@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Archie">
+  <title>Archie</title>
+  <!-- A-frame that reads as both an A and a house: solid sage over a solid
+       offset shadow, with a doorway cut from the base and a triangular gable
+       window echoing the roof pitch. Used as the favicon. -->
+  <path d="M32 4 58 57H38V40H26V57H6z" fill="#53665C" transform="translate(6,5)"/>
+  <path d="M32 4 58 57H38V40H26V57H6z" fill="#D9D3C4"/>
+  <path d="M32 19 42 35H22z" fill="#1D2924"/>
+</svg>

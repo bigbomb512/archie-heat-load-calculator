@@ -1,0 +1,10 @@
+{
+  "case_id": "crowded_rcp_context",
+  "description": "Crowded architect set where the layout plan supplies geometry and the RCP supplies ceiling and services context.",
+  "expectations": {
+    "pages": {
+      "geometry": [14],
+      "rcp_context": [16]
+    }
+  }
+}

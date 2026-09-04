@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+frontend/.DS_Store
+frontend/node_modules/
+frontend/test-results/
+frontend/playwright-report/
+
+output/
+*.log
+
+.env
+.venv/
+venv/

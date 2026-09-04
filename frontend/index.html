@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Archie — Mechanical Workspace</title>
+<link rel="icon" href="/frontend/assets/images/archie-mark.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/frontend/css/styles.css">
+</head>
+<body>
+<div class="shell">
+
+  <!-- ============ sidebar ============ -->
+  <aside class="side">
+    <!-- One bubble around the whole word: the mark is the "A", "rchie" follows.
+         Inline so the fills stay put across themes; the file is the favicon. -->
+    <div class="logo">
+      <div class="brand" role="img" aria-label="Archie">
+        <svg class="mark" viewBox="6 4 58 58" aria-hidden="true">
+          <path class="shadow" d="M32 4 58 57H38V40H26V57H6z" transform="translate(6,5)"/>
+          <path class="body"   d="M32 4 58 57H38V40H26V57H6z"/>
+          <path class="window" d="M32 19 42 35H22z"/>
+        </svg>
+        <span class="wm" aria-hidden="true">rchie</span>
+      </div>
+    </div>
+
+    <nav class="nav">
+      <button class="on" id="navCurrent">
+        <svg class="ic" viewBox="0 0 24 24"><path d="M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/></svg>
+        Current project
+      </button>
+      <button id="navNew">
+        <svg class="ic" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+        New analysis
+      </button>
+      <div class="micro sec">Projects</div>
+    </nav>
+    <div class="projects" id="projects"><div class="empty-proj">No projects yet</div></div>
+
+    <nav class="nav" style="padding-bottom:12px">
+      <button id="navSettings">
+        <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 7 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 3 15H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 9 4.6h.1A1.7 1.7 0 0 0 10.3 3V3a2 2 0 1 1 4 0v.1A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.6 1.3H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+        Settings
+      </button>
+    </nav>
+    <div class="foot">Document analysis · v1</div>
+  </aside>
+
+  <!-- ============ main ============ -->
+  <main class="main">
+    <header class="top">
+      <h1 id="topTitle">New analysis</h1>
+      <div class="sub" id="topSub">Upload an architect's drawing set to begin</div>
+      <div class="right">
+        <button class="iconbtn" id="theme" aria-label="Switch between light and dark">
+          <svg class="moon" viewBox="0 0 24 24">
+            <path d="M20 14.2A8.2 8.2 0 0 1 9.8 4 8.4 8.4 0 1 0 20 14.2z"/>
+          </svg>
+          <svg class="sun" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="4.2"/>
+            <path d="M12 2.6v2.2M12 19.2v2.2M2.6 12h2.2M19.2 12h2.2M5.4 5.4l1.6 1.6M17 17l1.6 1.6M18.6 5.4 17 7M7 17l-1.6 1.6"/>
+          </svg>
+        </button>
+        <button class="btn ghost hide" id="btnRestart">Start over</button>
+        <button class="btn key narrow-only hide" id="btnConfirmTop">Confirm selection</button>
+        <button class="btn key hide" id="btnAnalyse">Analyse PDF</button>
+      </div>
+    </header>
+
+    <div class="work"><div class="stage">
+
+      <!-- upload -->
+      <section id="vUpload">
+        <div class="drop" id="drop">
+          <div class="mark">
+            <svg viewBox="0 0 24 24"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5"/><path d="M3 15v3a3 3 0 0 0 3 3h12a3 3 0 0 0 3-3v-3"/></svg>
+          </div>
+          <h2>Upload a drawing set</h2>
+          <p>Archie reads the whole document and removes pages that are clearly not useful for HVAC design.</p>
+          <label class="lbl" for="pdf">Choose PDF</label>
+          <input id="pdf" type="file" accept="application/pdf">
+          <p class="fine">Floor plans, elevations, sections, specifications and notes — all in one file.</p>
+        </div>
+      </section>
+
+      <!-- uploaded -->
+      <section id="vFile" class="hide">
+        <div class="filecard">
+          <div class="filerow">
+            <div class="fileicon"><svg viewBox="0 0 24 24"><path d="M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/></svg></div>
+            <div class="filemeta">
+              <b id="fName">—</b>
+              <span id="fMeta">—</span>
+            </div>
+            <span class="micro" id="fState">Uploading</span>
+          </div>
+          <div class="track"><i id="fBar"></i></div>
+        </div>
+      </section>
+
+      <!-- analysing -->
+      <section id="vRun" class="hide">
+        <div class="run">
+          <div class="line"><span class="dot"></span><h3>Analysing architectural document</h3></div>
+          <p id="runSub">Reviewing pages…</p>
+          <div class="steps">
+            <div class="step" id="s1"><span class="bx"></span>Reading text layer and title blocks</div>
+            <div class="step" id="s2"><span class="bx"></span>Classifying each page by drawing type</div>
+            <div class="step" id="s3"><span class="bx"></span>Rendering page previews</div>
+            <div class="step" id="s4"><span class="bx"></span>Selecting pages relevant to HVAC design</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- results -->
+      <section id="vRes" class="hide">
+        <div class="result-head">
+          <div>
+            <div class="eyebrow">Analysis complete</div>
+            <h2 id="summaryTitle">Ready for review</h2>
+            <p id="summaryLead">Archie prepared the key drawing information for the next AI stage.</p>
+          </div>
+          <button class="btn ghost" id="btnDebug">Open debug view</button>
+        </div>
+
+        <div class="summary-grid">
+          <article class="summary-card">
+            <span class="label">Status</span>
+            <b id="statusText">Needs checking</b>
+            <small id="statusSub">Confirm the important drawings before continuing.</small>
+          </article>
+          <article class="summary-card">
+            <span class="label">Building plans</span>
+            <b class="num" id="sumPlans">0</b>
+            <small>Floor plans and RCPs selected for design context.</small>
+          </article>
+          <article class="summary-card">
+            <span class="label">Measurements</span>
+            <b class="num" id="sumDimensions">0</b>
+            <small id="scaleStatus">Scale/direct dimension status pending.</small>
+          </article>
+          <article class="summary-card">
+            <span class="label">Rooms</span>
+            <b class="num" id="sumRooms">0</b>
+            <small>Room labels found in readable PDF text.</small>
+          </article>
+        </div>
+
+        <div class="next-panel">
+          <div>
+            <div class="micro">Next action</div>
+            <h3 id="nextActionTitle">Confirm drawings for AI measurement check</h3>
+            <p id="nextActionText">The app will create spatial OCR, prepare the AI packet, and package selected screenshots for ChatGPT.</p>
+          </div>
+          <button class="btn key" id="btnContinue">Continue</button>
+        </div>
+
+        <div class="review-panel hide" id="visionPanel">
+          <div class="panel-head">
+            <div>
+              <div class="micro">Vision review</div>
+              <h3>Review plans, walls, and measurements</h3>
+            </div>
+          </div>
+          <p class="fine">Upload the complete ChatGPT packet, then paste its strict vision JSON here. Archie will validate it and create the reasoning packet.</p>
+          <textarea id="visionJson" rows="10" spellcheck="false" placeholder='{"provider":"chatgpt_manual","result":{"layered_geometry":{"pages":[]}}}'></textarea>
+          <div class="bar">
+            <span class="conf" id="visionStatus">Waiting for vision JSON</span>
+            <button class="btn key" id="btnVisionSubmit">Create reasoning packet</button>
+          </div>
+          <div class="review-list" id="visionLinks"></div>
+        </div>
+
+        <div class="review-panel hide" id="designRequirementsPanel">
+          <div class="panel-head">
+            <div>
+              <div class="micro">Design inputs</div>
+              <h3>Project-wide HVAC requirements</h3>
+            </div>
+          </div>
+          <p class="fine">Designer-provided inputs are separate from architect drawing evidence. Confirmed inputs can support final engineering; provisional inputs support a preliminary brief only.</p>
+          <div class="panel-head"><div><div class="micro">Thermal model</div><h3>Draft model from drawing evidence</h3></div><button class="btn ghost mini" id="btnBuildThermalModel" type="button">Build draft model</button></div>
+          <p class="fine">Direct drawing facts are pre-filled. Review only the exceptions before sending the approved facts into Design Inputs.</p>
+          <div class="bar"><span class="conf" id="thermalModelStatus">Build a draft thermal model from the reviewed drawing packet.</span><button class="btn key" id="btnApplyThermalModel" type="button">Apply reviewed facts</button></div>
+          <div class="review-list" id="thermalFacts"></div>
+          <div class="review-list" id="thermalReviewItems"></div>
+          <div class="review-list" id="thermalModelLinks"></div>
+          <form id="designRequirementsForm" class="requirements-form">
+            <label>Space usage<input id="reqSpaceUsage" type="text" placeholder="e.g. retail tenancy"></label>
+            <label>Peak expected occupancy<input id="reqOccupancy" type="number" min="1" step="1"></label>
+            <label>Occupancy status<select id="reqOccupancyStatus"><option value="missing">Missing</option><option value="provisional">Provisional</option><option value="confirmed">Confirmed</option></select></label>
+            <label>Occupancy source<input id="reqOccupancySource" type="text" placeholder="Client brief, lease, site survey"></label>
+            <label>Operating hours<textarea id="reqOperatingHours" rows="2" placeholder="e.g. Mon-Fri 08:00-18:00"></textarea></label>
+            <label>Indoor cooling setpoint (°C)<input id="reqCooling" type="number" min="0" step="0.1"></label>
+            <label>Indoor heating setpoint (°C)<input id="reqHeating" type="number" min="0" step="0.1"></label>
+            <label>Outdoor summer condition (°C)<input id="reqSummer" type="number" min="0" step="0.1"></label>
+            <label>Outdoor winter condition (°C)<input id="reqWinter" type="number" min="0" step="0.1"></label>
+            <label>Design conditions status<select id="reqConditionsStatus"><option value="missing">Missing</option><option value="provisional">Provisional</option><option value="confirmed">Confirmed</option></select></label>
+            <label>Design conditions source<input id="reqConditionsSource" type="text" placeholder="Project brief or designer basis"></label>
+            <label>Outside-air basis<textarea id="reqFreshAir" rows="2" placeholder="Required airflow, standard, or designer basis"></textarea></label>
+            <label>Outside-air status<select id="reqFreshAirStatus"><option value="missing">Missing</option><option value="provisional">Provisional</option><option value="confirmed">Confirmed</option></select></label>
+            <label>Outside-air source<input id="reqFreshAirSource" type="text" placeholder="Code, consultant, client brief"></label>
+            <label>Cooking/baking activity<select id="reqCookingActivity"><option value="unknown">Unknown</option><option value="none">None</option><option value="baking_or_cooking">Baking or cooking</option></select></label>
+            <label>Hood requirement<select id="reqHoodRequirement"><option value="unknown">Unknown</option><option value="not_required">Not required</option><option value="required">Required</option></select></label>
+            <label>Exhaust outcome<select id="reqExhaustOutcome"><option value="unknown">Unknown</option><option value="not_required">Not required</option><option value="general_exhaust">General exhaust</option><option value="process_kitchen_exhaust">Process/kitchen exhaust</option></select></label>
+            <label>Make-up-air requirement<select id="reqMakeUpAir"><option value="unknown">Unknown</option><option value="not_required">Not required</option><option value="required">Required</option></select></label>
+            <label>Exhaust basis<textarea id="reqExhaust" rows="2" placeholder="Required exhaust, equipment, or designer basis"></textarea></label>
+            <label>Exhaust status<select id="reqExhaustStatus"><option value="missing">Missing</option><option value="provisional">Provisional</option><option value="confirmed">Confirmed</option><option value="not_applicable">Not applicable</option></select></label>
+            <label>Exhaust source<input id="reqExhaustSource" type="text" placeholder="Code, hood schedule, or designer decision"></label>
+            <label>Ceiling height (mm)<input id="reqCeilingHeight" type="number" min="1000" step="1" placeholder="e.g. 3200"></label>
+            <label>Ceiling void height (mm)<input id="reqCeilingVoid" type="number" min="0" step="1"></label>
+            <label>Ceiling status<select id="reqCeilingStatus"><option value="missing">Missing</option><option value="provisional">Provisional</option><option value="confirmed">Confirmed</option></select></label>
+            <label>Ceiling source<input id="reqCeilingSource" type="text" placeholder="Architectural/RCP drawing or site survey"></label>
+            <label>Existing services<textarea id="reqExistingServices" rows="2" placeholder="Existing HVAC, electrical, hydraulic or access constraints"></textarea></label>
+            <label>Existing services status<select id="reqServicesStatus"><option value="missing">Missing</option><option value="provisional">Provisional</option><option value="confirmed">Confirmed</option></select></label>
+            <label>Existing services source<input id="reqServicesSource" type="text" placeholder="Site survey, landlord, base building record"></label>
+            <label>Electrical capacity<textarea id="reqElectricalCapacity" rows="2" placeholder="Available supply, switchboard capacity, or constraint"></textarea></label>
+            <label>Condensate route<textarea id="reqCondensateRoute" rows="2" placeholder="Approved drain point or route constraint"></textarea></label>
+            <label>Outdoor-unit location<textarea id="reqOutdoorUnitLocation" rows="2" placeholder="Approved location, access, noise constraints"></textarea></label>
+            <label>Riser/base-building services<textarea id="reqRiserServices" rows="2" placeholder="Risers, shafts, base-building HVAC/services"></textarea></label>
+            <label>Maintenance access<textarea id="reqMaintenanceAccess" rows="2" placeholder="Plant access, ceiling access, maintenance constraints"></textarea></label>
+            <label>Australian code basis<textarea id="reqCodeBasis" rows="2" placeholder="e.g. project-specific NCC / AS 1668 basis"></textarea></label>
+            <label>Designer notes<textarea id="reqDesignerNotes" rows="3"></textarea></label>
+          </form>
+          <div class="panel-head"><div><div class="micro">Cooling conditions</div><h3>Psychrometric calculation inputs</h3></div></div>
+          <p class="fine">Enter the designer-approved summer design conditions used for preliminary outside-air cooling load only.</p>
+          <div class="requirements-form">
+            <label>Indoor cooling wet-bulb (°C)<input id="reqCoolingWetBulb" type="number" step="0.1"></label>
+            <label>Outdoor summer wet-bulb (°C)<input id="reqSummerWetBulb" type="number" step="0.1"></label>
+            <label>Atmospheric pressure (kPa)<input id="reqAtmosphericPressure" type="number" min="1" step="0.001"></label>
+            <label>Calculation-input status<select id="reqCoolingLoadStatus"><option value="missing">Missing</option><option value="provisional">Provisional</option><option value="confirmed">Confirmed</option></select></label>
+            <label>Calculation-input source<textarea id="reqCoolingLoadSource" rows="2" placeholder="Designer design-condition basis"></textarea></label>
+          </div>
+          <div class="panel-head"><div><div class="micro">HVAC zones</div><h3>Editable design areas</h3></div><button class="btn ghost mini" id="btnAddZone" type="button">Add zone</button></div>
+          <p class="fine">Room labels below are PDF suggestions only. Combine or replace them to create the HVAC design/control zones used for engineering inputs.</p>
+          <div id="zones"></div>
+          <div class="panel-head"><div><div class="micro">Heat sources</div><h3>Appliances and equipment</h3></div><button class="btn ghost mini" id="btnAddHeatSource" type="button">Add source</button></div>
+          <p class="fine">Record manufacturer-backed watts where available and mark each source confirmed or provisional.</p>
+          <div class="requirements-form heat-verification"><label>Heat-source status<select id="reqHeatSourcesStatus"><option value="missing">Missing</option><option value="provisional">Provisional</option><option value="confirmed">Confirmed</option></select></label><label>Heat-source source<input id="reqHeatSourcesSource" type="text" placeholder="Manufacturer data, schedule, or client brief"></label></div>
+          <div id="heatSources"></div>
+          <div class="bar"><span class="conf" id="requirementsStatus">Loading design inputs…</span><button class="btn key" id="btnSaveRequirements" type="button">Save design inputs</button></div>
+          <div class="review-list" id="requirementsLinks"></div>
+          <div class="panel-head"><div><div class="micro">Preliminary cooling loads</div><h3>Zone contribution breakdown</h3></div><button class="btn key" id="btnCalculateHeatLoad" type="button">Calculate cooling loads</button></div>
+          <div class="bar"><span class="conf" id="heatLoadStatus">Save design inputs before calculating.</span></div>
+          <div id="heatLoadResults"></div>
+          <div class="panel-head"><div><div class="micro">Preliminary ventilation</div><h3>Outside air, exhaust, and make-up air</h3></div><button class="btn key" id="btnCalculateVentilation" type="button">Calculate ventilation</button></div>
+          <div class="bar"><span class="conf" id="ventilationStatus">Enter zone ventilation inputs, then calculate.</span></div>
+          <div id="ventilationResults"></div>
+        </div>
+
+        <div class="review-panel">
+          <div class="panel-head">
+            <div>
+              <div class="micro">Needs checking</div>
+              <h3>Only review uncertain items</h3>
+            </div>
+          </div>
+          <div id="reviewList" class="review-list"></div>
+        </div>
+
+        <div class="debug-panel hide" id="debugPanel">
+          <div class="debug-head">
+            <div>
+              <div class="micro">Debug view</div>
+              <h3>Page evidence</h3>
+            </div>
+            <div class="switch">
+              <button class="on" data-f="rel" id="fRel">Useful</button>
+              <button data-f="all" id="fAll">All pages</button>
+            </div>
+          </div>
+          <div class="scored">
+            <div>
+              <div class="big num" id="rTotal">0</div>
+              <div class="cap">pages analysed</div>
+            </div>
+            <div>
+              <div class="big num hi" id="rRel">0</div>
+              <div class="cap">pages kept</div>
+            </div>
+          </div>
+          <div class="grid" id="grid"></div>
+        </div>
+      </section>
+
+    </div></div>
+  </main>
+
+  <!-- ============ right panel ============ -->
+  <aside class="aside">
+    <div class="hd"><div class="micro">Analysis summary</div></div>
+    <div class="bd" id="asideBody">
+      <p style="color:var(--grey);font-size:12.5px;margin:0">
+        No analysis yet. Upload a drawing set and run the analysis to see results here.
+      </p>
+    </div>
+    <div class="ft">
+      <button class="btn key" id="btnConfirm" disabled>Confirm selection</button>
+    </div>
+  </aside>
+</div>
+
+<script src="/frontend/js/app.js"></script>
+</body>
+</html>

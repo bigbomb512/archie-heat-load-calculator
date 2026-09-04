@@ -1,0 +1,21 @@
+{
+  "case_id": "compact_tenancy_vector",
+  "description": "Compact tenancy set with a dimension plan, supporting finish plan, and reflected ceiling plan.",
+  "expectations": {
+    "pages": {
+      "geometry": [18, 19],
+      "rcp_context": [20]
+    },
+    "major_dimensions": [
+      {"page": 18, "value_mm": 8075},
+      {"page": 18, "value_mm": 8205},
+      {"page": 18, "value_mm": 6585},
+      {"page": 18, "value_mm": 5655},
+      {"page": 18, "value_mm": 5535},
+      {"page": 18, "value_mm": 3650},
+      {"page": 18, "value_mm": 1810},
+      {"page": 18, "value_mm": 950},
+      {"page": 18, "value_mm": 670}
+    ]
+  }
+}

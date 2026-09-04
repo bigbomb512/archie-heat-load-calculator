@@ -1,0 +1,3 @@
+#!/bin/zsh
+cd "$(dirname "$0")"
+'/Users/jeremyzheng/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3' -m backend.web_app "$@"
