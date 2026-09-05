@@ -40,6 +40,8 @@ async function mockApi(page) {
   } }));
   await page.route("**/api/analyse", route => route.fulfill({ json: analysis }));
   await page.route("**/api/analysis?id=demo-project", route => route.fulfill({ json: analysis }));
+  await page.route("**/api/hourly-load-model?project_id=demo-project", route => route.fulfill({ json: { hourly_load_model: {floors: [], zones: [], rooms: []}, readiness: {status: "review_required", issues: []} } }));
+  await page.route("**/api/hourly-load-report?project_id=demo-project", route => route.fulfill({ json: { hourly_load_report: {}, status: "not_calculated" } }));
 }
 
 const designRequirements = {
@@ -157,22 +159,41 @@ test("design-input verification controls save with the reasoning packet", async 
   expect(errors).toEqual([]);
 });
 
-test("cooling-load calculation displays a deterministic zone breakdown", async ({ page }) => {
+test("hourly cooling workflow displays a labelled partial draft", async ({ page }) => {
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));
   await mockApi(page);
-  await page.route("**/api/heat-load", async route => {
+  const hourlyModel = {
+    schema_version: 2,
+    floors: [{floor_id: "level_01", name: "Level 1", elevation_m: 0, verification_status: "confirmed", source: "A-101", citations: []}],
+    zones: [{zone_id: "zone_001", name: "Sales zone", floor_id: "level_01", verification_status: "confirmed", source: "Engineer", citations: []}],
+    rooms: [{room_id: "room_001", name: "Sales area", zone_id: "zone_001", mapping_status: "confirmed", verification_status: "confirmed", source: "Engineer", source_zone_id: "zone_001", source_room_labels: [], area_m2: 30, occupancy: 18, indoor_cooling_setpoint_c: 24, heat_sources: [], cooling_load: {}, cooling_load_conditions: {}, schedule_assignments: {people: "", lighting: "", outside_air: "", equipment: {}, solar: {}}}],
+  };
+  await page.route("**/api/hourly-load-model?project_id=demo-project", route => route.fulfill({json: {hourly_load_model: hourlyModel, readiness: {status: "confirmed", issues: []}}}));
+  await page.route("**/api/hourly-load-model", async route => {
     const body = route.request().postDataJSON();
-    expect(body.requirements.zones[0].cooling_load.outside_air_lps).toBe(90);
+    expect(body.action).toBe("save");
+    expect(body.hourly_load_model.schema_version).toBe(3);
+    expect(body.hourly_load_model.floors[0]).toEqual(expect.objectContaining({floor_id: "level_01", verification_status: "confirmed"}));
+    expect(body.hourly_load_model.zones[0]).toEqual(expect.objectContaining({zone_id: "zone_001", floor_id: "level_01"}));
+    expect(body.hourly_load_model.rooms[0]).toEqual(expect.objectContaining({room_id: "room_001", zone_id: "zone_001", mapping_status: "confirmed"}));
+    expect(body.hourly_load_model.rooms[0].unapproved_components).toEqual(expect.arrayContaining([expect.objectContaining({component_id: "infiltration", calculation_status: "stored_not_calculated", value: 0.25, unit: "ACH", source: "Site note"})]));
+    return route.fulfill({json: {hourly_load_model: body.hourly_load_model, readiness: {status: "confirmed", issues: []}}});
+  });
+  await page.route("**/api/hourly-load-report?project_id=demo-project", route => route.fulfill({json: {hourly_load_report: {}, status: "not_calculated"}}));
+  await page.route("**/api/hourly-load-report", async route => {
+    const body = route.request().postDataJSON();
+    expect(body.selected_scenario_ids).toEqual(["summer_day"]);
     return route.fulfill({ json: {
-      heat_load_status: "current",
-      heat_load_report_url: "/output/heat_load_report.json",
-      reasoning_zip_url: "/output/reasoning_packet.zip",
-      heat_load_report: {
-        status: "calculated", calculated_zone_count: 1, blocked_zone_count: 0, project_total_kw: 4.2,
-        zone_results: [{ zone_name: "Sales area", status: "calculated", subtotal_kw: 3.8, safety_allowance_kw: 0.4, design_total_kw: 4.2,
-          contributions: [{ name: "people", total_kw: 1.1 }, { name: "outside_air", total_kw: 1.4 }],
-        }],
+      status: "current",
+      hourly_load_report: {
+        status: "draft",
+        readiness: {status: "draft", issues: [{status: "blocked", scope: "room", affected_id: "room_002", reason: "people schedule assignment", source_artifact: "hourly_load_model", citations: []}]},
+        input_artifacts: {hourly_load_model: {artifact_url: "/output/hourly_load_model.json"}},
+        scope_summary: {complete_scope: false, blocked_rooms: [{room_id: "room_002", reasons: ["people schedule assignment"]}]},
+        known_exclusions: [{room_id: "room_001", component_type: "infiltration", value: 0.25, unit: "ACH", source: "Site note"}],
+        unresolved_room_inputs: [{room_id: "room_001", component_type: "steam_gain"}],
+        scenario_results: [{scenario_id: "summer_day", title: "Summer design day", status: "draft", included_scope_peak: {design_total_kw: 4.2}, scope_summary: {complete_scope: false, blocked_rooms: [{room_id: "room_002", reasons: ["people schedule assignment"]}]}}],
       },
     } });
   });
@@ -183,10 +204,22 @@ test("cooling-load calculation displays a deterministic zone breakdown", async (
     show("vRes");
     showDesignRequirements(requirements, {}, []);
   }, coolingRequirements);
-  await page.locator("#btnCalculateHeatLoad").click();
+  const infiltration = page.locator(".room-component").first();
+  await infiltration.locator(".room-component-state").selectOption("stored_not_calculated");
+  await infiltration.locator(".room-component-value").fill("0.25");
+  await infiltration.locator(".room-component-unit").fill("ACH");
+  await infiltration.locator(".room-component-status").selectOption("confirmed");
+  await infiltration.locator(".room-component-source").fill("Site note");
+  await page.locator("#btnSaveHourlyModel").click();
+  await page.locator("#hourlyScenarioIds").fill("summer_day");
+  await page.locator("#btnCalculateHourlyLoad").click();
 
-  await expect(page.locator("#heatLoadStatus")).toContainText("Project total 4.20 kW");
-  await expect(page.locator("#heatLoadResults")).toContainText("outside_air: 1.40 kW");
+  await expect(page.locator("#hourlyReportStatus")).toContainText("included room scope only");
+  await expect(page.locator("#hourlyLoadResults")).toContainText("not a complete project duty");
+  await expect(page.locator("#coolingReadiness")).toContainText("people schedule assignment");
+  await expect(page.locator("#coolingReadiness")).toContainText("Open evidence");
+  await expect(page.locator("#hourlyLoadResults")).toContainText("known excluded room input");
+  await expect(page.locator("#hourlyLoadResults")).toContainText("unresolved room input");
   expect(errors).toEqual([]);
 });
 
@@ -222,6 +255,47 @@ test("ventilation calculation displays outside-air and exhaust evidence", async 
 
   await expect(page.locator("#ventilationStatus")).toContainText("Outside air 90.0 L/s");
   await expect(page.locator("#ventilationResults")).toContainText("Make-up air 0.0 L/s");
+  expect(errors).toEqual([]);
+});
+
+test("reviewed envelope editor saves a confirmed opaque boundary", async ({ page }) => {
+  const errors = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await mockApi(page);
+  const emptyLibrary = { schema_version: 1, updated_at: "", constructions: [], windows: [], shading_records: [] };
+  const emptyModel = { schema_version: 1, updated_at: "", active_for_calculation: false, surfaces: [] };
+  const readiness = { status: "review_required", active_for_calculation: false, included: [], blocked: [], stored_not_calculated: [] };
+  await page.route("**/api/envelope-library**", async route => {
+    if (route.request().method() === "GET") return route.fulfill({ json: { envelope_library: emptyLibrary, readiness } });
+    const body = route.request().postDataJSON();
+    expect(body.envelope_library.constructions[0]).toEqual(expect.objectContaining({ record_id: "wall-a", kind: "opaque_wall", u_value_w_m2k: 0.5, review_status: "confirmed" }));
+    return route.fulfill({ json: { envelope_library: body.envelope_library, readiness } });
+  });
+  await page.route("**/api/envelope-model**", async route => {
+    if (route.request().method() === "GET") return route.fulfill({ json: { envelope_model: emptyModel, readiness } });
+    const body = route.request().postDataJSON();
+    expect(body.envelope_model.active_for_calculation).toBe(true);
+    expect(body.envelope_model.surfaces[0]).toEqual(expect.objectContaining({ surface_id: "north-wall", owner_zone_id: "zone_001", boundary_method: "external", construction_id: "wall-a", review_status: "confirmed" }));
+    return route.fulfill({ json: { envelope_model: body.envelope_model, readiness: { ...readiness, active_for_calculation: true } } });
+  });
+  await page.goto("/");
+  await page.evaluate(requirements => { DATA = { id: "demo-project" }; show("vRes"); showDesignRequirements(requirements, {}, []); }, coolingRequirements);
+  await page.locator("#btnAddConstruction").click();
+  await page.locator(".envelope-construction .env-id").fill("wall-a");
+  await page.locator(".envelope-construction .env-title").fill("Reviewed wall");
+  await page.locator(".envelope-construction .env-u").fill("0.5");
+  await page.locator(".envelope-construction .env-status").selectOption("confirmed");
+  await page.locator(".envelope-construction .env-source").fill("Engineer reviewed schedule");
+  await page.locator("#btnAddBoundary").click();
+  await page.locator(".envelope-boundary .boundary-id").fill("north-wall");
+  await page.locator(".envelope-boundary .boundary-zone").fill("zone_001");
+  await page.locator(".envelope-boundary .boundary-area").fill("10");
+  await page.locator(".envelope-boundary .boundary-construction").fill("wall-a");
+  await page.locator(".envelope-boundary .boundary-status").selectOption("confirmed");
+  await page.locator(".envelope-boundary .boundary-source").fill("Reviewed facade drawing");
+  await page.locator("#envelopeActive").check();
+  await page.locator("#btnSaveEnvelope").click();
+  await expect(page.locator("#envelopeStatus")).toContainText("reviewed model active");
   expect(errors).toEqual([]);
 });
 

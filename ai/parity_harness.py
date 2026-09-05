@@ -123,7 +123,7 @@ def archie_results_from_heat_report(heat_load_report):
 
 def archie_results_from_hourly_load_report(hourly_load_report):
     """Expose a current hourly design-day report without declaring DA09 parity."""
-    governing = hourly_load_report.get("governing_project_peak", {})
+    governing = hourly_load_report.get("project_peak", {})
     scenario_id = governing.get("scenario_id")
     scenario = next((item for item in hourly_load_report.get("scenario_results", []) if item.get("scenario_id") == scenario_id), {})
     return {

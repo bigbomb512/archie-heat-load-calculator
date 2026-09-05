@@ -11,20 +11,32 @@ It does **not** own HVAC layout, equipment placement, routing, CAD actions, or d
 - PDF page triage, rendering, review packets, spatial OCR, and cited building evidence.
 - Manual AI packets for visual/evidence review.
 - External-research handoff packets for a web-enabled AI or researcher; every external fact must have a direct citation and remains review-required.
-- Evidence-aware preliminary and hourly cooling calculations for entered/reviewed inputs.
-- Site conditions, schedules, design-day scenarios, room-within-zone load overlays, provisional/final readiness, and parity-report scaffolding.
+- Evidence-aware hourly cooling reports with explicit blocked, draft, and review-ready states.
+- Reviewed per-project opaque-envelope libraries and boundary models, including
+  exterior and fixed-adjacent-temperature steady-state cooling conduction.
+- Site conditions, schedules, design-day scenarios, reviewed floor/zone/room overlays, readiness, and parity-report scaffolding.
+- Room-owned evidence records for unsupported airflow and moisture/process inputs. They are captured as confirmed absent, stored-not-calculated, or unassessed; they never silently change cooling totals.
 
-The current cooling method is limited to its declared inputs. It is not CAMEL+/DA09 parity, equipment selection, heating design, AHU/plant analysis, annual analysis, or geometric shading.
+The current cooling method is limited to its declared inputs. Stored infiltration, transfer/extract/make-up air, vapour/steam, and process latent inputs remain explicit exclusions until an approved method exists. It is not CAMEL+/DA09 parity, equipment selection, heating design, AHU/plant analysis, annual analysis, or geometric shading.
 
 ## Run locally
 
 ```bash
-python3 -m backend.web_app --port 8000
+git clone https://github.com/bigbomb512/archie-heat-load-calculator.git
+cd archie-heat-load-calculator
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+brew install poppler
+./start_web --port 8000
 ```
 
 Open `http://127.0.0.1:8000`.
 
-Dependencies for PDF processing are listed in `requirements.txt`; Poppler is required for rendered page previews.
+`start_web` uses `.venv/bin/python` when available, otherwise it uses `python3` (or
+the optional `PYTHON_BIN` environment variable). It never relies on a developer's
+personal machine path. Dependencies for PDF processing are listed in
+`requirements.txt`; Poppler is required for rendered page previews.
 
 ## Evidence-to-research flow
 
@@ -44,4 +56,5 @@ Run the research handoff after a reviewed `ai_input.json` exists:
 PYTHONPATH=. python3 ai/research_packet.py output/review/<project>/ai_input.json
 ```
 
-See [the research handoff guide](docs/ai_research_handoff.md) and [the cooling roadmap](docs/cool_heat_load_roadmap.md).
+See [the research handoff guide](docs/ai_research_handoff.md), [the reviewed
+envelope guide](docs/reviewed_envelope_slice.md), and [the cooling roadmap](docs/cool_heat_load_roadmap.md).

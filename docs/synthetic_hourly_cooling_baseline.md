@@ -8,8 +8,8 @@ The fixture exercises the actual backend workflow:
 2. save five cited-but-synthetic weekday schedules;
 3. save one provisional 24-hour January cooling design-day scenario;
 4. seed then review a one-room/one-zone hourly model;
-5. calculate a provisional hourly cooling report.
+5. calculate a draft hourly cooling report.
 
-Every numerical input is synthetic and every artifact is deliberately provisional. The case also writes an unresolved `synthetic-no-drawings` coverage exception, so a final calculation is blocked. It is not a real project, benchmark case, code-compliance example or basis for equipment selection.
+Every numerical input is synthetic and every artifact is deliberately provisional. The case also writes an unresolved `synthetic-no-drawings` coverage exception, so the result remains `draft`, never `review_ready` or `validated`. It is not a real project, benchmark case, code-compliance example or basis for equipment selection.
 
 The generated artifacts are local runtime output under `output/web_review/synthetic-hourly-cooling-baseline/` and are intentionally ignored by Git. The reproducible generator is [`tools/create_synthetic_hourly_cooling_baseline.py`](../tools/create_synthetic_hourly_cooling_baseline.py).

@@ -81,7 +81,7 @@ response exposes `site_design_conditions_url` and
 
 ## Deliberate v1 boundary
 
-Saving this resource does not update the existing preliminary cooling or
+Saving this resource does not update the legacy cooling or
 ventilation inputs, invalidate reports, select a climate station, or perform a
 cooling/heating calculation. A future, separately approved integration must
 make that linkage explicit.

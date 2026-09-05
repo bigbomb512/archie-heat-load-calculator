@@ -459,7 +459,7 @@ def build_reasoning_prompt(ai_input, coordinate_review, vector_geometry, dimensi
         "Treat C.O.S dimensions as provisional and keep `site_confirm_required` true when present.\n"
         "Treat visible equipment such as IMDL-62Y-4(E) as drawing evidence, not final procurement truth unless contractor-confirmed.\n"
         "`design_requirements.json` contains inputs supplied by the designer. Cite them separately from PDF evidence.\n"
-        "`heat_load_report.json`, when present, is a deterministic preliminary cooling-load breakdown. Cite its calculation status and warnings; it is not final equipment selection or sizing authority.\n"
+        "`heat_load_report.json`, when present, is a legacy read-only cooling breakdown. Use `hourly_load_report.json` for current cooling results; cite its status and warnings, and do not treat it as equipment selection or sizing authority.\n"
         "`ventilation_report.json`, when present, is a deterministic preliminary outside-air, process-exhaust, make-up-air, and zone-balance report. Cite its selected basis, status, and warnings; it is not final fan, hood, duct, or compliance authority.\n"
         "`thermal_evidence.json` and `thermal_model.json`, when present, are cited PDF facts and an engineer-reviewable draft respectively. Never turn an exception item into a calculation assumption until it is confirmed in design_requirements.json.\n"
         "Its `zones` are designer-owned HVAC design/control areas. Source room labels are PDF suggestions only, not confirmed room boundaries. Use each zone's explicit values first and inherit omitted values from the project-wide requirements.\n"

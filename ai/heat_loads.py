@@ -74,18 +74,25 @@ def envelope_load(surfaces, outdoor_db_c, indoor_db_c):
     total_kw = 0.0
     rows = []
     for surface in surfaces:
-        gain_kw = surface["area_m2"] * surface["u_value_w_m2k"] * (outdoor_db_c - indoor_db_c) / 1000
+        boundary_db_c = surface.get("boundary_temperature_c")
+        if boundary_db_c is None:
+            boundary_db_c = outdoor_db_c
+        gain_kw = surface["area_m2"] * surface["u_value_w_m2k"] * (boundary_db_c - indoor_db_c) / 1000
         total_kw += gain_kw
         rows.append({
             "surface_id": surface["surface_id"],
             "orientation": surface["orientation"],
+            "boundary_method": surface.get("boundary_method", "external"),
+            "boundary_temperature_c": boundary_db_c,
+            "construction_id": surface.get("construction_id", ""),
+            "construction_revision": surface.get("construction_revision"),
             "gain_kw": round(gain_kw, 4),
         })
     return contribution(
         "envelope",
         total_kw,
         inputs={"surfaces": rows, "outdoor_db_c": outdoor_db_c, "indoor_db_c": indoor_db_c},
-        formula="surface area × U-value × (outdoor DB − indoor DB) ÷ 1000",
+        formula="surface area × U-value × (surface boundary temperature − indoor DB) ÷ 1000",
     )
 
 

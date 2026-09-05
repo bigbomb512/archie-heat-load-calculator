@@ -13,6 +13,7 @@ from ai.design_requirements import (
 )
 from ai.heat_loads import envelope_load, equipment_load, lighting_load, outside_air_load, people_load, solar_load
 from ai.site_design_conditions import validate_citations
+from ai.cooling_readiness import assess_cooling_readiness, room_component_issues, topology_issues
 
 
 DAY_TYPES = ("weekday", "saturday", "sunday_holiday")
@@ -22,6 +23,18 @@ MONTHS = (
 )
 STATUSES = {"missing", "provisional", "confirmed", "not_applicable"}
 ID = re.compile(r"^[a-z][a-z0-9_-]*$")
+ROOM_COMPONENT_STATES = {"not_present_confirmed", "stored_not_calculated", "not_assessed"}
+ROOM_COMPONENT_TYPES = {
+    "infiltration": {"group": "airflow", "units": {"L/s", "m3/s", "m3/h", "ACH"}},
+    "minimum_supply_air": {"group": "airflow", "units": {"L/s", "m3/s", "m3/h"}},
+    "extract_air": {"group": "airflow", "units": {"L/s", "m3/s", "m3/h"}},
+    "spill_air": {"group": "airflow", "units": {"L/s", "m3/s", "m3/h"}},
+    "transfer_air": {"group": "airflow", "units": {"L/s", "m3/s", "m3/h"}},
+    "make_up_air": {"group": "airflow", "units": {"L/s", "m3/s", "m3/h"}},
+    "vapour_gain": {"group": "moisture", "units": {"kg/h", "g/h", "W"}},
+    "steam_gain": {"group": "moisture", "units": {"kg/h", "g/h", "W"}},
+    "process_latent_load": {"group": "moisture", "units": {"kg/h", "g/h", "W"}},
+}
 
 
 def timestamp():
@@ -38,9 +51,11 @@ def empty_design_day_scenarios():
 
 def empty_hourly_load_model():
     return {
-        "schema_version": 1,
+        "schema_version": 3,
         "updated_at": "",
         "source_requirements_updated_at": "",
+        "floors": [],
+        "zones": [],
         "rooms": [],
     }
 
@@ -255,8 +270,17 @@ def design_day_summary(scenarios):
 
 def build_hourly_load_model(requirements):
     requirements = requirements_snapshot(requirements)
+    floors = [{
+        "floor_id": "unassigned", "name": "Unassigned legacy floor", "elevation_m": None,
+        "verification_status": "provisional", "source": "Migrated from legacy design zones; assign a reviewed floor.", "citations": [],
+    }]
+    zones = []
     rooms = []
     for zone in requirements.get("zones", []):
+        zones.append({
+            "zone_id": zone["zone_id"], "name": zone.get("name", zone["zone_id"]), "floor_id": "unassigned",
+            "verification_status": "provisional", "source": "Migrated from legacy design zone; assign a reviewed floor.", "citations": [],
+        })
         room_id = f"{zone['zone_id']}-room-1"
         room = {
             "room_id": room_id,
@@ -274,12 +298,15 @@ def build_hourly_load_model(requirements):
             "cooling_load": deepcopy(zone.get("cooling_load", {})),
             "cooling_load_conditions": deepcopy(requirements.get("cooling_load_conditions", {})),
             "schedule_assignments": {"people": "", "lighting": "", "outside_air": "", "equipment": {}, "solar": {}},
+            "unapproved_components": default_room_components(),
         }
         rooms.append(room)
     return {
-        "schema_version": 1,
+        "schema_version": 3,
         "updated_at": timestamp(),
         "source_requirements_updated_at": requirements.get("updated_at", ""),
+        "floors": floors,
+        "zones": zones,
         "rooms": rooms,
     }
 
@@ -293,21 +320,124 @@ def seed_heat_source(source, room_id, index):
 def validate_hourly_load_model(raw):
     if not isinstance(raw, dict):
         raise ValueError("Hourly load model must be a JSON object.")
+    raw = migrate_hourly_model(raw)
     rooms = raw.get("rooms", [])
     if not isinstance(rooms, list):
         raise ValueError("Hourly load model rooms must be a list.")
+    floors = raw.get("floors", [])
+    zones = raw.get("zones", [])
+    if not isinstance(floors, list) or not isinstance(zones, list):
+        raise ValueError("Hourly load model floors and zones must be lists.")
+    checked_floors, floor_ids = [], set()
+    for index, raw_floor in enumerate(floors, start=1):
+        floor = validate_floor(raw_floor, index)
+        if floor["floor_id"] in floor_ids:
+            raise ValueError(f"Floor ID '{floor['floor_id']}' is duplicated.")
+        floor_ids.add(floor["floor_id"])
+        checked_floors.append(floor)
+    checked_zones, zone_ids = [], set()
+    for index, raw_zone in enumerate(zones, start=1):
+        zone = validate_model_zone(raw_zone, index)
+        if zone["zone_id"] in zone_ids:
+            raise ValueError(f"Zone ID '{zone['zone_id']}' is duplicated.")
+        if zone["floor_id"] not in floor_ids:
+            raise ValueError(f"Zone '{zone['zone_id']}' references unknown floor '{zone['floor_id']}'.")
+        zone_ids.add(zone["zone_id"])
+        checked_zones.append(zone)
     result, room_ids = [], set()
     for index, raw_room in enumerate(rooms, start=1):
         room = validate_room(raw_room, index)
         if room["room_id"] in room_ids:
             raise ValueError(f"Room ID '{room['room_id']}' is duplicated.")
+        if room["zone_id"] not in zone_ids:
+            raise ValueError(f"Room '{room['room_id']}' references unknown zone '{room['zone_id']}'.")
         room_ids.add(room["room_id"])
         result.append(room)
+    for room in result:
+        for component in room["unapproved_components"]:
+            source_room_id = component["source_room_id"]
+            if source_room_id and source_room_id not in room_ids:
+                raise ValueError(f"Room {room['room_id']} component '{component['component_id']}' references unknown source room '{source_room_id}'.")
+            if source_room_id == room["room_id"]:
+                raise ValueError(f"Room {room['room_id']} component '{component['component_id']}' cannot reference itself as a source room.")
     return {
-        "schema_version": 1,
+        "schema_version": 3,
         "updated_at": timestamp(),
         "source_requirements_updated_at": text(raw.get("source_requirements_updated_at", ""), "Hourly load model source requirements timestamp"),
+        "floors": checked_floors,
+        "zones": checked_zones,
         "rooms": result,
+    }
+
+
+def migrate_hourly_model(raw):
+    """Normalise saved v1/v2 overlays without changing their original artifacts."""
+    if not isinstance(raw, dict):
+        raise ValueError("Hourly load model must be a JSON object.")
+    result = deepcopy(raw)
+    if result.get("schema_version", 1) < 2 or "floors" not in result or "zones" not in result:
+        result["floors"] = [{
+            "floor_id": "unassigned", "name": "Unassigned legacy floor", "elevation_m": None,
+            "verification_status": "provisional", "source": "Migrated from schema-v1 room overlay; assign a reviewed floor.", "citations": [],
+        }]
+        seen = set()
+        result["zones"] = []
+        for room in result.get("rooms", []):
+            zone_id = str(room.get("zone_id", "")).strip()
+            if zone_id and zone_id not in seen:
+                seen.add(zone_id)
+                result["zones"].append({
+                    "zone_id": zone_id, "name": zone_id, "floor_id": "unassigned",
+                    "verification_status": "provisional", "source": "Migrated from schema-v1 room overlay; assign a reviewed floor.", "citations": [],
+                })
+    result["schema_version"] = 3
+    return result
+
+
+def migrate_hourly_model_v1(raw):
+    """Backward-compatible name retained for callers of the v1 migration helper."""
+    return migrate_hourly_model(raw)
+
+
+def validate_floor(raw, index):
+    if not isinstance(raw, dict):
+        raise ValueError(f"Floor {index} must be an object.")
+    floor_id = text(raw.get("floor_id", ""), f"Floor {index} ID")
+    if not ID.fullmatch(floor_id):
+        raise ValueError(f"Floor {index} ID must use lowercase stable IDs.")
+    status = status_value(raw.get("verification_status", "missing"), f"Floor {floor_id}")
+    source = text(raw.get("source", ""), f"Floor {floor_id} source")
+    if status in {"confirmed", "provisional"} and not source:
+        raise ValueError(f"Floor {floor_id} needs a source when {status}.")
+    name = text(raw.get("name", ""), f"Floor {floor_id} name")
+    if not name:
+        raise ValueError(f"Floor {floor_id} needs a name.")
+    return {
+        "floor_id": floor_id, "name": name,
+        "elevation_m": optional_number(raw.get("elevation_m"), f"Floor {floor_id} elevation", -10000, 10000),
+        "verification_status": status, "source": source,
+        "citations": validate_citations(raw.get("citations", []), f"Floor {floor_id}"),
+    }
+
+
+def validate_model_zone(raw, index):
+    if not isinstance(raw, dict):
+        raise ValueError(f"Zone {index} must be an object.")
+    zone_id = text(raw.get("zone_id", ""), f"Zone {index} ID")
+    floor_id = text(raw.get("floor_id", ""), f"Zone {zone_id} floor ID")
+    if not ID.fullmatch(zone_id) or not ID.fullmatch(floor_id):
+        raise ValueError(f"Zone {index} and its floor ID must use lowercase stable IDs.")
+    status = status_value(raw.get("verification_status", "missing"), f"Zone {zone_id}")
+    source = text(raw.get("source", ""), f"Zone {zone_id} source")
+    if status in {"confirmed", "provisional"} and not source:
+        raise ValueError(f"Zone {zone_id} needs a source when {status}.")
+    name = text(raw.get("name", ""), f"Zone {zone_id} name")
+    if not name:
+        raise ValueError(f"Zone {zone_id} needs a name.")
+    return {
+        "zone_id": zone_id, "name": name, "floor_id": floor_id,
+        "verification_status": status, "source": source,
+        "citations": validate_citations(raw.get("citations", []), f"Zone {zone_id}"),
     }
 
 
@@ -323,24 +453,32 @@ def validate_room(raw, index):
     if mapping_status not in {"inferred", "confirmed"}:
         raise ValueError(f"Room {room_id} mapping status must be inferred or confirmed.")
     status_value(verification_status, f"Room {room_id}")
+    name = text(raw.get("name", ""), f"Room {room_id} name")
+    room_source = text(raw.get("source", ""), f"Room {room_id} source")
+    if not name:
+        raise ValueError(f"Room {room_id} needs a name.")
+    if verification_status in {"confirmed", "provisional"} and not room_source:
+        raise ValueError(f"Room {room_id} needs a source when {verification_status}.")
     cooling = validate_zone_cooling_load(raw.get("cooling_load", {}))
     conditions = validate_cooling_load_conditions(raw.get("cooling_load_conditions", {}))
     sources, source_ids = [], set()
     for source_index, raw_source in enumerate(raw.get("heat_sources", []), start=1):
-        source = validate_hourly_heat_source(raw_source, room_id, source_index)
-        if source["source_id"] in source_ids:
-            raise ValueError(f"Room {room_id} heat-source ID '{source['source_id']}' is duplicated.")
-        source_ids.add(source["source_id"])
-        sources.append(source)
+        heat_source = validate_hourly_heat_source(raw_source, room_id, source_index)
+        if heat_source["source_id"] in source_ids:
+            raise ValueError(f"Room {room_id} heat-source ID '{heat_source['source_id']}' is duplicated.")
+        source_ids.add(heat_source["source_id"])
+        sources.append(heat_source)
     assignments = validate_assignments(raw.get("schedule_assignments", {}), room_id, source_ids, cooling)
+    components = validate_room_components(raw.get("unapproved_components"), room_id)
     return {
         "room_id": room_id,
-        "name": text(raw.get("name", ""), f"Room {room_id} name"),
+        "name": name,
         "zone_id": zone_id,
         "source_zone_id": text(raw.get("source_zone_id", ""), f"Room {room_id} source zone ID"),
         "mapping_status": mapping_status,
         "verification_status": verification_status,
-        "source": text(raw.get("source", ""), f"Room {room_id} source"),
+        "source": room_source,
+        "citations": validate_citations(raw.get("citations", []), f"Room {room_id}"),
         "source_room_labels": text_list(raw.get("source_room_labels", []), f"Room {room_id} source room labels"),
         "area_m2": optional_number(raw.get("area_m2"), f"Room {room_id} area", 0, 1000000),
         "occupancy": optional_number(raw.get("occupancy"), f"Room {room_id} occupancy", 0, 1000000),
@@ -349,6 +487,91 @@ def validate_room(raw, index):
         "cooling_load": cooling,
         "cooling_load_conditions": conditions,
         "schedule_assignments": assignments,
+        "unapproved_components": components,
+    }
+
+
+def default_room_components():
+    return [{
+        "component_id": component_type,
+        "component_type": component_type,
+        "value": None,
+        "unit": "",
+        "source_room_id": "",
+        "source": "",
+        "citations": [],
+        "verification_status": "missing",
+        "calculation_status": "not_assessed",
+    } for component_type in ROOM_COMPONENT_TYPES]
+
+
+def validate_room_components(raw_components, room_id):
+    if raw_components is None:
+        raw_components = default_room_components()
+    if not isinstance(raw_components, list):
+        raise ValueError(f"Room {room_id} unapproved components must be a list.")
+    supplied_types = {item.get("component_type") for item in raw_components if isinstance(item, dict)}
+    components = list(raw_components) + [item for item in default_room_components() if item["component_type"] not in supplied_types]
+    result, component_ids = [], set()
+    for index, raw in enumerate(components, start=1):
+        component = validate_room_component(raw, room_id, index)
+        if component["component_id"] in component_ids:
+            raise ValueError(f"Room {room_id} component ID '{component['component_id']}' is duplicated.")
+        component_ids.add(component["component_id"])
+        result.append(component)
+    return result
+
+
+def validate_room_component(raw, room_id, index):
+    if not isinstance(raw, dict):
+        raise ValueError(f"Room {room_id} component {index} must be an object.")
+    component_type = text(raw.get("component_type", ""), f"Room {room_id} component {index} type")
+    if component_type not in ROOM_COMPONENT_TYPES:
+        raise ValueError(f"Room {room_id} component {index} has an unsupported type '{component_type}'.")
+    component_id = text(raw.get("component_id", ""), f"Room {room_id} component {index} ID")
+    if not ID.fullmatch(component_id):
+        raise ValueError(f"Room {room_id} component {index} needs a stable component ID.")
+    calculation_status = raw.get("calculation_status", "not_assessed")
+    if calculation_status not in ROOM_COMPONENT_STATES:
+        raise ValueError(f"Room {room_id} component '{component_id}' has an invalid calculation status.")
+    value = optional_number(raw.get("value"), f"Room {room_id} component '{component_id}' value", 0, 1000000000)
+    unit = text(raw.get("unit", ""), f"Room {room_id} component '{component_id}' unit")
+    source_room_id = text(raw.get("source_room_id", ""), f"Room {room_id} component '{component_id}' source room ID")
+    source = text(raw.get("source", ""), f"Room {room_id} component '{component_id}' source")
+    verification_status = status_value(raw.get("verification_status", "missing"), f"Room {room_id} component '{component_id}'")
+    citations = validate_citations(raw.get("citations", []), f"Room {room_id} component '{component_id}'")
+    if source_room_id and component_type != "transfer_air":
+        raise ValueError(f"Room {room_id} component '{component_id}' may reference a source room only for transfer air.")
+    if source_room_id and not ID.fullmatch(source_room_id):
+        raise ValueError(f"Room {room_id} component '{component_id}' source room ID must use a lowercase stable ID.")
+    if calculation_status == "not_present_confirmed":
+        if value is not None or unit:
+            raise ValueError(f"Room {room_id} component '{component_id}' marked not present cannot have a value or unit.")
+        if verification_status != "confirmed" or not source:
+            raise ValueError(f"Room {room_id} component '{component_id}' marked not present needs confirmed review and a source.")
+    elif calculation_status == "stored_not_calculated":
+        if value is None or not unit:
+            raise ValueError(f"Room {room_id} component '{component_id}' stored for later calculation needs a value and unit.")
+        if value <= 0:
+            raise ValueError(f"Room {room_id} component '{component_id}' stored for later calculation needs a positive value; confirm not present when it is zero.")
+        if unit not in ROOM_COMPONENT_TYPES[component_type]["units"]:
+            allowed = ", ".join(sorted(ROOM_COMPONENT_TYPES[component_type]["units"]))
+            raise ValueError(f"Room {room_id} component '{component_id}' unit must be one of: {allowed}.")
+        if verification_status not in {"confirmed", "provisional"} or not source:
+            raise ValueError(f"Room {room_id} component '{component_id}' stored for later calculation needs a source and review status.")
+    else:
+        if value is not None or unit or source_room_id or source or citations or verification_status != "missing":
+            raise ValueError(f"Room {room_id} component '{component_id}' not assessed cannot include a value, source, citation, or review status.")
+    return {
+        "component_id": component_id,
+        "component_type": component_type,
+        "value": value,
+        "unit": unit,
+        "source_room_id": source_room_id,
+        "source": source,
+        "citations": citations,
+        "verification_status": verification_status,
+        "calculation_status": calculation_status,
     }
 
 
@@ -391,18 +614,16 @@ def validate_assignments(raw, room_id, source_ids, cooling):
 
 def hourly_model_summary(model, requirements=None):
     model = validate_hourly_load_model(model)
-    missing, provisional = [], []
-    if not model["rooms"]:
-        missing.append("hourly room model")
-    if requirements and model.get("source_requirements_updated_at") != requirements.get("updated_at"):
-        missing.append("source design requirements are stale")
-    for room in model["rooms"]:
-        if room["mapping_status"] != "confirmed" or room["verification_status"] != "confirmed":
-            provisional.append(room["room_id"])
-    return readiness(missing, provisional, {"room_count": len(model["rooms"])})
+    issues = topology_issues(model, (requirements or {}).get("updated_at", "")) + room_component_issues(model)
+    missing = [item["reason"] for item in issues if item["status"] == "blocked"]
+    provisional = [item["affected_id"] for item in issues if item["status"] == "draft"]
+    return readiness(missing, provisional, {
+        "floor_count": len(model["floors"]), "zone_count": len(model["zones"]), "room_count": len(model["rooms"]),
+        "issues": issues,
+    })
 
 
-def calculate_hourly_load_report(requirements, schedule_library, scenarios, model, selected_scenario_ids, calculation_stage="preliminary", coverage=None):
+def calculate_hourly_load_report(requirements, schedule_library, scenarios, model, selected_scenario_ids, coverage=None):
     requirements = requirements_snapshot(requirements)
     schedule_library = artifact_snapshot(schedule_library, validate_schedule_library)
     scenarios = artifact_snapshot(scenarios, validate_design_day_scenarios)
@@ -411,8 +632,8 @@ def calculate_hourly_load_report(requirements, schedule_library, scenarios, mode
     stale = model.get("source_requirements_updated_at") != requirements.get("updated_at")
     selected = select_scenarios(scenarios, selected_scenario_ids)
     report = {
-        "report_type": "hourly_design_day_cooling_load",
-        "calculation_stage": calculation_stage,
+        "report_schema_version": 2,
+        "report_type": "hourly_cooling_load",
         "status": "blocked",
         "input_fingerprints": {
             "requirements_updated_at": requirements.get("updated_at", ""),
@@ -421,42 +642,59 @@ def calculate_hourly_load_report(requirements, schedule_library, scenarios, mode
             "hourly_load_model_updated_at": model.get("updated_at", ""),
         },
         "excluded_components": [
-            "partitions", "infiltration", "dynamic thermal mass", "detailed glazing physics",
+            "partitions", "infiltration", "minimum supply air", "extract/spill/transfer/make-up air",
+            "vapour/steam/process latent loads", "dynamic thermal mass", "detailed glazing physics",
             "AHU coil effects", "fan/duct effects", "heat recovery", "plant loads",
         ],
         "scenario_results": [],
-        "governing_project_peak": {},
+        "included_scope_peak": {},
+        "project_peak": {},
         "warnings": [],
         "blocked_reasons": [],
+        "readiness": {},
+        "scope_summary": {},
+        "known_exclusions": [],
+        "unresolved_room_inputs": [],
     }
     if stale:
         report["blocked_reasons"].append("Hourly load model is stale because design requirements changed after the model was saved.")
+        attach_readiness(report, model, requirements, coverage)
         return report
     if not selected:
         report["blocked_reasons"].append("Select at least one design-day scenario.")
+        attach_readiness(report, model, requirements, coverage)
         return report
-    if calculation_stage not in {"preliminary", "final"}:
-        report["blocked_reasons"].append("Calculation stage must be preliminary or final.")
-        return report
-    if calculation_stage == "final" and coverage.get("coverage_exceptions"):
-        report["blocked_reasons"].append("Final hourly cooling load is blocked by unresolved drawing coverage.")
-        return report
-
     for scenario in selected:
         report["scenario_results"].append(calculate_scenario(requirements, schedule_library, model, scenario))
     all_rooms = [room for scenario in report["scenario_results"] for room in scenario["rooms"]]
     if not any(room["status"] != "blocked" for room in all_rooms):
         report["blocked_reasons"].append("No selected scenario produced a complete room result.")
         report["blocked_reasons"].extend(reason for scenario in report["scenario_results"] for reason in scenario["blocked_reasons"])
+        attach_readiness(report, model, requirements, coverage)
         return report
-    provisional = any(scenario["status"] != "calculated" for scenario in report["scenario_results"])
-    if calculation_stage == "final" and provisional:
-        report["blocked_reasons"].append("Final hourly cooling load requires confirmed rooms, schedules, and design-day conditions.")
-        return report
-    report["status"] = "calculated_provisional" if provisional else "calculated"
-    report["governing_project_peak"] = governing_peak(report["scenario_results"])
+    readiness_result = attach_readiness(report, model, requirements, coverage)
+    report["included_scope_peak"] = governing_peak(report["scenario_results"], "included_scope_peak")
+    if readiness_result["scope_summary"]["complete_scope"] and readiness_result["status"] == "review_ready":
+        report["project_peak"] = deepcopy(report["included_scope_peak"])
     report["warnings"] = [warning for scenario in report["scenario_results"] for warning in scenario["warnings"]]
     return report
+
+
+def attach_readiness(report, model, requirements, coverage, envelope_input=None):
+    readiness_result = assess_cooling_readiness(report, model, requirements.get("updated_at", ""), coverage, envelope_input)
+    report["status"] = readiness_result["status"]
+    report["readiness"] = {"status": readiness_result["status"], "issues": readiness_result["issues"]}
+    report["scope_summary"] = readiness_result["scope_summary"]
+    coverage_rows = readiness_result["scope_summary"].get("room_input_coverage", [])
+    report["known_exclusions"] = [
+        {"room_id": row["room_id"], **component}
+        for row in coverage_rows for component in row["stored_not_calculated"]
+    ]
+    report["unresolved_room_inputs"] = [
+        {"room_id": row["room_id"], **component}
+        for row in coverage_rows for component in row["not_assessed"]
+    ]
+    return readiness_result
 
 
 def select_scenarios(scenarios, selected_ids):
@@ -474,7 +712,8 @@ def calculate_scenario(requirements, library, model, scenario):
     result = {
         "scenario_id": scenario["scenario_id"], "title": scenario["title"], "mode": scenario["mode"],
         "representative_month": scenario["representative_month"], "day_type": scenario["day_type"],
-        "status": "blocked", "rooms": [], "zones": [], "project_hours": [], "project_peak": {},
+        "status": "blocked", "rooms": [], "zones": [], "floors": [], "included_scope_hours": [], "included_scope_peak": {},
+        "scope_summary": {},
         "warnings": [], "blocked_reasons": [],
     }
     if scenario["mode"] != "cooling":
@@ -490,11 +729,23 @@ def calculate_scenario(requirements, library, model, scenario):
     if not calculated_rooms:
         result["blocked_reasons"].append("All rooms are blocked for this scenario.")
         return result
-    result["zones"] = aggregate_zones(calculated_rooms)
-    result["project_hours"] = aggregate_project(result["zones"])
-    result["project_peak"] = peak(result["project_hours"])
-    room_provisional = any(room["status"] != "calculated" for room in room_results)
-    result["status"] = "calculated_provisional" if scenario_provisional or room_provisional else "calculated"
+    zones = {zone["zone_id"]: zone for zone in model["zones"]}
+    floors = {floor["floor_id"]: floor for floor in model["floors"]}
+    result["zones"] = aggregate_zones(calculated_rooms, zones)
+    result["floors"] = aggregate_floors(result["zones"], floors)
+    result["included_scope_hours"] = aggregate_project(result["zones"])
+    result["included_scope_peak"] = peak(result["included_scope_hours"])
+    blocked_rooms = [{"room_id": room["room_id"], "reasons": room["blocked_reasons"]} for room in room_results if room["status"] == "blocked"]
+    incomplete_component_rooms = [room["room_id"] for room in room_results if room.get("room_input_scope", {}).get("status") != "complete"]
+    result["scope_summary"] = {
+        "active_room_ids": [room["room_id"] for room in room_results],
+        "included_room_ids": [room["room_id"] for room in calculated_rooms],
+        "blocked_rooms": blocked_rooms,
+        "incomplete_component_room_ids": incomplete_component_rooms,
+        "complete_scope": not blocked_rooms and not incomplete_component_rooms,
+    }
+    room_provisional = any(room["status"] != "review_ready" for room in room_results)
+    result["status"] = "draft" if scenario_provisional or room_provisional or blocked_rooms else "review_ready"
     if scenario_provisional:
         result["warnings"].append("Design-day scenario contains provisional evidence.")
     result["warnings"].extend(warning for room in room_results for warning in room["warnings"])
@@ -527,7 +778,11 @@ def scenario_ready(scenario):
 
 
 def calculate_room_hours(requirements, library, scenario, room):
-    result = {"room_id": room["room_id"], "name": room["name"], "zone_id": room["zone_id"], "status": "blocked", "hours": [], "peak": {}, "warnings": [], "blocked_reasons": []}
+    component_scope = room_component_scope(room)
+    result = {
+        "room_id": room["room_id"], "name": room["name"], "zone_id": room["zone_id"], "status": "blocked",
+        "hours": [], "peak": {}, "warnings": [], "blocked_reasons": [], "room_input_scope": component_scope,
+    }
     static_missing = room_static_missing(room)
     if static_missing:
         result["blocked_reasons"].extend(static_missing)
@@ -539,12 +794,16 @@ def calculate_room_hours(requirements, library, scenario, room):
     provisional = profile_provisional or room_is_provisional(room)
     if provisional:
         result["warnings"].append("Room mapping, static inputs, or schedules remain provisional.")
+    if component_scope["stored_not_calculated"]:
+        result["warnings"].append("Known room airflow or moisture inputs are stored but excluded until an approved calculation method exists.")
+    if component_scope["not_assessed"]:
+        result["warnings"].append("Room airflow or moisture input categories have not been assessed.")
     for weather in scenario["hours"]:
         hour = weather["hour"]
         contributions = room_contributions(room, profiles, hour, weather, scenario["atmospheric_pressure_kpa"]["value"])
         result["hours"].append(hour_total(hour, contributions, room["cooling_load"]["safety_factor"]))
     result["peak"] = peak(result["hours"])
-    result["status"] = "calculated_provisional" if provisional else "calculated"
+    result["status"] = "draft" if provisional else "review_ready"
     return result
 
 
@@ -638,7 +897,22 @@ def room_is_provisional(room):
         return True
     if any(source.get("verification_status") != "confirmed" for source in room["heat_sources"]):
         return True
-    return any(surface.get("verification_status") != "confirmed" for surface in room["cooling_load"].get("envelope_surfaces", []))
+    if any(surface.get("verification_status") != "confirmed" for surface in room["cooling_load"].get("envelope_surfaces", [])):
+        return True
+    return any(component["calculation_status"] != "not_present_confirmed" for component in room["unapproved_components"])
+
+
+def room_component_scope(room):
+    result = {"room_id": room["room_id"], "stored_not_calculated": [], "not_assessed": [], "not_present_confirmed": []}
+    for component in room.get("unapproved_components", []):
+        item = {
+            "component_id": component["component_id"], "component_type": component["component_type"],
+            "value": component["value"], "unit": component["unit"], "source": component["source"],
+            "citations": deepcopy(component["citations"]), "source_room_id": component["source_room_id"],
+        }
+        result[component["calculation_status"]].append(item)
+    result["status"] = "complete" if not result["stored_not_calculated"] and not result["not_assessed"] else "incomplete"
+    return result
 
 
 def room_contributions(room, profiles, hour, weather, pressure):
@@ -705,15 +979,36 @@ def combine_components(contributions):
     return result
 
 
-def aggregate_zones(rooms):
+def aggregate_zones(rooms, zone_lookup):
     grouped = {}
     for room in rooms:
         grouped.setdefault(room["zone_id"], []).append(room)
     result = []
     for zone_id, members in grouped.items():
         hours = [aggregate_hours([room["hours"][hour] for room in members], hour) for hour in range(24)]
-        result.append({"zone_id": zone_id, "room_ids": [room["room_id"] for room in members], "hours": hours, "peak": peak(hours)})
+        zone = zone_lookup.get(zone_id, {})
+        result.append({
+            "zone_id": zone_id, "name": zone.get("name", zone_id), "floor_id": zone.get("floor_id", ""),
+            "room_ids": [room["room_id"] for room in members], "hours": hours, "peak": peak(hours),
+        })
     return sorted(result, key=lambda item: item["zone_id"])
+
+
+def aggregate_floors(zones, floor_lookup):
+    grouped = {}
+    for zone in zones:
+        grouped.setdefault(zone.get("floor_id", ""), []).append(zone)
+    result = []
+    for floor_id, members in grouped.items():
+        hours = [aggregate_hours([zone["hours"][hour] for zone in members], hour) for hour in range(24)]
+        floor = floor_lookup.get(floor_id, {})
+        result.append({
+            "floor_id": floor_id, "name": floor.get("name", floor_id),
+            "zone_ids": [zone["zone_id"] for zone in members],
+            "room_ids": [room_id for zone in members for room_id in zone["room_ids"]],
+            "hours": hours, "peak": peak(hours),
+        })
+    return sorted(result, key=lambda item: item["floor_id"])
 
 
 def aggregate_project(zones):
@@ -748,15 +1043,15 @@ def peak(hours):
     }
 
 
-def governing_peak(scenarios):
-    choices = [scenario for scenario in scenarios if scenario.get("project_peak")]
+def governing_peak(scenarios, peak_key="included_scope_peak"):
+    choices = [scenario for scenario in scenarios if scenario.get(peak_key)]
     if not choices:
         return {}
-    maximum = max(item["project_peak"]["design_total_kw"] for item in choices)
-    tied = [{"scenario_id": item["scenario_id"], "month": item["representative_month"], "hours": item["project_peak"]["tied_hours"]} for item in choices if item["project_peak"]["design_total_kw"] == maximum]
+    maximum = max(item[peak_key]["design_total_kw"] for item in choices)
+    tied = [{"scenario_id": item["scenario_id"], "month": item["representative_month"], "hours": item[peak_key]["tied_hours"]} for item in choices if item[peak_key]["design_total_kw"] == maximum]
     first = tied[0]
     governing = next(item for item in choices if item["scenario_id"] == first["scenario_id"])
-    result = deepcopy(governing["project_peak"])
+    result = deepcopy(governing[peak_key])
     result.update({"scenario_id": first["scenario_id"], "month": first["month"], "ties": tied})
     return result
 

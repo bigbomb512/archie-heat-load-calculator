@@ -224,7 +224,7 @@
             <label>Designer notes<textarea id="reqDesignerNotes" rows="3"></textarea></label>
           </form>
           <div class="panel-head"><div><div class="micro">Cooling conditions</div><h3>Psychrometric calculation inputs</h3></div></div>
-          <p class="fine">Enter the designer-approved summer design conditions used for preliminary outside-air cooling load only.</p>
+          <p class="fine">Enter the designer-approved summer design conditions used for outside-air cooling inputs.</p>
           <div class="requirements-form">
             <label>Indoor cooling wet-bulb (°C)<input id="reqCoolingWetBulb" type="number" step="0.1"></label>
             <label>Outdoor summer wet-bulb (°C)<input id="reqSummerWetBulb" type="number" step="0.1"></label>
@@ -241,9 +241,30 @@
           <div id="heatSources"></div>
           <div class="bar"><span class="conf" id="requirementsStatus">Loading design inputs…</span><button class="btn key" id="btnSaveRequirements" type="button">Save design inputs</button></div>
           <div class="review-list" id="requirementsLinks"></div>
-          <div class="panel-head"><div><div class="micro">Preliminary cooling loads</div><h3>Zone contribution breakdown</h3></div><button class="btn key" id="btnCalculateHeatLoad" type="button">Calculate cooling loads</button></div>
-          <div class="bar"><span class="conf" id="heatLoadStatus">Save design inputs before calculating.</span></div>
-          <div id="heatLoadResults"></div>
+          <div class="panel-head"><div><div class="micro">Reviewed envelope</div><h3>Project constructions and boundaries</h3></div><button class="btn ghost mini" id="btnMigrateEnvelope" type="button">Seed legacy inputs</button></div>
+          <p class="fine">Only confirmed opaque constructions and boundaries can enter this cooling calculation. Window, frame and geometry records are retained for future approved methods and never contribute yet.</p>
+          <div class="panel-head"><div><div class="micro">Construction library</div><h3>Per-project reviewed opaque assemblies</h3></div><button class="btn ghost mini" id="btnAddConstruction" type="button">Add construction</button></div>
+          <div id="envelopeConstructions" class="envelope-editor"></div>
+          <details class="envelope-storage"><summary><span><b>Stored window and shading records</b><small>These are evidence records only; detailed glazing and geometric shading are excluded.</small></span></summary><div class="requirements-form"><label>Window records (JSON)<textarea id="envelopeWindows" rows="5" placeholder='[{"record_id":"window-1", ...}]'></textarea></label><label>Shading records (JSON)<textarea id="envelopeShading" rows="5" placeholder='[{"record_id":"shade-1", ...}]'></textarea></label></div></details>
+          <div class="panel-head"><div><div class="micro">Boundary model</div><h3>Room and zone envelope surfaces</h3></div><button class="btn ghost mini" id="btnAddBoundary" type="button">Add boundary</button></div>
+          <div id="envelopeSurfaces" class="envelope-editor"></div>
+          <div class="bar"><label class="envelope-activate"><input id="envelopeActive" type="checkbox"> Use reviewed model for cooling calculations</label><span class="conf" id="envelopeStatus">Save reviewed constructions and boundary inputs separately from legacy cooling surfaces.</span><button class="btn key" id="btnSaveEnvelope" type="button">Save envelope</button></div>
+          <div id="envelopeReadiness" class="review-list"></div>
+          <div class="panel-head"><div><div class="micro">Cooling workflow</div><h3>Floors, zones, and rooms</h3></div><button class="btn ghost mini" id="btnBuildHourlyModel" type="button">Seed from design inputs</button></div>
+          <p class="fine">Map every room to a reviewed zone and floor. Legacy models seed an explicit provisional “Unassigned legacy floor”; the calculator never guesses a level.</p>
+          <div class="panel-head hierarchy-heading"><div><div class="micro">Floors</div><h3>Building levels</h3></div><button class="btn ghost mini" id="btnAddFloor" type="button">Add floor</button></div>
+          <div id="hourlyFloors" class="hierarchy-editor"></div>
+          <div class="panel-head hierarchy-heading"><div><div class="micro">Zones</div><h3>Conditioned areas</h3></div><button class="btn ghost mini" id="btnAddHourlyZone" type="button">Add zone</button></div>
+          <div id="hourlyZones" class="hierarchy-editor"></div>
+          <div class="panel-head hierarchy-heading"><div><div class="micro">Rooms</div><h3>Room inputs and assignments</h3></div><button class="btn ghost mini" id="btnAddHourlyRoom" type="button">Add room</button></div>
+          <div id="hourlyRooms" class="hierarchy-editor"></div>
+          <div class="bar"><span class="conf" id="hourlyModelStatus">Seed or load the room model to review topology.</span><button class="btn key" id="btnSaveHourlyModel" type="button">Save hierarchy</button></div>
+          <div id="roomInputCoverage" class="review-list"></div>
+          <div class="panel-head"><div><div class="micro">Cooling load report</div><h3>Hourly design-day result</h3></div><button class="btn key" id="btnCalculateHourlyLoad" type="button">Calculate cooling report</button></div>
+          <div class="requirements-form"><label>Selected cooling scenario IDs<input id="hourlyScenarioIds" placeholder="e.g. summer_design_day"></label></div>
+          <div class="bar"><span class="conf" id="hourlyReportStatus">Save reviewed hourly inputs before calculating.</span></div>
+          <div id="coolingReadiness" class="review-list"></div>
+          <div id="hourlyLoadResults"></div>
           <div class="panel-head"><div><div class="micro">Preliminary ventilation</div><h3>Outside air, exhaust, and make-up air</h3></div><button class="btn key" id="btnCalculateVentilation" type="button">Calculate ventilation</button></div>
           <div class="bar"><span class="conf" id="ventilationStatus">Enter zone ventilation inputs, then calculate.</span></div>
           <div id="ventilationResults"></div>

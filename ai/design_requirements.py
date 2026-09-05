@@ -311,6 +311,11 @@ def empty_envelope_surface():
         "solar_design_w_m2": None,
         "solar_gain_factor": None,
         "shading_factor": None,
+        "boundary_method": "external",
+        "boundary_temperature_c": None,
+        "construction_id": "",
+        "construction_revision": None,
+        "manual_solar_source": "",
         "verification_status": "missing",
         "source": "",
     }
@@ -470,6 +475,29 @@ def validate_envelope_surfaces(surfaces):
         surface["solar_gain_factor"] = optional_factor(surface["solar_gain_factor"], f"Envelope surface {index} solar-gain factor")
         surface["shading_factor"] = optional_factor(surface["shading_factor"], f"Envelope surface {index} shading factor")
         surface["verification_status"] = validate_choice(surface["verification_status"], VERIFICATION_STATUSES, f"Envelope surface {index} verification status")
+        surface["boundary_method"] = validate_choice(surface["boundary_method"], {"external", "fixed_adjacent_temperature"}, f"Envelope surface {index} boundary method")
+        if surface["boundary_temperature_c"] in (None, ""):
+            surface["boundary_temperature_c"] = None
+        else:
+            try:
+                surface["boundary_temperature_c"] = float(surface["boundary_temperature_c"])
+            except (TypeError, ValueError) as error:
+                raise ValueError(f"Envelope surface {index} boundary temperature must be a number or blank.") from error
+            if not -100 <= surface["boundary_temperature_c"] <= 100:
+                raise ValueError(f"Envelope surface {index} boundary temperature is outside the accepted range.")
+        if surface["boundary_method"] == "fixed_adjacent_temperature" and surface["boundary_temperature_c"] is None:
+            raise ValueError(f"Envelope surface {index} fixed adjacent boundary needs a boundary temperature.")
+        surface["construction_id"] = text_value(surface["construction_id"], f"Envelope surface {index} construction ID")
+        surface["manual_solar_source"] = text_value(surface["manual_solar_source"], f"Envelope surface {index} manual solar source")
+        if surface["construction_revision"] not in (None, ""):
+            try:
+                surface["construction_revision"] = int(surface["construction_revision"])
+            except (TypeError, ValueError) as error:
+                raise ValueError(f"Envelope surface {index} construction revision must be a whole number or blank.") from error
+            if surface["construction_revision"] < 1:
+                raise ValueError(f"Envelope surface {index} construction revision must be positive.")
+        else:
+            surface["construction_revision"] = None
         result.append(surface)
     return result
 

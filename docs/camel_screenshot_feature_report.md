@@ -33,7 +33,7 @@ Engineering meaning:
 - Overhang, side reveals/fins, distance and rotation affect sun obstruction by orientation and time.
 - The model needs an unambiguous coordinate convention and a clearly defined surface normal.
 
-Current project status: external surface evidence and a manually entered design solar basis are supported in the preliminary cooling inputs. Dynamic shading geometry, angle calculation, reveal/overhang obstruction, and any CAMEL+ rotation convention are **not implemented**. The hourly model accepts only an engineer-entered solar schedule assigned to each solar-bearing surface.
+Current project status: external surface evidence and a manually entered design solar basis are supported in the authoritative hourly cooling workflow. Dynamic shading geometry, angle calculation, reveal/overhang obstruction, and any CAMEL+ rotation convention are **not implemented**. The hourly model accepts only an engineer-entered solar schedule assigned to each solar-bearing surface.
 
 ### 2. Windows, glass data and corrections
 

@@ -1,3 +1,10 @@
 #!/bin/zsh
+set -euo pipefail
+
 cd "$(dirname "$0")"
-'/Users/jeremyzheng/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3' -m backend.web_app "$@"
+
+if [[ -x ".venv/bin/python" ]]; then
+  exec ".venv/bin/python" -m backend.web_app "$@"
+fi
+
+exec "${PYTHON_BIN:-python3}" -m backend.web_app "$@"

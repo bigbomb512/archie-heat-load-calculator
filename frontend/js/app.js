@@ -439,8 +439,17 @@ requiredElement("btnAddZone").addEventListener("click", () => addZone());
 requiredElement("btnSaveRequirements").addEventListener("click", saveDesignRequirements);
 requiredElement("btnBuildThermalModel").addEventListener("click", () => saveThermalModel("build"));
 requiredElement("btnApplyThermalModel").addEventListener("click", () => saveThermalModel("save"));
-requiredElement("btnCalculateHeatLoad").addEventListener("click", calculateHeatLoad);
 requiredElement("btnCalculateVentilation").addEventListener("click", calculateVentilation);
+requiredElement("btnBuildHourlyModel").addEventListener("click", () => saveHourlyModel("build"));
+requiredElement("btnAddFloor").addEventListener("click", () => addHourlyFloor());
+requiredElement("btnAddHourlyZone").addEventListener("click", () => addHourlyZone());
+requiredElement("btnAddHourlyRoom").addEventListener("click", () => addHourlyRoom());
+requiredElement("btnSaveHourlyModel").addEventListener("click", () => saveHourlyModel("save"));
+requiredElement("btnCalculateHourlyLoad").addEventListener("click", calculateHourlyLoad);
+requiredElement("btnAddConstruction").addEventListener("click", () => addEnvelopeConstruction());
+requiredElement("btnAddBoundary").addEventListener("click", () => addEnvelopeBoundary());
+requiredElement("btnSaveEnvelope").addEventListener("click", saveEnvelope);
+requiredElement("btnMigrateEnvelope").addEventListener("click", migrateEnvelope);
 
 async function confirmSelection(){
   if (!DATA || !PICK.size) return toast("Nothing selected", "Include at least one page before confirming.");
@@ -845,7 +854,7 @@ function readDesignRequirements(){
   return result;
 }
 
-function showDesignRequirements(requirements = {}, readiness = {}, roomSuggestions = ROOM_SUGGESTIONS, heatLoadReport = {}, heatLoadStatus = "not_calculated", ventilationReport = {}, ventilationStatus = "not_calculated"){
+function showDesignRequirements(requirements = {}, readiness = {}, roomSuggestions = ROOM_SUGGESTIONS, heatLoadReport = {}, heatLoadStatus = "not_calculated", ventilationReport = {}, ventilationStatus = "not_calculated", heatLoadReportUrl = ""){
   requiredElement("designRequirementsPanel").classList.remove("hide");
   ROOM_SUGGESTIONS = roomSuggestions || [];
   Object.entries(requirementFields).forEach(([key, id]) => {
@@ -874,9 +883,161 @@ function showDesignRequirements(requirements = {}, readiness = {}, roomSuggestio
   requiredElement("requirementsStatus").textContent = readiness.status
     ? `${readiness.status} · ${[missing.length && "Missing: " + missing.join(", "), provisional.length && "Provisional: " + provisional.join(", "), incompleteZones && `${incompleteZones} zone${incompleteZones === 1 ? "" : "s"} need inputs`, errors.length && "Fix: " + errors.join(", ")].filter(Boolean).join(" · ") || "All required design inputs confirmed."}`
     : "Complete design inputs to unlock final engineering work.";
-  drawHeatLoadReport(heatLoadReport, heatLoadStatus);
+  const hasLegacyCooling = Object.keys(heatLoadReport || {}).length > 0;
+  requiredElement("requirementsLinks").innerHTML = hasLegacyCooling
+    ? `<article class="review-item"><div><b>Legacy cooling report (read-only)</b><span>${esc(heatLoadStatus)} · new calculations use the hourly cooling report.</span></div>${heatLoadReportUrl ? `<a class="btn ghost mini" href="${esc(heatLoadReportUrl)}" target="_blank" rel="noopener">Open</a>` : ""}</article>`
+    : "";
   drawVentilationReport(ventilationReport, ventilationStatus);
   loadThermalModel();
+  loadEnvelope();
+  loadHourlyModel();
+  loadHourlyLoadReport();
+}
+
+function addEnvelopeConstruction(record = {}){
+  const row = document.createElement("div");
+  row.className = "envelope-construction";
+  row.innerHTML = `<input class="env-id" placeholder="Construction ID" value="${esc(record.record_id || "")}">
+    <input class="env-title" placeholder="Construction title" value="${esc(record.title || "")}">
+    <select class="env-kind"><option value="opaque_wall">Wall</option><option value="roof">Roof</option><option value="floor">Floor</option><option value="ceiling">Ceiling</option><option value="partition">Partition</option></select>
+    <input class="env-u" type="number" min="0.001" step="0.001" placeholder="U W/m²K" value="${record.u_value_w_m2k ?? ""}">
+    <input class="env-abs" type="number" min="0" max="1" step="0.01" placeholder="Absorptivity" value="${record.absorptivity ?? ""}">
+    <select class="env-status"><option value="missing">Missing</option><option value="provisional">Provisional</option><option value="confirmed">Confirmed</option></select>
+    <input class="env-source" placeholder="Reviewed source" value="${esc(record.source || "")}">
+    <button class="btn ghost mini" type="button">Remove</button>`;
+  row.querySelector(".env-kind").value = record.kind || "opaque_wall";
+  row.querySelector(".env-status").value = record.review_status || "missing";
+  row.querySelector("button").addEventListener("click", () => row.remove());
+  requiredElement("envelopeConstructions").appendChild(row);
+}
+
+function addEnvelopeBoundary(surface = {}){
+  const row = document.createElement("div");
+  row.className = "envelope-boundary";
+  row.innerHTML = `<input class="boundary-id" placeholder="Surface ID" value="${esc(surface.surface_id || "")}">
+    <input class="boundary-zone" placeholder="Owner zone ID" value="${esc(surface.owner_zone_id || "")}">
+    <select class="boundary-kind"><option value="opaque_wall">Wall</option><option value="roof">Roof</option><option value="floor">Floor</option><option value="ceiling">Ceiling</option><option value="partition">Partition</option><option value="glazing">Glazing (stored)</option></select>
+    <select class="boundary-orientation"><option value="N">N</option><option value="NE">NE</option><option value="E">E</option><option value="SE">SE</option><option value="S">S</option><option value="SW">SW</option><option value="W">W</option><option value="NW">NW</option><option value="horizontal">Horizontal</option><option value="internal">Internal</option></select>
+    <input class="boundary-area" type="number" min="0.001" step="0.01" placeholder="Area m²" value="${surface.area_m2 ?? ""}">
+    <input class="boundary-construction" placeholder="Construction ID" value="${esc(surface.construction_id || "")}">
+    <select class="boundary-method"><option value="external">External</option><option value="fixed_adjacent_temperature">Fixed adjacent temp</option><option value="outdoor_offset">Outdoor offset (stored)</option><option value="proportional_ambient_difference">Proportional (stored)</option></select>
+    <input class="boundary-temp" type="number" step="0.1" placeholder="Adjacent °C" value="${surface.adjacent_temperature_c ?? ""}">
+    <select class="boundary-status"><option value="missing">Missing</option><option value="provisional">Provisional</option><option value="confirmed">Confirmed</option></select>
+    <input class="boundary-source" placeholder="Reviewed source" value="${esc(surface.source || "")}">
+    <label class="boundary-solar"><input class="boundary-solar-enabled" type="checkbox" ${surface.manual_solar?.enabled ? "checked" : ""}> Manual solar</label>
+    <input class="boundary-solar-design" type="number" min="0" step="0.1" placeholder="Solar W/m²" value="${surface.manual_solar?.solar_design_w_m2 ?? ""}">
+    <input class="boundary-solar-gain" type="number" min="0" max="1" step="0.01" placeholder="Gain factor" value="${surface.manual_solar?.solar_gain_factor ?? ""}">
+    <input class="boundary-solar-shade" type="number" min="0" max="1" step="0.01" placeholder="Shade factor" value="${surface.manual_solar?.shading_factor ?? ""}">
+    <select class="boundary-solar-status"><option value="missing">Missing</option><option value="provisional">Provisional</option><option value="confirmed">Confirmed</option></select>
+    <input class="boundary-solar-source" placeholder="Manual solar source" value="${esc(surface.manual_solar?.source || "")}">
+    <button class="btn ghost mini" type="button">Remove</button>`;
+  row.querySelector(".boundary-kind").value = surface.kind || "opaque_wall";
+  row.querySelector(".boundary-orientation").value = surface.orientation || "N";
+  row.querySelector(".boundary-method").value = surface.boundary_method || "external";
+  row.querySelector(".boundary-status").value = surface.review_status || "missing";
+  row.querySelector(".boundary-solar-status").value = surface.manual_solar?.review_status || "missing";
+  row.querySelector("button").addEventListener("click", () => row.remove());
+  requiredElement("envelopeSurfaces").appendChild(row);
+}
+
+function parseEnvelopeRecords(id, label){
+  const raw = requiredElement(id).value.trim();
+  if (!raw) return [];
+  try {
+    const value = JSON.parse(raw);
+    if (!Array.isArray(value)) throw new Error("must be an array");
+    return value;
+  } catch (error) {
+    throw new Error(`${label} must be valid JSON array: ${error.message}`);
+  }
+}
+
+function readEnvelope(){
+  return {
+    envelope_library: {
+      constructions: [...document.querySelectorAll(".envelope-construction")].map(row => ({
+        record_id: row.querySelector(".env-id").value.trim(), title: row.querySelector(".env-title").value.trim(), revision: 1,
+        kind: row.querySelector(".env-kind").value, u_value_w_m2k: blankToNull(row.querySelector(".env-u").value), absorptivity: blankToNull(row.querySelector(".env-abs").value),
+        review_status: row.querySelector(".env-status").value, source: row.querySelector(".env-source").value.trim(), citations: [],
+      })),
+      windows: parseEnvelopeRecords("envelopeWindows", "Window records"), shading_records: parseEnvelopeRecords("envelopeShading", "Shading records"),
+    },
+    envelope_model: {
+      active_for_calculation: requiredElement("envelopeActive").checked,
+      surfaces: [...document.querySelectorAll(".envelope-boundary")].map(row => ({
+        surface_id: row.querySelector(".boundary-id").value.trim(), owner_zone_id: row.querySelector(".boundary-zone").value.trim(), owner_room_id: "",
+        kind: row.querySelector(".boundary-kind").value, orientation: row.querySelector(".boundary-orientation").value,
+        area_m2: blankToNull(row.querySelector(".boundary-area").value), construction_id: row.querySelector(".boundary-construction").value.trim(), window_id: "", shading_record_ids: [],
+        boundary_method: row.querySelector(".boundary-method").value, adjacent_temperature_c: blankToNull(row.querySelector(".boundary-temp").value),
+        review_status: row.querySelector(".boundary-status").value, source: row.querySelector(".boundary-source").value.trim(), citations: [],
+        manual_solar: {enabled: row.querySelector(".boundary-solar-enabled").checked, solar_design_w_m2: blankToNull(row.querySelector(".boundary-solar-design").value), solar_gain_factor: blankToNull(row.querySelector(".boundary-solar-gain").value), shading_factor: blankToNull(row.querySelector(".boundary-solar-shade").value), review_status: row.querySelector(".boundary-solar-status").value, source: row.querySelector(".boundary-solar-source").value.trim(), citations: []},
+      })),
+    },
+  };
+}
+
+function showEnvelope(library = {}, model = {}, readiness = {}){
+  requiredElement("envelopeConstructions").innerHTML = "";
+  (library.constructions || []).forEach(addEnvelopeConstruction);
+  requiredElement("envelopeWindows").value = JSON.stringify(library.windows || [], null, 2);
+  requiredElement("envelopeShading").value = JSON.stringify(library.shading_records || [], null, 2);
+  requiredElement("envelopeSurfaces").innerHTML = "";
+  (model.surfaces || []).forEach(addEnvelopeBoundary);
+  requiredElement("envelopeActive").checked = Boolean(model.active_for_calculation);
+  const rows = [
+    ...(readiness.included || []).map(item => ["Included", item]),
+    ...(readiness.blocked || []).map(item => ["Blocked", item]),
+    ...(readiness.stored_not_calculated || []).map(item => ["Stored only", item]),
+  ];
+  requiredElement("envelopeStatus").textContent = readiness.active_for_calculation ? `${readiness.status || "review required"} · reviewed model active` : "Legacy envelope remains active until reviewed model is saved and activated.";
+  requiredElement("envelopeReadiness").innerHTML = rows.length ? rows.map(([state, item]) => `<article class="review-item"><div><b>${esc(state)} · ${esc(item.surface_id)}</b><span>${esc(item.kind || "surface")} · ${esc(item.reason || "reviewed steady-state opaque input")}</span></div></article>`).join("") : "<div class=\"review-empty\"><b>No reviewed envelope surfaces</b><span>Add reviewed records or seed legacy values as provisional.</span></div>";
+}
+
+async function loadEnvelope(){
+  if (!DATA?.id) return;
+  try {
+    const [libraryRes, modelRes] = await Promise.all([
+      fetch("/api/envelope-library?project_id=" + encodeURIComponent(DATA.id)), fetch("/api/envelope-model?project_id=" + encodeURIComponent(DATA.id)),
+    ]);
+    const library = await libraryRes.json(), model = await modelRes.json();
+    if (libraryRes.ok && modelRes.ok && !library.error && !model.error) showEnvelope(library.envelope_library, model.envelope_model, model.readiness);
+  } catch {}
+}
+
+async function saveEnvelope(){
+  if (!DATA?.id) return;
+  requiredElement("btnSaveEnvelope").disabled = true;
+  requiredElement("envelopeStatus").textContent = "Saving reviewed envelope records…";
+  try {
+    const envelope = readEnvelope();
+    let response = await fetch("/api/envelope-library", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({project_id: DATA.id, envelope_library: envelope.envelope_library})});
+    let data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || "Could not save envelope library.");
+    response = await fetch("/api/envelope-model", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({project_id: DATA.id, envelope_model: envelope.envelope_model})});
+    data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || "Could not save envelope model.");
+    showEnvelope(envelope.envelope_library, data.envelope_model, data.readiness);
+    toast("Envelope saved", "Cooling reports using this project are now stale until recalculated.");
+  } catch (error) {
+    requiredElement("envelopeStatus").textContent = "Could not save envelope records.";
+    toast("Envelope save failed", error.message);
+  }
+  requiredElement("btnSaveEnvelope").disabled = false;
+}
+
+async function migrateEnvelope(){
+  if (!DATA?.id) return;
+  requiredElement("btnMigrateEnvelope").disabled = true;
+  try {
+    const response = await fetch("/api/envelope-model", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({project_id: DATA.id, action:"migrate_legacy"})});
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || "Could not migrate legacy envelope inputs.");
+    await loadEnvelope();
+    toast("Legacy inputs seeded", "Migrated records are provisional and the legacy calculation path remains active.");
+  } catch (error) {
+    toast("Envelope migration failed", error.message);
+  }
+  requiredElement("btnMigrateEnvelope").disabled = false;
 }
 
 async function loadThermalModel(){
@@ -941,7 +1102,7 @@ async function loadDesignRequirements(){
   try {
     const res = await fetch("/api/design-requirements?project_id=" + encodeURIComponent(DATA.id));
     const data = await res.json();
-    if (res.ok && !data.error) showDesignRequirements(data.requirements, data.readiness, data.room_suggestions, data.heat_load_report, data.heat_load_status, data.ventilation_report, data.ventilation_status);
+    if (res.ok && !data.error) showDesignRequirements(data.requirements, data.readiness, data.room_suggestions, data.heat_load_report, data.heat_load_status, data.ventilation_report, data.ventilation_status, data.heat_load_report_url);
   } catch {}
 }
 
@@ -968,41 +1129,308 @@ async function saveDesignRequirements(){
   requiredElement("btnSaveRequirements").disabled = false;
 }
 
-async function calculateHeatLoad(){
-  if (!DATA?.id) return;
-  requiredElement("btnCalculateHeatLoad").disabled = true;
-  requiredElement("heatLoadStatus").textContent = "Calculating preliminary cooling loads…";
-  try {
-    const res = await fetch("/api/heat-load", {
-      method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({project_id: DATA.id, requirements: readDesignRequirements()}),
-    });
-    const data = await res.json();
-    if (!res.ok || data.error) throw new Error(data.error || "Could not calculate cooling loads.");
-    drawHeatLoadReport(data.heat_load_report, data.heat_load_status);
-    const links = [["heat_load_report.json", data.heat_load_report_url], ["refreshed reasoning packet", data.reasoning_zip_url]]
-      .filter(([, url]) => url);
-    requiredElement("requirementsLinks").innerHTML = links.map(([label, url]) => `<article class="review-item"><div><b>${esc(label)}</b></div><a class="btn ghost mini" href="${url}" target="_blank" rel="noopener">Open</a></article>`).join("");
-    toast("Cooling loads calculated", `Status: ${data.heat_load_report.status}.`);
-  } catch (error) {
-    requiredElement("heatLoadStatus").textContent = "Could not calculate cooling loads.";
-    toast("Cooling-load calculation failed", error.message);
-  }
-  requiredElement("btnCalculateHeatLoad").disabled = false;
+function addHourlyFloor(floor = {}){
+  const row = document.createElement("div");
+  row.className = "hierarchy-row";
+  row.innerHTML = `<input class="hourly-floor-id" placeholder="Floor ID" value="${esc(floor.floor_id || "")}">
+    <input class="hourly-floor-name" placeholder="Floor name" value="${esc(floor.name || "")}">
+    <input class="hourly-floor-elevation" type="number" step="0.01" placeholder="Elevation m (optional)" value="${floor.elevation_m ?? ""}">
+    <select class="hourly-floor-status"><option value="missing">Missing</option><option value="provisional">Provisional</option><option value="confirmed">Confirmed</option></select>
+    <input class="hourly-floor-source" placeholder="Reviewed source" value="${esc(floor.source || "")}">
+    <button class="btn ghost mini" type="button">Remove</button>`;
+  row.querySelector(".hourly-floor-status").value = floor.verification_status || "missing";
+  row.querySelector("button").addEventListener("click", () => row.remove());
+  requiredElement("hourlyFloors").appendChild(row);
 }
 
-function drawHeatLoadReport(report = {}, reportStatus = "not_calculated"){
-  if (!report?.zone_results?.length) {
-    requiredElement("heatLoadStatus").textContent = reportStatus === "stale" ? "Cooling-load report is stale. Calculate again after reviewing inputs." : "Enter cooling-load inputs, then calculate a preliminary breakdown.";
-    requiredElement("heatLoadResults").innerHTML = "";
-    return;
+function addHourlyZone(zone = {}){
+  const row = document.createElement("div");
+  row.className = "hierarchy-row";
+  row.innerHTML = `<input class="hourly-zone-id" placeholder="Zone ID" value="${esc(zone.zone_id || "")}">
+    <input class="hourly-zone-name" placeholder="Zone name" value="${esc(zone.name || "")}">
+    <input class="hourly-zone-floor" placeholder="Floor ID" value="${esc(zone.floor_id || "")}">
+    <select class="hourly-zone-status"><option value="missing">Missing</option><option value="provisional">Provisional</option><option value="confirmed">Confirmed</option></select>
+    <input class="hourly-zone-source" placeholder="Reviewed source" value="${esc(zone.source || "")}">
+    <button class="btn ghost mini" type="button">Remove</button>`;
+  row.querySelector(".hourly-zone-status").value = zone.verification_status || "missing";
+  row.querySelector("button").addEventListener("click", () => row.remove());
+  requiredElement("hourlyZones").appendChild(row);
+}
+
+const ROOM_COMPONENT_TYPES = [
+  ["infiltration", "Infiltration", "airflow"], ["minimum_supply_air", "Minimum supply air", "airflow"],
+  ["extract_air", "Extract air", "airflow"], ["spill_air", "Spill air", "airflow"],
+  ["transfer_air", "Transfer air", "airflow"], ["make_up_air", "Make-up air", "airflow"],
+  ["vapour_gain", "Vapour gain", "moisture"], ["steam_gain", "Steam gain", "moisture"],
+  ["process_latent_load", "Process latent load", "moisture"],
+];
+
+function defaultRoomComponents(){
+  return ROOM_COMPONENT_TYPES.map(([component_type]) => ({
+    component_id: component_type, component_type, value: null, unit: "", source_room_id: "", source: "", citations: [],
+    verification_status: "missing", calculation_status: "not_assessed",
+  }));
+}
+
+function normaliseRoomComponents(components = []){
+  const supplied = new Set((components || []).map(item => item.component_type));
+  return [...(components || []), ...defaultRoomComponents().filter(item => !supplied.has(item.component_type))];
+}
+
+function roomComponentMarkup(component = {}){
+  const typeOptions = ROOM_COMPONENT_TYPES.map(([value, label]) => `<option value="${value}">${label}</option>`).join("");
+  const citation = component.citations?.[0]?.reference || "";
+  return `<div class="room-component">
+    <input class="room-component-id" placeholder="Component ID" value="${esc(component.component_id || "")}">
+    <select class="room-component-type">${typeOptions}</select>
+    <select class="room-component-state"><option value="not_assessed">Not assessed</option><option value="not_present_confirmed">Not present, confirmed</option><option value="stored_not_calculated">Stored, not calculated</option></select>
+    <input class="room-component-value" type="number" min="0" step="any" placeholder="Raw value" value="${component.value ?? ""}">
+    <input class="room-component-unit" placeholder="Unit (e.g. L/s)" value="${esc(component.unit || "")}">
+    <input class="room-component-source-room" placeholder="Source room ID (transfer only)" value="${esc(component.source_room_id || "")}">
+    <select class="room-component-status"><option value="missing">Missing</option><option value="provisional">Provisional</option><option value="confirmed">Confirmed</option></select>
+    <input class="room-component-source" placeholder="Evidence source" value="${esc(component.source || "")}">
+    <input class="room-component-citation" placeholder="Citation reference (optional)" value="${esc(citation)}">
+  </div>`;
+}
+
+function addHourlyRoom(room = {}){
+  const card = document.createElement("details");
+  card.className = "room-input-card";
+  card.open = true;
+  const cooling = room.cooling_load || {};
+  const conditions = room.cooling_load_conditions || {};
+  const components = normaliseRoomComponents(room.unapproved_components);
+  card.innerHTML = `<summary><span>${esc(room.name || room.room_id || "New room")}</span><small>Topology, supported cooling inputs, and excluded room inputs</small></summary>
+    <div class="hierarchy-row">
+      <input class="hourly-room-id" placeholder="Room ID" value="${esc(room.room_id || "")}">
+      <input class="hourly-room-name" placeholder="Room name" value="${esc(room.name || "")}">
+      <input class="hourly-room-zone" placeholder="Zone ID" value="${esc(room.zone_id || "")}">
+      <select class="hourly-room-mapping"><option value="inferred">Inferred</option><option value="confirmed">Confirmed</option></select>
+      <select class="hourly-room-status"><option value="missing">Missing</option><option value="provisional">Provisional</option><option value="confirmed">Confirmed</option></select>
+      <input class="hourly-room-source" placeholder="Reviewed source" value="${esc(room.source || "")}">
+      <button class="btn ghost mini" type="button">Remove</button>
+    </div>
+    <div class="room-input-grid">
+      <fieldset><legend>Supported cooling inputs</legend>
+        <label>Area m²<input class="room-area" type="number" min="0" step="any" value="${room.area_m2 ?? ""}"></label>
+        <label>Occupancy<input class="room-occupancy" type="number" min="0" step="any" value="${room.occupancy ?? ""}"></label>
+        <label>Cooling setpoint °C<input class="room-setpoint" type="number" step="any" value="${room.indoor_cooling_setpoint_c ?? ""}"></label>
+        <label>People sensible W/person<input class="room-people-sensible" type="number" min="0" step="any" value="${cooling.people_sensible_w_per_person ?? ""}"></label>
+        <label>People latent W/person<input class="room-people-latent" type="number" min="0" step="any" value="${cooling.people_latent_w_per_person ?? ""}"></label>
+        <label>People diversity<input class="room-people-diversity" type="number" min="0" step="any" value="${cooling.people_diversity_factor ?? ""}"></label>
+        <label>Lighting W/m²<input class="room-lighting" type="number" min="0" step="any" value="${cooling.lighting_w_m2 ?? ""}"></label>
+        <label>Lighting diversity<input class="room-lighting-diversity" type="number" min="0" step="any" value="${cooling.lighting_diversity_factor ?? ""}"></label>
+        <label>Outside-air cooling L/s<input class="room-outside-air" type="number" min="0" step="any" value="${cooling.outside_air_lps ?? ""}"></label>
+        <label>Safety factor<input class="room-safety" type="number" min="0" step="any" value="${cooling.safety_factor ?? ""}"></label>
+        <label>Cooling input status<select class="room-cooling-status"><option value="missing">Missing</option><option value="provisional">Provisional</option><option value="confirmed">Confirmed</option></select></label>
+        <label>Cooling input source<input class="room-cooling-source" value="${esc(cooling.source || "")}"></label>
+        <label>Indoor cooling WB °C<input class="room-wet-bulb" type="number" step="any" value="${conditions.indoor_cooling_wet_bulb_c ?? ""}"></label>
+        <label>Condition status<select class="room-condition-status"><option value="missing">Missing</option><option value="provisional">Provisional</option><option value="confirmed">Confirmed</option></select></label>
+        <label>Condition source<input class="room-condition-source" value="${esc(conditions.source || "")}"></label>
+      </fieldset>
+      <fieldset><legend>Schedules</legend>
+        <label>People schedule<input class="room-people-schedule" value="${esc(room.schedule_assignments?.people || "")}"></label>
+        <label>Lighting schedule<input class="room-lighting-schedule" value="${esc(room.schedule_assignments?.lighting || "")}"></label>
+        <label>Outside-air schedule<input class="room-outside-air-schedule" value="${esc(room.schedule_assignments?.outside_air || "")}"></label>
+        <p class="fine">Heat-source and solar schedules remain tied to their existing reviewed source/surface records.</p>
+      </fieldset>
+      <fieldset class="room-airflow-components"><legend>Airflow declarations — stored, not calculated</legend>${components.filter(item => ROOM_COMPONENT_TYPES.find(row => row[0] === item.component_type)?.[2] === "airflow").map(roomComponentMarkup).join("")}</fieldset>
+      <fieldset class="room-moisture-components"><legend>Moisture and process declarations — stored, not calculated</legend>${components.filter(item => ROOM_COMPONENT_TYPES.find(row => row[0] === item.component_type)?.[2] === "moisture").map(roomComponentMarkup).join("")}</fieldset>
+    </div>`;
+  card.querySelector(".hourly-room-mapping").value = room.mapping_status || "inferred";
+  card.querySelector(".hourly-room-status").value = room.verification_status || "missing";
+  card.querySelector(".room-cooling-status").value = cooling.verification_status || "missing";
+  card.querySelector(".room-condition-status").value = conditions.verification_status || "missing";
+  card.querySelectorAll(".room-component").forEach((row, index) => {
+    const componentId = row.querySelector(".room-component-id").value;
+    const component = components.find(item => item.component_id === componentId) || components[index];
+    row.querySelector(".room-component-type").value = component.component_type || "infiltration";
+    row.querySelector(".room-component-state").value = component.calculation_status || "not_assessed";
+    row.querySelector(".room-component-status").value = component.verification_status || "missing";
+  });
+  card.querySelector("button").addEventListener("click", () => card.remove());
+  requiredElement("hourlyRooms").appendChild(card);
+}
+
+function showHourlyModel(model = {}, readiness = {}){
+  requiredElement("hourlyFloors").innerHTML = "";
+  requiredElement("hourlyZones").innerHTML = "";
+  requiredElement("hourlyRooms").innerHTML = "";
+  (model.floors || []).forEach(addHourlyFloor);
+  (model.zones || []).forEach(addHourlyZone);
+  (model.rooms || []).forEach(addHourlyRoom);
+  const issues = readiness.issues || [];
+  requiredElement("hourlyModelStatus").textContent = readiness.status
+    ? `${readiness.status} · ${model.floors?.length || 0} floors · ${model.zones?.length || 0} zones · ${model.rooms?.length || 0} rooms${issues.length ? ` · ${issues.length} readiness items` : ""}`
+    : "Seed or load the room model to review topology.";
+  drawRoomInputCoverage(model);
+}
+
+function drawRoomInputCoverage(model = {}){
+  const rows = (model.rooms || []).map(room => {
+    const components = normaliseRoomComponents(room.unapproved_components);
+    const stored = components.filter(item => item.calculation_status === "stored_not_calculated");
+    const unassessed = components.filter(item => item.calculation_status === "not_assessed");
+    if (!stored.length && !unassessed.length) {
+      return `<article class="review-item readiness-review_ready"><div><b>${esc(room.room_id)} · reviewed supported room scope</b><span>All airflow and moisture categories are confirmed not present.</span></div></article>`;
+    }
+    const storedText = stored.map(item => `${item.component_type}${item.value !== null && item.value !== undefined ? ` (${item.value} ${item.unit})` : ""}`).join(", ");
+    const unassessedText = unassessed.map(item => item.component_type).join(", ");
+    return `<article class="review-item readiness-draft"><div><b>${esc(room.room_id)} · room input coverage incomplete</b><span>${storedText ? `Stored, excluded: ${storedText}. ` : ""}${unassessedText ? `Assess: ${unassessedText}.` : ""}</span></div></article>`;
+  });
+  requiredElement("roomInputCoverage").innerHTML = rows.length ? `<div class="panel-head hierarchy-heading"><div><div class="micro">Room input coverage</div><h3>Known exclusions and unresolved categories</h3></div></div>${rows.join("")}` : "";
+}
+
+function readHourlyModel(){
+  const floors = [...requiredElement("hourlyFloors").querySelectorAll(".hierarchy-row")].map(row => ({
+    floor_id: row.querySelector(".hourly-floor-id").value.trim(), name: row.querySelector(".hourly-floor-name").value.trim(),
+    elevation_m: blankToNull(row.querySelector(".hourly-floor-elevation").value), verification_status: row.querySelector(".hourly-floor-status").value,
+    source: row.querySelector(".hourly-floor-source").value.trim(), citations: [],
+  }));
+  const zones = [...requiredElement("hourlyZones").querySelectorAll(".hierarchy-row")].map(row => ({
+    zone_id: row.querySelector(".hourly-zone-id").value.trim(), name: row.querySelector(".hourly-zone-name").value.trim(), floor_id: row.querySelector(".hourly-zone-floor").value.trim(),
+    verification_status: row.querySelector(".hourly-zone-status").value, source: row.querySelector(".hourly-zone-source").value.trim(), citations: [],
+  }));
+  const roomsById = new Map((HOURLY_MODEL.rooms || []).map(room => [room.room_id, room]));
+  const rooms = [...requiredElement("hourlyRooms").querySelectorAll(".room-input-card")].map(card => {
+    const row = requiredElement("hourlyRooms") && card.querySelector(".hierarchy-row");
+    const roomId = row.querySelector(".hourly-room-id").value.trim();
+    const existing = roomsById.get(roomId) || {};
+    const load = {...(existing.cooling_load || {})};
+    const conditions = {...(existing.cooling_load_conditions || {})};
+    const existingComponentsById = new Map((existing.unapproved_components || []).map(item => [item.component_id, item]));
+    const components = [...card.querySelectorAll(".room-component")].map(component => {
+      const citation = component.querySelector(".room-component-citation").value.trim();
+      const componentId = component.querySelector(".room-component-id").value.trim();
+      const original = existingComponentsById.get(componentId);
+      const originalCitation = original?.citations?.[0]?.reference || "";
+      return {
+        component_id: componentId, component_type: component.querySelector(".room-component-type").value,
+        calculation_status: component.querySelector(".room-component-state").value,
+        value: blankToNull(component.querySelector(".room-component-value").value), unit: component.querySelector(".room-component-unit").value.trim(),
+        source_room_id: component.querySelector(".room-component-source-room").value.trim(), verification_status: component.querySelector(".room-component-status").value,
+        source: component.querySelector(".room-component-source").value.trim(),
+        citations: citation === originalCitation ? (original?.citations || []) : (citation ? [{reference: citation, page: null, excerpt: ""}] : []),
+      };
+    });
+    Object.assign(load, {
+      people_sensible_w_per_person: blankToNull(card.querySelector(".room-people-sensible").value), people_latent_w_per_person: blankToNull(card.querySelector(".room-people-latent").value),
+      people_diversity_factor: blankToNull(card.querySelector(".room-people-diversity").value), lighting_w_m2: blankToNull(card.querySelector(".room-lighting").value),
+      lighting_diversity_factor: blankToNull(card.querySelector(".room-lighting-diversity").value), outside_air_lps: blankToNull(card.querySelector(".room-outside-air").value),
+      safety_factor: blankToNull(card.querySelector(".room-safety").value), verification_status: card.querySelector(".room-cooling-status").value,
+      source: card.querySelector(".room-cooling-source").value.trim(),
+    });
+    Object.assign(conditions, {
+      indoor_cooling_wet_bulb_c: blankToNull(card.querySelector(".room-wet-bulb").value), verification_status: card.querySelector(".room-condition-status").value,
+      source: card.querySelector(".room-condition-source").value.trim(),
+    });
+    return {
+      ...existing, room_id: roomId, name: row.querySelector(".hourly-room-name").value.trim(), zone_id: row.querySelector(".hourly-room-zone").value.trim(),
+      mapping_status: row.querySelector(".hourly-room-mapping").value, verification_status: row.querySelector(".hourly-room-status").value,
+      source: row.querySelector(".hourly-room-source").value.trim(), citations: [],
+      area_m2: blankToNull(card.querySelector(".room-area").value), occupancy: blankToNull(card.querySelector(".room-occupancy").value),
+      indoor_cooling_setpoint_c: blankToNull(card.querySelector(".room-setpoint").value), cooling_load: load, cooling_load_conditions: conditions,
+      schedule_assignments: {...(existing.schedule_assignments || {}), people: card.querySelector(".room-people-schedule").value.trim(), lighting: card.querySelector(".room-lighting-schedule").value.trim(), outside_air: card.querySelector(".room-outside-air-schedule").value.trim()},
+      unapproved_components: components,
+    };
+  });
+  return {...HOURLY_MODEL, schema_version: 3, floors, zones, rooms};
+}
+
+let HOURLY_MODEL = {floors: [], zones: [], rooms: []};
+
+async function loadHourlyModel(){
+  if (!DATA?.id) return;
+  try {
+    const res = await fetch(`/api/hourly-load-model?project_id=${encodeURIComponent(DATA.id)}`);
+    const data = await res.json();
+    if (!res.ok || data.error) return;
+    HOURLY_MODEL = data.hourly_load_model || HOURLY_MODEL;
+    showHourlyModel(HOURLY_MODEL, data.readiness || {});
+  } catch (_) { /* The main design-input workflow remains usable offline. */ }
+}
+
+async function saveHourlyModel(action){
+  if (!DATA?.id) return;
+  requiredElement("btnSaveHourlyModel").disabled = true;
+  try {
+    const payload = action === "build" ? {project_id: DATA.id, action} : {project_id: DATA.id, action, hourly_load_model: readHourlyModel()};
+    const res = await fetch("/api/hourly-load-model", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)});
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || "Could not save the hourly hierarchy.");
+    HOURLY_MODEL = data.hourly_load_model;
+    showHourlyModel(HOURLY_MODEL, data.readiness || {});
+    toast(action === "build" ? "Hourly model seeded" : "Hierarchy saved", "Review topology status before calculating cooling loads.");
+  } catch (error) {
+    requiredElement("hourlyModelStatus").textContent = "Could not save the hourly hierarchy.";
+    toast("Hourly hierarchy failed", error.message);
   }
-  requiredElement("heatLoadStatus").textContent = `${report.status} · ${report.calculated_zone_count} calculated · ${report.blocked_zone_count} blocked · Project total ${Number(report.project_total_kw || 0).toFixed(2)} kW`;
-  requiredElement("heatLoadResults").innerHTML = report.zone_results.map(zone => {
-    if (zone.status === "blocked") return `<article class="heat-load-result"><b>${esc(zone.zone_name)}</b><span>Blocked: ${esc((zone.blocked_reasons || []).join(", "))}</span></article>`;
-    const rows = (zone.contributions || []).map(item => `<span>${esc(item.name)}: ${Number(item.total_kw).toFixed(2)} kW</span>`).join("");
-    return `<article class="heat-load-result"><b>${esc(zone.zone_name)} · ${esc(zone.status)}</b><div>${rows}</div><span>Subtotal ${Number(zone.subtotal_kw).toFixed(2)} kW · Safety ${Number(zone.safety_allowance_kw).toFixed(2)} kW · Total ${Number(zone.design_total_kw).toFixed(2)} kW</span></article>`;
-  }).join("");
+  requiredElement("btnSaveHourlyModel").disabled = false;
+}
+
+function drawCoolingReadiness(readiness = {}, artifacts = {}){
+  const issues = readiness.issues || [];
+  const groups = issues.reduce((result, item) => {
+    (result[item.scope || "project"] ||= []).push(item);
+    return result;
+  }, {});
+  requiredElement("coolingReadiness").innerHTML = Object.entries(groups).map(([scope, rows]) => `<section class="readiness-group"><h4>${esc(scope)}</h4>${rows.map(item => {
+    const artifact = artifacts[item.source_artifact] || {};
+    const citations = item.citations || [];
+    const source = [item.source_artifact, item.input_source, ...citations.map(citation => citation.label || citation.reference || citation.url || "citation")].filter(Boolean).join(" · ");
+    const link = artifact.artifact_url
+      ? `<a class="btn ghost mini" href="${esc(artifact.artifact_url)}" target="_blank" rel="noopener">Open evidence</a>`
+      : "";
+    return `<article class="review-item readiness-${esc(item.status)}"><div><b>${esc(item.scope)} · ${esc(item.affected_id)}</b><span>${esc(item.reason)}</span><small>${esc(source)}</small></div>${link}</article>`;
+  }).join("")}</section>`).join("");
+}
+
+function drawHourlyLoadReport(report = {}, artifactStatus = "not_calculated"){
+  const status = report.status || artifactStatus;
+  requiredElement("hourlyReportStatus").textContent = artifactStatus === "stale"
+    ? "Cooling Load Report is stale. Refresh the changed inputs and calculate again."
+    : `${status} · ${report.scope_summary?.complete_scope ? "complete room scope" : "included room scope only"}`;
+  drawCoolingReadiness(report.readiness || {}, report.input_artifacts || {});
+  const scenarios = report.scenario_results || [];
+  const scopeRows = [
+    ...(report.known_exclusions || []).map(item => `<article class="heat-load-result"><b>${esc(item.room_id)} · known excluded room input</b><span>${esc(`${item.component_type}: ${item.value} ${item.unit}`)} · ${esc(item.source || "source required")}</span></article>`),
+    ...(report.unresolved_room_inputs || []).map(item => `<article class="heat-load-result"><b>${esc(item.room_id)} · unresolved room input</b><span>Assess ${esc(item.component_type)} before calling this a complete room scope.</span></article>`),
+  ];
+  requiredElement("hourlyLoadResults").innerHTML = [...scenarios.map(scenario => {
+    const peak = scenario.included_scope_peak || {};
+    const blocked = scenario.scope_summary?.blocked_rooms || [];
+    return `<article class="heat-load-result"><b>${esc(scenario.title || scenario.scenario_id)} · ${esc(scenario.status)}</b>
+      <span>Included-scope subtotal peak ${Number(peak.design_total_kw || 0).toFixed(2)} kW${scenario.scope_summary?.complete_scope ? "" : " · not a complete project duty"}</span>
+      ${blocked.length ? `<span>Omitted rooms: ${esc(blocked.map(item => item.room_id).join(", "))}</span>` : ""}</article>`;
+  }), ...scopeRows].join("");
+}
+
+async function loadHourlyLoadReport(){
+  if (!DATA?.id) return;
+  try {
+    const res = await fetch(`/api/hourly-load-report?project_id=${encodeURIComponent(DATA.id)}`);
+    const data = await res.json();
+    if (!res.ok || data.error) return;
+    drawHourlyLoadReport(data.hourly_load_report || {}, data.status || "not_calculated");
+  } catch (_) { /* Report is optional until all hourly artifacts exist. */ }
+}
+
+async function calculateHourlyLoad(){
+  if (!DATA?.id) return;
+  requiredElement("btnCalculateHourlyLoad").disabled = true;
+  requiredElement("hourlyReportStatus").textContent = "Calculating the hourly cooling report…";
+  try {
+    const ids = requiredElement("hourlyScenarioIds").value.split(",").map(value => value.trim()).filter(Boolean);
+    const res = await fetch("/api/hourly-load-report", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({project_id: DATA.id, selected_scenario_ids: ids})});
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || "Could not calculate the cooling report.");
+    drawHourlyLoadReport(data.hourly_load_report, data.status);
+    toast("Cooling report calculated", `Status: ${data.hourly_load_report.status}.`);
+  } catch (error) {
+    requiredElement("hourlyReportStatus").textContent = "Could not calculate the cooling report.";
+    toast("Cooling report failed", error.message);
+  }
+  requiredElement("btnCalculateHourlyLoad").disabled = false;
 }
 
 async function calculateVentilation(){

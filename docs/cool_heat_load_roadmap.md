@@ -30,9 +30,9 @@ The project now has a solid **V1 hourly cooling foundation**, but it is not yet 
 - A cited hourly cooling design-day scenario stores 24 dry-bulb/wet-bulb points and pressure, including physical validation that wet bulb cannot exceed dry bulb.
 - A reviewed room-within-zone overlay is separate from `design_requirements.json`; it can seed draft rooms from current zones but requires engineer review.
 - The hourly cooling runner calculates people, lighting, individual equipment/refrigeration, steady-state envelope conduction, manually supplied surface solar and psychrometric outside-air loads.
-- Reports preserve hourly room/zone/project components, sensible/latent values, subtotal, safety allowance, design total, coincident project peak, tied peak hours, provisional/blocked state and input timestamps.
+- Reports preserve hourly room/zone/floor components, sensible/latent values, subtotal, safety allowance, design total, included-scope peak, blocked rooms, readiness state and input timestamps. A project peak is shown only for review-ready complete scope.
 - The API persists isolated per-project artifacts and identifies stale models/reports after their source requirements change.
-- The parity adapter exposes a current hourly project peak/components while deliberately retaining `final_parity_allowed: false`.
+- The parity adapter can expose complete-scope hourly components while deliberately retaining `final_parity_allowed: false`; it does not treat a draft subtotal as a project duty.
 
 ### Not yet a supported calculation result
 
@@ -73,9 +73,11 @@ Each project review folder can hold these separate files:
 - `schedule_library.json` — cited reusable hourly schedule profiles.
 - `design_day_scenarios.json` — cited hourly cooling or future-heating weather scenarios.
 - `hourly_load_model.json` — reviewed room overlay and schedule assignments.
-- `hourly_load_report.json` — current or stale hourly cooling results.
+- `hourly_load_report.json` — current or stale authoritative hourly cooling results, with `blocked`, `draft`, or `review_ready` status.
 
-They intentionally do not overwrite `design_requirements.json`. Saving a site condition, schedule or hourly report does not silently change the existing preliminary cooling or ventilation reports.
+The legacy `heat_load_report.json` remains readable only. New calculations are written exclusively to `hourly_load_report.json`.
+
+They intentionally do not overwrite `design_requirements.json`. Saving a site condition, schedule or hourly report does not silently change the legacy cooling report or the separate ventilation report.
 
 ### Backend/API handoff
 
@@ -107,9 +109,9 @@ The contracts are documented in [`site_design_conditions_api.md`](site_design_co
 - [ ] Create one engineer-reviewed sample project with cited schedules, design-day scenario and room overlay; keep it clearly labelled as a test/reference case, not a benchmark.
 - Add API-level validation/error examples for every blocked state so the future frontend can render actionable remediation.
 - Add regression coverage for artifact migration/versioning, stale-report causes and component reconciliation at room/zone/project level.
-- Produce a concise backend runbook covering artifact lifecycle: build model → review/save → calculate provisional → confirm/final request.
+- Produce a concise backend runbook covering artifact lifecycle: build model → review/save → calculate draft → complete scope → review-ready report.
 
-**Exit criteria:** a repeatable test project can generate a current provisional cooling report, explain every result line and become stale predictably when a dependency changes.
+**Exit criteria:** a repeatable test project can generate a current draft or review-ready cooling report, explain every result line and become stale predictably when a dependency changes.
 
 ### Milestone 1 — Complete reviewed room cooling inputs
 
@@ -117,12 +119,12 @@ The contracts are documented in [`site_design_conditions_api.md`](site_design_co
 
 **Work:**
 
-- Expand the room overlay to carry separately cited infiltration, vapour gain, minimum supply air, extract/spill/transfer/make-up air, source-room mapping and airflow constraints.
+- [x] Expand the room overlay to carry separately cited infiltration, vapour gain, minimum supply air, extract/spill/transfer/make-up air, source-room mapping and airflow constraints as `not_present_confirmed`, `stored_not_calculated`, or `not_assessed` records. These records are deliberately excluded from totals pending an approved method.
 - Add a source-specific internal-gain schema for latent and steam/process loads; retain people, lighting, equipment and refrigeration as independent entities.
 - Add reviewed construction and opening references rather than free-text-only envelope fields. Preserve source/version and allow engineer overrides.
 - Define explicit readiness rules for each new non-zero component and block only the affected room/scenario with actionable reasons.
 
-**Decisions required before implementation:** approved calculation methods and units for infiltration, vapour/steam, transfer-air treatment and any diversity rules. No code rates or CAMEL defaults should be embedded without a separately approved source/basis.
+**Decisions required before calculation implementation:** approved calculation methods and units for infiltration, vapour/steam, transfer-air treatment and any diversity rules. No code rates or CAMEL defaults should be embedded without a separately approved source/basis.
 
 **Exit criteria:** every supported non-zero room load/airflow component has source, status, units, validation and report visibility; unsupported components remain explicit exclusions.
 

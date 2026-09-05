@@ -287,12 +287,11 @@ def main():
     report = post(web_app.api_save_hourly_load_report, "/api/hourly-load-report", {
         "project_id": PROJECT_ID,
         "selected_scenario_ids": ["synthetic_january_weekday"],
-        "calculation_stage": "preliminary",
     })
 
     result = report["hourly_load_report"]
-    if result["status"] != "calculated_provisional":
-        raise RuntimeError(f"Expected calculated_provisional synthetic report, received {result['status']!r}.")
+    if result["status"] != "draft":
+        raise RuntimeError(f"Expected draft synthetic report, received {result['status']!r}.")
     manifest = {
         "case_name": project["name"],
         "warning": WARNING,
@@ -306,11 +305,11 @@ def main():
             "hourly_load_report": report["artifact_url"],
         },
         "report_status": result["status"],
-        "governing_project_peak": result["governing_project_peak"],
+        "included_scope_peak": result["included_scope_peak"],
         "excluded_components": result["excluded_components"],
     }
     (review_dir / "synthetic_case_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-    print(json.dumps({"project_id": PROJECT_ID, "review_dir": str(review_dir), "report_status": result["status"], "governing_project_peak": result["governing_project_peak"]}, indent=2))
+    print(json.dumps({"project_id": PROJECT_ID, "review_dir": str(review_dir), "report_status": result["status"], "included_scope_peak": result["included_scope_peak"]}, indent=2))
 
 
 if __name__ == "__main__":

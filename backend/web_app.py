@@ -12,6 +12,16 @@ from urllib.parse import parse_qs, quote, urlparse
 from ai.ai_packet import build_ai_packet, load_json
 from ai.design_pipeline import create_confirmed_ai_packet
 from ai.design_requirements import compatibility_requirements, empty_design_requirements, requirements_summary, validate_design_requirements
+from ai.envelope import (
+    apply_reviewed_envelope_to_hourly_model,
+    apply_reviewed_envelope_to_requirements,
+    empty_envelope_library,
+    empty_envelope_model,
+    envelope_summary,
+    migrate_legacy_envelope,
+    validate_envelope_library,
+    validate_envelope_model,
+)
 from ai.site_design_conditions import empty_site_design_conditions, site_design_conditions_summary, validate_site_design_conditions
 from ai.hourly_loads import (
     build_hourly_load_model,
@@ -26,10 +36,10 @@ from ai.hourly_loads import (
     validate_hourly_load_model,
     validate_schedule_library,
 )
+from ai.cooling_readiness import assess_cooling_readiness
 from ai.drawing_coverage import build_drawing_coverage
 from ai.building_evidence import build_building_evidence
 from ai.parity_harness import archie_results_from_heat_report, archie_results_from_hourly_load_report, compare_case, render_markdown, validate_benchmark_case
-from ai.heat_loads import calculate_heat_load_report
 from ai.thermal_model import apply_thermal_model, build_thermal_evidence, build_thermal_model
 from ai.ventilation import calculate_ventilation_report
 from ai.geometry_review import normalise_vision
@@ -67,6 +77,16 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json(api_hourly_load_model(self))
         if self.path.startswith("/api/hourly-load-report"):
             return self.send_json(api_hourly_load_report(self))
+        if self.path.startswith("/api/envelope-library"):
+            try:
+                return self.send_json(api_envelope_library(self))
+            except Exception as error:
+                return self.send_json({"error": str(error)}, 404)
+        if self.path.startswith("/api/envelope-model"):
+            try:
+                return self.send_json(api_envelope_model(self))
+            except Exception as error:
+                return self.send_json({"error": str(error)}, 404)
         if self.path.startswith("/api/design-requirements"):
             return self.send_json(api_design_requirements(self))
         if self.path.startswith("/api/heat-load"):
@@ -106,6 +126,10 @@ class Handler(SimpleHTTPRequestHandler):
             return self.save_hourly_load_model()
         if self.path == "/api/hourly-load-report":
             return self.save_hourly_load_report()
+        if self.path == "/api/envelope-library":
+            return self.save_envelope_library()
+        if self.path == "/api/envelope-model":
+            return self.save_envelope_model()
         if self.path == "/api/design-requirements":
             return self.save_design_requirements()
         if self.path == "/api/heat-load":
@@ -195,12 +219,26 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json({"error": str(error)}, 400)
         self.send_json(result)
 
-    def save_heat_load(self):
+    def save_envelope_library(self):
         try:
-            result = api_save_heat_load(self)
+            result = api_save_envelope_library(self)
         except Exception as error:
             return self.send_json({"error": str(error)}, 400)
         self.send_json(result)
+
+    def save_envelope_model(self):
+        try:
+            result = api_save_envelope_model(self)
+        except Exception as error:
+            return self.send_json({"error": str(error)}, 400)
+        self.send_json(result)
+
+    def save_heat_load(self):
+        self.send_json({
+            "error": "The legacy cooling calculation endpoint is retired. Save hourly inputs and use /api/hourly-load-report.",
+            "deprecated": True,
+            "replacement": "/api/hourly-load-report",
+        }, 410)
 
     def save_ventilation(self):
         try:
@@ -450,7 +488,97 @@ def hourly_paths(project):
         "model": review_dir / "hourly_load_model.json",
         "report": review_dir / "hourly_load_report.json",
         "coverage": review_dir / "drawing_coverage.json",
+        "envelope_library": review_dir / "envelope_library.json",
+        "envelope_model": review_dir / "envelope_model.json",
     }
+
+
+def envelope_artifacts(project):
+    paths = hourly_paths(project)
+    raw_library = load_json(paths["envelope_library"]) if paths["envelope_library"].exists() else empty_envelope_library()
+    library = validate_envelope_library(raw_library)
+    if paths["envelope_library"].exists():
+        library["updated_at"] = raw_library.get("updated_at", "")
+    else:
+        library["updated_at"] = ""
+    raw_model = load_json(paths["envelope_model"]) if paths["envelope_model"].exists() else empty_envelope_model()
+    model = validate_envelope_model(raw_model, library)
+    if paths["envelope_model"].exists():
+        model["updated_at"] = raw_model.get("updated_at", "")
+    else:
+        model["updated_at"] = ""
+    return library, model
+
+
+def api_envelope_library(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    library, model = envelope_artifacts(project)
+    path = hourly_paths(project)["envelope_library"]
+    return artifact_response(project, "envelope_library", library, envelope_summary(library, model), path)
+
+
+def api_envelope_model(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    library, model = envelope_artifacts(project)
+    path = hourly_paths(project)["envelope_model"]
+    response = artifact_response(project, "envelope_model", model, envelope_summary(library, model), path)
+    response["envelope_library_url"] = safe_link(hourly_paths(project)["envelope_library"]) if hourly_paths(project)["envelope_library"].exists() else ""
+    return response
+
+
+def api_save_envelope_library(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    paths = hourly_paths(project)
+    library = validate_envelope_library(data.get("envelope_library", data.get("library", data)))
+    existing_model = load_json(paths["envelope_model"]) if paths["envelope_model"].exists() else empty_envelope_model()
+    # A changed library can invalidate model references; reject rather than silently dropping them.
+    model = validate_envelope_model(existing_model, library)
+    write_artifact(paths["envelope_library"], library)
+    project["envelope_library"] = str(paths["envelope_library"])
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return artifact_response(project, "envelope_library", library, envelope_summary(library, model), paths["envelope_library"])
+
+
+def api_save_envelope_model(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    paths = hourly_paths(project)
+    action = data.get("action", "save")
+    if action == "migrate_legacy":
+        if not paths["requirements"].exists():
+            raise ValueError("Save design requirements before migrating legacy envelope surfaces.")
+        library, model = migrate_legacy_envelope(load_json(paths["requirements"]))
+        write_artifact(paths["envelope_library"], library)
+        project["envelope_library"] = str(paths["envelope_library"])
+    elif action == "save":
+        library = load_json(paths["envelope_library"]) if paths["envelope_library"].exists() else empty_envelope_library()
+        library = validate_envelope_library(library)
+        model = validate_envelope_model(data.get("envelope_model", data.get("model", data)), library)
+    else:
+        raise ValueError("Envelope model action must be save or migrate_legacy.")
+    validate_active_envelope_owners(model, paths)
+    write_artifact(paths["envelope_model"], model)
+    project["envelope_model"] = str(paths["envelope_model"])
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return artifact_response(project, "envelope_model", model, envelope_summary(library, model), paths["envelope_model"])
+
+
+def validate_active_envelope_owners(model, paths):
+    if not model["active_for_calculation"]:
+        return
+    if not paths["requirements"].exists():
+        raise ValueError("Save design requirements with HVAC zones before activating the reviewed envelope model.")
+    zone_ids = {item.get("zone_id", "") for item in load_json(paths["requirements"]).get("zones", [])}
+    unknown = sorted({item["owner_zone_id"] for item in model["surfaces"] if item["owner_zone_id"] not in zone_ids})
+    if unknown:
+        raise ValueError("Reviewed envelope surfaces reference unknown HVAC zones: " + ", ".join(unknown))
 
 
 def api_schedules(request):
@@ -499,7 +627,8 @@ def api_hourly_load_model(request):
     query = parse_qs(urlparse(request.path).query)
     project = project_by_id(query.get("project_id", [""])[0])
     paths = hourly_paths(project)
-    model = load_json(paths["model"]) if paths["model"].exists() else empty_hourly_load_model()
+    raw_model = load_json(paths["model"]) if paths["model"].exists() else empty_hourly_load_model()
+    model = artifact_snapshot(raw_model, validate_hourly_load_model)
     requirements = load_json(paths["requirements"]) if paths["requirements"].exists() else None
     return artifact_response(project, "hourly_load_model", model, hourly_model_summary(model, requirements), paths["model"])
 
@@ -535,7 +664,7 @@ def api_hourly_load_report(request):
     return {
         "id": project["id"],
         "hourly_load_report": report,
-        "readiness": {"status": report.get("status", "review_required"), "requires_engineer_review": report.get("status") != "calculated"},
+        "readiness": report.get("readiness", {"status": report.get("status", "blocked"), "issues": []}),
         "url": safe_link(current) if current else "",
         "artifact_url": safe_link(paths["report"]) if paths["report"].exists() else "",
         "status": "current" if current else ("stale" if paths["report"].exists() else "not_calculated"),
@@ -552,16 +681,33 @@ def api_save_hourly_load_report(request):
     if missing:
         raise ValueError("Save " + ", ".join(missing) + " before calculating an hourly cooling report.")
     coverage = load_json(paths["coverage"]) if paths["coverage"].exists() else {}
-    report = calculate_hourly_load_report(
-        load_json(paths["requirements"]), load_json(paths["schedules"]), load_json(paths["scenarios"]),
-        load_json(paths["model"]), data.get("selected_scenario_ids", data.get("scenario_ids", [])),
-        data.get("calculation_stage", "preliminary"), coverage,
-    )
+    library, envelope_model = envelope_artifacts(project)
+    requirements, envelope_inputs = apply_reviewed_envelope_to_requirements(load_json(paths["requirements"]), library, envelope_model)
+    model = apply_reviewed_envelope_to_hourly_model(load_json(paths["model"]), library, envelope_model)
+    report = calculate_hourly_load_report(requirements, load_json(paths["schedules"]), load_json(paths["scenarios"]), model,
+        data.get("selected_scenario_ids", data.get("scenario_ids", [])), coverage)
+    report["input_fingerprints"]["envelope_library_updated_at"] = library.get("updated_at", "")
+    report["input_fingerprints"]["envelope_model_updated_at"] = envelope_model.get("updated_at", "")
+    report["envelope_input"] = envelope_inputs
+    report["excluded_components"] = sorted(set(report["excluded_components"] + [
+        "dynamic thermal mass", "detailed glazing physics", "geometric shading", "AHU coil effects", "fan/duct effects", "heat recovery", "plant loads", "heating",
+    ]))
+    readiness = assess_cooling_readiness(report, model, requirements.get("updated_at", ""), coverage, envelope_inputs)
+    report["readiness"] = {"status": readiness["status"], "issues": readiness["issues"]}
+    report["scope_summary"] = readiness["scope_summary"]
+    report["status"] = readiness["status"]
+    if envelope_model["active_for_calculation"] and (envelope_inputs["blocked"] or envelope_inputs["stored_not_calculated"]):
+        report["status"] = "blocked"
+        report["blocked_reasons"].append("Reviewed envelope model has blocked or stored-not-calculated surfaces; resolve or deactivate it before calculation.")
+        report["readiness"]["status"] = "blocked"
     report["input_artifacts"] = {
         "design_requirements": {"artifact_url": safe_link(paths["requirements"]), "updated_at": report["input_fingerprints"]["requirements_updated_at"]},
         "schedule_library": {"artifact_url": safe_link(paths["schedules"]), "updated_at": report["input_fingerprints"]["schedule_library_updated_at"]},
         "design_day_scenarios": {"artifact_url": safe_link(paths["scenarios"]), "updated_at": report["input_fingerprints"]["design_day_scenarios_updated_at"]},
         "hourly_load_model": {"artifact_url": safe_link(paths["model"]), "updated_at": report["input_fingerprints"]["hourly_load_model_updated_at"]},
+        "envelope_library": {"artifact_url": safe_link(paths["envelope_library"]) if paths["envelope_library"].exists() else "", "updated_at": library.get("updated_at", "")},
+        "envelope_model": {"artifact_url": safe_link(paths["envelope_model"]) if paths["envelope_model"].exists() else "", "updated_at": envelope_model.get("updated_at", "")},
+        "drawing_coverage": {"artifact_url": safe_link(paths["coverage"]) if paths["coverage"].exists() else "", "updated_at": coverage.get("updated_at", "")},
     }
     write_artifact(paths["report"], report)
     project["hourly_load_report"] = str(paths["report"])
@@ -570,7 +716,7 @@ def api_save_hourly_load_report(request):
     current = current_hourly_load_report_path(project)
     return {
         "id": project["id"], "hourly_load_report": report,
-        "readiness": {"status": report["status"], "requires_engineer_review": report["status"] != "calculated"},
+        "readiness": report["readiness"],
         "url": safe_link(current) if current else "", "artifact_url": safe_link(paths["report"]),
         "status": "current" if current else "stale",
     }
@@ -599,15 +745,16 @@ def api_design_requirements(request):
     path = Path(project["review_dir"]) / "design_requirements.json"
     requirements = compatibility_requirements(load_json(path)) if path.exists() else empty_design_requirements()
     heat_load_path = current_heat_load_report_path(project, path)
+    legacy_heat_load_path = existing_path(project.get("heat_load_report"), path.with_name("heat_load_report.json"))
     ventilation_path = current_ventilation_report_path(project, path)
     return {
         "id": project["id"],
         "requirements": requirements,
         "readiness": requirements_summary(requirements),
         "room_suggestions": project_room_suggestions(project),
-        "heat_load_report": load_json(heat_load_path) if heat_load_path else {},
-        "heat_load_report_url": safe_link(heat_load_path) if heat_load_path else "",
-        "heat_load_status": "current" if heat_load_path else ("stale" if (Path(project["review_dir"]) / "heat_load_report.json").exists() else "not_calculated"),
+        "heat_load_report": load_json(legacy_heat_load_path) if legacy_heat_load_path else {},
+        "heat_load_report_url": safe_link(legacy_heat_load_path) if legacy_heat_load_path else "",
+        "heat_load_status": "current" if heat_load_path else ("stale" if legacy_heat_load_path else "not_calculated"),
         "ventilation_report": load_json(ventilation_path) if ventilation_path else {},
         "ventilation_report_url": safe_link(ventilation_path) if ventilation_path else "",
         "ventilation_status": "current" if ventilation_path else ("stale" if (Path(project["review_dir"]) / "ventilation_report.json").exists() else "not_calculated"),
@@ -789,49 +936,20 @@ def api_heat_load(request):
     project = project_by_id(query.get("project_id", [""])[0])
     requirements_path = Path(project["review_dir"]) / "design_requirements.json"
     heat_load_path = current_heat_load_report_path(project, requirements_path)
+    legacy_heat_load_path = existing_path(project.get("heat_load_report"), requirements_path.with_name("heat_load_report.json"))
     return {
         "id": project["id"],
-        "report": load_json(heat_load_path) if heat_load_path else {},
-        "status": "current" if heat_load_path else ("stale" if (Path(project["review_dir"]) / "heat_load_report.json").exists() else "not_calculated"),
-        "url": safe_link(heat_load_path) if heat_load_path else "",
+        "report": load_json(legacy_heat_load_path) if legacy_heat_load_path else {},
+        "status": "current" if heat_load_path else ("stale" if legacy_heat_load_path else "not_calculated"),
+        "url": safe_link(legacy_heat_load_path) if legacy_heat_load_path else "",
+        "legacy": True,
+        "deprecated": True,
+        "message": "Legacy flat cooling report is read-only. New cooling calculations use /api/hourly-load-report.",
     }
 
 
 def api_save_heat_load(request):
-    data = read_json_body(request)
-    project = project_by_id(data.get("project_id") or data.get("id", ""))
-    if not project.get("vision_response"):
-        raise ValueError("Create a reasoning packet before calculating cooling loads.")
-    review_dir = Path(project["review_dir"])
-    if data.get("calculation_stage") == "final":
-        coverage_path = review_dir / "drawing_coverage.json"
-        coverage = load_json(coverage_path) if coverage_path.exists() else {}
-        unresolved = coverage.get("coverage_exceptions", [])
-        if unresolved:
-            raise ValueError("Final cooling-load calculation is blocked by unresolved drawing coverage: " + "; ".join(item.get("question", "coverage review required") for item in unresolved))
-    requirements_path = review_dir / "design_requirements.json"
-    if data.get("requirements") is not None:
-        requirements = validate_design_requirements(data["requirements"])
-    elif requirements_path.exists():
-        requirements = validate_design_requirements(load_json(requirements_path))
-    else:
-        raise ValueError("Enter design inputs before calculating cooling loads.")
-    requirements_path.write_text(json.dumps(requirements, indent=2), encoding="utf-8")
-    report = calculate_heat_load_report(requirements)
-    heat_load_path = review_dir / "heat_load_report.json"
-    heat_load_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
-    project["heat_load_report"] = str(heat_load_path)
-    result = rebuild_reasoning_packet(project, requirements_path)
-    project["reasoning_packet"] = result["reasoning_packet_raw"]
-    project["updated_at"] = timestamp()
-    update_project(project)
-    response = result["response"]
-    response.update({
-        "heat_load_report": report,
-        "heat_load_report_url": safe_link(heat_load_path),
-        "heat_load_status": "current",
-    })
-    return response
+    raise ValueError("The legacy cooling calculation endpoint is retired. Use /api/hourly-load-report.")
 
 
 def api_ventilation(request):
@@ -992,7 +1110,10 @@ def current_heat_load_report_path(project, requirements_path):
         return None
     report = load_json(candidate)
     requirements = load_json(requirements_path)
-    return candidate if report.get("requirements_updated_at") == requirements.get("updated_at") else None
+    if report.get("requirements_updated_at") != requirements.get("updated_at"):
+        return None
+    library, model = envelope_artifacts(project)
+    return candidate if report.get("envelope_library_updated_at", "") == library.get("updated_at", "") and report.get("envelope_model_updated_at", "") == model.get("updated_at", "") else None
 
 
 def current_ventilation_report_path(project, requirements_path):
@@ -1020,6 +1141,9 @@ def current_hourly_load_report_path(project):
         "design_day_scenarios_updated_at": load_json(paths["scenarios"]).get("updated_at", ""),
         "hourly_load_model_updated_at": load_json(paths["model"]).get("updated_at", ""),
     }
+    library, model = envelope_artifacts(project)
+    expected["envelope_library_updated_at"] = library.get("updated_at", "")
+    expected["envelope_model_updated_at"] = model.get("updated_at", "")
     return candidate if fingerprints == expected else None
 
 

@@ -328,11 +328,14 @@ button,input{ font:inherit; color:inherit }
 .requirements-form input,.requirements-form textarea,.requirements-form select,.heat-source input,.heat-source select{ border:1px solid var(--line); border-radius:var(--r); background:var(--main-bg); color:var(--text); padding:8px; resize:vertical }
 #designRequirementsPanel .panel-head{ margin-top:8px }
 #designRequirementsPanel .bar{ display:flex; align-items:center; gap:12px; padding:14px 18px 0 }
+.envelope-activate{ display:flex; align-items:center; gap:6px; color:var(--text-2); font-size:12px; white-space:nowrap }
 #heatSources{ padding:0 18px }
 .heat-source{ display:grid; grid-template-columns:minmax(0,1fr) 80px 110px 120px minmax(0,1fr) auto; gap:8px; margin-top:8px }
 #zones{ padding:0 18px; display:grid; gap:8px }
 .zone-editor{ border:1px solid var(--line-soft); border-radius:var(--r); background:var(--main-bg) }
 .zone-editor summary{ cursor:pointer; display:flex; justify-content:space-between; gap:12px; align-items:center; padding:10px 12px; color:var(--text) }
+.envelope-storage{ margin:0 18px; border:1px solid var(--line-soft); border-radius:var(--r); background:var(--main-bg) }
+.envelope-storage summary{ cursor:pointer; display:flex; justify-content:space-between; gap:12px; align-items:center; padding:10px 12px; color:var(--text) }
 .zone-editor summary::marker{ color:var(--text-2) }
 .zone-title{ font-weight:600 }
 .zone-warning{ color:var(--text-2); font-size:12px; text-align:right }
@@ -347,6 +350,34 @@ button,input{ font:inherit; color:inherit }
 .zone-heat-source{ display:grid; grid-template-columns:minmax(0,1fr) 100px 65px 105px 85px 85px 100px minmax(0,1fr) auto; gap:8px }
 .envelope-surfaces{ display:grid; gap:8px; padding:8px 12px 0 }
 .envelope-surface{ display:grid; grid-template-columns:minmax(0,1fr) 110px 90px 85px 100px 100px 90px 80px 100px minmax(0,1fr) auto; gap:8px }
+.envelope-editor{ display:grid; gap:8px; padding:0 18px 10px }
+.hierarchy-editor{ display:grid; gap:8px; padding:0 18px 10px }
+.hierarchy-heading{ margin-top:12px }
+.hierarchy-row{ display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.2fr) minmax(0,1fr) 110px minmax(0,1.4fr) auto; gap:8px; align-items:center; padding:8px; border:1px solid var(--line-soft); border-radius:var(--r); background:var(--main-bg) }
+.hierarchy-row input,.hierarchy-row select{ border:1px solid var(--line); border-radius:var(--r); background:var(--panel); color:var(--text); padding:8px; min-width:0 }
+.room-input-card{ border:1px solid var(--line-soft); border-radius:var(--r); background:var(--main-bg) }
+.room-input-card summary{ cursor:pointer; display:flex; justify-content:space-between; gap:12px; padding:10px 12px; color:var(--text); font-weight:600 }
+.room-input-card summary small{ color:var(--text-2); font-weight:400 }
+.room-input-card .hierarchy-row{ border:0; border-radius:0; border-top:1px solid var(--line-soft) }
+.room-input-grid{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; padding:0 12px 12px }
+.room-input-grid fieldset{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin:0; border:1px solid var(--line-soft); border-radius:var(--r); padding:10px }
+.room-input-grid legend{ color:var(--ink); font-size:12px; font-weight:600; padding:0 4px }
+.room-input-grid label{ display:grid; gap:4px; color:var(--text-2); font-size:11.5px }
+.room-input-grid input,.room-input-grid select{ border:1px solid var(--line); border-radius:var(--r); background:var(--panel); color:var(--text); padding:8px; min-width:0 }
+.room-input-grid .fine{ grid-column:1 / -1; margin:0; color:var(--text-2) }
+.room-airflow-components,.room-moisture-components{ grid-column:1 / -1; display:grid !important; grid-template-columns:1fr !important }
+.room-component{ display:grid; grid-template-columns:minmax(100px,1fr) minmax(130px,1.2fr) 160px 95px 95px minmax(120px,1fr) 105px minmax(140px,1.4fr) minmax(140px,1.2fr); gap:8px }
+.room-component input,.room-component select{ min-width:0 }
+.readiness-blocked{ border-left:3px solid #b64c45 }
+.readiness-draft{ border-left:3px solid var(--warn) }
+.readiness-review_ready{ border-left:3px solid var(--accent) }
+.readiness-group h4{ margin:10px 0 6px; color:var(--ink); text-transform:capitalize }
+.envelope-construction,.envelope-boundary{ display:grid; gap:8px; align-items:center; padding:8px; border:1px solid var(--line-soft); border-radius:var(--r); background:var(--main-bg) }
+.envelope-construction{ grid-template-columns:minmax(0,1fr) minmax(0,1fr) 100px 95px 100px 100px minmax(0,1fr) auto }
+.envelope-boundary{ grid-template-columns:repeat(5,minmax(90px,1fr)) 110px 135px 90px 100px minmax(0,1fr) 95px repeat(3,90px) 100px minmax(0,1fr) auto }
+.envelope-construction input,.envelope-construction select,.envelope-boundary input,.envelope-boundary select{ border:1px solid var(--line); border-radius:var(--r); background:var(--panel); color:var(--text); padding:8px; min-width:0 }
+.boundary-solar{ display:flex; align-items:center; gap:5px; font-size:11px; color:var(--text-2) }
+@media(max-width:1200px){ .envelope-construction,.envelope-boundary,.hierarchy-row,.room-component{ grid-template-columns:repeat(3,minmax(0,1fr)) auto } }
 .heat-load-result{ display:grid; gap:6px; padding:10px 12px; border-top:1px solid var(--line); font-size:12px; color:var(--text-2) }
 .heat-load-result:first-child{ border-top:0 }
 .heat-load-result b{ color:var(--text) }
@@ -354,7 +385,7 @@ button,input{ font:inherit; color:inherit }
 .zone-actions{ padding:10px 12px 12px }
 @media(max-width:1200px){ .zone-heat-source,.envelope-surface{ grid-template-columns:repeat(3,minmax(0,1fr)) auto }.zone-heat-source .zone-heat-note,.envelope-surface .surface-source{ grid-column:1 / -1 } }
 @media(max-width:900px){ .heat-source,.zone-heat-source{ grid-template-columns:minmax(0,1fr) 70px 100px 110px auto }.heat-source .heat-source-note,.zone-heat-source .zone-heat-note{ grid-column:1 / -1 }.envelope-surface{ grid-template-columns:repeat(2,minmax(0,1fr)) auto } }
-@media(max-width:760px){ .requirements-form,.zone-fields,.zone-load-fields,.zone-ventilation-fields{ grid-template-columns:1fr }.heat-source,.zone-heat-source,.envelope-surface{ grid-template-columns:1fr 80px 90px auto }.heat-source .heat-source-note,.zone-heat-source .zone-heat-note,.envelope-surface .surface-source{ grid-column:1 / -1 }.zone-editor summary{ align-items:flex-start; flex-direction:column }.zone-warning{ text-align:left } }
+@media(max-width:760px){ .requirements-form,.zone-fields,.zone-load-fields,.zone-ventilation-fields,.envelope-construction,.envelope-boundary,.hierarchy-row,.room-input-grid,.room-input-grid fieldset,.room-component{ grid-template-columns:1fr }.heat-source,.zone-heat-source,.envelope-surface{ grid-template-columns:1fr 80px 90px auto }.heat-source .heat-source-note,.zone-heat-source .zone-heat-note,.envelope-surface .surface-source{ grid-column:1 / -1 }.zone-editor summary,.envelope-storage summary,.room-input-card summary{ align-items:flex-start; flex-direction:column }.zone-warning{ text-align:left } }
 .debug-panel{ padding-bottom:16px }
 .debug-panel .scored{ padding:16px 18px 0; margin:0 }
 .debug-panel .grid{ padding:0 18px }
