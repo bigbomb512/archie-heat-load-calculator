@@ -1,0 +1,21 @@
+{
+  "synthetic-hourly-cooling-baseline": {
+    "id": "synthetic-hourly-cooling-baseline",
+    "name": "SYNTHETIC \u2014 Hourly Cooling Baseline (NOT FOR DESIGN)",
+    "pages": 0,
+    "size_bytes": 0,
+    "analysed": true,
+    "relevant": 0,
+    "review_dir": "/Users/jeremyzheng/Documents/GitHub/archie-heat-load-calculator/output/web_review/synthetic-hourly-cooling-baseline",
+    "synthetic_test_case": true,
+    "synthetic_warning": "SYNTHETIC TEST FIXTURE \u2014 NOT FOR ENGINEERING DESIGN, EQUIPMENT SELECTION, OR BENCHMARK PARITY.",
+    "created_at": "2026-09-05T16:13:52+1000",
+    "updated_at": "2026-09-05T16:13:52+1000",
+    "design_requirements": "/Users/jeremyzheng/Documents/GitHub/archie-heat-load-calculator/output/web_review/synthetic-hourly-cooling-baseline/design_requirements.json",
+    "site_design_conditions": "/Users/jeremyzheng/Documents/GitHub/archie-heat-load-calculator/output/web_review/synthetic-hourly-cooling-baseline/site_design_conditions.json",
+    "schedule_library": "/Users/jeremyzheng/Documents/GitHub/archie-heat-load-calculator/output/web_review/synthetic-hourly-cooling-baseline/schedule_library.json",
+    "design_day_scenarios": "/Users/jeremyzheng/Documents/GitHub/archie-heat-load-calculator/output/web_review/synthetic-hourly-cooling-baseline/design_day_scenarios.json",
+    "hourly_load_model": "/Users/jeremyzheng/Documents/GitHub/archie-heat-load-calculator/output/web_review/synthetic-hourly-cooling-baseline/hourly_load_model.json",
+    "hourly_load_report": "/Users/jeremyzheng/Documents/GitHub/archie-heat-load-calculator/output/web_review/synthetic-hourly-cooling-baseline/hourly_load_report.json"
+  }
+}

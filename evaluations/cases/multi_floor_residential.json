@@ -1,0 +1,14 @@
+{
+  "case_id": "multi_floor_residential",
+  "description": "Large multi-floor architect set. Lower Ground and Ground Floor must remain distinct; RCPs provide supporting context only.",
+  "expectations": {
+    "pages": {
+      "geometry": [26, 29],
+      "rcp_context": [43, 44]
+    },
+    "floors": [
+      {"label": "Ground Floor", "source_pages": [26, 43]},
+      {"label": "Lower Ground Floor", "source_pages": [29, 44]}
+    ]
+  }
+}

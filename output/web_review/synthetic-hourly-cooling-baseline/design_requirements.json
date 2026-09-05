@@ -1,0 +1,164 @@
+{
+  "version": 5,
+  "scope": "project",
+  "space_usage": "Synthetic small retail cooling test case",
+  "occupancy": 8.0,
+  "operating_hours": "Synthetic weekday 08:00-18:00",
+  "indoor_cooling_setpoint_c": 24.0,
+  "indoor_heating_setpoint_c": 20.0,
+  "outdoor_summer_db_c": 34.0,
+  "outdoor_winter_db_c": 5.0,
+  "fresh_air_basis": "Synthetic fixed outdoor-air basis for workflow testing",
+  "exhaust_basis": "Synthetic case: no process exhaust",
+  "cooking_activity": "none",
+  "hood_requirement": "not_required",
+  "exhaust_outcome": "not_required",
+  "make_up_air_requirement": "not_required",
+  "ceiling_height_mm": 3000.0,
+  "ceiling_void_height_mm": 300.0,
+  "heat_sources": [],
+  "zones": [
+    {
+      "zone_id": "synthetic_retail_zone",
+      "name": "Synthetic Retail Room",
+      "usage": "Synthetic retail test space",
+      "source_room_labels": [
+        "SYNTHETIC RETAIL ROOM \u2014 NOT FOR DESIGN"
+      ],
+      "area_m2": 40.0,
+      "occupancy": 8.0,
+      "operating_hours": "Synthetic weekday 08:00-18:00",
+      "indoor_cooling_setpoint_c": 24.0,
+      "indoor_heating_setpoint_c": 20.0,
+      "ceiling_height_mm": 3000.0,
+      "heat_sources": [
+        {
+          "name": "Synthetic display refrigeration",
+          "quantity": 1.0,
+          "watts": 500.0,
+          "kind": "refrigeration",
+          "diversity_factor": 0.8,
+          "space_gain_factor": 0.9,
+          "verification_status": "provisional",
+          "source": "Synthetic test fixture created for hourly cooling workflow regression testing."
+        }
+      ],
+      "cooling_load": {
+        "people_sensible_w_per_person": 75.0,
+        "people_latent_w_per_person": 55.0,
+        "people_diversity_factor": 0.8,
+        "lighting_w_m2": 12.0,
+        "lighting_diversity_factor": 0.9,
+        "outside_air_lps": 40.0,
+        "safety_factor": 1.1,
+        "envelope_not_applicable": false,
+        "envelope_surfaces": [
+          {
+            "surface_id": "synthetic_south_wall",
+            "kind": "opaque_wall",
+            "orientation": "S",
+            "area_m2": 18.0,
+            "u_value_w_m2k": 0.6,
+            "solar_design_w_m2": 350.0,
+            "solar_gain_factor": 0.2,
+            "shading_factor": 0.9,
+            "boundary_method": "external",
+            "boundary_temperature_c": null,
+            "construction_id": "",
+            "construction_revision": null,
+            "manual_solar_source": "",
+            "verification_status": "provisional",
+            "source": "Synthetic test fixture created for hourly cooling workflow regression testing."
+          },
+          {
+            "surface_id": "synthetic_west_glazing",
+            "kind": "glazing",
+            "orientation": "W",
+            "area_m2": 6.0,
+            "u_value_w_m2k": 2.5,
+            "solar_design_w_m2": 500.0,
+            "solar_gain_factor": 0.4,
+            "shading_factor": 0.8,
+            "boundary_method": "external",
+            "boundary_temperature_c": null,
+            "construction_id": "",
+            "construction_revision": null,
+            "manual_solar_source": "",
+            "verification_status": "provisional",
+            "source": "Synthetic test fixture created for hourly cooling workflow regression testing."
+          }
+        ],
+        "verification_status": "provisional",
+        "source": "Synthetic test fixture created for hourly cooling workflow regression testing."
+      },
+      "ventilation_requirements": {
+        "process_type": "none",
+        "basis_name": "",
+        "basis_source": "",
+        "outside_air_method": "combined",
+        "people_rate_lps_per_person": null,
+        "area_rate_lps_per_m2": null,
+        "fixed_minimum_lps": null,
+        "process_exhaust_requirement": "unknown",
+        "process_exhaust_lps": null,
+        "hood_type_or_duty": "",
+        "recirculable": "unknown",
+        "allowable_transfer_air_lps": null,
+        "allowable_outside_air_credit_lps": null,
+        "design_supply_lps_including_outside_air": null,
+        "return_or_relief_lps": null,
+        "dedicated_make_up_air_lps": null,
+        "verification_status": "missing",
+        "source": ""
+      }
+    }
+  ],
+  "cooling_load_conditions": {
+    "indoor_cooling_wet_bulb_c": 17.5,
+    "outdoor_summer_wet_bulb_c": 23.0,
+    "atmospheric_pressure_kpa": 101.325,
+    "verification_status": "provisional",
+    "source": "Synthetic test fixture created for hourly cooling workflow regression testing."
+  },
+  "existing_services": "Synthetic case only; no existing-services assessment.",
+  "service_constraints": {
+    "electrical_capacity": "",
+    "condensate_route": "",
+    "outdoor_unit_location": "",
+    "riser_or_base_building_services": "",
+    "maintenance_access": ""
+  },
+  "code_basis": "Synthetic workflow test only; no code basis is asserted.",
+  "designer_notes": "SYNTHETIC TEST FIXTURE \u2014 NOT FOR ENGINEERING DESIGN, EQUIPMENT SELECTION, OR BENCHMARK PARITY.",
+  "verification": {
+    "occupancy": {
+      "status": "provisional",
+      "source": "Synthetic test fixture created for hourly cooling workflow regression testing."
+    },
+    "design_conditions": {
+      "status": "provisional",
+      "source": "Synthetic test fixture created for hourly cooling workflow regression testing."
+    },
+    "outside_air": {
+      "status": "provisional",
+      "source": "Synthetic test fixture created for hourly cooling workflow regression testing."
+    },
+    "exhaust": {
+      "status": "provisional",
+      "source": "Synthetic test fixture created for hourly cooling workflow regression testing."
+    },
+    "heat_sources": {
+      "status": "provisional",
+      "source": "Synthetic test fixture created for hourly cooling workflow regression testing."
+    },
+    "ceiling": {
+      "status": "provisional",
+      "source": "Synthetic test fixture created for hourly cooling workflow regression testing."
+    },
+    "existing_services": {
+      "status": "provisional",
+      "source": "Synthetic test fixture created for hourly cooling workflow regression testing."
+    }
+  },
+  "updated_at": "2026-09-05T06:13:52.603742+00:00"
+}

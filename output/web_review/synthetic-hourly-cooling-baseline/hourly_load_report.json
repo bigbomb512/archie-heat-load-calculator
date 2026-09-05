@@ -1,0 +1,4996 @@
+{
+  "report_schema_version": 2,
+  "report_type": "hourly_cooling_load",
+  "status": "draft",
+  "input_fingerprints": {
+    "requirements_updated_at": "2026-09-05T06:13:52.603742+00:00",
+    "schedule_library_updated_at": "2026-09-05T06:13:52.605485+00:00",
+    "design_day_scenarios_updated_at": "2026-09-05T06:13:52.606149+00:00",
+    "hourly_load_model_updated_at": "2026-09-05T06:13:52.607619+00:00",
+    "envelope_library_updated_at": "",
+    "envelope_model_updated_at": ""
+  },
+  "excluded_components": [
+    "AHU coil effects",
+    "detailed glazing physics",
+    "dynamic thermal mass",
+    "fan/duct effects",
+    "geometric shading",
+    "heat recovery",
+    "heating",
+    "infiltration",
+    "partitions",
+    "plant loads"
+  ],
+  "scenario_results": [
+    {
+      "scenario_id": "synthetic_january_weekday",
+      "title": "Synthetic January weekday cooling design day",
+      "mode": "cooling",
+      "representative_month": "January",
+      "day_type": "weekday",
+      "status": "draft",
+      "rooms": [
+        {
+          "room_id": "synthetic_retail_zone-room-1",
+          "name": "Synthetic Retail Room",
+          "zone_id": "synthetic_retail_zone",
+          "status": "draft",
+          "hours": [
+            {
+              "hour": 0,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.48,
+                  "base_latent_kw": 0.352,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.432,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.36,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "envelope": {
+                  "sensible_kw": -0.1032,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.1032,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                }
+              },
+              "subtotal_sensible_kw": -0.1032,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": -0.1032,
+              "safety_factor": 1.1,
+              "safety_allowance_kw": -0.0103,
+              "design_total_kw": -0.1135
+            },
+            {
+              "hour": 1,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.48,
+                  "base_latent_kw": 0.352,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.432,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.36,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "envelope": {
+                  "sensible_kw": -0.129,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.129,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                }
+              },
+              "subtotal_sensible_kw": -0.129,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": -0.129,
+              "safety_factor": 1.1,
+              "safety_allowance_kw": -0.0129,
+              "design_total_kw": -0.1419
+            },
+            {
+              "hour": 2,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.48,
+                  "base_latent_kw": 0.352,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.432,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.36,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "envelope": {
+                  "sensible_kw": -0.1548,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.1548,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                }
+              },
+              "subtotal_sensible_kw": -0.1548,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": -0.1548,
+              "safety_factor": 1.1,
+              "safety_allowance_kw": -0.0155,
+              "design_total_kw": -0.1703
+            },
+            {
+              "hour": 3,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.48,
+                  "base_latent_kw": 0.352,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.432,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.36,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "envelope": {
+                  "sensible_kw": -0.1548,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.1548,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                }
+              },
+              "subtotal_sensible_kw": -0.1548,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": -0.1548,
+              "safety_factor": 1.1,
+              "safety_allowance_kw": -0.0155,
+              "design_total_kw": -0.1703
+            },
+            {
+              "hour": 4,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.48,
+                  "base_latent_kw": 0.352,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.432,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.36,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "envelope": {
+                  "sensible_kw": -0.1806,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.1806,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                }
+              },
+              "subtotal_sensible_kw": -0.1806,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": -0.1806,
+              "safety_factor": 1.1,
+              "safety_allowance_kw": -0.0181,
+              "design_total_kw": -0.1987
+            },
+            {
+              "hour": 5,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.48,
+                  "base_latent_kw": 0.352,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.432,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.36,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "envelope": {
+                  "sensible_kw": -0.1548,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.1548,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                }
+              },
+              "subtotal_sensible_kw": -0.1548,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": -0.1548,
+              "safety_factor": 1.1,
+              "safety_allowance_kw": -0.0155,
+              "design_total_kw": -0.1703
+            },
+            {
+              "hour": 6,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.48,
+                  "base_latent_kw": 0.352,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.432,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.36,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "envelope": {
+                  "sensible_kw": -0.1032,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.1032,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                }
+              },
+              "subtotal_sensible_kw": -0.1032,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": -0.1032,
+              "safety_factor": 1.1,
+              "safety_allowance_kw": -0.0103,
+              "design_total_kw": -0.1135
+            },
+            {
+              "hour": 7,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.48,
+                  "base_latent_kw": 0.352,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "lighting": {
+                  "sensible_kw": 0.0864,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0864,
+                  "base_sensible_kw": 0.432,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.2
+                  ]
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.108,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.108,
+                  "base_sensible_kw": 0.36,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.3
+                  ]
+                },
+                "envelope": {
+                  "sensible_kw": -0.0258,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.0258,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "solar": {
+                  "sensible_kw": 0.2094,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.2094,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "outside_air": {
+                  "sensible_kw": -0.0142,
+                  "latent_kw": -0.0489,
+                  "total_kw": -0.0631,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                }
+              },
+              "subtotal_sensible_kw": 0.3638,
+              "subtotal_latent_kw": -0.0489,
+              "subtotal_kw": 0.3149,
+              "safety_factor": 1.1,
+              "safety_allowance_kw": 0.0315,
+              "design_total_kw": 0.3464
+            },
+            {
+              "hour": 8,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.12,
+                  "latent_kw": 0.088,
+                  "total_kw": 0.208,
+                  "base_sensible_kw": 0.48,
+                  "base_latent_kw": 0.352,
+                  "schedule_factors": [
+                    0.25
+                  ]
+                },
+                "lighting": {
+                  "sensible_kw": 0.2592,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.2592,
+                  "base_sensible_kw": 0.432,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.6
+                  ]
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.252,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.252,
+                  "base_sensible_kw": 0.36,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.7
+                  ]
+                },
+                "envelope": {
+                  "sensible_kw": 0.0516,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0516,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "solar": {
+                  "sensible_kw": 0.6282,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.6282,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0561,
+                  "latent_kw": -0.0165,
+                  "total_kw": 0.0396,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                }
+              },
+              "subtotal_sensible_kw": 1.3671,
+              "subtotal_latent_kw": 0.0715,
+              "subtotal_kw": 1.4386,
+              "safety_factor": 1.1,
+              "safety_allowance_kw": 0.1439,
+              "design_total_kw": 1.5825
+            },
+            {
+              "hour": 9,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.24,
+                  "latent_kw": 0.176,
+                  "total_kw": 0.416,
+                  "base_sensible_kw": 0.48,
+                  "base_latent_kw": 0.352,
+                  "schedule_factors": [
+                    0.5
+                  ]
+                },
+                "lighting": {
+                  "sensible_kw": 0.3888,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.3888,
+                  "base_sensible_kw": 0.432,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.9
+                  ]
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.36,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.36,
+                  "base_sensible_kw": 0.36,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    1.0
+                  ]
+                },
+                "envelope": {
+                  "sensible_kw": 0.129,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.129,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "solar": {
+                  "sensible_kw": 1.047,
+                  "latent_kw": 0.0,
+                  "total_kw": 1.047,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "outside_air": {
+                  "sensible_kw": 0.1849,
+                  "latent_kw": 0.1017,
+                  "total_kw": 0.2866,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                }
+              },
+              "subtotal_sensible_kw": 2.3497,
+              "subtotal_latent_kw": 0.2777,
+              "subtotal_kw": 2.6274,
+              "safety_factor": 1.1,
+              "safety_allowance_kw": 0.2627,
+              "design_total_kw": 2.8901
+            },
+            {
+              "hour": 10,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.384,
+                  "latent_kw": 0.2816,
+                  "total_kw": 0.6656,
+                  "base_sensible_kw": 0.48,
+                  "base_latent_kw": 0.352,
+                  "schedule_factors": [
+                    0.8
+                  ]
+                },
+                "lighting": {
+                  "sensible_kw": 0.3888,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.3888,
+                  "base_sensible_kw": 0.432,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.9
+                  ]
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.36,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.36,
+                  "base_sensible_kw": 0.36,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    1.0
+                  ]
+                },
+                "envelope": {
+                  "sensible_kw": 0.1806,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.1806,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "solar": {
+                  "sensible_kw": 1.4658,
+                  "latent_kw": 0.0,
+                  "total_kw": 1.4658,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "outside_air": {
+                  "sensible_kw": 0.2569,
+                  "latent_kw": 0.1495,
+                  "total_kw": 0.4064,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                }
+              },
+              "subtotal_sensible_kw": 3.0361,
+              "subtotal_latent_kw": 0.4311,
+              "subtotal_kw": 3.4672,
+              "safety_factor": 1.1,
+              "safety_allowance_kw": 0.3467,
+              "design_total_kw": 3.8139
+            },
+            {
+              "hour": 11,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.384,
+                  "latent_kw": 0.2816,
+                  "total_kw": 0.6656,
+                  "base_sensible_kw": 0.48,
+                  "base_latent_kw": 0.352,
+                  "schedule_factors": [
+                    0.8
+                  ]
+                },
+                "lighting": {
+                  "sensible_kw": 0.3888,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.3888,
+                  "base_sensible_kw": 0.432,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.9
+                  ]
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.36,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.36,
+                  "base_sensible_kw": 0.36,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    1.0
+                  ]
+                },
+                "envelope": {
+                  "sensible_kw": 0.2322,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.2322,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "solar": {
+                  "sensible_kw": 1.8846,
+                  "latent_kw": 0.0,
+                  "total_kw": 1.8846,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "outside_air": {
+                  "sensible_kw": 0.3278,
+                  "latent_kw": 0.2015,
+                  "total_kw": 0.5293,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                }
+              },
+              "subtotal_sensible_kw": 3.5774,
+              "subtotal_latent_kw": 0.4831,
+              "subtotal_kw": 4.0605,
+              "safety_factor": 1.1,
+              "safety_allowance_kw": 0.4061,
+              "design_total_kw": 4.4666
+            },
+            {
+              "hour": 12,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.384,
+                  "latent_kw": 0.2816,
+                  "total_kw": 0.6656,
+                  "base_sensible_kw": 0.48,
+                  "base_latent_kw": 0.352,
+                  "schedule_factors": [
+                    0.8
+                  ]
+                },
+                "lighting": {
+                  "sensible_kw": 0.3888,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.3888,
+                  "base_sensible_kw": 0.432,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.9
+                  ]
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.36,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.36,
+                  "base_sensible_kw": 0.36,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    1.0
+                  ]
+                },
+                "envelope": {
+                  "sensible_kw": 0.258,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.258,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "solar": {
+                  "sensible_kw": 2.094,
+                  "latent_kw": 0.0,
+                  "total_kw": 2.094,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "outside_air": {
+                  "sensible_kw": 0.3625,
+                  "latent_kw": 0.2982,
+                  "total_kw": 0.6607,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                }
+              },
+              "subtotal_sensible_kw": 3.8473,
+              "subtotal_latent_kw": 0.5798,
+              "subtotal_kw": 4.4271,
+              "safety_factor": 1.1,
+              "safety_allowance_kw": 0.4427,
+              "design_total_kw": 4.8698
+            },
+            {
+              "hour": 13,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.384,
+                  "latent_kw": 0.2816,
+                  "total_kw": 0.6656,
+                  "base_sensible_kw": 0.48,
+                  "base_latent_kw": 0.352,
+                  "schedule_factors": [
+                    0.8
+                  ]
+                },
+                "lighting": {
+                  "sensible_kw": 0.3888,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.3888,
+                  "base_sensible_kw": 0.432,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.9
+                  ]
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.36,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.36,
+                  "base_sensible_kw": 0.36,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    1.0
+                  ]
+                },
+                "envelope": {
+                  "sensible_kw": 0.2838,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.2838,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "solar": {
+                  "sensible_kw": 2.094,
+                  "latent_kw": 0.0,
+                  "total_kw": 2.094,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "outside_air": {
+                  "sensible_kw": 0.3977,
+                  "latent_kw": 0.2579,
+                  "total_kw": 0.6556,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                }
+              },
+              "subtotal_sensible_kw": 3.9083,
+              "subtotal_latent_kw": 0.5395,
+              "subtotal_kw": 4.4478,
+              "safety_factor": 1.1,
+              "safety_allowance_kw": 0.4448,
+              "design_total_kw": 4.8926
+            },
+            {
+              "hour": 14,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.384,
+                  "latent_kw": 0.2816,
+                  "total_kw": 0.6656,
+                  "base_sensible_kw": 0.48,
+                  "base_latent_kw": 0.352,
+                  "schedule_factors": [
+                    0.8
+                  ]
+                },
+                "lighting": {
+                  "sensible_kw": 0.3888,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.3888,
+                  "base_sensible_kw": 0.432,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.9
+                  ]
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.36,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.36,
+                  "base_sensible_kw": 0.36,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    1.0
+                  ]
+                },
+                "envelope": {
+                  "sensible_kw": 0.2838,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.2838,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "solar": {
+                  "sensible_kw": 2.094,
+                  "latent_kw": 0.0,
+                  "total_kw": 2.094,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "outside_air": {
+                  "sensible_kw": 0.3977,
+                  "latent_kw": 0.2579,
+                  "total_kw": 0.6556,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                }
+              },
+              "subtotal_sensible_kw": 3.9083,
+              "subtotal_latent_kw": 0.5395,
+              "subtotal_kw": 4.4478,
+              "safety_factor": 1.1,
+              "safety_allowance_kw": 0.4448,
+              "design_total_kw": 4.8926
+            },
+            {
+              "hour": 15,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.384,
+                  "latent_kw": 0.2816,
+                  "total_kw": 0.6656,
+                  "base_sensible_kw": 0.48,
+                  "base_latent_kw": 0.352,
+                  "schedule_factors": [
+                    0.8
+                  ]
+                },
+                "lighting": {
+                  "sensible_kw": 0.3888,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.3888,
+                  "base_sensible_kw": 0.432,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.9
+                  ]
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.36,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.36,
+                  "base_sensible_kw": 0.36,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    1.0
+                  ]
+                },
+                "envelope": {
+                  "sensible_kw": 0.258,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.258,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "solar": {
+                  "sensible_kw": 1.6752,
+                  "latent_kw": 0.0,
+                  "total_kw": 1.6752,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "outside_air": {
+                  "sensible_kw": 0.3633,
+                  "latent_kw": 0.1613,
+                  "total_kw": 0.5246,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                }
+              },
+              "subtotal_sensible_kw": 3.4293,
+              "subtotal_latent_kw": 0.4429,
+              "subtotal_kw": 3.8722,
+              "safety_factor": 1.1,
+              "safety_allowance_kw": 0.3872,
+              "design_total_kw": 4.2594
+            },
+            {
+              "hour": 16,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.384,
+                  "latent_kw": 0.2816,
+                  "total_kw": 0.6656,
+                  "base_sensible_kw": 0.48,
+                  "base_latent_kw": 0.352,
+                  "schedule_factors": [
+                    0.8
+                  ]
+                },
+                "lighting": {
+                  "sensible_kw": 0.3888,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.3888,
+                  "base_sensible_kw": 0.432,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.9
+                  ]
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.36,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.36,
+                  "base_sensible_kw": 0.36,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    1.0
+                  ]
+                },
+                "envelope": {
+                  "sensible_kw": 0.2064,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.2064,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "solar": {
+                  "sensible_kw": 1.047,
+                  "latent_kw": 0.0,
+                  "total_kw": 1.047,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "outside_air": {
+                  "sensible_kw": 0.2928,
+                  "latent_kw": 0.1093,
+                  "total_kw": 0.4021,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                }
+              },
+              "subtotal_sensible_kw": 2.679,
+              "subtotal_latent_kw": 0.3909,
+              "subtotal_kw": 3.0699,
+              "safety_factor": 1.1,
+              "safety_allowance_kw": 0.307,
+              "design_total_kw": 3.3769
+            },
+            {
+              "hour": 17,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.192,
+                  "latent_kw": 0.1408,
+                  "total_kw": 0.3328,
+                  "base_sensible_kw": 0.48,
+                  "base_latent_kw": 0.352,
+                  "schedule_factors": [
+                    0.4
+                  ]
+                },
+                "lighting": {
+                  "sensible_kw": 0.3024,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.3024,
+                  "base_sensible_kw": 0.432,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.7
+                  ]
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.36,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.36,
+                  "base_sensible_kw": 0.36,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    1.0
+                  ]
+                },
+                "envelope": {
+                  "sensible_kw": 0.129,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.129,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "solar": {
+                  "sensible_kw": 0.4188,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.4188,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "outside_air": {
+                  "sensible_kw": 0.1386,
+                  "latent_kw": 0.0763,
+                  "total_kw": 0.2149,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                }
+              },
+              "subtotal_sensible_kw": 1.5408,
+              "subtotal_latent_kw": 0.2171,
+              "subtotal_kw": 1.7579,
+              "safety_factor": 1.1,
+              "safety_allowance_kw": 0.1758,
+              "design_total_kw": 1.9337
+            },
+            {
+              "hour": 18,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.48,
+                  "base_latent_kw": 0.352,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "lighting": {
+                  "sensible_kw": 0.0864,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0864,
+                  "base_sensible_kw": 0.432,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.2
+                  ]
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.18,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.18,
+                  "base_sensible_kw": 0.36,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.5
+                  ]
+                },
+                "envelope": {
+                  "sensible_kw": 0.0516,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0516,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0187,
+                  "latent_kw": 0.0246,
+                  "total_kw": 0.0433,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                }
+              },
+              "subtotal_sensible_kw": 0.3367,
+              "subtotal_latent_kw": 0.0246,
+              "subtotal_kw": 0.3613,
+              "safety_factor": 1.1,
+              "safety_allowance_kw": 0.0361,
+              "design_total_kw": 0.3974
+            },
+            {
+              "hour": 19,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.48,
+                  "base_latent_kw": 0.352,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.432,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.36,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "envelope": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                }
+              },
+              "subtotal_sensible_kw": 0.0,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": 0.0,
+              "safety_factor": 1.1,
+              "safety_allowance_kw": 0.0,
+              "design_total_kw": 0.0
+            },
+            {
+              "hour": 20,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.48,
+                  "base_latent_kw": 0.352,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.432,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.36,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "envelope": {
+                  "sensible_kw": -0.0258,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.0258,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                }
+              },
+              "subtotal_sensible_kw": -0.0258,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": -0.0258,
+              "safety_factor": 1.1,
+              "safety_allowance_kw": -0.0026,
+              "design_total_kw": -0.0284
+            },
+            {
+              "hour": 21,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.48,
+                  "base_latent_kw": 0.352,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.432,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.36,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "envelope": {
+                  "sensible_kw": -0.0516,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.0516,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                }
+              },
+              "subtotal_sensible_kw": -0.0516,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": -0.0516,
+              "safety_factor": 1.1,
+              "safety_allowance_kw": -0.0052,
+              "design_total_kw": -0.0568
+            },
+            {
+              "hour": 22,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.48,
+                  "base_latent_kw": 0.352,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.432,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.36,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "envelope": {
+                  "sensible_kw": -0.0774,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.0774,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                }
+              },
+              "subtotal_sensible_kw": -0.0774,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": -0.0774,
+              "safety_factor": 1.1,
+              "safety_allowance_kw": -0.0077,
+              "design_total_kw": -0.0851
+            },
+            {
+              "hour": 23,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.48,
+                  "base_latent_kw": 0.352,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.432,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.36,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": [
+                    0.0
+                  ]
+                },
+                "envelope": {
+                  "sensible_kw": -0.1032,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.1032,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0,
+                  "base_sensible_kw": 0.0,
+                  "base_latent_kw": 0.0,
+                  "schedule_factors": []
+                }
+              },
+              "subtotal_sensible_kw": -0.1032,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": -0.1032,
+              "safety_factor": 1.1,
+              "safety_allowance_kw": -0.0103,
+              "design_total_kw": -0.1135
+            }
+          ],
+          "peak": {
+            "design_total_kw": 4.8926,
+            "tied_hours": [
+              13,
+              14
+            ],
+            "display_hour": 13,
+            "hour": 13,
+            "sensible_kw": 3.9083,
+            "latent_kw": 0.5395,
+            "total_kw": 4.4478,
+            "components": {
+              "people": {
+                "sensible_kw": 0.384,
+                "latent_kw": 0.2816,
+                "total_kw": 0.6656,
+                "base_sensible_kw": 0.48,
+                "base_latent_kw": 0.352,
+                "schedule_factors": [
+                  0.8
+                ]
+              },
+              "lighting": {
+                "sensible_kw": 0.3888,
+                "latent_kw": 0.0,
+                "total_kw": 0.3888,
+                "base_sensible_kw": 0.432,
+                "base_latent_kw": 0.0,
+                "schedule_factors": [
+                  0.9
+                ]
+              },
+              "equipment_refrigeration": {
+                "sensible_kw": 0.36,
+                "latent_kw": 0.0,
+                "total_kw": 0.36,
+                "base_sensible_kw": 0.36,
+                "base_latent_kw": 0.0,
+                "schedule_factors": [
+                  1.0
+                ]
+              },
+              "envelope": {
+                "sensible_kw": 0.2838,
+                "latent_kw": 0.0,
+                "total_kw": 0.2838,
+                "base_sensible_kw": 0.0,
+                "base_latent_kw": 0.0,
+                "schedule_factors": []
+              },
+              "solar": {
+                "sensible_kw": 2.094,
+                "latent_kw": 0.0,
+                "total_kw": 2.094,
+                "base_sensible_kw": 0.0,
+                "base_latent_kw": 0.0,
+                "schedule_factors": []
+              },
+              "outside_air": {
+                "sensible_kw": 0.3977,
+                "latent_kw": 0.2579,
+                "total_kw": 0.6556,
+                "base_sensible_kw": 0.0,
+                "base_latent_kw": 0.0,
+                "schedule_factors": []
+              }
+            }
+          },
+          "warnings": [
+            "Room mapping, static inputs, or schedules remain provisional."
+          ],
+          "blocked_reasons": []
+        }
+      ],
+      "zones": [
+        {
+          "zone_id": "synthetic_retail_zone",
+          "name": "Synthetic Retail Room",
+          "floor_id": "unassigned",
+          "room_ids": [
+            "synthetic_retail_zone-room-1"
+          ],
+          "hours": [
+            {
+              "hour": 0,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "envelope": {
+                  "sensible_kw": -0.1032,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.1032
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                }
+              },
+              "subtotal_sensible_kw": -0.1032,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": -0.1032,
+              "safety_allowance_kw": -0.0103,
+              "design_total_kw": -0.1135
+            },
+            {
+              "hour": 1,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "envelope": {
+                  "sensible_kw": -0.129,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.129
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                }
+              },
+              "subtotal_sensible_kw": -0.129,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": -0.129,
+              "safety_allowance_kw": -0.0129,
+              "design_total_kw": -0.1419
+            },
+            {
+              "hour": 2,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "envelope": {
+                  "sensible_kw": -0.1548,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.1548
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                }
+              },
+              "subtotal_sensible_kw": -0.1548,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": -0.1548,
+              "safety_allowance_kw": -0.0155,
+              "design_total_kw": -0.1703
+            },
+            {
+              "hour": 3,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "envelope": {
+                  "sensible_kw": -0.1548,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.1548
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                }
+              },
+              "subtotal_sensible_kw": -0.1548,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": -0.1548,
+              "safety_allowance_kw": -0.0155,
+              "design_total_kw": -0.1703
+            },
+            {
+              "hour": 4,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "envelope": {
+                  "sensible_kw": -0.1806,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.1806
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                }
+              },
+              "subtotal_sensible_kw": -0.1806,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": -0.1806,
+              "safety_allowance_kw": -0.0181,
+              "design_total_kw": -0.1987
+            },
+            {
+              "hour": 5,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "envelope": {
+                  "sensible_kw": -0.1548,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.1548
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                }
+              },
+              "subtotal_sensible_kw": -0.1548,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": -0.1548,
+              "safety_allowance_kw": -0.0155,
+              "design_total_kw": -0.1703
+            },
+            {
+              "hour": 6,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "envelope": {
+                  "sensible_kw": -0.1032,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.1032
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                }
+              },
+              "subtotal_sensible_kw": -0.1032,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": -0.1032,
+              "safety_allowance_kw": -0.0103,
+              "design_total_kw": -0.1135
+            },
+            {
+              "hour": 7,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "lighting": {
+                  "sensible_kw": 0.0864,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0864
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.108,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.108
+                },
+                "envelope": {
+                  "sensible_kw": -0.0258,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.0258
+                },
+                "solar": {
+                  "sensible_kw": 0.2094,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.2094
+                },
+                "outside_air": {
+                  "sensible_kw": -0.0142,
+                  "latent_kw": -0.0489,
+                  "total_kw": -0.0631
+                }
+              },
+              "subtotal_sensible_kw": 0.3638,
+              "subtotal_latent_kw": -0.0489,
+              "subtotal_kw": 0.3149,
+              "safety_allowance_kw": 0.0315,
+              "design_total_kw": 0.3464
+            },
+            {
+              "hour": 8,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.12,
+                  "latent_kw": 0.088,
+                  "total_kw": 0.208
+                },
+                "lighting": {
+                  "sensible_kw": 0.2592,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.2592
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.252,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.252
+                },
+                "envelope": {
+                  "sensible_kw": 0.0516,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0516
+                },
+                "solar": {
+                  "sensible_kw": 0.6282,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.6282
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0561,
+                  "latent_kw": -0.0165,
+                  "total_kw": 0.0396
+                }
+              },
+              "subtotal_sensible_kw": 1.3671,
+              "subtotal_latent_kw": 0.0715,
+              "subtotal_kw": 1.4386,
+              "safety_allowance_kw": 0.1439,
+              "design_total_kw": 1.5825
+            },
+            {
+              "hour": 9,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.24,
+                  "latent_kw": 0.176,
+                  "total_kw": 0.416
+                },
+                "lighting": {
+                  "sensible_kw": 0.3888,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.3888
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.36,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.36
+                },
+                "envelope": {
+                  "sensible_kw": 0.129,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.129
+                },
+                "solar": {
+                  "sensible_kw": 1.047,
+                  "latent_kw": 0.0,
+                  "total_kw": 1.047
+                },
+                "outside_air": {
+                  "sensible_kw": 0.1849,
+                  "latent_kw": 0.1017,
+                  "total_kw": 0.2866
+                }
+              },
+              "subtotal_sensible_kw": 2.3497,
+              "subtotal_latent_kw": 0.2777,
+              "subtotal_kw": 2.6274,
+              "safety_allowance_kw": 0.2627,
+              "design_total_kw": 2.8901
+            },
+            {
+              "hour": 10,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.384,
+                  "latent_kw": 0.2816,
+                  "total_kw": 0.6656
+                },
+                "lighting": {
+                  "sensible_kw": 0.3888,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.3888
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.36,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.36
+                },
+                "envelope": {
+                  "sensible_kw": 0.1806,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.1806
+                },
+                "solar": {
+                  "sensible_kw": 1.4658,
+                  "latent_kw": 0.0,
+                  "total_kw": 1.4658
+                },
+                "outside_air": {
+                  "sensible_kw": 0.2569,
+                  "latent_kw": 0.1495,
+                  "total_kw": 0.4064
+                }
+              },
+              "subtotal_sensible_kw": 3.0361,
+              "subtotal_latent_kw": 0.4311,
+              "subtotal_kw": 3.4672,
+              "safety_allowance_kw": 0.3467,
+              "design_total_kw": 3.8139
+            },
+            {
+              "hour": 11,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.384,
+                  "latent_kw": 0.2816,
+                  "total_kw": 0.6656
+                },
+                "lighting": {
+                  "sensible_kw": 0.3888,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.3888
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.36,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.36
+                },
+                "envelope": {
+                  "sensible_kw": 0.2322,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.2322
+                },
+                "solar": {
+                  "sensible_kw": 1.8846,
+                  "latent_kw": 0.0,
+                  "total_kw": 1.8846
+                },
+                "outside_air": {
+                  "sensible_kw": 0.3278,
+                  "latent_kw": 0.2015,
+                  "total_kw": 0.5293
+                }
+              },
+              "subtotal_sensible_kw": 3.5774,
+              "subtotal_latent_kw": 0.4831,
+              "subtotal_kw": 4.0605,
+              "safety_allowance_kw": 0.4061,
+              "design_total_kw": 4.4666
+            },
+            {
+              "hour": 12,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.384,
+                  "latent_kw": 0.2816,
+                  "total_kw": 0.6656
+                },
+                "lighting": {
+                  "sensible_kw": 0.3888,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.3888
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.36,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.36
+                },
+                "envelope": {
+                  "sensible_kw": 0.258,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.258
+                },
+                "solar": {
+                  "sensible_kw": 2.094,
+                  "latent_kw": 0.0,
+                  "total_kw": 2.094
+                },
+                "outside_air": {
+                  "sensible_kw": 0.3625,
+                  "latent_kw": 0.2982,
+                  "total_kw": 0.6607
+                }
+              },
+              "subtotal_sensible_kw": 3.8473,
+              "subtotal_latent_kw": 0.5798,
+              "subtotal_kw": 4.4271,
+              "safety_allowance_kw": 0.4427,
+              "design_total_kw": 4.8698
+            },
+            {
+              "hour": 13,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.384,
+                  "latent_kw": 0.2816,
+                  "total_kw": 0.6656
+                },
+                "lighting": {
+                  "sensible_kw": 0.3888,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.3888
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.36,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.36
+                },
+                "envelope": {
+                  "sensible_kw": 0.2838,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.2838
+                },
+                "solar": {
+                  "sensible_kw": 2.094,
+                  "latent_kw": 0.0,
+                  "total_kw": 2.094
+                },
+                "outside_air": {
+                  "sensible_kw": 0.3977,
+                  "latent_kw": 0.2579,
+                  "total_kw": 0.6556
+                }
+              },
+              "subtotal_sensible_kw": 3.9083,
+              "subtotal_latent_kw": 0.5395,
+              "subtotal_kw": 4.4478,
+              "safety_allowance_kw": 0.4448,
+              "design_total_kw": 4.8926
+            },
+            {
+              "hour": 14,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.384,
+                  "latent_kw": 0.2816,
+                  "total_kw": 0.6656
+                },
+                "lighting": {
+                  "sensible_kw": 0.3888,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.3888
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.36,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.36
+                },
+                "envelope": {
+                  "sensible_kw": 0.2838,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.2838
+                },
+                "solar": {
+                  "sensible_kw": 2.094,
+                  "latent_kw": 0.0,
+                  "total_kw": 2.094
+                },
+                "outside_air": {
+                  "sensible_kw": 0.3977,
+                  "latent_kw": 0.2579,
+                  "total_kw": 0.6556
+                }
+              },
+              "subtotal_sensible_kw": 3.9083,
+              "subtotal_latent_kw": 0.5395,
+              "subtotal_kw": 4.4478,
+              "safety_allowance_kw": 0.4448,
+              "design_total_kw": 4.8926
+            },
+            {
+              "hour": 15,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.384,
+                  "latent_kw": 0.2816,
+                  "total_kw": 0.6656
+                },
+                "lighting": {
+                  "sensible_kw": 0.3888,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.3888
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.36,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.36
+                },
+                "envelope": {
+                  "sensible_kw": 0.258,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.258
+                },
+                "solar": {
+                  "sensible_kw": 1.6752,
+                  "latent_kw": 0.0,
+                  "total_kw": 1.6752
+                },
+                "outside_air": {
+                  "sensible_kw": 0.3633,
+                  "latent_kw": 0.1613,
+                  "total_kw": 0.5246
+                }
+              },
+              "subtotal_sensible_kw": 3.4293,
+              "subtotal_latent_kw": 0.4429,
+              "subtotal_kw": 3.8722,
+              "safety_allowance_kw": 0.3872,
+              "design_total_kw": 4.2594
+            },
+            {
+              "hour": 16,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.384,
+                  "latent_kw": 0.2816,
+                  "total_kw": 0.6656
+                },
+                "lighting": {
+                  "sensible_kw": 0.3888,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.3888
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.36,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.36
+                },
+                "envelope": {
+                  "sensible_kw": 0.2064,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.2064
+                },
+                "solar": {
+                  "sensible_kw": 1.047,
+                  "latent_kw": 0.0,
+                  "total_kw": 1.047
+                },
+                "outside_air": {
+                  "sensible_kw": 0.2928,
+                  "latent_kw": 0.1093,
+                  "total_kw": 0.4021
+                }
+              },
+              "subtotal_sensible_kw": 2.679,
+              "subtotal_latent_kw": 0.3909,
+              "subtotal_kw": 3.0699,
+              "safety_allowance_kw": 0.307,
+              "design_total_kw": 3.3769
+            },
+            {
+              "hour": 17,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.192,
+                  "latent_kw": 0.1408,
+                  "total_kw": 0.3328
+                },
+                "lighting": {
+                  "sensible_kw": 0.3024,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.3024
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.36,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.36
+                },
+                "envelope": {
+                  "sensible_kw": 0.129,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.129
+                },
+                "solar": {
+                  "sensible_kw": 0.4188,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.4188
+                },
+                "outside_air": {
+                  "sensible_kw": 0.1386,
+                  "latent_kw": 0.0763,
+                  "total_kw": 0.2149
+                }
+              },
+              "subtotal_sensible_kw": 1.5408,
+              "subtotal_latent_kw": 0.2171,
+              "subtotal_kw": 1.7579,
+              "safety_allowance_kw": 0.1758,
+              "design_total_kw": 1.9337
+            },
+            {
+              "hour": 18,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "lighting": {
+                  "sensible_kw": 0.0864,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0864
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.18,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.18
+                },
+                "envelope": {
+                  "sensible_kw": 0.0516,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0516
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0187,
+                  "latent_kw": 0.0246,
+                  "total_kw": 0.0433
+                }
+              },
+              "subtotal_sensible_kw": 0.3367,
+              "subtotal_latent_kw": 0.0246,
+              "subtotal_kw": 0.3613,
+              "safety_allowance_kw": 0.0361,
+              "design_total_kw": 0.3974
+            },
+            {
+              "hour": 19,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "envelope": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                }
+              },
+              "subtotal_sensible_kw": 0.0,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": 0.0,
+              "safety_allowance_kw": 0.0,
+              "design_total_kw": 0.0
+            },
+            {
+              "hour": 20,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "envelope": {
+                  "sensible_kw": -0.0258,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.0258
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                }
+              },
+              "subtotal_sensible_kw": -0.0258,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": -0.0258,
+              "safety_allowance_kw": -0.0026,
+              "design_total_kw": -0.0284
+            },
+            {
+              "hour": 21,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "envelope": {
+                  "sensible_kw": -0.0516,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.0516
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                }
+              },
+              "subtotal_sensible_kw": -0.0516,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": -0.0516,
+              "safety_allowance_kw": -0.0052,
+              "design_total_kw": -0.0568
+            },
+            {
+              "hour": 22,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "envelope": {
+                  "sensible_kw": -0.0774,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.0774
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                }
+              },
+              "subtotal_sensible_kw": -0.0774,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": -0.0774,
+              "safety_allowance_kw": -0.0077,
+              "design_total_kw": -0.0851
+            },
+            {
+              "hour": 23,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "envelope": {
+                  "sensible_kw": -0.1032,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.1032
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                }
+              },
+              "subtotal_sensible_kw": -0.1032,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": -0.1032,
+              "safety_allowance_kw": -0.0103,
+              "design_total_kw": -0.1135
+            }
+          ],
+          "peak": {
+            "design_total_kw": 4.8926,
+            "tied_hours": [
+              13,
+              14
+            ],
+            "display_hour": 13,
+            "hour": 13,
+            "sensible_kw": 3.9083,
+            "latent_kw": 0.5395,
+            "total_kw": 4.4478,
+            "components": {
+              "people": {
+                "sensible_kw": 0.384,
+                "latent_kw": 0.2816,
+                "total_kw": 0.6656
+              },
+              "lighting": {
+                "sensible_kw": 0.3888,
+                "latent_kw": 0.0,
+                "total_kw": 0.3888
+              },
+              "equipment_refrigeration": {
+                "sensible_kw": 0.36,
+                "latent_kw": 0.0,
+                "total_kw": 0.36
+              },
+              "envelope": {
+                "sensible_kw": 0.2838,
+                "latent_kw": 0.0,
+                "total_kw": 0.2838
+              },
+              "solar": {
+                "sensible_kw": 2.094,
+                "latent_kw": 0.0,
+                "total_kw": 2.094
+              },
+              "outside_air": {
+                "sensible_kw": 0.3977,
+                "latent_kw": 0.2579,
+                "total_kw": 0.6556
+              }
+            }
+          }
+        }
+      ],
+      "floors": [
+        {
+          "floor_id": "unassigned",
+          "name": "Unassigned legacy floor",
+          "zone_ids": [
+            "synthetic_retail_zone"
+          ],
+          "room_ids": [
+            "synthetic_retail_zone-room-1"
+          ],
+          "hours": [
+            {
+              "hour": 0,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "envelope": {
+                  "sensible_kw": -0.1032,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.1032
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                }
+              },
+              "subtotal_sensible_kw": -0.1032,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": -0.1032,
+              "safety_allowance_kw": -0.0103,
+              "design_total_kw": -0.1135
+            },
+            {
+              "hour": 1,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "envelope": {
+                  "sensible_kw": -0.129,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.129
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                }
+              },
+              "subtotal_sensible_kw": -0.129,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": -0.129,
+              "safety_allowance_kw": -0.0129,
+              "design_total_kw": -0.1419
+            },
+            {
+              "hour": 2,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "envelope": {
+                  "sensible_kw": -0.1548,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.1548
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                }
+              },
+              "subtotal_sensible_kw": -0.1548,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": -0.1548,
+              "safety_allowance_kw": -0.0155,
+              "design_total_kw": -0.1703
+            },
+            {
+              "hour": 3,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "envelope": {
+                  "sensible_kw": -0.1548,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.1548
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                }
+              },
+              "subtotal_sensible_kw": -0.1548,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": -0.1548,
+              "safety_allowance_kw": -0.0155,
+              "design_total_kw": -0.1703
+            },
+            {
+              "hour": 4,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "envelope": {
+                  "sensible_kw": -0.1806,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.1806
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                }
+              },
+              "subtotal_sensible_kw": -0.1806,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": -0.1806,
+              "safety_allowance_kw": -0.0181,
+              "design_total_kw": -0.1987
+            },
+            {
+              "hour": 5,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "envelope": {
+                  "sensible_kw": -0.1548,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.1548
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                }
+              },
+              "subtotal_sensible_kw": -0.1548,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": -0.1548,
+              "safety_allowance_kw": -0.0155,
+              "design_total_kw": -0.1703
+            },
+            {
+              "hour": 6,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "envelope": {
+                  "sensible_kw": -0.1032,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.1032
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                }
+              },
+              "subtotal_sensible_kw": -0.1032,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": -0.1032,
+              "safety_allowance_kw": -0.0103,
+              "design_total_kw": -0.1135
+            },
+            {
+              "hour": 7,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "lighting": {
+                  "sensible_kw": 0.0864,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0864
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.108,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.108
+                },
+                "envelope": {
+                  "sensible_kw": -0.0258,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.0258
+                },
+                "solar": {
+                  "sensible_kw": 0.2094,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.2094
+                },
+                "outside_air": {
+                  "sensible_kw": -0.0142,
+                  "latent_kw": -0.0489,
+                  "total_kw": -0.0631
+                }
+              },
+              "subtotal_sensible_kw": 0.3638,
+              "subtotal_latent_kw": -0.0489,
+              "subtotal_kw": 0.3149,
+              "safety_allowance_kw": 0.0315,
+              "design_total_kw": 0.3464
+            },
+            {
+              "hour": 8,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.12,
+                  "latent_kw": 0.088,
+                  "total_kw": 0.208
+                },
+                "lighting": {
+                  "sensible_kw": 0.2592,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.2592
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.252,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.252
+                },
+                "envelope": {
+                  "sensible_kw": 0.0516,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0516
+                },
+                "solar": {
+                  "sensible_kw": 0.6282,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.6282
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0561,
+                  "latent_kw": -0.0165,
+                  "total_kw": 0.0396
+                }
+              },
+              "subtotal_sensible_kw": 1.3671,
+              "subtotal_latent_kw": 0.0715,
+              "subtotal_kw": 1.4386,
+              "safety_allowance_kw": 0.1439,
+              "design_total_kw": 1.5825
+            },
+            {
+              "hour": 9,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.24,
+                  "latent_kw": 0.176,
+                  "total_kw": 0.416
+                },
+                "lighting": {
+                  "sensible_kw": 0.3888,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.3888
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.36,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.36
+                },
+                "envelope": {
+                  "sensible_kw": 0.129,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.129
+                },
+                "solar": {
+                  "sensible_kw": 1.047,
+                  "latent_kw": 0.0,
+                  "total_kw": 1.047
+                },
+                "outside_air": {
+                  "sensible_kw": 0.1849,
+                  "latent_kw": 0.1017,
+                  "total_kw": 0.2866
+                }
+              },
+              "subtotal_sensible_kw": 2.3497,
+              "subtotal_latent_kw": 0.2777,
+              "subtotal_kw": 2.6274,
+              "safety_allowance_kw": 0.2627,
+              "design_total_kw": 2.8901
+            },
+            {
+              "hour": 10,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.384,
+                  "latent_kw": 0.2816,
+                  "total_kw": 0.6656
+                },
+                "lighting": {
+                  "sensible_kw": 0.3888,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.3888
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.36,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.36
+                },
+                "envelope": {
+                  "sensible_kw": 0.1806,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.1806
+                },
+                "solar": {
+                  "sensible_kw": 1.4658,
+                  "latent_kw": 0.0,
+                  "total_kw": 1.4658
+                },
+                "outside_air": {
+                  "sensible_kw": 0.2569,
+                  "latent_kw": 0.1495,
+                  "total_kw": 0.4064
+                }
+              },
+              "subtotal_sensible_kw": 3.0361,
+              "subtotal_latent_kw": 0.4311,
+              "subtotal_kw": 3.4672,
+              "safety_allowance_kw": 0.3467,
+              "design_total_kw": 3.8139
+            },
+            {
+              "hour": 11,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.384,
+                  "latent_kw": 0.2816,
+                  "total_kw": 0.6656
+                },
+                "lighting": {
+                  "sensible_kw": 0.3888,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.3888
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.36,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.36
+                },
+                "envelope": {
+                  "sensible_kw": 0.2322,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.2322
+                },
+                "solar": {
+                  "sensible_kw": 1.8846,
+                  "latent_kw": 0.0,
+                  "total_kw": 1.8846
+                },
+                "outside_air": {
+                  "sensible_kw": 0.3278,
+                  "latent_kw": 0.2015,
+                  "total_kw": 0.5293
+                }
+              },
+              "subtotal_sensible_kw": 3.5774,
+              "subtotal_latent_kw": 0.4831,
+              "subtotal_kw": 4.0605,
+              "safety_allowance_kw": 0.4061,
+              "design_total_kw": 4.4666
+            },
+            {
+              "hour": 12,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.384,
+                  "latent_kw": 0.2816,
+                  "total_kw": 0.6656
+                },
+                "lighting": {
+                  "sensible_kw": 0.3888,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.3888
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.36,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.36
+                },
+                "envelope": {
+                  "sensible_kw": 0.258,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.258
+                },
+                "solar": {
+                  "sensible_kw": 2.094,
+                  "latent_kw": 0.0,
+                  "total_kw": 2.094
+                },
+                "outside_air": {
+                  "sensible_kw": 0.3625,
+                  "latent_kw": 0.2982,
+                  "total_kw": 0.6607
+                }
+              },
+              "subtotal_sensible_kw": 3.8473,
+              "subtotal_latent_kw": 0.5798,
+              "subtotal_kw": 4.4271,
+              "safety_allowance_kw": 0.4427,
+              "design_total_kw": 4.8698
+            },
+            {
+              "hour": 13,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.384,
+                  "latent_kw": 0.2816,
+                  "total_kw": 0.6656
+                },
+                "lighting": {
+                  "sensible_kw": 0.3888,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.3888
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.36,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.36
+                },
+                "envelope": {
+                  "sensible_kw": 0.2838,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.2838
+                },
+                "solar": {
+                  "sensible_kw": 2.094,
+                  "latent_kw": 0.0,
+                  "total_kw": 2.094
+                },
+                "outside_air": {
+                  "sensible_kw": 0.3977,
+                  "latent_kw": 0.2579,
+                  "total_kw": 0.6556
+                }
+              },
+              "subtotal_sensible_kw": 3.9083,
+              "subtotal_latent_kw": 0.5395,
+              "subtotal_kw": 4.4478,
+              "safety_allowance_kw": 0.4448,
+              "design_total_kw": 4.8926
+            },
+            {
+              "hour": 14,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.384,
+                  "latent_kw": 0.2816,
+                  "total_kw": 0.6656
+                },
+                "lighting": {
+                  "sensible_kw": 0.3888,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.3888
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.36,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.36
+                },
+                "envelope": {
+                  "sensible_kw": 0.2838,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.2838
+                },
+                "solar": {
+                  "sensible_kw": 2.094,
+                  "latent_kw": 0.0,
+                  "total_kw": 2.094
+                },
+                "outside_air": {
+                  "sensible_kw": 0.3977,
+                  "latent_kw": 0.2579,
+                  "total_kw": 0.6556
+                }
+              },
+              "subtotal_sensible_kw": 3.9083,
+              "subtotal_latent_kw": 0.5395,
+              "subtotal_kw": 4.4478,
+              "safety_allowance_kw": 0.4448,
+              "design_total_kw": 4.8926
+            },
+            {
+              "hour": 15,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.384,
+                  "latent_kw": 0.2816,
+                  "total_kw": 0.6656
+                },
+                "lighting": {
+                  "sensible_kw": 0.3888,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.3888
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.36,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.36
+                },
+                "envelope": {
+                  "sensible_kw": 0.258,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.258
+                },
+                "solar": {
+                  "sensible_kw": 1.6752,
+                  "latent_kw": 0.0,
+                  "total_kw": 1.6752
+                },
+                "outside_air": {
+                  "sensible_kw": 0.3633,
+                  "latent_kw": 0.1613,
+                  "total_kw": 0.5246
+                }
+              },
+              "subtotal_sensible_kw": 3.4293,
+              "subtotal_latent_kw": 0.4429,
+              "subtotal_kw": 3.8722,
+              "safety_allowance_kw": 0.3872,
+              "design_total_kw": 4.2594
+            },
+            {
+              "hour": 16,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.384,
+                  "latent_kw": 0.2816,
+                  "total_kw": 0.6656
+                },
+                "lighting": {
+                  "sensible_kw": 0.3888,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.3888
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.36,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.36
+                },
+                "envelope": {
+                  "sensible_kw": 0.2064,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.2064
+                },
+                "solar": {
+                  "sensible_kw": 1.047,
+                  "latent_kw": 0.0,
+                  "total_kw": 1.047
+                },
+                "outside_air": {
+                  "sensible_kw": 0.2928,
+                  "latent_kw": 0.1093,
+                  "total_kw": 0.4021
+                }
+              },
+              "subtotal_sensible_kw": 2.679,
+              "subtotal_latent_kw": 0.3909,
+              "subtotal_kw": 3.0699,
+              "safety_allowance_kw": 0.307,
+              "design_total_kw": 3.3769
+            },
+            {
+              "hour": 17,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.192,
+                  "latent_kw": 0.1408,
+                  "total_kw": 0.3328
+                },
+                "lighting": {
+                  "sensible_kw": 0.3024,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.3024
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.36,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.36
+                },
+                "envelope": {
+                  "sensible_kw": 0.129,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.129
+                },
+                "solar": {
+                  "sensible_kw": 0.4188,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.4188
+                },
+                "outside_air": {
+                  "sensible_kw": 0.1386,
+                  "latent_kw": 0.0763,
+                  "total_kw": 0.2149
+                }
+              },
+              "subtotal_sensible_kw": 1.5408,
+              "subtotal_latent_kw": 0.2171,
+              "subtotal_kw": 1.7579,
+              "safety_allowance_kw": 0.1758,
+              "design_total_kw": 1.9337
+            },
+            {
+              "hour": 18,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "lighting": {
+                  "sensible_kw": 0.0864,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0864
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.18,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.18
+                },
+                "envelope": {
+                  "sensible_kw": 0.0516,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0516
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0187,
+                  "latent_kw": 0.0246,
+                  "total_kw": 0.0433
+                }
+              },
+              "subtotal_sensible_kw": 0.3367,
+              "subtotal_latent_kw": 0.0246,
+              "subtotal_kw": 0.3613,
+              "safety_allowance_kw": 0.0361,
+              "design_total_kw": 0.3974
+            },
+            {
+              "hour": 19,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "envelope": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                }
+              },
+              "subtotal_sensible_kw": 0.0,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": 0.0,
+              "safety_allowance_kw": 0.0,
+              "design_total_kw": 0.0
+            },
+            {
+              "hour": 20,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "envelope": {
+                  "sensible_kw": -0.0258,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.0258
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                }
+              },
+              "subtotal_sensible_kw": -0.0258,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": -0.0258,
+              "safety_allowance_kw": -0.0026,
+              "design_total_kw": -0.0284
+            },
+            {
+              "hour": 21,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "envelope": {
+                  "sensible_kw": -0.0516,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.0516
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                }
+              },
+              "subtotal_sensible_kw": -0.0516,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": -0.0516,
+              "safety_allowance_kw": -0.0052,
+              "design_total_kw": -0.0568
+            },
+            {
+              "hour": 22,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "envelope": {
+                  "sensible_kw": -0.0774,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.0774
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                }
+              },
+              "subtotal_sensible_kw": -0.0774,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": -0.0774,
+              "safety_allowance_kw": -0.0077,
+              "design_total_kw": -0.0851
+            },
+            {
+              "hour": 23,
+              "components": {
+                "people": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "lighting": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "equipment_refrigeration": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "envelope": {
+                  "sensible_kw": -0.1032,
+                  "latent_kw": 0.0,
+                  "total_kw": -0.1032
+                },
+                "solar": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                },
+                "outside_air": {
+                  "sensible_kw": 0.0,
+                  "latent_kw": 0.0,
+                  "total_kw": 0.0
+                }
+              },
+              "subtotal_sensible_kw": -0.1032,
+              "subtotal_latent_kw": 0.0,
+              "subtotal_kw": -0.1032,
+              "safety_allowance_kw": -0.0103,
+              "design_total_kw": -0.1135
+            }
+          ],
+          "peak": {
+            "design_total_kw": 4.8926,
+            "tied_hours": [
+              13,
+              14
+            ],
+            "display_hour": 13,
+            "hour": 13,
+            "sensible_kw": 3.9083,
+            "latent_kw": 0.5395,
+            "total_kw": 4.4478,
+            "components": {
+              "people": {
+                "sensible_kw": 0.384,
+                "latent_kw": 0.2816,
+                "total_kw": 0.6656
+              },
+              "lighting": {
+                "sensible_kw": 0.3888,
+                "latent_kw": 0.0,
+                "total_kw": 0.3888
+              },
+              "equipment_refrigeration": {
+                "sensible_kw": 0.36,
+                "latent_kw": 0.0,
+                "total_kw": 0.36
+              },
+              "envelope": {
+                "sensible_kw": 0.2838,
+                "latent_kw": 0.0,
+                "total_kw": 0.2838
+              },
+              "solar": {
+                "sensible_kw": 2.094,
+                "latent_kw": 0.0,
+                "total_kw": 2.094
+              },
+              "outside_air": {
+                "sensible_kw": 0.3977,
+                "latent_kw": 0.2579,
+                "total_kw": 0.6556
+              }
+            }
+          }
+        }
+      ],
+      "included_scope_hours": [
+        {
+          "hour": 0,
+          "components": {
+            "people": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "lighting": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "equipment_refrigeration": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "envelope": {
+              "sensible_kw": -0.1032,
+              "latent_kw": 0.0,
+              "total_kw": -0.1032
+            },
+            "solar": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "outside_air": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            }
+          },
+          "subtotal_sensible_kw": -0.1032,
+          "subtotal_latent_kw": 0.0,
+          "subtotal_kw": -0.1032,
+          "safety_allowance_kw": -0.0103,
+          "design_total_kw": -0.1135
+        },
+        {
+          "hour": 1,
+          "components": {
+            "people": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "lighting": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "equipment_refrigeration": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "envelope": {
+              "sensible_kw": -0.129,
+              "latent_kw": 0.0,
+              "total_kw": -0.129
+            },
+            "solar": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "outside_air": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            }
+          },
+          "subtotal_sensible_kw": -0.129,
+          "subtotal_latent_kw": 0.0,
+          "subtotal_kw": -0.129,
+          "safety_allowance_kw": -0.0129,
+          "design_total_kw": -0.1419
+        },
+        {
+          "hour": 2,
+          "components": {
+            "people": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "lighting": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "equipment_refrigeration": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "envelope": {
+              "sensible_kw": -0.1548,
+              "latent_kw": 0.0,
+              "total_kw": -0.1548
+            },
+            "solar": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "outside_air": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            }
+          },
+          "subtotal_sensible_kw": -0.1548,
+          "subtotal_latent_kw": 0.0,
+          "subtotal_kw": -0.1548,
+          "safety_allowance_kw": -0.0155,
+          "design_total_kw": -0.1703
+        },
+        {
+          "hour": 3,
+          "components": {
+            "people": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "lighting": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "equipment_refrigeration": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "envelope": {
+              "sensible_kw": -0.1548,
+              "latent_kw": 0.0,
+              "total_kw": -0.1548
+            },
+            "solar": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "outside_air": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            }
+          },
+          "subtotal_sensible_kw": -0.1548,
+          "subtotal_latent_kw": 0.0,
+          "subtotal_kw": -0.1548,
+          "safety_allowance_kw": -0.0155,
+          "design_total_kw": -0.1703
+        },
+        {
+          "hour": 4,
+          "components": {
+            "people": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "lighting": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "equipment_refrigeration": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "envelope": {
+              "sensible_kw": -0.1806,
+              "latent_kw": 0.0,
+              "total_kw": -0.1806
+            },
+            "solar": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "outside_air": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            }
+          },
+          "subtotal_sensible_kw": -0.1806,
+          "subtotal_latent_kw": 0.0,
+          "subtotal_kw": -0.1806,
+          "safety_allowance_kw": -0.0181,
+          "design_total_kw": -0.1987
+        },
+        {
+          "hour": 5,
+          "components": {
+            "people": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "lighting": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "equipment_refrigeration": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "envelope": {
+              "sensible_kw": -0.1548,
+              "latent_kw": 0.0,
+              "total_kw": -0.1548
+            },
+            "solar": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "outside_air": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            }
+          },
+          "subtotal_sensible_kw": -0.1548,
+          "subtotal_latent_kw": 0.0,
+          "subtotal_kw": -0.1548,
+          "safety_allowance_kw": -0.0155,
+          "design_total_kw": -0.1703
+        },
+        {
+          "hour": 6,
+          "components": {
+            "people": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "lighting": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "equipment_refrigeration": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "envelope": {
+              "sensible_kw": -0.1032,
+              "latent_kw": 0.0,
+              "total_kw": -0.1032
+            },
+            "solar": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "outside_air": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            }
+          },
+          "subtotal_sensible_kw": -0.1032,
+          "subtotal_latent_kw": 0.0,
+          "subtotal_kw": -0.1032,
+          "safety_allowance_kw": -0.0103,
+          "design_total_kw": -0.1135
+        },
+        {
+          "hour": 7,
+          "components": {
+            "people": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "lighting": {
+              "sensible_kw": 0.0864,
+              "latent_kw": 0.0,
+              "total_kw": 0.0864
+            },
+            "equipment_refrigeration": {
+              "sensible_kw": 0.108,
+              "latent_kw": 0.0,
+              "total_kw": 0.108
+            },
+            "envelope": {
+              "sensible_kw": -0.0258,
+              "latent_kw": 0.0,
+              "total_kw": -0.0258
+            },
+            "solar": {
+              "sensible_kw": 0.2094,
+              "latent_kw": 0.0,
+              "total_kw": 0.2094
+            },
+            "outside_air": {
+              "sensible_kw": -0.0142,
+              "latent_kw": -0.0489,
+              "total_kw": -0.0631
+            }
+          },
+          "subtotal_sensible_kw": 0.3638,
+          "subtotal_latent_kw": -0.0489,
+          "subtotal_kw": 0.3149,
+          "safety_allowance_kw": 0.0315,
+          "design_total_kw": 0.3464
+        },
+        {
+          "hour": 8,
+          "components": {
+            "people": {
+              "sensible_kw": 0.12,
+              "latent_kw": 0.088,
+              "total_kw": 0.208
+            },
+            "lighting": {
+              "sensible_kw": 0.2592,
+              "latent_kw": 0.0,
+              "total_kw": 0.2592
+            },
+            "equipment_refrigeration": {
+              "sensible_kw": 0.252,
+              "latent_kw": 0.0,
+              "total_kw": 0.252
+            },
+            "envelope": {
+              "sensible_kw": 0.0516,
+              "latent_kw": 0.0,
+              "total_kw": 0.0516
+            },
+            "solar": {
+              "sensible_kw": 0.6282,
+              "latent_kw": 0.0,
+              "total_kw": 0.6282
+            },
+            "outside_air": {
+              "sensible_kw": 0.0561,
+              "latent_kw": -0.0165,
+              "total_kw": 0.0396
+            }
+          },
+          "subtotal_sensible_kw": 1.3671,
+          "subtotal_latent_kw": 0.0715,
+          "subtotal_kw": 1.4386,
+          "safety_allowance_kw": 0.1439,
+          "design_total_kw": 1.5825
+        },
+        {
+          "hour": 9,
+          "components": {
+            "people": {
+              "sensible_kw": 0.24,
+              "latent_kw": 0.176,
+              "total_kw": 0.416
+            },
+            "lighting": {
+              "sensible_kw": 0.3888,
+              "latent_kw": 0.0,
+              "total_kw": 0.3888
+            },
+            "equipment_refrigeration": {
+              "sensible_kw": 0.36,
+              "latent_kw": 0.0,
+              "total_kw": 0.36
+            },
+            "envelope": {
+              "sensible_kw": 0.129,
+              "latent_kw": 0.0,
+              "total_kw": 0.129
+            },
+            "solar": {
+              "sensible_kw": 1.047,
+              "latent_kw": 0.0,
+              "total_kw": 1.047
+            },
+            "outside_air": {
+              "sensible_kw": 0.1849,
+              "latent_kw": 0.1017,
+              "total_kw": 0.2866
+            }
+          },
+          "subtotal_sensible_kw": 2.3497,
+          "subtotal_latent_kw": 0.2777,
+          "subtotal_kw": 2.6274,
+          "safety_allowance_kw": 0.2627,
+          "design_total_kw": 2.8901
+        },
+        {
+          "hour": 10,
+          "components": {
+            "people": {
+              "sensible_kw": 0.384,
+              "latent_kw": 0.2816,
+              "total_kw": 0.6656
+            },
+            "lighting": {
+              "sensible_kw": 0.3888,
+              "latent_kw": 0.0,
+              "total_kw": 0.3888
+            },
+            "equipment_refrigeration": {
+              "sensible_kw": 0.36,
+              "latent_kw": 0.0,
+              "total_kw": 0.36
+            },
+            "envelope": {
+              "sensible_kw": 0.1806,
+              "latent_kw": 0.0,
+              "total_kw": 0.1806
+            },
+            "solar": {
+              "sensible_kw": 1.4658,
+              "latent_kw": 0.0,
+              "total_kw": 1.4658
+            },
+            "outside_air": {
+              "sensible_kw": 0.2569,
+              "latent_kw": 0.1495,
+              "total_kw": 0.4064
+            }
+          },
+          "subtotal_sensible_kw": 3.0361,
+          "subtotal_latent_kw": 0.4311,
+          "subtotal_kw": 3.4672,
+          "safety_allowance_kw": 0.3467,
+          "design_total_kw": 3.8139
+        },
+        {
+          "hour": 11,
+          "components": {
+            "people": {
+              "sensible_kw": 0.384,
+              "latent_kw": 0.2816,
+              "total_kw": 0.6656
+            },
+            "lighting": {
+              "sensible_kw": 0.3888,
+              "latent_kw": 0.0,
+              "total_kw": 0.3888
+            },
+            "equipment_refrigeration": {
+              "sensible_kw": 0.36,
+              "latent_kw": 0.0,
+              "total_kw": 0.36
+            },
+            "envelope": {
+              "sensible_kw": 0.2322,
+              "latent_kw": 0.0,
+              "total_kw": 0.2322
+            },
+            "solar": {
+              "sensible_kw": 1.8846,
+              "latent_kw": 0.0,
+              "total_kw": 1.8846
+            },
+            "outside_air": {
+              "sensible_kw": 0.3278,
+              "latent_kw": 0.2015,
+              "total_kw": 0.5293
+            }
+          },
+          "subtotal_sensible_kw": 3.5774,
+          "subtotal_latent_kw": 0.4831,
+          "subtotal_kw": 4.0605,
+          "safety_allowance_kw": 0.4061,
+          "design_total_kw": 4.4666
+        },
+        {
+          "hour": 12,
+          "components": {
+            "people": {
+              "sensible_kw": 0.384,
+              "latent_kw": 0.2816,
+              "total_kw": 0.6656
+            },
+            "lighting": {
+              "sensible_kw": 0.3888,
+              "latent_kw": 0.0,
+              "total_kw": 0.3888
+            },
+            "equipment_refrigeration": {
+              "sensible_kw": 0.36,
+              "latent_kw": 0.0,
+              "total_kw": 0.36
+            },
+            "envelope": {
+              "sensible_kw": 0.258,
+              "latent_kw": 0.0,
+              "total_kw": 0.258
+            },
+            "solar": {
+              "sensible_kw": 2.094,
+              "latent_kw": 0.0,
+              "total_kw": 2.094
+            },
+            "outside_air": {
+              "sensible_kw": 0.3625,
+              "latent_kw": 0.2982,
+              "total_kw": 0.6607
+            }
+          },
+          "subtotal_sensible_kw": 3.8473,
+          "subtotal_latent_kw": 0.5798,
+          "subtotal_kw": 4.4271,
+          "safety_allowance_kw": 0.4427,
+          "design_total_kw": 4.8698
+        },
+        {
+          "hour": 13,
+          "components": {
+            "people": {
+              "sensible_kw": 0.384,
+              "latent_kw": 0.2816,
+              "total_kw": 0.6656
+            },
+            "lighting": {
+              "sensible_kw": 0.3888,
+              "latent_kw": 0.0,
+              "total_kw": 0.3888
+            },
+            "equipment_refrigeration": {
+              "sensible_kw": 0.36,
+              "latent_kw": 0.0,
+              "total_kw": 0.36
+            },
+            "envelope": {
+              "sensible_kw": 0.2838,
+              "latent_kw": 0.0,
+              "total_kw": 0.2838
+            },
+            "solar": {
+              "sensible_kw": 2.094,
+              "latent_kw": 0.0,
+              "total_kw": 2.094
+            },
+            "outside_air": {
+              "sensible_kw": 0.3977,
+              "latent_kw": 0.2579,
+              "total_kw": 0.6556
+            }
+          },
+          "subtotal_sensible_kw": 3.9083,
+          "subtotal_latent_kw": 0.5395,
+          "subtotal_kw": 4.4478,
+          "safety_allowance_kw": 0.4448,
+          "design_total_kw": 4.8926
+        },
+        {
+          "hour": 14,
+          "components": {
+            "people": {
+              "sensible_kw": 0.384,
+              "latent_kw": 0.2816,
+              "total_kw": 0.6656
+            },
+            "lighting": {
+              "sensible_kw": 0.3888,
+              "latent_kw": 0.0,
+              "total_kw": 0.3888
+            },
+            "equipment_refrigeration": {
+              "sensible_kw": 0.36,
+              "latent_kw": 0.0,
+              "total_kw": 0.36
+            },
+            "envelope": {
+              "sensible_kw": 0.2838,
+              "latent_kw": 0.0,
+              "total_kw": 0.2838
+            },
+            "solar": {
+              "sensible_kw": 2.094,
+              "latent_kw": 0.0,
+              "total_kw": 2.094
+            },
+            "outside_air": {
+              "sensible_kw": 0.3977,
+              "latent_kw": 0.2579,
+              "total_kw": 0.6556
+            }
+          },
+          "subtotal_sensible_kw": 3.9083,
+          "subtotal_latent_kw": 0.5395,
+          "subtotal_kw": 4.4478,
+          "safety_allowance_kw": 0.4448,
+          "design_total_kw": 4.8926
+        },
+        {
+          "hour": 15,
+          "components": {
+            "people": {
+              "sensible_kw": 0.384,
+              "latent_kw": 0.2816,
+              "total_kw": 0.6656
+            },
+            "lighting": {
+              "sensible_kw": 0.3888,
+              "latent_kw": 0.0,
+              "total_kw": 0.3888
+            },
+            "equipment_refrigeration": {
+              "sensible_kw": 0.36,
+              "latent_kw": 0.0,
+              "total_kw": 0.36
+            },
+            "envelope": {
+              "sensible_kw": 0.258,
+              "latent_kw": 0.0,
+              "total_kw": 0.258
+            },
+            "solar": {
+              "sensible_kw": 1.6752,
+              "latent_kw": 0.0,
+              "total_kw": 1.6752
+            },
+            "outside_air": {
+              "sensible_kw": 0.3633,
+              "latent_kw": 0.1613,
+              "total_kw": 0.5246
+            }
+          },
+          "subtotal_sensible_kw": 3.4293,
+          "subtotal_latent_kw": 0.4429,
+          "subtotal_kw": 3.8722,
+          "safety_allowance_kw": 0.3872,
+          "design_total_kw": 4.2594
+        },
+        {
+          "hour": 16,
+          "components": {
+            "people": {
+              "sensible_kw": 0.384,
+              "latent_kw": 0.2816,
+              "total_kw": 0.6656
+            },
+            "lighting": {
+              "sensible_kw": 0.3888,
+              "latent_kw": 0.0,
+              "total_kw": 0.3888
+            },
+            "equipment_refrigeration": {
+              "sensible_kw": 0.36,
+              "latent_kw": 0.0,
+              "total_kw": 0.36
+            },
+            "envelope": {
+              "sensible_kw": 0.2064,
+              "latent_kw": 0.0,
+              "total_kw": 0.2064
+            },
+            "solar": {
+              "sensible_kw": 1.047,
+              "latent_kw": 0.0,
+              "total_kw": 1.047
+            },
+            "outside_air": {
+              "sensible_kw": 0.2928,
+              "latent_kw": 0.1093,
+              "total_kw": 0.4021
+            }
+          },
+          "subtotal_sensible_kw": 2.679,
+          "subtotal_latent_kw": 0.3909,
+          "subtotal_kw": 3.0699,
+          "safety_allowance_kw": 0.307,
+          "design_total_kw": 3.3769
+        },
+        {
+          "hour": 17,
+          "components": {
+            "people": {
+              "sensible_kw": 0.192,
+              "latent_kw": 0.1408,
+              "total_kw": 0.3328
+            },
+            "lighting": {
+              "sensible_kw": 0.3024,
+              "latent_kw": 0.0,
+              "total_kw": 0.3024
+            },
+            "equipment_refrigeration": {
+              "sensible_kw": 0.36,
+              "latent_kw": 0.0,
+              "total_kw": 0.36
+            },
+            "envelope": {
+              "sensible_kw": 0.129,
+              "latent_kw": 0.0,
+              "total_kw": 0.129
+            },
+            "solar": {
+              "sensible_kw": 0.4188,
+              "latent_kw": 0.0,
+              "total_kw": 0.4188
+            },
+            "outside_air": {
+              "sensible_kw": 0.1386,
+              "latent_kw": 0.0763,
+              "total_kw": 0.2149
+            }
+          },
+          "subtotal_sensible_kw": 1.5408,
+          "subtotal_latent_kw": 0.2171,
+          "subtotal_kw": 1.7579,
+          "safety_allowance_kw": 0.1758,
+          "design_total_kw": 1.9337
+        },
+        {
+          "hour": 18,
+          "components": {
+            "people": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "lighting": {
+              "sensible_kw": 0.0864,
+              "latent_kw": 0.0,
+              "total_kw": 0.0864
+            },
+            "equipment_refrigeration": {
+              "sensible_kw": 0.18,
+              "latent_kw": 0.0,
+              "total_kw": 0.18
+            },
+            "envelope": {
+              "sensible_kw": 0.0516,
+              "latent_kw": 0.0,
+              "total_kw": 0.0516
+            },
+            "solar": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "outside_air": {
+              "sensible_kw": 0.0187,
+              "latent_kw": 0.0246,
+              "total_kw": 0.0433
+            }
+          },
+          "subtotal_sensible_kw": 0.3367,
+          "subtotal_latent_kw": 0.0246,
+          "subtotal_kw": 0.3613,
+          "safety_allowance_kw": 0.0361,
+          "design_total_kw": 0.3974
+        },
+        {
+          "hour": 19,
+          "components": {
+            "people": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "lighting": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "equipment_refrigeration": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "envelope": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "solar": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "outside_air": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            }
+          },
+          "subtotal_sensible_kw": 0.0,
+          "subtotal_latent_kw": 0.0,
+          "subtotal_kw": 0.0,
+          "safety_allowance_kw": 0.0,
+          "design_total_kw": 0.0
+        },
+        {
+          "hour": 20,
+          "components": {
+            "people": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "lighting": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "equipment_refrigeration": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "envelope": {
+              "sensible_kw": -0.0258,
+              "latent_kw": 0.0,
+              "total_kw": -0.0258
+            },
+            "solar": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "outside_air": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            }
+          },
+          "subtotal_sensible_kw": -0.0258,
+          "subtotal_latent_kw": 0.0,
+          "subtotal_kw": -0.0258,
+          "safety_allowance_kw": -0.0026,
+          "design_total_kw": -0.0284
+        },
+        {
+          "hour": 21,
+          "components": {
+            "people": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "lighting": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "equipment_refrigeration": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "envelope": {
+              "sensible_kw": -0.0516,
+              "latent_kw": 0.0,
+              "total_kw": -0.0516
+            },
+            "solar": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "outside_air": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            }
+          },
+          "subtotal_sensible_kw": -0.0516,
+          "subtotal_latent_kw": 0.0,
+          "subtotal_kw": -0.0516,
+          "safety_allowance_kw": -0.0052,
+          "design_total_kw": -0.0568
+        },
+        {
+          "hour": 22,
+          "components": {
+            "people": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "lighting": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "equipment_refrigeration": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "envelope": {
+              "sensible_kw": -0.0774,
+              "latent_kw": 0.0,
+              "total_kw": -0.0774
+            },
+            "solar": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "outside_air": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            }
+          },
+          "subtotal_sensible_kw": -0.0774,
+          "subtotal_latent_kw": 0.0,
+          "subtotal_kw": -0.0774,
+          "safety_allowance_kw": -0.0077,
+          "design_total_kw": -0.0851
+        },
+        {
+          "hour": 23,
+          "components": {
+            "people": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "lighting": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "equipment_refrigeration": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "envelope": {
+              "sensible_kw": -0.1032,
+              "latent_kw": 0.0,
+              "total_kw": -0.1032
+            },
+            "solar": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            },
+            "outside_air": {
+              "sensible_kw": 0.0,
+              "latent_kw": 0.0,
+              "total_kw": 0.0
+            }
+          },
+          "subtotal_sensible_kw": -0.1032,
+          "subtotal_latent_kw": 0.0,
+          "subtotal_kw": -0.1032,
+          "safety_allowance_kw": -0.0103,
+          "design_total_kw": -0.1135
+        }
+      ],
+      "included_scope_peak": {
+        "design_total_kw": 4.8926,
+        "tied_hours": [
+          13,
+          14
+        ],
+        "display_hour": 13,
+        "hour": 13,
+        "sensible_kw": 3.9083,
+        "latent_kw": 0.5395,
+        "total_kw": 4.4478,
+        "components": {
+          "people": {
+            "sensible_kw": 0.384,
+            "latent_kw": 0.2816,
+            "total_kw": 0.6656
+          },
+          "lighting": {
+            "sensible_kw": 0.3888,
+            "latent_kw": 0.0,
+            "total_kw": 0.3888
+          },
+          "equipment_refrigeration": {
+            "sensible_kw": 0.36,
+            "latent_kw": 0.0,
+            "total_kw": 0.36
+          },
+          "envelope": {
+            "sensible_kw": 0.2838,
+            "latent_kw": 0.0,
+            "total_kw": 0.2838
+          },
+          "solar": {
+            "sensible_kw": 2.094,
+            "latent_kw": 0.0,
+            "total_kw": 2.094
+          },
+          "outside_air": {
+            "sensible_kw": 0.3977,
+            "latent_kw": 0.2579,
+            "total_kw": 0.6556
+          }
+        }
+      },
+      "scope_summary": {
+        "active_room_ids": [
+          "synthetic_retail_zone-room-1"
+        ],
+        "included_room_ids": [
+          "synthetic_retail_zone-room-1"
+        ],
+        "blocked_rooms": [],
+        "complete_scope": true
+      },
+      "warnings": [
+        "Design-day scenario contains provisional evidence.",
+        "Room mapping, static inputs, or schedules remain provisional."
+      ],
+      "blocked_reasons": []
+    }
+  ],
+  "included_scope_peak": {
+    "design_total_kw": 4.8926,
+    "tied_hours": [
+      13,
+      14
+    ],
+    "display_hour": 13,
+    "hour": 13,
+    "sensible_kw": 3.9083,
+    "latent_kw": 0.5395,
+    "total_kw": 4.4478,
+    "components": {
+      "people": {
+        "sensible_kw": 0.384,
+        "latent_kw": 0.2816,
+        "total_kw": 0.6656
+      },
+      "lighting": {
+        "sensible_kw": 0.3888,
+        "latent_kw": 0.0,
+        "total_kw": 0.3888
+      },
+      "equipment_refrigeration": {
+        "sensible_kw": 0.36,
+        "latent_kw": 0.0,
+        "total_kw": 0.36
+      },
+      "envelope": {
+        "sensible_kw": 0.2838,
+        "latent_kw": 0.0,
+        "total_kw": 0.2838
+      },
+      "solar": {
+        "sensible_kw": 2.094,
+        "latent_kw": 0.0,
+        "total_kw": 2.094
+      },
+      "outside_air": {
+        "sensible_kw": 0.3977,
+        "latent_kw": 0.2579,
+        "total_kw": 0.6556
+      }
+    },
+    "scenario_id": "synthetic_january_weekday",
+    "month": "January",
+    "ties": [
+      {
+        "scenario_id": "synthetic_january_weekday",
+        "month": "January",
+        "hours": [
+          13,
+          14
+        ]
+      }
+    ]
+  },
+  "project_peak": {},
+  "warnings": [
+    "Design-day scenario contains provisional evidence.",
+    "Room mapping, static inputs, or schedules remain provisional."
+  ],
+  "blocked_reasons": [],
+  "readiness": {
+    "status": "draft",
+    "issues": [
+      {
+        "status": "draft",
+        "scope": "floor",
+        "affected_id": "unassigned",
+        "reason": "Floor topology remains provisional.",
+        "source_artifact": "hourly_load_model",
+        "citations": [],
+        "blocks_calculation": false
+      },
+      {
+        "status": "draft",
+        "scope": "zone",
+        "affected_id": "synthetic_retail_zone",
+        "reason": "Zone topology remains provisional.",
+        "source_artifact": "hourly_load_model",
+        "citations": [],
+        "blocks_calculation": false
+      },
+      {
+        "status": "draft",
+        "scope": "room",
+        "affected_id": "synthetic_retail_zone-room-1",
+        "reason": "Room mapping or review remains provisional.",
+        "source_artifact": "hourly_load_model",
+        "citations": [],
+        "blocks_calculation": false
+      },
+      {
+        "status": "draft",
+        "scope": "room",
+        "affected_id": "synthetic_retail_zone-room-1",
+        "reason": "Room calculation uses provisional inputs.",
+        "source_artifact": "hourly_load_model",
+        "citations": [],
+        "blocks_calculation": false
+      },
+      {
+        "status": "draft",
+        "scope": "project",
+        "affected_id": "project",
+        "reason": "Drawing coverage requires review.",
+        "source_artifact": "drawing_coverage",
+        "citations": [],
+        "blocks_calculation": false
+      }
+    ]
+  },
+  "scope_summary": {
+    "active_room_ids": [
+      "synthetic_retail_zone-room-1"
+    ],
+    "included_room_ids": [
+      "synthetic_retail_zone-room-1"
+    ],
+    "blocked_rooms": [],
+    "complete_scope": true,
+    "floor_rollups": {
+      "unassigned": {
+        "included_room_ids": [
+          "synthetic_retail_zone-room-1"
+        ],
+        "zone_ids": [
+          "synthetic_retail_zone"
+        ],
+        "peak": {
+          "design_total_kw": 4.8926,
+          "tied_hours": [
+            13,
+            14
+          ],
+          "display_hour": 13,
+          "hour": 13,
+          "sensible_kw": 3.9083,
+          "latent_kw": 0.5395,
+          "total_kw": 4.4478,
+          "components": {
+            "people": {
+              "sensible_kw": 0.384,
+              "latent_kw": 0.2816,
+              "total_kw": 0.6656
+            },
+            "lighting": {
+              "sensible_kw": 0.3888,
+              "latent_kw": 0.0,
+              "total_kw": 0.3888
+            },
+            "equipment_refrigeration": {
+              "sensible_kw": 0.36,
+              "latent_kw": 0.0,
+              "total_kw": 0.36
+            },
+            "envelope": {
+              "sensible_kw": 0.2838,
+              "latent_kw": 0.0,
+              "total_kw": 0.2838
+            },
+            "solar": {
+              "sensible_kw": 2.094,
+              "latent_kw": 0.0,
+              "total_kw": 2.094
+            },
+            "outside_air": {
+              "sensible_kw": 0.3977,
+              "latent_kw": 0.2579,
+              "total_kw": 0.6556
+            }
+          }
+        }
+      }
+    },
+    "zone_rollups": {
+      "synthetic_retail_zone": {
+        "floor_id": "unassigned",
+        "included_room_ids": [
+          "synthetic_retail_zone-room-1"
+        ],
+        "peak": {
+          "design_total_kw": 4.8926,
+          "tied_hours": [
+            13,
+            14
+          ],
+          "display_hour": 13,
+          "hour": 13,
+          "sensible_kw": 3.9083,
+          "latent_kw": 0.5395,
+          "total_kw": 4.4478,
+          "components": {
+            "people": {
+              "sensible_kw": 0.384,
+              "latent_kw": 0.2816,
+              "total_kw": 0.6656
+            },
+            "lighting": {
+              "sensible_kw": 0.3888,
+              "latent_kw": 0.0,
+              "total_kw": 0.3888
+            },
+            "equipment_refrigeration": {
+              "sensible_kw": 0.36,
+              "latent_kw": 0.0,
+              "total_kw": 0.36
+            },
+            "envelope": {
+              "sensible_kw": 0.2838,
+              "latent_kw": 0.0,
+              "total_kw": 0.2838
+            },
+            "solar": {
+              "sensible_kw": 2.094,
+              "latent_kw": 0.0,
+              "total_kw": 2.094
+            },
+            "outside_air": {
+              "sensible_kw": 0.3977,
+              "latent_kw": 0.2579,
+              "total_kw": 0.6556
+            }
+          }
+        }
+      }
+    }
+  },
+  "envelope_input": {
+    "source": "legacy",
+    "included": [],
+    "blocked": [],
+    "stored_not_calculated": []
+  },
+  "input_artifacts": {
+    "design_requirements": {
+      "artifact_url": "/output/web_review/synthetic-hourly-cooling-baseline/design_requirements.json",
+      "updated_at": "2026-09-05T06:13:52.603742+00:00"
+    },
+    "schedule_library": {
+      "artifact_url": "/output/web_review/synthetic-hourly-cooling-baseline/schedule_library.json",
+      "updated_at": "2026-09-05T06:13:52.605485+00:00"
+    },
+    "design_day_scenarios": {
+      "artifact_url": "/output/web_review/synthetic-hourly-cooling-baseline/design_day_scenarios.json",
+      "updated_at": "2026-09-05T06:13:52.606149+00:00"
+    },
+    "hourly_load_model": {
+      "artifact_url": "/output/web_review/synthetic-hourly-cooling-baseline/hourly_load_model.json",
+      "updated_at": "2026-09-05T06:13:52.607619+00:00"
+    },
+    "envelope_library": {
+      "artifact_url": "",
+      "updated_at": ""
+    },
+    "envelope_model": {
+      "artifact_url": "",
+      "updated_at": ""
+    },
+    "drawing_coverage": {
+      "artifact_url": "/output/web_review/synthetic-hourly-cooling-baseline/drawing_coverage.json",
+      "updated_at": ""
+    }
+  }
+}

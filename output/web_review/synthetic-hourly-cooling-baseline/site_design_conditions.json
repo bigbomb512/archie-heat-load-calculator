@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-09-05T06:13:52.604729+00:00",
+  "site": {
+    "project_name": {
+      "value": "SYNTHETIC \u2014 Hourly Cooling Baseline",
+      "status": "provisional",
+      "source": "Synthetic test fixture created for hourly cooling workflow regression testing.",
+      "citations": []
+    },
+    "address": {
+      "value": "No physical address \u2014 synthetic fixture",
+      "status": "provisional",
+      "source": "Synthetic test fixture created for hourly cooling workflow regression testing.",
+      "citations": []
+    },
+    "location_description": {
+      "value": "No physical location \u2014 synthetic fixture",
+      "status": "provisional",
+      "source": "Synthetic test fixture created for hourly cooling workflow regression testing.",
+      "citations": []
+    },
+    "weather_station_reference": {
+      "value": "Synthetic 24-hour weather sequence \u2014 no station",
+      "status": "provisional",
+      "source": "Synthetic test fixture created for hourly cooling workflow regression testing.",
+      "citations": []
+    },
+    "elevation_m": {
+      "value": 0.0,
+      "status": "provisional",
+      "source": "Synthetic test fixture created for hourly cooling workflow regression testing.",
+      "citations": []
+    },
+    "north_orientation_note": {
+      "value": "No drawing orientation; solar values are synthetic test data.",
+      "status": "provisional",
+      "source": "Synthetic test fixture created for hourly cooling workflow regression testing.",
+      "citations": []
+    }
+  },
+  "design_basis": {
+    "name": "Synthetic hourly cooling workflow baseline",
+    "reference_version_or_date": "v1 fixture",
+    "status": "provisional",
+    "source": "Synthetic test fixture created for hourly cooling workflow regression testing.",
+    "citations": []
+  },
+  "summer": {
+    "outdoor_dry_bulb_c": {
+      "value": 34.0,
+      "status": "provisional",
+      "source": "Synthetic test fixture created for hourly cooling workflow regression testing.",
+      "citations": []
+    },
+    "outdoor_wet_bulb_c": {
+      "value": 23.0,
+      "status": "provisional",
+      "source": "Synthetic test fixture created for hourly cooling workflow regression testing.",
+      "citations": []
+    },
+    "indoor_dry_bulb_c": {
+      "value": 24.0,
+      "status": "provisional",
+      "source": "Synthetic test fixture created for hourly cooling workflow regression testing.",
+      "citations": []
+    },
+    "indoor_relative_humidity_percent": {
+      "value": 50.0,
+      "status": "provisional",
+      "source": "Synthetic test fixture created for hourly cooling workflow regression testing.",
+      "citations": []
+    },
+    "atmospheric_pressure_kpa": {
+      "value": 101.325,
+      "status": "provisional",
+      "source": "Synthetic test fixture created for hourly cooling workflow regression testing.",
+      "citations": []
+    }
+  },
+  "winter": {
+    "outdoor_dry_bulb_c": {
+      "value": 5.0,
+      "status": "provisional",
+      "source": "Synthetic test fixture created for hourly cooling workflow regression testing.",
+      "citations": []
+    },
+    "outdoor_relative_humidity_percent": {
+      "value": 80.0,
+      "status": "provisional",
+      "source": "Synthetic test fixture created for hourly cooling workflow regression testing.",
+      "citations": []
+    },
+    "indoor_dry_bulb_c": {
+      "value": 20.0,
+      "status": "provisional",
+      "source": "Synthetic test fixture created for hourly cooling workflow regression testing.",
+      "citations": []
+    },
+    "indoor_relative_humidity_percent": {
+      "value": 50.0,
+      "status": "provisional",
+      "source": "Synthetic test fixture created for hourly cooling workflow regression testing.",
+      "citations": []
+    }
+  }
+}

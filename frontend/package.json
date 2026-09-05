@@ -1,0 +1,32 @@
+{
+  "name": "archie-heat-load-calculator",
+  "version": "1.0.0",
+  "description": "Archie Heat Load Calculator — evidence-first PDF intake, AI research handoff, and cooling/heating load calculation.",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "dev": "cd .. && python3 -m backend.web_app --port 8000",
+    "start": "cd .. && python3 -m backend.web_app --port 8000",
+    "test:python": "cd .. && for test in tests/test_*.py; do [ \"$test\" = \"tests/test_frontend_contract.py\" ] || python3 \"$test\" || exit 1; done",
+    "test:contract": "cd .. && python3 tests/test_frontend_contract.py",
+    "test:frontend": "playwright test",
+    "test": "cd .. && for test in tests/test_*.py; do [ \"$test\" = \"tests/test_frontend_contract.py\" ] || python3 \"$test\" || exit 1; done && python3 tests/test_frontend_contract.py && cd frontend && playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1"
+  },
+  "engines": {
+    "python": ">=3.9"
+  },
+  "_note": [
+    "The frontend has no build step and no npm dependencies — index.html, css/ and js/",
+    "are served as-is. This file exists so tooling that expects a package.json can find",
+    "one, and so `npm run dev` starts the app.",
+    "",
+    "The app is NOT a static site. It needs the Python backend for /api/upload,",
+    "/api/analyse, /api/decisions, /api/projects and /api/analysis. Deploying only the",
+    "frontend folder to a static host will render the interface but every action fails.",
+    "",
+    "Requires poppler on the host for page previews and page counts: brew install poppler."
+  ]
+}

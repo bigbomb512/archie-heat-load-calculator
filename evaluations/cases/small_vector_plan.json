@@ -1,0 +1,36 @@
+{
+  "case_id": "small_vector_plan",
+  "description": "An anonymised example for a simple vector drawing set.",
+  "expectations": {
+    "pages": {
+      "geometry": [1],
+      "rcp_context": [2],
+      "excluded": [3]
+    },
+    "floors": [
+      {
+        "label": "Ground Floor",
+        "source_pages": [1, 2]
+      }
+    ],
+    "major_dimensions": [
+      {"page": 1, "value_mm": 7018},
+      {"page": 1, "value_mm": 2939}
+    ],
+    "minimum_physical_walls": [
+      {"page": 1, "minimum": 2}
+    ],
+    "forbidden_wall_regions": [
+      {"page": 1, "label": "title block", "bbox_px": [0, 900, 400, 1200]}
+    ],
+    "curves": [
+      {"page": 1, "minimum": 1}
+    ],
+    "dimension_links": [
+      {"page": 1, "value_mm": 7018}
+    ],
+    "confirmation": {
+      "minimum_status_counts": {"cad_ready_candidate": 1}
+    }
+  }
+}

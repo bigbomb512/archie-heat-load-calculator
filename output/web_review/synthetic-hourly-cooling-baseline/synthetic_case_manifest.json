@@ -1,0 +1,87 @@
+{
+  "case_name": "SYNTHETIC \u2014 Hourly Cooling Baseline (NOT FOR DESIGN)",
+  "warning": "SYNTHETIC TEST FIXTURE \u2014 NOT FOR ENGINEERING DESIGN, EQUIPMENT SELECTION, OR BENCHMARK PARITY.",
+  "purpose": "Exercise the site/schedule/scenario/room-model/hourly-report API workflow with no real project evidence.",
+  "not_valid_for": [
+    "engineering design",
+    "equipment selection",
+    "CAMEL+/DA09 parity",
+    "final calculation"
+  ],
+  "artifacts": {
+    "site_design_conditions": "/output/web_review/synthetic-hourly-cooling-baseline/site_design_conditions.json",
+    "schedule_library": "/output/web_review/synthetic-hourly-cooling-baseline/schedule_library.json",
+    "design_day_scenarios": "/output/web_review/synthetic-hourly-cooling-baseline/design_day_scenarios.json",
+    "hourly_load_model": "/output/web_review/synthetic-hourly-cooling-baseline/hourly_load_model.json",
+    "hourly_load_report": "/output/web_review/synthetic-hourly-cooling-baseline/hourly_load_report.json"
+  },
+  "report_status": "draft",
+  "included_scope_peak": {
+    "design_total_kw": 4.8926,
+    "tied_hours": [
+      13,
+      14
+    ],
+    "display_hour": 13,
+    "hour": 13,
+    "sensible_kw": 3.9083,
+    "latent_kw": 0.5395,
+    "total_kw": 4.4478,
+    "components": {
+      "people": {
+        "sensible_kw": 0.384,
+        "latent_kw": 0.2816,
+        "total_kw": 0.6656
+      },
+      "lighting": {
+        "sensible_kw": 0.3888,
+        "latent_kw": 0.0,
+        "total_kw": 0.3888
+      },
+      "equipment_refrigeration": {
+        "sensible_kw": 0.36,
+        "latent_kw": 0.0,
+        "total_kw": 0.36
+      },
+      "envelope": {
+        "sensible_kw": 0.2838,
+        "latent_kw": 0.0,
+        "total_kw": 0.2838
+      },
+      "solar": {
+        "sensible_kw": 2.094,
+        "latent_kw": 0.0,
+        "total_kw": 2.094
+      },
+      "outside_air": {
+        "sensible_kw": 0.3977,
+        "latent_kw": 0.2579,
+        "total_kw": 0.6556
+      }
+    },
+    "scenario_id": "synthetic_january_weekday",
+    "month": "January",
+    "ties": [
+      {
+        "scenario_id": "synthetic_january_weekday",
+        "month": "January",
+        "hours": [
+          13,
+          14
+        ]
+      }
+    ]
+  },
+  "excluded_components": [
+    "AHU coil effects",
+    "detailed glazing physics",
+    "dynamic thermal mass",
+    "fan/duct effects",
+    "geometric shading",
+    "heat recovery",
+    "heating",
+    "infiltration",
+    "partitions",
+    "plant loads"
+  ]
+}
