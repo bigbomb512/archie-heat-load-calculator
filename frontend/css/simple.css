@@ -1,0 +1,37 @@
+/* Plain usability layer; existing state and calculation contracts remain intact. */
+:root,:root[data-theme="light"],:root[data-theme="dark"] {
+ --rail-bg:#fafafa;--main-bg:#fff;--raise-bg:#fff;--surface:#fff;
+ --surface-ink:#222;--text:#222;--text-2:#555;--accent:#333;--accent-ink:#fff;
+ --line:#ccc;--line-soft:#e5e5e5;--wash:#f0f0f0;--wash-line:#999;
+ --warn:#555;--panel:#fff;--ink:#222;--grey:#555;
+ --shadow-md:none;--shadow-lg:none;--r:4px;--r-lg:4px;
+ --serif:Arial,Helvetica,sans-serif;--sidebar:210px;--aside:250px;
+ color-scheme:light;
+}
+body{font-size:15px}
+button,input,select,textarea{font-family:inherit;font-size:14px}
+button,.btn,.btn.mini,select,input:not([type="checkbox"]){min-height:40px}
+input,select,textarea{max-width:100%;min-width:0}
+a{color:inherit;text-underline-offset:3px}
+#theme{display:none}
+.logo{padding:24px 20px}.logo strong{font-size:22px}.logo small{font-size:13px;font-weight:400}
+.top{flex-wrap:wrap}.top h1{font-size:18px}.top .sub{white-space:normal}
+.intro{margin-bottom:28px}.intro h2{font-size:28px;margin:0 0 8px}.intro p{max-width:680px}.intro ol{padding-left:22px;line-height:1.9}
+.drop{padding:30px 24px;text-align:left}.drop .mark{display:none}
+.drop .lbl{background:none;color:var(--text);padding:0;margin-bottom:10px}
+.drop input{display:block;width:100%}.drop input::file-selector-button{padding:10px 16px;margin-right:12px;cursor:pointer}
+.workflow-links{display:flex;flex-wrap:wrap;gap:10px;padding:16px 18px;border-bottom:1px solid var(--line)}
+.workflow-links a{padding:8px 12px;border:1px solid var(--line);border-radius:4px}
+.panel-head[id],form[id]{scroll-margin-top:16px}
+.micro,.eyebrow{letter-spacing:.04em}
+.bar,.panel-head{flex-wrap:wrap}.envelope-activate{white-space:normal}
+.envelope-boundary,.envelope-construction,.hierarchy-row,.room-component,.zone-heat-source,.envelope-surface,.heat-source{grid-template-columns:repeat(2,minmax(0,1fr))}
+.readiness-blocked{border-left-color:#222}.card .shot .no{background:#222;color:#fff}
+.lb{background:rgba(0,0,0,.94)}.lb .lbtop,.lb .lbtop .num,.lb .why{color:#fff}
+.skip-link{position:fixed;left:12px;top:-100px;z-index:100;background:#fff;padding:12px;border:2px solid #222}.skip-link:focus{top:12px}
+@media(max-width:820px){
+ .shell{display:block;height:auto;min-height:100vh}.side{display:flex;border-bottom:1px solid var(--line)}
+ .side .logo{padding:14px 18px}.side .nav{flex-direction:row;flex-wrap:wrap}.side .nav button{width:auto}.side .nav .sec,.side .foot{display:none}
+ .projects{max-height:150px;padding:8px 12px}.work{overflow:visible;padding:18px}.top{padding:16px 18px}.top .right{margin-left:0;flex-wrap:wrap}
+ .requirements-form,.zone-fields,.zone-load-fields,.zone-ventilation-fields,.envelope-boundary,.envelope-construction,.hierarchy-row,.room-component,.zone-heat-source,.envelope-surface,.heat-source{grid-template-columns:1fr}
+}
