@@ -22,12 +22,21 @@ The current cooling method is limited to its declared inputs. Stored infiltratio
 ## Run locally
 
 ```bash
-python3 -m backend.web_app --port 8000
+git clone https://github.com/bigbomb512/archie-heat-load-calculator.git
+cd archie-heat-load-calculator
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+brew install poppler
+./start_web --port 8000
 ```
 
 Open `http://127.0.0.1:8000`.
 
-Dependencies for PDF processing are listed in `requirements.txt`; Poppler is required for rendered page previews.
+`start_web` uses `.venv/bin/python` when available, otherwise it uses `python3` (or
+the optional `PYTHON_BIN` environment variable). It never relies on a developer's
+personal machine path. Dependencies for PDF processing are listed in
+`requirements.txt`; Poppler is required for rendered page previews.
 
 ## Evidence-to-research flow
 
