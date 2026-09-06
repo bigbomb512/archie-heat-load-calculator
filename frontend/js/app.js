@@ -439,6 +439,8 @@ requiredElement("btnAddZone").addEventListener("click", () => addZone());
 requiredElement("btnSaveRequirements").addEventListener("click", saveDesignRequirements);
 requiredElement("btnBuildThermalModel").addEventListener("click", () => saveThermalModel("build"));
 requiredElement("btnApplyThermalModel").addEventListener("click", () => saveThermalModel("save"));
+requiredElement("btnBuildCalculatorDraft").addEventListener("click", () => saveCalculatorDraft("build"));
+requiredElement("btnApplyCalculatorDraft").addEventListener("click", () => saveCalculatorDraft("apply"));
 requiredElement("btnCalculateVentilation").addEventListener("click", calculateVentilation);
 requiredElement("btnBuildHourlyModel").addEventListener("click", () => saveHourlyModel("build"));
 requiredElement("btnAddFloor").addEventListener("click", () => addHourlyFloor());
@@ -889,6 +891,7 @@ function showDesignRequirements(requirements = {}, readiness = {}, roomSuggestio
     : "";
   drawVentilationReport(ventilationReport, ventilationStatus);
   loadThermalModel();
+  loadCalculatorDraft();
   loadEnvelope();
   loadHourlyModel();
   loadHourlyLoadReport();
@@ -1093,6 +1096,96 @@ async function saveThermalModel(action){
   } catch (error) {
     requiredElement("thermalModelStatus").textContent = "Could not update thermal model.";
     toast("Thermal model failed", error.message);
+  }
+  button.disabled = false;
+}
+
+async function loadCalculatorDraft(){
+  if (!DATA?.id) return;
+  try {
+    const res = await fetch("/api/calculator-draft?project_id=" + encodeURIComponent(DATA.id));
+    const data = await res.json();
+    if (res.ok && !data.error) showCalculatorDraft(data.calculator_draft || {}, data.artifact_url || "");
+  } catch {}
+}
+
+function showCalculatorDraft(draft = {}, artifactUrl = ""){
+  const groups = [
+    ["floors", "Floors and drawing coverage"], ["zones", "Zones and rooms"], ["rooms", "Zones and rooms"],
+    ["room_inputs", "Directly supported room inputs"], ["schedules", "Schedules"], ["envelope", "Envelope and opening candidates"],
+  ];
+  const decisions = draft.decisions || {};
+  const rendered = groups.map(([key, title]) => {
+    const rows = draft.candidates?.[key] || [];
+    if (!rows.length) return "";
+    return `<section class="draft-group"><div class="draft-group-title">${esc(title)}</div>${rows.map(item => calculatorDraftCandidateMarkup(item, decisions[item.candidate_id] || {})).join("")}</section>`;
+  }).join("");
+  requiredElement("calculatorDraftCandidates").innerHTML = rendered || (draft.status === "not_built" ? "" : `<article class="review-empty"><b>No source-backed calculator candidates found</b><span>Missing data stays in the review queue; Archie has not guessed any records.</span></article>`);
+  const reviewItems = draft.review_items || [];
+  requiredElement("calculatorDraftReviewItems").innerHTML = reviewItems.map(item => `<article class="review-item draft-review"><div><b>${esc(item.scope || "Review")} · ${esc(item.affected_id || "project")}</b><span>${esc(item.reason || item.question || "Evidence required.")}</span><small>${citationText(item.citations)}</small></div><label>Decision <select class="calculator-draft-decision" data-candidate="${esc(item.item_id)}"><option value="pending">Keep open</option><option value="needs_evidence">Needs evidence</option><option value="reject">Reject</option></select></label></article>`).join("");
+  const summary = draft.apply_summary || {};
+  const counts = [
+    summary.created?.length && `${summary.created.length} created`,
+    summary.already_present?.length && `${summary.already_present.length} already present`,
+    summary.skipped_conflicts?.length && `${summary.skipped_conflicts.length} conflict${summary.skipped_conflicts.length === 1 ? "" : "s"} skipped`,
+    summary.unresolved?.length && `${summary.unresolved.length} unresolved`,
+  ].filter(Boolean).join(" · ");
+  requiredElement("calculatorDraftSummary").innerHTML = (counts || artifactUrl) ? `<article class="review-item"><div><b>Draft status</b><span>${esc(counts || "No accepted proposals have been applied.")}</span></div>${artifactUrl ? `<a class="btn ghost mini" href="${esc(artifactUrl)}" target="_blank" rel="noopener">Open draft JSON</a>` : ""}</article>` : "";
+  requiredElement("calculatorDraftStatus").textContent = draft.status === "not_built" || !draft.status
+    ? "Build a proposal queue after the thermal model and drawing evidence are ready."
+    : `${draft.status} · ${(Object.values(draft.candidates || {}).flat()).length} source-backed proposals · ${reviewItems.length} items needing review`;
+}
+
+function calculatorDraftCandidateMarkup(item, savedDecision){
+  const action = savedDecision.decision || "pending";
+  const value = savedDecision.value || item.value || {};
+  return `<article class="review-item draft-candidate" data-candidate="${esc(item.candidate_id)}"><div><b>${esc(item.kind)} · ${esc(item.candidate_id)}</b><span>${esc(item.reason || "Source-backed proposal")}</span><small>${citationText(item.citations)} · confidence ${esc(item.confidence || "unknown")} · target ${esc(item.target_artifact || "")}</small><details><summary>Review/edit proposed record</summary><textarea class="calculator-draft-value" spellcheck="false">${esc(JSON.stringify(value, null, 2))}</textarea></details></div><label>Decision <select class="calculator-draft-decision" data-candidate="${esc(item.candidate_id)}"><option value="pending">Pending review</option><option value="accept">Accept</option><option value="edit">Edit</option><option value="reject">Reject</option><option value="needs_evidence">Needs evidence</option></select></label></article>`;
+}
+
+function citationText(citations = []){
+  const citation = citations[0] || {};
+  return citation.reference ? `${citation.reference}${citation.page ? ` · page ${citation.page}` : ""}${citation.excerpt ? ` · ${citation.excerpt}` : ""}` : "No citation";
+}
+
+function calculatorDraftDecisions(){
+  const decisions = {};
+  document.querySelectorAll(".calculator-draft-decision[data-candidate]").forEach(select => {
+    const candidateId = select.dataset.candidate;
+    const action = select.value;
+    if (action === "pending") return;
+    const row = select.closest(".draft-candidate");
+    const decision = {decision: action};
+    if (action === "edit") {
+      const textarea = row?.querySelector(".calculator-draft-value");
+      try { decision.value = JSON.parse(textarea?.value || "{}"); }
+      catch (_) { throw new Error(`Edited proposal ${candidateId} must be valid JSON.`); }
+    }
+    decisions[candidateId] = decision;
+  });
+  return decisions;
+}
+
+async function saveCalculatorDraft(action){
+  if (!DATA?.id) return;
+  const button = action === "build" ? requiredElement("btnBuildCalculatorDraft") : requiredElement("btnApplyCalculatorDraft");
+  button.disabled = true;
+  requiredElement("calculatorDraftStatus").textContent = action === "build" ? "Building a source-backed calculator proposal queue…" : "Applying accepted proposals without overwriting authored records…";
+  try {
+    const payload = {project_id: DATA.id, action};
+    if (action === "apply") payload.decisions = calculatorDraftDecisions();
+    const res = await fetch("/api/calculator-draft", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)});
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || "Could not update calculator draft.");
+    showCalculatorDraft(data.calculator_draft || {}, data.artifact_url || data.artifact_links?.calculator_draft || "");
+    if (action === "apply") {
+      await Promise.all([loadHourlyModel(), loadEnvelope(), loadHourlyLoadReport()]);
+      toast("Accepted proposals applied", `${data.apply_summary?.created?.length || 0} records created; conflicts and unresolved evidence remain visible.`);
+    } else {
+      toast("Calculator draft built", "No calculator artifacts or cooling results were changed.");
+    }
+  } catch (error) {
+    requiredElement("calculatorDraftStatus").textContent = "Could not update calculator draft.";
+    toast("Calculator draft failed", error.message);
   }
   button.disabled = false;
 }

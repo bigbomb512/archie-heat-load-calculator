@@ -41,6 +41,7 @@ from ai.drawing_coverage import build_drawing_coverage
 from ai.building_evidence import build_building_evidence
 from ai.parity_harness import archie_results_from_heat_report, archie_results_from_hourly_load_report, compare_case, render_markdown, validate_benchmark_case
 from ai.thermal_model import apply_thermal_model, build_thermal_evidence, build_thermal_model
+from ai.calculator_draft import apply_calculator_draft, build_calculator_draft, empty_calculator_draft
 from ai.ventilation import calculate_ventilation_report
 from ai.geometry_review import normalise_vision
 from ai.reasoning_packet import create_reasoning_packet_from_vision
@@ -98,6 +99,11 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(api_thermal_model(self))
             except Exception as error:
                 return self.send_json({"error": str(error)}, 404)
+        if self.path.startswith("/api/calculator-draft"):
+            try:
+                return self.send_json(api_calculator_draft(self))
+            except Exception as error:
+                return self.send_json({"error": str(error)}, 404)
         if self.path.startswith("/api/parity-report"):
             try:
                 return self.send_json(api_parity_report(self))
@@ -138,6 +144,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self.save_ventilation()
         if self.path == "/api/thermal-model":
             return self.save_thermal_model()
+        if self.path == "/api/calculator-draft":
+            return self.save_calculator_draft()
         if self.path == "/api/parity-report":
             return self.save_parity_report()
         if self.path == "/process":
@@ -250,6 +258,13 @@ class Handler(SimpleHTTPRequestHandler):
     def save_thermal_model(self):
         try:
             result = api_save_thermal_model(self)
+        except Exception as error:
+            return self.send_json({"error": str(error)}, 400)
+        self.send_json(result)
+
+    def save_calculator_draft(self):
+        try:
+            result = api_save_calculator_draft(self)
         except Exception as error:
             return self.send_json({"error": str(error)}, 400)
         self.send_json(result)
@@ -490,6 +505,7 @@ def hourly_paths(project):
         "coverage": review_dir / "drawing_coverage.json",
         "envelope_library": review_dir / "envelope_library.json",
         "envelope_model": review_dir / "envelope_model.json",
+        "calculator_draft": review_dir / "calculator_draft.json",
     }
 
 
@@ -780,6 +796,97 @@ def api_thermal_model(request):
         "drawing_coverage_url": safe_link(coverage_path) if coverage_path.exists() else "",
         "building_evidence": load_json(building_path) if building_path.exists() else {},
         "building_evidence_url": safe_link(building_path) if building_path.exists() else "",
+    }
+
+
+def api_calculator_draft(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    ensure_review_dir(project)
+    path = hourly_paths(project)["calculator_draft"]
+    draft = load_json(path) if path.exists() else empty_calculator_draft()
+    return {
+        "id": project["id"],
+        "calculator_draft": draft,
+        "artifact_url": safe_link(path) if path.exists() else "",
+        "status": "current" if path.exists() else "not_built",
+    }
+
+
+def api_save_calculator_draft(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    review_dir = Path(project["review_dir"])
+    paths = hourly_paths(project)
+    path = paths["calculator_draft"]
+    action = data.get("action", "build")
+    thermal_path = review_dir / "thermal_model.json"
+    building_path = review_dir / "building_evidence.json"
+    coverage_path = review_dir / "drawing_coverage.json"
+    if action == "build":
+        if not thermal_path.exists() or not building_path.exists():
+            raise ValueError("Build the cited thermal model and building evidence before creating a calculator draft.")
+        previous = load_json(path) if path.exists() else {}
+        draft = build_calculator_draft(
+            load_json(thermal_path), load_json(building_path),
+            load_json(coverage_path) if coverage_path.exists() else {}, previous,
+            {
+                "thermal_model": safe_link(thermal_path),
+                "building_evidence": safe_link(building_path),
+                "drawing_coverage": safe_link(coverage_path) if coverage_path.exists() else "",
+            },
+        )
+        write_artifact(path, draft)
+        project["calculator_draft"] = str(path)
+        project["updated_at"] = timestamp()
+        update_project(project)
+        return {
+            "id": project["id"], "calculator_draft": draft,
+            "artifact_url": safe_link(path), "status": "current",
+            "message": "Draft created. No hourly model, schedule, envelope, or report artifact was changed.",
+        }
+    if action != "apply":
+        raise ValueError("Calculator-draft action must be build or apply.")
+    if not path.exists():
+        raise ValueError("Build a calculator draft before applying accepted proposals.")
+    draft = load_json(path)
+    requirements = load_json(paths["requirements"]) if paths["requirements"].exists() else {}
+    raw_model = load_json(paths["model"]) if paths["model"].exists() else empty_hourly_load_model()
+    raw_schedules = load_json(paths["schedules"]) if paths["schedules"].exists() else empty_schedule_library()
+    library, envelope_model = envelope_artifacts(project)
+    outcome = apply_calculator_draft(
+        draft, data.get("decisions", {}), raw_model, raw_schedules, library, envelope_model,
+        requirements.get("updated_at", ""),
+    )
+    changed = outcome["changed"]
+    if changed["hourly_load_model"]:
+        write_artifact(paths["model"], outcome["hourly_load_model"])
+        project["hourly_load_model"] = str(paths["model"])
+    if changed["schedule_library"]:
+        write_artifact(paths["schedules"], outcome["schedule_library"])
+        project["schedule_library"] = str(paths["schedules"])
+    if changed["envelope_library"]:
+        write_artifact(paths["envelope_library"], outcome["envelope_library"])
+        project["envelope_library"] = str(paths["envelope_library"])
+    draft["decisions"] = data.get("decisions", {})
+    draft["apply_summary"] = outcome["summary"]
+    draft["updated_at"] = timestamp()
+    write_artifact(path, draft)
+    project["calculator_draft"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return {
+        "id": project["id"], "calculator_draft": draft,
+        "apply_summary": outcome["summary"], "changed_artifacts": [name for name, did_change in changed.items() if did_change],
+        "artifact_links": {
+            "calculator_draft": safe_link(path),
+            "hourly_load_model": safe_link(paths["model"]) if changed["hourly_load_model"] else "",
+            "schedule_library": safe_link(paths["schedules"]) if changed["schedule_library"] else "",
+            "envelope_library": safe_link(paths["envelope_library"]) if changed["envelope_library"] else "",
+        },
+        "readiness": hourly_model_summary(outcome["hourly_load_model"], requirements),
+        "status": "applied",
     }
 
 
