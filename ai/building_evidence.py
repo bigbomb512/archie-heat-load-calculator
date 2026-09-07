@@ -2,6 +2,8 @@
 
 import re
 
+from ai.drawing_coverage import source_fingerprint, timestamp
+
 
 EQUIPMENT_WORDS = {
     "refrigeration": ["fridge", "freezer", "display fridge", "cool room"],
@@ -11,8 +13,11 @@ EQUIPMENT_WORDS = {
 
 
 def build_building_evidence(ai_input, drawing_coverage=None, spatial_ocr=None, vision_response=None):
-    pages = source_pages(ai_input, spatial_ocr or {})
+    pages = source_pages(ai_input, spatial_ocr or {}, drawing_coverage or {})
     result = empty_evidence(ai_input)
+    result["source_fingerprint"] = source_fingerprint(ai_input)
+    result["generated_from"] = "ai_input.json"
+    result["generated_at"] = timestamp()
     for page in pages:
         add_spaces(result, page)
         add_surfaces(result, page)
@@ -37,25 +42,36 @@ def empty_evidence(ai_input):
     return {
         "version": 1,
         "source_pdf": ai_input.get("source_pdf", ""),
+        "source_fingerprint": source_fingerprint(ai_input),
+        "generated_from": "ai_input.json",
+        "generated_at": timestamp(),
         "spaces": [], "levels": [], "surfaces": [], "openings": [], "constructions": [],
         "lighting": [], "equipment": [], "cross_sheet_links": [], "exceptions": [], "sources": {},
     }
 
 
-def source_pages(ai_input, spatial_ocr):
+def source_pages(ai_input, spatial_ocr, drawing_coverage=None):
     ocr_text = {}
     for page in spatial_ocr.get("pages", []):
-        ocr_text[page.get("page")] = "\n".join(item.get("text_excerpt", "") for item in page.get("title_blocks", []))
+        excerpts = [item.get("text_excerpt", "") for item in page.get("title_blocks", [])]
+        excerpts.extend(item.get("text", "") for item in page.get("word_samples", []) if item.get("text"))
+        ocr_text[page.get("page")] = "\n".join(excerpts)
     pages = []
     drawing_pages = ai_input.get("drawing_set", {}).get("pages", [])
     if not drawing_pages:
         drawing_pages = ai_input.get("confirmed_pages", {}).get("floor_plans", []) + ai_input.get("confirmed_pages", {}).get("reference_pages", [])
     for page in drawing_pages:
+        coverage_role = next((item for item in (drawing_coverage or {}).get("page_roles", [])
+                              if item.get("page") == page.get("page")), {})
         pages.append({
             "page": page.get("page"), "level_name": page.get("level_name", ""),
             "classification": page.get("sheet_classification", page.get("detected_type", "other")),
             "thermal_role": page.get("thermal_role", "not_calculation_evidence"),
             "title": page.get("title", ""), "rooms": page.get("rooms", []),
+            "proposed_role": coverage_role.get("proposed_role", ""),
+            "authority_status": coverage_role.get("authority_status", ""),
+            "room_labels": next((item.get("room_label_candidates", []) for item in spatial_ocr.get("pages", [])
+                                  if item.get("page") == page.get("page")), []),
             "text": page.get("structured_content", {}).get("markdown", "") + "\n" + ocr_text.get(page.get("page"), ""),
         })
     return pages
@@ -81,6 +97,17 @@ def add_spaces(result, page):
     for match in re.finditer(r"(?:\b([A-Za-z][A-Za-z0-9 .-]{1,40})\s+)?AREA\s*[:.]?\s*(\d+(?:\.\d+)?)\s*(m²|m2)\b", page["text"], re.I):
         label = (match.group(1) or page["title"] or "Proposed space").strip()
         record(result, "spaces", page, {"name": label, "area": match.group(2) + " " + match.group(3), "level_name": page["level_name"]}, excerpt=match.group(0))
+    known_room_terms = ("shop", "kitchen", "bar", "dining", "cool room", "freezer", "storage", "toilet", "office", "staff", "entry", "service", "room")
+    existing = {item.get("name", "").casefold() for item in result["spaces"] if item.get("level_name") == page["level_name"]}
+    for candidate in page.get("room_labels", []):
+        label = re.sub(r"\s+", " ", str(candidate.get("text", ""))).strip(" .:-")
+        if (candidate.get("status") not in {"possible_room_or_area_label", "room_label"}
+                or len(label) < 3 or len(label) > 45 or not any(term in label.casefold() for term in known_room_terms)
+                or label.casefold() in existing):
+            continue
+        record(result, "spaces", page, {"name": label, "area": "", "level_name": page["level_name"], "status": "inferred"},
+               status="inferred", excerpt=label)
+        existing.add(label.casefold())
 
 
 def add_levels(result, coverage):

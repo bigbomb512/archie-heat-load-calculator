@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT))
 
 from ai.building_evidence import build_building_evidence
 from ai.calculator_draft import build_calculator_draft
-from ai.drawing_coverage import build_drawing_coverage
+from ai.drawing_coverage import build_drawing_coverage, source_fingerprint, timestamp
 from ai.thermal_model import build_thermal_evidence, build_thermal_model
 
 
@@ -48,6 +48,20 @@ def validate_manifest(manifest, source_pdf):
     return result
 
 
+def coverage_is_current(coverage, ai_input):
+    """Reject empty or derived coverage from a different source packet."""
+    pages = ai_input.get("drawing_set", {}).get("pages", [])
+    return (
+        isinstance(coverage, dict)
+        and coverage.get("source_pdf") == ai_input.get("source_pdf", "")
+        and coverage.get("source_fingerprint") == source_fingerprint(ai_input)
+        and isinstance(coverage.get("sheet_register"), list)
+        and len(coverage.get("sheet_register", [])) == len(pages)
+        and isinstance(coverage.get("page_roles"), list)
+        and set(("version", "source_pdf", "source_fingerprint", "sheet_register", "levels", "coverage_exceptions")) <= set(coverage)
+    )
+
+
 def prepare(source_dir, output_dir, manifest_path):
     source_dir = Path(source_dir).resolve()
     output_dir = Path(output_dir).resolve()
@@ -56,7 +70,11 @@ def prepare(source_dir, output_dir, manifest_path):
         raise ValueError(f"Missing ai_input.json in evidence packet: {source_dir}")
     spatial_ocr = load(source_dir / "spatial_ocr.json")
     vision_response = load(source_dir / "vision_response.json")
-    coverage = load(source_dir / "drawing_coverage.json") or build_drawing_coverage(ai_input)
+    existing_coverage = load(source_dir / "drawing_coverage.json")
+    coverage = existing_coverage if coverage_is_current(existing_coverage, ai_input) else build_drawing_coverage(ai_input)
+    if existing_coverage is not coverage:
+        coverage["rebuild_reason"] = "missing, empty, stale, or schema-incomplete derived coverage artifact"
+        coverage["generated_at"] = timestamp()
     building = build_building_evidence(ai_input, coverage, spatial_ocr, vision_response)
     thermal_evidence = build_thermal_evidence(ai_input, spatial_ocr, vision_response, coverage, building)
     thermal_model = build_thermal_model(thermal_evidence)

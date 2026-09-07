@@ -40,7 +40,8 @@ def empty_calculator_draft():
     return {"schema_version": 2, "revision": 0, "status": "not_built", "updated_at": "",
             "candidates": {group: [] for group in GROUPS}, "review_items": [],
             "source_artifacts": {}, "source_fingerprints": {}, "decisions": {},
-            "review_history": [], "application_receipts": []}
+            "review_history": [], "application_receipts": [], "page_roles": [],
+            "evidence_summary": {}, "readiness": {"status": "blocked", "issues": []}}
 
 
 def all_candidates(draft):
@@ -85,7 +86,10 @@ def build_calculator_draft(thermal_model, building_evidence, drawing_coverage, p
                      "thermal_model": thermal_model, "building_evidence": building_evidence,
                      "drawing_coverage": drawing_coverage, "thermal_evidence": thermal_evidence}.items()},
                  review_history=deepcopy(previous.get("review_history", [])),
-                 application_receipts=deepcopy(previous.get("application_receipts", [])))
+                 application_receipts=deepcopy(previous.get("application_receipts", [])),
+                 page_roles=deepcopy(drawing_coverage.get("page_roles", [])),
+                 evidence_summary={key: len(building_evidence.get(key, [])) for key in
+                                   ("spaces", "levels", "surfaces", "openings", "constructions", "lighting", "equipment")})
     document = building_evidence.get("source_pdf") or thermal_model.get("source_pdf") or "building_evidence.json"
 
     def add(group, kind, identity, value, evidence, reason, evidence_ids=(), dependencies=(), confidence="unknown"):
@@ -102,10 +106,29 @@ def build_calculator_draft(thermal_model, building_evidence, drawing_coverage, p
         return row
 
     def issue(identity, reason, evidence=(), affected_id="project"):
-        draft["review_items"].append({"item_id": "issue_" + fingerprint([document, identity])[:16],
+        item = {"item_id": "issue_" + fingerprint([document, identity])[:16],
             "scope": "room" if affected_id != "project" else "project", "affected_id": affected_id,
             "reason": reason, "status": "needs_evidence", "source": document,
-            "citations": citations(evidence, document), "evidence_ids": [], "confidence": "unknown"})
+            "citations": citations(evidence, document), "evidence_ids": [], "confidence": "unknown",
+            "effect": "blocks_room" if affected_id != "project" else "blocks_project",
+            "remediation": "Provide source-backed evidence or make an explicit engineer review decision."}
+        draft["review_items"].append(item)
+
+    # Preserve source-level exceptions as actionable review items. They are
+    # evidence findings, not approvals or calculated inputs.
+    for source_issue in list(building_evidence.get("exceptions", [])) + list(drawing_coverage.get("coverage_exceptions", [])):
+        if isinstance(source_issue, dict):
+            item = deepcopy(source_issue)
+            item.setdefault("item_id", "source_issue_" + fingerprint(item)[:16])
+            item.setdefault("scope", "project")
+            item.setdefault("affected_id", item.get("level_name", "project"))
+            item.setdefault("reason", item.get("question", "Source evidence requires review."))
+            item.setdefault("status", "needs_evidence")
+            item.setdefault("source", document)
+            item.setdefault("citations", [])
+            item.setdefault("effect", "blocks_project")
+            item.setdefault("remediation", "Review the cited source and provide the missing relationship or value.")
+            draft["review_items"].append(item)
 
     floors = {}
     for level in sorted(drawing_coverage.get("levels", []), key=lambda r: r.get("level_name", "")):
@@ -134,8 +157,7 @@ def build_calculator_draft(thermal_model, building_evidence, drawing_coverage, p
             continue
         floor = floors.get(key[0])
         if not floor:
-            issue([key, "floor"], "Room floor is unresolved. Confirm its drawing level and rebuild.", evidence)
-            continue
+            issue([key, "floor"], "Room evidence is present but its drawing level is unresolved. Map it to a reviewed floor.", evidence)
         # Candidate identity is anchored to the evidence record and sheet/page,
         # not the extracted value. A corrected area/excerpt must revisit the
         # same proposal rather than silently creating a new room.
@@ -144,8 +166,8 @@ def build_calculator_draft(thermal_model, building_evidence, drawing_coverage, p
         suffix = fingerprint([document, identity])[:12]
         zone_id, room_id = "zone_" + suffix, "room_" + suffix
         zone = add("zones", "zone", identity, {"zone_id": zone_id, "name": space["name"],
-            "floor_id": floor["value"]["floor_id"]}, evidence,
-            "Review the proposed one-room zone and floor mapping.", [space.get("id")], [floor["candidate_id"]], space.get("confidence", "unknown"))
+            "floor_id": floor["value"]["floor_id"] if floor else ""}, evidence,
+            "Review the proposed one-room zone and floor mapping.", [space.get("id")], [floor["candidate_id"]] if floor else [], space.get("confidence", "unknown"))
         room = add("rooms", "room", identity, {"room_id": room_id, "name": space["name"], "zone_id": zone_id},
             evidence, "Confirm room identity and mapping; missing load inputs remain missing.",
             [space.get("id")], [zone["candidate_id"]], space.get("confidence", "unknown"))
@@ -224,6 +246,16 @@ def build_calculator_draft(thermal_model, building_evidence, drawing_coverage, p
             draft["decisions"][cid] = deepcopy(decision)
         else:
             draft["review_history"].append({"candidate_id": cid, "decision": decision, "reason": "Evidence changed, removed, or legacy approval requires review."})
+    topology_ready = bool(draft["candidates"]["floors"] and draft["candidates"]["rooms"])
+    if not topology_ready:
+        draft["status"] = "blocked"
+        draft["readiness"] = {"status": "blocked", "issues": [
+            {"status": "blocked", "affected_id": "project", "source_artifact": "building_evidence.json",
+             "reason": "No source-backed floor and room topology candidates are available.",
+             "effect": "blocks_project", "remediation": "Provide an identifiable plan page and room evidence."}
+        ]}
+    else:
+        draft["readiness"] = {"status": "review_required", "issues": deepcopy(draft["review_items"])}
     return draft
 
 

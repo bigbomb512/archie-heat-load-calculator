@@ -46,6 +46,20 @@ The command fails if the packet has no source PDF or the manifest has no named
 reviewer. It creates a proposal-only `calculator_draft.json`; it never fills
 missing rooms, schedules, loads, or envelope values.
 
+The tool verifies the derived coverage artifact against the `ai_input.json`
+source fingerprint and page count. Empty or stale coverage is rebuilt in
+memory and marked with a rebuild reason. Each source page receives a
+proposal-only role (`supporting_geometry_plan`, `reflected_ceiling_plan`,
+`services_or_lighting_plan`, `reference`, and so on) with page citation,
+confidence, and authority status. A role is never treated as engineer-approved
+just because the classifier selected it.
+
+For pages with readable spatial OCR, room-label candidates are retained as
+medium-confidence evidence. A label does not create an area, ceiling height,
+occupancy, schedule, equipment duty, U-value, or cooling load. Missing floor
+identity, geometry, and supported inputs remain explicit review items and keep
+the case blocked or draft.
+
 ## 3. Review and apply
 
 In the browser:

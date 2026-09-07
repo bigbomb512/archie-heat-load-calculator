@@ -7,6 +7,7 @@ import re
 
 from ai.design_requirements import empty_design_requirements, empty_zone_ventilation_requirements, validate_design_requirements
 from ai.building_evidence import build_building_evidence, slug
+from ai.drawing_coverage import source_fingerprint
 
 
 EQUIPMENT = (
@@ -42,6 +43,8 @@ def build_thermal_evidence(ai_input, spatial_ocr=None, vision_response=None, dra
     return {
         "version": 1,
         "source_pdf": ai_input.get("source_pdf", ""),
+        "source_fingerprint": source_fingerprint(ai_input),
+        "generated_from": "ai_input.json",
         "facts": unique_facts(facts),
         "sources": {
             "ai_input": "reviewed PDF packet",
@@ -82,6 +85,7 @@ def build_thermal_model(evidence):
         "version": 1,
         "status": "review_required",
         "source_pdf": evidence.get("source_pdf", ""),
+        "source_fingerprint": evidence.get("source_fingerprint", ""),
         "site_context": {
             "project_address": address.get("value") if address else "",
             "status": "direct" if address else "missing",
