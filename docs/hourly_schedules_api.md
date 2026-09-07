@@ -8,6 +8,28 @@ Every input status is one of `missing`, `provisional`, `confirmed`, or `not_appl
 
 `confirmed` schedules and scenarios require sources. A review-ready calculation requires confirmed complete-scope inputs and no unresolved drawing-coverage exceptions. Saving any artifact does not update `design_requirements.json`, legacy cooling reports, or ventilation reports.
 
+## Evidence-to-calculator draft bridge
+
+`GET /api/calculator-draft?project_id=...` retrieves the project-local
+`calculator_draft.json`. `POST /api/calculator-draft` accepts these actions:
+
+- `build` rebuilds source-backed candidates from thermal, building-evidence and
+  drawing-coverage artifacts.
+- `save_review` persists `accept`, `edit`, `reject`, or `needs_evidence`
+  decisions with reviewer attribution and citations. It does not change calculator artifacts.
+- `preview_apply` returns additive records, fields to populate, already-present
+  values, authored conflicts, missing dependencies and unresolved evidence.
+- `apply` requires the expected draft revision and preview token, then writes only
+  valid accepted records. Existing populated fields and active envelope surfaces
+  are never overwritten by the bridge.
+
+Draft schema 2 stores source-content and candidate fingerprints, evidence IDs,
+source page/excerpt, confidence, decision history and application receipts.
+Changing source evidence or a target artifact invalidates a stale browser review;
+the API returns a structured `409` conflict. A repeated no-op apply does not
+rewrite target artifacts or their timestamps. Accepted records retain bridge
+provenance when edited later in the hourly or envelope editors.
+
 ## Schedules
 
 `GET /api/schedules?project_id=...` retrieves `schedule_library.json`.

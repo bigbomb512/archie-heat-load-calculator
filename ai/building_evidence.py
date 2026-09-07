@@ -77,7 +77,7 @@ def add_spaces(result, page):
     for room in page["rooms"]:
         label = room.get("name", "").strip()
         if label:
-            record(result, "spaces", page, {"name": label, "area": room.get("area", ""), "level_name": page["level_name"]}, excerpt=label)
+            record(result, "spaces", page, {"name": label, "area": room.get("area", ""), "level_name": page["level_name"]}, excerpt=label + (" · " + str(room["area"]) if room.get("area") else ""))
     for match in re.finditer(r"(?:\b([A-Za-z][A-Za-z0-9 .-]{1,40})\s+)?AREA\s*[:.]?\s*(\d+(?:\.\d+)?)\s*(m²|m2)\b", page["text"], re.I):
         label = (match.group(1) or page["title"] or "Proposed space").strip()
         record(result, "spaces", page, {"name": label, "area": match.group(2) + " " + match.group(3), "level_name": page["level_name"]}, excerpt=match.group(0))

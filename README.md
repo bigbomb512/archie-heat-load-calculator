@@ -16,6 +16,7 @@ It does **not** own HVAC layout, equipment placement, routing, CAD actions, or d
   exterior and fixed-adjacent-temperature steady-state cooling conduction.
 - Site conditions, schedules, design-day scenarios, reviewed floor/zone/room overlays, readiness, and parity-report scaffolding.
 - Room-owned evidence records for unsupported airflow and moisture/process inputs. They are captured as confirmed absent, stored-not-calculated, or unassessed; they never silently change cooling totals.
+- Evidence-to-calculator draft bridge: cited drawing/thermal evidence becomes versioned proposals that an engineer can accept, edit, reject, or mark as needing evidence before anything is applied to the hourly model.
 
 The current cooling method is limited to its declared inputs. Stored infiltration, transfer/extract/make-up air, vapour/steam, and process latent inputs remain explicit exclusions until an approved method exists. It is not CAMEL+/DA09 parity, equipment selection, heating design, AHU/plant analysis, annual analysis, or geometric shading.
 
@@ -46,9 +47,19 @@ PDF drawings
 → manual AI visual review and/or web-enabled research handoff
 → cited proposed facts
 → engineer review
+→ calculator draft (`calculator_draft.json`)
+→ save review → preview conflicts → apply accepted records
 → calculator input artifacts
 → provisional or confirmed load report
 ```
+
+The bridge API is `GET`/`POST /api/calculator-draft`. Building and saving review
+decisions never changes calculator artifacts. `preview_apply` reports creates,
+empty fields, existing records, conflicts and missing dependencies; `apply`
+performs additive, fingerprint-checked writes with recoverable staging. Accepted
+evidence is not the same as a complete calculation input: unresolved occupancy,
+schedules, airflow, envelope or other required fields remain visible in
+readiness and keep the cooling report draft or blocked.
 
 Run the research handoff after a reviewed `ai_input.json` exists:
 
@@ -57,4 +68,9 @@ PYTHONPATH=. python3 ai/research_packet.py output/review/<project>/ai_input.json
 ```
 
 See [the research handoff guide](docs/ai_research_handoff.md), [the reviewed
-envelope guide](docs/reviewed_envelope_slice.md), and [the cooling roadmap](docs/cool_heat_load_roadmap.md).
+envelope guide](docs/reviewed_envelope_slice.md), [the cooling workflow runbook](docs/cooling_workflow_runbook.md),
+and [the cooling roadmap](docs/cool_heat_load_roadmap.md).
+
+For a private drawing-based case, use `tools/create_reviewed_cooling_case.py`.
+It requires a named reviewer manifest, keeps the source PDF outside GitHub, and
+creates only proposal/evidence artifacts until the review is explicitly applied.

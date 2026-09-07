@@ -223,6 +223,52 @@ test("hourly cooling workflow displays a labelled partial draft", async ({ page 
   expect(errors).toEqual([]);
 });
 
+test("evidence-to-calculator bridge saves, previews, and applies reviewed proposals", async ({ page }) => {
+  const errors = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await mockApi(page);
+  let revision = 1;
+  const floorCandidate = {
+    candidate_id: "floor_ground_123", kind: "floor",
+    value: {floor_id: "floor_ground", name: "Ground", elevation_m: null},
+    reason: "Review the proposed drawing level.", target_artifact: "hourly_load_model",
+    source: "drawing-set.pdf", confidence: "high",
+    citations: [{reference: "drawing-set.pdf", page: 1, excerpt: "Ground floor plan"}],
+    dependencies: [], fingerprint: "candidate-fingerprint",
+  };
+  const draft = {schema_version: 2, revision, status: "review_required", candidates: {floors: [floorCandidate], zones: [], rooms: [], room_inputs: [], schedules: [], envelope: []}, review_items: [], decisions: {}, apply_summary: {}};
+  await page.route("**/api/calculator-draft", async route => {
+    const request = route.request();
+    if (request.method() === "GET") return route.fulfill({json: {id: "demo-project", calculator_draft: draft, status: "current"}});
+    const body = request.postDataJSON();
+    if (body.action === "save_review") {
+      expect(body.decisions.floor_ground_123).toEqual(expect.objectContaining({decision: "accept", reviewer: "ENG-1"}));
+      revision = 2;
+      return route.fulfill({json: {calculator_draft: {...draft, revision, decisions: body.decisions}, status: "current"}});
+    }
+    if (body.action === "preview_apply") {
+      expect(body.expected_revision).toBe(2);
+      return route.fulfill({json: {calculator_draft: {...draft, revision: 2, decisions: {floor_ground_123: {decision: "accept", reviewer: "ENG-1"}}}, preview_token: "preview-1", preview: {created: [{candidate_id: "floor_ground_123"}]}, apply_summary: {}}});
+    }
+    expect(body.action).toBe("apply");
+    expect(body.preview_token).toBe("preview-1");
+    return route.fulfill({json: {calculator_draft: {...draft, revision: 3, decisions: {floor_ground_123: {decision: "accept", reviewer: "ENG-1"}}, apply_summary: {created: [{candidate_id: "floor_ground_123"}], reports_marked_stale: ["hourly_load_report.json"]}}, apply_summary: {created: [{candidate_id: "floor_ground_123"}], reports_marked_stale: ["hourly_load_report.json"]}, changed_artifacts: ["hourly_load_model"]}});
+  });
+  await page.goto("/");
+  await page.evaluate(input => { DATA = {id: "demo-project"}; show("vRes"); requiredElement("designRequirementsPanel").classList.remove("hide"); showCalculatorDraft(input); }, draft);
+  const candidate = page.locator(".draft-candidate");
+  await candidate.locator("details").evaluate(element => { element.open = true; });
+  await candidate.locator('[data-field="reviewer"]').fill("ENG-1");
+  await candidate.locator(".calculator-draft-decision").selectOption("accept");
+  await page.locator("#btnSaveCalculatorReview").click();
+  await expect(page.locator("#calculatorDraftStatus")).toContainText("review_required");
+  await page.locator("#btnPreviewCalculatorDraft").click();
+  await expect(page.locator("#calculatorDraftSummary")).toContainText("created");
+  await page.locator("#btnApplyCalculatorDraft").click();
+  await expect(page.locator("#calculatorDraftSummary")).toContainText("Reports stale");
+  expect(errors).toEqual([]);
+});
+
 test("ventilation calculation displays outside-air and exhaust evidence", async ({ page }) => {
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));

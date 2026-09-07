@@ -100,6 +100,7 @@ def common_record(raw, index, label):
     review_status = status(raw.get("review_status", raw.get("verification_status", "missing")), f"Envelope {label} {record_id}")
     result = {
         "record_id": record_id,
+        "bridge_provenance": deepcopy(raw.get("bridge_provenance", {})),
         "title": text(raw.get("title", ""), f"Envelope {label} {record_id} title"),
         "revision": positive_integer(raw.get("revision", 1), f"Envelope {label} {record_id} revision"),
         "review_status": review_status,
@@ -149,6 +150,7 @@ def validate_surface(raw, index, construction_ids, window_ids, shading_ids):
         raise ValueError(f"Envelope surface {surface_id} references unknown shading records: {', '.join(sorted(unknown_shading))}.")
     result = {
         "surface_id": surface_id,
+        "bridge_provenance": deepcopy(raw.get("bridge_provenance", {})),
         "owner_zone_id": stable_id(raw.get("owner_zone_id", ""), f"Envelope surface {surface_id} owner zone ID"),
         "owner_room_id": text(raw.get("owner_room_id", ""), f"Envelope surface {surface_id} owner room ID"),
         "kind": kind,
