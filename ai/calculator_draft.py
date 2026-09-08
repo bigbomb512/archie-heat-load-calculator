@@ -41,7 +41,7 @@ def empty_calculator_draft():
             "candidates": {group: [] for group in GROUPS}, "review_items": [],
             "source_artifacts": {}, "source_fingerprints": {}, "decisions": {},
             "review_history": [], "application_receipts": [], "page_roles": [],
-            "evidence_summary": {}, "readiness": {"status": "blocked", "issues": []}}
+            "evidence_summary": {}, "evidence_fusion": {}, "readiness": {"status": "blocked", "issues": []}}
 
 
 def all_candidates(draft):
@@ -76,7 +76,7 @@ def quantity(raw, unit):
 
 
 def build_calculator_draft(thermal_model, building_evidence, drawing_coverage, previous=None,
-                           source_artifacts=None, thermal_evidence=None):
+                           source_artifacts=None, thermal_evidence=None, evidence_fusion=None):
     previous = previous or {}
     thermal_evidence = thermal_evidence or {}
     draft = empty_calculator_draft()
@@ -84,10 +84,13 @@ def build_calculator_draft(thermal_model, building_evidence, drawing_coverage, p
                  source_artifacts=source_artifacts or {},
                  source_fingerprints={name: fingerprint(value) for name, value in {
                      "thermal_model": thermal_model, "building_evidence": building_evidence,
-                     "drawing_coverage": drawing_coverage, "thermal_evidence": thermal_evidence}.items()},
+                     "drawing_coverage": drawing_coverage, "thermal_evidence": thermal_evidence,
+                     "evidence_fusion": evidence_fusion or {}}.items()},
                  review_history=deepcopy(previous.get("review_history", [])),
                  application_receipts=deepcopy(previous.get("application_receipts", [])),
-                 page_roles=deepcopy(drawing_coverage.get("page_roles", [])),
+                 page_roles=deepcopy((evidence_fusion or {}).get("pages") or drawing_coverage.get("page_roles", [])),
+                 evidence_fusion={"schema_version": (evidence_fusion or {}).get("schema_version"), "fingerprint": (evidence_fusion or {}).get("fingerprint", ""),
+                                  "facts": deepcopy((evidence_fusion or {}).get("facts", [])), "fact_registry": deepcopy((evidence_fusion or {}).get("fact_registry", {}))},
                  evidence_summary={key: len(building_evidence.get(key, [])) for key in
                                    ("spaces", "levels", "surfaces", "openings", "constructions", "lighting", "equipment")})
     document = building_evidence.get("source_pdf") or thermal_model.get("source_pdf") or "building_evidence.json"
@@ -130,6 +133,16 @@ def build_calculator_draft(thermal_model, building_evidence, drawing_coverage, p
             item.setdefault("remediation", "Review the cited source and provide the missing relationship or value.")
             draft["review_items"].append(item)
 
+    # Fusion findings retain page/entity provenance and remain review-only;
+    # they are never interpreted as calculator facts here.
+    for fusion_issue in (evidence_fusion or {}).get("review_items", []):
+        item = deepcopy(fusion_issue)
+        item.setdefault("scope", "project")
+        item.setdefault("source", "architect_evidence_fusion.json")
+        item.setdefault("citations", [])
+        item.setdefault("effect", "blocks_project")
+        draft["review_items"].append(item)
+
     floors = {}
     for level in sorted(drawing_coverage.get("levels", []), key=lambda r: r.get("level_name", "")):
         name = level.get("level_name", "").strip()
@@ -166,9 +179,12 @@ def build_calculator_draft(thermal_model, building_evidence, drawing_coverage, p
         suffix = fingerprint([document, identity])[:12]
         zone_id, room_id = "zone_" + suffix, "room_" + suffix
         zone = add("zones", "zone", identity, {"zone_id": zone_id, "name": space["name"],
-            "floor_id": floor["value"]["floor_id"] if floor else ""}, evidence,
+            "floor_id": floor["value"]["floor_id"] if floor else "",
+            "floor_status": "proposed" if floor else "unresolved"}, evidence,
             "Review the proposed one-room zone and floor mapping.", [space.get("id")], [floor["candidate_id"]] if floor else [], space.get("confidence", "unknown"))
-        room = add("rooms", "room", identity, {"room_id": room_id, "name": space["name"], "zone_id": zone_id},
+        room = add("rooms", "room", identity, {"room_id": room_id, "name": space["name"], "zone_id": zone_id,
+            "floor_id": floor["value"]["floor_id"] if floor else "", "geometry_status": space.get("geometry_status", "label_detected"),
+            "geometry_reference": space.get("geometry_reference"), "unresolved_fields": list(space.get("unresolved_fields", []))},
             evidence, "Confirm room identity and mapping; missing load inputs remain missing.",
             [space.get("id")], [zone["candidate_id"]], space.get("confidence", "unknown"))
         room_lookup[space.get("id")] = room
@@ -180,6 +196,14 @@ def build_calculator_draft(thermal_model, building_evidence, drawing_coverage, p
                 "Confirm the cited room area.", [space.get("id")], [room["candidate_id"]], space.get("confidence", "unknown"))
         else:
             issue([identity, "area"], "Supply a cited positive room area with explicit m² units.", evidence, room_id)
+        for field in space.get("unresolved_fields", []):
+            if field not in {"area", "geometry", "floor"}:
+                continue
+            issue([identity, field], f"Resolve the room {field} from source-backed evidence before activation.", evidence, room_id)
+        if not floor:
+            issue([identity, "floor"], "Map the room to a reviewed floor before activation.", evidence, room_id)
+        if space.get("geometry_status") not in {"geometry_confirmed"}:
+            issue([identity, "geometry"], "Confirm a room boundary or geometry witness; a label alone cannot activate a room.", evidence, room_id)
         issue([identity, "schedules"], "Assign reviewed schedules for each non-zero supported room load in the room editor.", evidence, room_id)
 
     # Only explicit source-room links permit assignment. Same name/page/level is insufficient.
@@ -333,6 +357,19 @@ def apply_calculator_draft(draft, decisions=None, hourly_model=None, schedule_li
         if id_key in supplied and supplied[id_key] != value[id_key]:
             raise ValueError("Target ID cannot be edited: " + cid)
         value.update(supplied)
+        # A label-only proposal is useful evidence, but it is not a calculator
+        # room.  Topology activation requires an explicitly reviewed floor and
+        # geometry witness; the bridge must never turn proximity into geometry.
+        if item["kind"] == "zone" and not value.get("floor_id"):
+            summary["unresolved"].append({"candidate_id": cid, "reason": "A zone cannot be applied without a reviewed floor assignment."})
+            continue
+        if item["kind"] == "room":
+            if not value.get("floor_id"):
+                summary["unresolved"].append({"candidate_id": cid, "reason": "A room cannot be applied without a reviewed floor assignment."})
+                continue
+            if value.get("geometry_status") != "geometry_confirmed":
+                summary["unresolved"].append({"candidate_id": cid, "reason": "Room geometry must be explicitly reviewed and confirmed before activation."})
+                continue
         evidence = validate_citations(item["citations"] + decision.get("citations", []), cid)
         if not supported_citations(evidence):
             summary["unresolved"].append({"candidate_id": cid, "reason": "Supply supporting citations and excerpts."})
@@ -357,7 +394,7 @@ def apply_calculator_draft(draft, decisions=None, hourly_model=None, schedule_li
             changes, conflicts = {}, {}
             if existing:
                 for field, proposed in record.items():
-                    if field in {key, "source", "citations", "verification_status", "review_status", "mapping_status", "status", "revision", "bridge_provenance"}:
+                    if field in ({key, "source", "citations", "verification_status", "review_status", "mapping_status", "status", "revision", "bridge_provenance", "floor_status", "geometry_status", "geometry_reference", "unresolved_fields"} | ({"floor_id"} if item["kind"] == "room" else set())):
                         continue
                     current = existing.get(field)
                     if isinstance(proposed, dict) and fill:

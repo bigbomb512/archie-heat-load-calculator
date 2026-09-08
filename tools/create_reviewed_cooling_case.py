@@ -17,9 +17,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from ai.building_evidence import build_building_evidence
+from ai.evidence_fusion import build_evidence_fusion
 from ai.calculator_draft import build_calculator_draft
 from ai.drawing_coverage import build_drawing_coverage, source_fingerprint, timestamp
 from ai.thermal_model import build_thermal_evidence, build_thermal_model
+from ai.research_cache import empty_research_cache
 
 
 def load(path, default=None):
@@ -70,28 +72,32 @@ def prepare(source_dir, output_dir, manifest_path):
         raise ValueError(f"Missing ai_input.json in evidence packet: {source_dir}")
     spatial_ocr = load(source_dir / "spatial_ocr.json")
     vision_response = load(source_dir / "vision_response.json")
+    vector_geometry = load(source_dir / "vector_geometry.json")
     existing_coverage = load(source_dir / "drawing_coverage.json")
     coverage = existing_coverage if coverage_is_current(existing_coverage, ai_input) else build_drawing_coverage(ai_input)
     if existing_coverage is not coverage:
         coverage["rebuild_reason"] = "missing, empty, stale, or schema-incomplete derived coverage artifact"
         coverage["generated_at"] = timestamp()
     building = build_building_evidence(ai_input, coverage, spatial_ocr, vision_response)
+    fusion = build_evidence_fusion(ai_input, coverage, building, spatial_ocr, vector_geometry, vision_response)
     thermal_evidence = build_thermal_evidence(ai_input, spatial_ocr, vision_response, coverage, building)
     thermal_model = build_thermal_model(thermal_evidence)
     manifest = validate_manifest(load(Path(manifest_path)), ai_input.get("source_pdf", ""))
     draft = build_calculator_draft(
         thermal_model, building, coverage, source_artifacts={
             name: str(source_dir / (name + ".json")) for name in ("thermal_model", "building_evidence", "drawing_coverage", "thermal_evidence")
-        }, thermal_evidence=thermal_evidence,
+        }, thermal_evidence=thermal_evidence, evidence_fusion=fusion,
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     artifacts = {
         "drawing_coverage.json": coverage,
         "building_evidence.json": building,
+        "architect_evidence_fusion.json": fusion,
         "thermal_evidence.json": thermal_evidence,
         "thermal_model.json": thermal_model,
         "calculator_draft.json": draft,
         "review_manifest.json": manifest,
+        "research_cache.json": empty_research_cache(),
     }
     for name, value in artifacts.items():
         (output_dir / name).write_text(json.dumps(value, indent=2), encoding="utf-8")
@@ -99,6 +105,7 @@ def prepare(source_dir, output_dir, manifest_path):
             "review_manifest": manifest, "evidence_summary": {
                 key: len(building.get(key, [])) for key in ("spaces", "levels", "surfaces", "openings", "constructions", "lighting", "equipment")
             }, "thermal_model_status": thermal_model.get("status", "review_required"),
+            "fusion_summary": {"pages": len(fusion["pages"]), "entities": len(fusion["entities"]), "facts": len(fusion.get("facts", [])), "conflicts": len(fusion["conflicts"]), "review_items": len(fusion["review_items"])},
             "next_action": "Review calculator_draft.json; unresolved candidates remain excluded until explicitly accepted."}
 
 

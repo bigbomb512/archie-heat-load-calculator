@@ -18,7 +18,7 @@ def source_data():
         "thermal": {"zones": [{"name": "Shop A", "ceiling_height_mm": 3000, "status": "direct"}]},
         "building": {
             "source_pdf": "drawing-set.pdf", "levels": [],
-            "spaces": [{"id": "spaces-3-1", "name": "Shop A", "area": "42 m²", "level_name": "Ground", "status": "direct", "evidence": EVIDENCE}],
+            "spaces": [{"id": "spaces-3-1", "name": "Shop A", "area": "42 m²", "level_name": "Ground", "geometry": {"page": 3, "reference": "room-boundary-3-1"}, "geometry_status": "geometry_confirmed", "status": "direct", "evidence": EVIDENCE}],
             "lighting": [{"id": "lighting-3-1", "connected_w": 480, "level_name": "Ground", "status": "direct", "evidence": EVIDENCE}],
             "equipment": [{"id": "equipment-3-1", "name": "oven", "kind": "cooking", "quantity": 1, "watts": None, "level_name": "Ground", "status": "direct", "evidence": EVIDENCE}],
             "surfaces": [{"id": "surfaces-3-1", "kind": "external_boundary", "adjacency": "", "geometry": None, "level_name": "Ground", "status": "direct", "evidence": EVIDENCE}],
@@ -76,6 +76,16 @@ class CalculatorDraftTests(unittest.TestCase):
         outcome = apply_calculator_draft(reviewed, None, model)
         self.assertEqual(outcome["hourly_load_model"]["floors"][0]["name"], "Authored floor")
         self.assertEqual(len(outcome["summary"]["skipped_conflicts"]), 1)
+
+    def test_label_only_room_cannot_become_active_topology(self):
+        data = source_data()
+        data["building"]["spaces"][0].pop("geometry")
+        data["building"]["spaces"][0]["geometry_status"] = "geometry_review_required"
+        draft = build_calculator_draft(data["thermal"], data["building"], data["coverage"])
+        ids = [item["candidate_id"] for key in ("floors", "zones", "rooms") for item in draft["candidates"][key]]
+        outcome = apply_calculator_draft(self.reviewed(draft, ids))
+        self.assertEqual(outcome["hourly_load_model"]["rooms"], [])
+        self.assertTrue(any("geometry" in item["reason"].lower() for item in outcome["summary"]["unresolved"]))
 
     def test_incomplete_construction_stays_outside_envelope_library(self):
         draft = self.build(); construction = next(item for item in draft["candidates"]["envelope"] if item["kind"] == "construction")

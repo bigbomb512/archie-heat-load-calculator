@@ -32,6 +32,10 @@ def build_drawing_coverage(ai_input):
         "source_fingerprint": source_fingerprint(ai_input),
         "generated_from": "ai_input.json",
         "generated_at": timestamp(),
+        # Keep a complete page register under the explicit ``pages`` key as
+        # well as the legacy sheet_register name.  Consumers can therefore
+        # distinguish an indexed packet from a roles-only derived artifact.
+        "pages": [dict(page) for page in pages],
         "sheet_register": [sheet_entry(page) for page in pages],
         "page_roles": page_roles,
         "levels": levels,
@@ -127,6 +131,9 @@ def classify_page_roles(pages, ai_input):
             "classification_evidence": evidence,
             "source_fingerprint": source_fingerprint({"page": page}),
             "authority_status": authority,
+            "geometry_eligible": role in {"main_floor_plan", "supporting_geometry_plan"} and authority != "excluded",
+            "reference_only": role in {"reference", "detail", "elevation_or_section"},
+            "review_required": authority in {"ambiguous", "proposed"},
             "source": {"page": page.get("page"), "kind": "reviewed_pdf_page"},
         })
     return result

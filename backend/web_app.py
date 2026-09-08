@@ -44,6 +44,7 @@ from ai.parity_harness import archie_results_from_heat_report, archie_results_fr
 from ai.thermal_model import apply_thermal_model, build_thermal_evidence, build_thermal_model
 from ai.calculator_draft import DraftConflict
 from backend import draft_service
+from backend import evidence_fusion_service
 from ai.ventilation import calculate_ventilation_report
 from ai.geometry_review import normalise_vision
 from ai.reasoning_packet import create_reasoning_packet_from_vision
@@ -106,6 +107,11 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(api_calculator_draft(self))
             except Exception as error:
                 return self.send_json({"error": str(error)}, 404)
+        if self.path.startswith("/api/evidence-fusion"):
+            try:
+                return self.send_json(api_evidence_fusion(self))
+            except Exception as error:
+                return self.send_json({"error": str(error)}, 404)
         if self.path.startswith("/api/parity-report"):
             try:
                 return self.send_json(api_parity_report(self))
@@ -148,6 +154,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self.save_thermal_model()
         if self.path == "/api/calculator-draft":
             return self.save_calculator_draft()
+        if self.path == "/api/evidence-fusion":
+            return self.save_evidence_fusion()
         if self.path == "/api/parity-report":
             return self.save_parity_report()
         if self.path == "/process":
@@ -270,6 +278,13 @@ class Handler(SimpleHTTPRequestHandler):
         except DraftConflict as error:
             return self.send_json({"error": str(error), "code": error.code, "conflict": True,
                                    "action": "reload_review_preview"}, 409)
+        except Exception as error:
+            return self.send_json({"error": str(error)}, 400)
+        self.send_json(result)
+
+    def save_evidence_fusion(self):
+        try:
+            result = api_save_evidence_fusion(self)
         except Exception as error:
             return self.send_json({"error": str(error)}, 400)
         self.send_json(result)
@@ -818,6 +833,20 @@ def api_calculator_draft(request):
     project = project_by_id(query.get("project_id", [""])[0])
     ensure_review_dir(project)
     return draft_service.get(sys.modules[__name__], project)
+
+
+def api_evidence_fusion(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    ensure_review_dir(project)
+    return evidence_fusion_service.get(sys.modules[__name__], project)
+
+
+def api_save_evidence_fusion(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    return evidence_fusion_service.post(sys.modules[__name__], project, data)
 
 
 def api_save_calculator_draft(request):

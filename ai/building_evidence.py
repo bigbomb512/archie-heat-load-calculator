@@ -64,12 +64,13 @@ def source_pages(ai_input, spatial_ocr, drawing_coverage=None):
         coverage_role = next((item for item in (drawing_coverage or {}).get("page_roles", [])
                               if item.get("page") == page.get("page")), {})
         pages.append({
-            "page": page.get("page"), "level_name": page.get("level_name", ""),
+            "page": page.get("page"), "drawing_number": page.get("drawing_number", ""), "level_name": page.get("level_name", ""),
             "classification": page.get("sheet_classification", page.get("detected_type", "other")),
             "thermal_role": page.get("thermal_role", "not_calculation_evidence"),
             "title": page.get("title", ""), "rooms": page.get("rooms", []),
             "proposed_role": coverage_role.get("proposed_role", ""),
             "authority_status": coverage_role.get("authority_status", ""),
+            "reference_only": coverage_role.get("proposed_role") in {"reference", "detail"},
             "room_labels": next((item.get("room_label_candidates", []) for item in spatial_ocr.get("pages", [])
                                   if item.get("page") == page.get("page")), []),
             "text": page.get("structured_content", {}).get("markdown", "") + "\n" + ocr_text.get(page.get("page"), ""),
@@ -78,12 +79,16 @@ def source_pages(ai_input, spatial_ocr, drawing_coverage=None):
 
 
 def source(page, excerpt):
-    return {"page": page["page"], "kind": "reviewed_pdf_text", "sheet_classification": page["classification"], "excerpt": excerpt}
+    return {"page": page["page"], "kind": "reviewed_pdf_text", "sheet_classification": page["classification"],
+            "drawing_number": page.get("drawing_number", ""), "excerpt": excerpt}
 
 
 def record(result, family, page, value, status="direct", **extra):
     entries = result[family]
-    item = {"id": f"{family}-{page['page']}-{len(entries) + 1}", "status": status, "confidence": "high" if status == "direct" else "medium", "evidence": [source(page, extra.pop("excerpt", page["title"]))]}
+    item = {"id": f"{family}-{page['page']}-{len(entries) + 1}", "status": status,
+            "confidence": "high" if status == "direct" else "medium",
+            "extraction_method": extra.pop("extraction_method", "structured_pdf"),
+            "evidence": [source(page, extra.pop("excerpt", page["title"]))]}
     item.update(value)
     item.update(extra)
     entries.append(item)
@@ -93,20 +98,36 @@ def add_spaces(result, page):
     for room in page["rooms"]:
         label = room.get("name", "").strip()
         if label:
-            record(result, "spaces", page, {"name": label, "area": room.get("area", ""), "level_name": page["level_name"]}, excerpt=label + (" · " + str(room["area"]) if room.get("area") else ""))
+            geometry = room.get("geometry") or room.get("polygon") or room.get("boundary_reference")
+            record(result, "spaces", page, {"name": label, "area": room.get("area", ""), "level_name": page["level_name"],
+                    "geometry_status": "geometry_confirmed" if geometry else "geometry_review_required",
+                    "geometry_reference": geometry, "unresolved_fields": [] if geometry and room.get("area") else ["geometry" if not geometry else "area"]},
+                    excerpt=label + (" · " + str(room["area"]) if room.get("area") else ""), extraction_method="source_room_record")
     for match in re.finditer(r"(?:\b([A-Za-z][A-Za-z0-9 .-]{1,40})\s+)?AREA\s*[:.]?\s*(\d+(?:\.\d+)?)\s*(m²|m2)\b", page["text"], re.I):
         label = (match.group(1) or page["title"] or "Proposed space").strip()
-        record(result, "spaces", page, {"name": label, "area": match.group(2) + " " + match.group(3), "level_name": page["level_name"]}, excerpt=match.group(0))
+        if any(item.get("name", "").casefold() == label.casefold()
+               and str(item.get("area", "")).replace("m²", "").replace("m2", "").strip() == match.group(2)
+               for item in result["spaces"] if item.get("level_name") == page["level_name"]):
+            continue
+        record(result, "spaces", page, {"name": label, "area": match.group(2) + " " + match.group(3), "level_name": page["level_name"],
+                "geometry_status": "geometry_review_required", "geometry_reference": None, "unresolved_fields": ["geometry"]},
+                excerpt=match.group(0), extraction_method="explicit_area_text")
     known_room_terms = ("shop", "kitchen", "bar", "dining", "cool room", "freezer", "storage", "toilet", "office", "staff", "entry", "service", "room")
+    non_room_terms = ("legend", "symbol", "tile", "tiles", "grout", "joint", "colour", "color", "coated", "concealed", "services", "floor", "location")
     existing = {item.get("name", "").casefold() for item in result["spaces"] if item.get("level_name") == page["level_name"]}
+    if page.get("reference_only") or page.get("proposed_role") in {"reference", "detail", "services_or_lighting_plan"}:
+        return
     for candidate in page.get("room_labels", []):
         label = re.sub(r"\s+", " ", str(candidate.get("text", ""))).strip(" .:-")
         if (candidate.get("status") not in {"possible_room_or_area_label", "room_label"}
                 or len(label) < 3 or len(label) > 45 or not any(term in label.casefold() for term in known_room_terms)
+                or any(term in label.casefold() for term in non_room_terms)
                 or label.casefold() in existing):
             continue
-        record(result, "spaces", page, {"name": label, "area": "", "level_name": page["level_name"], "status": "inferred"},
-               status="inferred", excerpt=label)
+        record(result, "spaces", page, {"name": label, "area": "", "level_name": page["level_name"], "status": "inferred",
+                "geometry_status": "label_detected", "geometry_reference": None,
+                "unresolved_fields": ["floor", "geometry", "area"]}, status="inferred", excerpt=label,
+               extraction_method="spatial_ocr_room_label")
         existing.add(label.casefold())
 
 

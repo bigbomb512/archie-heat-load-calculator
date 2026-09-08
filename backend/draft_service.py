@@ -12,6 +12,7 @@ from ai.calculator_draft import (
     DraftConflict, apply_calculator_draft, build_calculator_draft,
     check_revision, empty_calculator_draft, fingerprint, save_review, timestamp,
 )
+from ai.evidence_fusion import build_evidence_fusion
 from ai.hourly_loads import hourly_model_summary, room_static_missing
 
 LOCK = threading.RLock()
@@ -94,7 +95,7 @@ def response(web, project, draft):
     return {"id": project["id"], "calculator_draft": draft,
             "artifact_url": web.safe_link(root / "calculator_draft.json") if (root / "calculator_draft.json").exists() else "",
             "status": status,
-            "artifact_links": {name: web.safe_link(root / file) for name, file in {**SOURCE_FILES, **TARGET_FILES}.items() if (root / file).exists()}}
+            "artifact_links": {name: web.safe_link(root / file) for name, file in {**SOURCE_FILES, **TARGET_FILES, "architect_evidence_fusion": "architect_evidence_fusion.json"}.items() if (root / file).exists()}}
 
 
 @serialized
@@ -115,8 +116,14 @@ def post(web, project, data):
         if not all((root / SOURCE_FILES[name]).exists() for name in ("thermal_model", "building_evidence")):
             raise ValueError("Build thermal-model and building evidence first.")
         sources = {name: read(root / file) for name, file in SOURCE_FILES.items()}
+        fusion_path = root / "architect_evidence_fusion.json"
+        fusion = read(fusion_path, {})
+        if not fusion or fusion.get("source_fingerprint") != sources["drawing_coverage"].get("source_fingerprint"):
+            fusion = build_evidence_fusion(read(root / "ai_input.json", {"source_pdf": sources["building_evidence"].get("source_pdf", "")}), sources["drawing_coverage"], sources["building_evidence"],
+                                           read(root / "spatial_ocr.json", {}), read(root / "vector_geometry.json", {}), read(root / "vision_response.json", {}))
+            atomic_bytes(fusion_path, json.dumps(fusion, indent=2, allow_nan=False).encode())
         draft = build_calculator_draft(sources["thermal_model"], sources["building_evidence"], sources["drawing_coverage"], draft,
-            {name: web.safe_link(root / file) for name, file in SOURCE_FILES.items() if (root / file).exists()}, sources["thermal_evidence"])
+            {name: web.safe_link(root / file) for name, file in SOURCE_FILES.items() if (root / file).exists()}, sources["thermal_evidence"], fusion)
         commit(root, {path.name: draft})
         return response(web, project, draft)
     check_revision(draft, data.get("expected_revision"))
