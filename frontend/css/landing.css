@@ -1,0 +1,594 @@
+/* ==========================================================================
+   Archie — heat load calculator, landing page
+   Formatted after the Column design system.
+
+   Deep-navy institutional language on a near-white canvas. Brand colour is a
+   coordinated pair — indigo navy for structure, seafoam for data and code —
+   with one warm orange reserved for high-signal accents. A single geometric
+   grotesque carries everything from 300 to 600; there is no serif.
+
+   The generated plates are dark linework on near-white paper, so on this
+   canvas they need no inversion: multiply blending drops the paper out and
+   leaves the drawing sitting directly on the page.
+   ========================================================================== */
+
+:root{
+  /* ---- palette: sea blue, orange, white ----
+     Column's structure, recoloured. The deep indigo is replaced by a lighter
+     sea blue that still carries enough weight for filled buttons and display
+     type, the greys are given a cool marine cast so they belong to it, and
+     orange stays the single high-signal accent. */
+  --sea:          #1E7FA8;   /* primary brand: filled CTAs, headings, wordmark */
+  --sea-deep:     #17688A;   /* pressed and hover state of the primary */
+  --sea-tint:     #E8F3F8;   /* washes, quiet fills */
+  --slate-ink:    #33454F;   /* secondary headings and body */
+  --steel:        #6E828E;   /* dominant muted text */
+  --fog:          #9DB0BB;   /* icon strokes, tertiary borders */
+  --mist:         #BFCED7;   /* captions, fine print */
+  --silver:       #DCE7ED;   /* the structural hairline */
+  --canvas:       #F5F9FB;   /* page background — white with a marine cast */
+  --paper:        #FFFFFF;   /* card surfaces */
+  --seafoam:      #2E9CC4;   /* data, code, technical labels */
+  --orange:       #F0742B;   /* the action colour — every CTA, and the marks
+                                that count: step numbers, units, tick marks */
+  --orange-deep:  #D85F1C;   /* pressed and hover state */
+  --orange-tint:  #FDEEE4;   /* quiet fill behind orange marks */
+
+  /* ---- type ---- */
+  --sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* ---- shape: one radius across the system ---- */
+  --r: 8px;
+  --r-pill: 9999px;
+
+  /* ---- elevation: multi-layer, navy-tinted, never grey ---- */
+  --shadow-subtle: rgba(30,127,168,.12) 0 1px 3px 0, rgba(30,127,168,.07) 0 1px 2px 0;
+  --shadow-md: rgba(30,127,168,.08) 0 8px 16px 0, rgba(30,127,168,.05) 0 2px 4px 0;
+  --shadow-xl: rgba(23,104,138,.04) 0 40px 32px 0, rgba(23,104,138,.05) 0 16px 16px 0,
+               rgba(30,127,168,.06) 0 2px 6px 0;
+  --ring: rgba(30,127,168,.07) 0 0 0 1px;
+
+  --t-fast: 120ms cubic-bezier(.4,0,.2,1);
+  --t: 220ms cubic-bezier(.4,0,.2,1);
+  --t-enter: 800ms cubic-bezier(.16,.7,.3,1);
+
+  --wide: 1200px;      /* Column page max-width */
+  --pad: 32px;
+  --gap-section: 72px; /* Column section gap */
+}
+
+*{ box-sizing:border-box }
+html{ scroll-behavior:smooth }
+body{
+  margin:0; background:var(--canvas); color:var(--slate-ink);
+  font-family:var(--sans); font-size:16px; line-height:1.5;
+  font-feature-settings:"salt" 2;
+  -webkit-font-smoothing:antialiased;
+  overflow-x:hidden;
+}
+a{ color:inherit; text-decoration:none }
+img{ display:block; max-width:100% }
+:focus-visible{ outline:2px solid var(--sea); outline-offset:3px; border-radius:4px }
+.wrap{ width:100%; max-width:var(--wide); margin:0 auto; padding:0 var(--pad) }
+
+/* ---- nav ---- */
+.nav{
+  position:fixed; inset:0 0 auto 0; z-index:20; height:72px; display:flex; align-items:center;
+  background:rgba(245,249,251,.84); backdrop-filter:saturate(1.3) blur(14px);
+  border-bottom:1px solid transparent; transition:border-color var(--t), background var(--t);
+}
+.nav.scrolled{ border-bottom-color:var(--silver); background:rgba(245,249,251,.94) }
+.nav .wrap{ display:flex; align-items:center; justify-content:space-between; gap:20px }
+.wordmark{ display:inline-flex; align-items:center; gap:12px;
+  font-size:20px; font-weight:600; letter-spacing:-.02em; color:var(--sea) }
+.wordmark .rule{ width:20px; height:1px; background:var(--fog) }
+.wordmark .tag{ font-family:var(--mono); font-size:10px; letter-spacing:.1em;
+  text-transform:uppercase; color:var(--seafoam); font-weight:400 }
+.navlinks{ display:flex; align-items:center; gap:32px }
+.navlinks a{ font-size:16px; font-weight:300; color:var(--steel); transition:color var(--t-fast) }
+.navlinks a:hover{ color:var(--sea) }
+
+/* ---- buttons: navy is the primary, orange is signal ---- */
+.btn{
+  display:inline-flex; align-items:center; gap:8px; height:44px; padding:0 20px;
+  border:1px solid var(--silver); border-radius:var(--r); background:var(--paper);
+  font-size:16px; font-weight:500; color:var(--sea); cursor:pointer;
+  box-shadow:var(--shadow-subtle);
+  transition:background var(--t-fast), border-color var(--t-fast),
+             box-shadow var(--t), transform var(--t);
+}
+.btn:hover{ border-color:var(--fog); box-shadow:var(--shadow-md); transform:translateY(-1px) }
+.btn:active{ transform:translateY(0); box-shadow:var(--shadow-subtle) }
+.btn-primary{ background:var(--orange); border-color:var(--orange); color:#fff;
+  box-shadow:rgba(240,116,43,.28) 0 4px 14px 0, rgba(240,116,43,.16) 0 1px 3px 0 }
+.btn-primary:hover{ background:var(--orange-deep); border-color:var(--orange-deep);
+  box-shadow:rgba(240,116,43,.34) 0 8px 22px 0, rgba(240,116,43,.18) 0 2px 4px 0 }
+.btn-quiet{ height:40px; font-size:14px; color:var(--orange-deep);
+  border-color:rgba(240,116,43,.42) }
+.btn-quiet:hover{ border-color:var(--orange); background:var(--orange-tint) }
+.arw{ transition:transform var(--t) }
+.btn:hover .arw{ transform:translateX(3px) }
+.textlink{ font-size:16px; font-weight:300; color:var(--steel);
+  border-bottom:1px solid var(--silver); padding-bottom:2px;
+  transition:color var(--t-fast), border-color var(--t-fast) }
+.textlink:hover{ color:var(--sea); border-color:var(--sea) }
+
+/* ================= hero space ================= */
+.hero{ position:relative; min-height:92vh; display:flex; align-items:center;
+  padding:144px 0 96px; overflow:hidden }
+.space{ position:absolute; inset:0; z-index:0; pointer-events:none;
+  perspective:1400px; perspective-origin:50% 45% }
+
+.plate{
+  position:absolute; will-change:transform; opacity:0;
+  transform:translate3d(var(--tx,0),var(--ty,0),var(--tz,0)) rotate(var(--rot,0deg));
+  transition:opacity 1.2s ease;
+}
+.space.lit .plate{ opacity:var(--o,.5) }
+
+/* Dark linework on near-white paper, on a near-white canvas: multiply drops
+   the paper and leaves only the drawing. No inversion, no filter. */
+.plate img{
+  mix-blend-mode:multiply;
+  mask-image:radial-gradient(ellipse 78% 78% at 50% 50%, #000 40%, transparent 86%);
+}
+/* A few plates carry the warm accent so the field is not uniformly navy. */
+.plate.warm img{ filter:sepia(.7) saturate(3.4) hue-rotate(-14deg) }
+
+.p1{ --o:.16; top:-6%;  left:-14%; width:62vw; --rot:-3deg }
+.p2{ --o:.22; top:20%;  left:4%;   width:44vw; --rot:2deg }
+.p3{ --o:.18; top:-10%; right:-10%; width:56vw; --rot:4deg }
+.p4{ --o:.40; bottom:-16%; right:1%; width:50vw; --rot:-2deg }
+.p5{ --o:.14; bottom:-6%; left:-8%; width:46vw; --rot:3deg }
+.p6{ --o:.62; top:22%;  right:6%;  width:42vw; --rot:-1deg }
+
+.grid-field{
+  position:absolute; inset:-20%; opacity:.7;
+  background-image:
+    linear-gradient(to right, rgba(30,127,168,.06) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(30,127,168,.06) 1px, transparent 1px);
+  background-size:80px 80px; animation:drift 60s linear infinite;
+  mask-image:radial-gradient(ellipse at 50% 45%, #000 18%, transparent 70%);
+}
+@keyframes drift{ to{ transform:translate3d(80px,80px,0) } }
+
+.vignette{
+  position:absolute; inset:0;
+  background:
+    radial-gradient(ellipse 58% 68% at 26% 50%, rgba(245,249,251,.96) 32%, transparent 74%),
+    linear-gradient(to bottom, var(--canvas) 0%, transparent 20%, transparent 72%, var(--canvas) 100%);
+}
+
+.hero-copy{ position:relative; z-index:2 }
+.eyebrow{
+  display:inline-flex; align-items:center; gap:8px; margin:0 0 24px;
+  font-family:var(--mono); font-size:12px; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--orange-deep); background:var(--orange-tint); border:1px solid rgba(240,116,43,.34);
+  border-radius:var(--r-pill); padding:7px 16px 7px 12px; box-shadow:var(--shadow-subtle);
+}
+.dot{ width:7px; height:7px; border-radius:50%; background:var(--orange);
+  animation:pulse 2.6s ease-in-out infinite }
+@keyframes pulse{ 0%,100%{ opacity:.5 } 50%{ opacity:1 } }
+
+h1.display{
+  margin:0 0 24px; font-size:clamp(40px,5.4vw,60px); font-weight:600;
+  line-height:1.1; letter-spacing:-.03em; color:var(--sea); max-width:16ch;
+}
+.subhead{ margin:0 0 40px; font-size:18px; line-height:1.33; font-weight:400;
+  color:var(--steel); max-width:48ch }
+.actions{ display:flex; align-items:center; gap:24px; flex-wrap:wrap }
+.scrollcue{ position:absolute; bottom:36px; left:50%; transform:translateX(-50%); z-index:2 }
+.scrollcue span{ display:block; width:1px; height:44px;
+  background:linear-gradient(var(--fog), transparent); animation:cue 2.4s ease-in-out infinite }
+@keyframes cue{ 0%,100%{ opacity:.3; transform:scaleY(.6) } 50%{ opacity:1; transform:scaleY(1) } }
+
+
+/* ================= the tour =================
+   Ported from the Stonepine scroll-scrub hero. The section is tall; inside it
+   a single stage sticks to the viewport while scroll position cross-fades four
+   scenes and swaps the chapter of copy pinned over them. The section height IS
+   the scrub track — 4 screens of scroll for 4 scenes. */
+
+.tour{ position:relative; height:400vh; background:var(--sea) }
+.tour__stage{
+  position:sticky; top:0; height:100dvh; width:100%; overflow:hidden;
+  background:var(--sea); isolation:isolate;
+}
+
+.tour__media{ position:absolute; inset:0; z-index:0 }
+.tour__video{
+  width:100%; height:100%; object-fit:cover; object-position:50% 50%;
+  display:block; position:absolute; inset:0;
+}
+/* The scenes are pale line drawings; without this the copy has nothing to sit
+   on. Sea blue from the left, so type stays legible and the drawing survives. */
+/* Over footage rather than line art, so it only has to make type legible —
+   weighted to the left, and much lighter than a drawing would need. */
+.tour__scrim{
+  position:absolute; inset:0;
+  background:
+    linear-gradient(100deg, rgba(12,58,80,.82) 0%, rgba(16,74,101,.55) 34%,
+      rgba(23,104,138,.18) 62%, rgba(23,104,138,.04) 100%),
+    linear-gradient(to bottom, rgba(12,58,80,.42), transparent 24%, transparent 72%, rgba(12,58,80,.46));
+}
+
+.tour__progress{ position:absolute; top:0; left:0; right:0; height:2px; z-index:5;
+  background:rgba(255,255,255,.18) }
+.tour__progress i{ display:block; height:100%; width:0%; background:var(--orange) }
+
+/* Chapters are stacked in one place; only the active one is visible. */
+.tour__story{ position:absolute; inset:0; z-index:2; display:flex; align-items:center }
+.tour__story .wrap{ position:relative; width:100%; min-height:340px }
+.tour__copy{
+  position:absolute; inset:auto auto auto var(--pad); max-width:44rem;
+  opacity:0; transform:translateY(18px); pointer-events:none;
+  transition:opacity 620ms cubic-bezier(.16,.7,.3,1),
+             transform 620ms cubic-bezier(.16,.7,.3,1);
+}
+.tour__copy.is-on{ opacity:1; transform:none; pointer-events:auto }
+
+.tour__kicker{
+  display:inline-flex; align-items:center; gap:9px; margin:0 0 22px;
+  font-family:var(--mono); font-size:12px; letter-spacing:.08em; text-transform:uppercase;
+  color:#fff; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.28);
+  border-radius:var(--r-pill); padding:7px 16px 7px 12px; backdrop-filter:blur(6px);
+}
+.tour__kicker .dot{ background:var(--orange) }
+.tour__title{
+  margin:0 0 22px; font-size:clamp(38px,5.2vw,62px); font-weight:600; line-height:1.06;
+  letter-spacing:-.03em; color:#fff; max-width:17ch;
+  text-shadow:0 2px 30px rgba(10,50,70,.28);
+}
+.tour__body{ margin:0 0 32px; font-size:18px; line-height:1.4; color:rgba(255,255,255,.86);
+  max-width:44ch }
+.tour__copy .textlink{ color:rgba(255,255,255,.86); border-bottom-color:rgba(255,255,255,.4) }
+.tour__copy .textlink:hover{ color:#fff; border-bottom-color:#fff }
+
+/* Route dots: where you are in the tour, and a way to jump. */
+.tour__route{ position:absolute; right:calc(var(--pad) + 4px); top:50%; z-index:4;
+  transform:translateY(-50%); display:flex; flex-direction:column; gap:12px }
+.tour__dot{
+  width:9px; height:9px; padding:0; border-radius:50%; cursor:pointer;
+  border:1px solid rgba(255,255,255,.6); background:transparent;
+  transition:background var(--t), transform var(--t), border-color var(--t);
+}
+.tour__dot:hover{ transform:scale(1.25) }
+.tour__dot.is-on{ background:var(--orange); border-color:var(--orange) }
+
+@media (max-width:900px){
+  .tour{ height:360vh }
+  .tour__copy{ inset:auto var(--pad) auto var(--pad); max-width:none }
+  .tour__scrim{ background:
+    linear-gradient(to bottom, rgba(23,104,138,.62) 0%, rgba(23,104,138,.86) 62%,
+      rgba(23,104,138,.94) 100%) }
+  .tour__route{ display:none }
+}
+
+/* Without motion the tour becomes four stacked scenes, read normally. */
+@media (prefers-reduced-motion:reduce){
+  .tour{ height:auto }
+  .tour__stage{ position:relative; height:auto; padding:120px 0 80px }
+  .tour__media{ position:absolute }
+  .tour__layer:first-child{ opacity:1 }
+  .tour__story{ position:relative; display:block }
+  .tour__story .wrap{ min-height:0 }
+  .tour__copy{ position:relative; inset:auto; opacity:1; transform:none;
+    pointer-events:auto; margin-bottom:56px }
+  .tour__route,.tour__progress{ display:none }
+}
+
+/* ================= bands ================= */
+.band{ position:relative; padding:var(--gap-section) 0; border-top:1px solid var(--silver) }
+.band-quote{ background:var(--orange); border-top-color:var(--orange) }
+.band-end{ padding:96px 0 72px }
+
+.kicker{ margin:0 0 16px; font-family:var(--mono); font-size:12px; letter-spacing:.08em;
+  text-transform:uppercase; color:var(--orange) }
+.h2{ margin:0 0 20px; font-size:clamp(28px,3.4vw,40px); font-weight:600; line-height:1.1;
+  letter-spacing:-.02em; color:var(--sea); max-width:20ch }
+.lede{ margin:0 0 32px; font-size:18px; line-height:1.38; font-weight:400;
+  color:var(--steel); max-width:48ch }
+
+/* ---- figures ---- */
+.figures{ padding:64px 0; background:var(--orange-tint);
+  border-top-color:rgba(240,116,43,.22) }
+.figlist{ list-style:none; margin:0; padding:0; display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr)); gap:24px }
+.figlist li{ background:var(--paper); border:1px solid var(--silver); border-radius:var(--r);
+  padding:24px; box-shadow:var(--shadow-subtle) }
+.fignum{ display:block; font-size:40px; font-weight:600; line-height:1.1;
+  letter-spacing:-.8px; color:var(--sea); margin-bottom:8px }
+.fignum em{ font-style:normal; font-family:var(--mono); font-size:24px; color:var(--orange) }
+.figcap{ font-size:14px; line-height:1.43; color:var(--steel) }
+
+/* ---- steps ---- */
+.steps{ list-style:none; margin:48px 0 0; padding:0; display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr)); gap:24px }
+.steps li{ position:relative; z-index:1; min-width:0; background:var(--paper); border:1px solid var(--silver);
+  border-radius:var(--r); padding:24px; box-shadow:var(--shadow-subtle) }
+.stepno{ display:inline-block; font-family:var(--mono); font-size:12px;
+  color:var(--orange); background:var(--orange-tint); border-radius:var(--r);
+  padding:4px 9px; margin-bottom:16px }
+.steps h3{ margin:0 0 8px; font-size:20px; font-weight:500; line-height:1.1;
+  letter-spacing:-.2px; color:var(--sea) }
+.steps p{ margin:0; font-size:14px; line-height:1.43; color:var(--steel) }
+
+/* ---- evidence ---- */
+.split{ display:grid; grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr); gap:64px;
+  align-items:center }
+.split > *{ min-width:0 }
+.ticks{ list-style:none; margin:0; padding:0; display:grid; gap:12px }
+.ticks li{ position:relative; padding-left:28px; font-size:16px; color:var(--steel) }
+.ticks li::before{ content:""; position:absolute; left:0; top:7px; width:8px; height:8px;
+  border-radius:2px; background:var(--orange) }
+
+.scrubfig{ margin:0 }
+.scrubmat{
+  position:relative; background:var(--paper); border:1px solid var(--silver);
+  border-radius:var(--r); padding:24px; overflow:hidden; box-shadow:var(--shadow-xl);
+}
+.scrubmat img{ width:100%; border-radius:4px }
+.sweep{
+  --reveal:100%;   /* revealed by default; JS drives it from 0 on scroll */
+  position:absolute; inset:24px; border-radius:4px; pointer-events:none;
+  background:linear-gradient(to right, transparent 0%, transparent var(--reveal),
+    rgba(245,249,251,.94) calc(var(--reveal) + 4%), rgba(245,249,251,.99) 100%);
+}
+.scrubfig figcaption{ margin-top:16px; font-family:var(--mono); font-size:12px;
+  color:var(--mist) }
+
+/* ---- statement ---- */
+.pull{ margin:0 auto; max-width:24ch; font-size:clamp(28px,3.8vw,48px); font-weight:600;
+  line-height:1.1; letter-spacing:-.96px; text-align:center; color:#fff }
+.attrib{ margin:24px 0 0; text-align:center; font-family:var(--mono); font-size:12px;
+  letter-spacing:.08em; text-transform:uppercase; color:rgba(255,255,255,.72) }
+
+/* ---- handoff ---- */
+/* Padding is held in variables because the photograph has to be offset by
+   exactly the same amounts to bleed past it to the card's edges. */
+.endcard{ --cardx:48px; --cardtop:300px;
+  position:relative; overflow:hidden; background:var(--paper);
+  border:1px solid var(--silver); border-top:3px solid var(--orange);
+  border-radius:var(--r); padding:var(--cardtop) var(--cardx) 64px;
+  text-align:center; box-shadow:var(--shadow-xl) }
+/* The photograph fills the whole card, offset by the padding so it reaches
+   all four edges. The copy sits on it, held by a scrim from the bottom. */
+.endcard > .endspace{ position:absolute;
+  top:calc(var(--cardtop) * -1);
+  left:calc(var(--cardx) * -1); right:calc(var(--cardx) * -1);
+  bottom:-64px;
+  opacity:1; pointer-events:none; overflow:hidden }
+.endspace img{ width:100%; height:100%; object-fit:cover; object-position:50% 42%;
+  display:block }
+/* The photograph is left alone at the top of the card and white takes over
+   only where the copy sits, so the picture is clear rather than veiled. */
+.endspace::after{
+  content:""; position:absolute; inset:0;
+  background:linear-gradient(to bottom,
+    rgba(6,26,38,.18) 0%, rgba(6,26,38,.10) 34%,
+    rgba(6,26,38,.52) 66%, rgba(6,26,38,.86) 100%);
+}
+.endcard > *:not(.endspace){ position:relative; z-index:1 }
+.end-h2{ max-width:22ch; margin-left:auto; margin-right:auto; color:#fff;
+  text-shadow:0 2px 24px rgba(4,20,30,.45) }
+.end-lede{ margin-left:auto; margin-right:auto; max-width:52ch;
+  color:rgba(255,255,255,.9) }
+.end-actions{ justify-content:center; margin-bottom:24px }
+.endnote{ margin:0; font-size:12px; line-height:1.5; color:rgba(255,255,255,.72) }
+
+/* ---- footer ---- */
+.foot{ border-top:1px solid var(--silver); padding:32px 0 40px }
+.foot .wrap{ display:flex; align-items:baseline; justify-content:space-between; gap:16px }
+.foot-mark{ font-size:20px; font-weight:600; letter-spacing:-.02em; color:var(--sea) }
+.footnote{ font-family:var(--mono); font-size:12px; color:var(--mist) }
+
+
+/* ================= background furniture =================
+   The page stays white. What sits on it is drafting apparatus, not decoration:
+   a faint blue grid, registration crosses at the band corners, a measurement
+   tick strip, and two very low washes — blue at the top, orange at the foot —
+   so the white is tinted rather than flat. Everything here is inert: no
+   pointer events, no reflow, nothing above the content. */
+
+/* Two washes fixed behind the whole document. 4–5% alpha: enough to feel,
+   not enough to read as a colour. */
+body::before{
+  content:""; position:fixed; inset:0; z-index:-2; pointer-events:none;
+  background:
+    radial-gradient(60vw 50vh at 12% -6%,  rgba(30,127,168,.055), transparent 70%),
+    radial-gradient(55vw 45vh at 92% 104%, rgba(240,116,43,.05),  transparent 70%);
+}
+
+/* The drafting grid, continued out of the hero and across the page. */
+body::after{
+  content:""; position:fixed; inset:0; z-index:-1; pointer-events:none; opacity:.55;
+  background-image:
+    linear-gradient(to right, rgba(30,127,168,.05) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(30,127,168,.05) 1px, transparent 1px);
+  background-size:80px 80px;
+  mask-image:linear-gradient(to bottom, transparent, #000 12%, #000 88%, transparent);
+}
+
+/* Registration crosses — the marks a drawing sheet is aligned by. One blue
+   pair at the top of a band, one orange at the foot, drawn as gradients so
+   they cost nothing. */
+.band{ position:relative }
+.band::before,
+.band::after{
+  content:""; position:absolute; width:11px; height:11px; pointer-events:none;
+  background:
+    linear-gradient(var(--mark), var(--mark)) center/100% 1px no-repeat,
+    linear-gradient(var(--mark), var(--mark)) center/1px 100% no-repeat;
+  opacity:.5;
+}
+/* Anchored to the content column, not the viewport, so they line up with the
+   text above them the way a sheet's corner marks line up with its border. */
+.band::before{ --mark:var(--sea);
+  top:24px;    left:max(14px, calc(50% - var(--wide)/2 + 10px)) }
+.band::after{  --mark:var(--orange);
+  bottom:24px; right:max(14px, calc(50% - var(--wide)/2 + 10px)) }
+.band-quote::before,
+.band-quote::after{ --mark:rgba(255,255,255,.55) }
+
+/* A tick strip under the hero: a measurement scale, orange every fifth mark. */
+.figures{ position:relative }
+.figures::before{
+  content:""; position:absolute; inset:0 0 auto 0; height:7px; pointer-events:none;
+  background:
+    repeating-linear-gradient(to right,
+      rgba(240,116,43,.55) 0 1px, transparent 1px 16px),
+    repeating-linear-gradient(to right,
+      rgba(30,127,168,.28) 0 1px, transparent 1px 80px);
+  mask-image:linear-gradient(to right, transparent, #000 12%, #000 88%, transparent);
+}
+
+/* A ghost plate behind the evidence band, barely there, warmed. */
+.scrub{ position:relative; overflow:hidden }
+.scrub::before{
+  content:""; position:absolute; right:-16%; top:-6%; width:44vw; height:112%;
+  pointer-events:none; opacity:.05;
+  background:url("/frontend/assets/images/photo/facade.webp") no-repeat center/cover;
+  filter:grayscale(1) contrast(1.1);
+}
+
+/* Content must sit above the furniture. */
+/* A short rule struck down from the blue mark, as on a drawing border. */
+.band .wrap::before{
+  content:""; position:absolute; left:-10px; top:-34px; width:1px; height:22px;
+  background:linear-gradient(var(--sea), transparent); opacity:.35;
+  pointer-events:none;
+}
+.band-quote .wrap::before{ background:linear-gradient(rgba(255,255,255,.6), transparent) }
+
+.band > .wrap{ position:relative; z-index:1 }
+
+
+/* ================= photography =================
+   Real buildings, handled so they read as one system rather than ten stock
+   pictures: everything is duotoned toward the brand blue, cropped hard, and
+   framed off-axis. Nothing sits square in a box. */
+
+/* The shared treatment. Grayscale first so the source colour cannot fight the
+   brand, then a blue lift; sepia+hue-rotate warms the ones that want orange. */
+.ph img,
+.strip__cell img,
+.offsetpair img,
+.scrubfig__inset img,
+.band-quote__photo img{
+  filter:grayscale(1) contrast(1.06) brightness(1.02);
+}
+
+/* ---- facade strip ---- */
+.strip{ background:var(--sea); overflow:hidden; padding-bottom:22px }
+.strip__row{ display:grid; grid-template-columns:repeat(4,1fr); gap:2px }
+.strip__cell{ margin:0; position:relative; aspect-ratio:4/5; overflow:hidden; background:var(--sea) }
+.strip__cell img{
+  width:100%; height:100%; object-fit:cover; display:block;
+  filter:grayscale(1) contrast(1.1); opacity:.62;
+  transition:transform 900ms cubic-bezier(.16,.7,.3,1), opacity 600ms ease;
+}
+.strip__cell:nth-child(2) img,
+.strip__cell:nth-child(4) img{ opacity:.5 }
+.strip__cell:hover img{ transform:scale(1.05); opacity:.86 }
+/* Every second cell drops a notch, so the row is a rhythm rather than a band. */
+.strip__cell:nth-child(even){ transform:translateY(22px) }
+
+/* ---- offset pair in the method section ---- */
+/* Anchored to the band, not the flow, so it sits beside the heading in the
+   space the 20ch measure leaves empty — and never lands on the cards. */
+#method{ position:relative }
+.offsetpair{ position:absolute; top:-40px; right:var(--pad); width:440px; height:260px;
+  margin:0; z-index:0; pointer-events:none }
+.offsetpair figure{ position:absolute; margin:0; overflow:hidden;
+  border-radius:var(--r); box-shadow:var(--shadow-xl) }
+.offsetpair img{ width:100%; height:100%; object-fit:cover; display:block }
+.offsetpair__a{ right:0; top:0; width:262px; height:166px }
+.offsetpair__b{ right:206px; top:50px; width:170px; height:210px;
+  border:5px solid var(--canvas) }
+#method .wrap{ position:relative; z-index:1 }
+
+/* ---- inset beside the evidence figure ---- */
+.scrubfig{ position:relative }
+.scrubfig__inset{
+  position:absolute; left:-46px; bottom:-38px; width:180px; height:230px;
+  margin:0; overflow:hidden; border-radius:var(--r); border:5px solid var(--canvas);
+  box-shadow:var(--shadow-xl); z-index:2;
+}
+.scrubfig__inset img{ width:100%; height:100%; object-fit:cover; display:block }
+
+/* ---- the orange statement, burned through a photograph ----
+   luminosity keeps the orange and takes only the light from the picture, so
+   the band stays one flat colour with a building inside it. */
+.band-quote{ position:relative; overflow:hidden }
+.band-quote__photo{ position:absolute; inset:0; pointer-events:none; opacity:.28 }
+.band-quote__photo img{ width:100%; height:100%; object-fit:cover; display:block;
+  mix-blend-mode:luminosity; filter:grayscale(1) contrast(1.2) }
+.band-quote .wrap{ position:relative; z-index:1 }
+
+/* ---- endcard ---- */
+.endspace img{ filter:saturate(1.06) contrast(1.04) }
+
+/* ================= scroll animation =================
+   Four entrances, chosen per element rather than applied uniformly:
+     default   rise from below
+     left      slide in from the left
+     clarify   blur out of focus into focus
+     clip      wipe upward, for photographs */
+[data-anim]{ --d:0ms }
+.rv{ opacity:0; transition:opacity 780ms cubic-bezier(.16,.7,.3,1) var(--d),
+     transform 780ms cubic-bezier(.16,.7,.3,1) var(--d),
+     filter 780ms cubic-bezier(.16,.7,.3,1) var(--d),
+     clip-path 900ms cubic-bezier(.16,.7,.3,1) var(--d) }
+.rv{ transform:translateY(18px) }
+.rv[data-anim="left"]{ transform:translateX(-42px) }
+.rv[data-anim="clarify"]{ transform:none; filter:blur(14px); opacity:0 }
+.rv[data-anim="clip"]{ transform:none; opacity:1; clip-path:inset(100% 0 0 0) }
+.rv.in{ opacity:1; transform:none; filter:none; clip-path:inset(0 0 0 0) }
+
+@media (max-width:1080px){
+  .offsetpair{ display:none }
+  .scrubfig__inset{ left:auto; right:-18px; bottom:-30px; width:140px; height:180px }
+}
+@media (max-width:720px){
+  .strip__row{ grid-template-columns:repeat(2,1fr) }
+  .strip__cell:nth-child(even){ transform:none }
+  .scrubfig__inset{ display:none }
+}
+@media (prefers-reduced-motion:reduce){
+  .rv{ opacity:1 !important; transform:none !important; filter:none !important;
+       clip-path:none !important }
+  .strip__cell:nth-child(even){ transform:none }
+}
+
+/* ================= entry motion ================= */
+.steps li:nth-child(2){ --d:80ms } .steps li:nth-child(3){ --d:160ms }
+.steps li:nth-child(4){ --d:240ms }
+.ticks li:nth-child(2){ --d:60ms } .ticks li:nth-child(3){ --d:120ms }
+.ticks li:nth-child(4){ --d:180ms }
+.figlist li:nth-child(2){ --d:80ms } .figlist li:nth-child(3){ --d:160ms }
+
+/* ================= responsive ================= */
+@media (max-width:1080px){
+  :root{ --pad:24px; --gap-section:56px }
+  .split{ grid-template-columns:minmax(0,1fr); gap:40px }
+  .steps{ grid-template-columns:repeat(2,minmax(0,1fr)) }
+  .p1,.p3,.p5{ opacity:.1 }
+}
+@media (max-width:720px){
+  :root{ --pad:20px }
+  .navlinks a:not(.btn){ display:none }
+  .hero{ min-height:auto; padding:120px 0 72px }
+  .steps,.figlist{ grid-template-columns:minmax(0,1fr) }
+  .endcard{ --cardx:24px; --cardtop:230px; padding:var(--cardtop) var(--cardx) 40px }
+  .foot .wrap{ flex-direction:column; gap:8px }
+  .plate{ display:none }
+  .plate.p6,.plate.p4{ display:block; opacity:.14 }
+}
+@media (prefers-reduced-motion:reduce){
+  html{ scroll-behavior:auto }
+  *{ animation:none !important; transition:none !important }
+  .space.lit .plate{ opacity:var(--o,.3) }
+  .sweep{ display:none }
+  body::after{ opacity:.35 }
+}
