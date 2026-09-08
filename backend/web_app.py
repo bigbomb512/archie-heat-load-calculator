@@ -66,6 +66,59 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store, max-age=0")
         super().end_headers()
 
+    def send_head(self):
+        # WebKit requires byte ranges to seek through a scroll-driven video.
+        self._video_bytes_remaining = None
+        path = Path(self.translate_path(self.path))
+        if path.suffix.lower() != ".mp4" or not path.is_file():
+            return super().send_head()
+
+        source = path.open("rb")
+        size = path.stat().st_size
+        start, end = 0, size - 1
+        range_header = self.headers.get("Range")
+        partial = False
+        # Ignore unsupported/malformed ranges; serve the full representation.
+        match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header or "")
+        if match and any(match.groups()):
+            first, last = match.groups()
+            if first:
+                start = int(first)
+                end = min(int(last), size - 1) if last else size - 1
+            else:
+                start = max(0, size - int(last))
+            if start >= size or end < start:
+                source.close()
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return None
+            partial = True
+
+        self.send_response(206 if partial else 200)
+        self.send_header("Content-Type", "video/mp4")
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(end - start + 1))
+        self.send_header("Last-Modified", self.date_time_string(path.stat().st_mtime))
+        if partial:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.end_headers()
+        source.seek(start)
+        self._video_bytes_remaining = end - start + 1
+        return source
+
+    def copyfile(self, source, outputfile):
+        remaining = getattr(self, "_video_bytes_remaining", None)
+        if remaining is None:
+            return super().copyfile(source, outputfile)
+        while remaining > 0:
+            chunk = source.read(min(64 * 1024, remaining))
+            if not chunk:
+                break
+            outputfile.write(chunk)
+            remaining -= len(chunk)
+
     def do_GET(self):
         if self.path == "/":
             return self.send_file(FRONTEND / "index.html", "text/html")
