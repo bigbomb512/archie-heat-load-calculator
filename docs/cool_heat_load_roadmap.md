@@ -33,6 +33,7 @@ The project now has a solid **V1 hourly cooling foundation**, but it is not yet 
 - Reports preserve hourly room/zone/floor components, sensible/latent values, subtotal, safety allowance, design total, included-scope peak, blocked rooms, readiness state and input timestamps. A project peak is shown only for review-ready complete scope.
 - The API persists isolated per-project artifacts and identifies stale models/reports after their source requirements change.
 - The parity adapter can expose complete-scope hourly components while deliberately retaining `final_parity_allowed: false`; it does not treat a draft subtotal as a project duty.
+- The evidence-to-calculator bridge creates source-backed, fingerprinted proposals and applies only explicit engineer decisions through a preview/conflict-controlled workflow. It does not approve evidence or fill missing calculation inputs.
 
 ### Not yet a supported calculation result
 
@@ -60,6 +61,12 @@ The project now has a solid **V1 hourly cooling foundation**, but it is not yet 
 | Coils/psychrometrics/fans/ducts | Partial | Outdoor-air psychrometric load and cooling safety factor | Coil, ADP/bypass, fans, ducts, heating safety |
 | Chiller/boiler/circuits/plant | Not started | None | System-to-plant aggregation and auxiliaries |
 | Validation/evidence/reporting | Partial | Evidence artifacts, staleness, tests and disabled parity gate | Authorised benchmarks, tolerance policy and engineer-facing issue pack |
+
+The bridge is complete for model entry: source evidence can be rebuilt, reviewed,
+saved, previewed and applied additively into the hourly topology, schedule and
+inactive envelope artifacts. Calculation-method work remains deliberately
+separate; detailed glazing, geometric shading, infiltration, transfer air,
+heating, AHU, plant, annual analysis and CAMEL+ validation are still excluded.
 
 Of the 14 calculation areas in the checklist, 12 have a deliberately limited foundation and 2 (system type/mapping and primary plant) have not started. “Partial” means the prerequisite data/evidence or a limited calculation is available; it does **not** mean the CAMEL+ capability is reproduced or ready for equipment selection.
 
@@ -109,7 +116,7 @@ The contracts are documented in [`site_design_conditions_api.md`](site_design_co
 - [ ] Create one engineer-reviewed sample project with cited schedules, design-day scenario and room overlay; keep it clearly labelled as a test/reference case, not a benchmark.
 - Add API-level validation/error examples for every blocked state so the future frontend can render actionable remediation.
 - Add regression coverage for artifact migration/versioning, stale-report causes and component reconciliation at room/zone/project level.
-- Produce a concise backend runbook covering artifact lifecycle: build model → review/save → calculate draft → complete scope → review-ready report.
+- [x] Produce a concise backend runbook covering artifact lifecycle: build model → review/save → calculate draft → complete scope → review-ready report. See [Cooling workflow runbook](cooling_workflow_runbook.md).
 
 **Exit criteria:** a repeatable test project can generate a current draft or review-ready cooling report, explain every result line and become stale predictably when a dependency changes.
 
@@ -124,7 +131,17 @@ The contracts are documented in [`site_design_conditions_api.md`](site_design_co
 - Add reviewed construction and opening references rather than free-text-only envelope fields. Preserve source/version and allow engineer overrides.
 - Define explicit readiness rules for each new non-zero component and block only the affected room/scenario with actionable reasons.
 
+The current schema already stores unsupported airflow and moisture/process
+components with room ownership, units, source, citations and explicit
+calculation status. The remaining data-only work is to finish component-level
+provenance for internal gains and strengthen construction/opening references;
+these records remain excluded from cooling totals.
+
 **Decisions required before calculation implementation:** approved calculation methods and units for infiltration, vapour/steam, transfer-air treatment and any diversity rules. No code rates or CAMEL defaults should be embedded without a separately approved source/basis.
+
+The infiltration decision record is documented in
+[`infiltration_method_gate.md`](infiltration_method_gate.md). Its status is
+not approved, so no infiltration calculation may be enabled.
 
 **Exit criteria:** every supported non-zero room load/airflow component has source, status, units, validation and report visibility; unsupported components remain explicit exclusions.
 
@@ -229,6 +246,12 @@ The contracts are documented in [`site_design_conditions_api.md`](site_design_co
 - Consider annual/month-by-month tables, graphs and shadow animation only as later milestones with their required calendar/weather/solar methods.
 
 **Exit criteria:** the UI cannot present stale/provisional/blocked data as final, and every issued document retains enough data to reproduce the result.
+
+The private drawing-case preparation tool and runbook are available, but the
+current local candidate remains review-required because its evidence packet has
+no resolved floor/room topology or complete supported internal-gain inputs. It
+must not be promoted to a review-ready result until a named reviewer resolves
+those gaps.
 
 ## Recommended next action
 

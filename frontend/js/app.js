@@ -8,6 +8,8 @@ function optionalElement(id){
   return document.getElementById(id);
 }
 let DATA = null, FILTER = "rel", PICK = new Set(), CUR = null, DEBUG = false, PACKET = null, ROOM_SUGGESTIONS = [];
+let CALCULATOR_DRAFT = null, DRAFT_PREVIEW_TOKEN = "", DRAFT_DIRTY = false;
+let ENVELOPE_LIBRARY = {constructions: [], windows: [], shading_records: []}, ENVELOPE_MODEL = {surfaces: []};
 
 /* ---- theme -------------------------------------------------------------
    Dark by default. A saved choice wins; otherwise follow the system. The
@@ -438,8 +440,9 @@ requiredElement("btnAddHeatSource").addEventListener("click", () => addHeatSourc
 requiredElement("btnAddZone").addEventListener("click", () => addZone());
 requiredElement("btnSaveRequirements").addEventListener("click", saveDesignRequirements);
 requiredElement("btnBuildThermalModel").addEventListener("click", () => saveThermalModel("build"));
-requiredElement("btnApplyThermalModel").addEventListener("click", () => saveThermalModel("save"));
 requiredElement("btnBuildCalculatorDraft").addEventListener("click", () => saveCalculatorDraft("build"));
+requiredElement("btnSaveCalculatorReview").addEventListener("click", () => saveCalculatorDraft("save_review"));
+requiredElement("btnPreviewCalculatorDraft").addEventListener("click", () => saveCalculatorDraft("preview_apply"));
 requiredElement("btnApplyCalculatorDraft").addEventListener("click", () => saveCalculatorDraft("apply"));
 requiredElement("btnCalculateVentilation").addEventListener("click", calculateVentilation);
 requiredElement("btnBuildHourlyModel").addEventListener("click", () => saveHourlyModel("build"));
@@ -956,30 +959,34 @@ function parseEnvelopeRecords(id, label){
 }
 
 function readEnvelope(){
+  const constructionById = new Map((ENVELOPE_LIBRARY.constructions || []).map(item => [item.record_id, item]));
+  const surfaceById = new Map((ENVELOPE_MODEL.surfaces || []).map(item => [item.surface_id, item]));
   return {
     envelope_library: {
-      constructions: [...document.querySelectorAll(".envelope-construction")].map(row => ({
+      constructions: [...document.querySelectorAll(".envelope-construction")].map(row => ({...(constructionById.get(row.querySelector(".env-id").value.trim()) || {}),
         record_id: row.querySelector(".env-id").value.trim(), title: row.querySelector(".env-title").value.trim(), revision: 1,
         kind: row.querySelector(".env-kind").value, u_value_w_m2k: blankToNull(row.querySelector(".env-u").value), absorptivity: blankToNull(row.querySelector(".env-abs").value),
-        review_status: row.querySelector(".env-status").value, source: row.querySelector(".env-source").value.trim(), citations: [],
+        review_status: row.querySelector(".env-status").value, source: row.querySelector(".env-source").value.trim(), citations: constructionById.get(row.querySelector(".env-id").value.trim())?.citations || [],
       })),
       windows: parseEnvelopeRecords("envelopeWindows", "Window records"), shading_records: parseEnvelopeRecords("envelopeShading", "Shading records"),
     },
     envelope_model: {
       active_for_calculation: requiredElement("envelopeActive").checked,
-      surfaces: [...document.querySelectorAll(".envelope-boundary")].map(row => ({
+      surfaces: [...document.querySelectorAll(".envelope-boundary")].map(row => ({...(surfaceById.get(row.querySelector(".boundary-id").value.trim()) || {}),
         surface_id: row.querySelector(".boundary-id").value.trim(), owner_zone_id: row.querySelector(".boundary-zone").value.trim(), owner_room_id: "",
         kind: row.querySelector(".boundary-kind").value, orientation: row.querySelector(".boundary-orientation").value,
         area_m2: blankToNull(row.querySelector(".boundary-area").value), construction_id: row.querySelector(".boundary-construction").value.trim(), window_id: "", shading_record_ids: [],
         boundary_method: row.querySelector(".boundary-method").value, adjacent_temperature_c: blankToNull(row.querySelector(".boundary-temp").value),
-        review_status: row.querySelector(".boundary-status").value, source: row.querySelector(".boundary-source").value.trim(), citations: [],
-        manual_solar: {enabled: row.querySelector(".boundary-solar-enabled").checked, solar_design_w_m2: blankToNull(row.querySelector(".boundary-solar-design").value), solar_gain_factor: blankToNull(row.querySelector(".boundary-solar-gain").value), shading_factor: blankToNull(row.querySelector(".boundary-solar-shade").value), review_status: row.querySelector(".boundary-solar-status").value, source: row.querySelector(".boundary-solar-source").value.trim(), citations: []},
+        review_status: row.querySelector(".boundary-status").value, source: row.querySelector(".boundary-source").value.trim(), citations: surfaceById.get(row.querySelector(".boundary-id").value.trim())?.citations || [],
+        manual_solar: {...(surfaceById.get(row.querySelector(".boundary-id").value.trim())?.manual_solar || {}), enabled: row.querySelector(".boundary-solar-enabled").checked, solar_design_w_m2: blankToNull(row.querySelector(".boundary-solar-design").value), solar_gain_factor: blankToNull(row.querySelector(".boundary-solar-gain").value), shading_factor: blankToNull(row.querySelector(".boundary-solar-shade").value), review_status: row.querySelector(".boundary-solar-status").value, source: row.querySelector(".boundary-solar-source").value.trim(), citations: surfaceById.get(row.querySelector(".boundary-id").value.trim())?.manual_solar?.citations || []},
       })),
     },
   };
 }
 
 function showEnvelope(library = {}, model = {}, readiness = {}){
+  ENVELOPE_LIBRARY = library;
+  ENVELOPE_MODEL = model;
   requiredElement("envelopeConstructions").innerHTML = "";
   (library.constructions || []).forEach(addEnvelopeConstruction);
   requiredElement("envelopeWindows").value = JSON.stringify(library.windows || [], null, 2);
@@ -1080,9 +1087,9 @@ function thermalDecisions(){
 
 async function saveThermalModel(action){
   if (!DATA?.id) return;
-  const button = action === "build" ? requiredElement("btnBuildThermalModel") : requiredElement("btnApplyThermalModel");
+  const button = requiredElement("btnBuildThermalModel");
   button.disabled = true;
-  requiredElement("thermalModelStatus").textContent = action === "build" ? "Building cited thermal-model draft…" : "Applying reviewed facts and refreshing reasoning packet…";
+  requiredElement("thermalModelStatus").textContent = "Building cited thermal-model draft…";
   try {
     const res = await fetch("/api/thermal-model", {
       method: "POST", headers: {"Content-Type": "application/json"},
@@ -1091,8 +1098,7 @@ async function saveThermalModel(action){
     const data = await res.json();
     if (!res.ok || data.error) throw new Error(data.error || "Could not save thermal model.");
     showThermalModel(data.thermal_evidence, data.thermal_model, data.thermal_evidence_url, data.thermal_model_url, data.drawing_coverage, data.drawing_coverage_url, data.building_evidence, data.building_evidence_url);
-    if (action === "save") showDesignRequirements(data.requirements, data.requirements_readiness || {}, [], {}, data.heat_load_status, {}, data.ventilation_status);
-    toast(action === "build" ? "Thermal model drafted" : "Reviewed facts applied", action === "build" ? "Direct evidence is pre-filled; review the listed exceptions." : "The reasoning packet was refreshed and earlier reports are stale.");
+    toast("Thermal model drafted", "Direct evidence is pre-filled; review the listed exceptions.");
   } catch (error) {
     requiredElement("thermalModelStatus").textContent = "Could not update thermal model.";
     toast("Thermal model failed", error.message);
@@ -1110,6 +1116,9 @@ async function loadCalculatorDraft(){
 }
 
 function showCalculatorDraft(draft = {}, artifactUrl = ""){
+  CALCULATOR_DRAFT = draft;
+  DRAFT_PREVIEW_TOKEN = "";
+  DRAFT_DIRTY = false;
   const groups = [
     ["floors", "Floors and drawing coverage"], ["zones", "Zones and rooms"], ["rooms", "Zones and rooms"],
     ["room_inputs", "Directly supported room inputs"], ["schedules", "Schedules"], ["envelope", "Envelope and opening candidates"],
@@ -1122,7 +1131,7 @@ function showCalculatorDraft(draft = {}, artifactUrl = ""){
   }).join("");
   requiredElement("calculatorDraftCandidates").innerHTML = rendered || (draft.status === "not_built" ? "" : `<article class="review-empty"><b>No source-backed calculator candidates found</b><span>Missing data stays in the review queue; Archie has not guessed any records.</span></article>`);
   const reviewItems = draft.review_items || [];
-  requiredElement("calculatorDraftReviewItems").innerHTML = reviewItems.map(item => `<article class="review-item draft-review"><div><b>${esc(item.scope || "Review")} · ${esc(item.affected_id || "project")}</b><span>${esc(item.reason || item.question || "Evidence required.")}</span><small>${citationText(item.citations)}</small></div><label>Decision <select class="calculator-draft-decision" data-candidate="${esc(item.item_id)}"><option value="pending">Keep open</option><option value="needs_evidence">Needs evidence</option><option value="reject">Reject</option></select></label></article>`).join("");
+  requiredElement("calculatorDraftReviewItems").innerHTML = reviewItems.map(item => calculatorDraftReviewMarkup(item, decisions[item.item_id] || {})).join("");
   const summary = draft.apply_summary || {};
   const counts = [
     summary.created?.length && `${summary.created.length} created`,
@@ -1130,16 +1139,30 @@ function showCalculatorDraft(draft = {}, artifactUrl = ""){
     summary.skipped_conflicts?.length && `${summary.skipped_conflicts.length} conflict${summary.skipped_conflicts.length === 1 ? "" : "s"} skipped`,
     summary.unresolved?.length && `${summary.unresolved.length} unresolved`,
   ].filter(Boolean).join(" · ");
-  requiredElement("calculatorDraftSummary").innerHTML = (counts || artifactUrl) ? `<article class="review-item"><div><b>Draft status</b><span>${esc(counts || "No accepted proposals have been applied.")}</span></div>${artifactUrl ? `<a class="btn ghost mini" href="${esc(artifactUrl)}" target="_blank" rel="noopener">Open draft JSON</a>` : ""}</article>` : "";
+  const receipt = summary.reports_marked_stale?.length ? ` Reports stale: ${summary.reports_marked_stale.join(", ")}.` : "";
+  requiredElement("calculatorDraftSummary").innerHTML = (counts || artifactUrl || receipt) ? `<article class="review-item"><div><b>Application summary</b><span>${esc((counts || "No reviewed changes applied.") + receipt)}</span></div>${artifactUrl ? `<a class="btn ghost mini" href="${esc(artifactUrl)}" target="_blank" rel="noopener">Open draft JSON</a>` : ""}</article>` : "";
   requiredElement("calculatorDraftStatus").textContent = draft.status === "not_built" || !draft.status
     ? "Build a proposal queue after the thermal model and drawing evidence are ready."
-    : `${draft.status} · ${(Object.values(draft.candidates || {}).flat()).length} source-backed proposals · ${reviewItems.length} items needing review`;
+    : `${draft.status} · ${(Object.values(draft.candidates || {}).flat()).length} source-backed proposals · ${reviewItems.length} items needing review${DRAFT_DIRTY ? " · unsaved review" : ""}`;
+  document.querySelectorAll(".calculator-draft-decision, .calculator-draft-field, .calculator-draft-review-field").forEach(control => control.addEventListener("change", () => { DRAFT_DIRTY = true; DRAFT_PREVIEW_TOKEN = ""; }));
+  document.querySelectorAll(".calculator-draft-field, .calculator-draft-review-field").forEach(control => control.addEventListener("input", () => { DRAFT_DIRTY = true; DRAFT_PREVIEW_TOKEN = ""; }));
 }
 
 function calculatorDraftCandidateMarkup(item, savedDecision){
   const action = savedDecision.decision || "pending";
   const value = savedDecision.value || item.value || {};
-  return `<article class="review-item draft-candidate" data-candidate="${esc(item.candidate_id)}"><div><b>${esc(item.kind)} · ${esc(item.candidate_id)}</b><span>${esc(item.reason || "Source-backed proposal")}</span><small>${citationText(item.citations)} · confidence ${esc(item.confidence || "unknown")} · target ${esc(item.target_artifact || "")}</small><details><summary>Review/edit proposed record</summary><textarea class="calculator-draft-value" spellcheck="false">${esc(JSON.stringify(value, null, 2))}</textarea></details></div><label>Decision <select class="calculator-draft-decision" data-candidate="${esc(item.candidate_id)}"><option value="pending">Pending review</option><option value="accept">Accept</option><option value="edit">Edit</option><option value="reject">Reject</option><option value="needs_evidence">Needs evidence</option></select></label></article>`;
+  const fields = Object.entries(value).filter(([key]) => !["citations", "day_profiles"].includes(key)).map(([key, raw]) => {
+    const input = typeof raw === "number" ? `<input class="calculator-draft-field" data-field="${esc(key)}" type="number" step="any" value="${raw}">` : `<input class="calculator-draft-field" data-field="${esc(key)}" value="${esc(raw ?? "")}">`;
+    return `<label>${esc(key)}${input}</label>`;
+  }).join("");
+  const profiles = value.day_profiles ? `<label>Day profiles (24-hour JSON, edit only when fully cited)<textarea class="calculator-draft-json-field" data-field="day_profiles" spellcheck="false">${esc(JSON.stringify(value.day_profiles, null, 2))}</textarea></label>` : "";
+  const citation = item.citations?.[0] || {};
+  return `<article class="review-item draft-candidate" data-candidate="${esc(item.candidate_id)}"><div><b>${esc(item.kind)} · ${esc(item.candidate_id)}</b><span>${esc(item.reason || "Source-backed proposal")}</span><small>${citationText(item.citations)} · confidence ${esc(item.confidence || "unknown")} · target ${esc(item.target_artifact || "")}</small><details><summary>Review fields and evidence</summary><div class="draft-fields">${fields}${profiles}<label>Engineer review source<input class="calculator-draft-review-field" data-field="source" placeholder="Reviewer, calculation note, or marked-up drawing"></label><label>Reviewer<input class="calculator-draft-review-field" data-field="reviewer" placeholder="Name / initials"></label><label>Review citation reference<input class="calculator-draft-review-field" data-field="citation_reference" value="${esc(citation.reference || "")}"></label><label>Review excerpt<textarea class="calculator-draft-review-field" data-field="citation_excerpt">${esc(citation.excerpt || "")}</textarea></label></div></details></div><label>Decision <select class="calculator-draft-decision" data-candidate="${esc(item.candidate_id)}"><option value="pending" ${action === "pending" ? "selected" : ""}>Pending review</option><option value="accept" ${action === "accept" ? "selected" : ""}>Accept</option><option value="edit" ${action === "edit" ? "selected" : ""}>Edit</option><option value="reject" ${action === "reject" ? "selected" : ""}>Reject</option><option value="needs_evidence" ${action === "needs_evidence" ? "selected" : ""}>Needs evidence</option></select></label></article>`;
+}
+
+function calculatorDraftReviewMarkup(item, savedDecision){
+  const action = savedDecision.decision || "pending";
+  return `<article class="review-item draft-review"><div><b>${esc(item.scope || "Review")} · ${esc(item.affected_id || "project")}</b><span>${esc(item.reason || item.question || "Evidence required.")}</span><small>${citationText(item.citations)} · source ${esc(item.source || "")}</small></div><label>Decision <select class="calculator-draft-decision" data-candidate="${esc(item.item_id)}"><option value="pending" ${action === "pending" ? "selected" : ""}>Keep open</option><option value="accept" ${action === "accept" ? "selected" : ""}>Acknowledge</option><option value="needs_evidence" ${action === "needs_evidence" ? "selected" : ""}>Needs evidence</option><option value="reject" ${action === "reject" ? "selected" : ""}>Reject</option></select></label><input class="calculator-draft-review-field" data-reviewer-for="${esc(item.item_id)}" placeholder="Reviewer / note" value="${esc(savedDecision.reviewer || "")}"></article>`;
 }
 
 function citationText(citations = []){
@@ -1155,11 +1178,25 @@ function calculatorDraftDecisions(){
     if (action === "pending") return;
     const row = select.closest(".draft-candidate");
     const decision = {decision: action};
+    const reviewer = row?.querySelector('[data-field="reviewer"]')?.value.trim() || row?.querySelector(`[data-reviewer-for="${CSS.escape(candidateId)}"]`)?.value.trim() || "";
+    if (reviewer) decision.reviewer = reviewer;
     if (action === "edit") {
-      const textarea = row?.querySelector(".calculator-draft-value");
-      try { decision.value = JSON.parse(textarea?.value || "{}"); }
-      catch (_) { throw new Error(`Edited proposal ${candidateId} must be valid JSON.`); }
+      const original = (CALCULATOR_DRAFT?.candidates ? Object.values(CALCULATOR_DRAFT.candidates).flat().find(item => item.candidate_id === candidateId)?.value : {}) || {};
+      decision.value = structuredClone(original);
+      row?.querySelectorAll(".calculator-draft-field, .calculator-draft-json-field").forEach(input => {
+        let value = input.value;
+        if (input.type === "number") value = value === "" ? null : Number(value);
+        if (input.dataset.field === "day_profiles") {
+          try { value = JSON.parse(value); } catch (_) { throw new Error(`Edited proposal ${candidateId} has invalid day profiles JSON.`); }
+        }
+        decision.value[input.dataset.field] = value;
+      });
     }
+    const source = row?.querySelector('[data-field="source"]')?.value.trim();
+    const reference = row?.querySelector('[data-field="citation_reference"]')?.value.trim();
+    const excerpt = row?.querySelector('[data-field="citation_excerpt"]')?.value.trim();
+    if (source) decision.source = source;
+    if (reference || excerpt) decision.citations = [{reference: reference || "Engineer review", page: null, excerpt: excerpt || ""}];
     decisions[candidateId] = decision;
   });
   return decisions;
@@ -1167,19 +1204,31 @@ function calculatorDraftDecisions(){
 
 async function saveCalculatorDraft(action){
   if (!DATA?.id) return;
-  const button = action === "build" ? requiredElement("btnBuildCalculatorDraft") : requiredElement("btnApplyCalculatorDraft");
+  if (action === "apply" && !DRAFT_PREVIEW_TOKEN) return toast("Preview required", "Save the review, then preview changes before applying them.");
+  const button = action === "build" ? requiredElement("btnBuildCalculatorDraft") : action === "save_review" ? requiredElement("btnSaveCalculatorReview") : action === "preview_apply" ? requiredElement("btnPreviewCalculatorDraft") : requiredElement("btnApplyCalculatorDraft");
   button.disabled = true;
-  requiredElement("calculatorDraftStatus").textContent = action === "build" ? "Building a source-backed calculator proposal queue…" : "Applying accepted proposals without overwriting authored records…";
+  requiredElement("calculatorDraftStatus").textContent = action === "build" ? "Building a source-backed calculator proposal queue…" : action === "save_review" ? "Saving engineer decisions without changing calculator artifacts…" : action === "preview_apply" ? "Previewing reviewed changes and conflicts…" : "Applying reviewed proposals without overwriting authored records…";
   try {
     const payload = {project_id: DATA.id, action};
-    if (action === "apply") payload.decisions = calculatorDraftDecisions();
+    if (action === "save_review" || action === "preview_apply") {
+      if (action === "preview_apply" && DRAFT_DIRTY) throw new Error("Save the review before previewing changes.");
+      if (action === "save_review") { payload.expected_revision = CALCULATOR_DRAFT?.revision; payload.decisions = calculatorDraftDecisions(); }
+    }
+    if (action === "preview_apply" || action === "apply") { payload.expected_revision = CALCULATOR_DRAFT?.revision; if (action === "apply") payload.preview_token = DRAFT_PREVIEW_TOKEN; }
     const res = await fetch("/api/calculator-draft", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)});
     const data = await res.json();
     if (!res.ok || data.error) throw new Error(data.error || "Could not update calculator draft.");
-    showCalculatorDraft(data.calculator_draft || {}, data.artifact_url || data.artifact_links?.calculator_draft || "");
+    const displayDraft = {...(data.calculator_draft || {})};
+    if (data.preview || data.apply_summary) displayDraft.apply_summary = data.preview || data.apply_summary;
+    showCalculatorDraft(displayDraft, data.artifact_url || data.artifact_links?.calculator_draft || "");
+    if (action === "preview_apply") DRAFT_PREVIEW_TOKEN = data.preview_token || "";
     if (action === "apply") {
       await Promise.all([loadHourlyModel(), loadEnvelope(), loadHourlyLoadReport()]);
       toast("Accepted proposals applied", `${data.apply_summary?.created?.length || 0} records created; conflicts and unresolved evidence remain visible.`);
+    } else if (action === "save_review") {
+      toast("Review saved", "Calculator artifacts were not changed. Preview before applying.");
+    } else if (action === "preview_apply") {
+      toast("Changes previewed", "Review conflicts and missing dependencies before applying.");
     } else {
       toast("Calculator draft built", "No calculator artifacts or cooling results were changed.");
     }
@@ -1375,12 +1424,14 @@ function drawRoomInputCoverage(model = {}){
 }
 
 function readHourlyModel(){
-  const floors = [...requiredElement("hourlyFloors").querySelectorAll(".hierarchy-row")].map(row => ({
+  const floorsById = new Map((HOURLY_MODEL.floors || []).map(item => [item.floor_id, item]));
+  const zonesById = new Map((HOURLY_MODEL.zones || []).map(item => [item.zone_id, item]));
+  const floors = [...requiredElement("hourlyFloors").querySelectorAll(".hierarchy-row")].map(row => ({...(floorsById.get(row.querySelector(".hourly-floor-id").value.trim()) || {}),
     floor_id: row.querySelector(".hourly-floor-id").value.trim(), name: row.querySelector(".hourly-floor-name").value.trim(),
     elevation_m: blankToNull(row.querySelector(".hourly-floor-elevation").value), verification_status: row.querySelector(".hourly-floor-status").value,
     source: row.querySelector(".hourly-floor-source").value.trim(), citations: [],
   }));
-  const zones = [...requiredElement("hourlyZones").querySelectorAll(".hierarchy-row")].map(row => ({
+  const zones = [...requiredElement("hourlyZones").querySelectorAll(".hierarchy-row")].map(row => ({...(zonesById.get(row.querySelector(".hourly-zone-id").value.trim()) || {}),
     zone_id: row.querySelector(".hourly-zone-id").value.trim(), name: row.querySelector(".hourly-zone-name").value.trim(), floor_id: row.querySelector(".hourly-zone-floor").value.trim(),
     verification_status: row.querySelector(".hourly-zone-status").value, source: row.querySelector(".hourly-zone-source").value.trim(), citations: [],
   }));
@@ -1420,7 +1471,7 @@ function readHourlyModel(){
     return {
       ...existing, room_id: roomId, name: row.querySelector(".hourly-room-name").value.trim(), zone_id: row.querySelector(".hourly-room-zone").value.trim(),
       mapping_status: row.querySelector(".hourly-room-mapping").value, verification_status: row.querySelector(".hourly-room-status").value,
-      source: row.querySelector(".hourly-room-source").value.trim(), citations: [],
+      source: row.querySelector(".hourly-room-source").value.trim(), citations: existing.citations || [],
       area_m2: blankToNull(card.querySelector(".room-area").value), occupancy: blankToNull(card.querySelector(".room-occupancy").value),
       indoor_cooling_setpoint_c: blankToNull(card.querySelector(".room-setpoint").value), cooling_load: load, cooling_load_conditions: conditions,
       schedule_assignments: {...(existing.schedule_assignments || {}), people: card.querySelector(".room-people-schedule").value.trim(), lighting: card.querySelector(".room-lighting-schedule").value.trim(), outside_air: card.querySelector(".room-outside-air-schedule").value.trim()},

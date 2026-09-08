@@ -176,14 +176,14 @@
           <p class="fine">Designer-provided inputs are separate from architect drawing evidence. Confirmed inputs can support final engineering; provisional inputs support a preliminary brief only.</p>
           <div class="panel-head"><div><div class="micro">Thermal model</div><h3>Draft model from drawing evidence</h3></div><button class="btn ghost mini" id="btnBuildThermalModel" type="button">Build draft model</button></div>
           <p class="fine">Direct drawing facts are pre-filled. Review only the exceptions before sending the approved facts into Design Inputs.</p>
-          <div class="bar"><span class="conf" id="thermalModelStatus">Build a draft thermal model from the reviewed drawing packet.</span><button class="btn key" id="btnApplyThermalModel" type="button">Apply reviewed facts</button></div>
+          <div class="bar"><span class="conf" id="thermalModelStatus">Build a draft thermal model from the reviewed drawing packet.</span></div>
           <div class="review-list" id="thermalFacts"></div>
           <div class="review-list" id="thermalReviewItems"></div>
           <div class="review-list" id="thermalModelLinks"></div>
           <section class="calculator-draft-panel" aria-labelledby="calculatorDraftHeading">
             <div class="panel-head"><div><div class="micro">Evidence-to-calculator bridge</div><h3 id="calculatorDraftHeading">Evidence-to-Calculator Draft</h3></div><button class="btn ghost mini" id="btnBuildCalculatorDraft" type="button">Build calculator draft</button></div>
             <p class="fine">This turns reviewed drawing evidence into cited proposals only. It does not calculate a load, invent missing inputs, or change the hourly model until an engineer accepts a proposal.</p>
-            <div class="bar"><span class="conf" id="calculatorDraftStatus">Build a proposal queue after the thermal model and drawing evidence are ready.</span><button class="btn key" id="btnApplyCalculatorDraft" type="button">Apply accepted proposals</button></div>
+            <div class="bar"><span class="conf" id="calculatorDraftStatus">Build a proposal queue after the thermal model and drawing evidence are ready.</span><span class="draft-actions"><button class="btn ghost mini" id="btnSaveCalculatorReview" type="button">Save review</button><button class="btn ghost mini" id="btnPreviewCalculatorDraft" type="button">Preview changes</button><button class="btn key" id="btnApplyCalculatorDraft" type="button">Apply reviewed changes</button></span></div>
             <div class="review-list" id="calculatorDraftCandidates"></div>
             <div class="review-list" id="calculatorDraftReviewItems"></div>
             <div class="review-list" id="calculatorDraftSummary"></div>

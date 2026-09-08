@@ -97,6 +97,7 @@ def validate_schedule(raw, index):
     result = {
         "schedule_id": schedule_id,
         "title": text(raw.get("title", ""), f"Schedule {schedule_id} title"),
+        "bridge_provenance": deepcopy(raw.get("bridge_provenance", {})),
         "description": text(raw.get("description", ""), f"Schedule {schedule_id} description"),
         "status": status,
         "source": text(raw.get("source", ""), f"Schedule {schedule_id} source"),
@@ -414,6 +415,7 @@ def validate_floor(raw, index):
         raise ValueError(f"Floor {floor_id} needs a name.")
     return {
         "floor_id": floor_id, "name": name,
+        "bridge_provenance": deepcopy(raw.get("bridge_provenance", {})),
         "elevation_m": optional_number(raw.get("elevation_m"), f"Floor {floor_id} elevation", -10000, 10000),
         "verification_status": status, "source": source,
         "citations": validate_citations(raw.get("citations", []), f"Floor {floor_id}"),
@@ -436,6 +438,7 @@ def validate_model_zone(raw, index):
         raise ValueError(f"Zone {zone_id} needs a name.")
     return {
         "zone_id": zone_id, "name": name, "floor_id": floor_id,
+        "bridge_provenance": deepcopy(raw.get("bridge_provenance", {})),
         "verification_status": status, "source": source,
         "citations": validate_citations(raw.get("citations", []), f"Zone {zone_id}"),
     }
@@ -473,6 +476,8 @@ def validate_room(raw, index):
     return {
         "room_id": room_id,
         "name": name,
+        "bridge_provenance": deepcopy(raw.get("bridge_provenance", {})),
+        "ceiling_height_mm": optional_number(raw.get("ceiling_height_mm"), f"Room {room_id} ceiling height", 1, 1000000),
         "zone_id": zone_id,
         "source_zone_id": text(raw.get("source_zone_id", ""), f"Room {room_id} source zone ID"),
         "mapping_status": mapping_status,

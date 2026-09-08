@@ -7,10 +7,10 @@
   "scripts": {
     "dev": "cd .. && python3 -m backend.web_app --port 8000",
     "start": "cd .. && python3 -m backend.web_app --port 8000",
-    "test:python": "cd .. && for test in tests/test_*.py; do [ \"$test\" = \"tests/test_frontend_contract.py\" ] || python3 \"$test\" || exit 1; done",
-    "test:contract": "cd .. && python3 tests/test_frontend_contract.py",
+    "test:python": "cd .. && for test in tests/test_*.py; do [ \"$test\" = \"tests/test_frontend_contract.py\" ] || PYTHONPATH=. python3 \"$test\" || exit 1; done",
+    "test:contract": "cd .. && PYTHONPATH=. python3 tests/test_frontend_contract.py",
     "test:frontend": "playwright test",
-    "test": "cd .. && for test in tests/test_*.py; do [ \"$test\" = \"tests/test_frontend_contract.py\" ] || python3 \"$test\" || exit 1; done && python3 tests/test_frontend_contract.py && cd frontend && playwright test"
+    "test": "cd .. && for test in tests/test_*.py; do [ \"$test\" = \"tests/test_frontend_contract.py\" ] || PYTHONPATH=. python3 \"$test\" || exit 1; done && PYTHONPATH=. python3 tests/test_frontend_contract.py && cd frontend && playwright test"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1"
