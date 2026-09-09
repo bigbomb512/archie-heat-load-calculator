@@ -9,7 +9,11 @@ from copy import deepcopy
 import hashlib
 import json
 
-from ai.hourly_loads import validate_hourly_load_model, validate_schedule_library, validate_design_day_scenarios
+from ai.hourly_loads import (
+    validate_hourly_load_model, validate_schedule_library, validate_design_day_scenarios,
+    room_static_missing, scenario_ready,
+)
+from ai.research_cache import validate_cache, eligible_records
 
 
 def _fingerprint(value):
@@ -23,6 +27,7 @@ def assemble_calculator_inputs(hourly_model, schedule_library, scenarios, select
     scenario_library = validate_design_day_scenarios(scenarios)
     selected = selected_scenario_ids or [row["scenario_id"] for row in scenario_library["scenarios"] if row.get("mode") == "cooling"]
     scenario_ids = {row["scenario_id"] for row in scenario_library["scenarios"]}
+    research_cache = validate_cache(research_cache or {"schema_version": 1, "revision": 0, "records": []})
     issues, included, excluded = [], [], []
     floor_ids = {row["floor_id"] for row in model["floors"]}
     zone_map = {row["zone_id"]: row for row in model["zones"]}
@@ -34,13 +39,7 @@ def assemble_calculator_inputs(hourly_model, schedule_library, scenarios, select
             issues.append({"status": "blocked", "affected_id": room_id, "reason": "Room has no valid floor/zone mapping.", "source_artifact": "hourly_load_model.json"})
             excluded.append(room_id)
             continue
-        room_issues = []
-        if room.get("area_m2") is None or room.get("area_m2") <= 0:
-            room_issues.append("positive room area is required")
-        if room.get("occupancy") is None:
-            room_issues.append("occupancy is required")
-        if not room.get("heat_sources"):
-            room_issues.append("supported lighting/equipment inputs are required")
+        room_issues = room_static_missing(room)
         assignments = room.get("schedule_assignments", {})
         for assignment in assignments.values() if isinstance(assignments, dict) else []:
             schedule_id = assignment.get("schedule_id") if isinstance(assignment, dict) else assignment
@@ -52,9 +51,16 @@ def assemble_calculator_inputs(hourly_model, schedule_library, scenarios, select
             (included if status == "draft" else excluded).append(room_id)
         else:
             included.append(room_id)
+    selected_scenarios = {row["scenario_id"]: row for row in scenario_library["scenarios"]}
     for scenario_id in selected:
         if scenario_id not in scenario_ids:
             issues.append({"status": "blocked", "affected_id": scenario_id, "reason": "Selected scenario is missing.", "source_artifact": "design_day_scenarios.json"})
+        else:
+            missing, provisional = scenario_ready(selected_scenarios[scenario_id])
+            for reason in missing:
+                issues.append({"status": "blocked", "affected_id": scenario_id, "reason": reason, "source_artifact": "design_day_scenarios.json"})
+            if provisional:
+                issues.append({"status": "draft", "affected_id": scenario_id, "reason": "Selected design-day scenario contains provisional inputs.", "source_artifact": "design_day_scenarios.json"})
     if not selected:
         issues.append({"status": "blocked", "affected_id": "project", "reason": "No cooling design scenario is selected.", "source_artifact": "design_day_scenarios.json"})
     if not model["rooms"]:
@@ -71,6 +77,11 @@ def assemble_calculator_inputs(hourly_model, schedule_library, scenarios, select
             "research_cache": {"fingerprint": (research_cache or {}).get("fingerprint", "")},
             "envelope": {"fingerprint": (envelope or {}).get("fingerprint", "")},
         },
+        "research_defaults_available": [
+            {"record_id": row["record_id"], "category": row["category"], "value": row["value"],
+             "unit": row["unit"], "citation": row["citation"], "scope": row["scope"]}
+            for row in research_cache["records"] if row.get("review_status") == "approved"
+        ],
         "excluded_components": ["unresolved or unsupported inputs remain excluded until their approved calculation method exists"],
     }
     result["input_fingerprint"] = _fingerprint(result)

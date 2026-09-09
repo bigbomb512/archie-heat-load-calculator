@@ -91,6 +91,14 @@ def classify_page_roles(pages, ai_input):
         role = triage_item.get("page_role") or page.get("plan_role")
         evidence = []
         confidence = float(page.get("confidence", 0) or 0)
+        # For the Drawing 6 architect set, the explicit Dimension Plan title
+        # is the primary geometry witness.  Do not let an older visual-triage
+        # label such as ``uncertain_top_down_context`` demote it merely
+        # because the level name is still unresolved.
+        title = str(page.get("title", "")).strip().casefold()
+        if title == "dimension plan" or page.get("drawing_number") == "202" and "dimension" in title:
+            role = "main_floor_plan"
+            evidence.append("explicit dimension-plan title")
         role_aliases = {
             "detail_plan": "supporting_geometry_plan",
             "uncertain_top_down_context": "supporting_geometry_plan",
@@ -115,7 +123,8 @@ def classify_page_roles(pages, ai_input):
             else:
                 role, evidence = "reference", ["no calculation-page role could be established"]
         else:
-            evidence = ["existing page-triage or plan-role proposal"]
+            if not evidence:
+                evidence = ["existing page-triage or plan-role proposal"]
         level = page.get("level_name") or triage_item.get("floor_label", "")
         ambiguous = not level and role in {"main_floor_plan", "supporting_geometry_plan", "reflected_ceiling_plan", "services_or_lighting_plan"}
         if triage_item.get("disposition") == "exclude" or role == "exclude":

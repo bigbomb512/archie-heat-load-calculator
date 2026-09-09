@@ -83,6 +83,13 @@ def build_evidence_fusion(ai_input, coverage=None, building=None, spatial_ocr=No
         for item in building.get(family, []):
             citation = _citation(item, page_map)
             page = citation.get("page")
+            # ``drawing_coverage`` creates an explicit ``Unassigned level``
+            # placeholder when no sheet carries a reliable level identity.
+            # Keep that state in the review queue, but do not turn the
+            # synthetic placeholder into a source-backed floor fact.  The
+            # fact registry is intentionally strict about provenance.
+            if kind == "floor" and not citation.get("page") and not citation.get("reference"):
+                continue
             label = item.get("name") or item.get("tag") or item.get("reference") or item.get("kind") or item.get("id")
             entity = {
                 "entity_id": _stable_id(fp, page, citation.get("drawing_number"), item.get("level_name"), label, item.get("geometry_reference", "")),
@@ -117,6 +124,19 @@ def build_evidence_fusion(ai_input, coverage=None, building=None, spatial_ocr=No
                                   "kind": "same_drawing_number", "status": "proposed"})
 
     review_items = []
+    for level in building.get("levels", []):
+        evidence = level.get("evidence") or []
+        if not any(row.get("page") or row.get("reference") for row in evidence if isinstance(row, dict)):
+            review_items.append({
+                "item_id": "fusion_issue_" + _fingerprint(["floor_identity", level.get("id", "unassigned")])[:16],
+                "affected_id": level.get("id", "unassigned"),
+                "status": "blocked",
+                "field": "floor",
+                "source_artifact": "building_evidence.json",
+                "page": None,
+                "reason": "No architect page provides a reliable floor identity for this coverage group.",
+                "remediation": "Link a dimensioned plan, elevation, or section that names the level before activating a floor.",
+            })
     for entity in entities:
         value = entity["value"]
         if entity["kind"] == "room":

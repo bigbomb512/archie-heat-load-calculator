@@ -148,6 +148,32 @@ REFERENCE_RULES = [
         "support_words": ["heat", "exhaust", "fridge", "dishwasher", "cooking", "hood", "diffuser", "grille"],
     },
     {
+        "type": "material_or_finish_schedule",
+        "importance": "reference",
+        "packet_role": "material_and_construction_context",
+        "title_words": [
+            "material schedule",
+            "finish schedule",
+            "schedule of finishes",
+            "material and finishes",
+        ],
+        "support_words": ["finish", "colour", "color", "supplier", "tile", "paint", "laminate", "glazing"],
+    },
+    {
+        "type": "architect_lighting_plan",
+        "importance": "reference",
+        "packet_role": "lighting_and_ceiling_context",
+        "title_words": ["service plan - lighting", "lighting plan", "ceiling service plan"],
+        "support_words": ["downlight", "track light", "ceiling light", "lighting strip", "luminaire"],
+    },
+    {
+        "type": "architect_electrical_plan",
+        "importance": "reference",
+        "packet_role": "architect_electrical_context",
+        "title_words": ["service plan - electrical", "service plan - electricity", "electrical plan", "service plan - power"],
+        "support_words": ["gpo", "power", "data point", "electrical distribution board"],
+    },
+    {
         "type": "bca_or_ventilation_notes",
         "importance": "reference",
         "packet_role": "code_or_ventilation_note_context",
@@ -157,6 +183,16 @@ REFERENCE_RULES = [
 ]
 
 KNOWN_TITLES = [
+    "Dimension Plan",
+    "Floor Finish Plan",
+    "Material Schedule",
+    "Service Plan - Lighting",
+    "Service Plan - Electrical",
+    "Service Plan - Electricity",
+    "Reflective Ceiling Plan",
+    "Internal Elevation",
+    "Shopfront Elevation",
+    "Construction Detail",
     "Reflected Ceiling Plan",
     "General Arrangement Plan",
     "Shop Floor Plan",

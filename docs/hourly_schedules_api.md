@@ -64,6 +64,21 @@ The schedule semantic is a generic load fraction. Assign it explicitly to people
 
 ## Hourly room model
 
+## Calculator input assembly and scoped defaults
+
+`GET /api/calculator-inputs?project_id=...` returns a deterministic input-set
+readiness record without writing calculator artifacts. It lists active and
+excluded rooms, missing inputs, source fingerprints, approved research records,
+and the evidence-fusion/research artifacts used for the assessment. It never
+turns an unapproved or out-of-scope research record into a calculation input.
+
+`POST /api/calculator-inputs` with `action: "save_research_record"` adds one
+validated, cited record to the project-local `research_cache.json`. The cache
+is versioned and calculations use only records marked `approved`, unexpired,
+and matching the requested project scope. Updating the cache changes the report
+input fingerprint, so an existing report becomes stale rather than silently
+remaining current.
+
 `GET /api/hourly-load-model?project_id=...` retrieves `hourly_load_model.json`.
 
 `POST /api/hourly-load-model` supports two actions:

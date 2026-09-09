@@ -19,8 +19,8 @@
     "python": ">=3.9"
   },
   "_note": [
-    "The frontend has no build step and no npm dependencies — index.html, css/ and js/",
-    "are served as-is. This file exists so tooling that expects a package.json can find",
+    "The frontend has no build step or runtime npm dependency — index.html, css/ and js/",
+    "are served as-is. Playwright is a development dependency for browser tests. This file exists so tooling that expects a package.json can find",
     "one, and so `npm run dev` starts the app.",
     "",
     "The app is NOT a static site. It needs the Python backend for /api/upload,",

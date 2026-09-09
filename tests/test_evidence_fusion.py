@@ -44,6 +44,12 @@ class EvidenceFusionTests(unittest.TestCase):
         self.assertEqual({x["entity_id"] for x in first["entities"]}, {x["entity_id"] for x in second["entities"]})
         self.assertEqual(first["fingerprint"], second["fingerprint"])
 
+    def test_unassigned_coverage_placeholder_is_review_item_not_fact(self):
+        building = {"levels": [{"id": "level-unassigned_level", "name": "Unassigned level", "evidence": []}]}
+        fusion = build_evidence_fusion(self.ai, self.coverage, building)
+        self.assertFalse(any(fact.get("category") == "floor" for fact in fusion["facts"]))
+        self.assertTrue(any(item["affected_id"] == "level-unassigned_level" for item in fusion["review_items"]))
+
 
 if __name__ == "__main__":
     unittest.main()

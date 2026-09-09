@@ -51,6 +51,8 @@ def validate_record(record):
         raise ValueError("Unsupported research category: " + str(record["category"]))
     if record["review_status"] not in REVIEW_STATUSES:
         raise ValueError("Invalid research review status.")
+    if record["review_status"] == "approved" and not str(record.get("reviewed_by", "")).strip():
+        raise ValueError("Approved research records require reviewed_by.")
     if not _parse_time(record["retrieved_at"]):
         raise ValueError("Research retrieved_at must be an ISO timestamp.")
     if record["expiry"] and not _parse_time(record["expiry"]):
@@ -83,7 +85,7 @@ def eligible_records(cache, category, scope=None, now=None):
         if expiry and expiry <= now:
             continue
         record_scope = record.get("scope") or {}
-        if any(scope.get(key) is not None and record_scope.get(key) not in (None, scope.get(key)) for key in scope):
+        if any(scope.get(key) is not None and record_scope.get(key) != scope.get(key) for key in scope):
             continue
         eligible.append(record)
     return eligible

@@ -31,6 +31,20 @@ def main():
     check("zone preserves building evidence ids", thermal["zones"][0]["building_evidence_ids"])
     check("approved adapter keeps a calculation zone", apply_thermal_model(thermal, {})["zones"][0]["area_m2"] == 18)
 
+    # Ceiling/service legends contain room-like phrases (for example
+    # "COOLROOM FREEZER") but are not room-boundary evidence.  They must
+    # remain supporting evidence rather than creating topology candidates.
+    rcp = [{"page": 6, "title": "Reflective Ceiling Plan", "level_name": "",
+            "sheet_classification": "reflected_ceiling_plan", "thermal_role": "surface_confirmation",
+            "rooms": [], "structured_content": {"markdown": "COOLROOM FREEZER LANDLORD SERVICE ENGINEER"}}]
+    rcp_ocr = {"pages": [{"page": 6, "room_label_candidates": [
+        {"text": "COOLROOM FREEZER", "status": "possible_room_or_area_label"},
+        {"text": "LANDLORD SERVICE ENGINEER", "status": "possible_room_or_area_label"},
+    ]}]}
+    rcp_evidence = build_building_evidence({"source_pdf": "fixture.pdf", "drawing_set": {"pages": rcp}},
+                                           {"page_roles": [{"page": 6, "proposed_role": "reflected_ceiling_plan"}]}, rcp_ocr)
+    check("service legends do not create room candidates", not rcp_evidence["spaces"])
+
 
 if __name__ == "__main__":
     main()

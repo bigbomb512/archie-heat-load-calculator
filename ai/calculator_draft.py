@@ -119,10 +119,15 @@ def build_calculator_draft(thermal_model, building_evidence, drawing_coverage, p
 
     # Preserve source-level exceptions as actionable review items. They are
     # evidence findings, not approvals or calculated inputs.
+    seen_source_issues = set()
     for source_issue in list(building_evidence.get("exceptions", [])) + list(drawing_coverage.get("coverage_exceptions", [])):
         if isinstance(source_issue, dict):
             item = deepcopy(source_issue)
             item.setdefault("item_id", "source_issue_" + fingerprint(item)[:16])
+            issue_key = item.get("item_id") or fingerprint(item)
+            if issue_key in seen_source_issues:
+                continue
+            seen_source_issues.add(issue_key)
             item.setdefault("scope", "project")
             item.setdefault("affected_id", item.get("level_name", "project"))
             item.setdefault("reason", item.get("question", "Source evidence requires review."))

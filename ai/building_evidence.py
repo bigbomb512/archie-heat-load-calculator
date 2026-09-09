@@ -115,7 +115,17 @@ def add_spaces(result, page):
     known_room_terms = ("shop", "kitchen", "bar", "dining", "cool room", "freezer", "storage", "toilet", "office", "staff", "entry", "service", "room")
     non_room_terms = ("legend", "symbol", "tile", "tiles", "grout", "joint", "colour", "color", "coated", "concealed", "services", "floor", "location")
     existing = {item.get("name", "").casefold() for item in result["spaces"] if item.get("level_name") == page["level_name"]}
-    if page.get("reference_only") or page.get("proposed_role") in {"reference", "detail", "services_or_lighting_plan"}:
+    # Reflected-ceiling and service/electrical sheets are useful supporting
+    # evidence for ceilings, lighting and equipment, but their legends and
+    # notes routinely contain room-like phrases.  Do not promote those OCR
+    # fragments to room identities; room topology must come from geometry
+    # plans or an explicit source-room record.
+    if (page.get("reference_only")
+            or page.get("proposed_role") in {"reference", "detail", "services_or_lighting_plan",
+                                              "reflected_ceiling_plan", "architect_lighting_plan",
+                                              "architect_electrical_plan"}
+            or page.get("classification") in {"reflected_ceiling_plan", "architect_lighting_plan",
+                                                "architect_electrical_plan"}):
         return
     for candidate in page.get("room_labels", []):
         label = re.sub(r"\s+", " ", str(candidate.get("text", ""))).strip(" .:-")

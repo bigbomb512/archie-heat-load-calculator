@@ -38,6 +38,8 @@ from ai.hourly_loads import (
     validate_schedule_library,
 )
 from ai.cooling_readiness import assess_cooling_readiness
+from ai.calculator_inputs import assemble_calculator_inputs
+from ai.research_cache import empty_research_cache, validate_cache, upsert_record
 from ai.drawing_coverage import build_drawing_coverage
 from ai.building_evidence import build_building_evidence
 from ai.parity_harness import archie_results_from_heat_report, archie_results_from_hourly_load_report, compare_case, render_markdown, validate_benchmark_case
@@ -134,6 +136,11 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json(api_hourly_load_model(self))
         if self.path.startswith("/api/hourly-load-report"):
             return self.send_json(api_hourly_load_report(self))
+        if self.path.startswith("/api/calculator-inputs"):
+            try:
+                return self.send_json(api_calculator_inputs(self))
+            except Exception as error:
+                return self.send_json({"error": str(error)}, 400)
         if self.path.startswith("/api/envelope-library"):
             try:
                 return self.send_json(api_envelope_library(self))
@@ -193,6 +200,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self.save_hourly_load_model()
         if self.path == "/api/hourly-load-report":
             return self.save_hourly_load_report()
+        if self.path == "/api/calculator-inputs":
+            return self.save_calculator_inputs()
         if self.path == "/api/envelope-library":
             return self.save_envelope_library()
         if self.path == "/api/envelope-model":
@@ -286,6 +295,13 @@ class Handler(SimpleHTTPRequestHandler):
     def save_hourly_load_report(self):
         try:
             result = api_save_hourly_load_report(self)
+        except Exception as error:
+            return self.send_json({"error": str(error)}, 400)
+        self.send_json(result)
+
+    def save_calculator_inputs(self):
+        try:
+            result = api_save_calculator_inputs(self)
         except Exception as error:
             return self.send_json({"error": str(error)}, 400)
         self.send_json(result)
@@ -579,6 +595,8 @@ def hourly_paths(project):
         "envelope_library": review_dir / "envelope_library.json",
         "envelope_model": review_dir / "envelope_model.json",
         "calculator_draft": review_dir / "calculator_draft.json",
+        "research_cache": review_dir / "research_cache.json",
+        "evidence_fusion": review_dir / "architect_evidence_fusion.json",
     }
 
 
@@ -760,6 +778,41 @@ def api_hourly_load_report(request):
     }
 
 
+def api_calculator_inputs(request, selected_scenario_ids=None):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    paths = hourly_paths(project)
+    required = ("requirements", "schedules", "scenarios", "model")
+    missing = [name for name in required if not paths[name].exists()]
+    if missing:
+        return {"id": project["id"], "status": "blocked", "missing_artifacts": missing, "calculator_input_set": {"status": "blocked", "issues": []}}
+    library, envelope_model = envelope_artifacts(project)
+    fusion = load_json(paths["evidence_fusion"]) if paths["evidence_fusion"].exists() else {}
+    research = validate_cache(load_json(paths["research_cache"]) if paths["research_cache"].exists() else empty_research_cache())
+    selected = selected_scenario_ids if selected_scenario_ids is not None else query.get("scenario_id", [])
+    assembled = assemble_calculator_inputs(load_json(paths["model"]), load_json(paths["schedules"]), load_json(paths["scenarios"]),
+        selected, fusion=fusion, research_cache=research, envelope=envelope_model)
+    assembled["artifact_links"] = {name: safe_link(paths[name]) for name in ("model", "schedules", "scenarios", "research_cache", "evidence_fusion") if paths[name].exists()}
+    return {"id": project["id"], "calculator_input_set": assembled, "status": assembled["status"]}
+
+
+def api_save_calculator_inputs(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    paths = hourly_paths(project)
+    action = data.get("action", "assemble")
+    if action not in {"assemble", "save_research_record"}:
+        raise ValueError("Calculator-input action must be assemble or save_research_record.")
+    if action == "save_research_record":
+        current = validate_cache(load_json(paths["research_cache"]) if paths["research_cache"].exists() else empty_research_cache())
+        updated = upsert_record(current, data.get("research_record", {}))
+        paths["research_cache"].write_text(json.dumps(updated, indent=2), encoding="utf-8")
+        project["updated_at"] = timestamp()
+        update_project(project)
+        return {"id": project["id"], "research_cache": updated, "artifact_url": safe_link(paths["research_cache"]), "status": "current"}
+    return api_calculator_inputs(type("Request", (), {"path": f"/api/calculator-inputs?project_id={quote(project['id'])}"})(), data.get("selected_scenario_ids"))
+
+
 def api_save_hourly_load_report(request):
     data = read_json_body(request)
     project = project_by_id(data.get("project_id") or data.get("id", ""))
@@ -777,6 +830,8 @@ def api_save_hourly_load_report(request):
         data.get("selected_scenario_ids", data.get("scenario_ids", [])), coverage)
     report["input_fingerprints"]["envelope_library_updated_at"] = library.get("updated_at", "")
     report["input_fingerprints"]["envelope_model_updated_at"] = envelope_model.get("updated_at", "")
+    report["input_fingerprints"]["research_cache_fingerprint"] = draft_service.fingerprint(load_json(paths["research_cache"]) if paths["research_cache"].exists() else empty_research_cache())
+    report["input_fingerprints"]["evidence_fusion_fingerprint"] = load_json(paths["evidence_fusion"]).get("fingerprint", "") if paths["evidence_fusion"].exists() else ""
     report["evidence_fingerprints"] = {
         name: draft_service.fingerprint(load_json(paths[name])) if paths[name].exists() else draft_service.fingerprint({})
         for name in ("coverage",)
@@ -1270,6 +1325,8 @@ def current_hourly_load_report_path(project):
     library, model = envelope_artifacts(project)
     expected["envelope_library_updated_at"] = library.get("updated_at", "")
     expected["envelope_model_updated_at"] = model.get("updated_at", "")
+    expected["research_cache_fingerprint"] = draft_service.fingerprint(load_json(paths["research_cache"]) if paths["research_cache"].exists() else empty_research_cache())
+    expected["evidence_fusion_fingerprint"] = load_json(paths["evidence_fusion"]).get("fingerprint", "") if paths["evidence_fusion"].exists() else ""
     if fingerprints != expected:
         return None
     evidence_fingerprints = report.get("evidence_fingerprints")

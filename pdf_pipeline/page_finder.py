@@ -24,9 +24,30 @@ from pdf_pipeline.visual_features import extract_pdf_visual_features
 def classify_page(raw_text, page_number, document_title="", visual=None):
     title_text = clean_text(extract_drawing_title(raw_text))
 
-    if found_words(title_area(raw_text), IGNORE_TITLE_WORDS) and not is_visual_top_down(visual):
+    # Explicit sheet titles outrank visual heuristics.  Schedule tables and
+    # architect service plans can have strong horizontal/vertical line scores
+    # and were previously promoted to false floor plans.
+    non_geometry_titles = {
+        "material schedule",
+        "finish schedule",
+        "schedule of finishes",
+        "service plan - lighting",
+        "service plan - electrical",
+        "service plan - power",
+    }
+    if title_text in non_geometry_titles:
         return None
-    if should_ignore_title(title_text) and not is_visual_top_down(visual):
+
+    title_block_text = title_area(raw_text)
+    explicit_ceiling_plan = (
+        title_text in {"reflective ceiling plan", "ceiling plan"}
+        and "drawing" in title_block_text
+        and "dwg no" in title_block_text
+    )
+
+    if found_words(title_area(raw_text), IGNORE_TITLE_WORDS) and not is_visual_top_down(visual) and not explicit_ceiling_plan:
+        return None
+    if should_ignore_title(title_text) and not is_visual_top_down(visual) and not explicit_ceiling_plan:
         return None
 
     match = best_rule_match(raw_text, page_number, PAGE_RULES)
@@ -34,7 +55,9 @@ def classify_page(raw_text, page_number, document_title="", visual=None):
         if match["type"] in {"elevation", "section"} and is_visual_top_down(visual):
             return inferred_plan_match(raw_text, page_number, document_title, visual)
         attach_visual_features(match, visual)
-        if not has_primary_plan_evidence(raw_text, match, visual):
+        if match["type"] == "reflected_ceiling_plan" and not explicit_ceiling_plan and non_plan_context(raw_text, visual):
+            return None
+        if not explicit_ceiling_plan and not has_primary_plan_evidence(raw_text, match, visual):
             return None
         return match
     return inferred_plan_match(raw_text, page_number, document_title, visual)
@@ -47,6 +70,16 @@ def classify_reference_page(raw_text, page_number):
         return None
     if should_ignore_reference_title(title_text):
         return None
+
+    # Preserve explicit architectural elevations/sections as surface evidence
+    # even when their body text also contains material or fixture terms.
+    titled = best_rule_match(raw_text, page_number, PAGE_RULES)
+    has_drawing_footer = "drawing" in title_area(raw_text) and "dwg no" in title_area(raw_text)
+    if titled and (
+        (titled.get("type") in {"elevation", "section"} and (title_text or has_drawing_footer))
+        or (titled.get("type") == "reflected_ceiling_plan" and title_text in {"reflective ceiling plan", "ceiling plan"})
+    ):
+        return titled
 
     return best_rule_match(raw_text, page_number, REFERENCE_RULES, allow_support_only=True)
 
@@ -653,7 +686,7 @@ def thermal_role(sheet_classification):
         return "site_orientation_or_shading"
     if sheet_classification in {"detail", "door_schedule"}:
         return "construction_or_opening_detail"
-    if sheet_classification in {"existing_hvac_or_services_plan", "equipment_or_fixture_schedule", "bca_or_ventilation_notes"}:
+    if sheet_classification in {"existing_hvac_or_services_plan", "equipment_or_fixture_schedule", "material_or_finish_schedule", "architect_lighting_plan", "architect_electrical_plan", "bca_or_ventilation_notes"}:
         return "services_or_internal_load"
     if sheet_classification == "perspective_or_3d":
         return "visual_context"

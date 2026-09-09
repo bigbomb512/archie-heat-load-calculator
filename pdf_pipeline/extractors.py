@@ -105,6 +105,15 @@ def extract_pdf_title(pdf_path):
 def extract_drawing_title(raw_text):
     lines = useful_lines(raw_text)
 
+    # Most consultant sheets place the actual title on the line immediately
+    # below a ``DRAWING / DWG NO / JOB NO`` header.  The old extractor fell
+    # through to the next long footer sentence (usually ``including
+    # amendments ...``), which made schedules look like plans and shifted the
+    # evidence model onto the wrong pages.
+    title = title_from_drawing_block(lines)
+    if title:
+        return title
+
     title = title_near_project_manager(lines)
     if title:
         return title
@@ -122,6 +131,28 @@ def extract_drawing_title(raw_text):
         if known_title.lower() in raw_text.lower():
             return known_title
 
+    return ""
+
+
+def title_from_drawing_block(lines):
+    """Return the title from a conventional drawing-register footer.
+
+    Keep this deliberately conservative: only accept a short line followed by
+    a drawing number and job number.  This avoids treating arbitrary notes or
+    schedule rows as a sheet title.
+    """
+    for index, line in enumerate(lines):
+        lower = line.lower()
+        if "drawing" not in lower or "dwg no" not in lower:
+            continue
+        for candidate in lines[index + 1 : index + 5]:
+            cleaned = re.sub(r"\s+", " ", candidate).strip()
+            match = re.match(r"^(.+?)\s+(\d{2,4})\s+([A-Za-z0-9._-]+)(?:\s+[A-Za-z])?$", cleaned)
+            if not match:
+                continue
+            title = match.group(1).strip(" -:;")
+            if 2 <= len(title) <= 90 and not re.search(r"\b(date|rev(?:ision)?|project|amendments?)\b", title, re.I):
+                return title
     return ""
 
 
@@ -198,9 +229,9 @@ def line_is_title_noise(line):
 
 
 def known_title_from_text(text):
-    lower = text.lower()
+    lower = re.sub(r"\s+", " ", text.lower())
     for title in KNOWN_TITLES:
-        if title.lower() in lower:
+        if re.sub(r"\s+", " ", title.lower()) in lower:
             return title
     return ""
 
