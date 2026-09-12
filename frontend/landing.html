@@ -157,23 +157,21 @@
 
 <section class="band shortcut-section" id="workflow" aria-labelledby="workflow-title">
 <div class="wrap">
-<div class="shortcut-heading"><div><p class="kicker">The Archie workflow</p><h2 class="h2" id="workflow-title">Less input work.<br>More engineering judgement.</h2></div><p>Jump from project documents to a prepared model for review. Archie’s proposed AI workflow handles the measuring, searching and entry in between.</p></div>
+<div class="shortcut-heading"><div><p class="kicker">The Archie workflow</p><h2 class="h2" id="workflow-title">Less input work.<br>More engineering judgement.</h2></div><p>From PDF to heat load: AI prepares the inputs and brings unresolved engineering decisions to the engineer before calculating.</p></div>
 <div class="workflow-diagram">
-<div class="flow-node flow-start"><span class="flow-num">01</span><div><h3>Collect drawings & agree requirements</h3><p>Project documents, design conditions and scope.</p></div><span class="flow-label">START HERE</span></div>
-<div class="flow-fork">
-<div class="manual-lane"><p class="lane-label">Manual preparation</p>
-<ol start="2" class="manual-steps">
-<li><span class="flow-num">02</span><div><h3>Measure the building</h3><p>Rooms, walls, windows and heights.</p></div></li>
-<li><span class="flow-num">03</span><div><h3>Find the specifications</h3><p>Constructions, glazing and shading.</p></div></li>
-<li><span class="flow-num">04</span><div><h3>Enter the load inputs</h3><p>People, equipment, schedules and airflows.</p></div></li>
-<li><span class="flow-num">05</span><div><h3>Assemble the model</h3><p>Surface assignments, AHUs and zones.</p></div></li>
-</ol></div>
-<aside class="ai-lane" aria-label="Archie bypasses manual preparation in steps 2 to 5, taking the engineer directly to step 6"><div class="ai-lane__copy"><span class="ai-badge">ARCHIE SHORTCUT</span><h3>Skip the<br>manual entry.</h3><p>AI prepares the model.<br>You review the exceptions.</p><ul><li>Cited measurements</li><li>Matched specifications</li><li>Populated inputs</li><li>Proposed assignments</li></ul><small>Proposed capability<br>Engineer approval required</small></div><div class="big-arrow" aria-hidden="true"></div></aside>
+<ol class="ai-workflow" aria-label="PDF to engineer-reviewed heat load">
+<li class="flow-node"><span class="flow-num" aria-hidden="true">01</span><div><h3>PDF</h3></div></li>
+<li class="flow-node"><span class="flow-num" aria-hidden="true">02</span><div><h3>AI reads everything</h3></div></li>
+<li class="flow-node"><span class="flow-num" aria-hidden="true">03</span><div><h3>AI extracts all available information</h3></div></li>
+<li class="flow-node"><span class="flow-num" aria-hidden="true">04</span><div><h3>AI calculates/derives what it safely can</h3></div></li>
+<li class="flow-node"><span class="flow-num" aria-hidden="true">05</span><div><h3>AI applies approved assumptions</h3></div></li>
+<li class="flow-node"><span class="flow-num" aria-hidden="true">06</span><div><h3>AI identifies ONLY unresolved engineering decisions</h3></div></li>
+<li class="flow-node flow-review"><span class="flow-num" aria-hidden="true">07</span><div><h3>Engineer answers those</h3></div><span class="flow-label">ENGINEER CHECKPOINT</span></li>
+<li class="flow-node"><span class="flow-num" aria-hidden="true">08</span><div><h3>AI calculates heat load</h3></div></li>
+<li class="flow-node flow-review"><span class="flow-num" aria-hidden="true">09</span><div><h3>Engineer reviews</h3></div><span class="flow-label">ENGINEER CHECKPOINT</span></li>
+</ol>
 </div>
-<div class="flow-node flow-review"><span class="flow-num">06</span><div><h3>Review the prepared model</h3><p>Confirm geometry and zoning. Resolve missing evidence, conflicts and assumptions.</p></div><span class="flow-label">ENGINEER CHECKPOINT</span></div>
-<ol start="7" class="flow-finish"><li><span>07</span><h3>System & coil settings</h3></li><li><span>08</span><h3>Run calculations</h3></li><li><span>09</span><h3>Check & revise results</h3></li><li><span>10</span><h3>Issue the report</h3></li></ol>
-</div>
-<p class="workflow-note">The shortcut removes manual preparation, not the engineering checks or calculations. This is a target workflow; Archie’s current scope is limited to its supported cooling methods.</p>
+<p class="workflow-note">This is the target workflow. Archie’s current calculation scope is limited to its supported cooling methods.</p>
 </div></section>
   <!-- ============ statement ============ -->
   <section class="band band-quote">
