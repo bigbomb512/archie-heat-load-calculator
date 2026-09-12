@@ -110,7 +110,7 @@ def proposed_zones(spaces, adjacencies, lighting, equipment):
         area = area_number(space.get("area"))
         zone_id = "shop_31b" if name.lower() == "shop 31b" else "zone_" + slug(name) + f"_{index + 1}"
         zones.append({
-            "zone_id": zone_id, "name": name, "usage": "", "area_m2": area, "ceiling_height_mm": None,
+            "zone_id": zone_id, "name": name, "usage": "", "area_m2": area, "ceiling_height_mm": space.get("ceiling_height_mm"),
             "evidence_fact_ids": [], "building_evidence_ids": [space.get("id")],
             "surfaces": surface_candidates(zone_id, adjacencies),
             "internal_load_candidates": load_candidates(equipment),

@@ -32,6 +32,31 @@ def _positive_number(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value > 0
 
 
+def direct_unique_opening_geometry(value):
+    """A dimension is safe only after a unique plan target has been established."""
+    if not isinstance(value, dict):
+        return False
+    geometry = value.get("geometry") or {}
+    dimensions = value.get("dimensions") or {}
+    return bool(
+        geometry.get("direct_dimension")
+        and geometry.get("unique_target")
+        and geometry.get("auto_activation_basis") == "direct_dimension_unique_plan_tag"
+        and _positive_number(dimensions.get("width_mm"))
+        and _positive_number(dimensions.get("height_mm"))
+        and dimensions.get("unit") == "mm"
+    )
+
+
+def ai_verified_geometry(value):
+    """Two cited architect witnesses are the narrow automatic-activation path."""
+    if not isinstance(value, dict):
+        return False
+    witnesses = value.get("vision_witnesses", [])
+    pairs = {(item.get("page"), item.get("reference")) for item in witnesses if isinstance(item, dict)}
+    return bool(value.get("ai_verified") and value.get("activation_basis") == "two_independent_architect_witnesses" and len(pairs) >= 2)
+
+
 def validate_fact(raw, known_pages=None):
     if not isinstance(raw, dict):
         raise ValueError("Fact must be an object.")
@@ -54,6 +79,8 @@ def validate_fact(raw, known_pages=None):
         raise ValueError("Fact cites a page not present in the architect packet.")
     if raw["category"] in {"area", "ceiling_height"} and not _positive_number(raw["value"]):
         raise ValueError("Numeric geometry facts require a positive value.")
+    if raw["category"] == "opening" and raw["activation_status"] == "active" and not direct_unique_opening_geometry(raw.get("value")):
+        raise ValueError("Active opening facts require a direct, uniquely matched dimension witness.")
     if raw["category"] in {"area", "ceiling_height", "opening", "glazing", "construction"} and not raw.get("unit") and raw["category"] in {"area", "ceiling_height"}:
         raise ValueError("Geometry facts require units.")
     return deepcopy(raw)
@@ -85,14 +112,16 @@ def fact_from_entity(entity):
     if category not in FACT_CATEGORIES:
         category = "construction" if kind == "construction" else "room"
     source = entity.get("source", {})
-    status = "valid" if entity.get("geometry_status") == "geometry_confirmed" or kind in {"floor", "opening", "construction", "lighting", "equipment"} else "needs_review"
-    activation = "active" if category in {"floor", "opening", "construction", "lighting", "equipment"} and status == "valid" else "proposed"
+    opening_geometry = category == "opening" and direct_unique_opening_geometry(value)
+    verified_geometry = ai_verified_geometry(value)
+    status = "valid" if verified_geometry or entity.get("geometry_status") == "geometry_confirmed" or kind in {"floor", "construction", "lighting", "equipment"} or opening_geometry else "needs_review"
+    activation = "active" if (verified_geometry or category in {"floor", "construction", "lighting", "equipment"} or opening_geometry) and status == "valid" else "proposed"
     return {
         "fact_id": entity["entity_id"], "category": category, "value": value.get("area") if category == "area" else value,
         "unit": value.get("unit", ""), "affected_id": value.get("room_id") or value.get("level_name") or value.get("id", ""),
         "source_type": "architect_pdf", "source": source, "excerpt": source.get("excerpt", ""),
         "extraction_confidence": entity.get("confidence", "unknown"), "validation_status": status,
-        "activation_status": activation, "conflicts": [],
+        "activation_status": activation, "activation_basis": (value.get("geometry") or {}).get("auto_activation_basis", ""), "conflicts": [],
         "candidate_fingerprint": fingerprint(entity), "evidence_ids": entity.get("evidence_ids", []),
         "dependencies": list(value.get("dependencies", [])) if isinstance(value, dict) else [],
     }
@@ -125,8 +154,10 @@ def activate_safe_facts(registry):
             fact["activation_status"] = "proposed"
             continue
         value = fact.get("value")
-        exact = fact["category"] in {"floor", "opening", "construction", "lighting", "equipment"}
-        if fact["category"] in {"room", "room_boundary", "area", "ceiling_height", "glazing", "orientation", "schedule", "occupancy", "adjacency"}:
+        exact = ai_verified_geometry(value) or fact["category"] in {"floor", "construction", "lighting", "equipment"} or (
+            fact["category"] == "opening" and direct_unique_opening_geometry(fact.get("value"))
+        )
+        if fact["category"] in {"room", "room_boundary", "area", "ceiling_height", "glazing", "orientation", "schedule", "occupancy", "adjacency"} and not ai_verified_geometry(value):
             exact = False
         fact["activation_status"] = "active" if exact else "proposed"
     result["revision"] = int(result.get("revision", 0)) + 1

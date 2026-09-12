@@ -165,6 +165,55 @@ def outside_air_load(flow_lps, indoor_db_c, indoor_wb_c, outdoor_db_c, outdoor_w
     )
 
 
+def infiltration_flow_lps(value, unit, room_volume_m3=None):
+    """Resolve an approved infiltration input to outdoor-condition L/s."""
+    if value is None or value <= 0:
+        raise ValueError("Infiltration flow must be positive.")
+    if unit == "ACH":
+        if room_volume_m3 is None or room_volume_m3 <= 0:
+            raise ValueError("ACH infiltration requires a positive reviewed room volume.")
+        return value * room_volume_m3 / 3.6
+    if unit == "L/s":
+        return value
+    if unit == "m3/s":
+        return value * 1000
+    if unit == "m3/h":
+        return value / 3.6
+    raise ValueError("Unsupported infiltration unit.")
+
+
+def infiltration_load(value, unit, indoor_db_c, indoor_wb_c, outdoor_db_c, outdoor_wb_c, pressure_kpa,
+                      *, room_volume_m3=None, schedule_factor=1.0, method_id="", gate_version=""):
+    """Cooling infiltration using the approved outdoor-condition psychrometric method.
+
+    The raw signed terms stay visible for audit. Only positive sensible and
+    latent cooling gains are passed to the hourly cooling total.
+    """
+    base_flow_lps = infiltration_flow_lps(value, unit, room_volume_m3)
+    applied_flow_lps = base_flow_lps * schedule_factor
+    raw = outside_air_load(applied_flow_lps, indoor_db_c, indoor_wb_c, outdoor_db_c, outdoor_wb_c, pressure_kpa)
+    raw_sensible = raw["sensible_kw"]
+    raw_latent = raw["latent_kw"]
+    return contribution(
+        "infiltration",
+        max(raw_sensible, 0.0),
+        max(raw_latent, 0.0),
+        {
+            **raw["inputs"],
+            "input_value": value,
+            "input_unit": unit,
+            "resolved_flow_lps": round(base_flow_lps, 6),
+            "applied_flow_lps": round(applied_flow_lps, 6),
+            "room_volume_m3": round(room_volume_m3, 6) if room_volume_m3 is not None else None,
+            "schedule_factor": schedule_factor,
+            "raw_signed_sensible_kw": raw_sensible,
+            "raw_signed_latent_kw": raw_latent,
+            "method_id": method_id,
+            "gate_version": gate_version,
+            "flow_reference": "outdoor_design_condition",
+        },
+        "approved infiltration flow × moist-air enthalpy difference; signed diagnostics retained, positive sensible and latent cooling gains applied",
+    )
 def calculate_zone_cooling(requirements, zone):
     load = zone.get("cooling_load", {})
     conditions = requirements.get("cooling_load_conditions", {})

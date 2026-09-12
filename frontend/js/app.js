@@ -10,6 +10,12 @@ function optionalElement(id){
 let DATA = null, FILTER = "rel", PICK = new Set(), CUR = null, DEBUG = false, PACKET = null, ROOM_SUGGESTIONS = [];
 let CALCULATOR_DRAFT = null, DRAFT_PREVIEW_TOKEN = "", DRAFT_DIRTY = false;
 let ENVELOPE_LIBRARY = {constructions: [], windows: [], shading_records: []}, ENVELOPE_MODEL = {surfaces: []};
+let CALCULATOR_INPUT_SET = null, CALCULATOR_INPUT_OVERRIDES = {revision: 0, records: []}, PROJECT_CONTEXT = {};
+// Legacy projects/tests that predate the input-snapshot workflow may not
+// expose /api/calculator-inputs at all. Once that endpoint responds, the
+// explicit Assemble → Calculate gate is enforced.
+let CALCULATOR_INPUTS_AVAILABLE = false;
+let VISION_EXTRACTION = null, VISION_POLL = null;
 
 /* ---- theme -------------------------------------------------------------
    Dark by default. A saved choice wins; otherwise follow the system. The
@@ -133,6 +139,7 @@ function runSteps(){
 /* ---------------- results ---------------- */
 function showResults(data){
   DATA = Object.assign({}, DATA, data);
+  CALCULATOR_INPUTS_AVAILABLE = false;
   PACKET = data.chatgpt_packet || null;
   PICK = new Set(data.sheets.filter(s => s.selected_by_default || s.relevant).map(s => s.page));
   FILTER = "rel";
@@ -436,6 +443,10 @@ function zoom(page){
 requiredElement("btnConfirm").addEventListener("click", confirmSelection);
 requiredElement("btnConfirmTop").addEventListener("click", confirmSelection);
 requiredElement("btnVisionSubmit").addEventListener("click", submitVisionResponse);
+requiredElement("btnVisionEstimate").addEventListener("click", () => visionExtractionAction("estimate"));
+requiredElement("btnVisionStart").addEventListener("click", () => visionExtractionAction("start"));
+requiredElement("btnVisionCancel").addEventListener("click", () => visionExtractionAction("cancel"));
+requiredElement("btnVisionRetry").addEventListener("click", () => visionExtractionAction("retry"));
 requiredElement("btnAddHeatSource").addEventListener("click", () => addHeatSource());
 requiredElement("btnAddZone").addEventListener("click", () => addZone());
 requiredElement("btnSaveRequirements").addEventListener("click", saveDesignRequirements);
@@ -445,12 +456,17 @@ requiredElement("btnSaveCalculatorReview").addEventListener("click", () => saveC
 requiredElement("btnPreviewCalculatorDraft").addEventListener("click", () => saveCalculatorDraft("preview_apply"));
 requiredElement("btnApplyCalculatorDraft").addEventListener("click", () => saveCalculatorDraft("apply"));
 requiredElement("btnCalculateVentilation").addEventListener("click", calculateVentilation);
+requiredElement("btnSaveInfiltrationGate").addEventListener("click", saveInfiltrationGate);
 requiredElement("btnBuildHourlyModel").addEventListener("click", () => saveHourlyModel("build"));
 requiredElement("btnAddFloor").addEventListener("click", () => addHourlyFloor());
 requiredElement("btnAddHourlyZone").addEventListener("click", () => addHourlyZone());
 requiredElement("btnAddHourlyRoom").addEventListener("click", () => addHourlyRoom());
 requiredElement("btnSaveHourlyModel").addEventListener("click", () => saveHourlyModel("save"));
 requiredElement("btnCalculateHourlyLoad").addEventListener("click", calculateHourlyLoad);
+requiredElement("btnAssembleCalculatorInputs").addEventListener("click", assembleCalculatorInputs);
+requiredElement("btnSaveProjectContext").addEventListener("click", saveProjectContext);
+requiredElement("btnSaveCalculatorOverride").addEventListener("click", saveCalculatorOverride);
+requiredElement("btnRefreshResearch").addEventListener("click", refreshResearch);
 requiredElement("btnAddConstruction").addEventListener("click", () => addEnvelopeConstruction());
 requiredElement("btnAddBoundary").addEventListener("click", () => addEnvelopeBoundary());
 requiredElement("btnSaveEnvelope").addEventListener("click", saveEnvelope);
@@ -490,15 +506,56 @@ async function confirmSelection(){
 
 function showVisionPanel(){
   requiredElement("visionPanel").classList.remove("hide");
-  requiredElement("visionStatus").textContent = "Upload the complete packet to ChatGPT, then paste its structured vision JSON.";
-  requiredElement("visionLinks").innerHTML = PACKET ? `
-    <article class="review-item">
-      <div>
-        <b>ChatGPT vision packet ready</b>
-        <span>It includes screenshots, PDF text, vector candidates, and dimension evidence.</span>
-      </div>
-      ${PACKET.zip ? `<a class="btn ghost mini" href="${PACKET.zip}" target="_blank" rel="noopener">Download packet</a>` : ""}
-    </article>` : "";
+  loadVisionExtraction();
+}
+
+function visionSettings(){
+  return {
+    owner_opt_in: requiredElement("visionOptIn").checked,
+    max_budget_aud: requiredElement("visionBudget").value === "" ? null : Number(requiredElement("visionBudget").value),
+    selected_group_ids: [...requiredElement("visionGroups").querySelectorAll("input:checked")].map(input => input.value),
+  };
+}
+
+async function loadVisionExtraction(){
+  if (!DATA?.id) return;
+  try {
+    const res = await fetch(`/api/vision-extraction?project_id=${encodeURIComponent(DATA.id)}`);
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || "Could not load AI extraction.");
+    drawVisionExtraction(data);
+  } catch (error) { requiredElement("visionStatus").textContent = "AI extraction settings unavailable."; }
+}
+
+function drawVisionExtraction(data){
+  VISION_EXTRACTION = data;
+  const settings = data.settings || {};
+  requiredElement("visionOptIn").checked = !!settings.owner_opt_in;
+  requiredElement("visionBudget").value = settings.max_budget_aud ?? "";
+  const selected = new Set(settings.selected_group_ids || data.available_groups?.map(group => group.group_id) || []);
+  requiredElement("visionGroups").innerHTML = (data.available_groups || []).map(group => `<label><input type="checkbox" value="${esc(group.group_id)}" ${selected.has(group.group_id) ? "checked" : ""}> ${esc(group.title)} (${group.pages.length} page${group.pages.length === 1 ? "" : "s"})</label>`).join("") || "<span>No eligible page groups are available yet.</span>";
+  const job = data.job || {}, estimate = data.estimate || {};
+  const progress = job.total_groups ? ` · ${job.completed_groups || 0}/${job.total_groups} groups` : "";
+  requiredElement("visionStatus").textContent = job.status ? `${job.status}${progress}${job.error ? ` · ${job.error}` : ""}` : (estimate.estimate_available ? `Estimate: $${estimate.estimated_cost_aud.toFixed(2)} AUD for ${estimate.request_count} request(s).` : "Set a server-side estimate rate before starting.");
+  const active = ["queued", "running", "cancel_requested"].includes(job.status);
+  requiredElement("btnVisionStart").disabled = active;
+  requiredElement("btnVisionCancel").classList.toggle("hide", !active);
+  requiredElement("btnVisionRetry").classList.toggle("hide", !["failed", "cancelled", "interrupted"].includes(job.status));
+  const links = Object.entries(data.artifact_links || {}).map(([name, url]) => `<a class="btn ghost mini" href="${url}" target="_blank" rel="noopener">${esc(name)}</a>`).join(" ");
+  requiredElement("visionLinks").innerHTML = `<article class="review-item"><div><b>Evidence-only scope</b><span>Topology and geometry only; extraction cannot activate cooling inputs or a thermal envelope.</span></div>${links}</article>`;
+  if (VISION_POLL) clearTimeout(VISION_POLL);
+  if (active) VISION_POLL = setTimeout(loadVisionExtraction, 2000);
+}
+
+async function visionExtractionAction(action){
+  if (!DATA?.id) return toast("No project selected", "Open or analyse a project first.");
+  try {
+    const res = await fetch("/api/vision-extraction", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({project_id: DATA.id, action, settings: visionSettings()})});
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || "AI extraction request failed.");
+    drawVisionExtraction(data);
+    if (action === "start") toast("AI extraction started", "Only selected architect evidence is being processed.");
+  } catch (error) { toast("AI extraction", error.message); }
 }
 
 async function submitVisionResponse(){
@@ -897,7 +954,9 @@ function showDesignRequirements(requirements = {}, readiness = {}, roomSuggestio
   loadCalculatorDraft();
   loadEnvelope();
   loadHourlyModel();
+  loadInfiltrationGate();
   loadHourlyLoadReport();
+  loadCalculatorInputs();
 }
 
 function addEnvelopeConstruction(record = {}){
@@ -1125,15 +1184,38 @@ function showCalculatorDraft(draft = {}, artifactUrl = ""){
   ];
   const decisions = draft.decisions || {};
   const roles = draft.page_roles || [];
-  const roleSummary = roles.length ? `<section class="draft-group page-role-summary"><div class="draft-group-title">Drawing page authority</div><div class="draft-role-grid">${roles.map(role => `<article class="review-item"><div><b>Page ${esc(role.page || role.page_number || "?")} · ${esc(role.proposed_role || role.role || "unclassified")}</b><span>${esc(role.level_candidate || role.level || "Floor identity unresolved")}</span><small>${esc(role.authority_status || "proposed")} · confidence ${esc(role.confidence || "unknown")} · ${role.geometry_eligible ? "geometry eligible" : "reference-only / geometry not established"}</small></div></article>`).join("")}</div></section>` : "";
+  const roleSummary = roles.length ? `<section class="draft-group page-role-summary"><div class="draft-group-title">Drawing page authority and capabilities</div><div class="draft-role-grid">${roles.map(role => `<article class="review-item"><div><b>Page ${esc(role.page || role.page_number || "?")} · ${esc(role.proposed_role || role.role || "unclassified")}</b><span>${esc(role.level_candidate || role.level || "Floor identity unresolved")} · ${esc(role.page_group || "unassigned group")}</span><small>${esc(role.authority_status || "proposed")} · confidence ${esc(role.confidence || "unknown")} · ${role.geometry_eligible ? "geometry eligible" : role.visual_crosscheck_eligible ? "3D cross-check only" : "supporting/reference evidence"}</small><small>${esc((role.capabilities || []).join(" · ") || "capabilities unresolved")}</small></div></article>`).join("")}</div></section>` : "";
   const facts = draft.evidence_fusion?.facts || draft.facts || [];
-  const factSummary = facts.length ? `<section class="draft-group fact-summary"><div class="draft-group-title">AI fact registry</div><article class="review-item"><div><b>${facts.filter(f => f.activation_status === "active").length} automatically activated · ${facts.filter(f => f.activation_status === "proposed").length} proposed · ${facts.filter(f => f.validation_status !== "valid").length} requiring validation</b><span>Exact source-backed metadata may activate automatically; geometry and engineering values remain traceable proposals until the calculation gate is satisfied.</span><small>${facts.map(f => `${esc(f.category)} · ${esc(f.activation_status)} · ${esc(f.source?.drawing_number || f.source?.page || "source unavailable")}`).join(" · ")}</small></div></article></section>` : "";
+  const geometryFacts = facts.filter(f => f.category === "opening" && ((f.value?.geometry?.direct_dimension) || f.value?.dimensions));
+  const geometryLinks = (draft.evidence_fusion?.relationships || []).filter(link => ["plan_elevation_opening_match", "plan_elevation_parent_surface_match"].includes(link.kind));
+  const geometryResolution = draft.evidence_fusion?.geometry_resolution || {};
+  const crossChecks = (geometryResolution.relationships || []).filter(link => link.kind === "3d_visual_crosscheck");
+  const geometryConflicts = geometryResolution.conflicts || [];
+  const geometrySummary = (geometryFacts.length || geometryLinks.length || crossChecks.length || geometryConflicts.length) ? `<section class="draft-group fact-summary"><div class="draft-group-title">Multi-page geometry evidence</div>${geometryFacts.map(fact => {
+    const dimensions = fact.value?.dimensions
+      || fact.value?.geometry?.dimension_chain
+      || fact.value?.geometry?.dimension_chain_mm;
+    const unit = fact.value?.geometry?.unit || "";
+    const text = Array.isArray(dimensions)
+      ? dimensions.map(value => `${value}${unit ? ` ${unit}` : ""}`).join(" · ")
+      : dimensions?.width_mm
+        ? `${dimensions.width_mm} × ${dimensions.height_mm} ${dimensions.unit || "mm"}`
+        : "Dimension chain recorded";
+    const source = fact.source?.drawing_number
+      ? `${fact.source.drawing_number} · page ${fact.source.page}`
+      : fact.source?.page
+        ? `Page ${fact.source.page}`
+        : "Source unavailable";
+    const basis = fact.activation_basis || fact.value?.geometry?.auto_activation_basis || "needs unique plan match";
+    return `<article class="review-item"><div><b>${esc(fact.value?.tag || fact.value?.kind || "Opening geometry")} · ${esc(text)}</b><span>${esc(fact.activation_status)} · ${esc(basis)}</span><small>${esc(source)} · confidence ${esc(fact.extraction_confidence || "unknown")}</small></div></article>`;
+  }).join("")}${geometryLinks.map(link => `<article class="review-item"><div><b>Plan/elevation match</b><span>${esc(link.basis || "evidence match")} · pages ${esc((link.pages || []).join(", "))}</span></div></article>`).join("")}${crossChecks.map(link => `<article class="review-item"><div><b>3D visual cross-check</b><span>Page ${esc(link.from_page || "?")} · supporting evidence only</span><small>3D imagery cannot supply primary dimensions or room areas.</small></div></article>`).join("")}${geometryConflicts.map(conflict => `<article class="review-item"><div><b>Geometry conflict</b><span>${esc(conflict.reason || "Conflicting geometry evidence")}</span><small>Pages ${esc((conflict.pages || []).join(", "))} · review required</small></div></article>`).join("")}</section>` : "";
+  const factSummary = facts.length ? `<section class="draft-group fact-summary"><div class="draft-group-title">AI fact registry</div><article class="review-item"><div><b>${facts.filter(f => f.activation_status === "active").length} automatically activated · ${facts.filter(f => f.activation_status === "proposed").length} proposed · ${facts.filter(f => f.validation_status !== "valid").length} requiring validation</b><span>Only direct, uniquely plan-matched opening dimensions may auto-activate. Thermal properties and boundaries remain proposals.</span><small>${facts.map(f => `${esc(f.category)} · ${esc(f.activation_status)} · ${esc(f.source?.drawing_number || f.source?.page || "source unavailable")}`).join(" · ")}</small></div></article></section>` : "";
   const rendered = groups.map(([key, title]) => {
     const rows = draft.candidates?.[key] || [];
     if (!rows.length) return "";
     return `<section class="draft-group"><div class="draft-group-title">${esc(title)}</div>${rows.map(item => calculatorDraftCandidateMarkup(item, decisions[item.candidate_id] || {})).join("")}</section>`;
   }).join("");
-  requiredElement("calculatorDraftCandidates").innerHTML = roleSummary + factSummary + (rendered || (draft.status === "not_built" ? "" : `<article class="review-empty"><b>No source-backed calculator candidates found</b><span>Missing data stays in the review queue; Archie has not guessed any records.</span></article>`));
+  requiredElement("calculatorDraftCandidates").innerHTML = geometryReviewMarkup(draft) + roleSummary + geometrySummary + factSummary + (rendered || (draft.status === "not_built" ? "" : `<article class="review-empty"><b>No source-backed calculator candidates found</b><span>Missing data stays in the review queue; Archie has not guessed any records.</span></article>`));
   const reviewItems = draft.review_items || [];
   requiredElement("calculatorDraftReviewItems").innerHTML = reviewItems.map(item => calculatorDraftReviewMarkup(item, decisions[item.item_id] || {})).join("");
   const summary = draft.apply_summary || {};
@@ -1150,21 +1232,81 @@ function showCalculatorDraft(draft = {}, artifactUrl = ""){
     : `${draft.status} · ${(Object.values(draft.candidates || {}).flat()).length} source-backed proposals · ${reviewItems.length} items needing review${DRAFT_DIRTY ? " · unsaved review" : ""}`;
   document.querySelectorAll(".calculator-draft-decision, .calculator-draft-field, .calculator-draft-review-field").forEach(control => control.addEventListener("change", () => { DRAFT_DIRTY = true; DRAFT_PREVIEW_TOKEN = ""; }));
   document.querySelectorAll(".calculator-draft-field, .calculator-draft-review-field").forEach(control => control.addEventListener("input", () => { DRAFT_DIRTY = true; DRAFT_PREVIEW_TOKEN = ""; }));
+  document.querySelectorAll(".geometry-focus[data-focus-candidate]").forEach(button => button.addEventListener("click", () => {
+    const target = document.querySelector(`.draft-candidate[data-candidate="${CSS.escape(button.dataset.focusCandidate)}"]`);
+    if (!target) return;
+    target.scrollIntoView({behavior: "smooth", block: "center"});
+    target.classList.add("geometry-focus-target");
+    setTimeout(() => target.classList.remove("geometry-focus-target"), 1400);
+  }));
+}
+
+function geometryReviewMarkup(draft){
+  const rooms = draft.candidates?.rooms || [];
+  const roomInputs = draft.candidates?.room_inputs || [];
+  const floors = draft.candidates?.floors || [];
+  const zones = draft.candidates?.zones || [];
+  const pages = draft.page_roles || [];
+  const fusion = draft.evidence_fusion || {};
+  const geometry = fusion.geometry_resolution || {};
+  const witnesses = geometry.witnesses || [];
+  const pageGroups = {};
+  pages.forEach(page => {
+    const group = page.page_group || page.proposed_role || "unassigned";
+    (pageGroups[group] ||= []).push(page.page || page.page_number || "?");
+  });
+  const groupSummary = Object.entries(pageGroups).map(([group, groupPages]) => `<span class="geometry-chip"><b>${esc(group)}</b> · ${groupPages.length} page${groupPages.length === 1 ? "" : "s"} (${esc(groupPages.sort((a,b) => Number(a)-Number(b)).join(", "))})</span>`).join("");
+  const statusCounts = rooms.reduce((acc, room) => {
+    const status = room.value?.geometry_status || "label_detected";
+    acc[status] = (acc[status] || 0) + 1;
+    return acc;
+  }, {});
+  const roomCards = rooms.map(room => {
+    const value = room.value || {};
+    const citedPages = [...new Set((room.citations || []).map(c => c.page).filter(Boolean))];
+    const referencePages = (value.geometry_reference || []).map(ref => String(ref).match(/page[-_ ]?(\\d+)/i)?.[1]).filter(Boolean);
+    const allPages = [...new Set([...citedPages, ...referencePages])].sort((a,b) => Number(a)-Number(b));
+    const roomWitnesses = witnesses.filter(w => {
+      const text = JSON.stringify(w).toLowerCase();
+      return text.includes(String(value.room_id || room.candidate_id).toLowerCase()) || allPages.includes(String(w.page));
+    }).slice(0, 6);
+    const areaCandidate = roomInputs.find(item => item.kind === "area" && item.value?.room_id === value.room_id);
+    const ceilingCandidate = roomInputs.find(item => item.kind === "ceiling" && item.value?.room_id === value.room_id);
+    const areaValue = areaCandidate?.value?.area_m2 ?? value.area_m2;
+    const ceilingValue = ceilingCandidate?.value?.ceiling_height_mm;
+    const unresolved = value.unresolved_fields || [];
+    const status = value.geometry_status || "label_detected";
+    const decision = draft.decisions?.[room.candidate_id]?.decision || "pending";
+    const statusClass = status === "geometry_confirmed" ? "geometry-ok" : status === "geometry_review_required" ? "geometry-warn" : "geometry-blocked";
+    return `<article class="geometry-room-card ${statusClass}">
+      <div class="geometry-room-head"><div><b>${esc(value.name || room.candidate_id)}</b><span>${esc(status.replaceAll("_", " "))} · confidence ${esc(room.confidence || "unknown")} · decision ${esc(decision)}</span></div><span class="geometry-status">${esc(status.replaceAll("_", " "))}</span></div>
+      <div class="geometry-room-grid"><div><small>Floor</small><strong>${esc(value.floor_id || "Unresolved")}</strong></div><div><small>Zone</small><strong>${esc(value.zone_id || "Unresolved")}</strong></div><div><small>Area</small><strong>${areaValue ? `${esc(areaValue)} m²` : "Not supported"}</strong></div><div><small>Ceiling</small><strong>${ceilingValue ? `${esc(ceilingValue)} mm` : "Not linked"}</strong></div></div>
+      <div class="geometry-evidence-lines"><small>${citationText(room.citations || [])}</small>${value.geometry_reference ? `<small>Geometry references: ${esc((value.geometry_reference || []).join(" · "))}</small>` : ""}${roomWitnesses.length ? `<small>Witnesses: ${esc(roomWitnesses.map(w => `page ${w.page} · ${w.kind || "evidence"}`).join(" · "))}</small>` : ""}</div>
+      ${unresolved.length ? `<div class="geometry-missing"><b>Still required:</b> ${esc(unresolved.join(", "))}</div>` : ""}
+      <div class="geometry-review-actions"><button class="btn ghost mini geometry-focus" type="button" data-focus-candidate="${esc(room.candidate_id)}">Review proposal below</button><small class="geometry-guidance">A label alone cannot activate a room; geometry and area require evidence.</small></div>
+    </article>`;
+  }).join("");
+  const readiness = rooms.length ? `${statusCounts.geometry_confirmed || 0} geometry confirmed · ${statusCounts.geometry_review_required || 0} review required · ${(statusCounts.label_detected || 0) + (statusCounts.geometry_proposed || 0)} label/proposed` : "No room candidates yet";
+  return `<section class="geometry-review-workspace"><div class="draft-group-title">Geometry review workspace</div><div class="geometry-review-intro"><div><b>Resolve topology from evidence</b><span>${esc(readiness)} · ${floors.length} floor candidate${floors.length === 1 ? "" : "s"} · ${zones.length} zone candidates · ${pages.length} architect pages indexed.</span></div><span class="conf">No calculation inputs are changed here.</span></div><div class="geometry-page-groups">${groupSummary || `<span class="fine">Build the calculator draft to populate page groups.</span>`}</div><div class="geometry-room-list">${roomCards || `<article class="review-empty"><b>Room geometry is not ready</b><span>Build evidence and calculator proposals first; unresolved rooms remain excluded.</span></article>`}</div></section>`;
 }
 
 function calculatorDraftCandidateMarkup(item, savedDecision){
   const action = savedDecision.decision || "pending";
   const value = savedDecision.value || item.value || {};
-  const fields = Object.entries(value).filter(([key]) => !["citations", "day_profiles"].includes(key)).map(([key, raw]) => {
+  const fields = Object.entries(value).filter(([key]) => !["citations", "day_profiles", "geometry", "geometry_evidence"].includes(key)).map(([key, raw]) => {
     const input = typeof raw === "number" ? `<input class="calculator-draft-field" data-field="${esc(key)}" type="number" step="any" value="${raw}">` : `<input class="calculator-draft-field" data-field="${esc(key)}" value="${esc(raw ?? "")}">`;
     return `<label>${esc(key)}${input}</label>`;
   }).join("");
   const profiles = value.day_profiles ? `<label>Day profiles (24-hour JSON, edit only when fully cited)<textarea class="calculator-draft-json-field" data-field="day_profiles" spellcheck="false">${esc(JSON.stringify(value.day_profiles, null, 2))}</textarea></label>` : "";
   const citation = item.citations?.[0] || {};
-  const geometry = item.geometry_status ? `<small>geometry: ${esc(item.geometry_status)}${item.geometry_reference ? ` · witness ${esc(item.geometry_reference)}` : ""}</small>` : "";
-  const unresolved = item.unresolved_fields?.length ? `<small>unresolved: ${esc(item.unresolved_fields.join(", "))}</small>` : "";
+  const geometryStatus = item.geometry_status || value.geometry_status;
+  const geometryReference = item.geometry_reference || value.geometry_reference;
+  const geometry = geometryStatus ? `<small>geometry: ${esc(geometryStatus)}${geometryReference ? ` · witness ${esc(Array.isArray(geometryReference) ? geometryReference.join(" · ") : geometryReference)}` : ""}</small>` : "";
+  const unresolvedFields = item.unresolved_fields || value.unresolved_fields || [];
+  const unresolved = unresolvedFields.length ? `<small>unresolved: ${esc(unresolvedFields.join(", "))}</small>` : "";
   const floor = item.floor_id ? `<small>floor candidate: ${esc(item.floor_id)}</small>` : "";
-  return `<article class="review-item draft-candidate" data-candidate="${esc(item.candidate_id)}"><div><b>${esc(item.kind)} · ${esc(item.candidate_id)}</b><span>${esc(item.reason || "Source-backed proposal")}</span><small>${citationText(item.citations)} · confidence ${esc(item.confidence || "unknown")} · target ${esc(item.target_artifact || "")}</small>${geometry}${unresolved}${floor}<details><summary>Review fields and evidence</summary><div class="draft-fields">${fields}${profiles}<label>Engineer review source<input class="calculator-draft-review-field" data-field="source" placeholder="Reviewer, calculation note, or marked-up drawing"></label><label>Reviewer<input class="calculator-draft-review-field" data-field="reviewer" placeholder="Name / initials"></label><label>Review citation reference<input class="calculator-draft-review-field" data-field="citation_reference" value="${esc(citation.reference || "")}"></label><label>Review excerpt<textarea class="calculator-draft-review-field" data-field="citation_excerpt">${esc(citation.excerpt || "")}</textarea></label></div></details></div><label>Decision <select class="calculator-draft-decision" data-candidate="${esc(item.candidate_id)}"><option value="pending" ${action === "pending" ? "selected" : ""}>Pending review</option><option value="accept" ${action === "accept" ? "selected" : ""}>Accept</option><option value="edit" ${action === "edit" ? "selected" : ""}>Edit</option><option value="reject" ${action === "reject" ? "selected" : ""}>Reject</option><option value="needs_evidence" ${action === "needs_evidence" ? "selected" : ""}>Needs evidence</option></select></label></article>`;
+  const geometryEvidence = value.geometry || value.geometry_evidence ? `<small>geometry evidence: ${esc(JSON.stringify(value.geometry || value.geometry_evidence))}</small>` : "";
+  return `<article class="review-item draft-candidate" data-candidate="${esc(item.candidate_id)}"><div><b>${esc(item.kind)} · ${esc(item.candidate_id)}</b><span>${esc(item.reason || "Source-backed proposal")}</span><small>${citationText(item.citations)} · confidence ${esc(item.confidence || "unknown")} · target ${esc(item.target_artifact || "")}</small>${geometry}${geometryEvidence}${unresolved}${floor}<details><summary>Review fields and evidence</summary><div class="draft-fields">${fields}${profiles}<label>Engineer review source<input class="calculator-draft-review-field" data-field="source" placeholder="Reviewer, calculation note, or marked-up drawing"></label><label>Reviewer<input class="calculator-draft-review-field" data-field="reviewer" placeholder="Name / initials"></label><label>Review citation reference<input class="calculator-draft-review-field" data-field="citation_reference" value="${esc(citation.reference || "")}"></label><label>Review excerpt<textarea class="calculator-draft-review-field" data-field="citation_excerpt">${esc(citation.excerpt || "")}</textarea></label></div></details></div><label>Decision <select class="calculator-draft-decision" data-candidate="${esc(item.candidate_id)}"><option value="pending" ${action === "pending" ? "selected" : ""}>Pending review</option><option value="accept" ${action === "accept" ? "selected" : ""}>Accept</option><option value="edit" ${action === "edit" ? "selected" : ""}>Edit</option><option value="reject" ${action === "reject" ? "selected" : ""}>Reject</option><option value="needs_evidence" ${action === "needs_evidence" ? "selected" : ""}>Needs evidence</option></select></label></article>`;
 }
 
 function calculatorDraftReviewMarkup(item, savedDecision){
@@ -1298,6 +1440,7 @@ function addHourlyZone(zone = {}){
   row.innerHTML = `<input class="hourly-zone-id" placeholder="Zone ID" value="${esc(zone.zone_id || "")}">
     <input class="hourly-zone-name" placeholder="Zone name" value="${esc(zone.name || "")}">
     <input class="hourly-zone-floor" placeholder="Floor ID" value="${esc(zone.floor_id || "")}">
+    <input class="hourly-zone-height" type="number" min="1" step="1" placeholder="Ceiling height mm (optional)" value="${zone.ceiling_height_mm ?? ""}">
     <select class="hourly-zone-status"><option value="missing">Missing</option><option value="provisional">Provisional</option><option value="confirmed">Confirmed</option></select>
     <input class="hourly-zone-source" placeholder="Reviewed source" value="${esc(zone.source || "")}">
     <button class="btn ghost mini" type="button">Remove</button>`;
@@ -1317,7 +1460,7 @@ const ROOM_COMPONENT_TYPES = [
 function defaultRoomComponents(){
   return ROOM_COMPONENT_TYPES.map(([component_type]) => ({
     component_id: component_type, component_type, value: null, unit: "", source_room_id: "", source: "", citations: [],
-    verification_status: "missing", calculation_status: "not_assessed",
+    verification_status: "missing", calculation_status: "not_assessed", method_id: "", air_path: "", flow_reference: "",
   }));
 }
 
@@ -1332,13 +1475,16 @@ function roomComponentMarkup(component = {}){
   return `<div class="room-component">
     <input class="room-component-id" placeholder="Component ID" value="${esc(component.component_id || "")}">
     <select class="room-component-type">${typeOptions}</select>
-    <select class="room-component-state"><option value="not_assessed">Not assessed</option><option value="not_present_confirmed">Not present, confirmed</option><option value="stored_not_calculated">Stored, not calculated</option></select>
+    <select class="room-component-state"><option value="not_assessed">Not assessed</option><option value="not_present_confirmed">Not present, confirmed</option><option value="stored_not_calculated">Stored, not calculated</option><option value="calculated">Calculate (approved infiltration only)</option></select>
     <input class="room-component-value" type="number" min="0" step="any" placeholder="Raw value" value="${component.value ?? ""}">
     <input class="room-component-unit" placeholder="Unit (e.g. L/s)" value="${esc(component.unit || "")}">
     <input class="room-component-source-room" placeholder="Source room ID (transfer only)" value="${esc(component.source_room_id || "")}">
     <select class="room-component-status"><option value="missing">Missing</option><option value="provisional">Provisional</option><option value="confirmed">Confirmed</option></select>
     <input class="room-component-source" placeholder="Evidence source" value="${esc(component.source || "")}">
     <input class="room-component-citation" placeholder="Citation reference (optional)" value="${esc(citation)}">
+    <input class="room-component-method" placeholder="Method ID (infiltration)" value="${esc(component.method_id || "")}">
+    <input class="room-component-air-path" placeholder="Air path (infiltration)" value="${esc(component.air_path || "")}">
+    <input class="room-component-flow-reference" placeholder="Flow reference (infiltration)" value="${esc(component.flow_reference || "")}">
   </div>`;
 }
 
@@ -1362,6 +1508,7 @@ function addHourlyRoom(room = {}){
     <div class="room-input-grid">
       <fieldset><legend>Supported cooling inputs</legend>
         <label>Area m²<input class="room-area" type="number" min="0" step="any" value="${room.area_m2 ?? ""}"></label>
+        <label>Ceiling height mm<input class="room-ceiling-height" type="number" min="1" step="1" value="${room.ceiling_height_mm ?? ""}"></label>
         <label>Occupancy<input class="room-occupancy" type="number" min="0" step="any" value="${room.occupancy ?? ""}"></label>
         <label>Cooling setpoint °C<input class="room-setpoint" type="number" step="any" value="${room.indoor_cooling_setpoint_c ?? ""}"></label>
         <label>People sensible W/person<input class="room-people-sensible" type="number" min="0" step="any" value="${cooling.people_sensible_w_per_person ?? ""}"></label>
@@ -1381,9 +1528,10 @@ function addHourlyRoom(room = {}){
         <label>People schedule<input class="room-people-schedule" value="${esc(room.schedule_assignments?.people || "")}"></label>
         <label>Lighting schedule<input class="room-lighting-schedule" value="${esc(room.schedule_assignments?.lighting || "")}"></label>
         <label>Outside-air schedule<input class="room-outside-air-schedule" value="${esc(room.schedule_assignments?.outside_air || "")}"></label>
+        <label>Infiltration schedule<input class="room-infiltration-schedule" value="${esc(room.schedule_assignments?.infiltration || "")}"></label>
         <p class="fine">Heat-source and solar schedules remain tied to their existing reviewed source/surface records.</p>
       </fieldset>
-      <fieldset class="room-airflow-components"><legend>Airflow declarations — stored, not calculated</legend>${components.filter(item => ROOM_COMPONENT_TYPES.find(row => row[0] === item.component_type)?.[2] === "airflow").map(roomComponentMarkup).join("")}</fieldset>
+      <fieldset class="room-airflow-components"><legend>Airflow declarations — infiltration can calculate only after the approved method gate</legend>${components.filter(item => ROOM_COMPONENT_TYPES.find(row => row[0] === item.component_type)?.[2] === "airflow").map(roomComponentMarkup).join("")}</fieldset>
       <fieldset class="room-moisture-components"><legend>Moisture and process declarations — stored, not calculated</legend>${components.filter(item => ROOM_COMPONENT_TYPES.find(row => row[0] === item.component_type)?.[2] === "moisture").map(roomComponentMarkup).join("")}</fieldset>
     </div>`;
   card.querySelector(".hourly-room-mapping").value = room.mapping_status || "inferred";
@@ -1420,8 +1568,9 @@ function drawRoomInputCoverage(model = {}){
     const components = normaliseRoomComponents(room.unapproved_components);
     const stored = components.filter(item => item.calculation_status === "stored_not_calculated");
     const unassessed = components.filter(item => item.calculation_status === "not_assessed");
+    const calculated = components.filter(item => item.calculation_status === "calculated");
     if (!stored.length && !unassessed.length) {
-      return `<article class="review-item readiness-review_ready"><div><b>${esc(room.room_id)} · reviewed supported room scope</b><span>All airflow and moisture categories are confirmed not present.</span></div></article>`;
+      return `<article class="review-item readiness-review_ready"><div><b>${esc(room.room_id)} · reviewed supported room scope</b><span>${calculated.length ? `Calculated: ${esc(calculated.map(item => item.component_type).join(", "))}. ` : ""}All remaining airflow and moisture categories are confirmed not present.</span></div></article>`;
     }
     const storedText = stored.map(item => `${item.component_type}${item.value !== null && item.value !== undefined ? ` (${item.value} ${item.unit})` : ""}`).join(", ");
     const unassessedText = unassessed.map(item => item.component_type).join(", ");
@@ -1440,6 +1589,7 @@ function readHourlyModel(){
   }));
   const zones = [...requiredElement("hourlyZones").querySelectorAll(".hierarchy-row")].map(row => ({...(zonesById.get(row.querySelector(".hourly-zone-id").value.trim()) || {}),
     zone_id: row.querySelector(".hourly-zone-id").value.trim(), name: row.querySelector(".hourly-zone-name").value.trim(), floor_id: row.querySelector(".hourly-zone-floor").value.trim(),
+    ceiling_height_mm: blankToNull(row.querySelector(".hourly-zone-height").value),
     verification_status: row.querySelector(".hourly-zone-status").value, source: row.querySelector(".hourly-zone-source").value.trim(), citations: [],
   }));
   const roomsById = new Map((HOURLY_MODEL.rooms || []).map(room => [room.room_id, room]));
@@ -1455,13 +1605,19 @@ function readHourlyModel(){
       const componentId = component.querySelector(".room-component-id").value.trim();
       const original = existingComponentsById.get(componentId);
       const originalCitation = original?.citations?.[0]?.reference || "";
+      const componentType = component.querySelector(".room-component-type").value;
+      const calculationStatus = component.querySelector(".room-component-state").value;
+      const calculatedInfiltration = componentType === "infiltration" && calculationStatus === "calculated";
       return {
-        component_id: componentId, component_type: component.querySelector(".room-component-type").value,
-        calculation_status: component.querySelector(".room-component-state").value,
+        component_id: componentId, component_type: componentType,
+        calculation_status: calculationStatus,
         value: blankToNull(component.querySelector(".room-component-value").value), unit: component.querySelector(".room-component-unit").value.trim(),
         source_room_id: component.querySelector(".room-component-source-room").value.trim(), verification_status: component.querySelector(".room-component-status").value,
         source: component.querySelector(".room-component-source").value.trim(),
         citations: citation === originalCitation ? (original?.citations || []) : (citation ? [{reference: citation, page: null, excerpt: ""}] : []),
+        method_id: calculatedInfiltration ? "infiltration_psychrometric_v1" : component.querySelector(".room-component-method").value.trim(),
+        air_path: calculatedInfiltration ? "uncontrolled_infiltration" : component.querySelector(".room-component-air-path").value.trim(),
+        flow_reference: calculatedInfiltration ? "outdoor_design_condition" : component.querySelector(".room-component-flow-reference").value.trim(),
       };
     });
     Object.assign(load, {
@@ -1480,15 +1636,17 @@ function readHourlyModel(){
       mapping_status: row.querySelector(".hourly-room-mapping").value, verification_status: row.querySelector(".hourly-room-status").value,
       source: row.querySelector(".hourly-room-source").value.trim(), citations: existing.citations || [],
       area_m2: blankToNull(card.querySelector(".room-area").value), occupancy: blankToNull(card.querySelector(".room-occupancy").value),
+      ceiling_height_mm: blankToNull(card.querySelector(".room-ceiling-height").value),
       indoor_cooling_setpoint_c: blankToNull(card.querySelector(".room-setpoint").value), cooling_load: load, cooling_load_conditions: conditions,
-      schedule_assignments: {...(existing.schedule_assignments || {}), people: card.querySelector(".room-people-schedule").value.trim(), lighting: card.querySelector(".room-lighting-schedule").value.trim(), outside_air: card.querySelector(".room-outside-air-schedule").value.trim()},
+      schedule_assignments: {...(existing.schedule_assignments || {}), people: card.querySelector(".room-people-schedule").value.trim(), lighting: card.querySelector(".room-lighting-schedule").value.trim(), outside_air: card.querySelector(".room-outside-air-schedule").value.trim(), infiltration: card.querySelector(".room-infiltration-schedule").value.trim()},
       unapproved_components: components,
     };
   });
-  return {...HOURLY_MODEL, schema_version: 3, floors, zones, rooms};
+  return {...HOURLY_MODEL, schema_version: 4, floors, zones, rooms};
 }
 
 let HOURLY_MODEL = {floors: [], zones: [], rooms: []};
+let INFILTRATION_GATE = {};
 
 async function loadHourlyModel(){
   if (!DATA?.id) return;
@@ -1499,6 +1657,51 @@ async function loadHourlyModel(){
     HOURLY_MODEL = data.hourly_load_model || HOURLY_MODEL;
     showHourlyModel(HOURLY_MODEL, data.readiness || {});
   } catch (_) { /* The main design-input workflow remains usable offline. */ }
+}
+
+function showInfiltrationGate(gate = {}, readiness = {}){
+  INFILTRATION_GATE = gate || {};
+  requiredElement("infiltrationGateStatus").value = gate.approval_status || "placeholder";
+  requiredElement("infiltrationEngineerName").value = gate.engineer_name || "";
+  requiredElement("infiltrationEngineerCredential").value = gate.engineer_credential || "";
+  requiredElement("infiltrationApprovedAt").value = gate.approved_at || "";
+  requiredElement("infiltrationMethodCitation").value = gate.method_citation || "";
+  requiredElement("infiltrationScope").value = gate.scope || "Cooling infiltration sensible and latent load only.";
+  requiredElement("infiltrationGateCitation").value = gate.citations?.[0]?.reference || "";
+  requiredElement("infiltrationGateStatusText").textContent = readiness.message || "Infiltration method gate has not been saved.";
+}
+
+async function loadInfiltrationGate(){
+  if (!DATA?.id) return;
+  try {
+    const res = await fetch(`/api/infiltration-method-gate?project_id=${encodeURIComponent(DATA.id)}`);
+    const data = await res.json();
+    if (!res.ok || data.error) return;
+    showInfiltrationGate(data.infiltration_method_gate || {}, data.readiness || {});
+  } catch (_) { /* Gate is optional until a project has a review folder. */ }
+}
+
+async function saveInfiltrationGate(){
+  if (!DATA?.id) return;
+  const citation = requiredElement("infiltrationGateCitation").value.trim();
+  const gate = {
+    ...INFILTRATION_GATE,
+    approval_status: requiredElement("infiltrationGateStatus").value,
+    engineer_name: requiredElement("infiltrationEngineerName").value.trim(),
+    engineer_credential: requiredElement("infiltrationEngineerCredential").value.trim(),
+    approved_at: requiredElement("infiltrationApprovedAt").value.trim(),
+    method_citation: requiredElement("infiltrationMethodCitation").value.trim(),
+    scope: requiredElement("infiltrationScope").value.trim(),
+    citations: citation ? [{reference: citation, page: null, excerpt: "Approved infiltration method gate"}] : [],
+  };
+  try {
+    const res = await fetch("/api/infiltration-method-gate", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({project_id: DATA.id, infiltration_method_gate: gate})});
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || "Could not save infiltration method gate.");
+    showInfiltrationGate(data.infiltration_method_gate || {}, data.readiness || {});
+    CALCULATOR_INPUT_SET = null;
+    toast("Infiltration method gate saved", data.readiness?.message || "The report will become stale when eligible inputs are calculated.");
+  } catch (error) { toast("Infiltration gate failed", error.message); }
 }
 
 async function saveHourlyModel(action){
@@ -1517,6 +1720,173 @@ async function saveHourlyModel(action){
     toast("Hourly hierarchy failed", error.message);
   }
   requiredElement("btnSaveHourlyModel").disabled = false;
+}
+
+function splitContextRoomIds(value){
+  return value.split(",").map(item => item.trim()).filter(Boolean);
+}
+
+function readProjectContext(){
+  let roomUses = {};
+  const rawRoomUses = requiredElement("contextRoomUses").value.trim();
+  if (rawRoomUses) {
+    try { roomUses = JSON.parse(rawRoomUses); }
+    catch (_) { throw new Error("Room uses must be valid JSON keyed by room ID."); }
+  }
+  const citation = requiredElement("contextScopeCitation").value.trim();
+  const siteCitation = requiredElement("contextLocality").value.trim()
+    ? [{reference: requiredElement("contextLocality").value.trim(), page: null, excerpt: "Project location declaration"}]
+    : [];
+  return {
+    schema_version: 1,
+    site: {
+      country: "AU", locality: requiredElement("contextLocality").value.trim(),
+      state: requiredElement("contextState").value.trim(), climate_zone: requiredElement("contextClimateZone").value.trim(),
+      source: requiredElement("contextScopeSource").value.trim(), citations: siteCitation,
+    },
+    building_use: requiredElement("contextBuildingUse").value.trim(), room_uses: roomUses,
+    conditioned_scope: {
+      status: requiredElement("contextScopeSource").value.trim() ? "confirmed" : "missing",
+      mode: requiredElement("contextScopeMode").value,
+      room_ids: splitContextRoomIds(requiredElement("contextRoomIds").value),
+      source: requiredElement("contextScopeSource").value.trim(),
+      citations: citation ? [{reference: citation, page: null, excerpt: "Conditioned-scope declaration"}] : [],
+    },
+    reviewer: requiredElement("contextReviewer").value.trim(),
+  };
+}
+
+function showProjectContext(context = {}){
+  const site = context.site || {};
+  requiredElement("contextLocality").value = site.locality || "";
+  requiredElement("contextState").value = site.state || "";
+  requiredElement("contextClimateZone").value = site.climate_zone || "";
+  requiredElement("contextBuildingUse").value = context.building_use || "";
+  const scope = context.conditioned_scope || {};
+  requiredElement("contextScopeMode").value = scope.mode || "room_ids";
+  requiredElement("contextRoomIds").value = (scope.room_ids || []).join(", ");
+  requiredElement("contextScopeSource").value = scope.source || "";
+  requiredElement("contextScopeCitation").value = scope.citations?.[0]?.reference || "";
+  requiredElement("contextReviewer").value = context.reviewer || "";
+  requiredElement("contextRoomUses").value = Object.keys(context.room_uses || {}).length
+    ? JSON.stringify(context.room_uses, null, 2) : "";
+}
+
+function inputStatusLabel(status){
+  return ({project_evidence: "Project evidence", derived_evidence: "Derived from evidence", approved_default: "Approved default", project_override: "Project override", blocked: "Blocked", excluded: "Excluded"})[status] || status || "Unknown";
+}
+
+function calculatorInputGroup(target = ""){
+  const key = target.toLowerCase();
+  if (key.includes("schedule")) return "Schedules";
+  if (key.includes("weather") || key.includes("scenario") || key.includes("setpoint") || key.includes("wet_bulb")) return "Weather and scenario";
+  if (key.includes("occup") || key.includes("people")) return "People and occupancy";
+  if (key.includes("lighting")) return "Lighting";
+  if (key.includes("equipment") || key.includes("heat_source")) return "Equipment";
+  if (key.includes("outside_air")) return "Outside air";
+  if (key.includes("envelope") || key.includes("surface") || key.includes("construction") || key.includes("glazing") || key.includes("boundary")) return "Envelope";
+  if (key.includes("infiltration") || key.includes("vapour") || key.includes("steam") || key.includes("process") || key.includes("transfer")) return "Unsupported components";
+  return "Topology and project inputs";
+}
+
+function calculatorInputValue(value){
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+function showCalculatorInputs(inputSet = {}, context = {}, overrides = {}){
+  CALCULATOR_INPUT_SET = inputSet?.input_fingerprint ? inputSet : null;
+  CALCULATOR_INPUT_OVERRIDES = overrides || {revision: 0, records: []};
+  PROJECT_CONTEXT = context || {};
+  showProjectContext(context);
+  const status = inputSet?.status || "not_assembled";
+  const included = inputSet?.included_room_ids || [];
+  const excluded = inputSet?.excluded_room_ids || [];
+  const resolved = inputSet?.resolved_inputs || [];
+  const currentAssembly = inputSet?.current_assembly || {};
+  const coverage = inputSet?.snapshot_stale ? (currentAssembly.coverage_summary || {}) : (inputSet?.coverage_summary || {});
+  const counts = resolved.reduce((total, row) => {
+    total[row.resolution_status || "unknown"] = (total[row.resolution_status || "unknown"] || 0) + 1;
+    return total;
+  }, {});
+  requiredElement("calculatorInputStatus").textContent = inputSet?.input_fingerprint
+    ? `${inputSet.snapshot_stale ? "stale snapshot · reassemble required" : status} · immutable snapshot ${inputSet.input_fingerprint.slice(0, 12)} · ${included.length} included room${included.length === 1 ? "" : "s"}${excluded.length ? ` · ${excluded.length} excluded` : ""}`
+    : "Save a conditioned scope, then assemble a traceable cooling input set.";
+  const grouped = resolved.reduce((result, row) => { (result[calculatorInputGroup(row.target)] ||= []).push(row); return result; }, {});
+  const coverageCard = inputSet?.input_fingerprint ? `<article class="input-coverage-card"><div><b>Input coverage</b><span>${coverage.complete_scope ? "Complete active room scope" : "Included-scope calculation only"}</span></div><div class="input-coverage-grid"><div><small>Included</small><strong>${esc((coverage.included_room_ids || included).join(", ") || "None")}</strong></div><div><small>Blocked</small><strong>${esc((coverage.blocked_room_ids || []).join(", ") || "None")}</strong></div><div><small>Draft-only</small><strong>${esc((coverage.draft_only_room_ids || []).join(", ") || "None")}</strong></div><div><small>Excluded</small><strong>${esc((coverage.excluded_room_ids || excluded).join(", ") || "None")}</strong></div></div></article>` : "";
+  const register = Object.entries(grouped).map(([group, rows]) => `<details class="review-item input-register-group" open><summary><b>${esc(group)}</b><span>${rows.length} field${rows.length === 1 ? "" : "s"}</span></summary>${rows.map(row => `<div class="input-register-row"><div><b>${esc(row.target)}</b><span>${esc(inputStatusLabel(row.resolution_status))} · ${esc(calculatorInputValue(row.value))} ${esc(row.unit || "")}</span><small>${esc(row.source || row.policy_rule || "")}${row.citations?.length ? ` · ${esc(citationText(row.citations))}` : ""}${row.derivation?.formula ? ` · formula: ${esc(row.derivation.formula)}` : ""}</small></div></div>`).join("")}</details>`).join("");
+  requiredElement("calculatorInputSummary").innerHTML = inputSet?.input_fingerprint ? `${coverageCard}<article class="review-item"><div><b>Resolved input register</b><span>${esc(resolved.length)} fields · ${esc(counts.project_evidence || 0)} project evidence · ${esc(counts.derived_evidence || 0)} derived · ${esc(counts.approved_default || 0)} approved defaults · ${esc(counts.project_override || 0)} overrides</span><small>Policy: ${esc(inputSet.policy_version || "")}; source pack: ${esc(inputSet.source_pack_version || "not selected")}</small></div></article>${register}` : "";
+  const issues = inputSet?.snapshot_stale ? (currentAssembly.issues || []) : (inputSet?.issues || []);
+  const issueRows = issues.slice().sort((a, b) => ({blocked: 0, draft: 1}[a.status] ?? 2) - ({blocked: 0, draft: 1}[b.status] ?? 2));
+  requiredElement("calculatorInputIssues").innerHTML = issueRows.length
+    ? `<div class="draft-group-title">Ranked calculation exceptions</div>${issueRows.map(issue => `<article class="review-item readiness-${esc(issue.status || "blocked")}"><div><b>${esc(issue.status || "blocked")} · ${esc(issue.affected_id || "project")}</b><span>${esc(issue.reason || "Resolve this input before calculating.")}</span><small>${esc(issue.source_artifact || "")}${issue.input_id ? ` · ${esc(issue.input_id)}` : ""}</small></div></article>`).join("")}`
+    : inputSet?.input_fingerprint ? "<article class=\"review-item\"><div><b>No assembly exceptions</b><span>Check the report readiness after calculation; unsupported components remain visible there.</span></div></article>" : "";
+}
+
+async function loadCalculatorInputs(){
+  if (!DATA?.id) return;
+  try {
+    const res = await fetch(`/api/calculator-inputs?project_id=${encodeURIComponent(DATA.id)}`);
+    const data = await res.json();
+    if (!res.ok || data.error) return;
+    CALCULATOR_INPUTS_AVAILABLE = true;
+    showCalculatorInputs(data.calculator_input_set || {}, data.project_context || {}, data.calculator_input_overrides || {});
+  } catch (_) { /* Input assembly is optional until hourly artifacts are available. */ }
+}
+
+async function saveProjectContext(){
+  if (!DATA?.id) return;
+  try {
+    const res = await fetch("/api/calculator-inputs", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({project_id: DATA.id, action: "save_context", project_context: readProjectContext()})});
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || "Could not save project context.");
+    showProjectContext(data.project_context || {});
+    toast("Project context saved", "Reassemble inputs to create a new immutable snapshot.");
+  } catch (error) { toast("Project context failed", error.message); }
+}
+
+async function assembleCalculatorInputs(){
+  if (!DATA?.id) return;
+  requiredElement("btnAssembleCalculatorInputs").disabled = true;
+  try {
+    const selected = requiredElement("hourlyScenarioIds").value.split(",").map(value => value.trim()).filter(Boolean);
+    const res = await fetch("/api/calculator-inputs", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({project_id: DATA.id, action: "assemble", selected_scenario_ids: selected})});
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || "Could not assemble cooling inputs.");
+    CALCULATOR_INPUT_SET = data.calculator_input_set || null;
+    showCalculatorInputs(data.calculator_input_set || {}, PROJECT_CONTEXT, CALCULATOR_INPUT_OVERRIDES);
+    toast("Cooling inputs assembled", `${data.status} snapshot created. Resolve only the listed exceptions.`);
+  } catch (error) { toast("Input assembly failed", error.message); }
+  requiredElement("btnAssembleCalculatorInputs").disabled = false;
+}
+
+async function saveCalculatorOverride(){
+  if (!DATA?.id) return;
+  const citation = requiredElement("inputOverrideCitation").value.trim();
+  const value = blankToNull(requiredElement("inputOverrideValue").value);
+  const record = {
+    override_id: requiredElement("inputOverrideId").value.trim(), target: requiredElement("inputOverrideTarget").value.trim(), value,
+    unit: requiredElement("inputOverrideUnit").value.trim(), source: requiredElement("inputOverrideSource").value.trim(),
+    reviewer: requiredElement("inputOverrideReviewer").value.trim(), citations: citation ? [{reference: citation, page: null, excerpt: "Project-specific calculator override"}] : [],
+  };
+  try {
+    const res = await fetch("/api/calculator-inputs", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({project_id: DATA.id, action: "save_override", expected_revision: CALCULATOR_INPUT_OVERRIDES.revision, override: record})});
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || "Could not save the cited override.");
+    CALCULATOR_INPUT_OVERRIDES = data.calculator_input_overrides;
+    toast("Cited override saved", "Reassemble inputs to create a new immutable snapshot.");
+  } catch (error) { toast("Override failed", error.message); }
+}
+
+async function refreshResearch(){
+  if (!DATA?.id) return;
+  try {
+    const res = await fetch("/api/calculator-inputs", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({project_id: DATA.id, action: "refresh_research"})});
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || "Could not refresh approved sources.");
+    toast("Research source packs", data.message || "Approved local source cache is current.");
+  } catch (error) { toast("Research refresh unavailable", error.message); }
 }
 
 function drawCoolingReadiness(readiness = {}, artifacts = {}){
@@ -1550,9 +1920,19 @@ function drawHourlyLoadReport(report = {}, artifactStatus = "not_calculated"){
   requiredElement("hourlyLoadResults").innerHTML = [...scenarios.map(scenario => {
     const peak = scenario.included_scope_peak || {};
     const blocked = scenario.scope_summary?.blocked_rooms || [];
+    const infiltrationRows = (scenario.rooms || []).map(room => {
+      const infiltration = room.peak?.components?.infiltration;
+      if (!infiltration) return "";
+      const input = infiltration.inputs || infiltration.input_rows?.[0] || {};
+      const volume = input.room_volume_m3 == null ? "not required" : `${Number(input.room_volume_m3).toFixed(2)} m³`;
+      return `<li><b>${esc(room.name || room.room_id)}</b> · ${Number(infiltration.total_kw || 0).toFixed(2)} kW `
+        + `(sensible ${Number(infiltration.sensible_kw || 0).toFixed(2)} kW, latent ${Number(infiltration.latent_kw || 0).toFixed(2)} kW)`
+        + `<br><small>Peak hour ${esc(room.peak?.hour ?? "—")} · ${Number(input.resolved_flow_lps || 0).toFixed(2)} L/s resolved, ${Number(input.applied_flow_lps || 0).toFixed(2)} L/s applied · volume ${volume} · schedule ${Number(input.schedule_factor ?? 0).toFixed(2)} · signed diagnostics: ${Number(input.raw_signed_sensible_kw || 0).toFixed(2)} sensible / ${Number(input.raw_signed_latent_kw || 0).toFixed(2)} latent kW</small></li>`;
+    }).filter(Boolean);
     return `<article class="heat-load-result"><b>${esc(scenario.title || scenario.scenario_id)} · ${esc(scenario.status)}</b>
       <span>Included-scope subtotal peak ${Number(peak.design_total_kw || 0).toFixed(2)} kW${scenario.scope_summary?.complete_scope ? "" : " · not a complete project duty"}</span>
-      ${blocked.length ? `<span>Omitted rooms: ${esc(blocked.map(item => item.room_id).join(", "))}</span>` : ""}</article>`;
+      ${blocked.length ? `<span>Omitted rooms: ${esc(blocked.map(item => item.room_id).join(", "))}</span>` : ""}
+      ${infiltrationRows.length ? `<details><summary>Infiltration at each room governing hour</summary><ul class="audit-list">${infiltrationRows.join("")}</ul></details>` : ""}</article>`;
   }), ...scopeRows].join("");
 }
 
@@ -1568,11 +1948,14 @@ async function loadHourlyLoadReport(){
 
 async function calculateHourlyLoad(){
   if (!DATA?.id) return;
+  if (CALCULATOR_INPUTS_AVAILABLE && (!CALCULATOR_INPUT_SET?.input_fingerprint || CALCULATOR_INPUT_SET.snapshot_stale)) {
+    return toast("Assemble inputs first", "Create or refresh the immutable cooling-input snapshot before calculating.");
+  }
   requiredElement("btnCalculateHourlyLoad").disabled = true;
   requiredElement("hourlyReportStatus").textContent = "Calculating the hourly cooling report…";
   try {
     const ids = requiredElement("hourlyScenarioIds").value.split(",").map(value => value.trim()).filter(Boolean);
-    const res = await fetch("/api/hourly-load-report", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({project_id: DATA.id, selected_scenario_ids: ids})});
+    const res = await fetch("/api/hourly-load-report", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({project_id: DATA.id, selected_scenario_ids: ids, input_set_fingerprint: CALCULATOR_INPUT_SET?.input_fingerprint || ""})});
     const data = await res.json();
     if (!res.ok || data.error) throw new Error(data.error || "Could not calculate the cooling report.");
     drawHourlyLoadReport(data.hourly_load_report, data.status);

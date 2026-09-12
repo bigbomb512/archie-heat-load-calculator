@@ -9,6 +9,8 @@ from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
 import json
+from pathlib import Path
+from urllib.parse import urlparse
 
 
 RESEARCH_CATEGORIES = {
@@ -28,7 +30,34 @@ def fingerprint(value):
 
 
 def empty_research_cache():
-    return {"schema_version": 1, "revision": 0, "records": [], "updated_at": "", "fingerprint": ""}
+    return {"schema_version": 1, "revision": 0, "source_pack_version": "", "records": [], "updated_at": "", "fingerprint": ""}
+
+
+def approved_source_pack(pack_version):
+    path = Path(__file__).resolve().parents[1] / "config" / "approved_research_source_packs.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return (data.get("packs") or {}).get(str(pack_version), {})
+
+
+def _allowed_domain(url, pack):
+    host = (urlparse(str(url)).hostname or "").lower()
+    return any(host == domain or host.endswith("." + domain) for domain in pack.get("allowed_domains", []))
+
+
+def released_source_record(cache, record):
+    """Whether a record may supply an automatic default, not merely be stored."""
+    pack_version = cache.get("source_pack_version", "")
+    pack = approved_source_pack(pack_version)
+    return bool(
+        pack
+        and record.get("source_pack_version") == pack_version
+        and record.get("review_status") == "approved"
+        and record.get("released") is True
+        and _allowed_domain(record.get("url", ""), pack)
+    )
 
 
 def _parse_time(value):
@@ -57,7 +86,22 @@ def validate_record(record):
         raise ValueError("Research retrieved_at must be an ISO timestamp.")
     if record["expiry"] and not _parse_time(record["expiry"]):
         raise ValueError("Research expiry must be an ISO timestamp.")
-    return deepcopy(record)
+    result = deepcopy(record)
+    result["source_pack_version"] = str(result.get("source_pack_version", "")).strip()
+    result["released"] = bool(result.get("released", False))
+    bindings = result.get("bindings", [])
+    if not isinstance(bindings, list):
+        raise ValueError("Research record bindings must be a list.")
+    checked_bindings = []
+    for index, binding in enumerate(bindings, start=1):
+        if not isinstance(binding, dict):
+            raise ValueError("Research binding must be an object.")
+        target = str(binding.get("target", "")).strip()
+        if not target or binding.get("value") in (None, ""):
+            raise ValueError(f"Research binding {index} needs a target and value.")
+        checked_bindings.append({"target": target, "value": deepcopy(binding["value"]), "unit": str(binding.get("unit", result["unit"])).strip(), "scope": deepcopy(binding.get("scope", {}))})
+    result["bindings"] = checked_bindings
+    return result
 
 
 def validate_cache(cache):
@@ -69,7 +113,8 @@ def validate_cache(cache):
         raise ValueError("Research record IDs must be unique.")
     result = deepcopy(cache)
     result["records"] = records
-    result["fingerprint"] = fingerprint({"revision": result.get("revision", 0), "records": records})
+    result["source_pack_version"] = str(cache.get("source_pack_version", ""))
+    result["fingerprint"] = fingerprint({"revision": result.get("revision", 0), "source_pack_version": result["source_pack_version"], "records": records})
     return result
 
 
@@ -91,11 +136,49 @@ def eligible_records(cache, category, scope=None, now=None):
     return eligible
 
 
+def _scope_matches(record_scope, requested):
+    """A record can be broader than a project, but may not contradict it."""
+    for key, value in (requested or {}).items():
+        if value in (None, ""):
+            continue
+        if key in record_scope and record_scope[key] not in (None, "", value):
+            return False
+    return True
+
+
+def eligible_bindings(cache, target, scope=None, now=None):
+    """Return approved, unexpired target-specific records for deterministic use.
+
+    Bindings make a source record useful only for fields it explicitly declares;
+    a generic occupancy or weather record can never be guessed onto a field.
+    """
+    cache = validate_cache(cache)
+    now = now or datetime.now(timezone.utc)
+    result = []
+    for record in cache["records"]:
+        if not released_source_record(cache, record):
+            continue
+        expiry = _parse_time(record.get("expiry"))
+        if expiry and expiry <= now:
+            continue
+        for binding in record.get("bindings", []):
+            if binding["target"] != target:
+                continue
+            combined_scope = dict(record.get("scope") or {})
+            combined_scope.update(binding.get("scope") or {})
+            if not _scope_matches(combined_scope, scope or {}):
+                continue
+            item = deepcopy(record)
+            item.update({"value": deepcopy(binding["value"]), "unit": binding.get("unit", record["unit"]), "binding_target": target, "scope": combined_scope})
+            result.append(item)
+    return sorted(result, key=lambda row: row["record_id"])
+
+
 def upsert_record(cache, record):
     result = validate_cache(cache)
     record = validate_record(record)
     result["records"] = [row for row in result["records"] if row["record_id"] != record["record_id"]] + [record]
     result["revision"] = int(result.get("revision", 0)) + 1
     result["updated_at"] = timestamp()
-    result["fingerprint"] = fingerprint({"revision": result["revision"], "records": result["records"]})
+    result["fingerprint"] = fingerprint({"revision": result["revision"], "source_pack_version": result.get("source_pack_version", ""), "records": result["records"]})
     return result

@@ -5,11 +5,13 @@ approves geometry or engineering inputs and never calculates loads.
 """
 
 from collections import defaultdict
+from copy import deepcopy
 import hashlib
 import json
 
 from ai.drawing_coverage import source_fingerprint, timestamp
 from ai.fact_registry import registry_from_fusion
+from ai.geometry_resolution import build_geometry_resolution
 
 
 ROLE_ALIASES = {
@@ -17,6 +19,8 @@ ROLE_ALIASES = {
     "supporting_geometry_plan": "supporting_geometry_plan",
     "reflected_ceiling_plan": "reflected_ceiling_or_service_plan",
     "services_or_lighting_plan": "reflected_ceiling_or_service_plan",
+    "opening_elevation": "opening_elevation",
+    "opening_schedule": "opening_schedule",
     "elevation": "elevation_or_section",
     "section": "elevation_or_section",
     "detail": "construction_or_detail",
@@ -53,8 +57,14 @@ def _page_register(ai_input, coverage):
             "confidence": role.get("confidence", page.get("confidence", 0)),
             "classification_evidence": role.get("classification_evidence", page.get("classification_evidence", [])),
             "geometry_eligible": bool(role.get("geometry_eligible", proposed in {"primary_geometry_plan", "supporting_geometry_plan"})),
+            "opening_geometry_eligible": bool(role.get("opening_geometry_eligible", proposed == "opening_elevation")),
             "reference_only": bool(role.get("reference_only", proposed in {"legend_or_general_notes", "construction_or_detail", "3d_reference"})),
             "authority_status": role.get("authority_status", "proposed"),
+            "capabilities": role.get("capabilities", []),
+            "visual_available": role.get("visual_available", False),
+            "text_available": role.get("text_available", False),
+            "vector_available": role.get("vector_available", False),
+            "page_group": role.get("page_group", ""),
             "source_fingerprint": fp,
             "source": {"page": page.get("page"), "drawing_number": page.get("drawing_number", ""), "kind": "architect_pdf_page"},
         })
@@ -68,8 +78,109 @@ def _citation(item, page_map):
             "source": "architect_pdf"}
 
 
+def _normalise_label(value):
+    return " ".join(str(value or "").casefold().split())
+
+
+def _opening_tag(entity):
+    return str(entity.get("value", {}).get("tag", "")).upper().strip()
+
+
+def _direct_geometry(entity):
+    geometry = entity.get("value", {}).get("geometry") or {}
+    dimensions = entity.get("value", {}).get("dimensions") or {}
+    return bool(geometry.get("direct_dimension") and dimensions.get("width_mm") and dimensions.get("height_mm"))
+
+
+def _surface_label(entity):
+    value = entity.get("value", {})
+    return _normalise_label(value.get("surface_label") or value.get("adjacency") or entity.get("label"))
+
+
+def reconcile_plan_elevation_geometry(entities, pages):
+    """Link only unique, directly evidenced plan/elevation opening relationships."""
+    page_map = {row["page"]: row for row in pages}
+    plan_openings = defaultdict(list)
+    elevation_openings = []
+    plan_surfaces = defaultdict(list)
+    elevation_surfaces, boundary_surfaces = [], []
+    for entity in entities:
+        page = page_map.get(entity["source"].get("page"), {})
+        if entity["kind"] == "opening":
+            tag = _opening_tag(entity)
+            if page.get("geometry_eligible") and tag:
+                plan_openings[tag].append(entity)
+            if page.get("opening_geometry_eligible") and tag and _direct_geometry(entity):
+                elevation_openings.append(entity)
+        elif entity["kind"] == "surface":
+            label = _surface_label(entity)
+            geometry = entity.get("value", {}).get("geometry") or {}
+            if page.get("geometry_eligible") and label:
+                plan_surfaces[label].append(entity)
+            if page.get("opening_geometry_eligible") and label in {"shopfront", "storefront", "frontage"}:
+                boundary_surfaces.append(entity)
+            if page.get("opening_geometry_eligible") and geometry.get("direct_dimension") and label:
+                elevation_surfaces.append(entity)
+
+    relationships, conflicts, review_items = [], [], []
+    for elevation in elevation_openings:
+        tag = _opening_tag(elevation)
+        matches = plan_openings[tag]
+        if len(matches) == 1:
+            plan = matches[0]
+            elevation["value"]["geometry"]["unique_target"] = True
+            elevation["value"]["geometry"]["matched_plan_evidence_id"] = plan["evidence_ids"][0]
+            elevation["value"]["geometry"]["auto_activation_basis"] = "direct_dimension_unique_plan_tag"
+            relationships.append({
+                "relationship_id": "opening_match_" + _fingerprint([plan["entity_id"], elevation["entity_id"]])[:16],
+                "kind": "plan_elevation_opening_match", "from_entity_id": plan["entity_id"],
+                "to_entity_id": elevation["entity_id"], "status": "matched",
+                "basis": "exact_opening_tag", "pages": sorted({plan["source"].get("page"), elevation["source"].get("page")}),
+            })
+        else:
+            kind = "opening_plan_mapping_missing" if not matches else "opening_plan_mapping_ambiguous"
+            conflicts.append({
+                "conflict_id": "conflict_" + _fingerprint([kind, tag, elevation["entity_id"], [row["entity_id"] for row in matches]])[:16],
+                "kind": kind, "label": tag, "entity_ids": [elevation["entity_id"], *[row["entity_id"] for row in matches]],
+                "pages": sorted({elevation["source"].get("page"), *[row["source"].get("page") for row in matches]}),
+                "status": "review_required",
+                "reason": "A directly dimensioned elevation opening could not be matched to exactly one plan opening.",
+            })
+    for elevation in elevation_surfaces:
+        label = _surface_label(elevation)
+        matches = plan_surfaces[label]
+        if len(matches) == 1:
+            plan = matches[0]
+            elevation["value"]["geometry"]["matched_plan_evidence_id"] = plan["evidence_ids"][0]
+            relationships.append({
+                "relationship_id": "surface_match_" + _fingerprint([plan["entity_id"], elevation["entity_id"]])[:16],
+                "kind": "plan_elevation_parent_surface_match", "from_entity_id": plan["entity_id"],
+                "to_entity_id": elevation["entity_id"], "status": "matched",
+                "basis": "exact_surface_label", "pages": sorted({plan["source"].get("page"), elevation["source"].get("page")}),
+            })
+        elif matches:
+            conflicts.append({
+                "conflict_id": "conflict_" + _fingerprint(["surface_mapping", label, elevation["entity_id"]])[:16],
+                "kind": "surface_plan_mapping_ambiguous", "label": label,
+                "entity_ids": [elevation["entity_id"], *[row["entity_id"] for row in matches]],
+                "pages": sorted({elevation["source"].get("page"), *[row["source"].get("page") for row in matches]}),
+                "status": "review_required",
+                "reason": "A named elevation surface matches more than one plan surface.",
+            })
+    for surface in boundary_surfaces:
+        review_items.append({
+            "item_id": "fusion_issue_" + _fingerprint(["boundary", surface["entity_id"]])[:16],
+            "affected_id": surface["entity_id"], "status": "blocked", "field": "boundary_method",
+            "source_artifact": "architect_evidence_fusion.json", "page": surface["source"].get("page"),
+            "reason": "Storefront geometry is evidenced, but its thermal boundary is not established.",
+            "remediation": "Confirm whether the storefront faces outdoor air or an adjacent conditioned/unconditioned space before thermal use.",
+        })
+    return relationships, conflicts, review_items
+
+
 def build_evidence_fusion(ai_input, coverage=None, building=None, spatial_ocr=None,
-                          vector_geometry=None, vision_response=None):
+                          vector_geometry=None, vision_response=None,
+                          dimension_matches=None, geometry_confirmation=None):
     """Build a stable, proposal-only evidence graph from all architect pages."""
     coverage = coverage or {}
     building = building or {}
@@ -93,7 +204,7 @@ def build_evidence_fusion(ai_input, coverage=None, building=None, spatial_ocr=No
             label = item.get("name") or item.get("tag") or item.get("reference") or item.get("kind") or item.get("id")
             entity = {
                 "entity_id": _stable_id(fp, page, citation.get("drawing_number"), item.get("level_name"), label, item.get("geometry_reference", "")),
-                "kind": kind, "label": label, "value": item, "status": "proposal",
+                "kind": kind, "label": label, "value": deepcopy(item), "status": "proposal",
                 "confidence": item.get("confidence", "unknown"), "extraction_method": item.get("extraction_method", "structured_pdf"),
                 "geometry_status": item.get("geometry_status"), "source": citation,
                 "citations": [citation], "evidence_ids": [item.get("id", "")],
@@ -115,7 +226,18 @@ def build_evidence_fusion(ai_input, coverage=None, building=None, spatial_ocr=No
                               "pages": sorted(pages_for_label), "status": "review_required",
                               "reason": "Matching labels occur on multiple architect pages or levels; confirm identity before activation."})
 
-    relationships = []
+    relationships, geometry_conflicts, geometry_review_items = reconcile_plan_elevation_geometry(entities, pages)
+    conflicts.extend(geometry_conflicts)
+    geometry_resolution = build_geometry_resolution(
+        ai_input, coverage, building, spatial_ocr, vector_geometry,
+        dimension_matches=dimension_matches, geometry_confirmation=geometry_confirmation, vision_response=vision_response,
+    )
+    # Keep the existing entity relationship contract while adding the broader
+    # page/witness graph.  The new graph is evidence-only and cannot activate
+    # calculator inputs by itself.
+    relationships.extend(geometry_resolution["relationships"])
+    conflicts.extend(geometry_resolution["conflicts"])
+    geometry_review_items.extend(geometry_resolution["review_items"])
     for page in pages:
         same_drawing = [other["page"] for other in pages if other["page"] != page["page"] and other["drawing_number"] and other["drawing_number"] == page["drawing_number"]]
         if same_drawing:
@@ -123,7 +245,7 @@ def build_evidence_fusion(ai_input, coverage=None, building=None, spatial_ocr=No
                                   "from_page": page["page"], "to_pages": same_drawing[:12],
                                   "kind": "same_drawing_number", "status": "proposed"})
 
-    review_items = []
+    review_items = list(geometry_review_items)
     for level in building.get("levels", []):
         evidence = level.get("evidence") or []
         if not any(row.get("page") or row.get("reference") for row in evidence if isinstance(row, dict)):
@@ -150,6 +272,17 @@ def build_evidence_fusion(ai_input, coverage=None, building=None, spatial_ocr=No
                                      "affected_id": entity["entity_id"], "status": "blocked", "field": field,
                                      "source_artifact": "architect_evidence_fusion.json", "page": entity["source"].get("page"),
                                      "reason": f"Room evidence is missing reviewed {field}.", "remediation": "Review the cited architect page or leave unresolved."})
+        elif entity["kind"] == "opening":
+            geometry = value.get("geometry") or {}
+            dimensions = value.get("dimensions") or {}
+            if geometry.get("direct_dimension") and not dimensions.get("unit"):
+                review_items.append({
+                    "item_id": "fusion_issue_" + _fingerprint([entity["entity_id"], "dimension_unit"])[:16],
+                    "affected_id": entity["entity_id"], "status": "blocked", "field": "dimension_unit",
+                    "source_artifact": "architect_evidence_fusion.json", "page": entity["source"].get("page"),
+                    "reason": "Opening dimensions are printed, but the unit is not explicit in the cited evidence.",
+                    "remediation": "Link a cited unit note or leave the opening geometry inactive.",
+                })
     review_items.extend({"item_id": item["conflict_id"], "affected_id": item["conflict_id"], "status": "blocked",
                          "source_artifact": "architect_evidence_fusion.json", "page": (item.get("pages") or [None])[0],
                          "reason": item["reason"], "remediation": "Resolve the duplicate identity in the evidence-to-calculator review."} for item in conflicts)
@@ -161,6 +294,7 @@ def build_evidence_fusion(ai_input, coverage=None, building=None, spatial_ocr=No
         "schema_version": 2, "source_pdf": ai_input.get("source_pdf", ""), "source_fingerprint": fp,
         "generated_from": ["ai_input.json", "drawing_coverage.json", "building_evidence.json", "spatial_ocr.json", "vector_geometry.json", "vision_response.json"],
         "generated_at": timestamp(), "pages": pages, "entities": entities, "relationships": relationships,
+        "geometry_resolution": geometry_resolution,
         "conflicts": conflicts, "review_items": review_items,
         "sources": {"spatial_ocr": bool(spatial_ocr), "vector_geometry": bool(vector_geometry), "vision_response": bool(vision_response)},
         "activation_policy": "two_tier_metadata_only",
@@ -172,5 +306,6 @@ def build_evidence_fusion(ai_input, coverage=None, building=None, spatial_ocr=No
                                 "source_fingerprint": fp, "fact_count": len(registry["facts"]),
                                 "fingerprint": registry.get("fingerprint", "")}
     fusion["fingerprint"] = _fingerprint({"source": fp, "pages": pages, "entities": entities,
-                                           "facts": fusion["facts"], "conflicts": conflicts})
+                                           "facts": fusion["facts"], "relationships": relationships,
+                                           "geometry_resolution": geometry_resolution, "conflicts": conflicts})
     return fusion

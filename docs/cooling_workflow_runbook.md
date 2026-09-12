@@ -42,9 +42,29 @@ PYTHONPATH=. python3 tools/create_reviewed_cooling_case.py \
   --review-manifest /private/path/review_manifest.json
 ```
 
-The command fails if the packet has no source PDF or the manifest has no named
-reviewer. It creates a proposal-only `calculator_draft.json`; it never fills
-missing rooms, schedules, loads, or envelope values.
+If the packet already contains `drawing_coverage.json`, `building_evidence.json`,
+`architect_evidence_fusion.json`, and `calculator_draft.json`, bootstrap the
+calculator-side artifacts without rewriting any authored file:
+
+```bash
+PYTHONPATH=. python3 tools/create_reviewed_cooling_case.py \
+  --source-dir /private/path/evidence-packet \
+  --output-dir output/web_review/private-reviewed-cooling-case \
+  --bootstrap
+```
+
+Bootstrap creates only missing `project_context.json`,
+`calculator_input_overrides.json`, and `hourly_load_model.json`. Topology copied
+from the draft is provisional and carries candidate provenance; it does not
+confirm a floor, room geometry, area, envelope, or conditioned scope. Run it
+repeatedly as needed: existing files are preserved byte-for-byte. The API then
+requires the one explicit **Assemble cooling inputs** action before calculation.
+
+The normal prepare command fails if the packet has no source PDF or the
+manifest has no named reviewer. It creates a proposal-only
+`calculator_draft.json`; it never fills missing rooms, schedules, loads, or
+envelope values. Bootstrap also requires a source PDF, but can reuse the
+reviewer recorded in an existing private manifest.
 
 The tool verifies the derived coverage artifact against the `ai_input.json`
 source fingerprint and page count. Empty or stale coverage is rebuilt in
@@ -65,12 +85,18 @@ the case blocked or draft.
 In the browser:
 
 1. Build the Evidence-to-Calculator Draft.
-2. Inspect every source page and excerpt.
-3. Choose `accept`, `edit`, `reject`, or `needs_evidence`.
-4. Save the review.
-5. Preview changes and resolve conflicts or missing dependencies.
-6. Apply reviewed changes.
-7. Complete supported room cooling inputs in the hourly editor.
+2. Start in the **Geometry review workspace**. Page groups and room cards show
+   the linked plan, finish, ceiling/service, elevation and 3D cross-check
+   evidence. 3D pages are visual witnesses only and cannot supply dimensions.
+3. Resolve only the displayed exceptions: floor identity, room boundary,
+   geometry status, area evidence and conflicting witnesses.
+4. Choose `accept`, `edit`, `reject`, or `needs_evidence` on the linked
+   proposal below the room card.
+5. Save the review.
+6. Preview changes and resolve conflicts or missing dependencies.
+7. Apply reviewed changes. Topology is applied in floor → zone → room order;
+   authored records are never overwritten.
+8. Complete supported room cooling inputs in the hourly editor.
 
 Accepted evidence is not automatically a complete cooling input. Occupancy,
 schedules, setpoints, internal gains, envelope properties, and source status

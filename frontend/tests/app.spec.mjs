@@ -173,7 +173,7 @@ test("hourly cooling workflow displays a labelled partial draft", async ({ page 
   await page.route("**/api/hourly-load-model", async route => {
     const body = route.request().postDataJSON();
     expect(body.action).toBe("save");
-    expect(body.hourly_load_model.schema_version).toBe(3);
+    expect(body.hourly_load_model.schema_version).toBe(4);
     expect(body.hourly_load_model.floors[0]).toEqual(expect.objectContaining({floor_id: "level_01", verification_status: "confirmed"}));
     expect(body.hourly_load_model.zones[0]).toEqual(expect.objectContaining({zone_id: "zone_001", floor_id: "level_01"}));
     expect(body.hourly_load_model.rooms[0]).toEqual(expect.objectContaining({room_id: "room_001", zone_id: "zone_001", mapping_status: "confirmed"}));
@@ -266,6 +266,57 @@ test("evidence-to-calculator bridge saves, previews, and applies reviewed propos
   await expect(page.locator("#calculatorDraftSummary")).toContainText("created");
   await page.locator("#btnApplyCalculatorDraft").click();
   await expect(page.locator("#calculatorDraftSummary")).toContainText("Reports stale");
+  expect(errors).toEqual([]);
+});
+
+test("AI input assembly saves one project scope and calculates from an immutable snapshot", async ({ page }) => {
+  const errors = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await mockApi(page);
+  const context = {
+    schema_version: 1,
+    site: {country: "AU", locality: "Sydney", state: "NSW", climate_zone: "5", source: "Client brief", citations: []},
+    building_use: "retail", room_uses: {},
+    conditioned_scope: {status: "missing", mode: "all_rooms", room_ids: [], source: "", citations: []}, reviewer: "",
+  };
+  const snapshot = {
+    schema_version: 2, input_fingerprint: "snapshot-abc123", status: "draft", policy_version: "au-cooling-v1", source_pack_version: "au-retail-v1",
+    included_room_ids: ["room_001"], excluded_room_ids: [],
+    resolved_inputs: [{input_id: "input-1", target: "rooms.room_001.occupancy", value: 10, unit: "people", resolution_status: "derived_evidence", source: "Approved pack", policy_rule: "area × density", derivation: {formula: "occupancy = area × density"}}],
+    issues: [{status: "draft", affected_id: "room_001", reason: "Infiltration is not assessed and excluded.", source_artifact: "hourly_load_model.json"}],
+  };
+  await page.route("**/api/calculator-inputs**", async route => {
+    const request = route.request();
+    if (request.method() === "GET") return route.fulfill({json: {calculator_input_set: {}, project_context: context, calculator_input_overrides: {revision: 0, records: []}, status: "blocked"}});
+    const body = request.postDataJSON();
+    if (body.action === "save_context") {
+      expect(body.project_context.conditioned_scope).toEqual(expect.objectContaining({status: "confirmed", mode: "all_rooms", source: "Client cooling brief"}));
+      return route.fulfill({json: {project_context: {...body.project_context, revision: 1}, status: "current"}});
+    }
+    if (body.action === "assemble") {
+      expect(body.selected_scenario_ids).toEqual(["summer_day"]);
+      return route.fulfill({json: {calculator_input_set: snapshot, status: "draft"}});
+    }
+    return route.fulfill({json: {status: "not_available", message: "No worker configured."}});
+  });
+  await page.route("**/api/hourly-load-report", async route => {
+    const body = route.request().postDataJSON();
+    expect(body.input_set_fingerprint).toBe("snapshot-abc123");
+    return route.fulfill({json: {status: "current", hourly_load_report: {status: "draft", readiness: {status: "draft", issues: []}, scope_summary: {complete_scope: false}, scenario_results: []}}});
+  });
+  await page.goto("/");
+  await page.evaluate(requirements => { DATA = {id: "demo-project"}; show("vRes"); showDesignRequirements(requirements, {}, []); }, coolingRequirements);
+  await page.locator("#hourlyScenarioIds").fill("summer_day");
+  await page.locator("#calculatorInputSection details").first().evaluate(element => { element.open = true; });
+  await page.locator("#contextScopeMode").selectOption("all_rooms");
+  await page.locator("#contextScopeSource").fill("Client cooling brief");
+  await page.locator("#contextScopeCitation").fill("Brief section 2");
+  await page.locator("#btnSaveProjectContext").click();
+  await page.locator("#btnAssembleCalculatorInputs").click();
+  await expect(page.locator("#calculatorInputStatus")).toContainText("immutable snapshot");
+  await expect(page.locator("#calculatorInputSummary")).toContainText("Derived from evidence");
+  await expect(page.locator("#calculatorInputIssues")).toContainText("Infiltration");
+  await page.locator("#btnCalculateHourlyLoad").click();
   expect(errors).toEqual([]);
 });
 

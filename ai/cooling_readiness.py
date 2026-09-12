@@ -127,6 +127,7 @@ def assess_cooling_readiness(report, model, requirements_updated_at="", coverage
         stored = []
         unassessed = []
         confirmed_absent = []
+        calculated = []
         for component in room.get("unapproved_components", []):
             item = {
                 "component_id": component.get("component_id", ""), "component_type": component.get("component_type", ""),
@@ -137,11 +138,13 @@ def assess_cooling_readiness(report, model, requirements_updated_at="", coverage
                 stored.append(item)
             elif component.get("calculation_status") == "not_assessed":
                 unassessed.append(item)
+            elif component.get("calculation_status") == "calculated":
+                calculated.append(item)
             else:
                 confirmed_absent.append(item)
         room_input_coverage.append({
             "room_id": room.get("room_id", ""), "stored_not_calculated": stored,
-            "not_assessed": unassessed, "not_present_confirmed": confirmed_absent,
+            "calculated": calculated, "not_assessed": unassessed, "not_present_confirmed": confirmed_absent,
             "status": "complete" if not stored and not unassessed else "incomplete",
         })
     incomplete_component_rooms = [row["room_id"] for row in room_input_coverage if row["status"] != "complete"]

@@ -41,11 +41,53 @@ def empty_calculator_draft():
             "candidates": {group: [] for group in GROUPS}, "review_items": [],
             "source_artifacts": {}, "source_fingerprints": {}, "decisions": {},
             "review_history": [], "application_receipts": [], "page_roles": [],
-            "evidence_summary": {}, "evidence_fusion": {}, "readiness": {"status": "blocked", "issues": []}}
+            "evidence_summary": {}, "evidence_fusion": {}, "geometry_review": {},
+            "readiness": {"status": "blocked", "issues": []}}
 
 
 def all_candidates(draft):
     return [item for group in GROUPS for item in draft.get("candidates", {}).get(group, [])]
+
+
+def geometry_review_summary(draft):
+    """Return the compact, frontend-facing topology review read model.
+
+    Candidate records remain authoritative; this projection only groups their
+    evidence so the UI can show the useful page context without interpreting
+    geometry a second time.
+    """
+    rooms = draft.get("candidates", {}).get("rooms", [])
+    inputs = draft.get("candidates", {}).get("room_inputs", [])
+    pages = draft.get("page_roles", [])
+    groups = {}
+    for page in pages:
+        key = page.get("page_group") or page.get("proposed_role") or "unassigned"
+        groups[key] = groups.get(key, 0) + 1
+    room_rows = []
+    for room in rooms:
+        value = room.get("value", {})
+        room_id = value.get("room_id")
+        area = next((row for row in inputs if row.get("kind") == "area" and row.get("value", {}).get("room_id") == room_id), None)
+        ceiling = next((row for row in inputs if row.get("kind") == "ceiling" and row.get("value", {}).get("room_id") == room_id), None)
+        room_rows.append({
+            "candidate_id": room.get("candidate_id"),
+            "room_id": room_id,
+            "name": value.get("name", ""),
+            "floor_id": value.get("floor_id", ""),
+            "zone_id": value.get("zone_id", ""),
+            "geometry_status": value.get("geometry_status", "label_detected"),
+            "geometry_reference": value.get("geometry_reference"),
+            "area_m2": area.get("value", {}).get("area_m2") if area else value.get("area_m2"),
+            "ceiling_height_mm": ceiling.get("value", {}).get("ceiling_height_mm") if ceiling else None,
+            "unresolved_fields": value.get("unresolved_fields", []),
+            "citations": room.get("citations", []),
+            "confidence": room.get("confidence", "unknown"),
+            "decision": draft.get("decisions", {}).get(room.get("candidate_id"), {}).get("decision", "pending"),
+        })
+    return {"page_groups": groups, "rooms": room_rows,
+            "floor_candidate_count": len(draft.get("candidates", {}).get("floors", [])),
+            "zone_candidate_count": len(draft.get("candidates", {}).get("zones", [])),
+            "architect_page_count": len(pages)}
 
 
 def citations(evidence, document):
@@ -90,7 +132,11 @@ def build_calculator_draft(thermal_model, building_evidence, drawing_coverage, p
                  application_receipts=deepcopy(previous.get("application_receipts", [])),
                  page_roles=deepcopy((evidence_fusion or {}).get("pages") or drawing_coverage.get("page_roles", [])),
                  evidence_fusion={"schema_version": (evidence_fusion or {}).get("schema_version"), "fingerprint": (evidence_fusion or {}).get("fingerprint", ""),
-                                  "facts": deepcopy((evidence_fusion or {}).get("facts", [])), "fact_registry": deepcopy((evidence_fusion or {}).get("fact_registry", {}))},
+                                  "facts": deepcopy((evidence_fusion or {}).get("facts", [])),
+                                  "relationships": deepcopy((evidence_fusion or {}).get("relationships", [])),
+                                  "conflicts": deepcopy((evidence_fusion or {}).get("conflicts", [])),
+                                  "geometry_resolution": deepcopy((evidence_fusion or {}).get("geometry_resolution", {})),
+                                  "fact_registry": deepcopy((evidence_fusion or {}).get("fact_registry", {}))},
                  evidence_summary={key: len(building_evidence.get(key, [])) for key in
                                    ("spaces", "levels", "surfaces", "openings", "constructions", "lighting", "equipment")})
     document = building_evidence.get("source_pdf") or thermal_model.get("source_pdf") or "building_evidence.json"
@@ -149,7 +195,33 @@ def build_calculator_draft(thermal_model, building_evidence, drawing_coverage, p
         draft["review_items"].append(item)
 
     floors = {}
-    for level in sorted(drawing_coverage.get("levels", []), key=lambda r: r.get("level_name", "")):
+    # Vision/evidence fusion may identify a real level before the legacy
+    # coverage register has been explicitly reviewed.  Keep that level as a
+    # proposal so room candidates can depend on it, but do not treat it as an
+    # authored or calculation-ready floor.  The coverage register remains the
+    # preferred source when both artifacts contain the same level.
+    coverage_levels = list(drawing_coverage.get("levels", []))
+    coverage_names = {
+        str(level.get("level_name", "")).strip().casefold()
+        for level in coverage_levels
+        if str(level.get("level_name", "")).strip()
+    }
+    for level in building_evidence.get("levels", []):
+        name = str(level.get("name", level.get("level_name", ""))).strip()
+        if not name or name.casefold() in coverage_names:
+            continue
+        evidence = level.get("evidence", [])
+        if not evidence:
+            continue
+        coverage_levels.append({
+            "level_name": name,
+            "proposed_purpose": level.get("proposed_purpose", ""),
+            "purpose_status": level.get("status", "missing"),
+            "purpose_evidence": evidence,
+            "conditioned_status": level.get("conditioned_status", "unknown"),
+            "page_numbers": sorted({item.get("page") for item in evidence if item.get("page")}),
+        })
+    for level in sorted(coverage_levels, key=lambda r: r.get("level_name", "")):
         name = level.get("level_name", "").strip()
         if not name or name.lower().startswith("unassigned"):
             issue("floor_unknown", "Confirm the drawing level; no real floor was identified.")
@@ -257,10 +329,16 @@ def build_calculator_draft(thermal_model, building_evidence, drawing_coverage, p
                     u_value_w_m2k=(item.get("thermal_performance") or {}).get("u_value_w_m2k"), absorptivity=None)
             elif kind == "window":
                 value.update(record_id="window_" + suffix, opening_kind=item.get("kind", ""),
-                    u_value_w_m2k=(item.get("performance") or {}).get("u_value_w_m2k"))
+                    u_value_w_m2k=(item.get("performance") or {}).get("u_value_w_m2k"),
+                    geometry={
+                        "dimensions": deepcopy(item.get("dimensions")),
+                        "evidence": deepcopy(item.get("geometry") or {}),
+                    })
             else:
                 value.update(surface_id="surface_" + suffix, owner_room_id="", owner_zone_id="", kind=item.get("kind", ""),
                     area_m2=None, orientation="", boundary_method="", construction_id="", window_id="", adjacent_temperature_c=None)
+                if item.get("geometry"):
+                    value["geometry_evidence"] = deepcopy(item["geometry"])
             add("envelope", kind, identity, value, item.get("evidence", []),
                 "Supply missing reviewed properties and geometry. Envelope activation requires a separate editor action.",
                 [item.get("id")], confidence=item.get("confidence", "unknown"))
@@ -285,6 +363,7 @@ def build_calculator_draft(thermal_model, building_evidence, drawing_coverage, p
         ]}
     else:
         draft["readiness"] = {"status": "review_required", "issues": deepcopy(draft["review_items"])}
+    draft["geometry_review"] = geometry_review_summary(draft)
     return draft
 
 
@@ -310,6 +389,7 @@ def save_review(draft, changes, expected_revision):
         decision.update(candidate_fingerprint=row.get("fingerprint", fingerprint(row)), reviewed_at=timestamp())
         result["decisions"][cid] = decision
     result.update(revision=draft["revision"] + 1, updated_at=timestamp())
+    result["geometry_review"] = geometry_review_summary(result)
     return result
 
 

@@ -85,6 +85,19 @@ def geometry_page_refs(ai_input):
             )
             seen.add(page.get("page"))
     if refs:
+        # The design-input packet is the legacy shortlist.  Add architect
+        # elevations and sections that carry opening/vertical evidence even
+        # when an earlier classifier labelled them as a generic detail.
+        for page in ai_input.get("drawing_set", {}).get("pages", []):
+            if page.get("page") in seen or not page_is_geometry_capable(page):
+                continue
+            refs.append({
+                "page": page.get("page"),
+                "title": page.get("title", ""),
+                "plan_role": page.get("plan_role", ""),
+                "evidence_bucket": "all_architect_geometry_capable_pages",
+            })
+            seen.add(page.get("page"))
         return refs
 
     for page in ai_input.get("confirmed_pages", {}).get("floor_plans", []):
@@ -98,7 +111,33 @@ def geometry_page_refs(ai_input):
                 }
             )
             seen.add(page.get("page"))
+    for page in ai_input.get("drawing_set", {}).get("pages", []):
+        if page.get("page") in seen or not page_is_geometry_capable(page):
+            continue
+        refs.append({
+            "page": page.get("page"),
+            "title": page.get("title", ""),
+            "plan_role": page.get("plan_role", ""),
+            "evidence_bucket": "all_architect_geometry_capable_pages",
+        })
+        seen.add(page.get("page"))
     return refs
+
+
+def page_is_geometry_capable(page):
+    """Select pages whose vectors can witness geometry without treating every
+    drawing/detail as a room plan.  Raster/3D evidence is handled elsewhere.
+    """
+    title = str(page.get("title", "")).casefold()
+    detected = str(page.get("detected_type", "")).casefold()
+    role = str(page.get("plan_role", "")).casefold()
+    if any(term in title for term in ("storefront elevation", "shopfront elevation", "window elevation", "door elevation")):
+        return True
+    if detected in {"elevation", "section"} or any(term in title for term in (" elevation", " section")):
+        return True
+    if detected == "floor_plan" or "floor plan" in title or role in {"main_floor_plan", "supporting_geometry_plan"}:
+        return True
+    return False
 
 
 def is_detail_or_reference(page):
@@ -106,8 +145,8 @@ def is_detail_or_reference(page):
     blocked = [
         "detail",
         "enlarged",
-        "section",
-        "elevation",
+        # Sections/elevations are geometry-capable evidence and are retained;
+        # only explicit detail/joinery/schedule sheets are excluded here.
         "joinery",
         "cabinet",
         "fixture",

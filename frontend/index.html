@@ -152,17 +152,29 @@
         <div class="review-panel hide" id="visionPanel">
           <div class="panel-head">
             <div>
-              <div class="micro">Vision review</div>
-              <h3>Review plans, walls, and measurements</h3>
+              <div class="micro">AI drawing extraction</div>
+              <h3>Extract topology and geometry from selected evidence</h3>
             </div>
           </div>
-          <p class="fine">Upload the complete ChatGPT packet, then paste its strict vision JSON here. Archie will validate it and create the reasoning packet.</p>
-          <textarea id="visionJson" rows="10" spellcheck="false" placeholder='{"provider":"chatgpt_manual","result":{"layered_geometry":{"pages":[]}}}'></textarea>
+          <p class="fine">Opt in before selected architect-page images and related local evidence are sent to the server-side OpenAI job. Archie estimates the run first, records every request locally, and never exposes an API key in this browser.</p>
+          <div class="requirements-form">
+            <label><input id="visionOptIn" type="checkbox"> I approve AI processing of the selected architect evidence for this project.</label>
+            <label>Maximum project-run budget (AUD)<input id="visionBudget" type="number" min="0.01" step="0.01" placeholder="Required before start"></label>
+            <label>Evidence groups<div class="check-list" id="visionGroups"></div></label>
+          </div>
           <div class="bar">
             <span class="conf" id="visionStatus">Waiting for vision JSON</span>
-            <button class="btn key" id="btnVisionSubmit">Create reasoning packet</button>
+            <button class="btn ghost mini" id="btnVisionEstimate" type="button">Estimate run</button>
+            <button class="btn key" id="btnVisionStart" type="button">Start AI extraction</button>
+            <button class="btn ghost mini hide" id="btnVisionCancel" type="button">Cancel</button>
+            <button class="btn ghost mini hide" id="btnVisionRetry" type="button">Retry</button>
           </div>
           <div class="review-list" id="visionLinks"></div>
+          <details class="advanced-import"><summary>Advanced recovery: import pre-generated vision JSON</summary>
+            <p class="fine">This fallback uses the same local validation rules. It is not the primary workflow.</p>
+            <textarea id="visionJson" rows="10" spellcheck="false" placeholder='{"provider":"chatgpt_manual","result":{"layered_geometry":{"pages":[]}}}'></textarea>
+            <button class="btn ghost mini" id="btnVisionSubmit" type="button">Validate imported JSON</button>
+          </details>
         </div>
 
         <div class="review-panel hide" id="designRequirementsPanel">
@@ -181,8 +193,8 @@
           <div class="review-list" id="thermalReviewItems"></div>
           <div class="review-list" id="thermalModelLinks"></div>
           <section class="calculator-draft-panel" aria-labelledby="calculatorDraftHeading">
-            <div class="panel-head"><div><div class="micro">Evidence-to-calculator bridge</div><h3 id="calculatorDraftHeading">Evidence-to-Calculator Draft</h3></div><button class="btn ghost mini" id="btnBuildCalculatorDraft" type="button">Build calculator draft</button></div>
-            <p class="fine">This turns reviewed drawing evidence into cited proposals only. It does not calculate a load, invent missing inputs, or change the hourly model until an engineer accepts a proposal.</p>
+            <div class="panel-head"><div><div class="micro">Evidence-to-calculator bridge</div><h3 id="calculatorDraftHeading">Geometry &amp; Evidence Review</h3></div><button class="btn ghost mini" id="btnBuildCalculatorDraft" type="button">Build calculator draft</button></div>
+            <p class="fine">Start with the geometry review workspace below. It groups all architect-page evidence around each room, then lets you resolve only exceptions before the existing topology and input editors are used.</p>
             <div class="bar"><span class="conf" id="calculatorDraftStatus">Build a proposal queue after the thermal model and drawing evidence are ready.</span><span class="draft-actions"><button class="btn ghost mini" id="btnSaveCalculatorReview" type="button">Save review</button><button class="btn ghost mini" id="btnPreviewCalculatorDraft" type="button">Preview changes</button><button class="btn key" id="btnApplyCalculatorDraft" type="button">Apply reviewed changes</button></span></div>
             <div class="review-list" id="calculatorDraftCandidates"></div>
             <div class="review-list" id="calculatorDraftReviewItems"></div>
@@ -258,10 +270,25 @@
           <div id="hourlyFloors" class="hierarchy-editor"></div>
           <div class="panel-head hierarchy-heading"><div><div class="micro">Zones</div><h3>Conditioned areas</h3></div><button class="btn ghost mini" id="btnAddHourlyZone" type="button">Add zone</button></div>
           <div id="hourlyZones" class="hierarchy-editor"></div>
+          <section class="calculator-draft-panel" id="infiltrationGateSection" aria-labelledby="infiltrationGateHeading">
+            <div class="panel-head"><div><div class="micro">Approved method gate</div><h3 id="infiltrationGateHeading">Infiltration sensible and latent cooling</h3></div><button class="btn ghost mini" id="btnSaveInfiltrationGate" type="button">Save method gate</button></div>
+            <p class="fine">This feature remains disabled until a named HVAC engineer approves the fixed V1 method. It accepts ACH or direct airflow, requires a dedicated 24-hour schedule, and never replaces outside air.</p>
+            <div class="requirements-form"><label>Gate status<select id="infiltrationGateStatus"><option value="placeholder">Placeholder — disabled</option><option value="approved">Approved</option></select></label><label>Engineer name<input id="infiltrationEngineerName" placeholder="Named HVAC engineer"></label><label>Credential<input id="infiltrationEngineerCredential" placeholder="e.g. CPEng / licence"></label><label>Approval date<input id="infiltrationApprovedAt" type="date"></label><label>Method citation<input id="infiltrationMethodCitation" placeholder="Approved method reference"></label><label>Scope<textarea id="infiltrationScope" rows="2"></textarea></label><label>Gate citation<input id="infiltrationGateCitation" placeholder="Reference"></label></div>
+            <div class="bar"><span class="conf" id="infiltrationGateStatusText">Loading infiltration method gate…</span></div>
+          </section>
           <div class="panel-head hierarchy-heading"><div><div class="micro">Rooms</div><h3>Room inputs and assignments</h3></div><button class="btn ghost mini" id="btnAddHourlyRoom" type="button">Add room</button></div>
           <div id="hourlyRooms" class="hierarchy-editor"></div>
           <div class="bar"><span class="conf" id="hourlyModelStatus">Seed or load the room model to review topology.</span><button class="btn key" id="btnSaveHourlyModel" type="button">Save hierarchy</button></div>
           <div id="roomInputCoverage" class="review-list"></div>
+          <section class="calculator-draft-panel" id="calculatorInputSection" aria-labelledby="calculatorInputHeading">
+            <div class="panel-head"><div><div class="micro">AI input assembly</div><h3 id="calculatorInputHeading">Resolved cooling inputs</h3></div><button class="btn ghost mini" id="btnAssembleCalculatorInputs" type="button">Assemble cooling inputs</button></div>
+            <p class="fine">Click Assemble cooling inputs once the project scope is saved. Inspect the immutable register and exceptions before calculating. Archie uses explicit project evidence first, then approved scoped defaults; it never defaults geometry, thermal boundaries, U-values, glazing, or equipment heat.</p>
+            <details><summary><b>Project context and cooled scope</b></summary><div class="requirements-form"><label>Locality<input id="contextLocality" placeholder="e.g. Sydney"></label><label>State<input id="contextState" placeholder="e.g. NSW"></label><label>Climate zone<input id="contextClimateZone" placeholder="Optional cited climate zone"></label><label>Building use<input id="contextBuildingUse" placeholder="e.g. retail"></label><label>Conditioned scope<select id="contextScopeMode"><option value="room_ids">Listed room IDs</option><option value="all_rooms">All rooms in model</option><option value="room_uses">Listed room-use rooms</option></select></label><label>Conditioned room IDs<input id="contextRoomIds" placeholder="room_01, room_02"></label><label>Scope source<input id="contextScopeSource" placeholder="Project brief or reviewed declaration"></label><label>Scope citation<input id="contextScopeCitation" placeholder="Drawing, brief, or reference"></label><label>Reviewer<input id="contextReviewer" placeholder="Name / initials"></label><label>Room uses (JSON)<textarea id="contextRoomUses" rows="4" placeholder='{"room_01":{"use":"retail","source":"A-101","citations":[]}}'></textarea></label></div><div class="bar"><button class="btn ghost mini" id="btnSaveProjectContext" type="button">Save project context</button></div></details>
+            <div class="bar"><span class="conf" id="calculatorInputStatus">Save a conditioned scope, then assemble a traceable cooling input set.</span><button class="btn ghost mini" id="btnRefreshResearch" type="button">Refresh approved sources</button></div>
+            <div id="calculatorInputSummary" class="review-list"></div>
+            <div id="calculatorInputIssues" class="review-list"></div>
+            <details><summary><b>Cited override for an unresolved field</b></summary><div class="requirements-form"><label>Override ID<input id="inputOverrideId" placeholder="override-room-01-lighting"></label><label>Target<input id="inputOverrideTarget" placeholder="rooms.room_01.cooling_load.lighting_w_m2"></label><label>Value<input id="inputOverrideValue" type="number" step="any"></label><label>Unit<input id="inputOverrideUnit" placeholder="W/m2"></label><label>Source<input id="inputOverrideSource" placeholder="Cited project source"></label><label>Reviewer<input id="inputOverrideReviewer" placeholder="Name / initials"></label><label>Citation<input id="inputOverrideCitation" placeholder="Reference"></label></div><div class="bar"><button class="btn ghost mini" id="btnSaveCalculatorOverride" type="button">Save cited override</button></div></details>
+          </section>
           <div class="panel-head" id="reportSection" tabindex="-1"><div><div class="micro">Cooling load report</div><h3>Hourly design-day result</h3></div><button class="btn key" id="btnCalculateHourlyLoad" type="button">Calculate cooling report</button></div>
           <div class="requirements-form"><label>Selected cooling scenario IDs<input id="hourlyScenarioIds" placeholder="e.g. summer_design_day"></label></div>
           <div class="bar"><span class="conf" id="hourlyReportStatus">Save reviewed hourly inputs before calculating.</span></div>

@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "packs": {
+    "au-cooling-v1": {
+      "country": "AU",
+      "policy_version": "au-cooling-v1",
+      "allowed_domains": [
+        "bom.gov.au",
+        "abcb.gov.au",
+        "ncc.abcb.gov.au",
+        "csiro.au",
+        "energy.gov.au"
+      ],
+      "notes": "Only legally permitted metadata, citations and approved numerical facts are stored. Proprietary standard text is not copied into the cache."
+    }
+  }
+}

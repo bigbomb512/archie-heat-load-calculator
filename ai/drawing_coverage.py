@@ -27,7 +27,7 @@ def build_drawing_coverage(ai_input):
     exceptions = coverage_exceptions(levels, pages)
     page_roles = classify_page_roles(pages, ai_input)
     return {
-        "version": 2,
+        "version": 3,
         "source_pdf": ai_input.get("source_pdf", ""),
         "source_fingerprint": source_fingerprint(ai_input),
         "generated_from": "ai_input.json",
@@ -72,6 +72,11 @@ def sheet_entry(page):
         "confidence": page.get("confidence", 0),
         "human_decision": page.get("confirmed_decision", ""),
         "classification_evidence": page.get("classification_evidence", ""),
+        "capabilities": page.get("capabilities", []),
+        "visual_available": page.get("visual_available", False),
+        "text_available": page.get("text_available", False),
+        "vector_available": page.get("vector_available", False),
+        "page_group": page.get("page_group", ""),
         "source": {"page": page.get("page"), "kind": "reviewed_pdf_page"},
     }
 
@@ -85,20 +90,49 @@ def classify_page_roles(pages, ai_input):
             triage[item["page"]] = item
     result = []
     for page in pages:
-        text = " ".join(str(page.get(key, "")) for key in ("title", "drawing_number", "detected_type", "plan_role", "thermal_role")).lower()
+        structured_text = str(page.get("structured_content", {}).get("markdown", ""))
+        text = " ".join(str(page.get(key, "")) for key in ("title", "drawing_number", "detected_type", "plan_role", "thermal_role"))
+        text = (text + " " + structured_text).lower()
         rooms = page.get("rooms", []) or []
         triage_item = triage.get(page.get("page"), {})
         role = triage_item.get("page_role") or page.get("plan_role")
         evidence = []
         confidence = float(page.get("confidence", 0) or 0)
-        # For the Drawing 6 architect set, the explicit Dimension Plan title
-        # is the primary geometry witness.  Do not let an older visual-triage
-        # label such as ``uncertain_top_down_context`` demote it merely
-        # because the level name is still unresolved.
+        # Explicit sheet titles outrank stale visual-triage labels. A plan,
+        # for example, can be initially kept as reference context when a
+        # title block is flattened by PDF extraction.
         title = str(page.get("title", "")).strip().casefold()
-        if title == "dimension plan" or page.get("drawing_number") == "202" and "dimension" in title:
+        detected_type = str(page.get("detected_type", "")).casefold()
+        # Explicit sheet titles and detected sheet types outrank inherited
+        # reference_context labels.  The source packet's old triage often
+        # flattened titles such as "Internal Elevation" into reference pages.
+        if any(term in title for term in ("shopfront elevation", "storefront elevation", "window elevation", "door elevation")):
+            role = "opening_elevation"
+            evidence.append("explicit opening-elevation title")
+        elif detected_type in {"render_or_photo", "perspective_or_3d"} or any(term in title for term in ("3d", "perspective", "render", "isometric")):
+            role = "3d_render"
+            evidence.append("render/perspective classification or title")
+        elif ((title == "dimension plan" or page.get("drawing_number") == "202" and "dimension" in title)
+              and detected_type not in {"cover_or_drawing_list", "render_or_photo"}
+              and page.get("plan_role") != "reference_context"):
             role = "main_floor_plan"
             evidence.append("explicit dimension-plan title")
+        elif any(term in title for term in ("reflective ceiling", "reflected ceiling", "rcp")):
+            role = "reflected_ceiling_plan"
+            evidence.append("explicit reflected-ceiling title")
+        elif any(term in title for term in ("service plan", "lighting plan", "electrical plan", "hydraulic plan")):
+            role = "services_or_lighting_plan"
+            evidence.append("explicit service/lighting title")
+        elif any(term in title for term in ("elevation", "section")):
+            role = "elevation_or_section"
+            evidence.append("explicit elevation/section title")
+        elif any(term in title for term in ("window schedule", "door schedule", "glazing schedule", "opening schedule")):
+            role = "opening_schedule"
+            evidence.append("explicit opening schedule title")
+        elif (detected_type in {"elevation", "section"}
+              and any(term in text for term in ("shopfront elevation", "storefront elevation", "window elevation", "door elevation"))):
+            role = "opening_elevation"
+            evidence.append("opening-elevation terminology in extracted page text")
         role_aliases = {
             "detail_plan": "supporting_geometry_plan",
             "uncertain_top_down_context": "supporting_geometry_plan",
@@ -109,11 +143,22 @@ def classify_page_roles(pages, ai_input):
         if role in role_aliases:
             role = role_aliases[role]
             evidence.append("normalised existing plan-role label")
+        # Recover strong type/title evidence that was hidden behind a generic
+        # reference_context proposal in the legacy packet.
+        if role == "reference":
+            if detected_type in {"elevation", "section"}:
+                role = "elevation_or_section"
+                evidence.append("detected elevation/section type overrides reference context")
+            elif detected_type == "floor_plan":
+                role = "supporting_geometry_plan"
+                evidence.append("detected floor-plan type overrides reference context")
         if not role:
             if any(term in text for term in ("reflected ceiling", "rcp", "ceiling plan")):
                 role, evidence = "reflected_ceiling_plan", ["title/role contains reflected-ceiling terminology"]
             elif any(term in text for term in ("lighting", "services", "electrical", "hydraulic")):
                 role, evidence = "services_or_lighting_plan", ["title/role contains services or lighting terminology"]
+            elif any(term in text for term in ("shopfront elevation", "storefront elevation", "window elevation", "door elevation")):
+                role, evidence = "opening_elevation", ["title/role identifies an opening elevation"]
             elif any(term in text for term in ("elevation", "section")):
                 role, evidence = "elevation_or_section", ["title/role contains elevation or section terminology"]
             elif any(term in text for term in ("detail", "schedule", "legend")):
@@ -126,7 +171,7 @@ def classify_page_roles(pages, ai_input):
             if not evidence:
                 evidence = ["existing page-triage or plan-role proposal"]
         level = page.get("level_name") or triage_item.get("floor_label", "")
-        ambiguous = not level and role in {"main_floor_plan", "supporting_geometry_plan", "reflected_ceiling_plan", "services_or_lighting_plan"}
+        ambiguous = not level and role in {"main_floor_plan", "supporting_geometry_plan", "reflected_ceiling_plan", "services_or_lighting_plan", "opening_elevation", "elevation_or_section"}
         if triage_item.get("disposition") == "exclude" or role == "exclude":
             authority = "excluded"
         elif ambiguous or role in {"supporting_geometry_plan", "reference"}:
@@ -141,11 +186,60 @@ def classify_page_roles(pages, ai_input):
             "source_fingerprint": source_fingerprint({"page": page}),
             "authority_status": authority,
             "geometry_eligible": role in {"main_floor_plan", "supporting_geometry_plan"} and authority != "excluded",
-            "reference_only": role in {"reference", "detail", "elevation_or_section"},
+            # An elevation cannot establish a room boundary, but a specifically
+            # titled opening elevation can directly evidence an opening's
+            # dimensions. Keep that capability separate from plan geometry.
+            "opening_geometry_eligible": role == "opening_elevation" and authority != "excluded",
+            "visual_crosscheck_eligible": role == "3d_render" and authority != "excluded",
+            "reference_only": role in {"reference", "detail", "3d_render"},
+            "capabilities": page_capabilities(role, text),
+            "visual_available": bool(page.get("thumbnail_path") or page.get("image") or page.get("vision_triage") or page.get("rendered_image")),
+            "text_available": bool(structured_text.strip() or page.get("written_dimensions") or page.get("ceiling_constraints") or page.get("hvac_terms")),
+            "vector_available": role in {"main_floor_plan", "supporting_geometry_plan", "reflected_ceiling_plan", "services_or_lighting_plan", "opening_elevation", "elevation_or_section"},
+            "page_group": page_group_key(role, level, page.get("drawing_number", "")),
             "review_required": authority in {"ambiguous", "proposed"},
             "source": {"page": page.get("page"), "kind": "reviewed_pdf_page"},
         })
     return result
+
+
+def page_group_key(role, level, drawing_number=""):
+    """Stable grouping key for cross-page evidence, independent of array order."""
+    family = {
+        "main_floor_plan": "plan",
+        "supporting_geometry_plan": "plan_support",
+        "reflected_ceiling_plan": "ceiling_service",
+        "services_or_lighting_plan": "ceiling_service",
+        "opening_elevation": "openings",
+        "opening_schedule": "openings",
+        "elevation_or_section": "vertical",
+        "3d_render": "3d_crosscheck",
+        "detail": "details",
+        "reference": "reference",
+    }.get(role, role or "unclassified")
+    return "|".join((str(drawing_number or "unknown"), str(level or "unassigned"), family))
+
+
+def page_capabilities(role, text=""):
+    """Describe what a sheet can prove without treating every page as geometry."""
+    capabilities = {
+        "main_floor_plan": ["primary_room_geometry", "room_labels", "dimensions", "openings", "surface_relationships"],
+        "supporting_geometry_plan": ["supporting_geometry", "room_labels", "fitout_boundaries", "dimensions", "openings"],
+        "reflected_ceiling_plan": ["ceiling_height", "ceiling_type", "lighting_context", "service_constraints"],
+        "services_or_lighting_plan": ["lighting_context", "service_constraints", "ceiling_height"],
+        "opening_elevation": ["opening_geometry", "vertical_levels", "surface_relationships", "opening_tags"],
+        "opening_schedule": ["opening_tags", "opening_dimensions", "construction_references", "glazing_references"],
+        "elevation_or_section": ["vertical_geometry", "ceiling_height", "surface_relationships", "opening_context"],
+        "3d_render": ["visual_crosscheck", "opening_presence", "level_relationships", "conflict_detection"],
+        "detail": ["construction_references", "fixture_context", "opening_context"],
+        "reference": ["context_only"],
+    }.get(role, ["context_only"])
+    lower = text.casefold()
+    if "window" in lower or "glazing" in lower:
+        capabilities.append("opening_context")
+    if "lighting" in lower or "led" in lower:
+        capabilities.append("lighting_context")
+    return sorted(set(capabilities))
 
 
 def build_levels(pages):

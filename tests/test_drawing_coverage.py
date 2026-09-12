@@ -42,6 +42,9 @@ def main():
     check("floor purpose proposed", ground["proposed_purpose"], "food retail / food preparation")
     check("complete fixture avoids surface warning", any(item["item_id"].startswith("surface_views_missing-ground_floor") for item in coverage["coverage_exceptions"]), False)
     check("coverage preserves site evidence", any(link["thermal_role"] == "site_orientation_or_shading" for link in coverage["cross_sheet_links"]), True)
+    elevation_role = coverage["page_roles"][1]
+    check("shopfront elevation has opening geometry capability", elevation_role["opening_geometry_eligible"], True)
+    check("shopfront elevation remains outside room geometry", elevation_role["geometry_eligible"], False)
 
     missing = build_drawing_coverage({"drawing_set": {"pages": [pages[0]]}})
     check("missing elevation is flagged", missing["coverage_exceptions"][0]["item_id"], "surface_views_missing-ground_floor")

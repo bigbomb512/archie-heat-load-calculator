@@ -45,6 +45,17 @@ def main():
                                            {"page_roles": [{"page": 6, "proposed_role": "reflected_ceiling_plan"}]}, rcp_ocr)
     check("service legends do not create room candidates", not rcp_evidence["spaces"])
 
+    elevation = [{"page": 7, "title": "Shopfront Elevation", "level_name": "Ground Floor",
+                  "sheet_classification": "elevation", "thermal_role": "surface_confirmation", "rooms": [],
+                  "structured_content": {"markdown": "W01 1200 x 2100 mm · storefront 3600 mm"}}]
+    elevation_evidence = build_building_evidence(
+        {"source_pdf": "fixture.pdf", "drawing_set": {"pages": elevation}},
+        {"page_roles": [{"page": 7, "proposed_role": "opening_elevation", "opening_geometry_eligible": True}]},
+    )
+    dimensioned = next(item for item in elevation_evidence["openings"] if item.get("tag") == "W01" and item.get("dimensions"))
+    check("opening elevation stores explicit dimensions", dimensioned["dimensions"] == {"width_mm": 1200.0, "height_mm": 2100.0, "unit": "mm"})
+    check("dimensioned opening remains unresolved until plan matched", dimensioned["geometry"]["unique_target"] is False)
+
 
 if __name__ == "__main__":
     main()

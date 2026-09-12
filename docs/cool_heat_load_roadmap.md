@@ -38,7 +38,7 @@ The project now has a solid **V1 hourly cooling foundation**, but it is not yet 
 ### Not yet a supported calculation result
 
 - Heating load, heating peak timing or heating design output.
-- Dynamic thermal mass, detailed glazing, geometric shading, partitions/adjacent-space heat transfer, infiltration and vapour-gain modelling.
+- Dynamic thermal mass, detailed glazing, geometric shading, partitions/adjacent-space heat transfer and vapour-gain modelling. Infiltration cooling has an isolated implementation but remains disabled for a project until its HVAC-engineer method gate is approved.
 - AHU airflow allocation, coils, fans, ducts, heat recovery, preconditioning or psychrometric state paths.
 - Chiller, boiler, circuits, pumps, pipe effects, unitary-equipment inclusion or primary-plant aggregation.
 - Annual/month-by-month weather simulation, CAMEL-compatible graphs/tables, printable issue reports or frontend workflows.
@@ -92,6 +92,7 @@ They intentionally do not overwrite `design_requirements.json`. Saving a site co
 - Schedules: `GET`/`POST /api/schedules`
 - Design-day scenarios: `GET`/`POST /api/design-day-scenarios`
 - Hourly room model: `GET`/`POST /api/hourly-load-model`
+- Immutable cooling-input assembly: `GET`/`POST /api/calculator-inputs`
 - Hourly report: `GET`/`POST /api/hourly-load-report`
 
 The contracts are documented in [`site_design_conditions_api.md`](site_design_conditions_api.md) and [`hourly_schedules_api.md`](hourly_schedules_api.md). The project analysis response exposes discovery URLs/statuses for these artifacts. This is the contract for the teammate’s eventual UI; the backend should remain stable while that UI is built separately.
@@ -140,8 +141,9 @@ these records remain excluded from cooling totals.
 **Decisions required before calculation implementation:** approved calculation methods and units for infiltration, vapour/steam, transfer-air treatment and any diversity rules. No code rates or CAMEL defaults should be embedded without a separately approved source/basis.
 
 The infiltration decision record is documented in
-[`infiltration_method_gate.md`](infiltration_method_gate.md). Its status is
-not approved, so no infiltration calculation may be enabled.
+[`infiltration_method_gate.md`](infiltration_method_gate.md). The fixed V1
+engine is implemented, but each project remains disabled until its named
+HVAC-engineer gate is approved.
 
 **Exit criteria:** every supported non-zero room load/airflow component has source, status, units, validation and report visibility; unsupported components remain explicit exclusions.
 
@@ -255,7 +257,16 @@ those gaps.
 
 ## Recommended next action
 
-The next practical engineering task is **Milestone 0 followed by the bounded portions of Milestone 1**: exercise the existing cooling workflow with a reviewed example, then add only the missing room inputs whose calculation method has been approved. Do not start AHU, plant, annual graphs, geometric shading or a heating calculation until room cooling is validated against authorised reference cases.
+The next practical product task is the **Drawing 6 geometry review workspace**:
+use the existing multi-page evidence-fusion output to resolve page groups,
+floor identity, room witnesses and geometry/area status, then apply only the
+reviewed floor → zone → room topology through the existing draft bridge. After
+that, complete the supported room inputs and run one traceable cooling case.
+The temporary calculation sanity harness remains internal development support;
+it is not a contractor workflow or a reason to pause product work. Do not start
+AHU, plant, annual graphs, geometric shading or a heating calculation until
+this supported room-cooling case is complete and the appropriate method gates
+are passed.
 
 ## Definition of done by release level
 

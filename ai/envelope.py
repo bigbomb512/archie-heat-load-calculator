@@ -76,8 +76,13 @@ def validate_window(raw, index):
         "frame_fraction": optional_factor(raw.get("frame_fraction"), f"Window {row['record_id']} frame fraction"),
         "glass_area_correction": optional_factor(raw.get("glass_area_correction"), f"Window {row['record_id']} glass-area correction"),
         "internal_shading": text(raw.get("internal_shading", ""), f"Window {row['record_id']} internal shading"),
+        # Opening geometry is evidence only in this release. It is retained
+        # with the window record but cannot influence thermal calculations.
+        "geometry": raw.get("geometry", {}),
         "calculation_status": "stored_not_calculated",
     })
+    if not isinstance(row["geometry"], dict):
+        raise ValueError(f"Window {row['record_id']} geometry must be an object.")
     return row
 
 

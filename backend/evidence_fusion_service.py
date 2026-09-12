@@ -20,7 +20,7 @@ def _write(path, value):
 
 
 def _paths(root):
-    return {name: root / (name + ".json") for name in ("ai_input", "drawing_coverage", "building_evidence", "spatial_ocr", "vector_geometry", "vision_response", "research_cache")}
+    return {name: root / (name + ".json") for name in ("ai_input", "drawing_coverage", "building_evidence", "spatial_ocr", "vector_geometry", "dimension_wall_matches", "geometry_confirmation", "vision_response", "research_cache")}
 
 
 def _current_source_fingerprint(root):
@@ -50,7 +50,7 @@ def post(web, project, data):
     if action in {"build", "build_ai_extraction"}:
         if not paths["ai_input"].exists() or not paths["building_evidence"].exists():
             raise ValueError("Build the architect evidence artifacts first.")
-        fusion = build_evidence_fusion(_read(paths["ai_input"]), _read(paths["drawing_coverage"]), _read(paths["building_evidence"]), _read(paths["spatial_ocr"]), _read(paths["vector_geometry"]), _read(paths["vision_response"]))
+        fusion = build_evidence_fusion(_read(paths["ai_input"]), _read(paths["drawing_coverage"]), _read(paths["building_evidence"]), _read(paths["spatial_ocr"]), _read(paths["vector_geometry"]), _read(paths["vision_response"]), _read(paths["dimension_wall_matches"]), _read(paths["geometry_confirmation"]))
         _write(path, fusion)
     else:
         fusion = _read(path)

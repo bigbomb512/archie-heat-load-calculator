@@ -11,7 +11,8 @@ from ai.design_requirements import (
     validate_design_requirements,
     validate_zone_cooling_load,
 )
-from ai.heat_loads import envelope_load, equipment_load, lighting_load, outside_air_load, people_load, solar_load
+from ai.heat_loads import envelope_load, equipment_load, infiltration_load, lighting_load, outside_air_load, people_load, solar_load
+from ai.infiltration_gate import METHOD_ID as INFILTRATION_METHOD_ID, empty_infiltration_method_gate, gate_is_approved, validate_infiltration_method_gate
 from ai.site_design_conditions import validate_citations
 from ai.cooling_readiness import assess_cooling_readiness, room_component_issues, topology_issues
 
@@ -23,7 +24,7 @@ MONTHS = (
 )
 STATUSES = {"missing", "provisional", "confirmed", "not_applicable"}
 ID = re.compile(r"^[a-z][a-z0-9_-]*$")
-ROOM_COMPONENT_STATES = {"not_present_confirmed", "stored_not_calculated", "not_assessed"}
+ROOM_COMPONENT_STATES = {"not_present_confirmed", "stored_not_calculated", "calculated", "not_assessed"}
 ROOM_COMPONENT_TYPES = {
     "infiltration": {"group": "airflow", "units": {"L/s", "m3/s", "m3/h", "ACH"}},
     "minimum_supply_air": {"group": "airflow", "units": {"L/s", "m3/s", "m3/h"}},
@@ -51,7 +52,7 @@ def empty_design_day_scenarios():
 
 def empty_hourly_load_model():
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "updated_at": "",
         "source_requirements_updated_at": "",
         "floors": [],
@@ -280,6 +281,7 @@ def build_hourly_load_model(requirements):
     for zone in requirements.get("zones", []):
         zones.append({
             "zone_id": zone["zone_id"], "name": zone.get("name", zone["zone_id"]), "floor_id": "unassigned",
+            "ceiling_height_mm": zone.get("ceiling_height_mm"),
             "verification_status": "provisional", "source": "Migrated from legacy design zone; assign a reviewed floor.", "citations": [],
         })
         room_id = f"{zone['zone_id']}-room-1"
@@ -298,12 +300,12 @@ def build_hourly_load_model(requirements):
             "heat_sources": [seed_heat_source(source, room_id, index) for index, source in enumerate(zone.get("heat_sources", []), start=1)],
             "cooling_load": deepcopy(zone.get("cooling_load", {})),
             "cooling_load_conditions": deepcopy(requirements.get("cooling_load_conditions", {})),
-            "schedule_assignments": {"people": "", "lighting": "", "outside_air": "", "equipment": {}, "solar": {}},
+            "schedule_assignments": {"people": "", "lighting": "", "outside_air": "", "infiltration": "", "equipment": {}, "solar": {}},
             "unapproved_components": default_room_components(),
         }
         rooms.append(room)
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "updated_at": timestamp(),
         "source_requirements_updated_at": requirements.get("updated_at", ""),
         "floors": floors,
@@ -362,7 +364,7 @@ def validate_hourly_load_model(raw):
             if source_room_id == room["room_id"]:
                 raise ValueError(f"Room {room['room_id']} component '{component['component_id']}' cannot reference itself as a source room.")
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "updated_at": timestamp(),
         "source_requirements_updated_at": text(raw.get("source_requirements_updated_at", ""), "Hourly load model source requirements timestamp"),
         "floors": checked_floors,
@@ -391,7 +393,7 @@ def migrate_hourly_model(raw):
                     "zone_id": zone_id, "name": zone_id, "floor_id": "unassigned",
                     "verification_status": "provisional", "source": "Migrated from schema-v1 room overlay; assign a reviewed floor.", "citations": [],
                 })
-    result["schema_version"] = 3
+    result["schema_version"] = 4
     return result
 
 
@@ -439,6 +441,7 @@ def validate_model_zone(raw, index):
     return {
         "zone_id": zone_id, "name": name, "floor_id": floor_id,
         "bridge_provenance": deepcopy(raw.get("bridge_provenance", {})),
+        "ceiling_height_mm": optional_number(raw.get("ceiling_height_mm"), f"Zone {zone_id} ceiling height", 1, 1000000),
         "verification_status": status, "source": source,
         "citations": validate_citations(raw.get("citations", []), f"Zone {zone_id}"),
     }
@@ -507,6 +510,9 @@ def default_room_components():
         "citations": [],
         "verification_status": "missing",
         "calculation_status": "not_assessed",
+        "method_id": "",
+        "air_path": "",
+        "flow_reference": "",
     } for component_type in ROOM_COMPONENT_TYPES]
 
 
@@ -549,6 +555,9 @@ def validate_room_component(raw, room_id, index):
         raise ValueError(f"Room {room_id} component '{component_id}' may reference a source room only for transfer air.")
     if source_room_id and not ID.fullmatch(source_room_id):
         raise ValueError(f"Room {room_id} component '{component_id}' source room ID must use a lowercase stable ID.")
+    method_id = text(raw.get("method_id", ""), f"Room {room_id} component '{component_id}' method ID")
+    air_path = text(raw.get("air_path", ""), f"Room {room_id} component '{component_id}' air path")
+    flow_reference = text(raw.get("flow_reference", ""), f"Room {room_id} component '{component_id}' flow reference")
     if calculation_status == "not_present_confirmed":
         if value is not None or unit:
             raise ValueError(f"Room {room_id} component '{component_id}' marked not present cannot have a value or unit.")
@@ -564,6 +573,15 @@ def validate_room_component(raw, room_id, index):
             raise ValueError(f"Room {room_id} component '{component_id}' unit must be one of: {allowed}.")
         if verification_status not in {"confirmed", "provisional"} or not source:
             raise ValueError(f"Room {room_id} component '{component_id}' stored for later calculation needs a source and review status.")
+    elif calculation_status == "calculated":
+        if component_type != "infiltration":
+            raise ValueError(f"Room {room_id} component '{component_id}' can only be calculated when it is infiltration.")
+        if value is None or value <= 0 or unit not in ROOM_COMPONENT_TYPES[component_type]["units"]:
+            raise ValueError(f"Room {room_id} calculated infiltration needs a positive approved ACH or airflow value.")
+        if verification_status not in {"confirmed", "provisional"} or not source or not citations:
+            raise ValueError(f"Room {room_id} calculated infiltration needs review status, source, and citation.")
+        if method_id != INFILTRATION_METHOD_ID or air_path != "uncontrolled_infiltration" or flow_reference != "outdoor_design_condition":
+            raise ValueError(f"Room {room_id} calculated infiltration must declare the approved method, uncontrolled air path, and outdoor design-condition flow reference.")
     else:
         if value is not None or unit or source_room_id or source or citations or verification_status != "missing":
             raise ValueError(f"Room {room_id} component '{component_id}' not assessed cannot include a value, source, citation, or review status.")
@@ -577,6 +595,9 @@ def validate_room_component(raw, room_id, index):
         "citations": citations,
         "verification_status": verification_status,
         "calculation_status": calculation_status,
+        "method_id": method_id,
+        "air_path": air_path,
+        "flow_reference": flow_reference,
     }
 
 
@@ -594,7 +615,7 @@ def validate_hourly_heat_source(raw, room_id, index):
 def validate_assignments(raw, room_id, source_ids, cooling):
     if not isinstance(raw, dict):
         raise ValueError(f"Room {room_id} schedule assignments must be an object.")
-    for key in ("people", "lighting", "outside_air"):
+    for key in ("people", "lighting", "outside_air", "infiltration"):
         if not isinstance(raw.get(key, ""), str):
             raise ValueError(f"Room {room_id} {key} schedule assignment must be text.")
     equipment = raw.get("equipment", {})
@@ -612,6 +633,7 @@ def validate_assignments(raw, room_id, source_ids, cooling):
         "people": raw.get("people", "").strip(),
         "lighting": raw.get("lighting", "").strip(),
         "outside_air": raw.get("outside_air", "").strip(),
+        "infiltration": raw.get("infiltration", "").strip(),
         "equipment": {str(key): text(value, f"Room {room_id} equipment schedule") for key, value in equipment.items()},
         "solar": {str(key): text(value, f"Room {room_id} solar schedule") for key, value in solar.items()},
     }
@@ -628,12 +650,13 @@ def hourly_model_summary(model, requirements=None):
     })
 
 
-def calculate_hourly_load_report(requirements, schedule_library, scenarios, model, selected_scenario_ids, coverage=None):
+def calculate_hourly_load_report(requirements, schedule_library, scenarios, model, selected_scenario_ids, coverage=None, infiltration_gate=None):
     requirements = requirements_snapshot(requirements)
     schedule_library = artifact_snapshot(schedule_library, validate_schedule_library)
     scenarios = artifact_snapshot(scenarios, validate_design_day_scenarios)
     model = artifact_snapshot(model, validate_hourly_load_model)
     coverage = coverage or {}
+    infiltration_gate = validate_infiltration_method_gate(infiltration_gate or empty_infiltration_method_gate())
     stale = model.get("source_requirements_updated_at") != requirements.get("updated_at")
     selected = select_scenarios(scenarios, selected_scenario_ids)
     report = {
@@ -645,9 +668,10 @@ def calculate_hourly_load_report(requirements, schedule_library, scenarios, mode
             "schedule_library_updated_at": schedule_library.get("updated_at", ""),
             "design_day_scenarios_updated_at": scenarios.get("updated_at", ""),
             "hourly_load_model_updated_at": model.get("updated_at", ""),
+            "infiltration_method_gate_updated_at": infiltration_gate.get("updated_at", ""),
         },
         "excluded_components": [
-            "partitions", "infiltration", "minimum supply air", "extract/spill/transfer/make-up air",
+            "partitions", "minimum supply air", "extract/spill/transfer/make-up air",
             "vapour/steam/process latent loads", "dynamic thermal mass", "detailed glazing physics",
             "AHU coil effects", "fan/duct effects", "heat recovery", "plant loads",
         ],
@@ -670,7 +694,7 @@ def calculate_hourly_load_report(requirements, schedule_library, scenarios, mode
         attach_readiness(report, model, requirements, coverage)
         return report
     for scenario in selected:
-        report["scenario_results"].append(calculate_scenario(requirements, schedule_library, model, scenario))
+        report["scenario_results"].append(calculate_scenario(requirements, schedule_library, model, scenario, infiltration_gate))
     all_rooms = [room for scenario in report["scenario_results"] for room in scenario["rooms"]]
     if not any(room["status"] != "blocked" for room in all_rooms):
         report["blocked_reasons"].append("No selected scenario produced a complete room result.")
@@ -713,7 +737,7 @@ def select_scenarios(scenarios, selected_ids):
     return [lookup[item] for item in selected_ids]
 
 
-def calculate_scenario(requirements, library, model, scenario):
+def calculate_scenario(requirements, library, model, scenario, infiltration_gate):
     result = {
         "scenario_id": scenario["scenario_id"], "title": scenario["title"], "mode": scenario["mode"],
         "representative_month": scenario["representative_month"], "day_type": scenario["day_type"],
@@ -728,13 +752,13 @@ def calculate_scenario(requirements, library, model, scenario):
     if scenario_missing:
         result["blocked_reasons"].extend(scenario_missing)
         return result
-    room_results = [calculate_room_hours(requirements, library, scenario, room) for room in model["rooms"]]
+    zones = {zone["zone_id"]: zone for zone in model["zones"]}
+    room_results = [calculate_room_hours(requirements, library, scenario, room, zones[room["zone_id"]], infiltration_gate) for room in model["rooms"]]
     result["rooms"] = room_results
     calculated_rooms = [room for room in room_results if room["status"] != "blocked"]
     if not calculated_rooms:
         result["blocked_reasons"].append("All rooms are blocked for this scenario.")
         return result
-    zones = {zone["zone_id"]: zone for zone in model["zones"]}
     floors = {floor["floor_id"]: floor for floor in model["floors"]}
     result["zones"] = aggregate_zones(calculated_rooms, zones)
     result["floors"] = aggregate_floors(result["zones"], floors)
@@ -782,13 +806,13 @@ def scenario_ready(scenario):
     return missing, provisional
 
 
-def calculate_room_hours(requirements, library, scenario, room):
+def calculate_room_hours(requirements, library, scenario, room, zone, infiltration_gate):
     component_scope = room_component_scope(room)
     result = {
         "room_id": room["room_id"], "name": room["name"], "zone_id": room["zone_id"], "status": "blocked",
         "hours": [], "peak": {}, "warnings": [], "blocked_reasons": [], "room_input_scope": component_scope,
     }
-    static_missing = room_static_missing(room)
+    static_missing = room_static_missing(room, zone, infiltration_gate)
     if static_missing:
         result["blocked_reasons"].extend(static_missing)
         return result
@@ -805,14 +829,14 @@ def calculate_room_hours(requirements, library, scenario, room):
         result["warnings"].append("Room airflow or moisture input categories have not been assessed.")
     for weather in scenario["hours"]:
         hour = weather["hour"]
-        contributions = room_contributions(room, profiles, hour, weather, scenario["atmospheric_pressure_kpa"]["value"])
+        contributions = room_contributions(room, zone, infiltration_gate, profiles, hour, weather, scenario["atmospheric_pressure_kpa"]["value"])
         result["hours"].append(hour_total(hour, contributions, room["cooling_load"]["safety_factor"]))
     result["peak"] = peak(result["hours"])
     result["status"] = "draft" if provisional else "review_ready"
     return result
 
 
-def room_static_missing(room):
+def room_static_missing(room, zone=None, infiltration_gate=None):
     load = room["cooling_load"]
     conditions = room["cooling_load_conditions"]
     required = {
@@ -837,6 +861,16 @@ def room_static_missing(room):
         for key, label in (("surface_id", "surface ID"), ("area_m2", "area"), ("u_value_w_m2k", "U-value"), ("solar_design_w_m2", "design solar"), ("solar_gain_factor", "solar gain"), ("shading_factor", "shading"), ("source", "source")):
             if surface.get(key) in (None, ""):
                 missing.append(f"{surface.get('surface_id', 'surface')} {label}")
+    infiltration = infiltration_component(room)
+    if infiltration["calculation_status"] == "not_assessed":
+        missing.append("infiltration assessment")
+    elif infiltration["calculation_status"] == "stored_not_calculated":
+        missing.append("infiltration calculation eligibility")
+    elif infiltration["calculation_status"] == "calculated":
+        if not gate_is_approved(infiltration_gate):
+            missing.append("approved infiltration method gate")
+        if infiltration["unit"] == "ACH" and room_volume_m3(room, zone) is None:
+            missing.append("reviewed room or zone ceiling height for ACH infiltration")
     return missing
 
 
@@ -852,6 +886,8 @@ def resolved_profiles(library, day_type, room):
         required["lighting"] = assignments["lighting"]
     if outside_air_is_timed(room):
         required["outside_air"] = assignments["outside_air"]
+    if infiltration_is_timed(room):
+        required["infiltration"] = assignments["infiltration"]
     lookup = {item["schedule_id"]: item for item in library["schedules"]}
     profiles, missing, provisional = {}, [], False
     for target, schedule_id in required.items():
@@ -893,6 +929,24 @@ def outside_air_is_timed(room):
     return room["cooling_load"]["outside_air_lps"] != 0
 
 
+def infiltration_component(room):
+    return next((item for item in room.get("unapproved_components", []) if item.get("component_type") == "infiltration"), {
+        "calculation_status": "not_assessed", "value": None, "unit": "",
+    })
+
+
+def infiltration_is_timed(room):
+    component = infiltration_component(room)
+    return component.get("calculation_status") == "calculated" and bool(component.get("value"))
+
+
+def room_volume_m3(room, zone):
+    height_mm = room.get("ceiling_height_mm") or (zone or {}).get("ceiling_height_mm")
+    if room.get("area_m2") is None or height_mm is None:
+        return None
+    return room["area_m2"] * height_mm / 1000
+
+
 def room_is_provisional(room):
     if room["mapping_status"] != "confirmed" or room["verification_status"] != "confirmed":
         return True
@@ -904,11 +958,17 @@ def room_is_provisional(room):
         return True
     if any(surface.get("verification_status") != "confirmed" for surface in room["cooling_load"].get("envelope_surfaces", [])):
         return True
-    return any(component["calculation_status"] != "not_present_confirmed" for component in room["unapproved_components"])
+    for component in room["unapproved_components"]:
+        if component["component_type"] == "infiltration" and component["calculation_status"] == "calculated":
+            if component["verification_status"] != "confirmed":
+                return True
+        elif component["calculation_status"] != "not_present_confirmed":
+            return True
+    return False
 
 
 def room_component_scope(room):
-    result = {"room_id": room["room_id"], "stored_not_calculated": [], "not_assessed": [], "not_present_confirmed": []}
+    result = {"room_id": room["room_id"], "stored_not_calculated": [], "calculated": [], "not_assessed": [], "not_present_confirmed": []}
     for component in room.get("unapproved_components", []):
         item = {
             "component_id": component["component_id"], "component_type": component["component_type"],
@@ -920,7 +980,7 @@ def room_component_scope(room):
     return result
 
 
-def room_contributions(room, profiles, hour, weather, pressure):
+def room_contributions(room, zone, infiltration_gate, profiles, hour, weather, pressure):
     load = room["cooling_load"]
     people = scale(people_load(room["occupancy"], load["people_sensible_w_per_person"], load["people_latent_w_per_person"], load["people_diversity_factor"]), schedule_factor(profiles, "people", hour), "people")
     lighting = scale(lighting_load(room["area_m2"], load["lighting_w_m2"], load["lighting_diversity_factor"]), schedule_factor(profiles, "lighting", hour), "lighting")
@@ -936,7 +996,17 @@ def room_contributions(room, profiles, hour, weather, pressure):
         requirements_wet_bulb(room, "indoor_cooling_wet_bulb_c"), weather["outdoor_dry_bulb_c"]["value"],
         weather["outdoor_wet_bulb_c"]["value"], pressure,
     )
-    return [people, lighting, *equipment, envelope, *solar, outside_air]
+    contributions = [people, lighting, *equipment, envelope, *solar, outside_air]
+    infiltration = infiltration_component(room)
+    if infiltration.get("calculation_status") == "calculated":
+        contributions.append(infiltration_load(
+            infiltration["value"], infiltration["unit"], room["indoor_cooling_setpoint_c"],
+            requirements_wet_bulb(room, "indoor_cooling_wet_bulb_c"), weather["outdoor_dry_bulb_c"]["value"],
+            weather["outdoor_wet_bulb_c"]["value"], pressure,
+            room_volume_m3=room_volume_m3(room, zone), schedule_factor=schedule_factor(profiles, "infiltration", hour),
+            method_id=infiltration.get("method_id", ""), gate_version=infiltration_gate.get("updated_at", ""),
+        ))
+    return contributions
 
 
 def requirements_wet_bulb(room, key):
@@ -975,12 +1045,17 @@ def hour_total(hour, contributions, safety_factor):
 def combine_components(contributions):
     result = {}
     for item in contributions:
-        current = result.setdefault(item["name"], {"sensible_kw": 0.0, "latent_kw": 0.0, "total_kw": 0.0, "base_sensible_kw": 0.0, "base_latent_kw": 0.0, "schedule_factors": []})
+        current = result.setdefault(item["name"], {"sensible_kw": 0.0, "latent_kw": 0.0, "total_kw": 0.0, "base_sensible_kw": 0.0, "base_latent_kw": 0.0, "schedule_factors": [], "input_rows": []})
         for key in ("sensible_kw", "latent_kw", "base_sensible_kw", "base_latent_kw"):
             current[key] = round(current[key] + item.get(key, 0), 4)
         current["total_kw"] = round(current["sensible_kw"] + current["latent_kw"], 4)
         if "schedule_factor" in item:
             current["schedule_factors"].append(item["schedule_factor"])
+        if item.get("inputs") is not None:
+            current["input_rows"].append(deepcopy(item["inputs"]))
+            current.setdefault("inputs", deepcopy(item["inputs"]))
+        if item.get("formula"):
+            current.setdefault("formula", item["formula"])
     return result
 
 

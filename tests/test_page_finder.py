@@ -13,7 +13,7 @@ from ai.coordinate_review import create_coordinate_review, image_point_to_plan_p
 from ai.ai_packet import AI_CONTEXT_CONFIDENCE_THRESHOLD, build_ai_packet
 from ai.reasoning_packet import create_reasoning_packet
 from backend.web_app import sheet_summary
-from pdf_pipeline.extractors import extract_level_name, extract_rooms, extract_scale, extract_text_pages, extract_written_dimensions
+from pdf_pipeline.extractors import extract_drawing_title, extract_level_name, extract_rooms, extract_scale, extract_text_pages, extract_written_dimensions
 from pdf_pipeline.page_finder import analyze_pages, classify_page, classify_reference_page, has_top_view_signal, is_primary_discard
 from pdf_pipeline.renderer import page_number_from_path
 from pdf_pipeline.review import safe_folder_name
@@ -271,6 +271,7 @@ def check_visual_feature_scores():
 
 
 def main():
+    check_value("sheet marker extracts storefront elevation", extract_drawing_title("General Notes\n1 STOREFRONT ELEVATION\nDRAWING DWG NO JOB NO\nSHOPFRONT 300 H509"), "Storefront Elevation")
     check_blank_pdf_pages_are_preserved()
     check_visual_feature_scores()
     check(

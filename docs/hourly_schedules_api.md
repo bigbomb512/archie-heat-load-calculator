@@ -66,18 +66,45 @@ The schedule semantic is a generic load fraction. Assign it explicitly to people
 
 ## Calculator input assembly and scoped defaults
 
-`GET /api/calculator-inputs?project_id=...` returns a deterministic input-set
-readiness record without writing calculator artifacts. It lists active and
-excluded rooms, missing inputs, source fingerprints, approved research records,
-and the evidence-fusion/research artifacts used for the assessment. It never
-turns an unapproved or out-of-scope research record into a calculation input.
+`GET /api/calculator-inputs?project_id=...` returns the latest immutable input
+snapshot when one exists, plus the current project context, cited overrides,
+room coverage, grouped exceptions and the current assembly fingerprint. If
+source inputs changed after the snapshot was created, the response marks it
+`stale` and provides the current assembly status; calculation requires a new
+explicit assembly. It never writes calculator artifacts.
 
-`POST /api/calculator-inputs` with `action: "save_research_record"` adds one
-validated, cited record to the project-local `research_cache.json`. The cache
-is versioned and calculations use only records marked `approved`, unexpired,
-and matching the requested project scope. Updating the cache changes the report
-input fingerprint, so an existing report becomes stale rather than silently
-remaining current.
+`POST /api/calculator-inputs` supports these actions:
+
+- `save_context` writes the minimum project decision record: Australia-first
+  locality/use context and one cited conditioned-room scope declaration.
+- `save_override` writes one cited, reviewer-attributed project override. It
+  requires a stable target path, value, unit, source and citation.
+- `assemble` resolves the current inputs and creates (or reuses) an immutable,
+  content-addressed snapshot in `calculator_input_sets/<fingerprint>.json`.
+  The pointer file `calculator_input_set.json` only identifies the latest
+  snapshot; it does not rewrite historical snapshots.
+- `save_research_record` retains a cited project-local research candidate for
+  compatibility. This route always stores it as `proposed`; only a released,
+  approved source-pack record can become eligible automatically.
+- `refresh_research` may request an allowlisted collection worker when one is
+  configured. This local application deliberately has no live research worker;
+  calculation always reads the existing local cache.
+
+For every target calculator field the resolver uses this fixed precedence:
+
+1. cited project override;
+2. explicit, valid project evidence;
+3. supported derivation from resolved evidence;
+4. approved, current, scope-matched Australia-first source-pack default;
+5. blocked or excluded.
+
+The snapshot retains each value, unit, target path, source IDs, citations,
+scope, resolution status and, for derived values, formula, operands, rounding
+policy and competing candidates. It never defaults room geometry, boundaries,
+U-values, glazing performance, construction assemblies or equipment heat.
+Source-pack updates and overrides do not alter historical reports. A deliberate
+reassembly creates a new snapshot and the changed dependency makes any report
+that used the prior snapshot stale.
 
 `GET /api/hourly-load-model?project_id=...` retrieves `hourly_load_model.json`.
 
@@ -86,7 +113,7 @@ remaining current.
 - `{"project_id":"...","action":"build"}` seeds one **inferred**, provisional room per existing design zone. It also creates one provisional `unassigned` floor and maps each migrated zone to it; it never guesses a real level.
 - `{"project_id":"...","action":"save","hourly_load_model":{...}}` saves the engineer-reviewed model.
 
-Schema-v3 stores a topology before the existing room load inputs: each floor has a stable ID, name, optional elevation, review status, source and citations; each zone has a stable ID, name and valid `floor_id`; each room has a stable ID, name and valid `zone_id`. A room therefore belongs to a floor only through its zone. Schema-v1 and schema-v2 models are normalised in memory on `GET`; only an explicit save writes schema v3.
+Schema-v4 stores a topology before the existing room load inputs: each floor has a stable ID, name, optional elevation, review status, source and citations; each zone has a stable ID, name, optional cited ceiling height and valid `floor_id`; each room has a stable ID, name, optional cited ceiling height and valid `zone_id`. A room therefore belongs to a floor only through its zone. Schema-v1 through schema-v3 models are normalised in memory on `GET`; only an explicit save writes schema v4.
 
 Rooms retain source labels and mapping evidence, their own area/occupancy/setpoint/static cooling inputs/conditions, heat sources with stable source IDs, surfaces with existing surface IDs, and `schedule_assignments`:
 
@@ -95,6 +122,7 @@ Rooms retain source labels and mapping evidence, their own area/occupancy/setpoi
   "people": "retail_people",
   "lighting": "retail_lights",
   "outside_air": "retail_ventilation",
+  "infiltration": "retail_infiltration",
   "equipment": {"room-a-source-1": "refrigeration"},
   "solar": {"surface-north": "north_solar"}
 }
@@ -107,6 +135,10 @@ Each room also has `unapproved_components`. The calculator creates one record fo
 - `not_present_confirmed`: a cited, engineer-confirmed declaration that the component is absent. It has no value or unit.
 - `stored_not_calculated`: a positive, cited raw value in an accepted capture unit. It is deliberately excluded from the cooling total until its method is approved.
 - `not_assessed`: neither absence nor a source-backed value is known yet.
+- `calculated`: available only for `infiltration` after the project-local
+  approved method gate is active. It requires a source, citation, approved
+  method ID, uncontrolled-air-path declaration and outdoor-condition flow
+  reference.
 
 Transfer-air records may reference an existing `source_room_id`; no other component type may do so. Stored input units are captured but never converted in this release: airflow accepts `L/s`, `m3/s`, or `m3/h` (with `ACH` for infiltration); moisture/process input accepts `kg/h`, `g/h`, or `W`.
 
@@ -123,8 +155,22 @@ Transfer-air records may reference an existing `source_room_id`; no other compon
 }
 ```
 
-For every hour, the engine schedules people, lights, heat sources, solar and outside air; calculates envelope conduction at hourly outdoor DB; calculates psychrometric outside-air sensible/latent load at hourly DB/WB/pressure; then applies the existing explicit safety factor. It retains pre-safety and post-safety totals, components, tied peaks, and the earliest tied hour for display. Floors aggregate zones and zones aggregate rooms at the **same hour**, never independent room peaks.
+To calculate from an assembled snapshot, add its immutable fingerprint:
+
+```json
+{
+  "project_id": "example",
+  "input_set_fingerprint": "8af..."
+}
+```
+
+The endpoint materializes that snapshot in memory and never writes its resolved
+values back to editable room, schedule, requirements or envelope artifacts.
+
+`GET /api/infiltration-method-gate?project_id=...` retrieves the project-local method gate. `POST /api/infiltration-method-gate` saves the fixed V1 policy plus its approval record. A placeholder gate is visible but cannot contribute to cooling totals; an approved gate requires a named HVAC engineer, credential, date, citation and stated scope.
+
+For every hour, the engine schedules people, lights, heat sources, solar, outside air and eligible infiltration; calculates envelope conduction at hourly outdoor DB; calculates psychrometric outside-air and infiltration sensible/latent load at hourly DB/WB/pressure; then applies the existing explicit safety factor once. ACH infiltration uses reviewed room volume or a cited zone-height fallback. The report retains signed infiltration diagnostics while applying only positive sensible and latent cooling components. Floors aggregate zones and zones aggregate rooms at the **same hour**, never independent room peaks.
 
 The report exposes `known_exclusions` for stored uncalculated room inputs and `unresolved_room_inputs` for unassessed categories, separately from the calculated hourly components. A known excluded or unassessed room component makes the result `draft` and removes the project peak, while retaining an included-scope subtotal for engineering review.
 
-V1 excludes partitions, infiltration, dynamic thermal mass, detailed glazing physics, AHU coil and fan/duct effects, heat recovery, and plant loads. The analysis response exposes each artifact URL/status for frontend discovery. A draft may show only an included-scope subtotal; a project peak is available only for review-ready complete scope. The parity adapter remains disabled until an authorised CAMEL+/DA09 reconciliation is completed.
+V1 still excludes partitions, dynamic thermal mass, detailed glazing physics, AHU coil and fan/duct effects, heat recovery, and plant loads. Infiltration remains excluded until its project gate and room input are eligible. The analysis response exposes each artifact URL/status for frontend discovery. A draft may show only an included-scope subtotal; a project peak is available only for review-ready complete scope. The parity adapter remains disabled until an authorised CAMEL+/DA09 reconciliation is completed.

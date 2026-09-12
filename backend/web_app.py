@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+from copy import deepcopy
 import sys
 import html
 import json
@@ -38,7 +39,16 @@ from ai.hourly_loads import (
     validate_schedule_library,
 )
 from ai.cooling_readiness import assess_cooling_readiness
-from ai.calculator_inputs import assemble_calculator_inputs
+from ai.infiltration_gate import empty_infiltration_method_gate, gate_is_approved, validate_infiltration_method_gate
+from ai.calculator_inputs import (
+    assemble_calculator_inputs,
+    empty_overrides,
+    empty_project_context,
+    materialize_cooling_payload,
+    upsert_override,
+    validate_overrides,
+    validate_project_context,
+)
 from ai.research_cache import empty_research_cache, validate_cache, upsert_record
 from ai.drawing_coverage import build_drawing_coverage
 from ai.building_evidence import build_building_evidence
@@ -47,6 +57,7 @@ from ai.thermal_model import apply_thermal_model, build_thermal_evidence, build_
 from ai.calculator_draft import DraftConflict
 from backend import draft_service
 from backend import evidence_fusion_service
+from backend import vision_extraction_service
 from ai.ventilation import calculate_ventilation_report
 from ai.geometry_review import normalise_vision
 from ai.reasoning_packet import create_reasoning_packet_from_vision
@@ -136,6 +147,11 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json(api_hourly_load_model(self))
         if self.path.startswith("/api/hourly-load-report"):
             return self.send_json(api_hourly_load_report(self))
+        if self.path.startswith("/api/infiltration-method-gate"):
+            try:
+                return self.send_json(api_infiltration_method_gate(self))
+            except Exception as error:
+                return self.send_json({"error": str(error)}, 400)
         if self.path.startswith("/api/calculator-inputs"):
             try:
                 return self.send_json(api_calculator_inputs(self))
@@ -172,6 +188,11 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(api_evidence_fusion(self))
             except Exception as error:
                 return self.send_json({"error": str(error)}, 404)
+        if self.path.startswith("/api/vision-extraction"):
+            try:
+                return self.send_json(api_vision_extraction(self))
+            except Exception as error:
+                return self.send_json({"error": str(error)}, 400)
         if self.path.startswith("/api/parity-report"):
             try:
                 return self.send_json(api_parity_report(self))
@@ -200,6 +221,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self.save_hourly_load_model()
         if self.path == "/api/hourly-load-report":
             return self.save_hourly_load_report()
+        if self.path == "/api/infiltration-method-gate":
+            return self.save_infiltration_method_gate()
         if self.path == "/api/calculator-inputs":
             return self.save_calculator_inputs()
         if self.path == "/api/envelope-library":
@@ -218,6 +241,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self.save_calculator_draft()
         if self.path == "/api/evidence-fusion":
             return self.save_evidence_fusion()
+        if self.path == "/api/vision-extraction":
+            return self.save_vision_extraction()
         if self.path == "/api/parity-report":
             return self.save_parity_report()
         if self.path == "/process":
@@ -299,6 +324,13 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json({"error": str(error)}, 400)
         self.send_json(result)
 
+    def save_infiltration_method_gate(self):
+        try:
+            result = api_save_infiltration_method_gate(self)
+        except Exception as error:
+            return self.send_json({"error": str(error)}, 400)
+        self.send_json(result)
+
     def save_calculator_inputs(self):
         try:
             result = api_save_calculator_inputs(self)
@@ -354,6 +386,13 @@ class Handler(SimpleHTTPRequestHandler):
     def save_evidence_fusion(self):
         try:
             result = api_save_evidence_fusion(self)
+        except Exception as error:
+            return self.send_json({"error": str(error)}, 400)
+        self.send_json(result)
+
+    def save_vision_extraction(self):
+        try:
+            result = api_save_vision_extraction(self)
         except Exception as error:
             return self.send_json({"error": str(error)}, 400)
         self.send_json(result)
@@ -597,7 +636,44 @@ def hourly_paths(project):
         "calculator_draft": review_dir / "calculator_draft.json",
         "research_cache": review_dir / "research_cache.json",
         "evidence_fusion": review_dir / "architect_evidence_fusion.json",
+        "project_context": review_dir / "project_context.json",
+        "calculator_input_overrides": review_dir / "calculator_input_overrides.json",
+        "calculator_input_set": review_dir / "calculator_input_set.json",
+        "calculator_input_sets": review_dir / "calculator_input_sets",
+        "infiltration_method_gate": review_dir / "infiltration_method_gate.json",
     }
+
+
+def infiltration_gate_summary(gate):
+    approved = gate_is_approved(gate)
+    return {
+        "status": "approved" if approved else "placeholder",
+        "calculation_enabled": approved,
+        "method_id": gate.get("method_id", ""),
+        "message": "Approved for confirmed infiltration inputs." if approved else "Infiltration remains disabled until a named HVAC engineer approves this method gate.",
+    }
+
+
+def api_infiltration_method_gate(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    path = hourly_paths(project)["infiltration_method_gate"]
+    gate = load_json(path) if path.exists() else empty_infiltration_method_gate()
+    return artifact_response(project, "infiltration_method_gate", gate, infiltration_gate_summary(gate), path)
+
+
+def api_save_infiltration_method_gate(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    gate = validate_infiltration_method_gate(data.get("infiltration_method_gate", data.get("gate", {})))
+    gate["updated_at"] = timestamp()
+    path = hourly_paths(project)["infiltration_method_gate"]
+    write_artifact(path, gate)
+    project["infiltration_method_gate"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return artifact_response(project, "infiltration_method_gate", gate, infiltration_gate_summary(gate), path)
 
 
 def envelope_artifacts(project):
@@ -778,39 +854,178 @@ def api_hourly_load_report(request):
     }
 
 
-def api_calculator_inputs(request, selected_scenario_ids=None):
-    query = parse_qs(urlparse(request.path).query)
-    project = project_by_id(query.get("project_id", [""])[0])
+def _atomic_write(path, artifact):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    stage = path.with_name(path.name + ".stage")
+    stage.write_text(json.dumps(artifact, indent=2), encoding="utf-8")
+    stage.replace(path)
+
+
+def _input_context(paths):
+    return validate_project_context(load_json(paths["project_context"]) if paths["project_context"].exists() else empty_project_context())
+
+
+def _input_overrides(paths):
+    return validate_overrides(load_json(paths["calculator_input_overrides"]) if paths["calculator_input_overrides"].exists() else empty_overrides())
+
+
+def _load_input_snapshot(paths, fingerprint=""):
+    pointer = load_json(paths["calculator_input_set"]) if paths["calculator_input_set"].exists() else {}
+    input_fingerprint = fingerprint or pointer.get("input_fingerprint", "")
+    if not input_fingerprint:
+        return {}, pointer
+    path = paths["calculator_input_sets"] / f"{input_fingerprint}.json"
+    return (load_json(path) if path.exists() else {}), pointer
+
+
+def _store_input_snapshot(paths, snapshot):
+    path = paths["calculator_input_sets"] / f"{snapshot['input_fingerprint']}.json"
+    created = not path.exists()
+    if created:
+        _atomic_write(path, snapshot)
+    stored = load_json(path) if path.exists() else snapshot
+    pointer = {
+        "schema_version": snapshot["schema_version"], "input_fingerprint": snapshot["input_fingerprint"],
+        "snapshot_path": str(path.name), "status": stored.get("status", snapshot["status"]), "created_at": stored.get("created_at", snapshot["created_at"]),
+        "source_fingerprints": stored.get("source_fingerprints", snapshot["source_fingerprints"]),
+    }
+    old_pointer = load_json(paths["calculator_input_set"]) if paths["calculator_input_set"].exists() else {}
+    pointer_changed = old_pointer != pointer
+    if pointer_changed:
+        _atomic_write(paths["calculator_input_set"], pointer)
+    return path, pointer, (created or pointer_changed), stored
+
+
+def _assemble_project_inputs(project, selected_scenario_ids=None):
     paths = hourly_paths(project)
     required = ("requirements", "schedules", "scenarios", "model")
     missing = [name for name in required if not paths[name].exists()]
     if missing:
-        return {"id": project["id"], "status": "blocked", "missing_artifacts": missing, "calculator_input_set": {"status": "blocked", "issues": []}}
+        return {"status": "blocked", "missing_artifacts": missing, "issues": []}, paths
     library, envelope_model = envelope_artifacts(project)
+    requirements, envelope_inputs = apply_reviewed_envelope_to_requirements(load_json(paths["requirements"]), library, envelope_model)
+    model = apply_reviewed_envelope_to_hourly_model(load_json(paths["model"]), library, envelope_model)
     fusion = load_json(paths["evidence_fusion"]) if paths["evidence_fusion"].exists() else {}
     research = validate_cache(load_json(paths["research_cache"]) if paths["research_cache"].exists() else empty_research_cache())
+    selected = selected_scenario_ids if selected_scenario_ids is not None else []
+    assembled = assemble_calculator_inputs(
+        model, load_json(paths["schedules"]), load_json(paths["scenarios"]), selected,
+        fusion=fusion, research_cache=research, envelope=envelope_inputs,
+        project_context=_input_context(paths), overrides=_input_overrides(paths), requirements=requirements,
+        infiltration_gate=load_json(paths["infiltration_method_gate"]) if paths["infiltration_method_gate"].exists() else empty_infiltration_method_gate(),
+    )
+    return assembled, paths
+
+
+def api_calculator_inputs(request, selected_scenario_ids=None):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
     selected = selected_scenario_ids if selected_scenario_ids is not None else query.get("scenario_id", [])
-    assembled = assemble_calculator_inputs(load_json(paths["model"]), load_json(paths["schedules"]), load_json(paths["scenarios"]),
-        selected, fusion=fusion, research_cache=research, envelope=envelope_model)
-    assembled["artifact_links"] = {name: safe_link(paths[name]) for name in ("model", "schedules", "scenarios", "research_cache", "evidence_fusion") if paths[name].exists()}
-    return {"id": project["id"], "calculator_input_set": assembled, "status": assembled["status"]}
+    assembled, paths = _assemble_project_inputs(project, selected)
+    snapshot, pointer = _load_input_snapshot(paths)
+    current_fingerprint = assembled.get("input_fingerprint", "")
+    snapshot_stale = bool(snapshot and current_fingerprint and snapshot.get("input_fingerprint") != current_fingerprint)
+    display = snapshot or assembled
+    display["snapshot_stale"] = snapshot_stale
+    display["current_assembled_fingerprint"] = current_fingerprint
+    display["current_assembly_status"] = assembled.get("status", "blocked")
+    display["current_assembly"] = {
+        "status": assembled.get("status", "blocked"),
+        "input_fingerprint": current_fingerprint,
+        "coverage_summary": assembled.get("coverage_summary", {}),
+        "issues": assembled.get("issues", []),
+    }
+    display["artifact_links"] = {name: safe_link(paths[name]) for name in ("model", "schedules", "scenarios", "research_cache", "evidence_fusion", "project_context", "calculator_input_overrides", "calculator_input_set") if paths[name].exists()}
+    display["latest_snapshot"] = pointer
+    return {
+        "id": project["id"], "calculator_input_set": display,
+        "project_context": _input_context(paths),
+        "calculator_input_overrides": _input_overrides(paths),
+        "status": "stale" if snapshot_stale else display.get("status", "blocked"),
+        "latest_snapshot": pointer,
+        "snapshot_stale": snapshot_stale,
+        "current_assembled_fingerprint": current_fingerprint,
+        "current_assembly_status": assembled.get("status", "blocked"),
+        "coverage_summary": deepcopy(assembled.get("coverage_summary", display.get("coverage_summary", {}))),
+        "resolved_input_counts": {
+            status: sum(row.get("resolution_status") == status for row in display.get("resolved_inputs", []))
+            for status in ("project_evidence", "derived_evidence", "approved_default", "project_override", "blocked", "excluded")
+        },
+        "exceptions": deepcopy(assembled.get("issues", display.get("issues", []))),
+        "source_pack_version": assembled.get("source_pack_version", display.get("source_pack_version", "")),
+        "artifact_links": deepcopy(display.get("artifact_links", {})),
+    }
 
 
 def api_save_calculator_inputs(request):
     data = read_json_body(request)
     project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
     paths = hourly_paths(project)
     action = data.get("action", "assemble")
-    if action not in {"assemble", "save_research_record"}:
-        raise ValueError("Calculator-input action must be assemble or save_research_record.")
+    if action not in {"assemble", "save_research_record", "save_context", "save_override", "refresh_research"}:
+        raise ValueError("Unsupported calculator-input action.")
+    if action == "save_context":
+        context = validate_project_context(data.get("project_context", data.get("context", {})))
+        context["revision"] = int(_input_context(paths).get("revision", 0)) + 1
+        context["updated_at"] = timestamp()
+        _atomic_write(paths["project_context"], context)
+        project["project_context"] = str(paths["project_context"])
+        project["updated_at"] = timestamp()
+        update_project(project)
+        return {"id": project["id"], "project_context": context, "artifact_url": safe_link(paths["project_context"]), "status": "current", "reassembly_required": True}
+    if action == "save_override":
+        current = _input_overrides(paths)
+        expected = data.get("expected_revision")
+        if expected is not None and expected != current.get("revision"):
+            raise ValueError("Calculator-input overrides changed; reload before saving.")
+        updated = upsert_override(current, data.get("override", {}))
+        _atomic_write(paths["calculator_input_overrides"], updated)
+        project["calculator_input_overrides"] = str(paths["calculator_input_overrides"])
+        project["updated_at"] = timestamp()
+        update_project(project)
+        return {"id": project["id"], "calculator_input_overrides": updated, "artifact_url": safe_link(paths["calculator_input_overrides"]), "status": "current", "reassembly_required": True}
+    if action == "refresh_research":
+        return {"id": project["id"], "status": "not_available", "message": "Allowlisted research collection is not configured on this local server. Calculations continue to use the project-local approved cache only."}
     if action == "save_research_record":
         current = validate_cache(load_json(paths["research_cache"]) if paths["research_cache"].exists() else empty_research_cache())
-        updated = upsert_record(current, data.get("research_record", {}))
-        paths["research_cache"].write_text(json.dumps(updated, indent=2), encoding="utf-8")
+        record = dict(data.get("research_record", {}))
+        # This compatibility route is not the release workflow. A local user
+        # may retain a candidate with its citation, but only a future approved
+        # source-pack release may make it automatic-calculation eligible.
+        record["review_status"] = "proposed"
+        record["released"] = False
+        updated = upsert_record(current, record)
+        _atomic_write(paths["research_cache"], updated)
         project["updated_at"] = timestamp()
         update_project(project)
         return {"id": project["id"], "research_cache": updated, "artifact_url": safe_link(paths["research_cache"]), "status": "current"}
-    return api_calculator_inputs(type("Request", (), {"path": f"/api/calculator-inputs?project_id={quote(project['id'])}"})(), data.get("selected_scenario_ids"))
+    assembled, _ = _assemble_project_inputs(project, data.get("selected_scenario_ids"))
+    if assembled.get("missing_artifacts"):
+        return {"id": project["id"], "status": "blocked", "calculator_input_set": assembled}
+    expected_sources = data.get("expected_source_fingerprints")
+    if expected_sources:
+        actual_sources = assembled.get("source_fingerprints", {})
+        changed_sources = sorted(name for name, expected in expected_sources.items() if actual_sources.get(name) != expected)
+        if changed_sources:
+            raise ValueError("Calculator inputs changed since this assembly started: " + ", ".join(changed_sources) + ". Reload and assemble again.")
+    snapshot_path, pointer, changed, stored = _store_input_snapshot(paths, assembled)
+    stored["artifact_url"] = safe_link(snapshot_path)
+    stored["latest_snapshot"] = pointer
+    if changed:
+        project["updated_at"] = timestamp()
+        update_project(project)
+    return {
+        "id": project["id"], "calculator_input_set": stored, "status": stored["status"],
+        "artifact_url": safe_link(snapshot_path), "snapshot_reused": not changed,
+        "input_fingerprint": stored.get("input_fingerprint", ""),
+        "coverage_summary": deepcopy(stored.get("coverage_summary", {})),
+        "resolved_inputs": deepcopy(stored.get("resolved_inputs", [])),
+        "defaults_used": [row for row in stored.get("resolved_inputs", []) if row.get("resolution_status") == "approved_default"],
+        "derivations": [row for row in stored.get("resolved_inputs", []) if row.get("resolution_status") == "derived_evidence"],
+        "issues": deepcopy(stored.get("issues", [])),
+        "excluded_components": deepcopy(stored.get("excluded_components", [])),
+    }
 
 
 def api_save_hourly_load_report(request):
@@ -825,13 +1040,43 @@ def api_save_hourly_load_report(request):
     coverage = load_json(paths["coverage"]) if paths["coverage"].exists() else {}
     library, envelope_model = envelope_artifacts(project)
     requirements, envelope_inputs = apply_reviewed_envelope_to_requirements(load_json(paths["requirements"]), library, envelope_model)
-    model = apply_reviewed_envelope_to_hourly_model(load_json(paths["model"]), library, envelope_model)
-    report = calculate_hourly_load_report(requirements, load_json(paths["schedules"]), load_json(paths["scenarios"]), model,
-        data.get("selected_scenario_ids", data.get("scenario_ids", [])), coverage)
+    input_set_fingerprint = data.get("input_set_fingerprint", "")
+    input_set, _pointer = _load_input_snapshot(paths, input_set_fingerprint)
+    if input_set_fingerprint and not input_set:
+        raise ValueError("The requested calculator-input snapshot is unavailable. Assemble inputs again before calculating.")
+    if not input_set and paths["calculator_input_set"].exists():
+        raise ValueError("Assemble cooling inputs before calculating; the project has an input-set workflow enabled.")
+    if input_set:
+        current_assembly, _ = _assemble_project_inputs(project, input_set.get("selected_scenario_ids", []))
+        if current_assembly.get("input_fingerprint") != input_set.get("input_fingerprint"):
+            raise ValueError("Calculator inputs are stale. Assemble cooling inputs again before calculating.")
+    if input_set:
+        model, schedules, scenarios = materialize_cooling_payload(input_set)
+        selected_scenarios = input_set.get("selected_scenario_ids", [])
+    else:
+        model = apply_reviewed_envelope_to_hourly_model(load_json(paths["model"]), library, envelope_model)
+        schedules, scenarios = load_json(paths["schedules"]), load_json(paths["scenarios"])
+        selected_scenarios = data.get("selected_scenario_ids", data.get("scenario_ids", []))
+    raw_gate = load_json(paths["infiltration_method_gate"]) if paths["infiltration_method_gate"].exists() else empty_infiltration_method_gate()
+    infiltration_gate = input_set.get("payload", {}).get("infiltration_method_gate", raw_gate) if input_set else raw_gate
+    report = calculate_hourly_load_report(requirements, schedules, scenarios, model, selected_scenarios, coverage, infiltration_gate)
     report["input_fingerprints"]["envelope_library_updated_at"] = library.get("updated_at", "")
     report["input_fingerprints"]["envelope_model_updated_at"] = envelope_model.get("updated_at", "")
     report["input_fingerprints"]["research_cache_fingerprint"] = draft_service.fingerprint(load_json(paths["research_cache"]) if paths["research_cache"].exists() else empty_research_cache())
     report["input_fingerprints"]["evidence_fusion_fingerprint"] = load_json(paths["evidence_fusion"]).get("fingerprint", "") if paths["evidence_fusion"].exists() else ""
+    report["input_fingerprints"]["infiltration_method_gate_updated_at"] = infiltration_gate.get("updated_at", "")
+    if input_set:
+        report["input_fingerprints"]["calculator_input_set_fingerprint"] = input_set["input_fingerprint"]
+        report["input_fingerprints"]["project_context_fingerprint"] = _input_context(paths).get("fingerprint", "")
+        report["input_fingerprints"]["calculator_input_overrides_fingerprint"] = _input_overrides(paths).get("fingerprint", "")
+        report["calculator_input_set"] = {
+            "input_fingerprint": input_set["input_fingerprint"], "status": input_set["status"],
+            "policy_version": input_set["policy_version"], "source_pack_version": input_set.get("source_pack_version", ""),
+            "resolved_input_count": len(input_set.get("resolved_inputs", [])),
+            "defaulted_input_count": sum(row.get("resolution_status") == "approved_default" for row in input_set.get("resolved_inputs", [])),
+            "artifact_url": safe_link(paths["calculator_input_sets"] / f"{input_set['input_fingerprint']}.json"),
+        }
+        report["calculator_input_coverage"] = deepcopy(input_set.get("coverage_summary", {}))
     report["evidence_fingerprints"] = {
         name: draft_service.fingerprint(load_json(paths[name])) if paths[name].exists() else draft_service.fingerprint({})
         for name in ("coverage",)
@@ -861,7 +1106,10 @@ def api_save_hourly_load_report(request):
         "envelope_library": {"artifact_url": safe_link(paths["envelope_library"]) if paths["envelope_library"].exists() else "", "updated_at": library.get("updated_at", "")},
         "envelope_model": {"artifact_url": safe_link(paths["envelope_model"]) if paths["envelope_model"].exists() else "", "updated_at": envelope_model.get("updated_at", "")},
         "drawing_coverage": {"artifact_url": safe_link(paths["coverage"]) if paths["coverage"].exists() else "", "updated_at": coverage.get("updated_at", "")},
+        "infiltration_method_gate": {"artifact_url": safe_link(paths["infiltration_method_gate"]) if paths["infiltration_method_gate"].exists() else "", "updated_at": infiltration_gate.get("updated_at", "")},
     }
+    if input_set:
+        report["input_artifacts"]["calculator_input_set"] = {"artifact_url": report["calculator_input_set"]["artifact_url"], "updated_at": input_set.get("created_at", "")}
     write_artifact(paths["report"], report)
     project["hourly_load_report"] = str(paths["report"])
     project["updated_at"] = timestamp()
@@ -950,11 +1198,25 @@ def api_evidence_fusion(request):
     return evidence_fusion_service.get(sys.modules[__name__], project)
 
 
+def api_vision_extraction(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    ensure_review_dir(project)
+    return vision_extraction_service.get(sys.modules[__name__], project)
+
+
 def api_save_evidence_fusion(request):
     data = read_json_body(request)
     project = project_by_id(data.get("project_id") or data.get("id", ""))
     ensure_review_dir(project)
     return evidence_fusion_service.post(sys.modules[__name__], project, data)
+
+
+def api_save_vision_extraction(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    return vision_extraction_service.post(sys.modules[__name__], project, data)
 
 
 def api_save_calculator_draft(request):
@@ -1327,6 +1589,15 @@ def current_hourly_load_report_path(project):
     expected["envelope_model_updated_at"] = model.get("updated_at", "")
     expected["research_cache_fingerprint"] = draft_service.fingerprint(load_json(paths["research_cache"]) if paths["research_cache"].exists() else empty_research_cache())
     expected["evidence_fusion_fingerprint"] = load_json(paths["evidence_fusion"]).get("fingerprint", "") if paths["evidence_fusion"].exists() else ""
+    raw_gate = load_json(paths["infiltration_method_gate"]) if paths["infiltration_method_gate"].exists() else empty_infiltration_method_gate()
+    expected["infiltration_method_gate_updated_at"] = raw_gate.get("updated_at", "")
+    if "calculator_input_set_fingerprint" in fingerprints:
+        snapshot, _pointer = _load_input_snapshot(paths, fingerprints["calculator_input_set_fingerprint"])
+        if not snapshot:
+            return None
+        expected["calculator_input_set_fingerprint"] = fingerprints["calculator_input_set_fingerprint"]
+        expected["project_context_fingerprint"] = _input_context(paths).get("fingerprint", "")
+        expected["calculator_input_overrides_fingerprint"] = _input_overrides(paths).get("fingerprint", "")
     if fingerprints != expected:
         return None
     evidence_fingerprints = report.get("evidence_fingerprints")

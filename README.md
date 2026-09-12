@@ -74,3 +74,18 @@ and [the cooling roadmap](docs/cool_heat_load_roadmap.md).
 For a private drawing-based case, use `tools/create_reviewed_cooling_case.py`.
 It requires a named reviewer manifest, keeps the source PDF outside GitHub, and
 creates only proposal/evidence artifacts until the review is explicitly applied.
+
+If the evidence packet already has its coverage, evidence-fusion, thermal, and
+calculator-draft artifacts, run the additive bootstrap before opening the
+calculator:
+
+```bash
+PYTHONPATH=. python3 tools/create_reviewed_cooling_case.py \
+  --source-dir /private/path/evidence-packet \
+  --output-dir output/web_review/private-reviewed-cooling-case \
+  --bootstrap
+```
+
+Bootstrap creates only missing `project_context.json`,
+`calculator_input_overrides.json`, and `hourly_load_model.json`; existing
+authored files and private PDFs are not overwritten or copied.

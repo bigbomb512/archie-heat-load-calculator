@@ -120,7 +120,8 @@ def post(web, project, data):
         fusion = read(fusion_path, {})
         if not fusion or fusion.get("source_fingerprint") != sources["drawing_coverage"].get("source_fingerprint"):
             fusion = build_evidence_fusion(read(root / "ai_input.json", {"source_pdf": sources["building_evidence"].get("source_pdf", "")}), sources["drawing_coverage"], sources["building_evidence"],
-                                           read(root / "spatial_ocr.json", {}), read(root / "vector_geometry.json", {}), read(root / "vision_response.json", {}))
+                                           read(root / "spatial_ocr.json", {}), read(root / "vector_geometry.json", {}), read(root / "vision_response.json", {}),
+                                           read(root / "dimension_wall_matches.json", {}), read(root / "geometry_confirmation.json", {}))
             atomic_bytes(fusion_path, json.dumps(fusion, indent=2, allow_nan=False).encode())
         draft = build_calculator_draft(sources["thermal_model"], sources["building_evidence"], sources["drawing_coverage"], draft,
             {name: web.safe_link(root / file) for name, file in SOURCE_FILES.items() if (root / file).exists()}, sources["thermal_evidence"], fusion)

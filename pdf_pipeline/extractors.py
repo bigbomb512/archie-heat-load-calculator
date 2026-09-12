@@ -110,6 +110,13 @@ def extract_drawing_title(raw_text):
     # through to the next long footer sentence (usually ``including
     # amendments ...``), which made schedules look like plans and shifted the
     # evidence model onto the wrong pages.
+    # Sheet callouts such as ``1 STOREFRONT ELEVATION`` are often the only
+    # intact title when a multi-column title block is flattened by PDF text
+    # extraction. Prefer this short, drawing-like marker to a footer note.
+    title = title_from_sheet_marker(lines)
+    if title:
+        return title
+
     title = title_from_drawing_block(lines)
     if title:
         return title
@@ -153,6 +160,18 @@ def title_from_drawing_block(lines):
             title = match.group(1).strip(" -:;")
             if 2 <= len(title) <= 90 and not re.search(r"\b(date|rev(?:ision)?|project|amendments?)\b", title, re.I):
                 return title
+    return ""
+
+
+def title_from_sheet_marker(lines):
+    ending = r"(?:plan|elevation|section|schedule|image|detail)"
+    for line in lines:
+        match = re.fullmatch(r"\s*(?:\d{1,3}\s+)?([A-Za-z][A-Za-z0-9 &'\-/]{2,70}?\s+" + ending + r")\s*", line, re.I)
+        if not match:
+            continue
+        title = re.sub(r"\s+", " ", match.group(1)).strip()
+        if not line_is_title_noise(title):
+            return title.title()
     return ""
 
 

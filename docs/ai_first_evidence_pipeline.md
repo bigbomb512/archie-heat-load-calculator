@@ -37,10 +37,30 @@ cache of cited, reviewed records; it contains no network client and calculations
 never perform live web research. Expired, rejected, out-of-scope, or merely
 proposed records are not eligible inputs.
 
-The calculator input assembler produces a deterministic readiness record. It
-does not calculate loads; the existing hourly engine remains the only load
-calculator. A complete project duty is still withheld when active rooms have
-missing topology, schedules, supported gains, or current envelope inputs.
+The calculator input assembler now produces immutable, content-addressed
+cooling snapshots in `calculator_input_sets/`. Each snapshot resolves one
+field at a time using cited project overrides, explicit PDF/fusion evidence,
+supported derivations, then approved Australia-first source-pack defaults.
+It preserves every source, citation, formula and exclusion and does not modify
+the editable project artifacts. The existing hourly engine remains the only
+load calculator; it materializes a selected snapshot in memory.
+
+Assembly is an explicit step before calculation. Reassembling unchanged inputs
+reuses the same fingerprint; changed evidence, schedules, scenarios, context,
+overrides, research or gate inputs produce a new snapshot. The snapshot also
+contains room coverage (`included`, `excluded`, `blocked`, `draft-only`) and a
+complete-scope flag so a partial result cannot be presented as a project duty.
+
+Defaults are limited to weather, indoor conditions, safety allowance,
+occupancy/people assumptions, lighting assumptions, schedules and outside-air
+basis. Geometry, boundaries, U-values, glazing, construction assemblies and
+equipment heat remain non-defaultable. Unsupported airflow and moisture
+components are never inferred as zero: confirmed absence is explicit, while
+known or unassessed loads keep the relevant result at `draft`.
+
+A complete AI-assembled/default-backed supported cooling scope can be
+`review_ready`, but it remains visibly labelled as such and is never
+`validated`. Validation is reserved for the authorised benchmark gate.
 
 Drawing 6 remains private. The reviewed-case tool writes derived evidence to a
 local output directory and never copies the source PDF into the repository.

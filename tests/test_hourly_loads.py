@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import backend.web_app as web_app
 from ai.design_requirements import validate_design_requirements
+from ai.heat_loads import infiltration_load
 from ai.hourly_loads import (
     build_hourly_load_model,
     calculate_hourly_load_report,
@@ -18,6 +19,7 @@ from ai.hourly_loads import (
     validate_hourly_load_model,
     validate_schedule_library,
 )
+from ai.infiltration_gate import empty_infiltration_method_gate, validate_infiltration_method_gate
 
 
 def check(name, condition):
@@ -45,7 +47,7 @@ def profile(values, status="confirmed"):
 def library(status="confirmed"):
     values = [0.0] * 24
     values[14] = 1.0
-    return {"schedules": [{"schedule_id": name, "title": name, "description": "", "status": status, "source": "Engineer schedule", "citations": [], "day_profiles": {"weekday": profile(values, status), "saturday": profile([], "missing"), "sunday_holiday": profile([], "missing")}} for name in ("people", "lights", "air", "fridge", "solar")]}
+    return {"schedules": [{"schedule_id": name, "title": name, "description": "", "status": status, "source": "Engineer schedule", "citations": [], "day_profiles": {"weekday": profile(values, status), "saturday": profile([], "missing"), "sunday_holiday": profile([], "missing")}} for name in ("people", "lights", "air", "infil", "fridge", "solar")]}
 
 
 def scenarios(mode="cooling", status="confirmed"):
@@ -67,6 +69,31 @@ def reviewed_model(requirements):
             "value": None, "unit": "", "source_room_id": "", "source": "Engineer room-services review",
             "citations": [], "verification_status": "confirmed", "calculation_status": "not_present_confirmed",
         })
+    return model
+
+
+def approved_infiltration_gate():
+    gate = empty_infiltration_method_gate()
+    gate.update({
+        "approval_status": "approved", "engineer_name": "A. Engineer", "engineer_credential": "CPEng",
+        "approved_at": "2026-09-09", "method_citation": "Project infiltration method IM-01",
+        "scope": "Cooling infiltration sensible and latent load only.",
+        "citations": [{"reference": "IM-01", "page": 1, "excerpt": "Approved method"}],
+    })
+    return validate_infiltration_method_gate(gate)
+
+
+def calculated_infiltration(model, value, unit="ACH", status="confirmed"):
+    room = model["rooms"][0]
+    room["ceiling_height_mm"] = 3000
+    room["schedule_assignments"]["infiltration"] = "infil"
+    component = next(item for item in room["unapproved_components"] if item["component_type"] == "infiltration")
+    component.update({
+        "value": value, "unit": unit, "source": "Site leakage test", "verification_status": status,
+        "citations": [{"reference": "LT-01", "page": 1, "excerpt": "Infiltration rate"}],
+        "calculation_status": "calculated", "method_id": "infiltration_psychrometric_v1",
+        "air_path": "uncontrolled_infiltration", "flow_reference": "outdoor_design_condition",
+    })
     return model
 
 
@@ -122,7 +149,36 @@ def main():
 
     legacy_model = build_hourly_load_model(requirements)
     migrated = validate_hourly_load_model({"schema_version": 1, "updated_at": legacy_model["updated_at"], "source_requirements_updated_at": legacy_model["source_requirements_updated_at"], "rooms": legacy_model["rooms"]})
-    check("schema-v1 model normalises to provisional unassigned topology and unassessed room components", migrated["schema_version"] == 3 and migrated["floors"][0]["floor_id"] == "unassigned" and migrated["zones"][0]["floor_id"] == "unassigned" and migrated["rooms"][0]["unapproved_components"][0]["calculation_status"] == "not_assessed")
+    check("schema-v1 model normalises to provisional unassigned topology and unassessed room components", migrated["schema_version"] == 4 and migrated["floors"][0]["floor_id"] == "unassigned" and migrated["zones"][0]["floor_id"] == "unassigned" and migrated["rooms"][0]["unapproved_components"][0]["calculation_status"] == "not_assessed")
+
+    infiltration_model = calculated_infiltration(reviewed_model(requirements), 0.36)
+    infiltration_report = calculate_hourly_load_report(requirements, library(), scenarios(), infiltration_model, ["jan_weekday"], infiltration_gate=approved_infiltration_gate())
+    infiltration_hour = infiltration_report["scenario_results"][0]["rooms"][0]["hours"][14]
+    infiltration_component = infiltration_hour["components"]["infiltration"]
+    check("approved ACH infiltration contributes separately before the room safety factor", infiltration_report["status"] == "review_ready" and infiltration_component["inputs"]["resolved_flow_lps"] == 6 and infiltration_component["total_kw"] > 0)
+    check("infiltration schedule turns contribution off outside the assigned hour", infiltration_report["scenario_results"][0]["rooms"][0]["hours"][13]["components"]["infiltration"]["total_kw"] == 0)
+
+    direct_flow_model = calculated_infiltration(reviewed_model(requirements), 6, "L/s")
+    direct_flow_report = calculate_hourly_load_report(requirements, library(), scenarios(), direct_flow_model, ["jan_weekday"], infiltration_gate=approved_infiltration_gate())
+    direct_component = direct_flow_report["scenario_results"][0]["rooms"][0]["hours"][14]["components"]["infiltration"]
+    check("equivalent ACH and direct airflow produce the same infiltration cooling load", direct_component["total_kw"] == infiltration_component["total_kw"])
+
+    sensible_only = infiltration_load(10, "L/s", 24, 18, 35, 18, 101.325)
+    latent_only = infiltration_load(10, "L/s", 24, 18, 24, 22, 101.325)
+    negative_diagnostics = infiltration_load(10, "L/s", 24, 18, 20, 15, 101.325)
+    check("infiltration retains signed sensible and latent diagnostics while applying only cooling gains", sensible_only["sensible_kw"] > 0 and sensible_only["latent_kw"] == 0 and latent_only["sensible_kw"] == 0 and latent_only["latent_kw"] > 0 and negative_diagnostics["inputs"]["raw_signed_sensible_kw"] < 0 and negative_diagnostics["inputs"]["raw_signed_latent_kw"] < 0 and negative_diagnostics["total_kw"] == 0)
+
+    zone_height_model = calculated_infiltration(reviewed_model(requirements), 0.36)
+    zone_height_model["rooms"][0]["ceiling_height_mm"] = None
+    zone_height_model["zones"][0]["ceiling_height_mm"] = 3000
+    zone_height_report = calculate_hourly_load_report(requirements, library(), scenarios(), zone_height_model, ["jan_weekday"], infiltration_gate=approved_infiltration_gate())
+    check("ACH uses cited zone height when a room height is absent", zone_height_report["scenario_results"][0]["rooms"][0]["hours"][14]["components"]["infiltration"]["inputs"]["room_volume_m3"] == 60)
+
+    missing_gate = calculate_hourly_load_report(requirements, library(), scenarios(), calculated_infiltration(reviewed_model(requirements), 0.36), ["jan_weekday"])
+    check("unapproved infiltration gate blocks the affected room", missing_gate["status"] == "blocked" and "approved infiltration method gate" in missing_gate["scenario_results"][0]["rooms"][0]["blocked_reasons"])
+
+    provisional_infiltration = calculate_hourly_load_report(requirements, library(), scenarios(), calculated_infiltration(reviewed_model(requirements), 0.36, status="provisional"), ["jan_weekday"], infiltration_gate=approved_infiltration_gate())
+    check("provisional eligible infiltration remains draft-only", provisional_infiltration["status"] == "draft")
 
     stored_component = reviewed_model(requirements)
     stored_component["rooms"][0]["unapproved_components"][0].update({
@@ -130,7 +186,7 @@ def main():
         "calculation_status": "stored_not_calculated",
     })
     stored = calculate_hourly_load_report(requirements, library(), scenarios(), stored_component, ["jan_weekday"])
-    check("stored non-calculated room component keeps result draft without changing contribution", stored["status"] == "draft" and not stored["project_peak"] and not stored["scenario_results"][0]["scope_summary"]["complete_scope"] and stored["scenario_results"][0]["rooms"][0]["room_input_scope"]["stored_not_calculated"][0]["component_type"] == "infiltration")
+    check("stored non-calculated infiltration excludes the affected room until it is eligible", stored["status"] == "blocked" and "infiltration calculation eligibility" in stored["scenario_results"][0]["rooms"][0]["blocked_reasons"])
 
     invalid_transfer = reviewed_model(requirements)
     invalid_transfer["rooms"][0]["unapproved_components"][4].update({
@@ -194,12 +250,29 @@ def main():
             legacy_v2["schema_version"] = 2
             legacy_v2["rooms"][0].pop("unapproved_components")
             migrated_api = web_app.api_save_hourly_load_model(Request(json.dumps({"project_id": "p1", "action": "save", "hourly_load_model": legacy_v2}), "/api/hourly-load-model"))
-            check("API saves schema-v2 room models as schema-v3 with unassessed components", migrated_api["hourly_load_model"]["schema_version"] == 3 and migrated_api["hourly_load_model"]["rooms"][0]["unapproved_components"][0]["calculation_status"] == "not_assessed")
+            check("API saves schema-v2 room models as schema-v4 with unassessed components", migrated_api["hourly_load_model"]["schema_version"] == 4 and migrated_api["hourly_load_model"]["rooms"][0]["unapproved_components"][0]["calculation_status"] == "not_assessed")
             saved_model = reviewed_model(requirements)
             web_app.api_save_hourly_load_model(Request(json.dumps({"project_id": "p1", "action": "save", "hourly_load_model": saved_model}), "/api/hourly-load-model"))
+            saved_gate = web_app.api_save_infiltration_method_gate(Request(json.dumps({"project_id": "p1", "infiltration_method_gate": approved_infiltration_gate()}), "/api/infiltration-method-gate"))
             calculated = web_app.api_save_hourly_load_report(Request(json.dumps({"project_id": "p1", "selected_scenario_ids": ["jan_weekday"]}), "/api/hourly-load-report"))
             check("API persists isolated artifacts", saved_library["url"].endswith("schedule_library.json") and saved_scenarios["url"].endswith("design_day_scenarios.json") and built["url"].endswith("hourly_load_model.json") and (root / "hourly_load_report.json").exists())
+            check("API stores an engineer-approved infiltration gate separately", saved_gate["readiness"]["calculation_enabled"] and (root / "infiltration_method_gate.json").exists())
             check("API marks report current", calculated["status"] == "current" and web_app.api_hourly_load_report(Request("", "/api/hourly-load-report?project_id=p1"))["status"] == "current")
+            context = {
+                "schema_version": 1,
+                "site": {"country": "AU", "locality": "Sydney", "state": "NSW", "climate_zone": "5", "source": "Project brief", "citations": []},
+                "building_use": "retail", "room_uses": {"zone_001-room-1": {"use": "retail", "source": "A-101", "citations": []}},
+                "conditioned_scope": {"status": "confirmed", "mode": "all_rooms", "room_ids": [], "source": "Client cooling brief", "citations": []},
+                "reviewer": "Project owner",
+            }
+            saved_context = web_app.api_save_calculator_inputs(Request(json.dumps({"project_id": "p1", "action": "save_context", "project_context": context}), "/api/calculator-inputs"))
+            assembled = web_app.api_save_calculator_inputs(Request(json.dumps({"project_id": "p1", "action": "assemble", "selected_scenario_ids": ["jan_weekday"]}), "/api/calculator-inputs"))
+            input_set = assembled["calculator_input_set"]
+            snapshot_report = web_app.api_save_hourly_load_report(Request(json.dumps({"project_id": "p1", "input_set_fingerprint": input_set["input_fingerprint"]}), "/api/hourly-load-report"))
+            check("API writes immutable input snapshots and calculates from the selected snapshot", saved_context["project_context"]["revision"] == 1 and (root / "calculator_input_sets" / f"{input_set['input_fingerprint']}.json").exists() and snapshot_report["hourly_load_report"]["calculator_input_set"]["input_fingerprint"] == input_set["input_fingerprint"])
+            override = {"override_id": "retail-lighting", "target": "rooms.zone_001-room-1.cooling_load.lighting_w_m2", "value": 12, "unit": "W/m2", "source": "Lighting schedule", "reviewer": "Project owner", "citations": [{"reference": "LS-01", "page": 1, "excerpt": "12 W/m2"}]}
+            web_app.api_save_calculator_inputs(Request(json.dumps({"project_id": "p1", "action": "save_override", "expected_revision": 0, "override": override}), "/api/calculator-inputs"))
+            check("override changes stale a snapshot-backed report without rewriting it", web_app.api_hourly_load_report(Request("", "/api/hourly-load-report?project_id=p1"))["status"] == "stale")
             check("API does not rewrite requirements", json.loads(requirements_path.read_text(encoding="utf-8"))["updated_at"] == requirements["updated_at"])
             check("API isolates projects", web_app.api_schedules(Request("", "/api/schedules?project_id=p2"))["schedule_library"]["schedules"] == [])
             changed = json.loads(requirements_path.read_text(encoding="utf-8"))
