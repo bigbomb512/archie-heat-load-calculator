@@ -1,0 +1,10 @@
+@font-face{font-family:"Alte Haas Grotesk";src:url("../assets/fonts/AlteHaasGroteskRegular.ttf") format("truetype");font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:"Alte Haas Grotesk";src:url("../assets/fonts/AlteHaasGroteskBold.ttf") format("truetype");font-weight:700;font-style:normal;font-display:swap}
+:root,:root[data-theme="light"],:root[data-theme="dark"]{--sans:"Alte Haas Grotesk",Arial,sans-serif;--serif:var(--sans);--canvas:#F7F6F2;--sea:#163B50;--sea-deep:#163B50;--sea-tint:#E8F1F7;--orange:#246B91;--orange-deep:#163B50;--orange-tint:#E8F1F7;--slate-ink:#163B50;--steel:#526873;--mist:#526873;--main-bg:#F7F6F2;--rail-bg:#E8F1F7;--text:#163B50;--surface-ink:#163B50;--accent:#246B91;--action:#246B91;--action-hover:#163B50;--action-wash:#E8F1F7;--wash:#E8F1F7}
+body,button,input,select,textarea{font-family:var(--sans)}
+.brand-icon{width:32px;height:32px;flex-shrink:0}
+.logo strong,.wordmark,.foot-mark{color:#163B50}
+.logo-home{display:flex;gap:10px;align-items:flex-start;text-decoration:none}.logo-home .brand-icon{margin-top:2px}.home-link{display:inline-block;margin-top:15px;font-size:13px;color:#246B91;text-decoration:underline;text-underline-offset:4px}
+.drop input::file-selector-button{background:#246B91;border-color:#246B91}.drop input::file-selector-button:hover{background:#163B50}.drop.hot{background:#E8F1F7;border-color:#246B91}
+:focus-visible{outline:3px solid #246B91;outline-offset:4px}
+.side .logo{display:block}.logo-home{width:100%}.logo small{white-space:normal}.home-link{display:block;width:fit-content;margin-top:12px}

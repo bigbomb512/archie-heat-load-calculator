@@ -7,13 +7,17 @@
 <meta name="description" content="Review building evidence, organise project inputs and calculate hourly design-day cooling loads with Archie.">
 <link rel="stylesheet" href="/frontend/css/landing.css">
 <link rel="stylesheet" href="/frontend/css/landing-polish.css">
+<link rel="stylesheet" href="/frontend/css/brand.css">
+<link rel="stylesheet" href="/frontend/css/architecture.css">
+<link rel="icon" href="/frontend/assets/images/archie-mark.svg" type="image/svg+xml">
 </head>
 <body>
+<a class="landing-skip" href="#main">Skip to content</a>
 
 <!-- ============ nav ============ -->
 <header class="nav" id="nav">
   <div class="wrap">
-    <a class="wordmark" href="/">Archie<span class="rule"></span><span class="tag">Heat load</span></a>
+    <a class="wordmark" href="/frontend/landing.html"><img class="brand-icon" src="/frontend/assets/images/archie-mark.svg" alt="">Archie<span class="rule"></span><span class="tag">Heat load</span></a>
     <nav class="navlinks">
       <a href="#method">Method</a>
       <a href="#evidence">Evidence</a>
@@ -23,90 +27,25 @@
   </div>
 </header>
 
-<!-- ============ the tour ============
-     A scroll-scrubbed sequence: one sticky stage, four scenes cross-fading as
-     you descend, each with its own chapter of copy pinned over it. The section
-     is tall on purpose — its height is the scrub track. -->
-<section class="tour" id="tour">
-  <div class="tour__stage">
-    <div class="tour__media" aria-hidden="true">
-      <!-- One video, scrubbed by scroll. Muted + playsinline so iOS will
-           decode it inline; preload metadata so the first seek is instant.
-           The poster carries the first frame until the video paints. -->
-      <video class="tour__video" id="tourVideo"
-             src="/frontend/assets/video/tour.mp4"
-             poster="/frontend/assets/images/tour/poster.webp"
-             muted playsinline preload="auto"
-             disablepictureinpicture disableremoteplayback></video>
-      <div class="tour__scrim"></div>
-    </div>
-
-    <div class="tour__progress"><i></i></div>
-
-    <div class="tour__story">
-      <div class="wrap">
-        <div class="tour__copy">
-          <p class="tour__kicker"><span class="dot"></span>Evidence-first load calculation</p>
-          <h1 class="tour__title">Every load traced back to the drawing it came from.</h1>
-          <p class="tour__body">Bring your drawings, rooms and design conditions into one workspace. Review the evidence behind your inputs, then calculate hourly design-day cooling loads.</p>
-          <div class="actions">
-            <a class="btn btn-primary" href="/">Open the calculator <span class="arw">&rarr;</span></a>
-            <a class="textlink" href="#method">See the method</a>
-          </div>
-        </div>
-
-        <div class="tour__copy">
-          <p class="tour__kicker"><span class="dot"></span>The set arrives</p>
-          <h2 class="tour__title">Find the drawings that matter to the load.</h2>
-          <p class="tour__body">Plans, sections, elevations, specifications and schedules land as one PDF. Archie triages the whole set before anything is calculated.</p>
-        </div>
-
-        <div class="tour__copy">
-          <p class="tour__kicker"><span class="dot"></span>The envelope</p>
-          <h2 class="tour__title">Build the envelope. Keep the evidence.</h2>
-          <p class="tour__body">Review opaque constructions and room boundaries before calculation. Keep their source evidence alongside the model, with unsupported inputs explicitly recorded.</p>
-        </div>
-
-        <div class="tour__copy">
-          <p class="tour__kicker"><span class="dot"></span>The result</p>
-          <h2 class="tour__title">A number you can put in front of a reviewer.</h2>
-          <p class="tour__body">Hourly sensible and latent loads, per room and per zone, each traceable to its inputs and marked draft, blocked or review-ready.</p>
-          <div class="actions">
-            <a class="btn btn-primary" href="/">Open the calculator <span class="arw">&rarr;</span></a>
-          </div>
-        </div>
-      </div>
-    </div>
+<section class="city-hero" aria-labelledby="hero-title">
+<video class="city-hero__video" id="cityVideo" muted loop playsinline preload="metadata" poster="/frontend/assets/images/photo/neighbourhood.webp" aria-hidden="true" disablepictureinpicture><source src="/frontend/assets/video/neighbourhood.mp4" type="video/mp4"></video>
+<div class="city-hero__shade" aria-hidden="true"></div>
+<div class="wrap city-hero__layout">
+<div class="city-hero__copy">
+<p class="kicker">For mechanical &amp; HVAC engineers</p>
+<h1 id="hero-title">Building comfort.<br>Grounded in<br> the details.</h1>
+<p class="city-hero__intro">From building plans to cooling loads, with the evidence alongside every input and engineering judgement at the centre.</p>
+<div class="actions"><a class="btn btn-primary" href="/">Open the calculator <span aria-hidden="true">↗</span></a><a class="city-hero__link" href="#workflow">Explore the workflow ↓</a></div>
+<p class="city-hero__note">PDF drawings · Reviewed inputs · Hourly cooling loads</p>
+<button class="city-hero__motion" id="cityMotion" type="button" aria-controls="cityVideo" hidden>Play background video</button>
+</div>
 
 
-<div class="tour__route" aria-label="Tour chapters">
-      <button class="tour__dot is-on" data-go="0" aria-label="Introduction"></button>
-      <button class="tour__dot" data-go="1" aria-label="Drawing review"></button>
-      <button class="tour__dot" data-go="2" aria-label="Envelope inputs"></button>
-      <button class="tour__dot" data-go="3" aria-label="Cooling report"></button>
-    </div>
-  </div>
+</div>
 </section>
 
-<main>
-
-  <!-- ============ facade strip ============
-       Four large, static exterior photographs provide architectural context. -->
-  <section class="strip" aria-hidden="true">
-    <div class="strip__row">
-      <figure class="strip__cell" data-anim="clip"><img src="/frontend/assets/images/photo/tower.webp" alt="" loading="lazy"></figure>
-      <figure class="strip__cell" data-anim="clip" style="--d:110ms"><img src="/frontend/assets/images/photo/facade.webp" alt="" loading="lazy"></figure>
-      <figure class="strip__cell" data-anim="clip" style="--d:220ms"><img src="/frontend/assets/images/photo/commercial.webp" alt="" loading="lazy"></figure>
-      <figure class="strip__cell" data-anim="clip" style="--d:330ms"><img src="/frontend/assets/images/photo/clouds.webp" alt="" loading="lazy"></figure>
-    </div>
-  </section>
-
-  <!-- ============ figures: numbers ============ -->
-  <section class="band figures">
-    <div class="wrap">
-      <ul class="figlist"><li><span class="fignum">Hourly<span class="metric-mark">↗</span></span><span class="figcap">Design-day cooling results, organised by room and zone.</span></li><li><span class="fignum">Traceable<span class="metric-mark">⊞</span></span><span class="figcap">Drawing evidence and reviewed sources alongside your inputs.</span></li><li><span class="fignum">Reviewable<span class="metric-mark">✓</span></span><span class="figcap">Blocked, draft and review-ready states keep limitations visible.</span></li></ul>
-    </div>
-  </section>
+<main id="main">
+<section class="principles-band" aria-label="Engineering principles"><div class="wrap"><div class="hero-ledger" aria-label="Calculation principles"><div><span class="ledger-label">THE SOURCE</span><strong>Every input has a starting point.</strong><p>Drawings, specifications and reviewed assumptions.</p></div><div><span class="ledger-label">THE JUDGEMENT</span><strong>Engineers stay in the loop.</strong><p>Resolve decisions. Review the calculation.</p></div><div><span class="ledger-label">THE OUTPUT</span><strong>Cooling loads, with context.</strong><p>Hourly results, organised by room and zone.</p></div></div></div></section>
 
   <!-- ============ method ============ -->
   <section class="band" id="method">
@@ -142,22 +81,24 @@
           <li>Comparison-report scaffolding for benchmark review</li>
         </ul>
       </div>
-      <figure class="scrubfig">
-        <div class="scrubmat">
-          <img src="/frontend/assets/images/photo/office-bright.webp" alt="A bright office interior with blinds and ceiling services" id="scrubImg">
-          
-        </div>
-        <figcaption>Every space carries its own load, and its own evidence</figcaption>
-        <figure class="scrubfig__inset" aria-hidden="true">
-          <img src="/frontend/assets/images/photo/office-quiet.webp" alt="" loading="lazy">
-        </figure>
-      </figure>
+<aside class="drawing-desk" aria-labelledby="desk-title">
+<div class="desk-top"><span>ARCHIE / ENGINEERING WORKSPACE</span><span class="desk-status">Workflow preview</span></div>
+<div class="desk-heading"><h2 id="desk-title">See the building.<br>Keep the evidence.</h2><span class="desk-arrow" aria-hidden="true">↗</span></div>
+<div class="desk-tabs" role="tablist" aria-label="Explore the engineering workflow"><button type="button" role="tab" id="desk-tab-drawing" aria-controls="desk-panel" aria-selected="true" data-desk="drawing">01 / Drawing</button><button type="button" role="tab" id="desk-tab-inputs" aria-controls="desk-panel" aria-selected="false" tabindex="-1" data-desk="inputs">02 / Inputs</button><button type="button" role="tab" id="desk-tab-review" aria-controls="desk-panel" aria-selected="false" tabindex="-1" data-desk="review">03 / Review</button></div>
+<div id="desk-panel" role="tabpanel" aria-labelledby="desk-tab-drawing" tabindex="0">
+<figure class="desk-plan"><svg viewBox="0 0 520 225" role="img" aria-labelledby="plan-title"><title id="plan-title">Illustrative floor plan showing three rooms, windows and a shared corridor</title><defs><pattern id="plan-grid" width="20" height="20" patternUnits="userSpaceOnUse"><path d="M20 0H0V20" fill="none" stroke="#b6ccda" stroke-width=".5"/></pattern></defs><rect width="520" height="225" fill="url(#plan-grid)"/><g fill="#dcebf4" stroke="#246B91" stroke-width="2"><path d="M54 42H464V177H54Z"/><path d="M54 137H464M185 42V137M330 42V137" fill="none"/></g><g fill="none" stroke="#163B50" stroke-width="3"><path d="M54 95V42H105M142 42H246M285 42H375M413 42H464V177H295M254 177H54V128"/></g><g stroke="#246B91" stroke-width="1" fill="none"><path d="M54 22H464M54 17V27M464 17V27M484 42V177M479 42H489M479 177H489"/><path d="M110 137V112A25 25 0 0 1 135 137M245 137V112A25 25 0 0 1 270 137M380 137V112A25 25 0 0 1 405 137"/></g><g fill="#163B50" font-family="Arial,sans-serif" font-size="12"><text x="90" y="88">ROOM A</text><text x="225" y="88">ROOM B</text><text x="370" y="88">ROOM C</text><text x="219" y="160" font-size="10" letter-spacing="2">CORRIDOR</text><text x="54" y="207" font-size="10">SCHEMATIC ONLY · NOT A CALCULATED PROJECT</text></g></svg><figcaption><span>Building envelope / room boundaries</span><span aria-hidden="true">⌖</span></figcaption></figure>
+<div class="desk-detail"><span class="desk-detail__label" id="desk-label">START WITH THE SOURCE</span><h3 id="desk-heading">One drawing set. Connected evidence.</h3><p id="desk-description">Plans, sections and specifications provide the context for reviewed room and envelope inputs.</p></div>
+</div>
+<a class="desk-bottom" href="#workflow"><span>Explore the full nine-step AI workflow</span><span aria-hidden="true">→</span></a>
+</aside>
     </div>
   </section>
 
 <section class="band shortcut-section" id="workflow" aria-labelledby="workflow-title">
 <div class="wrap">
 <div class="shortcut-heading"><div><p class="kicker">The Archie workflow</p><h2 class="h2" id="workflow-title">Less input work.<br>More engineering judgement.</h2></div><p>From PDF to heat load: AI prepares the inputs and brings unresolved engineering decisions to the engineer before calculating.</p></div>
+<div class="workflow-composition">
+<aside class="workflow-context"><img src="/frontend/assets/images/photo/office-bright.webp" alt="Sunlit office with ceiling services and perimeter glazing" loading="lazy"><div class="workflow-context__copy"><p class="kicker">THE BUILDING BEHIND THE NUMBERS</p><h3>Every room.<br>Every surface.<br>Every decision.</h3><p>Bring the physical building and its design conditions together before reviewing the load.</p><dl><div><dt>Envelope</dt><dd>Walls, roofs, glazing and shading</dd></div><div><dt>Conditions</dt><dd>Weather, occupancy and schedules</dd></div><div><dt>Review</dt><dd>Sources, assumptions and decisions</dd></div></dl></div></aside>
 <div class="workflow-diagram">
 <ol class="ai-workflow" aria-label="PDF to engineer-reviewed heat load">
 <li class="flow-node"><span class="flow-num" aria-hidden="true">01</span><div><h3>PDF</h3></div></li>
@@ -170,6 +111,7 @@
 <li class="flow-node"><span class="flow-num" aria-hidden="true">08</span><div><h3>AI calculates heat load</h3></div></li>
 <li class="flow-node flow-review"><span class="flow-num" aria-hidden="true">09</span><div><h3>Engineer reviews</h3></div><span class="flow-label">ENGINEER CHECKPOINT</span></li>
 </ol>
+</div>
 </div>
 <p class="workflow-note">This is the target workflow. Archie’s current calculation scope is limited to its supported cooling methods.</p>
 </div></section>

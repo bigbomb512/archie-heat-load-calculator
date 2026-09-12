@@ -249,3 +249,48 @@
     navState();
   }
 })();
+
+(function () {
+  var video = document.getElementById('cityVideo');
+  var toggle = document.getElementById('cityMotion');
+  if (!video || !toggle) return;
+  var motion = window.matchMedia('(prefers-reduced-motion: reduce)');
+  function sync() { toggle.textContent = video.paused ? 'Play background video' : 'Pause background video'; }
+  function play() { video.play().catch(sync); }
+  toggle.hidden = false;
+  video.addEventListener('play', sync);
+  video.addEventListener('pause', sync);
+  toggle.addEventListener('click', function () { if (video.paused) play(); else video.pause(); });
+  motion.addEventListener('change', function () { if (motion.matches) video.pause(); });
+  if (!motion.matches) play();
+})();
+
+(function () {
+  var tabs = Array.from(document.querySelectorAll('[data-desk]'));
+  if (!tabs.length) return;
+  var content = {
+    drawing: ['START WITH THE SOURCE', 'One drawing set. Connected evidence.', 'Plans, sections and specifications provide the context for reviewed room and envelope inputs.'],
+    inputs: ['BUILD THE MODEL', 'Make the assumptions visible.', 'Review room boundaries, constructions, occupancy and design conditions alongside their sources.'],
+    review: ['APPLY ENGINEERING JUDGEMENT', 'Review the inputs. Then the result.', 'Resolve outstanding decisions before calculation, then check hourly cooling loads and their review status.']
+  };
+  function activate(tab) {
+    tabs.forEach(function (item) { item.setAttribute('aria-selected', String(item === tab)); item.tabIndex = item === tab ? 0 : -1; });
+    var text = content[tab.dataset.desk];
+    document.getElementById('desk-label').textContent = text[0];
+    document.getElementById('desk-heading').textContent = text[1];
+    document.getElementById('desk-description').textContent = text[2];
+    document.getElementById('desk-panel').setAttribute('aria-labelledby', tab.id);
+  }
+  tabs.forEach(function (tab, index) {
+    tab.addEventListener('click', function () { activate(tab); });
+    tab.addEventListener('keydown', function (event) {
+      var next;
+      if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+      else if (event.key === 'ArrowLeft') next = (index + tabs.length - 1) % tabs.length;
+      else if (event.key === 'Home') next = 0;
+      else if (event.key === 'End') next = tabs.length - 1;
+      else return;
+      event.preventDefault(); activate(tabs[next]); tabs[next].focus();
+    });
+  });
+})();
