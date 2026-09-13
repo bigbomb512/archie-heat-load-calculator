@@ -3,6 +3,7 @@
 from copy import deepcopy
 from pathlib import Path
 import json
+import hashlib
 
 from ai.drawing_coverage import source_fingerprint, timestamp
 from ai.evidence_fusion import build_evidence_fusion
@@ -51,6 +52,10 @@ def post(web, project, data):
         if not paths["ai_input"].exists() or not paths["building_evidence"].exists():
             raise ValueError("Build the architect evidence artifacts first.")
         fusion = build_evidence_fusion(_read(paths["ai_input"]), _read(paths["drawing_coverage"]), _read(paths["building_evidence"]), _read(paths["spatial_ocr"]), _read(paths["vector_geometry"]), _read(paths["vision_response"]), _read(paths["dimension_wall_matches"]), _read(paths["geometry_confirmation"]))
+        calc_path = root / "calculation_input_evidence.json"
+        if calc_path.exists():
+            fusion["calculation_input_evidence"] = _read(calc_path)
+            fusion["fingerprint"] = hashlib.sha256(json.dumps({key: value for key, value in fusion.items() if key != "fingerprint"}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         _write(path, fusion)
     else:
         fusion = _read(path)

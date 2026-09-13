@@ -208,8 +208,11 @@ class OpenAIResponsesProvider:
 
 
 def _prompt(group):
-    pages = [{key: value for key, value in page.items() if key in {"page", "drawing_number", "title", "role", "level_name", "structured_text"}} for page in group["pages"]]
-    return "Selected evidence group:\n" + json.dumps({"group_id": group["group_id"], "pages": pages}, indent=2) + "\nReturn exactly one group object inside the required groups array."
+    pages = [{key: value for key, value in page.items() if key in {
+        "page", "drawing_number", "drawing_number_candidates", "title", "role", "level_name",
+        "structured_text", "capability_map", "relevance", "selection", "selection_reasons", "related_pages",
+    }} for page in group["pages"]]
+    return "Selected ranked evidence group:\n" + json.dumps({"group_id": group["group_id"], "pages": pages}, indent=2) + "\nReturn exactly one group object inside the required groups array. Cite supplied page and drawing identity candidates; do not invent values."
 
 
 def _provider(settings):

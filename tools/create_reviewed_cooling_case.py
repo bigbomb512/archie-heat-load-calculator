@@ -19,11 +19,12 @@ sys.path.insert(0, str(ROOT))
 from ai.building_evidence import build_building_evidence
 from ai.evidence_fusion import build_evidence_fusion
 from ai.calculator_draft import build_calculator_draft
-from ai.drawing_coverage import build_drawing_coverage, source_fingerprint, timestamp
+from ai.drawing_coverage import build_drawing_coverage, evidence_fingerprint, source_fingerprint, timestamp
 from ai.thermal_model import build_thermal_evidence, build_thermal_model
 from ai.calculator_inputs import empty_overrides, empty_project_context, validate_overrides, validate_project_context
 from ai.design_requirements import empty_design_requirements, empty_zone_ventilation_requirements
-from ai.hourly_loads import build_hourly_load_model, empty_hourly_load_model, validate_hourly_load_model
+from ai.envelope import empty_envelope_library, empty_envelope_model
+from ai.hourly_loads import build_hourly_load_model, empty_design_day_scenarios, empty_hourly_load_model, empty_schedule_library, validate_hourly_load_model
 from ai.research_cache import empty_research_cache
 
 
@@ -217,29 +218,48 @@ def bootstrap(source_dir, output_dir, manifest_path=None):
         model_path.write_text(json.dumps(model, indent=2), encoding="utf-8")
         created.append(model_path.name)
 
+    # Keep the artifact graph structurally complete without inventing any
+    # schedules, weather, constructions, surfaces, or thermal properties.
+    # Existing authored files are deliberately preserved byte-for-byte.
+    empty_artifacts = {
+        "schedule_library.json": empty_schedule_library(),
+        "design_day_scenarios.json": empty_design_day_scenarios(),
+        "envelope_library.json": empty_envelope_library(),
+        "envelope_model.json": empty_envelope_model(),
+    }
+    for name, value in empty_artifacts.items():
+        path = output_dir / name
+        if path.exists():
+            continue
+        path.write_text(json.dumps(value, indent=2), encoding="utf-8")
+        created.append(name)
+
+    current_context = validate_project_context(load(context_path, empty_project_context()))
+    scope = current_context.get("conditioned_scope", {})
     return {
         "output_dir": str(output_dir),
         "source_pdf": source_pdf,
         "created": created,
         "preserved": [name for name in ("project_context.json", "calculator_input_overrides.json", "hourly_load_model.json") if name not in created and (output_dir / name).exists()],
-        "conditioned_scope": "missing",
+        "conditioned_scope": scope.get("status", "missing"),
         "status": "provisional",
-        "message": "Bootstrap created only missing local artifacts; explicit scope and engineering inputs remain unresolved.",
+        "message": "Bootstrap created only missing local artifacts; existing scope was preserved and engineering inputs remain unresolved.",
     }
 
 
-def coverage_is_current(coverage, ai_input):
+def coverage_is_current(coverage, ai_input, spatial_ocr=None, vector_geometry=None):
     """Reject empty or derived coverage from a different source packet."""
     pages = ai_input.get("drawing_set", {}).get("pages", [])
     return (
         isinstance(coverage, dict)
-        and coverage.get("version", 0) >= 3
+        and coverage.get("version", 0) >= 4
         and coverage.get("source_pdf") == ai_input.get("source_pdf", "")
         and coverage.get("source_fingerprint") == source_fingerprint(ai_input)
+        and (not (spatial_ocr or vector_geometry) or coverage.get("evidence_fingerprint") == evidence_fingerprint(ai_input, spatial_ocr, vector_geometry))
         and isinstance(coverage.get("sheet_register"), list)
         and len(coverage.get("sheet_register", [])) == len(pages)
         and isinstance(coverage.get("page_roles"), list)
-        and all(isinstance(row, dict) and "capabilities" in row and "page_group" in row for row in coverage.get("page_roles", []))
+        and all(isinstance(row, dict) and "capabilities" in row and "page_group" in row and "identity" in row and "capability_map" in row and "relevance" in row and "selection" in row for row in coverage.get("page_roles", []))
         and set(("version", "source_pdf", "source_fingerprint", "sheet_register", "levels", "coverage_exceptions")) <= set(coverage)
     )
 
@@ -256,7 +276,9 @@ def prepare(source_dir, output_dir, manifest_path):
     dimension_matches = load(source_dir / "dimension_wall_matches.json")
     geometry_confirmation = load(source_dir / "geometry_confirmation.json")
     existing_coverage = load(source_dir / "drawing_coverage.json")
-    coverage = existing_coverage if coverage_is_current(existing_coverage, ai_input) else build_drawing_coverage(ai_input)
+    coverage = existing_coverage if coverage_is_current(existing_coverage, ai_input, spatial_ocr, vector_geometry) else build_drawing_coverage(
+        ai_input, spatial_ocr=spatial_ocr, vector_geometry=vector_geometry
+    )
     if existing_coverage is not coverage:
         coverage["rebuild_reason"] = "missing, empty, stale, or schema-incomplete derived coverage artifact"
         coverage["generated_at"] = timestamp()

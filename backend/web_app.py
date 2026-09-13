@@ -52,11 +52,13 @@ from ai.calculator_inputs import (
 from ai.research_cache import empty_research_cache, validate_cache, upsert_record
 from ai.drawing_coverage import build_drawing_coverage
 from ai.building_evidence import build_building_evidence
+from ai.calculation_extraction import normalise_for_hourly_model
 from ai.parity_harness import archie_results_from_heat_report, archie_results_from_hourly_load_report, compare_case, render_markdown, validate_benchmark_case
 from ai.thermal_model import apply_thermal_model, build_thermal_evidence, build_thermal_model
 from ai.calculator_draft import DraftConflict
 from backend import draft_service
 from backend import evidence_fusion_service
+from backend import calculation_extraction_service
 from backend import vision_extraction_service
 from ai.ventilation import calculate_ventilation_report
 from ai.geometry_review import normalise_vision
@@ -188,6 +190,11 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(api_evidence_fusion(self))
             except Exception as error:
                 return self.send_json({"error": str(error)}, 404)
+        if self.path.startswith("/api/calculation-input-evidence"):
+            try:
+                return self.send_json(api_calculation_input_evidence(self))
+            except Exception as error:
+                return self.send_json({"error": str(error)}, 404)
         if self.path.startswith("/api/vision-extraction"):
             try:
                 return self.send_json(api_vision_extraction(self))
@@ -241,6 +248,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self.save_calculator_draft()
         if self.path == "/api/evidence-fusion":
             return self.save_evidence_fusion()
+        if self.path == "/api/calculation-input-evidence":
+            return self.save_calculation_input_evidence()
         if self.path == "/api/vision-extraction":
             return self.save_vision_extraction()
         if self.path == "/api/parity-report":
@@ -390,6 +399,13 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json({"error": str(error)}, 400)
         self.send_json(result)
 
+    def save_calculation_input_evidence(self):
+        try:
+            result = api_save_calculation_input_evidence(self)
+        except Exception as error:
+            return self.send_json({"error": str(error)}, 400)
+        self.send_json(result)
+
     def save_vision_extraction(self):
         try:
             result = api_save_vision_extraction(self)
@@ -491,7 +507,11 @@ def analyse_project(project):
     ai_input = build_ai_packet(packet)
     ai_output.write_text(json.dumps(ai_input, indent=2), encoding="utf-8")
     coverage_output = Path(result["review_dir"]) / "drawing_coverage.json"
-    coverage_output.write_text(json.dumps(build_drawing_coverage(ai_input), indent=2), encoding="utf-8")
+    coverage_output.write_text(json.dumps(build_drawing_coverage(
+        ai_input,
+        load_json(Path(result["review_dir"]) / "spatial_ocr.json"),
+        load_json(Path(result["review_dir"]) / "vector_geometry.json"),
+    ), indent=2), encoding="utf-8")
     building_output = Path(result["review_dir"]) / "building_evidence.json"
     building_output.write_text(json.dumps(build_building_evidence(ai_input, load_json(coverage_output)), indent=2), encoding="utf-8")
 
@@ -551,7 +571,11 @@ def api_save_decisions(request):
         project.pop(key, None)
     project["ai_input"] = pipeline["ai_input"]
     coverage_path = review_dir / "drawing_coverage.json"
-    coverage_path.write_text(json.dumps(build_drawing_coverage(load_json(pipeline["ai_input"])), indent=2), encoding="utf-8")
+    coverage_path.write_text(json.dumps(build_drawing_coverage(
+        load_json(pipeline["ai_input"]),
+        load_json(review_dir / "spatial_ocr.json"),
+        load_json(review_dir / "vector_geometry.json"),
+    ), indent=2), encoding="utf-8")
     project["drawing_coverage"] = str(coverage_path)
     building_path = review_dir / "building_evidence.json"
     building_path.write_text(json.dumps(build_building_evidence(load_json(pipeline["ai_input"]), load_json(coverage_path)), indent=2), encoding="utf-8")
@@ -636,6 +660,7 @@ def hourly_paths(project):
         "calculator_draft": review_dir / "calculator_draft.json",
         "research_cache": review_dir / "research_cache.json",
         "evidence_fusion": review_dir / "architect_evidence_fusion.json",
+        "calculation_input_evidence": review_dir / "calculation_input_evidence.json",
         "project_context": review_dir / "project_context.json",
         "calculator_input_overrides": review_dir / "calculator_input_overrides.json",
         "calculator_input_set": review_dir / "calculator_input_set.json",
@@ -906,6 +931,10 @@ def _assemble_project_inputs(project, selected_scenario_ids=None):
     requirements, envelope_inputs = apply_reviewed_envelope_to_requirements(load_json(paths["requirements"]), library, envelope_model)
     model = apply_reviewed_envelope_to_hourly_model(load_json(paths["model"]), library, envelope_model)
     fusion = load_json(paths["evidence_fusion"]) if paths["evidence_fusion"].exists() else {}
+    if paths["calculation_input_evidence"].exists():
+        fusion["calculation_input_evidence"] = normalise_for_hourly_model(
+            load_json(paths["calculation_input_evidence"]), model
+        )
     research = validate_cache(load_json(paths["research_cache"]) if paths["research_cache"].exists() else empty_research_cache())
     selected = selected_scenario_ids if selected_scenario_ids is not None else []
     assembled = assemble_calculator_inputs(
@@ -935,7 +964,7 @@ def api_calculator_inputs(request, selected_scenario_ids=None):
         "coverage_summary": assembled.get("coverage_summary", {}),
         "issues": assembled.get("issues", []),
     }
-    display["artifact_links"] = {name: safe_link(paths[name]) for name in ("model", "schedules", "scenarios", "research_cache", "evidence_fusion", "project_context", "calculator_input_overrides", "calculator_input_set") if paths[name].exists()}
+    display["artifact_links"] = {name: safe_link(paths[name]) for name in ("model", "schedules", "scenarios", "research_cache", "evidence_fusion", "calculation_input_evidence", "project_context", "calculator_input_overrides", "calculator_input_set") if paths[name].exists()}
     display["latest_snapshot"] = pointer
     return {
         "id": project["id"], "calculator_input_set": display,
@@ -1198,6 +1227,13 @@ def api_evidence_fusion(request):
     return evidence_fusion_service.get(sys.modules[__name__], project)
 
 
+def api_calculation_input_evidence(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    ensure_review_dir(project)
+    return calculation_extraction_service.get(sys.modules[__name__], project)
+
+
 def api_vision_extraction(request):
     query = parse_qs(urlparse(request.path).query)
     project = project_by_id(query.get("project_id", [""])[0])
@@ -1210,6 +1246,13 @@ def api_save_evidence_fusion(request):
     project = project_by_id(data.get("project_id") or data.get("id", ""))
     ensure_review_dir(project)
     return evidence_fusion_service.post(sys.modules[__name__], project, data)
+
+
+def api_save_calculation_input_evidence(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    return calculation_extraction_service.post(sys.modules[__name__], project, data)
 
 
 def api_save_vision_extraction(request):

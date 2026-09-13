@@ -3,8 +3,10 @@
 import unittest
 
 from ai.calculator_inputs import (
+    _scope_for_room,
     assemble_calculator_inputs,
     materialize_cooling_payload,
+    validate_project_context,
 )
 from ai.hourly_loads import build_hourly_load_model
 from ai.design_requirements import validate_design_requirements
@@ -122,6 +124,36 @@ class CalculatorInputTests(unittest.TestCase):
         self.assertEqual(result["status"], "blocked")
         self.assertTrue(any("Conditioned scope is missing" in item["reason"] for item in result["issues"]))
 
+    def test_context_preserves_explicit_conditioning_system(self):
+        context = self.context()
+        context["room_uses"]["zone_001-room-1"]["conditioning_system"] = "comfort_hvac"
+        checked = validate_project_context(context)
+        self.assertEqual(checked["room_uses"]["zone_001-room-1"]["conditioning_system"], "comfort_hvac")
+
+    def test_context_rejects_unknown_conditioning_system(self):
+        context = self.context()
+        context["room_uses"]["zone_001-room-1"]["conditioning_system"] = "unknown_system"
+        with self.assertRaises(ValueError):
+            validate_project_context(context)
+
+    def test_context_preserves_explicit_default_profile_mapping(self):
+        context = self.context()
+        context["room_uses"]["zone_001-room-1"].update({
+            "default_profile": "class_6_shop",
+            "default_profile_source": "Project owner profile mapping",
+            "default_profile_citations": [{"reference": "Drawing 6 profile decision", "page": None, "excerpt": "Use the Class 6 shop daily profile for this room."}],
+        })
+        checked = validate_project_context(context)
+        self.assertEqual(checked["room_uses"]["zone_001-room-1"]["default_profile"], "class_6_shop")
+        self.assertEqual(_scope_for_room(checked, "zone_001-room-1")["room_use"], "class_6_shop")
+        self.assertEqual(_scope_for_room(checked, "zone_001-room-1")["declared_room_use"], "retail")
+
+    def test_default_profile_mapping_requires_its_own_source(self):
+        context = self.context()
+        context["room_uses"]["zone_001-room-1"]["default_profile"] = "class_6_shop"
+        with self.assertRaises(ValueError):
+            validate_project_context(context)
+
     def test_valid_but_unactivated_fusion_fact_does_not_override_a_default(self):
         fusion = {"facts": [{
             "fact_id": "unreviewed-lighting", "target_path": "rooms.zone_001-room-1.cooling_load.lighting_w_m2", "value": 99,
@@ -132,6 +164,19 @@ class CalculatorInputTests(unittest.TestCase):
         row = next(item for item in result["resolved_inputs"] if item["target"].endswith("lighting_w_m2"))
         self.assertEqual(row["resolution_status"], "approved_default")
         self.assertEqual(row["value"], 10)
+
+    def test_active_pdf_calculation_candidate_is_project_evidence(self):
+        model = self.default_backed_model()
+        target = "rooms.zone_001-room-1.area_m2"
+        fusion = {"calculation_input_evidence": {"candidates": [{
+            "candidate_id": "calc-area-1", "target_path": target, "status": "active", "value": 24,
+            "unit": "m²", "source": {"page": 20, "drawing_number": "202", "excerpt": "Retail AREA: 24 m²"},
+            "confidence": "high",
+        }]}}
+        result = assemble_calculator_inputs(model, {"schedules": []}, scenario(), ["summer"], fusion=fusion, research_cache=self.default_cache(), project_context=self.context())
+        row = next(item for item in result["resolved_inputs"] if item["target"] == target)
+        self.assertEqual(row["resolution_status"], "project_evidence")
+        self.assertEqual(row["value"], 24)
 
 
 if __name__ == "__main__":

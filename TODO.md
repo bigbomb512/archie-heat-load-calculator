@@ -5,6 +5,12 @@ full milestone roadmap is in [`docs/cool_heat_load_roadmap.md`](docs/cool_heat_l
 
 ## Current priority — Drawing 6 geometry review workspace
 
+- [x] Extract cited calculation inputs from architect PDF plans, service/RCP
+  pages, openings, equipment schedules, notes and sections into a normalized
+  evidence register before adding another calculation method.
+- [x] Bind image, OCR, table, vector and manual-vision observations to stable
+  room/opening identities; keep ambiguous matches as conflicts and 3D as
+  cross-check-only evidence.
 - [ ] Use the existing evidence-fusion output in the frontend to review page
   groups, room witnesses, floor identity, geometry status and area evidence.
 - [ ] Apply only reviewed floor → zone → room topology without overwriting

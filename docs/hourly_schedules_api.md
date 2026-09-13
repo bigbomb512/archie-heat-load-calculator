@@ -174,3 +174,27 @@ For every hour, the engine schedules people, lights, heat sources, solar, outsid
 The report exposes `known_exclusions` for stored uncalculated room inputs and `unresolved_room_inputs` for unassessed categories, separately from the calculated hourly components. A known excluded or unassessed room component makes the result `draft` and removes the project peak, while retaining an included-scope subtotal for engineering review.
 
 V1 still excludes partitions, dynamic thermal mass, detailed glazing physics, AHU coil and fan/duct effects, heat recovery, and plant loads. Infiltration remains excluded until its project gate and room input are eligible. The analysis response exposes each artifact URL/status for frontend discovery. A draft may show only an included-scope subtotal; a project peak is available only for review-ready complete scope. The parity adapter remains disabled until an authorised CAMEL+/DA09 reconciliation is completed.
+## Calculation-input evidence
+
+Before assembling an immutable calculator snapshot, the frontend may build the
+derived PDF evidence register:
+
+```text
+GET  /api/calculation-input-evidence?project_id=...
+POST /api/calculation-input-evidence
+     {"project_id":"...", "action":"build"}
+```
+
+The register extracts cited numerical candidates from architect plans,
+reflected-ceiling/service pages, openings/elevations, equipment schedules,
+general notes and sections. It does not apply defaults or change authored
+calculator artifacts. Equipment presence/nameplate power is retained as
+evidence unless a heat-to-space basis is explicit. Active candidates are
+consumed by the existing calculator-input precedence and remain traceable to
+their source page and excerpt.
+
+Each response also includes `calculation_input_evidence.binding`, containing
+stable observations and relationships between OCR/table/image witnesses,
+plan/elevation opening tags, and manual vision records. `binding.conflicts`
+lists ambiguous matches and source disagreements. A 3D/render relationship is
+marked `cross_check_only` and cannot activate geometry or a cooling input.

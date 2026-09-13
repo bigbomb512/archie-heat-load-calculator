@@ -16,7 +16,7 @@ from ai.evidence_fusion import build_evidence_fusion
 from ai.hourly_loads import hourly_model_summary, room_static_missing
 
 LOCK = threading.RLock()
-SOURCE_FILES = {name: name + ".json" for name in ("thermal_model", "thermal_evidence", "building_evidence", "drawing_coverage")}
+SOURCE_FILES = {name: name + ".json" for name in ("thermal_model", "thermal_evidence", "building_evidence", "drawing_coverage", "calculation_input_evidence")}
 TARGET_FILES = {name: name + ".json" for name in ("hourly_load_model", "schedule_library", "envelope_library", "envelope_model")}
 ALLOWED_FILES = set(TARGET_FILES.values()) | {"calculator_draft.json"}
 
@@ -81,7 +81,18 @@ def snapshots(root):
 
 def freshness(root, draft):
     expected = draft.get("source_fingerprints", {})
-    return draft.get("schema_version") == 2 and all(expected.get(name) == fingerprint(read(root / filename)) for name, filename in SOURCE_FILES.items())
+    if draft.get("schema_version") != 2:
+        return False
+    for name, filename in SOURCE_FILES.items():
+        path = root / filename
+        # Schema-v2 drafts created before the calculation-evidence artifact
+        # existed remain compatible.  Once a draft records that dependency,
+        # the file must be present and unchanged.
+        if name == "calculation_input_evidence" and not path.exists() and name not in expected:
+            continue
+        if expected.get(name) != fingerprint(read(path)):
+            return False
+    return True
 
 
 def response(web, project, draft):
@@ -124,7 +135,8 @@ def post(web, project, data):
                                            read(root / "dimension_wall_matches.json", {}), read(root / "geometry_confirmation.json", {}))
             atomic_bytes(fusion_path, json.dumps(fusion, indent=2, allow_nan=False).encode())
         draft = build_calculator_draft(sources["thermal_model"], sources["building_evidence"], sources["drawing_coverage"], draft,
-            {name: web.safe_link(root / file) for name, file in SOURCE_FILES.items() if (root / file).exists()}, sources["thermal_evidence"], fusion)
+            {name: web.safe_link(root / file) for name, file in SOURCE_FILES.items() if (root / file).exists()}, sources["thermal_evidence"], fusion,
+            sources["calculation_input_evidence"] if (root / SOURCE_FILES["calculation_input_evidence"]).exists() else None)
         commit(root, {path.name: draft})
         return response(web, project, draft)
     check_revision(draft, data.get("expected_revision"))

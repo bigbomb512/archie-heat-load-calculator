@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 RESEARCH_CATEGORIES = {
     "weather", "material_thermal_property", "glazing_property", "occupancy_default",
     "lighting_density_default", "equipment_manufacturer", "ventilation_requirement",
-    "calculation_method",
+    "calculation_method", "schedule_default",
 }
 REVIEW_STATUSES = {"proposed", "approved", "expired", "rejected"}
 

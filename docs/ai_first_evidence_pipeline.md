@@ -62,5 +62,95 @@ A complete AI-assembled/default-backed supported cooling scope can be
 `review_ready`, but it remains visibly labelled as such and is never
 `validated`. Validation is reserved for the authorised benchmark gate.
 
+## Australia-first default pack
+
+`config/au_cooling_default_pack.json` contains the first cited candidate pack:
+the NCC 2022 Class 6 shop and Class 6 restaurant/cafe daily occupancy,
+lighting, and equipment profiles. `tools/seed_au_default_pack.py` can copy
+those records into a private project's `research_cache.json` without copying
+any PDF. The tool is idempotent and records the pack version and source
+fingerprint.
+
+The records are deliberately seeded as `proposed` and `released: false`.
+That means they are visible to the resolver and review UI but cannot affect a
+calculation yet. A source-pack release review must confirm the scope, profile
+interpretation, and release status before they become automatic defaults. In
+particular, the current Drawing 6 room uses (`cool room` and `freezer room`)
+do not silently match a generic Class 6 shop or restaurant profile. A future
+explicit room-use/profile mapping or project-specific schedule is required.
+The mapping is stored separately from `use`, so a room can remain named “Cool
+Room” while the project explicitly selects a cited schedule profile for its
+supported assumptions.
+
+The official source is NCC 2022 Specification 35, Tables S35C2e and S35C2f.
+The profiles express percentages of maximum occupancy, lighting power density,
+and internal heat gain; they do not supply room areas, equipment heat-to-space,
+thermal boundaries, U-values, or design-day weather. Those fields remain
+blocked until project evidence or a separately released, scope-matched source
+is available.
+
 Drawing 6 remains private. The reviewed-case tool writes derived evidence to a
 local output directory and never copies the source PDF into the repository.
+
+## PDF calculation-input evidence
+
+The Evidence-to-Calculator panel can build `calculation_input_evidence.json`.
+This derived register reads page-specific evidence from dimensioned plans,
+ceiling/service sheets, openings, equipment schedules, notes and sections. It
+stores candidate values with page, drawing number, excerpt, unit, extraction
+method, confidence and unresolved fields. Exact room-targeted values may be
+active; ambiguous geometry, incomplete schedules and equipment without a
+heat-to-space basis remain proposed, blocked or evidence-only.
+
+The endpoint is:
+
+```text
+GET  /api/calculation-input-evidence?project_id=...
+POST /api/calculation-input-evidence
+     {"project_id":"...", "action":"build"}
+```
+
+The artifact is never an editable hourly model. The calculator-input assembler
+consumes only active candidates after exact room-ID mapping, while the existing
+override and draft-review paths handle conflicts. Rebuilding is content
+addressed and source-fingerprinted; it does not alter schedules, envelopes,
+room inputs or reports.
+
+### Evidence binding
+
+The calculation-input register also contains a `binding` section. It preserves
+raw OCR words, table cells, image witnesses, and extracted candidates as stable
+observations, then records cross-page relationships such as:
+
+```text
+room label ↔ area/ceiling/lighting value
+opening tag ↔ plan opening ↔ elevation or schedule row
+PDF value ↔ manual vision value
+3D/render observation ↔ plan or elevation (cross-check only)
+```
+
+Bindings require an exact label/tag, compatible target, or explicit witness.
+They do not use visual similarity alone. A unique plan/elevation opening match
+is recorded as a sourced geometry relationship; multiple possible targets and
+vision/PDF disagreements become blocking conflicts. Three-dimensional images
+and render observations remain cross-check evidence and cannot provide primary
+dimensions or activate a load input. The binding fingerprint is included in
+the derived artifact fingerprint, so changing source evidence makes the
+register stale without rewriting authored calculator artifacts.
+
+### Ranked page discovery
+
+`drawing_coverage.json` is the page-discovery register. It scans every
+architect page, but does not treat every page as equally useful. Each page has
+title/drawing-number candidates, identity status, a multi-capability map,
+category-specific relevance scores, related-page links, and a selection state:
+`primary_context`, `supporting_context`, `cross_check_context`,
+`ranked_exception`, or `reference_only`.
+
+Title-block OCR and explicit sheet text take precedence over flattened legacy
+metadata. Dates are rejected as drawing numbers, while conflicting identities
+remain ambiguous and block automatic cross-page matching. The manual and
+optional provider vision handoffs consume the same ranked groups, so service,
+ceiling, elevation, schedule, detail, and 3D evidence cannot disappear merely
+because an older role name differed. A 3D page can strengthen or challenge a
+relationship, but never supplies primary dimensions or thermal properties.

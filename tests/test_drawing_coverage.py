@@ -50,6 +50,25 @@ def main():
     check("missing elevation is flagged", missing["coverage_exceptions"][0]["item_id"], "surface_views_missing-ground_floor")
     check("missing site is flagged", any(item["item_id"] == "site_context_missing-project" for item in missing["coverage_exceptions"]), True)
 
+    # Title-block OCR is authoritative for sheet identity; dates and legacy
+    # flattened metadata must not become drawing numbers.
+    identity_pages = [page(20, "floor_plan", "primary_geometry", title="including amendments of the relevant Building Code of", rooms=[])]
+    identity_pages[0]["drawing_number"] = "26.02"
+    identity_pages[0]["structured_content"] = {"markdown": "DIMENSION PLAN\n202 SCALE1:100\nGeneral Notes: date 26.02.26"}
+    identity = build_drawing_coverage({"source_pdf": "/tmp/set.pdf", "drawing_set": {"pages": identity_pages}}, {
+        "pages": [{"page": 20, "title_blocks": [{"text_excerpt": "DRAWING DWG NO JOB NO DIMENSION PLAN 202 SCALE1:100 DATE 26.02.26"}], "dimension_candidates": []}]
+    })["page_roles"][0]["identity"]
+    check("title-block drawing number beats date metadata", identity["selected_drawing_number"], "202")
+    check("date metadata is not retained as drawing number", all(candidate["value"] != "26.02" for candidate in identity["drawing_number_candidates"]), True)
+
+    service = build_drawing_coverage({"source_pdf": "/tmp/set.pdf", "drawing_set": {"pages": [
+        page(23, "architect_lighting_plan", "services_or_internal_load", title="Service Plan - Lighting"),
+        page(16, "render_or_photo", "visual_context", title="3D Render"),
+    ]}})
+    service_roles = {row["page"]: row for row in service["page_roles"]}
+    check("service page gets lighting capability", "lighting" in service_roles[23]["capability_map"], True)
+    check("3D page gets cross-check capability", "3d_cross_check" in service_roles[16]["capability_map"], True)
+
 
 if __name__ == "__main__":
     main()

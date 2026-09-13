@@ -55,7 +55,10 @@ class ReviewedCaseToolTests(unittest.TestCase):
                 }
             }), encoding="utf-8")
             first = bootstrap(source, output)
-            self.assertEqual(set(first["created"]), {"project_context.json", "calculator_input_overrides.json", "hourly_load_model.json"})
+            self.assertEqual(set(first["created"]), {
+                "project_context.json", "calculator_input_overrides.json", "hourly_load_model.json",
+                "schedule_library.json", "design_day_scenarios.json", "envelope_library.json", "envelope_model.json",
+            })
             model = json.loads((output / "hourly_load_model.json").read_text(encoding="utf-8"))
             self.assertEqual([row["room_id"] for row in model["rooms"]], ["room_01"])
             original = (output / "hourly_load_model.json").read_bytes()

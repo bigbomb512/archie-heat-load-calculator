@@ -452,6 +452,7 @@ requiredElement("btnAddZone").addEventListener("click", () => addZone());
 requiredElement("btnSaveRequirements").addEventListener("click", saveDesignRequirements);
 requiredElement("btnBuildThermalModel").addEventListener("click", () => saveThermalModel("build"));
 requiredElement("btnBuildCalculatorDraft").addEventListener("click", () => saveCalculatorDraft("build"));
+requiredElement("btnBuildCalculationEvidence").addEventListener("click", buildCalculationInputEvidence);
 requiredElement("btnSaveCalculatorReview").addEventListener("click", () => saveCalculatorDraft("save_review"));
 requiredElement("btnPreviewCalculatorDraft").addEventListener("click", () => saveCalculatorDraft("preview_apply"));
 requiredElement("btnApplyCalculatorDraft").addEventListener("click", () => saveCalculatorDraft("apply"));
@@ -951,6 +952,7 @@ function showDesignRequirements(requirements = {}, readiness = {}, roomSuggestio
     : "";
   drawVentilationReport(ventilationReport, ventilationStatus);
   loadThermalModel();
+  loadCalculationInputEvidence();
   loadCalculatorDraft();
   loadEnvelope();
   loadHourlyModel();
@@ -1172,6 +1174,48 @@ async function loadCalculatorDraft(){
     const data = await res.json();
     if (res.ok && !data.error) showCalculatorDraft(data.calculator_draft || {}, data.artifact_url || "");
   } catch {}
+}
+
+function showCalculationInputEvidence(evidence = {}, summary = {}, status = "not_built", artifactUrl = ""){
+  const counts = summary.status_counts || {};
+  requiredElement("calculationEvidenceStatus").textContent = status === "stale"
+    ? "Calculation-input evidence is stale; rebuild it from the current architect packet."
+    : evidence?.fingerprint
+      ? `${status} · ${summary.candidate_count || 0} candidates · ${counts.active || 0} active · ${counts.proposed || 0} proposed · ${counts.blocked || 0} blocked · ${counts.evidence_only || 0} evidence-only`
+      : "Build the numerical-input evidence register after the architect packet is analysed.";
+  const categoryText = Object.entries(summary.category_counts || {}).map(([key, value]) => `${key}: ${value.count || 0}`).join(" · ");
+  requiredElement("calculationEvidenceSummary").innerHTML = evidence?.fingerprint
+    ? `<article class="review-item"><div><b>Calculation-input evidence register</b><span>${esc(categoryText || "No categories extracted")}</span><small>Rooms referenced: ${esc((summary.affected_room_labels || []).join(", ") || "None")}</small></div>${artifactUrl ? `<a class="btn ghost mini" href="${esc(artifactUrl)}" target="_blank" rel="noopener">Open evidence JSON</a>` : ""}</article>${evidence.binding ? `<article class="review-item"><div><b>Evidence binding</b><span>${esc(`${evidence.binding.relationships?.length || 0} relationships · ${evidence.binding.conflicts?.length || 0} conflicts · ${evidence.binding.observations?.length || 0} observations`)}</span><small>Labels, table cells, image witnesses, PDF candidates, and manual vision records are linked by source page and stable evidence identity. 3D/image-only records remain cross-checks.</small></div></article>` : ""}`
+    : "";
+  const rows = (evidence.candidates || []).slice(0, 80);
+  const bindingIssues = (evidence.binding?.conflicts || []).map(item => `<article class="review-item readiness-blocked"><div><b>Binding conflict · ${esc(item.label || item.target || item.kind)}</b><span>${esc(item.reason || "Competing evidence requires review.")}</span><small>Pages ${esc((item.pages || []).join(", ") || "not cited")}</small></div></article>`).join("");
+  requiredElement("calculationEvidenceCandidates").innerHTML = rows.length || bindingIssues
+    ? `<div class="draft-group-title">Extracted values and exceptions</div>${rows.map(row => `<article class="review-item readiness-${esc(row.status === "active" ? "review_ready" : row.status === "evidence_only" ? "draft" : "blocked")}"><div><b>${esc(row.category)} · ${esc(row.target)}</b><span>${esc(typeof row.value === "object" ? JSON.stringify(row.value) : `${row.value ?? "—"} ${row.unit || ""}`)}</span><small>${esc(row.status)} · ${esc(row.source?.drawing_number || "")}, page ${esc(row.source?.page || "?")} · ${esc(row.source?.excerpt || "")}</small>${row.binding_status ? `<small>Binding: ${esc(row.binding_status)} · ${esc(row.binding_basis || "")}</small>` : ""}${row.unresolved_fields?.length ? `<small>Unresolved: ${esc(row.unresolved_fields.join(", "))}</small>` : ""}</div></article>`).join("")}${bindingIssues}`
+    : "";
+}
+
+async function loadCalculationInputEvidence(){
+  if (!DATA?.id) return;
+  try {
+    const res = await fetch(`/api/calculation-input-evidence?project_id=${encodeURIComponent(DATA.id)}`);
+    const data = await res.json();
+    if (res.ok && !data.error) showCalculationInputEvidence(data.calculation_input_evidence || {}, data.summary || {}, data.status || "not_built", data.artifact_url || "");
+  } catch (_) { /* Evidence extraction is optional until the packet is analysed. */ }
+}
+
+async function buildCalculationInputEvidence(){
+  if (!DATA?.id) return;
+  const button = requiredElement("btnBuildCalculationEvidence");
+  button.disabled = true;
+  requiredElement("calculationEvidenceStatus").textContent = "Extracting cited calculation inputs…";
+  try {
+    const res = await fetch("/api/calculation-input-evidence", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({project_id: DATA.id, action: "build"})});
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || "Could not extract calculation inputs.");
+    showCalculationInputEvidence(data.calculation_input_evidence || {}, data.summary || {}, data.status || "current", data.artifact_url || "");
+    toast("Calculation-input evidence built", `${data.summary?.candidate_count || 0} cited candidates recorded. Review unresolved values before assembly.`);
+  } catch (error) { requiredElement("calculationEvidenceStatus").textContent = "Calculation-input extraction failed."; toast("Extraction failed", error.message); }
+  button.disabled = false;
 }
 
 function showCalculatorDraft(draft = {}, artifactUrl = ""){

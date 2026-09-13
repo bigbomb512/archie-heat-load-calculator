@@ -18,10 +18,11 @@ from ai.drawing_coverage import source_fingerprint
 ENTITY_KINDS = {"floor", "room", "opening", "surface", "ceiling", "lighting", "equipment"}
 GEOMETRY_STATES = {"label_detected", "geometry_proposed", "geometry_confirmed", "not_applicable"}
 ROLE_GROUPS = {
-    "plan_geometry": {"primary_geometry_plan", "supporting_geometry_plan"},
-    "ceiling_lighting": {"reflected_ceiling_or_service_plan"},
-    "opening_elevation": {"opening_elevation", "elevation_or_section"},
-    "visual_cross_check": {"3d_reference"},
+    "plan_geometry": {"main_floor_plan", "primary_geometry_plan", "supporting_geometry_plan"},
+    "ceiling_lighting": {"reflected_ceiling_plan", "reflected_ceiling_or_service_plan", "services_or_lighting_plan", "architect_lighting_plan", "architect_electrical_plan"},
+    "opening_elevation": {"opening_elevation", "opening_schedule", "elevation_or_section", "elevation", "section"},
+    "visual_cross_check": {"3d_render", "3d_reference", "3d_crosscheck"},
+    "schedules_and_construction": {"schedule", "material_schedule", "equipment_schedule", "lighting_schedule", "construction_or_detail", "detail", "reference"},
 }
 
 
@@ -71,7 +72,12 @@ def validate_settings(raw):
 
 
 def select_page_groups(ai_input, coverage):
-    """Create stable, role-based request groups from the complete page register."""
+    """Create stable, capability-aware request groups from the complete register.
+
+    Older coverage artifacts contain only ``proposed_role``; those remain
+    supported. New coverage adds selection and capability metadata, allowing
+    the same selection to drive both manual and optional provider workflows.
+    """
     pages = {row.get("page"): row for row in ai_input.get("drawing_set", {}).get("pages", [])}
     roles = coverage.get("page_roles", []) if isinstance(coverage, dict) else []
     grouped = []
@@ -82,16 +88,54 @@ def select_page_groups(ai_input, coverage):
             if role.get("proposed_role") not in accepted_roles or page not in pages:
                 continue
             source = pages[page]
+            selection = role.get("selection", "")
+            # Keep ambiguous pages in the dedicated exception appendix rather
+            # than duplicating them in a normal role group. This ensures the
+            # provider sees the page with its uncertainty clearly labelled.
+            if selection in {"reference_only", "ranked_exception"}:
+                continue
             members.append({
                 "page": page,
-                "drawing_number": source.get("drawing_number", ""),
+                "drawing_number": role.get("resolved_drawing_number") or source.get("drawing_number", ""),
+                "drawing_number_candidates": (role.get("identity") or {}).get("drawing_number_candidates", []),
                 "title": source.get("title", ""),
                 "role": role.get("proposed_role"),
                 "level_name": role.get("level_name") or source.get("level_name", ""),
                 "structured_text": str(source.get("structured_content", {}).get("markdown", ""))[:12000],
+                "capability_map": role.get("capability_map", {}),
+                "relevance": role.get("relevance", {}),
+                "selection": selection or "legacy_role_selection",
+                "selection_reasons": role.get("selection_reasons", []),
+                "related_pages": role.get("related_pages", []),
             })
         if members:
             grouped.append({"group_id": group_id, "title": group_id.replace("_", " ").title(), "pages": sorted(members, key=lambda row: row["page"])})
+    exceptions = [
+        role for role in roles
+        if role.get("selection") == "ranked_exception" and role.get("page") in pages
+    ]
+    if exceptions:
+        grouped.append({
+            "group_id": "ranked_exceptions",
+            "title": "Ranked Exceptions",
+            "pages": sorted([
+                {
+                    "page": role["page"],
+                    "drawing_number": role.get("resolved_drawing_number") or pages[role["page"]].get("drawing_number", ""),
+                    "drawing_number_candidates": (role.get("identity") or {}).get("drawing_number_candidates", []),
+                    "title": pages[role["page"]].get("title", ""),
+                    "role": role.get("proposed_role"),
+                    "level_name": role.get("level_name") or pages[role["page"]].get("level_name", ""),
+                    "structured_text": str(pages[role["page"]].get("structured_content", {}).get("markdown", ""))[:12000],
+                    "capability_map": role.get("capability_map", {}),
+                    "relevance": role.get("relevance", {}),
+                    "selection": "ranked_exception",
+                    "selection_reasons": role.get("selection_reasons", []),
+                    "related_pages": role.get("related_pages", []),
+                }
+                for role in exceptions
+            ], key=lambda row: (-max(row.get("relevance", {}).values(), default=0), row["page"]))
+        })
     return grouped
 
 

@@ -118,16 +118,21 @@ def quantity(raw, unit):
 
 
 def build_calculator_draft(thermal_model, building_evidence, drawing_coverage, previous=None,
-                           source_artifacts=None, thermal_evidence=None, evidence_fusion=None):
+                           source_artifacts=None, thermal_evidence=None, evidence_fusion=None,
+                           calculation_input_evidence=None):
     previous = previous or {}
     thermal_evidence = thermal_evidence or {}
     draft = empty_calculator_draft()
+    source_fingerprints = {
+        "thermal_model": thermal_model, "building_evidence": building_evidence,
+        "drawing_coverage": drawing_coverage, "thermal_evidence": thermal_evidence,
+        "evidence_fusion": evidence_fusion or {},
+    }
+    if calculation_input_evidence is not None:
+        source_fingerprints["calculation_input_evidence"] = calculation_input_evidence
     draft.update(revision=previous.get("revision", 0) + 1, status="review_required", updated_at=timestamp(),
                  source_artifacts=source_artifacts or {},
-                 source_fingerprints={name: fingerprint(value) for name, value in {
-                     "thermal_model": thermal_model, "building_evidence": building_evidence,
-                     "drawing_coverage": drawing_coverage, "thermal_evidence": thermal_evidence,
-                     "evidence_fusion": evidence_fusion or {}}.items()},
+                 source_fingerprints={name: fingerprint(value) for name, value in source_fingerprints.items()},
                  review_history=deepcopy(previous.get("review_history", [])),
                  application_receipts=deepcopy(previous.get("application_receipts", [])),
                  page_roles=deepcopy((evidence_fusion or {}).get("pages") or drawing_coverage.get("page_roles", [])),

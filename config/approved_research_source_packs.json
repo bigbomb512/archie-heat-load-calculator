@@ -4,6 +4,8 @@
     "au-cooling-v1": {
       "country": "AU",
       "policy_version": "au-cooling-v1",
+      "release_status": "candidate",
+      "release_note": "NCC 2022 profile records are prepared as cited candidates. They become calculation-eligible only after the source-pack release review marks each record approved and released.",
       "allowed_domains": [
         "bom.gov.au",
         "abcb.gov.au",
@@ -11,7 +13,11 @@
         "csiro.au",
         "energy.gov.au"
       ],
-      "notes": "Only legally permitted metadata, citations and approved numerical facts are stored. Proprietary standard text is not copied into the cache."
+      "notes": "Only legally permitted metadata, citations and approved numerical facts are stored. Proprietary standard text is not copied into the cache.",
+      "candidate_records": [
+        "ncc2022-class6-shop-daily-profiles",
+        "ncc2022-class6-restaurant-cafe-daily-profiles"
+      ]
     }
   }
 }

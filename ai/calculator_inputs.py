@@ -29,6 +29,7 @@ SNAPSHOT_SCHEMA_VERSION = 2
 POLICY_VERSION = "au-cooling-v1"
 OVERRIDE_SCHEMA_VERSION = 1
 CONTEXT_SCHEMA_VERSION = 1
+CONDITIONING_SYSTEMS = {"comfort_hvac", "dedicated_refrigeration", "unknown"}
 
 
 def timestamp():
@@ -80,9 +81,30 @@ def validate_project_context(raw):
     for room_id, value in room_uses.items():
         if not isinstance(value, dict) or not str(value.get("use", "")).strip():
             raise ValueError(f"Project context room use '{room_id}' needs a use.")
+        conditioning_system = str(value.get("conditioning_system", "unknown")).strip().lower() or "unknown"
+        if conditioning_system not in CONDITIONING_SYSTEMS:
+            raise ValueError(
+                f"Project context room use '{room_id}' has an invalid conditioning_system. "
+                "Use comfort_hvac, dedicated_refrigeration, or unknown."
+            )
+        default_profile = str(value.get("default_profile", "")).strip().lower()
+        default_profile_source = str(value.get("default_profile_source", "")).strip()
+        default_profile_citations = validate_citations(
+            value.get("default_profile_citations", []),
+            f"Project context default profile {room_id}",
+        )
+        if default_profile and (not default_profile_source or not default_profile_citations):
+            raise ValueError(
+                f"Project context room use '{room_id}' default_profile needs "
+                "default_profile_source and at least one default_profile_citations entry."
+            )
         result["room_uses"][str(room_id)] = {
             "use": str(value["use"]).strip().lower(), "source": str(value.get("source", "")).strip(),
+            "conditioning_system": conditioning_system,
             "citations": validate_citations(value.get("citations", []), f"Project context room use {room_id}"),
+            "default_profile": default_profile,
+            "default_profile_source": default_profile_source,
+            "default_profile_citations": default_profile_citations,
         }
     scope = source.get("conditioned_scope") or {}
     if not isinstance(scope, dict):
@@ -197,6 +219,14 @@ def _fact_candidates(fusion, target):
         extracted = value.get("value") if isinstance(value, dict) and "value" in value else value
         if _value_present(extracted):
             rows.append({"id": fact.get("fact_id", ""), "value": extracted, "unit": fact.get("unit", ""), "source": fact.get("source", {}), "citations": fact.get("citations", []), "confidence": fact.get("extraction_confidence", "")})
+    for candidate in ((fusion or {}).get("calculation_input_evidence") or {}).get("candidates", []):
+        if candidate.get("status") != "active" or candidate.get("target_path") != target or not _value_present(candidate.get("value")):
+            continue
+        rows.append({
+            "id": candidate.get("candidate_id", ""), "value": candidate.get("value"), "unit": candidate.get("unit", ""),
+            "source": candidate.get("source", {}), "citations": [candidate.get("source", {})],
+            "confidence": candidate.get("confidence", ""),
+        })
     return rows
 
 
@@ -227,8 +257,18 @@ def _resolve_field(target, current_value, unit, *, current_source, current_citat
 
 
 def _scope_for_room(context, room_id):
-    use = (context.get("room_uses", {}).get(room_id) or {}).get("use") or context.get("building_use", "")
-    return {"country": "AU", "locality": context["site"].get("locality", ""), "state": context["site"].get("state", ""), "climate_zone": context["site"].get("climate_zone", ""), "room_use": use}
+    room_context = context.get("room_uses", {}).get(room_id) or {}
+    use = room_context.get("use") or context.get("building_use", "")
+    # A default profile is an explicit project mapping, not an inferred rename
+    # of the room. Keep the authored room use available for audit while using
+    # the selected profile only for scoped research-pack matching.
+    profile = room_context.get("default_profile") or ""
+    return {
+        "country": "AU", "locality": context["site"].get("locality", ""),
+        "state": context["site"].get("state", ""), "climate_zone": context["site"].get("climate_zone", ""),
+        "room_use": profile or use, "declared_room_use": use,
+        "default_profile": profile,
+    }
 
 
 def _is_active_room(context, room_id):
