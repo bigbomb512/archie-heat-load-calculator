@@ -252,16 +252,12 @@
 
 (function () {
   var video = document.getElementById('cityVideo');
-  var toggle = document.getElementById('cityMotion');
-  if (!video || !toggle) return;
+  if (!video) return;
   var motion = window.matchMedia('(prefers-reduced-motion: reduce)');
-  function sync() { toggle.textContent = video.paused ? 'Play background video' : 'Pause background video'; }
-  function play() { video.play().catch(sync); }
-  toggle.hidden = false;
-  video.addEventListener('play', sync);
-  video.addEventListener('pause', sync);
-  toggle.addEventListener('click', function () { if (video.paused) play(); else video.pause(); });
-  motion.addEventListener('change', function () { if (motion.matches) video.pause(); });
+  function play() { video.play().catch(function () {}); }
+  motion.addEventListener('change', function () {
+    if (motion.matches) video.pause(); else play();
+  });
   if (!motion.matches) play();
 })();
 
