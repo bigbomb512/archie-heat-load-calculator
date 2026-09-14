@@ -276,8 +276,10 @@ method version to avoid stale results.
 
 ## 9. Changed files and integration boundary
 
-Prepared in a separate worktree, branch `max-infiltration-method-prep`, based on
-`Max`. The shared `Max` checkout and `main` are not updated by this package.
+Prepared in a separate worktree based on `Max`, then moved onto `Max` at the
+user's explicit request. The temporary branch and worktree were retired after
+the package was preserved on `Max`. `main` remains unchanged. This branch move
+does not connect the package to production calculations.
 
 | File | Purpose |
 | --- | --- |
