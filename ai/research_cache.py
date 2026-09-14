@@ -22,6 +22,37 @@ RESEARCH_CATEGORIES = {
 REVIEW_STATUSES = {"proposed", "approved", "expired", "rejected"}
 RELEASE_STATUSES = {"candidate", "released", "revoked"}
 
+# This is intentionally separate from the calculator field registry.  It is
+# the ingestion boundary for reusable external defaults, and excludes every
+# geometry, envelope, glazing and equipment-heat field by construction.
+CANDIDATE_BINDING_POLICY = {
+    "weather": {"scenario.weather_profile": {"profile"}},
+    "indoor_cooling_condition": {
+        "room.indoor_cooling_setpoint_c": {"C"},
+        "room.indoor_cooling_wet_bulb_c": {"C"},
+    },
+    "safety_allowance": {"room.safety_factor": {""}},
+    "occupancy_default": {"room.occupancy_density_per_m2": {"people/m2"}},
+    "people_gain_default": {
+        "room.people_sensible_w_per_person": {"W/person"},
+        "room.people_latent_w_per_person": {"W/person"},
+        "room.people_diversity_factor": {""},
+    },
+    "lighting_density_default": {
+        "room.lighting_w_m2": {"W/m2"},
+        "room.lighting_diversity_factor": {""},
+    },
+    "ventilation_requirement": {
+        "room.outside_air_lps_per_person": {"L/s/person"},
+        "room.outside_air_lps_per_m2": {"L/s/m2"},
+    },
+    "schedule_default": {
+        "schedule.people": {"profile"},
+        "schedule.lighting": {"profile"},
+        "schedule.outside_air": {"profile"},
+    },
+}
+
 
 def _release_manifest_path():
     return Path(__file__).resolve().parents[1] / "config" / "research_source_pack_releases.json"
@@ -132,6 +163,11 @@ def _allowed_domain(url, pack):
     return any(host == domain or host.endswith("." + domain) for domain in pack.get("allowed_domains", []))
 
 
+def source_domain_allowed(url, pack_version):
+    """Whether a source URL is allowed for the named reusable source pack."""
+    return bool(approved_source_pack(pack_version) and _allowed_domain(url, approved_source_pack(pack_version)))
+
+
 def _scope_matches(record_scope, requested):
     """A record can be broader than a project, but may not contradict it."""
     for key, value in (requested or {}).items():
@@ -201,6 +237,8 @@ def validate_record(record):
     result = deepcopy(record)
     result["source_pack_version"] = str(result.get("source_pack_version", "")).strip()
     result["released"] = bool(result.get("released", False))
+    if not isinstance(result.get("scope"), dict):
+        raise ValueError("Research record scope must be an object.")
     bindings = result.get("bindings", [])
     if not isinstance(bindings, list):
         raise ValueError("Research record bindings must be a list.")
@@ -211,8 +249,67 @@ def validate_record(record):
         target = str(binding.get("target", "")).strip()
         if not target or binding.get("value") in (None, ""):
             raise ValueError(f"Research binding {index} needs a target and value.")
-        checked_bindings.append({"target": target, "value": deepcopy(binding["value"]), "unit": str(binding.get("unit", result["unit"])).strip(), "scope": deepcopy(binding.get("scope", {}))})
+        binding_scope = binding.get("scope", {})
+        if not isinstance(binding_scope, dict):
+            raise ValueError(f"Research binding {index} scope must be an object.")
+        checked_bindings.append({"target": target, "value": deepcopy(binding["value"]), "unit": str(binding.get("unit", result["unit"])).strip(), "scope": deepcopy(binding_scope)})
     result["bindings"] = checked_bindings
+    return result
+
+
+def _validate_profile(values, label):
+    if not isinstance(values, list) or len(values) != 24:
+        raise ValueError(f"{label} must contain exactly 24 hourly values.")
+    if any(not isinstance(value, (int, float)) or isinstance(value, bool) or value < 0 or value > 1 for value in values):
+        raise ValueError(f"{label} values must be numeric fractions from 0 to 1.")
+
+
+def _validate_weather_profile(value):
+    if not isinstance(value, dict):
+        raise ValueError("Weather candidate must contain a profile object.")
+    hours = value.get("hours")
+    if not isinstance(hours, list) or len(hours) != 24:
+        raise ValueError("Weather candidate must contain 24 hourly conditions.")
+    hour_ids = {row.get("hour") for row in hours if isinstance(row, dict)}
+    if hour_ids != set(range(24)):
+        raise ValueError("Weather candidate hours must contain each hour 0 through 23 exactly once.")
+    for row in hours:
+        if not isinstance(row.get("outdoor_dry_bulb_c"), (int, float)) or not isinstance(row.get("outdoor_wet_bulb_c"), (int, float)):
+            raise ValueError("Weather candidate hours need numeric dry-bulb and wet-bulb values.")
+    if not isinstance(value.get("atmospheric_pressure_kpa"), (int, float)) or value["atmospheric_pressure_kpa"] <= 0:
+        raise ValueError("Weather candidate needs a positive atmospheric pressure in kPa.")
+
+
+def validate_candidate_record(record):
+    """Validate a reusable Australia-first automatic-default candidate.
+
+    This is stricter than general research-cache validation. It rejects values
+    that could otherwise look cited but target a high-risk calculator input.
+    """
+    result = validate_record(record)
+    if result.get("scope", {}).get("country") != "AU":
+        raise ValueError(f"Candidate {result['record_id']} must declare country scope AU.")
+    allowed = CANDIDATE_BINDING_POLICY.get(result["category"], {})
+    if not allowed:
+        raise ValueError(f"Category {result['category']} is not eligible for automatic default candidates.")
+    if not result["bindings"]:
+        raise ValueError(f"Candidate {result['record_id']} needs at least one target binding.")
+    for binding in result["bindings"]:
+        target = binding["target"]
+        units = allowed.get(target)
+        if units is None:
+            raise ValueError(f"Candidate {result['record_id']} target {target} is not an allowed low-risk default.")
+        if binding["unit"] not in units:
+            raise ValueError(f"Candidate {result['record_id']} target {target} has invalid unit {binding['unit']!r}.")
+        if result["category"] == "schedule_default":
+            if not binding.get("scope", {}).get("day_type"):
+                raise ValueError(f"Schedule candidate {result['record_id']} needs a day_type scope.")
+            _validate_profile(binding["value"], f"Schedule candidate {result['record_id']}")
+        if result["category"] == "weather":
+            scope = {**result.get("scope", {}), **binding.get("scope", {})}
+            if not scope.get("scenario") or not any(scope.get(key) for key in ("locality", "state", "climate_zone")):
+                raise ValueError(f"Weather candidate {result['record_id']} needs scenario and locality, state, or climate-zone scope.")
+            _validate_weather_profile(binding["value"])
     return result
 
 
@@ -288,6 +385,8 @@ def default_record_statuses(cache, scope=None, now=None, release_manifest=None):
         {
             "record_id": record["record_id"], "category": record["category"],
             "review_status": record.get("review_status", ""), "scope": deepcopy(record.get("scope") or {}),
+            "publisher": record.get("publisher", ""), "citation": record.get("citation", ""),
+            "binding_targets": [row.get("target", "") for row in record.get("bindings", [])],
             **source_record_release_status(checked, record, scope, now, release_manifest),
         }
         for record in checked["records"]

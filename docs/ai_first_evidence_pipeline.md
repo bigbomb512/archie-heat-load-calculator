@@ -96,6 +96,27 @@ thermal boundaries, U-values, or design-day weather. Those fields remain
 blocked until project evidence or a separately released, scope-matched source
 is available.
 
+## Curating Australia-first default candidates
+
+`tools/seed_au_default_pack.py --check` validates the checked-in candidate
+pack without touching a project. It reports candidate counts by category and
+calculator target, the required Cooling V1 coverage that still lacks a cited
+candidate, and records that cannot be seeded. The same tool seeds only valid
+candidates into a private project cache; it always writes them as `proposed`
+and unreleased.
+
+Each candidate may carry its own official-source metadata. A candidate needs
+an allowlisted Australian source, citation, retrieval time, content hash,
+expiry, AU scope, and only permitted low-risk bindings. Complete 24-hour
+profiles are required for each declared day type. Weather candidates also need
+a locality/state/climate-zone and scenario scope. Geometry, thermal
+boundaries, constructions, U-values, glazing, solar/shading, and equipment
+heat-to-space targets are rejected by the curation tool before a cache write.
+
+The candidate report intentionally shows missing coverage rather than filling
+it with guessed values. It is developer-only: calculations continue to use
+only engineer-released, scope-matched records.
+
 Drawing 6 remains private. The reviewed-case tool writes derived evidence to a
 local output directory and never copies the source PDF into the repository.
 
