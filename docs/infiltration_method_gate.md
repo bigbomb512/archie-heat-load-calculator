@@ -38,11 +38,3 @@ An approved project gate needs: engineer name, credential, approval date, method
 7. Provisional input produces only `draft`; confirmed complete scope may be `review_ready`.
 
 This is cooling infiltration only. It does not approve heating, AHU, transfer air, extract/make-up air, glazing, shading, annual analysis, or benchmark validation.
-
-## Isolated preparation review (14 September 2026)
-
-The [isolated method package](infiltration_method_preparation.md) characterizes
-this existing policy and its validation gaps. It does not approve the method,
-change runtime physics, or release Drawing 6 inputs. Independent arithmetic
-vectors and dedicated tests are development evidence only. No engineer approval
-record is created by that package.
