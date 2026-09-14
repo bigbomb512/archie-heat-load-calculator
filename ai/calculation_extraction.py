@@ -13,6 +13,7 @@ import re
 
 from ai.drawing_coverage import timestamp
 from ai.evidence_binding import bind_calculation_evidence
+from ai.geometry_resolution import build_geometry_resolution
 
 
 SCHEMA_VERSION = 1
@@ -222,6 +223,59 @@ def _vision_candidates(vision, source_fp, pages_by_number):
     return rows
 
 
+def _geometry_candidates(geometry, source_fp, pages_by_number):
+    """Expose normalized geometry entities without activating authored inputs."""
+    rows = []
+    for entity in (geometry or {}).get("entities", []):
+        source = entity.get("source") or {}
+        page = pages_by_number.get(source.get("page"))
+        if not page:
+            continue
+        kind = entity.get("kind")
+        label = entity.get("label", "")
+        # Raw vector walls and unbound dimension text belong in the geometry
+        # graph. They are not calculator fields until a room/wall target is
+        # explicit, otherwise title-block numbers can become false dimensions.
+        if kind == "wall":
+            continue
+        if kind == "dimension":
+            raw_dimension = entity.get("value") if isinstance(entity.get("value"), dict) else {}
+            if not any(raw_dimension.get(key) for key in ("room_id", "room_label", "target_wall_id", "wall_id")):
+                continue
+        value = entity.get("value")
+        status = "active" if kind == "area" and entity.get("geometry_status") == "geometry_confirmed" else "proposed"
+        unresolved = list(entity.get("unresolved_fields", []))
+        if kind == "area":
+            raw = value.get("area_m2") if isinstance(value, dict) else None
+            if not isinstance(raw, (int, float)) or raw <= 0:
+                status = "blocked"
+                unresolved.append("area_m2")
+            target = f"room.{label}.area_m2"
+            category = "area"
+            unit = "m²"
+        elif kind == "room":
+            target, category, unit = f"room.{label}.identity", "room", ""
+            value = label
+            unresolved.extend(["geometry", "zone_id"] if not unresolved else [])
+        elif kind == "floor":
+            target, category, unit = f"floor.{label}.identity", "floor", ""
+            value = label
+            unresolved.extend(["floor_to_zone_mapping"] if not unresolved else [])
+        elif kind in {"opening", "surface", "wall", "dimension"}:
+            target, category = f"{kind}.{label or 'unresolved'}", kind
+            unit = "mm" if kind == "dimension" else ""
+        else:
+            continue
+        rows.append(_candidate(
+            source_fp, page, target, category, deepcopy(value), unit,
+            label=label, excerpt=str(entity.get("source", {}).get("excerpt", "")),
+            method=entity.get("extraction_method", "geometry_resolution"), status=status,
+            confidence=entity.get("confidence", "unknown"), witnesses=entity.get("witness_ids", []),
+            unresolved=unresolved, room_id=label if kind in {"room", "area"} else "",
+        ))
+    return rows
+
+
 def _validate_candidates(candidates, pages):
     known_pages = {page.get("page") for page in pages}
     by_target = {}
@@ -257,7 +311,8 @@ def _validate_candidates(candidates, pages):
     return candidates, issues
 
 
-def extract_calculation_input_evidence(ai_input, coverage=None, spatial_ocr=None, vector_geometry=None, vision_response=None):
+def extract_calculation_input_evidence(ai_input, coverage=None, spatial_ocr=None, vector_geometry=None, vision_response=None,
+                                       building=None, dimension_matches=None, geometry_confirmation=None):
     coverage = coverage or {}
     spatial_ocr = spatial_ocr or {}
     source_fp = _canonical_source_fingerprint(ai_input)
@@ -282,9 +337,31 @@ def extract_calculation_input_evidence(ai_input, coverage=None, spatial_ocr=None
         if role in ROLE_GROUPS["schedule"] or any(term in title for term in ("schedule", "general note", "design criteria", "requirements")) or role in ROLE_GROUPS["opening"]:
             _extract_schedule_and_notes(page, source_fp, candidates)
             _extract_equipment(page, source_fp, candidates)
-    candidates.extend(_vision_candidates(vision_response, source_fp, {page.get("page"): page for page in pages}))
+    pages_by_number = {page.get("page"): page for page in pages}
+    candidates.extend(_vision_candidates(vision_response, source_fp, pages_by_number))
+    geometry = build_geometry_resolution(
+        ai_input, coverage, building or {}, spatial_ocr, vector_geometry,
+        dimension_matches=dimension_matches, geometry_confirmation=geometry_confirmation,
+        vision_response=vision_response,
+    )
+    candidates.extend(_geometry_candidates(geometry, source_fp, pages_by_number))
     candidates, issues = _validate_candidates(candidates, pages)
-    deduped = {row["candidate_id"]: row for row in candidates}
+    # PDF, vision, and geometry-resolution passes can describe the same fact.
+    # Merge exact target/value duplicates while retaining every witness; keep
+    # differing values separate so the validator can report a conflict.
+    deduped = {}
+    priority = {"active": 0, "proposed": 1, "blocked": 2, "conflict": 3, "evidence_only": 4}
+    for row in candidates:
+        key = (row.get("target", ""), json.dumps(row.get("value"), sort_keys=True, separators=(",", ":")))
+        existing = deduped.get(key)
+        if existing is None:
+            deduped[key] = row
+            continue
+        existing["witness_ids"] = sorted(set(existing.get("witness_ids", [])) | set(row.get("witness_ids", [])))
+        existing["unresolved_fields"] = sorted(set(existing.get("unresolved_fields", [])) | set(row.get("unresolved_fields", [])))
+        if priority.get(row.get("status"), 9) < priority.get(existing.get("status"), 9):
+            existing["status"] = row.get("status")
+        existing.setdefault("source_alternatives", []).append(row.get("source", {}))
     candidates = sorted(deduped.values(), key=lambda row: row["candidate_id"])
     categories = {}
     for row in candidates:

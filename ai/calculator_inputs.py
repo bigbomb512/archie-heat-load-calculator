@@ -31,6 +31,38 @@ OVERRIDE_SCHEMA_VERSION = 1
 CONTEXT_SCHEMA_VERSION = 1
 CONDITIONING_SYSTEMS = {"comfort_hvac", "dedicated_refrigeration", "unknown"}
 
+# This registry is deliberately data-only.  It is the single policy surface
+# used by the resolver to decide whether a field may be derived or defaulted.
+# High-risk geometry and thermal fields are evidence/override-only.
+CALCULATOR_FIELD_REGISTRY = {
+    "area_m2": {"unit": "m2", "required": True, "allow_default": False, "allow_derived": True, "category": "geometry"},
+    "indoor_cooling_setpoint_c": {"unit": "C", "required": True, "allow_default": True, "allow_derived": False, "category": "conditions"},
+    "cooling_load.people_sensible_w_per_person": {"unit": "W/person", "required": True, "allow_default": True, "allow_derived": False, "category": "people"},
+    "cooling_load.people_latent_w_per_person": {"unit": "W/person", "required": True, "allow_default": True, "allow_derived": False, "category": "people"},
+    "cooling_load.people_diversity_factor": {"unit": "", "required": True, "allow_default": True, "allow_derived": False, "category": "people"},
+    "cooling_load.lighting_w_m2": {"unit": "W/m2", "required": True, "allow_default": True, "allow_derived": False, "category": "lighting"},
+    "cooling_load.lighting_diversity_factor": {"unit": "", "required": True, "allow_default": True, "allow_derived": False, "category": "lighting"},
+    "cooling_load.safety_factor": {"unit": "", "required": True, "allow_default": True, "allow_derived": False, "category": "policy"},
+    "cooling_load_conditions.indoor_cooling_wet_bulb_c": {"unit": "C", "required": True, "allow_default": True, "allow_derived": False, "category": "conditions"},
+    "occupancy": {"unit": "people", "required": True, "allow_default": True, "allow_derived": True, "category": "people"},
+    "cooling_load.outside_air_lps": {"unit": "L/s", "required": True, "allow_default": True, "allow_derived": True, "category": "outside_air"},
+    "schedule_assignments.people": {"unit": "profile", "required": True, "allow_default": True, "allow_derived": False, "category": "schedule"},
+    "schedule_assignments.lighting": {"unit": "profile", "required": True, "allow_default": True, "allow_derived": False, "category": "schedule"},
+    "schedule_assignments.outside_air": {"unit": "profile", "required": True, "allow_default": True, "allow_derived": False, "category": "schedule"},
+}
+
+
+def calculator_field_policy(target):
+    """Return policy metadata for a room field, without guessing unknown fields."""
+    prefix = "rooms."
+    relative = target[len(prefix):] if target.startswith(prefix) else target
+    parts = relative.split(".", 1)
+    field = parts[1] if len(parts) == 2 else relative
+    return deepcopy(CALCULATOR_FIELD_REGISTRY.get(field, {
+        "unit": "", "required": False, "allow_default": False,
+        "allow_derived": False, "category": "unknown",
+    }))
+
 
 def timestamp():
     return datetime.now(timezone.utc).isoformat()
@@ -73,8 +105,8 @@ def validate_project_context(raw):
     result["site"] = {key: str(site.get(key, "")).strip() for key in ("country", "locality", "state", "climate_zone", "source")}
     result["site"]["country"] = result["site"]["country"] or "AU"
     result["site"]["citations"] = validate_citations(site.get("citations", []), "Project context site")
-    if result["site"]["country"] != "AU":
-        raise ValueError("Cooling V1 source packs support Australia-only project context.")
+    # Explicit project evidence is portable. Australia-first research defaults
+    # are filtered by scope later and therefore only apply to matching AU data.
     room_uses = source.get("room_uses", {})
     if not isinstance(room_uses, dict):
         raise ValueError("Project context room uses must be an object.")
@@ -180,6 +212,24 @@ def _value_present(value):
     return value is not None and value != ""
 
 
+def _canonical_value(value, unit, expected):
+    """Normalize the small set of units used by the cooling input contract."""
+    if value in (None, "") or not expected:
+        return value, unit
+    aliases = {"m²": "m2", "m^2": "m2", "w/m²": "W/m2", "w/m^2": "W/m2", "°c": "C", "degc": "C"}
+    actual = aliases.get(str(unit or "").strip().lower(), str(unit or "").strip())
+    wanted = aliases.get(str(expected).strip().lower(), str(expected).strip())
+    if actual == wanted or not actual:
+        return value, wanted if actual else unit
+    if actual == "m" and wanted == "mm":
+        return float(value) * 1000, wanted
+    if actual == "m3/s" and wanted == "L/s":
+        return float(value) * 1000, wanted
+    if actual == "m3/h" and wanted == "L/s":
+        return float(value) / 3.6, wanted
+    return value, unit
+
+
 def _set_path(row, dotted, value):
     current = row
     parts = dotted.split(".")
@@ -192,12 +242,13 @@ def _room_target(room_id, field):
     return f"rooms.{room_id}.{field}"
 
 
-def _source_record(state, target, value, unit, *, source_id="", source="", citations=None, confidence="", rule="", derivation=None, candidates=None):
+def _source_record(state, target, value, unit, *, source_id="", source="", citations=None, confidence="", rule="", derivation=None, candidates=None, source_fingerprint="", evidence_witnesses=None):
     return {
         "input_id": "input-" + hashlib.sha256(target.encode()).hexdigest()[:16], "target": target,
         "value": deepcopy(value), "unit": unit, "resolution_status": state,
         "source_ids": [source_id] if source_id else [], "source": source, "citations": deepcopy(citations or []),
         "confidence": confidence, "policy_rule": rule, "derivation": deepcopy(derivation or {}),
+        "source_fingerprint": source_fingerprint, "evidence_witnesses": deepcopy(evidence_witnesses or []),
         "candidates": deepcopy(candidates or []),
     }
 
@@ -217,42 +268,58 @@ def _fact_candidates(fusion, target):
         if fact_target != target:
             continue
         extracted = value.get("value") if isinstance(value, dict) and "value" in value else value
-        if _value_present(extracted):
-            rows.append({"id": fact.get("fact_id", ""), "value": extracted, "unit": fact.get("unit", ""), "source": fact.get("source", {}), "citations": fact.get("citations", []), "confidence": fact.get("extraction_confidence", "")})
+        source = fact.get("source", {}) if isinstance(fact.get("source", {}), dict) else {}
+        citations = fact.get("citations", []) or ([source] if source.get("page") or source.get("drawing_number") else [])
+        if _value_present(extracted) and fact.get("fact_id") and (fact.get("source_fingerprint") or source.get("page") or source.get("drawing_number") or citations):
+            rows.append({"id": fact.get("fact_id", ""), "value": extracted, "unit": fact.get("unit", ""), "source": source, "citations": citations, "confidence": fact.get("extraction_confidence", ""), "source_fingerprint": fact.get("source_fingerprint", ""), "witnesses": fact.get("witness_ids", [])})
     for candidate in ((fusion or {}).get("calculation_input_evidence") or {}).get("candidates", []):
         if candidate.get("status") != "active" or candidate.get("target_path") != target or not _value_present(candidate.get("value")):
             continue
+        source = candidate.get("source", {}) if isinstance(candidate.get("source", {}), dict) else {}
+        citations = candidate.get("citations", []) or ([source] if source.get("page") or source.get("drawing_number") else [])
+        if not candidate.get("candidate_id") or not (candidate.get("source_fingerprint") or source.get("page") or source.get("drawing_number") or citations):
+            continue
         rows.append({
             "id": candidate.get("candidate_id", ""), "value": candidate.get("value"), "unit": candidate.get("unit", ""),
-            "source": candidate.get("source", {}), "citations": [candidate.get("source", {})],
-            "confidence": candidate.get("confidence", ""),
+            "source": source, "citations": citations,
+            "confidence": candidate.get("confidence", ""), "source_fingerprint": candidate.get("source_fingerprint", ""),
+            "witnesses": candidate.get("supporting_witness_ids", candidate.get("witness_ids", [])),
         })
     return rows
 
 
 def _resolve_field(target, current_value, unit, *, current_source, current_citations, fusion, cache, scope, overrides, default_target=None):
+    policy = calculator_field_policy(target)
+    expected_unit = policy.get("unit") or unit
     override_rows = [row for row in overrides["records"] if row["target"] == target]
     if len(override_rows) > 1 and _conflicting(override_rows):
         return _source_record("blocked", target, None, unit, rule="conflicting project overrides", candidates=override_rows), None
     if override_rows:
         row = override_rows[-1]
-        return _source_record("project_override", target, row["value"], row["unit"], source_id=row["override_id"], source=row["source"], citations=row["citations"], rule="cited project override"), row["value"]
+        value, canonical_unit = _canonical_value(row["value"], row["unit"], expected_unit)
+        return _source_record("project_override", target, value, canonical_unit, source_id=row["override_id"], source=row["source"], citations=row["citations"], rule="cited project override"), value
     facts = _fact_candidates(fusion, target)
+    for fact in facts:
+        fact["value"], fact["unit"] = _canonical_value(fact.get("value"), fact.get("unit", ""), expected_unit)
     if _conflicting(facts):
         return _source_record("blocked", target, None, unit, rule="conflicting explicit project evidence", candidates=facts), None
     if facts:
         fact = facts[0]
         reference = fact.get("source", {}).get("reference") or fact.get("source", {}).get("drawing_number") or "Architect evidence"
-        return _source_record("project_evidence", target, fact["value"], fact.get("unit") or unit, source_id=fact["id"], source=str(reference), citations=fact.get("citations", []), confidence=fact.get("confidence", ""), rule="explicit validated evidence"), fact["value"]
-    if _value_present(current_value):
-        return _source_record("project_evidence", target, current_value, unit, source=current_source, citations=current_citations, rule="authored project input"), current_value
+        return _source_record("project_evidence", target, fact["value"], fact.get("unit") or expected_unit, source_id=fact["id"], source=str(reference), citations=fact.get("citations", []), confidence=fact.get("confidence", ""), rule="explicit validated evidence", source_fingerprint=fact.get("source_fingerprint", ""), evidence_witnesses=fact.get("witnesses", [])), fact["value"]
+    if _value_present(current_value) and (str(current_source or "").strip() or current_citations):
+        value, canonical_unit = _canonical_value(current_value, unit, expected_unit)
+        return _source_record("project_evidence", target, value, canonical_unit, source=current_source, citations=current_citations, rule="authored project input"), value
+    if not policy.get("allow_default", False):
+        return _source_record("blocked", target, None, unit, rule="field is high-risk and cannot use an automatic default"), None
     bindings = eligible_bindings(cache, default_target or target, scope)
     if _conflicting(bindings):
         return _source_record("blocked", target, None, unit, rule="conflicting approved defaults", candidates=bindings), None
     if bindings:
         binding = bindings[0]
+        value, canonical_unit = _canonical_value(binding["value"], binding.get("unit") or unit, expected_unit)
         citation = {"reference": binding.get("citation", binding["record_id"]), "page": None, "excerpt": binding.get("excerpt", "")}
-        return _source_record("approved_default", target, binding["value"], binding.get("unit") or unit, source_id=binding["record_id"], source=binding.get("publisher", "Approved source pack"), citations=[citation], rule="approved scoped Australia-first default"), binding["value"]
+        return _source_record("approved_default", target, value, canonical_unit, source_id=binding["record_id"], source=binding.get("publisher", "Approved source pack"), citations=[citation], rule="approved scoped Australia-first default"), value
     return _source_record("blocked", target, None, unit, rule="no project evidence, override, or eligible default"), None
 
 
@@ -264,7 +331,7 @@ def _scope_for_room(context, room_id):
     # the selected profile only for scoped research-pack matching.
     profile = room_context.get("default_profile") or ""
     return {
-        "country": "AU", "locality": context["site"].get("locality", ""),
+        "country": context["site"].get("country", "AU"), "locality": context["site"].get("locality", ""),
         "state": context["site"].get("state", ""), "climate_zone": context["site"].get("climate_zone", ""),
         "room_use": profile or use, "declared_room_use": use,
         "default_profile": profile,
@@ -321,6 +388,11 @@ def _coverage_summary(model, included, excluded, issues, records, context):
                   if item.get("calculation_status") not in {"not_present_confirmed", "calculated"}]
         if labels:
             unsupported[room_id] = sorted(set(labels))
+    unresolved_supported = {}
+    for issue in issues:
+        room_id = issue.get("affected_id")
+        if room_id in room_ids and issue.get("status") in {"blocked", "draft"}:
+            unresolved_supported.setdefault(room_id, []).append(issue.get("reason", "Unresolved supported input"))
     outside_scope = sorted(room_ids - scoped)
     active_excluded = sorted(set(excluded) & scoped)
     complete_scope = bool(scoped) and set(scoped) == set(included) and not blocked and not draft_only and not active_excluded
@@ -333,6 +405,7 @@ def _coverage_summary(model, included, excluded, issues, records, context):
         "draft_only_room_ids": sorted(draft_only),
         "default_backed_room_ids": sorted(defaults),
         "unsupported_components_by_room": unsupported,
+        "unresolved_supported_inputs_by_room": {key: sorted(set(value)) for key, value in unresolved_supported.items()},
         "complete_scope": complete_scope,
         "project_blockers": [row for row in issues if row.get("affected_id") in {"project", None}],
     }
@@ -457,7 +530,7 @@ def _apply_weather_defaults(scenarios, selected, cache, context):
         if not scenario:
             issues.append({"status": "blocked", "affected_id": scenario_id, "reason": "Selected cooling scenario is missing.", "source_artifact": "design_day_scenarios.json"})
             continue
-        scope = {"country": "AU", "locality": context["site"].get("locality", ""), "state": context["site"].get("state", ""), "climate_zone": context["site"].get("climate_zone", ""), "scenario": scenario_id}
+        scope = {"country": context["site"].get("country", "AU"), "locality": context["site"].get("locality", ""), "state": context["site"].get("state", ""), "climate_zone": context["site"].get("climate_zone", ""), "scenario": scenario_id}
         profile = eligible_bindings(cache, "scenario.weather_profile", scope)
         if not scenario.get("hours") and len(profile) == 1 and isinstance(profile[0]["value"], dict):
             value = profile[0]["value"]
@@ -479,10 +552,12 @@ def _apply_weather_defaults(scenarios, selected, cache, context):
 
 def assemble_calculator_inputs(hourly_model, schedule_library, scenarios, selected_scenario_ids=None,
                                fusion=None, research_cache=None, envelope=None, *, project_context=None,
-                               overrides=None, requirements=None, infiltration_gate=None):
+                               overrides=None, requirements=None, infiltration_gate=None,
+                               calculation_input_evidence=None):
     """Resolve cooling inputs without mutating the supplied project artifacts."""
     fingerprints = {name: _fingerprint(_stable(value or {})) for name, value in {
         "hourly_model": hourly_model, "schedule_library": schedule_library, "scenarios": scenarios, "fusion": fusion,
+        "calculation_input_evidence": calculation_input_evidence,
         "research_cache": research_cache, "envelope": envelope, "project_context": project_context,
         "overrides": overrides, "requirements": requirements, "infiltration_method_gate": infiltration_gate,
     }.items()}
@@ -506,7 +581,8 @@ def assemble_calculator_inputs(hourly_model, schedule_library, scenarios, select
     coverage = _coverage_summary(model, included, excluded, issues, weather_records + room_records, context)
     status = "blocked" if not included or any(row.get("status") == "blocked" for row in issues) else ("review_ready" if coverage["complete_scope"] and not issues else "draft")
     core = {
-        "schema_version": SNAPSHOT_SCHEMA_VERSION, "policy_version": context["default_policy_version"], "selected_scenario_ids": selected,
+        "schema_version": SNAPSHOT_SCHEMA_VERSION, "policy_version": context["default_policy_version"], "field_registry_version": "cooling-v1",
+        "selected_scenario_ids": selected,
         "source_fingerprints": fingerprints, "source_pack_version": cache.get("source_pack_version", ""),
         "project_context": {"fingerprint": context["fingerprint"], "reviewer": context["reviewer"], "conditioned_scope": context["conditioned_scope"]},
         "status": status, "included_room_ids": included, "excluded_room_ids": excluded,
@@ -520,6 +596,11 @@ def assemble_calculator_inputs(hourly_model, schedule_library, scenarios, select
     result = deepcopy(core)
     result.update({"created_at": timestamp(), "snapshot_path": f"calculator_input_sets/{core['input_fingerprint']}.json"})
     result["research_defaults_available"] = [{"record_id": row["record_id"], "category": row["category"], "value": row["value"], "unit": row["unit"], "citation": row["citation"], "scope": row["scope"]} for row in cache["records"] if row.get("review_status") == "approved"]
+    result["research_defaults_unavailable"] = [
+        {"record_id": row["record_id"], "category": row["category"], "review_status": row.get("review_status", ""),
+         "released": bool(row.get("released", False)), "reason": "record is not an approved released source-pack default"}
+        for row in cache["records"] if row.get("review_status") != "approved" or row.get("released") is not True
+    ]
     return result
 
 

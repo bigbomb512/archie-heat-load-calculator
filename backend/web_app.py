@@ -75,6 +75,14 @@ PROJECTS_FILE = ROOT / "output" / "web_projects.json"
 ANALYSIS_VERSION = "drawing_set_coverage_v7"
 
 
+class CalculatorInputConflict(Exception):
+    """Raised when a browser submits against a changed input revision."""
+
+    def __init__(self, message, changed_sources=None):
+        super().__init__(message)
+        self.changed_sources = list(changed_sources or [])
+
+
 class Handler(SimpleHTTPRequestHandler):
     def end_headers(self):
         if self.path == "/" or self.path.startswith("/frontend/"):
@@ -329,6 +337,9 @@ class Handler(SimpleHTTPRequestHandler):
     def save_hourly_load_report(self):
         try:
             result = api_save_hourly_load_report(self)
+        except CalculatorInputConflict as error:
+            return self.send_json({"error": str(error), "code": "calculator_input_conflict", "conflict": True,
+                                   "changed_sources": error.changed_sources, "action": "reload_and_reassemble"}, 409)
         except Exception as error:
             return self.send_json({"error": str(error)}, 400)
         self.send_json(result)
@@ -343,6 +354,9 @@ class Handler(SimpleHTTPRequestHandler):
     def save_calculator_inputs(self):
         try:
             result = api_save_calculator_inputs(self)
+        except CalculatorInputConflict as error:
+            return self.send_json({"error": str(error), "code": "calculator_input_conflict", "conflict": True,
+                                   "changed_sources": error.changed_sources, "action": "reload_and_reassemble"}, 409)
         except Exception as error:
             return self.send_json({"error": str(error)}, 400)
         self.send_json(result)
@@ -931,9 +945,10 @@ def _assemble_project_inputs(project, selected_scenario_ids=None):
     requirements, envelope_inputs = apply_reviewed_envelope_to_requirements(load_json(paths["requirements"]), library, envelope_model)
     model = apply_reviewed_envelope_to_hourly_model(load_json(paths["model"]), library, envelope_model)
     fusion = load_json(paths["evidence_fusion"]) if paths["evidence_fusion"].exists() else {}
+    calculation_input_evidence = load_json(paths["calculation_input_evidence"]) if paths["calculation_input_evidence"].exists() else {}
     if paths["calculation_input_evidence"].exists():
         fusion["calculation_input_evidence"] = normalise_for_hourly_model(
-            load_json(paths["calculation_input_evidence"]), model
+            calculation_input_evidence, model
         )
     research = validate_cache(load_json(paths["research_cache"]) if paths["research_cache"].exists() else empty_research_cache())
     selected = selected_scenario_ids if selected_scenario_ids is not None else []
@@ -942,6 +957,7 @@ def _assemble_project_inputs(project, selected_scenario_ids=None):
         fusion=fusion, research_cache=research, envelope=envelope_inputs,
         project_context=_input_context(paths), overrides=_input_overrides(paths), requirements=requirements,
         infiltration_gate=load_json(paths["infiltration_method_gate"]) if paths["infiltration_method_gate"].exists() else empty_infiltration_method_gate(),
+        calculation_input_evidence=calculation_input_evidence,
     )
     return assembled, paths
 
@@ -954,7 +970,7 @@ def api_calculator_inputs(request, selected_scenario_ids=None):
     snapshot, pointer = _load_input_snapshot(paths)
     current_fingerprint = assembled.get("input_fingerprint", "")
     snapshot_stale = bool(snapshot and current_fingerprint and snapshot.get("input_fingerprint") != current_fingerprint)
-    display = snapshot or assembled
+    display = snapshot or {}
     display["snapshot_stale"] = snapshot_stale
     display["current_assembled_fingerprint"] = current_fingerprint
     display["current_assembly_status"] = assembled.get("status", "blocked")
@@ -966,22 +982,25 @@ def api_calculator_inputs(request, selected_scenario_ids=None):
     }
     display["artifact_links"] = {name: safe_link(paths[name]) for name in ("model", "schedules", "scenarios", "research_cache", "evidence_fusion", "calculation_input_evidence", "project_context", "calculator_input_overrides", "calculator_input_set") if paths[name].exists()}
     display["latest_snapshot"] = pointer
+    count_source = display if snapshot else assembled
     return {
         "id": project["id"], "calculator_input_set": display,
         "project_context": _input_context(paths),
         "calculator_input_overrides": _input_overrides(paths),
-        "status": "stale" if snapshot_stale else display.get("status", "blocked"),
+        "status": "stale" if snapshot_stale else (display.get("status") or assembled.get("status", "blocked")),
         "latest_snapshot": pointer,
         "snapshot_stale": snapshot_stale,
         "current_assembled_fingerprint": current_fingerprint,
         "current_assembly_status": assembled.get("status", "blocked"),
         "coverage_summary": deepcopy(assembled.get("coverage_summary", display.get("coverage_summary", {}))),
         "resolved_input_counts": {
-            status: sum(row.get("resolution_status") == status for row in display.get("resolved_inputs", []))
+            status: sum(row.get("resolution_status") == status for row in count_source.get("resolved_inputs", []))
             for status in ("project_evidence", "derived_evidence", "approved_default", "project_override", "blocked", "excluded")
         },
         "exceptions": deepcopy(assembled.get("issues", display.get("issues", []))),
         "source_pack_version": assembled.get("source_pack_version", display.get("source_pack_version", "")),
+        "research_defaults_available": deepcopy(assembled.get("research_defaults_available", display.get("research_defaults_available", []))),
+        "research_defaults_unavailable": deepcopy(assembled.get("research_defaults_unavailable", display.get("research_defaults_unavailable", []))),
         "artifact_links": deepcopy(display.get("artifact_links", {})),
     }
 
@@ -996,7 +1015,11 @@ def api_save_calculator_inputs(request):
         raise ValueError("Unsupported calculator-input action.")
     if action == "save_context":
         context = validate_project_context(data.get("project_context", data.get("context", {})))
-        context["revision"] = int(_input_context(paths).get("revision", 0)) + 1
+        expected_revision = data.get("expected_revision")
+        current_context = _input_context(paths)
+        if expected_revision is not None and expected_revision != current_context.get("revision"):
+            raise CalculatorInputConflict("Project context changed; reload before saving.", ["project_context"])
+        context["revision"] = int(current_context.get("revision", 0)) + 1
         context["updated_at"] = timestamp()
         _atomic_write(paths["project_context"], context)
         project["project_context"] = str(paths["project_context"])
@@ -1007,7 +1030,7 @@ def api_save_calculator_inputs(request):
         current = _input_overrides(paths)
         expected = data.get("expected_revision")
         if expected is not None and expected != current.get("revision"):
-            raise ValueError("Calculator-input overrides changed; reload before saving.")
+            raise CalculatorInputConflict("Calculator-input overrides changed; reload before saving.", ["calculator_input_overrides"])
         updated = upsert_override(current, data.get("override", {}))
         _atomic_write(paths["calculator_input_overrides"], updated)
         project["calculator_input_overrides"] = str(paths["calculator_input_overrides"])
@@ -1037,7 +1060,7 @@ def api_save_calculator_inputs(request):
         actual_sources = assembled.get("source_fingerprints", {})
         changed_sources = sorted(name for name, expected in expected_sources.items() if actual_sources.get(name) != expected)
         if changed_sources:
-            raise ValueError("Calculator inputs changed since this assembly started: " + ", ".join(changed_sources) + ". Reload and assemble again.")
+            raise CalculatorInputConflict("Calculator inputs changed since this assembly started: " + ", ".join(changed_sources) + ". Reload and assemble again.", changed_sources)
     snapshot_path, pointer, changed, stored = _store_input_snapshot(paths, assembled)
     stored["artifact_url"] = safe_link(snapshot_path)
     stored["latest_snapshot"] = pointer
@@ -1052,6 +1075,7 @@ def api_save_calculator_inputs(request):
         "resolved_inputs": deepcopy(stored.get("resolved_inputs", [])),
         "defaults_used": [row for row in stored.get("resolved_inputs", []) if row.get("resolution_status") == "approved_default"],
         "derivations": [row for row in stored.get("resolved_inputs", []) if row.get("resolution_status") == "derived_evidence"],
+        "research_defaults_unavailable": deepcopy(stored.get("research_defaults_unavailable", [])),
         "issues": deepcopy(stored.get("issues", [])),
         "excluded_components": deepcopy(stored.get("excluded_components", [])),
     }
@@ -1072,13 +1096,13 @@ def api_save_hourly_load_report(request):
     input_set_fingerprint = data.get("input_set_fingerprint", "")
     input_set, _pointer = _load_input_snapshot(paths, input_set_fingerprint)
     if input_set_fingerprint and not input_set:
-        raise ValueError("The requested calculator-input snapshot is unavailable. Assemble inputs again before calculating.")
+        raise CalculatorInputConflict("The requested calculator-input snapshot is unavailable. Assemble inputs again before calculating.", ["calculator_input_set"])
     if not input_set and paths["calculator_input_set"].exists():
-        raise ValueError("Assemble cooling inputs before calculating; the project has an input-set workflow enabled.")
+        raise CalculatorInputConflict("Assemble cooling inputs before calculating; the project has an input-set workflow enabled.", ["calculator_input_set"])
     if input_set:
         current_assembly, _ = _assemble_project_inputs(project, input_set.get("selected_scenario_ids", []))
         if current_assembly.get("input_fingerprint") != input_set.get("input_fingerprint"):
-            raise ValueError("Calculator inputs are stale. Assemble cooling inputs again before calculating.")
+            raise CalculatorInputConflict("Calculator inputs are stale. Assemble cooling inputs again before calculating.", ["calculator_input_set"])
     if input_set:
         model, schedules, scenarios = materialize_cooling_payload(input_set)
         selected_scenarios = input_set.get("selected_scenario_ids", [])

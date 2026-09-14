@@ -154,3 +154,19 @@ optional provider vision handoffs consume the same ranked groups, so service,
 ceiling, elevation, schedule, detail, and 3D evidence cannot disappear merely
 because an older role name differed. A 3D page can strengthen or challenge a
 relationship, but never supplies primary dimensions or thermal properties.
+
+### Reusable geometry binding
+
+`geometry_resolution` is a derived, project-independent evidence graph. It
+retains every indexed page, identity candidate, capability, geometry entity,
+witness, and cross-page relationship. Room matching is level-aware, so equal
+room names on different levels remain distinct; competing same-level records
+become conflicts. A uniquely room-labelled printed area may be used as an
+evidence value, while polygon-derived area requires a closed calibrated boundary
+and independent supporting evidence. Missing scale blocks derived geometry.
+
+Raw vector walls and unbound dimension text remain in the geometry graph but are
+not calculator fields. Plan/elevation, ceiling/service, opening/schedule, and
+3D relationships retain their matching basis and citations. 3D observations
+are cross-check-only. Geometry resolution writes derived evidence and draft
+candidates; it does not modify the hourly model, envelope model, or reports.

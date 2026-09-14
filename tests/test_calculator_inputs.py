@@ -93,6 +93,15 @@ class CalculatorInputTests(unittest.TestCase):
         self.assertEqual(result["research_defaults_available"][0]["record_id"], "default-1")
         self.assertEqual(model["rooms"], build_hourly_load_model(requirements())["rooms"])
 
+    def test_proposed_research_records_remain_visible_but_ineligible(self):
+        model = self.default_backed_model()
+        cache = self.default_cache()
+        cache["records"][0]["review_status"] = "proposed"
+        cache["records"][0]["released"] = False
+        result = assemble_calculator_inputs(model, {"schedules": []}, scenario(), ["summer"], research_cache=cache, project_context=self.context())
+        self.assertTrue(result["research_defaults_unavailable"])
+        self.assertFalse(any(item["resolution_status"] == "approved_default" for item in result["resolved_inputs"]))
+
     def test_approved_defaults_create_a_stable_derived_snapshot(self):
         model = self.default_backed_model()
         result = assemble_calculator_inputs(model, {"schedules": []}, scenario(), ["summer"], research_cache=self.default_cache(), project_context=self.context())
@@ -177,6 +186,29 @@ class CalculatorInputTests(unittest.TestCase):
         row = next(item for item in result["resolved_inputs"] if item["target"] == target)
         self.assertEqual(row["resolution_status"], "project_evidence")
         self.assertEqual(row["value"], 24)
+
+    def test_high_risk_geometry_is_never_defaulted(self):
+        model = self.default_backed_model()
+        cache = self.default_cache()
+        cache["records"][0]["bindings"].append({"target": "room.area_m2", "value": 999, "unit": "m2"})
+        model["rooms"][0]["area_m2"] = None
+        result = assemble_calculator_inputs(model, {"schedules": []}, scenario(), ["summer"], research_cache=cache, project_context=self.context())
+        area = next(item for item in result["resolved_inputs"] if item["target"].endswith(".area_m2"))
+        self.assertEqual(area["resolution_status"], "blocked")
+        self.assertIsNone(area["value"])
+
+    def test_direct_pdf_area_normalises_square_metre_unit(self):
+        model = self.default_backed_model()
+        target = "rooms.zone_001-room-1.area_m2"
+        fusion = {"calculation_input_evidence": {"candidates": [{
+            "candidate_id": "calc-area-unit", "target_path": target, "status": "active", "value": 24,
+            "unit": "m²", "source": {"page": 20, "drawing_number": "202", "excerpt": "AREA: 24 m²"},
+            "confidence": "high",
+        }]}}
+        result = assemble_calculator_inputs(model, {"schedules": []}, scenario(), ["summer"], fusion=fusion, research_cache=self.default_cache(), project_context=self.context())
+        area = next(item for item in result["resolved_inputs"] if item["target"] == target)
+        self.assertEqual(area["resolution_status"], "project_evidence")
+        self.assertEqual(area["unit"], "m2")
 
 
 if __name__ == "__main__":

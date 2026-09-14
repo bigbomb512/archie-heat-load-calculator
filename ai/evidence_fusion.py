@@ -52,6 +52,9 @@ def _page_register(ai_input, coverage):
         proposed = _role(page, role)
         rows.append({
             "page": page.get("page"), "drawing_number": page.get("drawing_number", ""),
+            "drawing_number_candidates": (role.get("identity") or {}).get("drawing_number_candidates", []),
+            "title_candidates": (role.get("identity") or {}).get("title_candidates", []),
+            "identity_status": (role.get("identity") or {}).get("status", role.get("drawing_number_status", "missing")),
             "title": page.get("title", ""), "proposed_role": proposed,
             "level_candidate": page.get("level_name") or role.get("level_name", ""),
             "confidence": role.get("confidence", page.get("confidence", 0)),
@@ -61,6 +64,10 @@ def _page_register(ai_input, coverage):
             "reference_only": bool(role.get("reference_only", proposed in {"legend_or_general_notes", "construction_or_detail", "3d_reference"})),
             "authority_status": role.get("authority_status", "proposed"),
             "capabilities": role.get("capabilities", []),
+            "capability_map": role.get("capability_map", {}),
+            "relevance": role.get("relevance", {}),
+            "selection": role.get("selection", "reference_only"),
+            "selection_reasons": role.get("selection_reasons", []),
             "visual_available": role.get("visual_available", False),
             "text_available": role.get("text_available", False),
             "vector_available": role.get("vector_available", False),
