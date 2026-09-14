@@ -20,6 +20,24 @@ RESEARCH_CATEGORIES = {
 }
 REVIEW_STATUSES = {"proposed", "approved", "expired", "rejected"}
 
+# A record only becomes calculation-eligible when it is approved *and* released
+# by a named reviewer.  Every other status is stored, visible and inert.
+RELEASABLE_STATUSES = {"approved"}
+ALLOWED_URL_SCHEMES = {"https"}
+
+# Targets whose value may never come from a source pack, whatever the pack says.
+# Geometry, envelope construction and room use are project facts that must be
+# read from the drawings or confirmed by the engineer, never defaulted.
+PROHIBITED_BINDING_TARGETS = {
+    "room.area_m2", "room.volume_m3", "room.height_m", "room.occupancy",
+    "room.envelope_surfaces", "room.u_value_w_m2k", "room.shgc",
+    "room.glazing_area_m2", "room.orientation", "room.use",
+}
+
+# Bindings for these target families must carry a building/use scope, so a
+# generic record can never be applied to an unrelated room type.
+USE_SCOPED_TARGET_PREFIXES = ("room.", "schedule.")
+
 
 def timestamp():
     return datetime.now(timezone.utc).isoformat()
@@ -42,6 +60,24 @@ def approved_source_pack(pack_version):
     return (data.get("packs") or {}).get(str(pack_version), {})
 
 
+def permitted_binding_targets(pack):
+    """Targets this pack is allowed to supply automatic defaults for."""
+    return {str(target).strip() for target in pack.get("released_binding_targets", []) if str(target).strip()}
+
+
+def prohibited_binding_targets(pack):
+    declared = {str(target).strip() for target in pack.get("blocked_binding_targets", []) if str(target).strip()}
+    return declared | PROHIBITED_BINDING_TARGETS
+
+
+def permitted_binding_target(pack, target):
+    """A pack may only widen within the allowlist; the denylist always wins."""
+    target = str(target).strip()
+    if not target or target in prohibited_binding_targets(pack):
+        return False
+    return target in permitted_binding_targets(pack)
+
+
 def _allowed_domain(url, pack):
     host = (urlparse(str(url)).hostname or "").lower()
     return any(host == domain or host.endswith("." + domain) for domain in pack.get("allowed_domains", []))
@@ -53,9 +89,15 @@ def released_source_record(cache, record):
     pack = approved_source_pack(pack_version)
     return bool(
         pack
+        and pack_version
         and record.get("source_pack_version") == pack_version
-        and record.get("review_status") == "approved"
+        and record.get("review_status") in RELEASABLE_STATUSES
         and record.get("released") is True
+        and str(record.get("reviewed_by", "")).strip()
+        and str(record.get("publisher", "")).strip()
+        and str(record.get("citation", "")).strip()
+        and str(record.get("content_hash", "")).strip()
+        and _parse_time(record.get("retrieved_at"))
         and _allowed_domain(record.get("url", ""), pack)
     )
 
@@ -82,13 +124,36 @@ def validate_record(record):
         raise ValueError("Invalid research review status.")
     if record["review_status"] == "approved" and not str(record.get("reviewed_by", "")).strip():
         raise ValueError("Approved research records require reviewed_by.")
-    if not _parse_time(record["retrieved_at"]):
+    for key in ("publisher", "citation", "content_hash"):
+        if not str(record.get(key, "")).strip():
+            raise ValueError(f"Research record {key} must not be blank.")
+    parsed_url = urlparse(str(record["url"]))
+    if parsed_url.scheme not in ALLOWED_URL_SCHEMES or not parsed_url.hostname:
+        raise ValueError("Research url must be an https URL with a hostname.")
+    retrieved = _parse_time(record["retrieved_at"])
+    if not retrieved:
         raise ValueError("Research retrieved_at must be an ISO timestamp.")
-    if record["expiry"] and not _parse_time(record["expiry"]):
+    expiry = _parse_time(record["expiry"]) if record["expiry"] else None
+    if record["expiry"] and not expiry:
         raise ValueError("Research expiry must be an ISO timestamp.")
+    if expiry and retrieved and expiry <= retrieved:
+        raise ValueError("Research expiry must be after retrieved_at.")
+    if not isinstance(record.get("scope"), dict):
+        raise ValueError("Research record scope must be an object.")
     result = deepcopy(record)
     result["source_pack_version"] = str(result.get("source_pack_version", "")).strip()
     result["released"] = bool(result.get("released", False))
+    if result["released"]:
+        # A release is never implied.  It requires an approval, a named
+        # reviewer, a pack version and a declared geographic scope.
+        if result["review_status"] not in RELEASABLE_STATUSES:
+            raise ValueError("Only approved research records may be released.")
+        if not result["source_pack_version"]:
+            raise ValueError("Released research records require a source_pack_version.")
+        if not str(result["scope"].get("country", "")).strip():
+            raise ValueError("Released research records require a geographic scope (scope.country).")
+        if retrieved and retrieved > datetime.now(timezone.utc):
+            raise ValueError("Released research records cannot be retrieved in the future.")
     bindings = result.get("bindings", [])
     if not isinstance(bindings, list):
         raise ValueError("Research record bindings must be a list.")
@@ -99,7 +164,19 @@ def validate_record(record):
         target = str(binding.get("target", "")).strip()
         if not target or binding.get("value") in (None, ""):
             raise ValueError(f"Research binding {index} needs a target and value.")
-        checked_bindings.append({"target": target, "value": deepcopy(binding["value"]), "unit": str(binding.get("unit", result["unit"])).strip(), "scope": deepcopy(binding.get("scope", {}))})
+        binding_scope = binding.get("scope", {})
+        if not isinstance(binding_scope, dict):
+            raise ValueError(f"Research binding {index} scope must be an object.")
+        if result["released"]:
+            if target in prohibited_binding_targets(approved_source_pack(result["source_pack_version"])):
+                raise ValueError(f"Research binding {index} targets a field that may never be defaulted: {target}")
+            combined = dict(result["scope"])
+            combined.update(binding_scope)
+            if target.startswith(USE_SCOPED_TARGET_PREFIXES) and not any(
+                str(combined.get(key, "")).strip() for key in ("room_use", "building_use")
+            ):
+                raise ValueError(f"Research binding {index} needs a building or room use scope for target {target}.")
+        checked_bindings.append({"target": target, "value": deepcopy(binding["value"]), "unit": str(binding.get("unit", result["unit"])).strip(), "scope": deepcopy(binding_scope)})
     result["bindings"] = checked_bindings
     return result
 
@@ -154,6 +231,9 @@ def eligible_bindings(cache, target, scope=None, now=None):
     """
     cache = validate_cache(cache)
     now = now or datetime.now(timezone.utc)
+    pack = approved_source_pack(cache.get("source_pack_version", ""))
+    if not permitted_binding_target(pack, target):
+        return []
     result = []
     for record in cache["records"]:
         if not released_source_record(cache, record):

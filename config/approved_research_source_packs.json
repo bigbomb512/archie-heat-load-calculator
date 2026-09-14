@@ -17,6 +17,38 @@
       "candidate_records": [
         "ncc2022-class6-shop-daily-profiles",
         "ncc2022-class6-restaurant-cafe-daily-profiles"
+      ],
+      "target_policy_note": "released_binding_targets is a policy ceiling, not an approval. A record may supply an automatic default only if it is approved, released by a named reviewer, in-scope, unexpired, and its binding target appears below. blocked_binding_targets can never be defaulted at all.",
+      "released_binding_targets": [
+        "room.indoor_cooling_setpoint_c",
+        "room.indoor_cooling_wet_bulb_c",
+        "room.people_sensible_w_per_person",
+        "room.people_latent_w_per_person",
+        "room.people_diversity_factor",
+        "room.lighting_w_m2",
+        "room.lighting_diversity_factor",
+        "room.safety_factor",
+        "room.occupancy_density_per_m2",
+        "room.outside_air_lps",
+        "room.outside_air_lps_per_person",
+        "room.outside_air_lps_per_m2",
+        "schedule.people",
+        "schedule.lighting",
+        "schedule.equipment",
+        "schedule.outside_air",
+        "scenario.weather_profile"
+      ],
+      "blocked_binding_targets": [
+        "room.area_m2",
+        "room.volume_m3",
+        "room.height_m",
+        "room.occupancy",
+        "room.use",
+        "room.envelope_surfaces",
+        "room.u_value_w_m2k",
+        "room.shgc",
+        "room.glazing_area_m2",
+        "room.orientation"
       ]
     }
   }
