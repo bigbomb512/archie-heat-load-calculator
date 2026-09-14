@@ -980,6 +980,9 @@ def api_calculator_inputs(request, selected_scenario_ids=None):
         "coverage_summary": assembled.get("coverage_summary", {}),
         "issues": assembled.get("issues", []),
     }
+    display["current_source_pack_release"] = deepcopy(assembled.get("source_pack_release", {}))
+    if not snapshot:
+        display["source_pack_release"] = deepcopy(assembled.get("source_pack_release", {}))
     display["artifact_links"] = {name: safe_link(paths[name]) for name in ("model", "schedules", "scenarios", "research_cache", "evidence_fusion", "calculation_input_evidence", "project_context", "calculator_input_overrides", "calculator_input_set") if paths[name].exists()}
     display["latest_snapshot"] = pointer
     count_source = display if snapshot else assembled
@@ -1001,6 +1004,7 @@ def api_calculator_inputs(request, selected_scenario_ids=None):
         "source_pack_version": assembled.get("source_pack_version", display.get("source_pack_version", "")),
         "research_defaults_available": deepcopy(assembled.get("research_defaults_available", display.get("research_defaults_available", []))),
         "research_defaults_unavailable": deepcopy(assembled.get("research_defaults_unavailable", display.get("research_defaults_unavailable", []))),
+        "source_pack_release": deepcopy(assembled.get("source_pack_release", display.get("source_pack_release", {}))),
         "artifact_links": deepcopy(display.get("artifact_links", {})),
     }
 

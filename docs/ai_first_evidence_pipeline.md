@@ -71,10 +71,17 @@ those records into a private project's `research_cache.json` without copying
 any PDF. The tool is idempotent and records the pack version and source
 fingerprint.
 
-The records are deliberately seeded as `proposed` and `released: false`.
-That means they are visible to the resolver and review UI but cannot affect a
-calculation yet. A source-pack release review must confirm the scope, profile
-interpretation, and release status before they become automatic defaults. In
+The records are deliberately seeded as candidates. That means they are visible
+to the resolver and review UI but cannot affect a calculation yet. A qualified
+HVAC engineer must release the exact record IDs and content hashes in
+`config/research_source_pack_releases.json`. Each release records the
+engineer name and credential, approval date, scope, expiry, and source-pack
+version. The normal project UI has no action that can release a default.
+
+At assembly time, Archie checks the record citation, allowlisted domain,
+expiry, source-pack version, release-manifest hash, and project scope. It uses
+the normal precedence order: cited project override, direct PDF evidence,
+validated derivation, engineer-released default, then blocked/excluded. In
 particular, the current Drawing 6 room uses (`cool room` and `freezer room`)
 do not silently match a generic Class 6 shop or restaurant profile. A future
 explicit room-use/profile mapping or project-specific schedule is required.

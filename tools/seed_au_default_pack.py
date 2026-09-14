@@ -33,9 +33,12 @@ def _record(raw, source, pack_version):
         "retrieved_at": source["retrieved_at"],
         "content_hash": source["content_hash"],
         "source_pack_version": pack_version,
-        "review_status": "proposed",
-        "reviewed_by": "",
-        "released": False,
+        # Candidate packs remain proposed by default. A future controlled pack
+        # release may carry reviewed status, but it still needs a matching
+        # engineer release manifest before the resolver can use it.
+        "review_status": row.get("review_status", "proposed"),
+        "reviewed_by": row.get("reviewed_by", ""),
+        "released": bool(row.get("released", False)),
         "citation": row.get("citation") or source["citation"],
         "expiry": row.get("expiry", ""),
     })
