@@ -861,6 +861,13 @@ def room_static_missing(room, zone=None, infiltration_gate=None):
         for key, label in (("surface_id", "surface ID"), ("area_m2", "area"), ("u_value_w_m2k", "U-value"), ("solar_design_w_m2", "design solar"), ("solar_gain_factor", "solar gain"), ("shading_factor", "shading"), ("source", "source")):
             if surface.get(key) in (None, ""):
                 missing.append(f"{surface.get('surface_id', 'surface')} {label}")
+    active = active_infiltration_components(room)
+    if len(active) > 1:
+        ids = ", ".join(sorted(item.get("component_id", "") for item in active))
+        missing.append(
+            f"a single declared infiltration air path (room declares {len(active)} active infiltration components: {ids}; "
+            "separate uncontrolled air paths are not represented by this model and are never summed)"
+        )
     infiltration = infiltration_component(room)
     if infiltration["calculation_status"] == "not_assessed":
         missing.append("infiltration assessment")
@@ -869,9 +876,39 @@ def room_static_missing(room, zone=None, infiltration_gate=None):
     elif infiltration["calculation_status"] == "calculated":
         if not gate_is_approved(infiltration_gate):
             missing.append("approved infiltration method gate")
-        if infiltration["unit"] == "ACH" and room_volume_m3(room, zone) is None:
-            missing.append("reviewed room or zone ceiling height for ACH infiltration")
+        if infiltration["unit"] == "ACH":
+            area = room.get("area_m2")
+            if area is None or area <= 0:
+                missing.append("positive room area for ACH infiltration")
+            if ceiling_height_mm(room, zone) is None:
+                missing.append("reviewed room or zone ceiling height for ACH infiltration")
+        missing.extend(infiltration_schedule_missing(room))
     return missing
+
+
+def active_infiltration_components(room):
+    """Infiltration components that declare a quantity the report could use."""
+    return [item for item in room.get("unapproved_components", [])
+            if item.get("component_type") == "infiltration"
+            and item.get("calculation_status") in {"calculated", "stored_not_calculated"}]
+
+
+def infiltration_schedule_missing(room):
+    """Infiltration needs its own dedicated profile, never an outside-air one.
+
+    Sharing one dedicated infiltration schedule ID across rooms stays valid;
+    only reusing this room's outside-air schedule as an implicit infiltration
+    schedule is rejected.
+    """
+    if not infiltration_is_timed(room):
+        return []
+    assignments = room.get("schedule_assignments", {})
+    infiltration_schedule = str(assignments.get("infiltration", "") or "").strip()
+    outside_air_schedule = str(assignments.get("outside_air", "") or "").strip()
+    if infiltration_schedule and infiltration_schedule == outside_air_schedule:
+        return [f"a dedicated infiltration schedule separate from the outside-air schedule "
+                f"(both are assigned '{infiltration_schedule}')"]
+    return []
 
 
 def resolved_profiles(library, day_type, room):
@@ -938,6 +975,14 @@ def infiltration_component(room):
 def infiltration_is_timed(room):
     component = infiltration_component(room)
     return component.get("calculation_status") == "calculated" and bool(component.get("value"))
+
+
+def ceiling_height_mm(room, zone):
+    """Reviewed room height, else the approved zone height; never a default."""
+    for height in (room.get("ceiling_height_mm"), (zone or {}).get("ceiling_height_mm")):
+        if height is not None and height > 0:
+            return height
+    return None
 
 
 def room_volume_m3(room, zone):
