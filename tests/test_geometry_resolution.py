@@ -40,6 +40,38 @@ class GeometryResolutionTests(unittest.TestCase):
         self.assertTrue(any(row["kind"] == "3d_visual_crosscheck" and row["primary_dimension_source"] is False for row in result["relationships"]))
         self.assertTrue(any(row["affected_id"] == "room-1" and row["field"] == "geometry" for row in result["review_items"]))
 
+    def test_geometry_contract_exposes_entities_and_page_identity(self):
+        ai = {"source_pdf": "other-project.pdf", "drawing_set": {"pages": [
+            {"page": 4, "title": "Level 1 Dimension Plan", "drawing_number": "A-101", "structured_content": {"markdown": ""}},
+            {"page": 9, "title": "Level 2 Dimension Plan", "drawing_number": "A-201", "structured_content": {"markdown": ""}},
+        ]}}
+        coverage = build_drawing_coverage(ai)
+        building = {"levels": [
+            {"id": "l1", "name": "Level 1", "evidence": [{"page": 4}]},
+            {"id": "l2", "name": "Level 2", "evidence": [{"page": 9}]},
+        ], "spaces": [
+            {"id": "room-l1", "name": "Storage", "level_name": "Level 1", "area_m2": 12, "geometry_status": "label_detected", "evidence": [{"page": 4, "excerpt": "Storage 12 m2"}]},
+            {"id": "room-l2", "name": "Storage", "level_name": "Level 2", "area_m2": 12, "geometry_status": "label_detected", "evidence": [{"page": 9, "excerpt": "Storage 12 m2"}]},
+        ]}
+        result = build_geometry_resolution(ai, coverage, building)
+        self.assertEqual(result["summary"]["page_count"], 2)
+        self.assertEqual(len([row for row in result["entities"] if row["kind"] == "area"]), 2)
+        self.assertEqual(len([row for row in result["conflicts"] if row["kind"] == "same_level_duplicate_room"]), 0)
+        self.assertTrue(all("entity_id" in row and "source" in row for row in result["entities"]))
+
+    def test_same_level_duplicate_room_is_a_conflict(self):
+        ai = {"source_pdf": "other-project.pdf", "drawing_set": {"pages": [
+            {"page": 1, "title": "Plan", "drawing_number": "A-101", "structured_content": {"markdown": ""}},
+            {"page": 2, "title": "Plan Revision", "drawing_number": "A-101", "structured_content": {"markdown": ""}},
+        ]}}
+        coverage = build_drawing_coverage(ai)
+        building = {"spaces": [
+            {"id": "room-a", "name": "Office", "level_name": "Level 1", "evidence": [{"page": 1}]},
+            {"id": "room-b", "name": "Office", "level_name": "Level 1", "evidence": [{"page": 2}]},
+        ]}
+        result = build_geometry_resolution(ai, coverage, building)
+        self.assertTrue(any(row["kind"] == "same_level_duplicate_room" for row in result["conflicts"]))
+
 
 if __name__ == "__main__":
     unittest.main()

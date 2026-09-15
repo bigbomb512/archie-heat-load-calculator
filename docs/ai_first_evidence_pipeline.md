@@ -71,10 +71,17 @@ those records into a private project's `research_cache.json` without copying
 any PDF. The tool is idempotent and records the pack version and source
 fingerprint.
 
-The records are deliberately seeded as `proposed` and `released: false`.
-That means they are visible to the resolver and review UI but cannot affect a
-calculation yet. A source-pack release review must confirm the scope, profile
-interpretation, and release status before they become automatic defaults. In
+The records are deliberately seeded as candidates. That means they are visible
+to the resolver and review UI but cannot affect a calculation yet. A qualified
+HVAC engineer must release the exact record IDs and content hashes in
+`config/research_source_pack_releases.json`. Each release records the
+engineer name and credential, approval date, scope, expiry, and source-pack
+version. The normal project UI has no action that can release a default.
+
+At assembly time, Archie checks the record citation, allowlisted domain,
+expiry, source-pack version, release-manifest hash, and project scope. It uses
+the normal precedence order: cited project override, direct PDF evidence,
+validated derivation, engineer-released default, then blocked/excluded. In
 particular, the current Drawing 6 room uses (`cool room` and `freezer room`)
 do not silently match a generic Class 6 shop or restaurant profile. A future
 explicit room-use/profile mapping or project-specific schedule is required.
@@ -88,6 +95,27 @@ and internal heat gain; they do not supply room areas, equipment heat-to-space,
 thermal boundaries, U-values, or design-day weather. Those fields remain
 blocked until project evidence or a separately released, scope-matched source
 is available.
+
+## Curating Australia-first default candidates
+
+`tools/seed_au_default_pack.py --check` validates the checked-in candidate
+pack without touching a project. It reports candidate counts by category and
+calculator target, the required Cooling V1 coverage that still lacks a cited
+candidate, and records that cannot be seeded. The same tool seeds only valid
+candidates into a private project cache; it always writes them as `proposed`
+and unreleased.
+
+Each candidate may carry its own official-source metadata. A candidate needs
+an allowlisted Australian source, citation, retrieval time, content hash,
+expiry, AU scope, and only permitted low-risk bindings. Complete 24-hour
+profiles are required for each declared day type. Weather candidates also need
+a locality/state/climate-zone and scenario scope. Geometry, thermal
+boundaries, constructions, U-values, glazing, solar/shading, and equipment
+heat-to-space targets are rejected by the curation tool before a cache write.
+
+The candidate report intentionally shows missing coverage rather than filling
+it with guessed values. It is developer-only: calculations continue to use
+only engineer-released, scope-matched records.
 
 Drawing 6 remains private. The reviewed-case tool writes derived evidence to a
 local output directory and never copies the source PDF into the repository.
@@ -154,3 +182,19 @@ optional provider vision handoffs consume the same ranked groups, so service,
 ceiling, elevation, schedule, detail, and 3D evidence cannot disappear merely
 because an older role name differed. A 3D page can strengthen or challenge a
 relationship, but never supplies primary dimensions or thermal properties.
+
+### Reusable geometry binding
+
+`geometry_resolution` is a derived, project-independent evidence graph. It
+retains every indexed page, identity candidate, capability, geometry entity,
+witness, and cross-page relationship. Room matching is level-aware, so equal
+room names on different levels remain distinct; competing same-level records
+become conflicts. A uniquely room-labelled printed area may be used as an
+evidence value, while polygon-derived area requires a closed calibrated boundary
+and independent supporting evidence. Missing scale blocks derived geometry.
+
+Raw vector walls and unbound dimension text remain in the geometry graph but are
+not calculator fields. Plan/elevation, ceiling/service, opening/schedule, and
+3D relationships retain their matching basis and citations. 3D observations
+are cross-check-only. Geometry resolution writes derived evidence and draft
+candidates; it does not modify the hourly model, envelope model, or reports.

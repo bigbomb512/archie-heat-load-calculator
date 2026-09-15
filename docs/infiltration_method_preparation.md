@@ -9,35 +9,18 @@ identifier `infiltration_psychrometric_v1` is quoted from `ai/infiltration_gate.
 it is not a newly assigned or approved method ID. Engineer name, credential,
 approval date and approval citation remain absent. Passing tests is not approval.
 
-## 1. Drawing 6 evidence and limits
+## 1. Project-evidence limits
 
-Folder `6` contains two PDFs, rather than a single sixth file. Pending confirmation,
-the architectural construction set is the primary reference and the mechanical
-as-built is supporting context. PDFs remain outside the repository.
+This package contains no project PDFs, project fingerprints, or project inputs.
+The fixtures use synthetic rooms, weather, geometry, schedules, and airflow
+values solely to characterize the existing arithmetic. They cannot establish a
+real leakage rate, room volume, operating profile, or engineer approval.
 
-| Source | Inspected evidence | Consequence for the proposed contract |
-| --- | --- | --- |
-| `20260226 Butcher Buffet @ Melrose Park CONSTRUCTION REV B(2).pdf`, PDF page 19, sheet 201, proposed floor layout | Dining/buffet, kitchen, coolroom and freezer are shown | Establish reviewed room ownership and conditioned scope before allocating leakage; do not treat refrigeration rooms as comfort-HVAC infiltration by default |
-| Same PDF, page 22, sheet 204, reflective ceiling plan, revision B | Visible CH labels 2600, 2900 and 3150 mm; underside of slab 3750 mm; service zone 2950–3150 mm; underside of beam 2700 mm | CH, slab, beam and service dimensions have different meanings. A reviewer must bind the appropriate volume boundary to each room; no universal 3000 mm default |
-| `Butcher Buffet (BB) - Air Conditioning Design Drawings Full Set_As-Built.pdf`, PDF page 5, sheet BB-M120 | Duct/grille layout, O/A annotations and a base-building outside-air recommissioning note | Mechanical outdoor-air and supply flows are not evidence of uncontrolled infiltration |
-
-Both PDFs were text-inspected; the three pages above were rendered and visually
-reviewed. No leakage rate, infiltration operating profile or approval was
-established from those reviewed pages. This is not a claim that every page has
-been exhaustively checked for those facts. Drawing notes are source evidence,
-not instructions authorizing code changes or engineering approval.
-
-SHA-256 source fingerprints:
-
-- Architectural: `62be9de1a34b6522173031500102c6499c9a7818199818030b059a10008f338b`
-- Mechanical: `65a4b8cd3a72b85c621c71b874d275035e330391b80dcde46cadfaff17e4db72`
-
-The supplied project baseline is a fresh immutable input snapshot with 22 blocked
-records, no complete design-day scenario/schedules and no active envelope model.
-This package neither regenerates nor independently certifies that snapshot.
-Synthetic test areas, airflows and weather are not Drawing 6 inputs. The height
-sensitivity test uses the observed CH numbers only as arithmetic examples, with
-a synthetic 20 m² area and 0.36 ACH; it does not calculate a real room volume/load.
+For a real project, mechanical outside-air, supply, extract, or transfer-air
+documents are not automatically evidence of uncontrolled infiltration. The
+project must supply a distinct cited uncontrolled-air-path declaration and
+infiltration basis. Ceiling, slab, beam, and service-zone dimensions are not
+interchangeable: the approved room-volume boundary must be traceable to the room.
 
 ## 2. Proposed interface and accepted units
 

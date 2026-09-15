@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
 import unittest
+from unittest.mock import patch
+from copy import deepcopy
 
 from ai.calculator_inputs import (
     _scope_for_room,
@@ -10,6 +12,7 @@ from ai.calculator_inputs import (
 )
 from ai.hourly_loads import build_hourly_load_model
 from ai.design_requirements import validate_design_requirements
+from ai.research_cache import validate_source_pack_release_manifest
 
 
 def requirements():
@@ -27,6 +30,21 @@ def scenario():
 
 
 class CalculatorInputTests(unittest.TestCase):
+    def setUp(self):
+        self.release_manifest = validate_source_pack_release_manifest({
+            "schema_version": 1,
+            "releases": [{
+                "release_id": "test-au-defaults", "pack_version": "au-cooling-v1", "status": "released",
+                "engineer": {"name": "Test HVAC Engineer", "credential": "CPEng"},
+                "approved_at": "2026-09-14T00:00:00+10:00", "approval_reference": "Test release",
+                "scope": {"country": "AU"}, "expiry": "2099-01-01T00:00:00+00:00",
+                "records": [{"record_id": "au-retail-defaults", "content_hash": "pack-v1"}],
+            }],
+        })
+        self.release_patch = patch("ai.calculator_inputs.source_pack_release_manifest", return_value=self.release_manifest)
+        self.release_patch.start()
+        self.addCleanup(self.release_patch.stop)
+
     def context(self):
         return {
             "schema_version": 1,
@@ -90,8 +108,17 @@ class CalculatorInputTests(unittest.TestCase):
         model = build_hourly_load_model(requirements())
         cache = {"schema_version": 1, "revision": 1, "records": [{"record_id": "default-1", "url": "https://example.test", "publisher": "Test", "retrieved_at": "2026-01-01T00:00:00+00:00", "content_hash": "x", "category": "occupancy_default", "value": 10, "unit": "people", "scope": {"location": "Sydney"}, "citation": "Table 1", "review_status": "approved", "reviewed_by": "Reviewer", "expiry": "2099-01-01T00:00:00+00:00"}]}
         result = assemble_calculator_inputs(model, {"schedules": []}, scenario(), ["summer"], research_cache=cache)
-        self.assertEqual(result["research_defaults_available"][0]["record_id"], "default-1")
+        self.assertEqual(result["research_defaults_unavailable"][0]["record_id"], "default-1")
         self.assertEqual(model["rooms"], build_hourly_load_model(requirements())["rooms"])
+
+    def test_proposed_research_records_remain_visible_but_ineligible(self):
+        model = self.default_backed_model()
+        cache = self.default_cache()
+        cache["records"][0]["review_status"] = "proposed"
+        cache["records"][0]["released"] = False
+        result = assemble_calculator_inputs(model, {"schedules": []}, scenario(), ["summer"], research_cache=cache, project_context=self.context())
+        self.assertTrue(result["research_defaults_unavailable"])
+        self.assertFalse(any(item["resolution_status"] == "approved_default" for item in result["resolved_inputs"]))
 
     def test_approved_defaults_create_a_stable_derived_snapshot(self):
         model = self.default_backed_model()
@@ -107,6 +134,14 @@ class CalculatorInputTests(unittest.TestCase):
         self.assertEqual(payload["rooms"][0]["cooling_load"]["outside_air_lps"], 70)
         self.assertTrue(schedules["schedules"])
         self.assertIsNone(model["rooms"][0]["occupancy"])
+
+    def test_release_manifest_change_requires_a_new_snapshot(self):
+        model = self.default_backed_model()
+        first = assemble_calculator_inputs(model, {"schedules": []}, scenario(), ["summer"], research_cache=self.default_cache(), project_context=self.context(), source_pack_releases=self.release_manifest)
+        changed_release = deepcopy(self.release_manifest)
+        changed_release["releases"][0]["approval_reference"] = "Updated engineering release review"
+        changed = assemble_calculator_inputs(model, {"schedules": []}, scenario(), ["summer"], research_cache=self.default_cache(), project_context=self.context(), source_pack_releases=changed_release)
+        self.assertNotEqual(first["input_fingerprint"], changed["input_fingerprint"])
 
     def test_cited_override_beats_an_approved_default(self):
         target = "rooms.zone_001-room-1.cooling_load.lighting_w_m2"
@@ -177,6 +212,29 @@ class CalculatorInputTests(unittest.TestCase):
         row = next(item for item in result["resolved_inputs"] if item["target"] == target)
         self.assertEqual(row["resolution_status"], "project_evidence")
         self.assertEqual(row["value"], 24)
+
+    def test_high_risk_geometry_is_never_defaulted(self):
+        model = self.default_backed_model()
+        cache = self.default_cache()
+        cache["records"][0]["bindings"].append({"target": "room.area_m2", "value": 999, "unit": "m2"})
+        model["rooms"][0]["area_m2"] = None
+        result = assemble_calculator_inputs(model, {"schedules": []}, scenario(), ["summer"], research_cache=cache, project_context=self.context())
+        area = next(item for item in result["resolved_inputs"] if item["target"].endswith(".area_m2"))
+        self.assertEqual(area["resolution_status"], "blocked")
+        self.assertIsNone(area["value"])
+
+    def test_direct_pdf_area_normalises_square_metre_unit(self):
+        model = self.default_backed_model()
+        target = "rooms.zone_001-room-1.area_m2"
+        fusion = {"calculation_input_evidence": {"candidates": [{
+            "candidate_id": "calc-area-unit", "target_path": target, "status": "active", "value": 24,
+            "unit": "m²", "source": {"page": 20, "drawing_number": "202", "excerpt": "AREA: 24 m²"},
+            "confidence": "high",
+        }]}}
+        result = assemble_calculator_inputs(model, {"schedules": []}, scenario(), ["summer"], fusion=fusion, research_cache=self.default_cache(), project_context=self.context())
+        area = next(item for item in result["resolved_inputs"] if item["target"] == target)
+        self.assertEqual(area["resolution_status"], "project_evidence")
+        self.assertEqual(area["unit"], "m2")
 
 
 if __name__ == "__main__":

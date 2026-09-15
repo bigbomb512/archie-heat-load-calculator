@@ -5,8 +5,8 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from ai.research_cache import eligible_bindings, validate_record
-from tools.seed_au_default_pack import seed
+from ai.research_cache import eligible_bindings, validate_candidate_record, validate_record
+from tools.seed_au_default_pack import inspect, seed
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,6 +39,62 @@ class AustraliaDefaultPackTests(unittest.TestCase):
             self.assertEqual(second["changed_record_ids"], [])
             cache = json.loads(cache_path.read_text(encoding="utf-8"))
             self.assertFalse(eligible_bindings(cache, "schedule.people", {"country": "AU", "room_use": "class_6_shop", "day_type": "weekday"}))
+
+    def test_candidate_report_lists_missing_coverage_without_inventing_values(self):
+        report = inspect(ROOT / "config" / "au_cooling_default_pack.json")
+        self.assertEqual(report["candidate_counts_by_category"], {"schedule_default": 2})
+        self.assertFalse(report["ineligible_records"])
+        self.assertTrue(any(row["target"] == "scenario.weather_profile" for row in report["missing_coverage"]))
+        self.assertTrue(any(row["scope"] == {"day_type": "weekend"} for row in report["missing_coverage"] if row["category"] == "schedule_default"))
+
+    def test_high_risk_target_and_incomplete_profile_are_rejected(self):
+        base = {
+            "record_id": "invalid-candidate", "url": "https://www.abcb.gov.au/source", "publisher": "ABCB",
+            "retrieved_at": "2026-09-14T00:00:00+10:00", "content_hash": "abc", "category": "schedule_default",
+            "value": "Invalid", "unit": "profile", "scope": {"country": "AU", "room_use": "retail"},
+            "citation": "Source", "review_status": "proposed", "expiry": "2027-01-01T00:00:00+10:00",
+            "bindings": [{"target": "schedule.people", "value": [1] * 23, "unit": "profile", "scope": {"day_type": "weekday"}}],
+        }
+        with self.assertRaisesRegex(ValueError, "24 hourly"):
+            validate_candidate_record(base)
+        base["bindings"] = [{"target": "room.area_m2", "value": 20, "unit": "m2"}]
+        with self.assertRaisesRegex(ValueError, "not an allowed low-risk"):
+            validate_candidate_record(base)
+
+    def test_record_specific_source_is_preserved_but_candidate_is_never_released(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = json.loads((ROOT / "config" / "au_cooling_default_pack.json").read_text(encoding="utf-8"))
+            manifest["records"] = [manifest["records"][0]]
+            manifest["records"][0]["source"] = {
+                "url": "https://www.csiro.au/cooling-profile",
+                "publisher": "CSIRO", "retrieved_at": "2026-09-14T00:00:00+10:00",
+                "content_hash": "csiro-candidate-v1", "citation": "CSIRO candidate profile"
+            }
+            pack_path = root / "pack.json"
+            cache_path = root / "research_cache.json"
+            pack_path.write_text(json.dumps(manifest), encoding="utf-8")
+            seed(cache_path, pack_path)
+            record = json.loads(cache_path.read_text(encoding="utf-8"))["records"][0]
+            self.assertEqual(record["publisher"], "CSIRO")
+            self.assertEqual(record["review_status"], "proposed")
+            self.assertFalse(record["released"])
+
+    def test_unallowlisted_candidate_source_is_reported_and_cannot_seed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = json.loads((ROOT / "config" / "au_cooling_default_pack.json").read_text(encoding="utf-8"))
+            manifest["records"] = [manifest["records"][0]]
+            manifest["records"][0]["source"] = {
+                "url": "https://example.test/profile", "publisher": "Unapproved", "retrieved_at": "2026-09-14T00:00:00+10:00",
+                "content_hash": "unapproved-v1", "citation": "Unapproved profile"
+            }
+            pack_path = root / "pack.json"
+            pack_path.write_text(json.dumps(manifest), encoding="utf-8")
+            report = inspect(pack_path)
+            self.assertTrue(report["ineligible_records"])
+            with self.assertRaisesRegex(ValueError, "allowlisted"):
+                seed(root / "research_cache.json", pack_path)
 
 
 if __name__ == "__main__":

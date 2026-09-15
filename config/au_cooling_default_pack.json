@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "pack_version": "au-cooling-v1",
-  "title": "Australia-first cooling schedule candidates",
+  "title": "Australia-first Cooling V1 default candidates",
   "source": {
     "url": "https://ncc.abcb.gov.au/editions/ncc-2022/adopted/volume-one/j-energy-efficiency/35-modelling-profiles-j1v3",
     "publisher": "Australian Building Codes Board",
@@ -11,6 +11,29 @@
   },
   "release_status": "candidate",
   "release_note": "These records are source-backed candidates. A named engineering release review must approve and release them before the calculation resolver can use them as automatic defaults.",
+  "required_coverage": [
+    {"category": "weather", "target": "scenario.weather_profile"},
+    {"category": "indoor_cooling_condition", "target": "room.indoor_cooling_setpoint_c"},
+    {"category": "indoor_cooling_condition", "target": "room.indoor_cooling_wet_bulb_c"},
+    {"category": "safety_allowance", "target": "room.safety_factor"},
+    {"category": "occupancy_default", "target": "room.occupancy_density_per_m2"},
+    {"category": "people_gain_default", "target": "room.people_sensible_w_per_person"},
+    {"category": "people_gain_default", "target": "room.people_latent_w_per_person"},
+    {"category": "people_gain_default", "target": "room.people_diversity_factor"},
+    {"category": "lighting_density_default", "target": "room.lighting_w_m2"},
+    {"category": "lighting_density_default", "target": "room.lighting_diversity_factor"},
+    {"category": "ventilation_requirement", "target": "room.outside_air_lps_per_person"},
+    {"category": "ventilation_requirement", "target": "room.outside_air_lps_per_m2"},
+    {"category": "schedule_default", "target": "schedule.people", "scope": {"day_type": "weekday"}},
+    {"category": "schedule_default", "target": "schedule.people", "scope": {"day_type": "weekend"}},
+    {"category": "schedule_default", "target": "schedule.people", "scope": {"day_type": "holiday"}},
+    {"category": "schedule_default", "target": "schedule.lighting", "scope": {"day_type": "weekday"}},
+    {"category": "schedule_default", "target": "schedule.lighting", "scope": {"day_type": "weekend"}},
+    {"category": "schedule_default", "target": "schedule.lighting", "scope": {"day_type": "holiday"}},
+    {"category": "schedule_default", "target": "schedule.outside_air", "scope": {"day_type": "weekday"}},
+    {"category": "schedule_default", "target": "schedule.outside_air", "scope": {"day_type": "weekend"}},
+    {"category": "schedule_default", "target": "schedule.outside_air", "scope": {"day_type": "holiday"}}
+  ],
   "records": [
     {
       "record_id": "ncc2022-class6-shop-daily-profiles",
@@ -20,8 +43,7 @@
       "unit": "profile",
       "bindings": [
         {"target": "schedule.people", "value": [0, 0, 0, 0, 0, 0, 0, 0.1, 0.2, 0.2, 0.15, 0.25, 0.25, 0.15, 0.15, 0.15, 0.15, 0.05, 0.05, 0, 0, 0, 0, 0], "unit": "profile", "scope": {"day_type": "weekday"}},
-        {"target": "schedule.lighting", "value": [0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0.1, 0.1, 0.1, 0.1, 0.1], "unit": "profile", "scope": {"day_type": "weekday"}},
-        {"target": "schedule.equipment", "value": [0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.7, 0.7, 0.7, 0.7, 0.7, 0.7, 0.7, 0.7, 0.7, 0.7, 0.7, 0.7, 0.1, 0.1, 0.1, 0.1, 0.1], "unit": "profile", "scope": {"day_type": "weekday"}}
+        {"target": "schedule.lighting", "value": [0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 0.25, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0.1, 0.1, 0.1, 0.1, 0.1], "unit": "profile", "scope": {"day_type": "weekday"}}
       ],
       "citation": "NCC 2022 Specification 35, Table S35C2e (Class 6 shop or shopping centre)",
       "excerpt": "Occupancy, artificial lighting and appliances/equipment daily profiles; profiles are percentages of the applicable maximum values.",
@@ -38,8 +60,7 @@
       "unit": "profile",
       "bindings": [
         {"target": "schedule.people", "value": [0, 0, 0, 0, 0, 0, 0.05, 0.05, 0.05, 0.05, 0.2, 0.5, 0.8, 0.7, 0.4, 0.2, 0.25, 0.5, 0.8, 0.8, 0.8, 0.5, 0.35, 0.2], "unit": "profile", "scope": {"day_type": "weekday"}},
-        {"target": "schedule.lighting", "value": [0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.4, 0.4, 0.6, 0.6, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.5, 0.5, 0.3], "unit": "profile", "scope": {"day_type": "weekday"}},
-        {"target": "schedule.equipment", "value": [0.15, 0.15, 0.15, 0.15, 0.15, 0.15, 0.4, 0.4, 0.6, 0.6, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.5, 0.5, 0.3], "unit": "profile", "scope": {"day_type": "weekday"}}
+        {"target": "schedule.lighting", "value": [0.05, 0.05, 0.05, 0.05, 0.05, 0.05, 0.4, 0.4, 0.6, 0.6, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.5, 0.5, 0.3], "unit": "profile", "scope": {"day_type": "weekday"}}
       ],
       "citation": "NCC 2022 Specification 35, Table S35C2f (Class 6 restaurant or cafe)",
       "excerpt": "Monday-to-Saturday occupancy, artificial lighting and appliances/equipment daily profiles; Sunday requires a separate profile.",

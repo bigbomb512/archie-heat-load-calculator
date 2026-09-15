@@ -1,95 +1,45 @@
 # Research Source-Pack Governance
 
-`ai/research_cache.py` is the only path by which an external engineering fact can
-become an automatic calculator input. This note states the gates it enforces.
+External research is stored separately from project evidence. Storing a cited
+record does not authorise Archie to use it in a calculation.
 
-Nothing here approves anything. The Australia-first pack `au-cooling-v1` is still
-`"release_status": "candidate"`, and its two NCC 2022 Class 6 profile records remain
-`review_status: proposed`, `released: false`. They are stored, visible and inert.
+## Candidate versus released default
 
-## The two ladders
+Candidate records are reviewed research inputs. They remain visible in the
+project cache but are inert. A candidate becomes an automatic default only when
+all of the following are true:
 
-A record is **stored** if it passes `validate_record`. A record is **usable as an
-automatic default** only if it additionally passes `released_source_record` *and*
-its binding target is permitted by the pack.
+1. Its source-pack version exists and its URL is allowlisted.
+2. The record is cited, approved, and unexpired.
+3. A current entry in `research_source_pack_releases.json` names the same pack,
+   record ID, and exact content hash.
+4. That entry is marked `released`, names a qualified HVAC engineer and
+   credential, and matches the project scope.
 
-### Storage gates (`validate_record`, all records)
+The manifest is the release authority. A cache record's legacy `released` flag
+cannot by itself authorise a calculation input.
 
-| Dimension | Rule |
-|---|---|
-| Identity | `record_id`, `category`, `unit`, `value` present; IDs unique per cache |
-| Publisher | non-blank after strip |
-| URL | parseable, scheme `https`, hostname present |
-| Citation | non-blank after strip |
-| Content hash | non-blank after strip |
-| Retrieval date | ISO 8601 timestamp |
-| Expiry | ISO 8601 timestamp, strictly **after** `retrieved_at` |
-| Scope | must be an object; bindings' scopes must be objects |
-| Review status | one of `proposed`, `approved`, `expired`, `rejected`; `approved` requires `reviewed_by` |
+## Scope and safety
 
-### Release gates (additional, only when `released: true`)
+Automatic candidates are curated through `validate_candidate_record` and are
+limited to low-risk cooling defaults: weather, indoor conditions, safety
+allowance, people/lighting assumptions, outside-air basis, and complete
+day-type profiles. The calculator-input resolver independently prevents
+defaults from supplying geometry, thermal boundaries, constructions, U-values,
+glazing, solar/shading, or actual equipment heat-to-space values.
 
-- `review_status` must be `approved` — a proposed record **cannot** be released.
-  This is the "never silently promote" rule, enforced at validation, not at read time.
-- `reviewed_by` must name a reviewer.
-- `source_pack_version` must be set, must match the cache's pack, and that pack
-  must exist in `config/approved_research_source_packs.json`.
-- `scope.country` must be declared (geographic scope).
-- Bindings on `room.*` and `schedule.*` targets must carry a building/room use
-  scope (`room_use` or `building_use`), on the record or on the binding.
-- `retrieved_at` may not be in the future.
-- The URL host must be inside the pack's `allowed_domains`.
-- The binding target must not be prohibited (see below).
+If a project PDF and a released default disagree, the explicit project evidence
+wins. Equal-authority project facts that disagree remain blocked for resolution.
+Every applied default records the pack version, release, citation, scope, and
+content hash in the immutable input snapshot.
 
-### Read gates (`eligible_bindings`)
+## Curation workflow
 
-Applied on every lookup: pack exists → target permitted → record released →
-not expired *at the requested instant* → scope compatible. Records broader than the
-project are allowed; records that contradict it are not.
+Use `tools/seed_au_default_pack.py --check` to validate a candidate pack before
+copying it into a private project cache. It rejects uncited, unallowlisted,
+expired, incomplete, or high-risk candidates and never marks a record approved
+or released. A qualified HVAC engineer must create the separate release-manifest
+entry for real calculation use.
 
-Conflicts are **not** resolved here. When two released records bind the same target
-in scope, both are returned, in `record_id` order, so
-`ai/calculator_inputs.py::_resolve_field` blocks the field rather than picking one.
-
-## Permitted and prohibited targets
-
-`released_binding_targets` in the pack is a **policy ceiling, not an approval**. Only
-low-risk quantities appear there: setpoints and design wet bulb, per-person sensible
-and latent gains, lighting density, diversity and safety factors, occupancy density,
-outside-air rates, hourly schedule profiles, and the design-day weather profile.
-
-`blocked_binding_targets`, unioned with the module-level `PROHIBITED_BINDING_TARGETS`,
-can never be defaulted regardless of what any pack declares:
-
-    room.area_m2, room.volume_m3, room.height_m, room.occupancy, room.use,
-    room.envelope_surfaces, room.u_value_w_m2k, room.shgc,
-    room.glazing_area_m2, room.orientation
-
-These are project facts. Geometry comes from the drawings, envelope construction and
-room use come from confirmed project evidence. `room.occupancy` is deliberately on the
-deny list: occupancy may only be **derived** from an approved
-`room.occupancy_density_per_m2` multiplied by a resolved room area, and that derivation
-is recorded with its formula and operands.
-
-The denylist wins over the allowlist. A target absent from both is not permitted.
-
-## Adding a record
-
-1. Add it to a pack manifest with `review_status: proposed`, `released: false`, a real
-   citation, publisher, retrieval date and content hash.
-2. Seed it into a private project cache with `tools/seed_au_default_pack.py`.
-   It stays ineligible.
-3. A named engineering release review sets `review_status: approved`, `reviewed_by`
-   and `released: true`. Only then can the resolver reach it, and only for a target on
-   the allowlist.
-
-A record's presence in this repository is never evidence of engineering approval.
-Only the artifact's own `review_status`, `reviewed_by` and `released` fields carry
-that claim.
-
-## Compatibility note
-
-The storage gates apply to every record in a cache, including pre-existing ones. A
-cache holding an `http://` URL, a blank publisher/citation/content hash, or an expiry
-at or before its retrieval date will now fail `validate_cache` on load and must be
-corrected rather than silently accepted.
+Passing a unit test or adding a candidate record is development evidence only;
+neither is engineering approval.

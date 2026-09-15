@@ -13,6 +13,7 @@ import re
 
 from ai.drawing_coverage import timestamp
 from ai.evidence_binding import bind_calculation_evidence
+from ai.geometry_resolution import build_geometry_resolution
 
 
 SCHEMA_VERSION = 1
@@ -555,6 +556,50 @@ def _finalize_contract(result, pages):
     return result
 
 
+def _geometry_candidates(geometry, source_fp, pages_by_number):
+    """Expose normalized geometry entities without activating authored inputs."""
+    rows = []
+    for entity in (geometry or {}).get("entities", []):
+        source = entity.get("source") or {}
+        page = pages_by_number.get(source.get("page"))
+        if not page:
+            continue
+        kind, label = entity.get("kind"), entity.get("label", "")
+        if kind == "wall":
+            continue
+        if kind == "dimension":
+            raw = entity.get("value") if isinstance(entity.get("value"), dict) else {}
+            if not any(raw.get(key) for key in ("room_id", "room_label", "target_wall_id", "wall_id")):
+                continue
+        value = entity.get("value")
+        status = "active" if kind == "area" and entity.get("geometry_status") == "geometry_confirmed" else "proposed"
+        unresolved = list(entity.get("unresolved_fields", []))
+        if kind == "area":
+            area = value.get("area_m2") if isinstance(value, dict) else None
+            if not isinstance(area, (int, float)) or area <= 0:
+                status, area = "blocked", None
+                unresolved.append("area_m2")
+            target, category, unit, value = f"room.{label}.area_m2", "area", "m²", area
+        elif kind == "room":
+            target, category, unit, value = f"room.{label}.identity", "room", "", label
+            unresolved.extend(["geometry", "zone_id"] if not unresolved else [])
+        elif kind == "floor":
+            target, category, unit, value = f"floor.{label}.identity", "floor", "", label
+            unresolved.extend(["floor_to_zone_mapping"] if not unresolved else [])
+        elif kind in {"opening", "surface", "dimension"}:
+            target, category, unit = f"{kind}.{label or 'unresolved'}", kind, "mm" if kind == "dimension" else ""
+        else:
+            continue
+        rows.append(_candidate(
+            source_fp, page, target, category, deepcopy(value), unit,
+            label=label, excerpt=str(source.get("excerpt", "")),
+            method=entity.get("extraction_method", "geometry_resolution"), status=status,
+            confidence=entity.get("confidence", "unknown"), witnesses=entity.get("witness_ids", []),
+            unresolved=unresolved, room_id=label if kind in {"room", "area"} else "",
+        ))
+    return rows
+
+
 def _validate_candidates(candidates, pages):
     known_pages = {page.get("page") for page in pages}
     by_target = {}
@@ -595,12 +640,16 @@ def _validate_candidates(candidates, pages):
     return candidates, issues
 
 
-def extract_calculation_input_evidence(ai_input, coverage=None, spatial_ocr=None, vector_geometry=None, vision_response=None):
+def extract_calculation_input_evidence(ai_input, coverage=None, spatial_ocr=None, vector_geometry=None, vision_response=None,
+                                       building=None, dimension_matches=None, geometry_confirmation=None):
     ai_input = _canonical_evidence(ai_input)
     coverage = _canonical_evidence(coverage or {})
     spatial_ocr = _canonical_evidence(spatial_ocr or {})
     vector_geometry = _canonical_evidence(vector_geometry or {})
     vision_response = _canonical_evidence(vision_response or {})
+    building = _canonical_evidence(building or {})
+    dimension_matches = _canonical_evidence(dimension_matches or {})
+    geometry_confirmation = _canonical_evidence(geometry_confirmation or {})
     source_fp = _canonical_source_fingerprint(ai_input)
     pages = []
     for raw in ai_input.get("drawing_set", {}).get("pages", []):
@@ -631,10 +680,20 @@ def extract_calculation_input_evidence(ai_input, coverage=None, spatial_ocr=None
             _extract_schedule_and_notes(page, source_fp, candidates)
             _extract_equipment(page, source_fp, candidates)
         _extract_unresolved_text(page, source_fp, candidates)
-    candidates.extend(_vision_candidates(vision_response, source_fp, {page.get("page"): page for page in pages}))
+    pages_by_number = {page.get("page"): page for page in pages}
+    candidates.extend(_vision_candidates(vision_response, source_fp, pages_by_number))
+    geometry = build_geometry_resolution(
+        ai_input, coverage, building, spatial_ocr, vector_geometry,
+        dimension_matches=dimension_matches,
+        geometry_confirmation=geometry_confirmation,
+        vision_response=vision_response,
+    )
+    candidates.extend(_geometry_candidates(geometry, source_fp, pages_by_number))
     _enforce_contract(candidates, pages)
     candidates.sort(key=lambda row: (row["candidate_id"], _fingerprint(row)))
     candidates, issues = _validate_candidates(candidates, pages)
+    # Keep records from separate architect witnesses distinct.  Candidate IDs
+    # include source location, so only an exact repeated extraction collapses.
     deduped = {row["candidate_id"]: row for row in candidates}
     candidates = sorted(deduped.values(), key=lambda row: row["candidate_id"])
     categories = {}

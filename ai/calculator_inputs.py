@@ -21,7 +21,13 @@ from ai.hourly_loads import (
     validate_schedule_library,
 )
 from ai.infiltration_gate import gate_is_approved, validate_infiltration_method_gate
-from ai.research_cache import eligible_bindings, validate_cache
+from ai.research_cache import (
+    default_record_statuses,
+    eligible_bindings,
+    source_pack_release_manifest,
+    validate_source_pack_release_manifest,
+    validate_cache,
+)
 from ai.site_design_conditions import validate_citations
 
 
@@ -30,6 +36,38 @@ POLICY_VERSION = "au-cooling-v1"
 OVERRIDE_SCHEMA_VERSION = 1
 CONTEXT_SCHEMA_VERSION = 1
 CONDITIONING_SYSTEMS = {"comfort_hvac", "dedicated_refrigeration", "unknown"}
+
+# This registry is deliberately data-only.  It is the single policy surface
+# used by the resolver to decide whether a field may be derived or defaulted.
+# High-risk geometry and thermal fields are evidence/override-only.
+CALCULATOR_FIELD_REGISTRY = {
+    "area_m2": {"unit": "m2", "required": True, "allow_default": False, "allow_derived": True, "category": "geometry"},
+    "indoor_cooling_setpoint_c": {"unit": "C", "required": True, "allow_default": True, "allow_derived": False, "category": "conditions"},
+    "cooling_load.people_sensible_w_per_person": {"unit": "W/person", "required": True, "allow_default": True, "allow_derived": False, "category": "people"},
+    "cooling_load.people_latent_w_per_person": {"unit": "W/person", "required": True, "allow_default": True, "allow_derived": False, "category": "people"},
+    "cooling_load.people_diversity_factor": {"unit": "", "required": True, "allow_default": True, "allow_derived": False, "category": "people"},
+    "cooling_load.lighting_w_m2": {"unit": "W/m2", "required": True, "allow_default": True, "allow_derived": False, "category": "lighting"},
+    "cooling_load.lighting_diversity_factor": {"unit": "", "required": True, "allow_default": True, "allow_derived": False, "category": "lighting"},
+    "cooling_load.safety_factor": {"unit": "", "required": True, "allow_default": True, "allow_derived": False, "category": "policy"},
+    "cooling_load_conditions.indoor_cooling_wet_bulb_c": {"unit": "C", "required": True, "allow_default": True, "allow_derived": False, "category": "conditions"},
+    "occupancy": {"unit": "people", "required": True, "allow_default": True, "allow_derived": True, "category": "people"},
+    "cooling_load.outside_air_lps": {"unit": "L/s", "required": True, "allow_default": True, "allow_derived": True, "category": "outside_air"},
+    "schedule_assignments.people": {"unit": "profile", "required": True, "allow_default": True, "allow_derived": False, "category": "schedule"},
+    "schedule_assignments.lighting": {"unit": "profile", "required": True, "allow_default": True, "allow_derived": False, "category": "schedule"},
+    "schedule_assignments.outside_air": {"unit": "profile", "required": True, "allow_default": True, "allow_derived": False, "category": "schedule"},
+}
+
+
+def calculator_field_policy(target):
+    """Return policy metadata for a room field, without guessing unknown fields."""
+    prefix = "rooms."
+    relative = target[len(prefix):] if target.startswith(prefix) else target
+    parts = relative.split(".", 1)
+    field = parts[1] if len(parts) == 2 else relative
+    return deepcopy(CALCULATOR_FIELD_REGISTRY.get(field, {
+        "unit": "", "required": False, "allow_default": False,
+        "allow_derived": False, "category": "unknown",
+    }))
 
 
 def timestamp():
@@ -73,8 +111,8 @@ def validate_project_context(raw):
     result["site"] = {key: str(site.get(key, "")).strip() for key in ("country", "locality", "state", "climate_zone", "source")}
     result["site"]["country"] = result["site"]["country"] or "AU"
     result["site"]["citations"] = validate_citations(site.get("citations", []), "Project context site")
-    if result["site"]["country"] != "AU":
-        raise ValueError("Cooling V1 source packs support Australia-only project context.")
+    # Explicit project evidence is portable. Australia-first research defaults
+    # are filtered by scope later and therefore only apply to matching AU data.
     room_uses = source.get("room_uses", {})
     if not isinstance(room_uses, dict):
         raise ValueError("Project context room uses must be an object.")
@@ -180,6 +218,24 @@ def _value_present(value):
     return value is not None and value != ""
 
 
+def _canonical_value(value, unit, expected):
+    """Normalize the small set of units used by the cooling input contract."""
+    if value in (None, "") or not expected:
+        return value, unit
+    aliases = {"m²": "m2", "m^2": "m2", "w/m²": "W/m2", "w/m^2": "W/m2", "°c": "C", "degc": "C"}
+    actual = aliases.get(str(unit or "").strip().lower(), str(unit or "").strip())
+    wanted = aliases.get(str(expected).strip().lower(), str(expected).strip())
+    if actual == wanted or not actual:
+        return value, wanted if actual else unit
+    if actual == "m" and wanted == "mm":
+        return float(value) * 1000, wanted
+    if actual == "m3/s" and wanted == "L/s":
+        return float(value) * 1000, wanted
+    if actual == "m3/h" and wanted == "L/s":
+        return float(value) / 3.6, wanted
+    return value, unit
+
+
 def _set_path(row, dotted, value):
     current = row
     parts = dotted.split(".")
@@ -192,12 +248,14 @@ def _room_target(room_id, field):
     return f"rooms.{room_id}.{field}"
 
 
-def _source_record(state, target, value, unit, *, source_id="", source="", citations=None, confidence="", rule="", derivation=None, candidates=None):
+def _source_record(state, target, value, unit, *, source_id="", source="", citations=None, confidence="", rule="", derivation=None, candidates=None, source_fingerprint="", evidence_witnesses=None, default_scope=None, source_pack_release=None):
     return {
         "input_id": "input-" + hashlib.sha256(target.encode()).hexdigest()[:16], "target": target,
         "value": deepcopy(value), "unit": unit, "resolution_status": state,
         "source_ids": [source_id] if source_id else [], "source": source, "citations": deepcopy(citations or []),
         "confidence": confidence, "policy_rule": rule, "derivation": deepcopy(derivation or {}),
+        "source_fingerprint": source_fingerprint, "evidence_witnesses": deepcopy(evidence_witnesses or []),
+        "default_scope": deepcopy(default_scope or {}), "source_pack_release": deepcopy(source_pack_release or {}),
         "candidates": deepcopy(candidates or []),
     }
 
@@ -217,42 +275,58 @@ def _fact_candidates(fusion, target):
         if fact_target != target:
             continue
         extracted = value.get("value") if isinstance(value, dict) and "value" in value else value
-        if _value_present(extracted):
-            rows.append({"id": fact.get("fact_id", ""), "value": extracted, "unit": fact.get("unit", ""), "source": fact.get("source", {}), "citations": fact.get("citations", []), "confidence": fact.get("extraction_confidence", "")})
+        source = fact.get("source", {}) if isinstance(fact.get("source", {}), dict) else {}
+        citations = fact.get("citations", []) or ([source] if source.get("page") or source.get("drawing_number") else [])
+        if _value_present(extracted) and fact.get("fact_id") and (fact.get("source_fingerprint") or source.get("page") or source.get("drawing_number") or citations):
+            rows.append({"id": fact.get("fact_id", ""), "value": extracted, "unit": fact.get("unit", ""), "source": source, "citations": citations, "confidence": fact.get("extraction_confidence", ""), "source_fingerprint": fact.get("source_fingerprint", ""), "witnesses": fact.get("witness_ids", [])})
     for candidate in ((fusion or {}).get("calculation_input_evidence") or {}).get("candidates", []):
         if candidate.get("status") != "active" or candidate.get("target_path") != target or not _value_present(candidate.get("value")):
             continue
+        source = candidate.get("source", {}) if isinstance(candidate.get("source", {}), dict) else {}
+        citations = candidate.get("citations", []) or ([source] if source.get("page") or source.get("drawing_number") else [])
+        if not candidate.get("candidate_id") or not (candidate.get("source_fingerprint") or source.get("page") or source.get("drawing_number") or citations):
+            continue
         rows.append({
             "id": candidate.get("candidate_id", ""), "value": candidate.get("value"), "unit": candidate.get("unit", ""),
-            "source": candidate.get("source", {}), "citations": [candidate.get("source", {})],
-            "confidence": candidate.get("confidence", ""),
+            "source": source, "citations": citations,
+            "confidence": candidate.get("confidence", ""), "source_fingerprint": candidate.get("source_fingerprint", ""),
+            "witnesses": candidate.get("supporting_witness_ids", candidate.get("witness_ids", [])),
         })
     return rows
 
 
-def _resolve_field(target, current_value, unit, *, current_source, current_citations, fusion, cache, scope, overrides, default_target=None):
+def _resolve_field(target, current_value, unit, *, current_source, current_citations, fusion, cache, scope, overrides, default_target=None, release_manifest=None):
+    policy = calculator_field_policy(target)
+    expected_unit = policy.get("unit") or unit
     override_rows = [row for row in overrides["records"] if row["target"] == target]
     if len(override_rows) > 1 and _conflicting(override_rows):
         return _source_record("blocked", target, None, unit, rule="conflicting project overrides", candidates=override_rows), None
     if override_rows:
         row = override_rows[-1]
-        return _source_record("project_override", target, row["value"], row["unit"], source_id=row["override_id"], source=row["source"], citations=row["citations"], rule="cited project override"), row["value"]
+        value, canonical_unit = _canonical_value(row["value"], row["unit"], expected_unit)
+        return _source_record("project_override", target, value, canonical_unit, source_id=row["override_id"], source=row["source"], citations=row["citations"], rule="cited project override"), value
     facts = _fact_candidates(fusion, target)
+    for fact in facts:
+        fact["value"], fact["unit"] = _canonical_value(fact.get("value"), fact.get("unit", ""), expected_unit)
     if _conflicting(facts):
         return _source_record("blocked", target, None, unit, rule="conflicting explicit project evidence", candidates=facts), None
     if facts:
         fact = facts[0]
         reference = fact.get("source", {}).get("reference") or fact.get("source", {}).get("drawing_number") or "Architect evidence"
-        return _source_record("project_evidence", target, fact["value"], fact.get("unit") or unit, source_id=fact["id"], source=str(reference), citations=fact.get("citations", []), confidence=fact.get("confidence", ""), rule="explicit validated evidence"), fact["value"]
-    if _value_present(current_value):
-        return _source_record("project_evidence", target, current_value, unit, source=current_source, citations=current_citations, rule="authored project input"), current_value
-    bindings = eligible_bindings(cache, default_target or target, scope)
+        return _source_record("project_evidence", target, fact["value"], fact.get("unit") or expected_unit, source_id=fact["id"], source=str(reference), citations=fact.get("citations", []), confidence=fact.get("confidence", ""), rule="explicit validated evidence", source_fingerprint=fact.get("source_fingerprint", ""), evidence_witnesses=fact.get("witnesses", [])), fact["value"]
+    if _value_present(current_value) and (str(current_source or "").strip() or current_citations):
+        value, canonical_unit = _canonical_value(current_value, unit, expected_unit)
+        return _source_record("project_evidence", target, value, canonical_unit, source=current_source, citations=current_citations, rule="authored project input"), value
+    if not policy.get("allow_default", False):
+        return _source_record("blocked", target, None, unit, rule="field is high-risk and cannot use an automatic default"), None
+    bindings = eligible_bindings(cache, default_target or target, scope, release_manifest=release_manifest)
     if _conflicting(bindings):
         return _source_record("blocked", target, None, unit, rule="conflicting approved defaults", candidates=bindings), None
     if bindings:
         binding = bindings[0]
+        value, canonical_unit = _canonical_value(binding["value"], binding.get("unit") or unit, expected_unit)
         citation = {"reference": binding.get("citation", binding["record_id"]), "page": None, "excerpt": binding.get("excerpt", "")}
-        return _source_record("approved_default", target, binding["value"], binding.get("unit") or unit, source_id=binding["record_id"], source=binding.get("publisher", "Approved source pack"), citations=[citation], rule="approved scoped Australia-first default"), binding["value"]
+        return _source_record("approved_default", target, value, canonical_unit, source_id=binding["record_id"], source=binding.get("publisher", "Approved source pack"), citations=[citation], rule="engineer-released scoped Australia-first default", default_scope=binding.get("scope", {}), source_pack_release=binding.get("source_pack_release", {})), value
     return _source_record("blocked", target, None, unit, rule="no project evidence, override, or eligible default"), None
 
 
@@ -264,7 +338,7 @@ def _scope_for_room(context, room_id):
     # the selected profile only for scoped research-pack matching.
     profile = room_context.get("default_profile") or ""
     return {
-        "country": "AU", "locality": context["site"].get("locality", ""),
+        "country": context["site"].get("country", "AU"), "locality": context["site"].get("locality", ""),
         "state": context["site"].get("state", ""), "climate_zone": context["site"].get("climate_zone", ""),
         "room_use": profile or use, "declared_room_use": use,
         "default_profile": profile,
@@ -321,6 +395,11 @@ def _coverage_summary(model, included, excluded, issues, records, context):
                   if item.get("calculation_status") not in {"not_present_confirmed", "calculated"}]
         if labels:
             unsupported[room_id] = sorted(set(labels))
+    unresolved_supported = {}
+    for issue in issues:
+        room_id = issue.get("affected_id")
+        if room_id in room_ids and issue.get("status") in {"blocked", "draft"}:
+            unresolved_supported.setdefault(room_id, []).append(issue.get("reason", "Unresolved supported input"))
     outside_scope = sorted(room_ids - scoped)
     active_excluded = sorted(set(excluded) & scoped)
     complete_scope = bool(scoped) and set(scoped) == set(included) and not blocked and not draft_only and not active_excluded
@@ -333,12 +412,13 @@ def _coverage_summary(model, included, excluded, issues, records, context):
         "draft_only_room_ids": sorted(draft_only),
         "default_backed_room_ids": sorted(defaults),
         "unsupported_components_by_room": unsupported,
+        "unresolved_supported_inputs_by_room": {key: sorted(set(value)) for key, value in unresolved_supported.items()},
         "complete_scope": complete_scope,
         "project_blockers": [row for row in issues if row.get("affected_id") in {"project", None}],
     }
 
 
-def _apply_room_defaults(model, library, scenarios, fusion, cache, context, overrides, selected, infiltration_gate):
+def _apply_room_defaults(model, library, scenarios, fusion, cache, context, overrides, selected, infiltration_gate, release_manifest=None):
     resolved, issues, included, excluded = [], [], [], []
     scenario_map = {row["scenario_id"]: row for row in scenarios["scenarios"]}
     zones = {zone["zone_id"]: zone for zone in model["zones"]}
@@ -370,7 +450,7 @@ def _apply_room_defaults(model, library, scenarios, fusion, cache, context, over
         ]
         for field, unit, current, source, citations in fields:
             target = _room_target(room_id, field)
-            record, value = _resolve_field(target, current, unit, current_source=source, current_citations=citations, fusion=fusion, cache=cache, scope=scope, overrides=overrides, default_target="room." + field.split(".")[-1])
+            record, value = _resolve_field(target, current, unit, current_source=source, current_citations=citations, fusion=fusion, cache=cache, scope=scope, overrides=overrides, default_target="room." + field.split(".")[-1], release_manifest=release_manifest)
             records.append(record)
             if value is not None:
                 _set_path(room, field, value)
@@ -382,26 +462,26 @@ def _apply_room_defaults(model, library, scenarios, fusion, cache, context, over
                     else:
                         room.update({"verification_status": "confirmed", "source": record["source"]})
         occupancy_target = _room_target(room_id, "occupancy")
-        occupancy_record, occupancy = _resolve_field(occupancy_target, room.get("occupancy"), "people", current_source=room.get("source", ""), current_citations=room.get("citations", []), fusion=fusion, cache=cache, scope=scope, overrides=overrides, default_target="room.occupancy")
+        occupancy_record, occupancy = _resolve_field(occupancy_target, room.get("occupancy"), "people", current_source=room.get("source", ""), current_citations=room.get("citations", []), fusion=fusion, cache=cache, scope=scope, overrides=overrides, default_target="room.occupancy", release_manifest=release_manifest)
         if occupancy is None:
-            density = eligible_bindings(cache, "room.occupancy_density_per_m2", scope)
+            density = eligible_bindings(cache, "room.occupancy_density_per_m2", scope, release_manifest=release_manifest)
             if len(density) == 1 and _value_present(room.get("area_m2")) and isinstance(density[0]["value"], (int, float)):
                 occupancy = round(float(room["area_m2"]) * float(density[0]["value"]), 4)
                 citation = {"reference": density[0].get("citation", density[0]["record_id"]), "page": None, "excerpt": density[0].get("excerpt", "")}
-                occupancy_record = _source_record("derived_evidence", occupancy_target, occupancy, "people", source_id=density[0]["record_id"], source=density[0].get("publisher", "Approved source pack"), citations=[citation], rule="approved occupancy density multiplied by resolved room area", derivation={"formula": "occupancy = area_m2 × occupancy_density_per_m2", "operands": {"area_m2": room["area_m2"], "occupancy_density_per_m2": density[0]["value"]}, "rounding": "4 decimal places"})
+                occupancy_record = _source_record("derived_evidence", occupancy_target, occupancy, "people", source_id=density[0]["record_id"], source=density[0].get("publisher", "Approved source pack"), citations=[citation], rule="engineer-released occupancy density multiplied by resolved room area", derivation={"formula": "occupancy = area_m2 × occupancy_density_per_m2", "operands": {"area_m2": room["area_m2"], "occupancy_density_per_m2": density[0]["value"]}, "rounding": "4 decimal places"}, default_scope=density[0].get("scope", {}), source_pack_release=density[0].get("source_pack_release", {}))
         records.append(occupancy_record)
         if occupancy is not None:
             room["occupancy"] = occupancy
         flow_target = _room_target(room_id, "cooling_load.outside_air_lps")
-        flow_record, flow = _resolve_field(flow_target, room["cooling_load"].get("outside_air_lps"), "L/s", current_source=room["cooling_load"].get("source", ""), current_citations=room.get("citations", []), fusion=fusion, cache=cache, scope=scope, overrides=overrides, default_target="room.outside_air_lps")
+        flow_record, flow = _resolve_field(flow_target, room["cooling_load"].get("outside_air_lps"), "L/s", current_source=room["cooling_load"].get("source", ""), current_citations=room.get("citations", []), fusion=fusion, cache=cache, scope=scope, overrides=overrides, default_target="room.outside_air_lps", release_manifest=release_manifest)
         if flow is None:
-            per_person, per_area = eligible_bindings(cache, "room.outside_air_lps_per_person", scope), eligible_bindings(cache, "room.outside_air_lps_per_m2", scope)
+            per_person, per_area = eligible_bindings(cache, "room.outside_air_lps_per_person", scope, release_manifest=release_manifest), eligible_bindings(cache, "room.outside_air_lps_per_m2", scope, release_manifest=release_manifest)
             if len(per_person) <= 1 and len(per_area) <= 1 and (per_person or per_area) and occupancy is not None and room.get("area_m2") is not None:
                 pp, pa = float(per_person[0]["value"]) if per_person else 0.0, float(per_area[0]["value"]) if per_area else 0.0
                 flow = round(pp * float(occupancy) + pa * float(room["area_m2"]), 4)
                 binding = (per_person or per_area)[0]
                 citation = {"reference": binding.get("citation", binding["record_id"]), "page": None, "excerpt": binding.get("excerpt", "")}
-                flow_record = _source_record("derived_evidence", flow_target, flow, "L/s", source_id=binding["record_id"], source=binding.get("publisher", "Approved source pack"), citations=[citation], rule="approved outside-air rates applied to resolved room occupancy and area", derivation={"formula": "L/s = occupancy × L/s/person + area × L/s/m2", "operands": {"occupancy": occupancy, "area_m2": room["area_m2"], "lps_per_person": pp, "lps_per_m2": pa}, "rounding": "4 decimal places"})
+                flow_record = _source_record("derived_evidence", flow_target, flow, "L/s", source_id=binding["record_id"], source=binding.get("publisher", "Approved source pack"), citations=[citation], rule="engineer-released outside-air rates applied to resolved room occupancy and area", derivation={"formula": "L/s = occupancy × L/s/person + area × L/s/m2", "operands": {"occupancy": occupancy, "area_m2": room["area_m2"], "lps_per_person": pp, "lps_per_m2": pa}, "rounding": "4 decimal places"}, default_scope=binding.get("scope", {}), source_pack_release=binding.get("source_pack_release", {}))
         records.append(flow_record)
         if flow is not None:
             room["cooling_load"]["outside_air_lps"] = flow
@@ -409,13 +489,13 @@ def _apply_room_defaults(model, library, scenarios, fusion, cache, context, over
             for component in ("people", "lighting", "outside_air"):
                 if room["schedule_assignments"].get(component):
                     continue
-                bindings = eligible_bindings(cache, f"schedule.{component}", {**scope, "day_type": primary["day_type"]})
+                bindings = eligible_bindings(cache, f"schedule.{component}", {**scope, "day_type": primary["day_type"]}, release_manifest=release_manifest)
                 if len(bindings) == 1:
                     schedule_id = _default_schedule(library, room, component, primary, bindings[0])
                     if schedule_id:
                         room["schedule_assignments"][component] = schedule_id
                         citation = {"reference": bindings[0].get("citation", bindings[0]["record_id"]), "page": None, "excerpt": bindings[0].get("excerpt", "")}
-                        records.append(_source_record("approved_default", _room_target(room_id, f"schedule_assignments.{component}"), schedule_id, "profile", source_id=bindings[0]["record_id"], source=bindings[0].get("publisher", "Approved source pack"), citations=[citation], rule="approved cited 24-hour room-use schedule"))
+                        records.append(_source_record("approved_default", _room_target(room_id, f"schedule_assignments.{component}"), schedule_id, "profile", source_id=bindings[0]["record_id"], source=bindings[0].get("publisher", "Approved source pack"), citations=[citation], rule="engineer-released cited 24-hour room-use schedule", default_scope=bindings[0].get("scope", {}), source_pack_release=bindings[0].get("source_pack_release", {})))
         timed_components = {
             "people": float(room.get("occupancy") or 0) * (float(room["cooling_load"].get("people_sensible_w_per_person") or 0) + float(room["cooling_load"].get("people_latent_w_per_person") or 0)) * float(room["cooling_load"].get("people_diversity_factor") or 0),
             "lighting": float(room.get("area_m2") or 0) * float(room["cooling_load"].get("lighting_w_m2") or 0) * float(room["cooling_load"].get("lighting_diversity_factor") or 0),
@@ -450,15 +530,15 @@ def _apply_room_defaults(model, library, scenarios, fusion, cache, context, over
     return resolved, issues, sorted(set(included)), sorted(set(excluded))
 
 
-def _apply_weather_defaults(scenarios, selected, cache, context):
+def _apply_weather_defaults(scenarios, selected, cache, context, release_manifest=None):
     records, issues, lookup = [], [], {row["scenario_id"]: row for row in scenarios["scenarios"]}
     for scenario_id in selected:
         scenario = lookup.get(scenario_id)
         if not scenario:
             issues.append({"status": "blocked", "affected_id": scenario_id, "reason": "Selected cooling scenario is missing.", "source_artifact": "design_day_scenarios.json"})
             continue
-        scope = {"country": "AU", "locality": context["site"].get("locality", ""), "state": context["site"].get("state", ""), "climate_zone": context["site"].get("climate_zone", ""), "scenario": scenario_id}
-        profile = eligible_bindings(cache, "scenario.weather_profile", scope)
+        scope = {"country": context["site"].get("country", "AU"), "locality": context["site"].get("locality", ""), "state": context["site"].get("state", ""), "climate_zone": context["site"].get("climate_zone", ""), "scenario": scenario_id}
+        profile = eligible_bindings(cache, "scenario.weather_profile", scope, release_manifest=release_manifest)
         if not scenario.get("hours") and len(profile) == 1 and isinstance(profile[0]["value"], dict):
             value = profile[0]["value"]
             hours = value.get("hours", [])
@@ -468,7 +548,7 @@ def _apply_weather_defaults(scenarios, selected, cache, context):
                 scenario["atmospheric_pressure_kpa"] = {"value": value["atmospheric_pressure_kpa"], "status": "confirmed", "source": source, "citations": []}
                 scenario.update({"status": "confirmed", "source": source})
                 citation = {"reference": profile[0].get("citation", profile[0]["record_id"]), "page": None, "excerpt": profile[0].get("excerpt", "")}
-                records.append(_source_record("approved_default", f"scenarios.{scenario_id}.weather_profile", value, "profile", source_id=profile[0]["record_id"], source=profile[0].get("publisher", "Approved source pack"), citations=[citation], rule="approved scoped design-day weather profile"))
+                records.append(_source_record("approved_default", f"scenarios.{scenario_id}.weather_profile", value, "profile", source_id=profile[0]["record_id"], source=profile[0].get("publisher", "Approved source pack"), citations=[citation], rule="engineer-released scoped design-day weather profile", default_scope=profile[0].get("scope", {}), source_pack_release=profile[0].get("source_pack_release", {})))
         missing, provisional = scenario_ready(scenario)
         for reason in missing:
             issues.append({"status": "blocked", "affected_id": scenario_id, "reason": reason, "source_artifact": "design_day_scenarios.json"})
@@ -479,12 +559,16 @@ def _apply_weather_defaults(scenarios, selected, cache, context):
 
 def assemble_calculator_inputs(hourly_model, schedule_library, scenarios, selected_scenario_ids=None,
                                fusion=None, research_cache=None, envelope=None, *, project_context=None,
-                               overrides=None, requirements=None, infiltration_gate=None):
+                               overrides=None, requirements=None, infiltration_gate=None,
+                               calculation_input_evidence=None, source_pack_releases=None):
     """Resolve cooling inputs without mutating the supplied project artifacts."""
+    release_manifest = validate_source_pack_release_manifest(source_pack_releases) if source_pack_releases is not None else source_pack_release_manifest()
     fingerprints = {name: _fingerprint(_stable(value or {})) for name, value in {
         "hourly_model": hourly_model, "schedule_library": schedule_library, "scenarios": scenarios, "fusion": fusion,
+        "calculation_input_evidence": calculation_input_evidence,
         "research_cache": research_cache, "envelope": envelope, "project_context": project_context,
         "overrides": overrides, "requirements": requirements, "infiltration_method_gate": infiltration_gate,
+        "research_source_pack_releases": release_manifest,
     }.items()}
     model, library, scenario_library = validate_hourly_load_model(deepcopy(hourly_model)), validate_schedule_library(deepcopy(schedule_library)), validate_design_day_scenarios(deepcopy(scenarios))
     checked_infiltration_gate = validate_infiltration_method_gate(infiltration_gate or {})
@@ -498,15 +582,16 @@ def assemble_calculator_inputs(hourly_model, schedule_library, scenarios, select
         context["building_use"] = "legacy"
     checked_overrides = validate_overrides(overrides)
     selected = sorted(set(selected_scenario_ids or [row["scenario_id"] for row in scenario_library["scenarios"] if row.get("mode") == "cooling"]))
-    weather_records, weather_issues = _apply_weather_defaults(scenario_library, selected, cache, context)
-    room_records, room_issues, included, excluded = _apply_room_defaults(model, library, scenario_library, fusion or {}, cache, context, checked_overrides, selected, checked_infiltration_gate)
+    weather_records, weather_issues = _apply_weather_defaults(scenario_library, selected, cache, context, release_manifest)
+    room_records, room_issues, included, excluded = _apply_room_defaults(model, library, scenario_library, fusion or {}, cache, context, checked_overrides, selected, checked_infiltration_gate, release_manifest)
     issues = weather_issues + room_issues
     if not model["rooms"]:
         issues.append({"status": "blocked", "affected_id": "project", "reason": "No rooms are available for calculation.", "source_artifact": "hourly_load_model.json"})
     coverage = _coverage_summary(model, included, excluded, issues, weather_records + room_records, context)
     status = "blocked" if not included or any(row.get("status") == "blocked" for row in issues) else ("review_ready" if coverage["complete_scope"] and not issues else "draft")
     core = {
-        "schema_version": SNAPSHOT_SCHEMA_VERSION, "policy_version": context["default_policy_version"], "selected_scenario_ids": selected,
+        "schema_version": SNAPSHOT_SCHEMA_VERSION, "policy_version": context["default_policy_version"], "field_registry_version": "cooling-v1",
+        "selected_scenario_ids": selected,
         "source_fingerprints": fingerprints, "source_pack_version": cache.get("source_pack_version", ""),
         "project_context": {"fingerprint": context["fingerprint"], "reviewer": context["reviewer"], "conditioned_scope": context["conditioned_scope"]},
         "status": status, "included_room_ids": included, "excluded_room_ids": excluded,
@@ -519,7 +604,18 @@ def assemble_calculator_inputs(hourly_model, schedule_library, scenarios, select
     core["input_fingerprint"] = _fingerprint(_stable(core))
     result = deepcopy(core)
     result.update({"created_at": timestamp(), "snapshot_path": f"calculator_input_sets/{core['input_fingerprint']}.json"})
-    result["research_defaults_available"] = [{"record_id": row["record_id"], "category": row["category"], "value": row["value"], "unit": row["unit"], "citation": row["citation"], "scope": row["scope"]} for row in cache["records"] if row.get("review_status") == "approved"]
+    record_statuses = default_record_statuses(cache, release_manifest=release_manifest)
+    active_releases = [
+        row for row in release_manifest["releases"]
+        if row["status"] == "released" and row["pack_version"] == cache.get("source_pack_version", "")
+    ]
+    result["source_pack_release"] = {
+        "manifest_fingerprint": release_manifest["fingerprint"],
+        "released_pack_versions": sorted({row["pack_version"] for row in active_releases}),
+        "releases": active_releases,
+    }
+    result["research_defaults_available"] = [row for row in record_statuses if row["eligible"]]
+    result["research_defaults_unavailable"] = [row for row in record_statuses if not row["eligible"]]
     return result
 
 

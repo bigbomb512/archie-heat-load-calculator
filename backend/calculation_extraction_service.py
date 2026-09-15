@@ -23,7 +23,8 @@ def _write(path, value):
 def _paths(root):
     return {name: root / f"{name}.json" for name in (
         "ai_input", "drawing_coverage", "spatial_ocr", "vector_geometry",
-        "vision_response", "hourly_load_model", "calculation_input_evidence",
+        "vision_response", "building_evidence", "dimension_wall_matches",
+        "geometry_confirmation", "hourly_load_model", "calculation_input_evidence",
     )}
 
 
@@ -38,6 +39,9 @@ def _build(root):
         _read(paths["spatial_ocr"]),
         _read(paths["vector_geometry"]),
         _read(paths["vision_response"]),
+        _read(paths["building_evidence"]),
+        _read(paths["dimension_wall_matches"]),
+        _read(paths["geometry_confirmation"]),
     )
 
 

@@ -73,8 +73,11 @@ def validate_window(raw, index):
     row = common_record(raw, index, "window")
     row.update({
         "u_value_w_m2k": positive_number(raw.get("u_value_w_m2k"), f"Window {row['record_id']} U-value", required=False),
+        "shgc": optional_factor(raw.get("shgc"), f"Window {row['record_id']} SHGC"),
+        "solar_transmission_factor": optional_factor(raw.get("solar_transmission_factor"), f"Window {row['record_id']} solar-transmission factor"),
         "frame_fraction": optional_factor(raw.get("frame_fraction"), f"Window {row['record_id']} frame fraction"),
         "glass_area_correction": optional_factor(raw.get("glass_area_correction"), f"Window {row['record_id']} glass-area correction"),
+        "internal_shading_factor": optional_factor(raw.get("internal_shading_factor"), f"Window {row['record_id']} internal shading factor"),
         "internal_shading": text(raw.get("internal_shading", ""), f"Window {row['record_id']} internal shading"),
         # Opening geometry is evidence only in this release. It is retained
         # with the window record but cannot influence thermal calculations.
@@ -158,13 +161,20 @@ def validate_surface(raw, index, construction_ids, window_ids, shading_ids):
         "bridge_provenance": deepcopy(raw.get("bridge_provenance", {})),
         "owner_zone_id": stable_id(raw.get("owner_zone_id", ""), f"Envelope surface {surface_id} owner zone ID"),
         "owner_room_id": text(raw.get("owner_room_id", ""), f"Envelope surface {surface_id} owner room ID"),
+        "opening_mapping_status": choice(raw.get("opening_mapping_status", "missing"), {"missing", "proposed", "confirmed", "conflict"}, f"Envelope surface {surface_id} opening mapping status"),
         "kind": kind,
         "orientation": choice(raw.get("orientation", ""), ORIENTATIONS, f"Envelope surface {surface_id} orientation"),
         "area_m2": positive_number(raw.get("area_m2"), f"Envelope surface {surface_id} area", required=raw.get("review_status", "missing") == "confirmed"),
         "construction_id": construction_id,
         "window_id": window_id,
+        "opening_tag": text(raw.get("opening_tag", ""), f"Envelope surface {surface_id} opening tag"),
+        "opening_width_m": positive_number(raw.get("opening_width_m"), f"Envelope surface {surface_id} opening width", required=False),
+        "opening_height_m": positive_number(raw.get("opening_height_m"), f"Envelope surface {surface_id} opening height", required=False),
+        "opening_quantity": optional_positive_integer(raw.get("opening_quantity"), f"Envelope surface {surface_id} opening quantity"),
+        "explicit_glass_area_m2": positive_number(raw.get("explicit_glass_area_m2"), f"Envelope surface {surface_id} explicit glass area", required=False),
         "shading_record_ids": shading_ids_used,
         "boundary_method": boundary,
+        "boundary_temperature_c": optional_number(raw.get("boundary_temperature_c"), f"Envelope surface {surface_id} boundary temperature", -100, 100),
         "adjacent_temperature_c": optional_number(raw.get("adjacent_temperature_c"), f"Envelope surface {surface_id} adjacent temperature", -100, 100),
         "manual_solar": validate_manual_solar(raw.get("manual_solar", {}), surface_id),
         "review_status": status(raw.get("review_status", "missing"), f"Envelope surface {surface_id}"),
@@ -383,6 +393,12 @@ def positive_integer(value, label):
     if not result.is_integer():
         raise ValueError(f"{label} must be a whole number.")
     return int(result)
+
+
+def optional_positive_integer(value, label):
+    if value in (None, ""):
+        return None
+    return positive_integer(value, label)
 
 
 def optional_factor(value, label):
