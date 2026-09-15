@@ -9,6 +9,7 @@ from ai.research_cache import (
     eligible_records,
     source_record_release_status,
     upsert_record,
+    validate_record,
     validate_source_pack_release_manifest,
 )
 
@@ -61,6 +62,25 @@ class ResearchCacheTests(unittest.TestCase):
         record = {"record_id": "unreleased", "url": "https://example.test/default", "publisher": "Test", "retrieved_at": now.isoformat(), "content_hash": "abc", "category": "lighting_density_default", "value": 10, "unit": "W/m2", "scope": {"country": "AU"}, "citation": "Table 1", "review_status": "approved", "reviewed_by": "Reviewer", "expiry": (now + timedelta(days=1)).isoformat(), "source_pack_version": "au-cooling-v1", "released": False, "bindings": [{"target": "room.lighting_w_m2", "value": 10, "unit": "W/m2"}]}
         cache = upsert_record({**empty_research_cache(), "source_pack_version": "au-cooling-v1"}, record)
         self.assertFalse(eligible_bindings(cache, "room.lighting_w_m2", {"country": "AU"}, now))
+
+
+class ResearchRecordValidationTests(unittest.TestCase):
+    def test_rejects_blank_metadata_insecure_urls_and_invalid_expiry_order(self):
+        now = datetime.now(timezone.utc)
+        record = {
+            "record_id": "candidate", "url": "https://www.abcb.gov.au/default", "publisher": "ABCB",
+            "retrieved_at": now.isoformat(), "content_hash": "hash", "category": "lighting_density_default",
+            "value": 10, "unit": "W/m2", "scope": {"country": "AU"}, "citation": "Table 1",
+            "review_status": "proposed", "expiry": (now + timedelta(days=1)).isoformat(),
+        }
+        for field in ("publisher", "citation", "content_hash"):
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                validate_record({**record, field: "  "})
+        for url in ("http://www.abcb.gov.au/default", "not-a-url"):
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                validate_record({**record, "url": url})
+        with self.assertRaises(ValueError):
+            validate_record({**record, "expiry": (now - timedelta(seconds=1)).isoformat()})
 
 
 if __name__ == "__main__":

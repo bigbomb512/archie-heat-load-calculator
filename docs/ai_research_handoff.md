@@ -11,3 +11,5 @@ This creates `research_packet/` beside the supplied evidence packet. Upload the 
 The generated code does **not** browse the internet, send project data to a third party, or apply research findings as calculation inputs. This separation prevents hidden cost, credential, privacy, and engineering-assumption decisions.
 
 Researchers must use direct citations and record unresolved or conflicting information. An engineer must review each proposed fact before it enters a load model. The packet's result template intentionally has no `confirmed` status.
+
+See [Research Source-Pack Governance](research_source_pack_governance.md) for the gates a returned fact must pass before it can become an automatic calculator default, and for the fields a source pack may never supply.

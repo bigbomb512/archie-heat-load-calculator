@@ -1,0 +1,514 @@
+{
+  "basis": "Independent 50-digit Decimal worksheet of documented existing equations",
+  "cases": [
+    {
+      "case_id": "hot_humid",
+      "expected": {
+        "applied_flow_lps": "6.000000000000",
+        "latent_kw": "0.064400000000",
+        "mass_flow_kg_s": "0.006722258401",
+        "raw_signed_latent_kw": "0.064400000000",
+        "raw_signed_sensible_kw": "0.074400000000",
+        "sensible_kw": "0.074400000000",
+        "signed_latent_unrounded_kw": "0.064361105492",
+        "signed_sensible_unrounded_kw": "0.074388511463",
+        "signed_total_unrounded_kw": "0.138749616954",
+        "total_kw": "0.138800000000"
+      },
+      "indoor": {
+        "enthalpy_kj_kg": "50.355617853084",
+        "humidity_ratio": "0.010296671113",
+        "saturation_kpa": "2.059729079717",
+        "vapour_kpa": "1.650176266817",
+        "volume_m3_kg": "0.855759234931"
+      },
+      "inputs": {
+        "indoor_db_c": "24.000000000000",
+        "indoor_wb_c": "18.000000000000",
+        "outdoor_db_c": "35.000000000000",
+        "outdoor_wb_c": "24.000000000000",
+        "pressure_kpa": "101.325000000000",
+        "schedule_factor": "1.000000000000",
+        "unit": "L/s",
+        "value": "6.000000000000"
+      },
+      "outdoor": {
+        "enthalpy_kj_kg": "70.995945654106",
+        "humidity_ratio": "0.013945655140",
+        "saturation_kpa": "2.978071163545",
+        "vapour_kpa": "2.222148565345",
+        "volume_m3_kg": "0.892557179793"
+      }
+    },
+    {
+      "case_id": "hot_dry",
+      "expected": {
+        "applied_flow_lps": "6.000000000000",
+        "latent_kw": "0.000000000000",
+        "mass_flow_kg_s": "0.006811939192",
+        "raw_signed_latent_kw": "-0.081200000000",
+        "raw_signed_sensible_kw": "0.075400000000",
+        "sensible_kw": "0.075400000000",
+        "signed_latent_unrounded_kw": "-0.081194227620",
+        "signed_sensible_unrounded_kw": "0.075380919104",
+        "signed_total_unrounded_kw": "-0.005813308516",
+        "total_kw": "0.075400000000"
+      },
+      "indoor": {
+        "enthalpy_kj_kg": "50.355617853084",
+        "humidity_ratio": "0.010296671113",
+        "saturation_kpa": "2.059729079717",
+        "vapour_kpa": "1.650176266817",
+        "volume_m3_kg": "0.855759234931"
+      },
+      "inputs": {
+        "indoor_db_c": "24.000000000000",
+        "indoor_wb_c": "18.000000000000",
+        "outdoor_db_c": "35.000000000000",
+        "outdoor_wb_c": "18.000000000000",
+        "pressure_kpa": "101.325000000000",
+        "schedule_factor": "1.000000000000",
+        "unit": "L/s",
+        "value": "6.000000000000"
+      },
+      "outdoor": {
+        "enthalpy_kj_kg": "49.502217910499",
+        "humidity_ratio": "0.005569626246",
+        "saturation_kpa": "2.059729079717",
+        "vapour_kpa": "0.899329443167",
+        "volume_m3_kg": "0.880806453266"
+      }
+    },
+    {
+      "case_id": "cool_humid",
+      "expected": {
+        "applied_flow_lps": "6.000000000000",
+        "latent_kw": "0.053700000000",
+        "mass_flow_kg_s": "0.007073183858",
+        "raw_signed_latent_kw": "0.053700000000",
+        "raw_signed_sensible_kw": "-0.028500000000",
+        "sensible_kw": "0.000000000000",
+        "signed_latent_unrounded_kw": "0.053731698471",
+        "signed_sensible_unrounded_kw": "-0.028462491843",
+        "signed_total_unrounded_kw": "0.025269206628",
+        "total_kw": "0.053700000000"
+      },
+      "indoor": {
+        "enthalpy_kj_kg": "50.355617853084",
+        "humidity_ratio": "0.010296671113",
+        "saturation_kpa": "2.059729079717",
+        "vapour_kpa": "1.650176266817",
+        "volume_m3_kg": "0.855759234931"
+      },
+      "inputs": {
+        "indoor_db_c": "24.000000000000",
+        "indoor_wb_c": "18.000000000000",
+        "outdoor_db_c": "20.000000000000",
+        "outdoor_wb_c": "19.000000000000",
+        "pressure_kpa": "101.325000000000",
+        "schedule_factor": "1.000000000000",
+        "unit": "L/s",
+        "value": "6.000000000000"
+      },
+      "outdoor": {
+        "enthalpy_kj_kg": "53.928154229354",
+        "humidity_ratio": "0.013319736124",
+        "saturation_kpa": "2.192839376919",
+        "vapour_kpa": "2.124503669094",
+        "volume_m3_kg": "0.848274287892"
+      }
+    },
+    {
+      "case_id": "cool_dry",
+      "expected": {
+        "applied_flow_lps": "6.000000000000",
+        "latent_kw": "0.000000000000",
+        "mass_flow_kg_s": "0.007127534387",
+        "raw_signed_latent_kw": "-0.033500000000",
+        "raw_signed_sensible_kw": "-0.028700000000",
+        "sensible_kw": "0.000000000000",
+        "signed_latent_unrounded_kw": "-0.033537666754",
+        "signed_sensible_unrounded_kw": "-0.028681198373",
+        "signed_total_unrounded_kw": "-0.062218865127",
+        "total_kw": "0.000000000000"
+      },
+      "indoor": {
+        "enthalpy_kj_kg": "50.355617853084",
+        "humidity_ratio": "0.010296671113",
+        "saturation_kpa": "2.059729079717",
+        "vapour_kpa": "1.650176266817",
+        "volume_m3_kg": "0.855759234931"
+      },
+      "inputs": {
+        "indoor_db_c": "24.000000000000",
+        "indoor_wb_c": "18.000000000000",
+        "outdoor_db_c": "20.000000000000",
+        "outdoor_wb_c": "15.000000000000",
+        "pressure_kpa": "101.325000000000",
+        "schedule_factor": "1.000000000000",
+        "unit": "L/s",
+        "value": "6.000000000000"
+      },
+      "outdoor": {
+        "enthalpy_kj_kg": "41.626250620315",
+        "humidity_ratio": "0.008473032314",
+        "saturation_kpa": "1.701982814716",
+        "vapour_kpa": "1.361842389091",
+        "volume_m3_kg": "0.841805829948"
+      }
+    },
+    {
+      "case_id": "same_state",
+      "expected": {
+        "applied_flow_lps": "6.000000000000",
+        "latent_kw": "0.000000000000",
+        "mass_flow_kg_s": "0.007011317851",
+        "raw_signed_latent_kw": "0.000000000000",
+        "raw_signed_sensible_kw": "0.000000000000",
+        "sensible_kw": "0.000000000000",
+        "signed_latent_unrounded_kw": "0.000000000000",
+        "signed_sensible_unrounded_kw": "0.000000000000",
+        "signed_total_unrounded_kw": "0.000000000000",
+        "total_kw": "0.000000000000"
+      },
+      "indoor": {
+        "enthalpy_kj_kg": "50.355617853084",
+        "humidity_ratio": "0.010296671113",
+        "saturation_kpa": "2.059729079717",
+        "vapour_kpa": "1.650176266817",
+        "volume_m3_kg": "0.855759234931"
+      },
+      "inputs": {
+        "indoor_db_c": "24.000000000000",
+        "indoor_wb_c": "18.000000000000",
+        "outdoor_db_c": "24.000000000000",
+        "outdoor_wb_c": "18.000000000000",
+        "pressure_kpa": "101.325000000000",
+        "schedule_factor": "1.000000000000",
+        "unit": "L/s",
+        "value": "6.000000000000"
+      },
+      "outdoor": {
+        "enthalpy_kj_kg": "50.355617853084",
+        "humidity_ratio": "0.010296671113",
+        "saturation_kpa": "2.059729079717",
+        "vapour_kpa": "1.650176266817",
+        "volume_m3_kg": "0.855759234931"
+      }
+    },
+    {
+      "case_id": "same_db_more_moisture",
+      "expected": {
+        "applied_flow_lps": "6.000000000000",
+        "latent_kw": "0.096400000000",
+        "mass_flow_kg_s": "0.006951471022",
+        "raw_signed_latent_kw": "0.096400000000",
+        "raw_signed_sensible_kw": "0.000000000000",
+        "sensible_kw": "0.000000000000",
+        "signed_latent_unrounded_kw": "0.096371719847",
+        "signed_sensible_unrounded_kw": "0.000000000000",
+        "signed_total_unrounded_kw": "0.096371719847",
+        "total_kw": "0.096400000000"
+      },
+      "indoor": {
+        "enthalpy_kj_kg": "50.355617853084",
+        "humidity_ratio": "0.010296671113",
+        "saturation_kpa": "2.059729079717",
+        "vapour_kpa": "1.650176266817",
+        "volume_m3_kg": "0.855759234931"
+      },
+      "inputs": {
+        "indoor_db_c": "24.000000000000",
+        "indoor_wb_c": "18.000000000000",
+        "outdoor_db_c": "24.000000000000",
+        "outdoor_wb_c": "22.000000000000",
+        "pressure_kpa": "101.325000000000",
+        "schedule_factor": "1.000000000000",
+        "unit": "L/s",
+        "value": "6.000000000000"
+      },
+      "outdoor": {
+        "enthalpy_kj_kg": "64.219118044823",
+        "humidity_ratio": "0.015742649410",
+        "saturation_kpa": "2.638551770034",
+        "vapour_kpa": "2.501418920334",
+        "volume_m3_kg": "0.863126664981"
+      }
+    },
+    {
+      "case_id": "schedule_off",
+      "expected": {
+        "applied_flow_lps": "0.000000000000",
+        "latent_kw": "0.000000000000",
+        "mass_flow_kg_s": "0.000000000000",
+        "raw_signed_latent_kw": "0.000000000000",
+        "raw_signed_sensible_kw": "0.000000000000",
+        "sensible_kw": "0.000000000000",
+        "signed_latent_unrounded_kw": "0.000000000000",
+        "signed_sensible_unrounded_kw": "0.000000000000",
+        "signed_total_unrounded_kw": "0.000000000000",
+        "total_kw": "0.000000000000"
+      },
+      "indoor": {
+        "enthalpy_kj_kg": "50.355617853084",
+        "humidity_ratio": "0.010296671113",
+        "saturation_kpa": "2.059729079717",
+        "vapour_kpa": "1.650176266817",
+        "volume_m3_kg": "0.855759234931"
+      },
+      "inputs": {
+        "indoor_db_c": "24.000000000000",
+        "indoor_wb_c": "18.000000000000",
+        "outdoor_db_c": "35.000000000000",
+        "outdoor_wb_c": "24.000000000000",
+        "pressure_kpa": "101.325000000000",
+        "schedule_factor": "0.000000000000",
+        "unit": "L/s",
+        "value": "6.000000000000"
+      },
+      "outdoor": {
+        "enthalpy_kj_kg": "70.995945654106",
+        "humidity_ratio": "0.013945655140",
+        "saturation_kpa": "2.978071163545",
+        "vapour_kpa": "2.222148565345",
+        "volume_m3_kg": "0.892557179793"
+      }
+    },
+    {
+      "case_id": "schedule_half",
+      "expected": {
+        "applied_flow_lps": "3.000000000000",
+        "latent_kw": "0.032200000000",
+        "mass_flow_kg_s": "0.003361129200",
+        "raw_signed_latent_kw": "0.032200000000",
+        "raw_signed_sensible_kw": "0.037200000000",
+        "sensible_kw": "0.037200000000",
+        "signed_latent_unrounded_kw": "0.032180552746",
+        "signed_sensible_unrounded_kw": "0.037194255731",
+        "signed_total_unrounded_kw": "0.069374808477",
+        "total_kw": "0.069400000000"
+      },
+      "indoor": {
+        "enthalpy_kj_kg": "50.355617853084",
+        "humidity_ratio": "0.010296671113",
+        "saturation_kpa": "2.059729079717",
+        "vapour_kpa": "1.650176266817",
+        "volume_m3_kg": "0.855759234931"
+      },
+      "inputs": {
+        "indoor_db_c": "24.000000000000",
+        "indoor_wb_c": "18.000000000000",
+        "outdoor_db_c": "35.000000000000",
+        "outdoor_wb_c": "24.000000000000",
+        "pressure_kpa": "101.325000000000",
+        "schedule_factor": "0.500000000000",
+        "unit": "L/s",
+        "value": "6.000000000000"
+      },
+      "outdoor": {
+        "enthalpy_kj_kg": "70.995945654106",
+        "humidity_ratio": "0.013945655140",
+        "saturation_kpa": "2.978071163545",
+        "vapour_kpa": "2.222148565345",
+        "volume_m3_kg": "0.892557179793"
+      }
+    },
+    {
+      "case_id": "double_flow",
+      "expected": {
+        "applied_flow_lps": "12.000000000000",
+        "latent_kw": "0.128700000000",
+        "mass_flow_kg_s": "0.013444516801",
+        "raw_signed_latent_kw": "0.128700000000",
+        "raw_signed_sensible_kw": "0.148800000000",
+        "sensible_kw": "0.148800000000",
+        "signed_latent_unrounded_kw": "0.128722210984",
+        "signed_sensible_unrounded_kw": "0.148777022925",
+        "signed_total_unrounded_kw": "0.277499233909",
+        "total_kw": "0.277500000000"
+      },
+      "indoor": {
+        "enthalpy_kj_kg": "50.355617853084",
+        "humidity_ratio": "0.010296671113",
+        "saturation_kpa": "2.059729079717",
+        "vapour_kpa": "1.650176266817",
+        "volume_m3_kg": "0.855759234931"
+      },
+      "inputs": {
+        "indoor_db_c": "24.000000000000",
+        "indoor_wb_c": "18.000000000000",
+        "outdoor_db_c": "35.000000000000",
+        "outdoor_wb_c": "24.000000000000",
+        "pressure_kpa": "101.325000000000",
+        "schedule_factor": "1.000000000000",
+        "unit": "L/s",
+        "value": "12.000000000000"
+      },
+      "outdoor": {
+        "enthalpy_kj_kg": "70.995945654106",
+        "humidity_ratio": "0.013945655140",
+        "saturation_kpa": "2.978071163545",
+        "vapour_kpa": "2.222148565345",
+        "volume_m3_kg": "0.892557179793"
+      }
+    },
+    {
+      "case_id": "outside_air_100_lps",
+      "expected": {
+        "applied_flow_lps": "100.000000000000",
+        "latent_kw": "1.072700000000",
+        "mass_flow_kg_s": "0.112037640012",
+        "raw_signed_latent_kw": "1.072700000000",
+        "raw_signed_sensible_kw": "1.239800000000",
+        "sensible_kw": "1.239800000000",
+        "signed_latent_unrounded_kw": "1.072685091530",
+        "signed_sensible_unrounded_kw": "1.239808524375",
+        "signed_total_unrounded_kw": "2.312493615905",
+        "total_kw": "2.312500000000"
+      },
+      "indoor": {
+        "enthalpy_kj_kg": "50.355617853084",
+        "humidity_ratio": "0.010296671113",
+        "saturation_kpa": "2.059729079717",
+        "vapour_kpa": "1.650176266817",
+        "volume_m3_kg": "0.855759234931"
+      },
+      "inputs": {
+        "indoor_db_c": "24.000000000000",
+        "indoor_wb_c": "18.000000000000",
+        "outdoor_db_c": "35.000000000000",
+        "outdoor_wb_c": "24.000000000000",
+        "pressure_kpa": "101.325000000000",
+        "schedule_factor": "1.000000000000",
+        "unit": "L/s",
+        "value": "100.000000000000"
+      },
+      "outdoor": {
+        "enthalpy_kj_kg": "70.995945654106",
+        "humidity_ratio": "0.013945655140",
+        "saturation_kpa": "2.978071163545",
+        "vapour_kpa": "2.222148565345",
+        "volume_m3_kg": "0.892557179793"
+      }
+    },
+    {
+      "case_id": "height_2600",
+      "expected": {
+        "applied_flow_lps": "5.200000000000",
+        "latent_kw": "0.055800000000",
+        "mass_flow_kg_s": "0.005825957281",
+        "raw_signed_latent_kw": "0.055800000000",
+        "raw_signed_sensible_kw": "0.064500000000",
+        "sensible_kw": "0.064500000000",
+        "signed_latent_unrounded_kw": "0.055779624760",
+        "signed_sensible_unrounded_kw": "0.064470043268",
+        "signed_total_unrounded_kw": "0.120249668027",
+        "total_kw": "0.120300000000"
+      },
+      "indoor": {
+        "enthalpy_kj_kg": "50.355617853084",
+        "humidity_ratio": "0.010296671113",
+        "saturation_kpa": "2.059729079717",
+        "vapour_kpa": "1.650176266817",
+        "volume_m3_kg": "0.855759234931"
+      },
+      "inputs": {
+        "indoor_db_c": "24.000000000000",
+        "indoor_wb_c": "18.000000000000",
+        "outdoor_db_c": "35.000000000000",
+        "outdoor_wb_c": "24.000000000000",
+        "pressure_kpa": "101.325000000000",
+        "schedule_factor": "1.000000000000",
+        "unit": "L/s",
+        "value": "5.200000000000"
+      },
+      "outdoor": {
+        "enthalpy_kj_kg": "70.995945654106",
+        "humidity_ratio": "0.013945655140",
+        "saturation_kpa": "2.978071163545",
+        "vapour_kpa": "2.222148565345",
+        "volume_m3_kg": "0.892557179793"
+      }
+    },
+    {
+      "case_id": "height_2900",
+      "expected": {
+        "applied_flow_lps": "5.800000000000",
+        "latent_kw": "0.062200000000",
+        "mass_flow_kg_s": "0.006498183121",
+        "raw_signed_latent_kw": "0.062200000000",
+        "raw_signed_sensible_kw": "0.071900000000",
+        "sensible_kw": "0.071900000000",
+        "signed_latent_unrounded_kw": "0.062215735309",
+        "signed_sensible_unrounded_kw": "0.071908894414",
+        "signed_total_unrounded_kw": "0.134124629723",
+        "total_kw": "0.134100000000"
+      },
+      "indoor": {
+        "enthalpy_kj_kg": "50.355617853084",
+        "humidity_ratio": "0.010296671113",
+        "saturation_kpa": "2.059729079717",
+        "vapour_kpa": "1.650176266817",
+        "volume_m3_kg": "0.855759234931"
+      },
+      "inputs": {
+        "indoor_db_c": "24.000000000000",
+        "indoor_wb_c": "18.000000000000",
+        "outdoor_db_c": "35.000000000000",
+        "outdoor_wb_c": "24.000000000000",
+        "pressure_kpa": "101.325000000000",
+        "schedule_factor": "1.000000000000",
+        "unit": "L/s",
+        "value": "5.800000000000"
+      },
+      "outdoor": {
+        "enthalpy_kj_kg": "70.995945654106",
+        "humidity_ratio": "0.013945655140",
+        "saturation_kpa": "2.978071163545",
+        "vapour_kpa": "2.222148565345",
+        "volume_m3_kg": "0.892557179793"
+      }
+    },
+    {
+      "case_id": "height_3150",
+      "expected": {
+        "applied_flow_lps": "6.300000000000",
+        "latent_kw": "0.067600000000",
+        "mass_flow_kg_s": "0.007058371321",
+        "raw_signed_latent_kw": "0.067600000000",
+        "raw_signed_sensible_kw": "0.078100000000",
+        "sensible_kw": "0.078100000000",
+        "signed_latent_unrounded_kw": "0.067579160766",
+        "signed_sensible_unrounded_kw": "0.078107937036",
+        "signed_total_unrounded_kw": "0.145687097802",
+        "total_kw": "0.145700000000"
+      },
+      "indoor": {
+        "enthalpy_kj_kg": "50.355617853084",
+        "humidity_ratio": "0.010296671113",
+        "saturation_kpa": "2.059729079717",
+        "vapour_kpa": "1.650176266817",
+        "volume_m3_kg": "0.855759234931"
+      },
+      "inputs": {
+        "indoor_db_c": "24.000000000000",
+        "indoor_wb_c": "18.000000000000",
+        "outdoor_db_c": "35.000000000000",
+        "outdoor_wb_c": "24.000000000000",
+        "pressure_kpa": "101.325000000000",
+        "schedule_factor": "1.000000000000",
+        "unit": "L/s",
+        "value": "6.300000000000"
+      },
+      "outdoor": {
+        "enthalpy_kj_kg": "70.995945654106",
+        "humidity_ratio": "0.013945655140",
+        "saturation_kpa": "2.978071163545",
+        "vapour_kpa": "2.222148565345",
+        "volume_m3_kg": "0.892557179793"
+      }
+    }
+  ],
+  "project_data": false,
+  "status": "synthetic_test_fixture_only_not_engineering_approval"
+}

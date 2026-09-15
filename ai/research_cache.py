@@ -57,7 +57,6 @@ CANDIDATE_BINDING_POLICY = {
 def _release_manifest_path():
     return Path(__file__).resolve().parents[1] / "config" / "research_source_pack_releases.json"
 
-
 def timestamp():
     return datetime.now(timezone.utc).isoformat()
 
@@ -230,10 +229,22 @@ def validate_record(record):
         raise ValueError("Invalid research review status.")
     if record["review_status"] == "approved" and not str(record.get("reviewed_by", "")).strip():
         raise ValueError("Approved research records require reviewed_by.")
-    if not _parse_time(record["retrieved_at"]):
+    for key in ("publisher", "citation", "content_hash"):
+        if not str(record.get(key, "")).strip():
+            raise ValueError(f"Research record {key} must not be blank.")
+    parsed_url = urlparse(str(record["url"]))
+    if parsed_url.scheme != "https" or not parsed_url.hostname:
+        raise ValueError("Research url must be an https URL with a hostname.")
+    retrieved = _parse_time(record["retrieved_at"])
+    if not retrieved:
         raise ValueError("Research retrieved_at must be an ISO timestamp.")
-    if record["expiry"] and not _parse_time(record["expiry"]):
+    expiry = _parse_time(record["expiry"]) if record["expiry"] else None
+    if record["expiry"] and not expiry:
         raise ValueError("Research expiry must be an ISO timestamp.")
+    if expiry and retrieved and expiry <= retrieved:
+        raise ValueError("Research expiry must be after retrieved_at.")
+    if not isinstance(record.get("scope"), dict):
+        raise ValueError("Research record scope must be an object.")
     result = deepcopy(record)
     result["source_pack_version"] = str(result.get("source_pack_version", "")).strip()
     result["released"] = bool(result.get("released", False))
