@@ -1,5 +1,6 @@
 """Non-proprietary CAMEL+/DA09 benchmark reconciliation and comparison tools."""
 
+from copy import deepcopy
 import json
 from pathlib import Path
 
@@ -63,6 +64,8 @@ def compare_case(case, archie_report):
     report = {
         "report_type": "da09_camel_room_to_zone_parity",
         "case_id": case["case_id"],
+        "source_files": deepcopy(case["source_files"]),
+        "authorisation": deepcopy(case["authorisation"]),
         "status": "blocked" if missing or unresolved or unmapped else "baseline_compared",
         "reference_peak": case["reference_results"].get("peak", {}),
         "archie_peak": archie_report.get("peak", {}),
@@ -242,21 +245,6 @@ def comparison_summary(report):
 
 
 def render_markdown(report):
-    lines = [f"# DA09/CAMEL+ Parity Report: {report['case_id']}", "", f"Status: **{report['status']}**", "", "## Reference readiness", ""]
-    if report["missing_reference_material"]:
-        lines.extend("- Missing: " + item for item in report["missing_reference_material"])
-    else:
-        lines.append("- Authorised reference material recorded.")
-    if report["unresolved_inputs"]:
-        lines.extend("- Unresolved input: " + str(item.get("field", "unnamed")) for item in report["unresolved_inputs"])
-    if report["unmapped_input_families"]:
-        lines.extend("- Unmapped input family: " + item.replace("_", " ") for item in report["unmapped_input_families"])
-    lines.extend(["", "## Comparison summary", "", f"- Peak timing: {report['peak_comparison']['status']}", f"- Comparable components: {report['summary']['compared_component_count']}", f"- Final parity allowed: {report['final_parity_allowed']}", "", "## Component variance", "", "| Scope | Component | CAMEL+ kW | Archie kW | Difference kW | Difference % | Status |", "| --- | --- | ---: | ---: | ---: | ---: | --- |"])
-    for entity in report["rooms"] + report["zones"]:
-        for component in entity.get("components", []):
-            lines.append("| {scope} | {name} | {reference} | {archie} | {difference} | {percent} | {status} |".format(
-                scope=entity["entity_id"], name=component["name"],
-                reference=component.get("reference_kw", ""), archie=component.get("archie_kw", ""),
-                difference=component.get("difference_kw", ""), percent=component.get("difference_percent", ""), status=component["status"],
-            ))
-    return "\n".join(lines) + "\n"
+    """Backward-compatible entry point for the benchmark Markdown export."""
+    from ai.benchmark_reporting import render_markdown as render
+    return render(report)
