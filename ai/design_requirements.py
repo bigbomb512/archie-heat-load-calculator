@@ -74,6 +74,7 @@ def empty_design_requirements():
         "heat_sources": [],
         "zones": [],
         "cooling_load_conditions": empty_cooling_load_conditions(),
+        "heating_load_conditions": empty_heating_load_conditions(),
         "existing_services": "",
         "service_constraints": {
             "electrical_capacity": "",
@@ -108,6 +109,7 @@ def validate_design_requirements(data):
     result["heat_sources"] = validate_heat_sources(result["heat_sources"])
     result["zones"] = validate_zones(result["zones"])
     result["cooling_load_conditions"] = validate_cooling_load_conditions(result["cooling_load_conditions"])
+    result["heating_load_conditions"] = validate_heating_load_conditions(result["heating_load_conditions"])
     result["service_constraints"] = validate_service_constraints(result["service_constraints"])
     result["verification"] = validate_verification(data.get("verification", {}), result)
     result["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -285,6 +287,15 @@ def empty_cooling_load_conditions():
     }
 
 
+def empty_heating_load_conditions():
+    """Winter design conditions reviewed for the heating calculation."""
+    return {
+        "outdoor_winter_db_c": None,
+        "verification_status": "missing",
+        "source": "",
+    }
+
+
 def empty_zone_cooling_load():
     return {
         "people_sensible_w_per_person": None,
@@ -427,6 +438,19 @@ def validate_cooling_load_conditions(raw):
         result[key] = numeric_value(result[key], label)
     result["verification_status"] = validate_choice(result["verification_status"], VERIFICATION_STATUSES, "Cooling-load conditions verification status")
     result["source"] = text_value(result["source"], "Cooling-load conditions source")
+    return result
+
+
+def validate_heating_load_conditions(raw):
+    if not isinstance(raw, dict):
+        raise ValueError("Heating-load conditions must be an object.")
+    result = empty_heating_load_conditions()
+    for key in result:
+        if key in raw:
+            result[key] = raw[key]
+    result["outdoor_winter_db_c"] = numeric_value(result["outdoor_winter_db_c"], "outdoor winter dry-bulb")
+    result["verification_status"] = validate_choice(result["verification_status"], VERIFICATION_STATUSES, "Heating-load conditions verification status")
+    result["source"] = text_value(result["source"], "Heating-load conditions source")
     return result
 
 

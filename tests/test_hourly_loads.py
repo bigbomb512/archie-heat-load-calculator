@@ -145,11 +145,26 @@ def main():
     provisional = calculate_hourly_load_report(requirements, library("provisional"), scenarios(), reviewed_model(requirements), ["jan_weekday"])
     check("provisional evidence produces a draft", provisional["status"] == "draft")
     heating = calculate_hourly_load_report(requirements, library(), scenarios("heating"), reviewed_model(requirements), ["jan_weekday"])
-    check("heating scenario is stored but unsupported", heating["status"] == "blocked" and "heating calculation is not implemented" in heating["scenario_results"][0]["blocked_reasons"][0])
+    heating_scenario = heating["scenario_results"][0]
+    check("heating scenario stays unpublishable while later heating components are unimplemented", heating["status"] == "blocked" and any("not implemented" in reason for reason in heating_scenario["blocked_reasons"]))
+    check("heating room without a reviewed setpoint or winter condition is blocked", heating_scenario["rooms"][0]["blocked_reasons"] and "indoor heating setpoint" in heating_scenario["rooms"][0]["blocked_reasons"])
+
+    heating_requirements = deepcopy(requirements_data())
+    heating_requirements["indoor_heating_setpoint_c"] = 21
+    heating_requirements["outdoor_winter_db_c"] = 2
+    heating_requirements["heating_load_conditions"] = {"outdoor_winter_db_c": 2, "verification_status": "confirmed", "source": "Winter design basis"}
+    heating_requirements = validate_design_requirements(heating_requirements)
+    heating_ready = calculate_hourly_load_report(heating_requirements, library(), scenarios("heating"), reviewed_model(heating_requirements), ["jan_weekday"])
+    heating_room = heating_ready["scenario_results"][0]["rooms"][0]
+    check("heating envelope conduction is calculated from the reviewed fabric", not heating_room["blocked_reasons"] and len(heating_room["hours"]) == 24)
+    # 10 m2 glazing at 0.5 W/m2K across 21 C indoor and 35 C outdoor weather is a gain, not a loss.
+    conduction = heating_room["hours"][0]["components"]["heating_envelope"]
+    check("heating conduction uses indoor setpoint minus boundary temperature", conduction["inputs"]["indoor_db_c"] == 21 and conduction["total_kw"] == round(10 * 0.5 * (21 - 35) / 1000, 4))
+    check("heating result is labelled envelope-conduction-only", heating_room["hours"][0]["scope"] == "envelope_conduction_only" and any("not a complete room heating load" in warning for warning in heating_room["warnings"]))
 
     legacy_model = build_hourly_load_model(requirements)
     migrated = validate_hourly_load_model({"schema_version": 1, "updated_at": legacy_model["updated_at"], "source_requirements_updated_at": legacy_model["source_requirements_updated_at"], "rooms": legacy_model["rooms"]})
-    check("schema-v1 model normalises to provisional unassigned topology and unassessed room components", migrated["schema_version"] == 4 and migrated["floors"][0]["floor_id"] == "unassigned" and migrated["zones"][0]["floor_id"] == "unassigned" and migrated["rooms"][0]["unapproved_components"][0]["calculation_status"] == "not_assessed")
+    check("schema-v1 model normalises to provisional unassigned topology and unassessed room components", migrated["schema_version"] == 5 and migrated["floors"][0]["floor_id"] == "unassigned" and migrated["zones"][0]["floor_id"] == "unassigned" and migrated["rooms"][0]["unapproved_components"][0]["calculation_status"] == "not_assessed")
 
     infiltration_model = calculated_infiltration(reviewed_model(requirements), 0.36)
     infiltration_report = calculate_hourly_load_report(requirements, library(), scenarios(), infiltration_model, ["jan_weekday"], infiltration_gate=approved_infiltration_gate())
@@ -250,7 +265,7 @@ def main():
             legacy_v2["schema_version"] = 2
             legacy_v2["rooms"][0].pop("unapproved_components")
             migrated_api = web_app.api_save_hourly_load_model(Request(json.dumps({"project_id": "p1", "action": "save", "hourly_load_model": legacy_v2}), "/api/hourly-load-model"))
-            check("API saves schema-v2 room models as schema-v4 with unassessed components", migrated_api["hourly_load_model"]["schema_version"] == 4 and migrated_api["hourly_load_model"]["rooms"][0]["unapproved_components"][0]["calculation_status"] == "not_assessed")
+            check("API saves schema-v2 room models as schema-v5 with unassessed components", migrated_api["hourly_load_model"]["schema_version"] == 5 and migrated_api["hourly_load_model"]["rooms"][0]["unapproved_components"][0]["calculation_status"] == "not_assessed")
             saved_model = reviewed_model(requirements)
             web_app.api_save_hourly_load_model(Request(json.dumps({"project_id": "p1", "action": "save", "hourly_load_model": saved_model}), "/api/hourly-load-model"))
             saved_gate = web_app.api_save_infiltration_method_gate(Request(json.dumps({"project_id": "p1", "infiltration_method_gate": approved_infiltration_gate()}), "/api/infiltration-method-gate"))

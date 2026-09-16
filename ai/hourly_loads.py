@@ -8,10 +8,11 @@ import re
 
 from ai.design_requirements import (
     validate_cooling_load_conditions,
+    validate_heating_load_conditions,
     validate_design_requirements,
     validate_zone_cooling_load,
 )
-from ai.heat_loads import envelope_load, equipment_load, infiltration_load, lighting_load, outside_air_load, people_load, solar_load
+from ai.heat_loads import envelope_load, equipment_load, heating_envelope_load, infiltration_load, lighting_load, outside_air_load, people_load, solar_load
 from ai.infiltration_gate import METHOD_ID as INFILTRATION_METHOD_ID, empty_infiltration_method_gate, gate_is_approved, validate_infiltration_method_gate
 from ai.site_design_conditions import validate_citations
 from ai.cooling_readiness import assess_cooling_readiness, room_component_issues, topology_issues
@@ -52,7 +53,7 @@ def empty_design_day_scenarios():
 
 def empty_hourly_load_model():
     return {
-        "schema_version": 4,
+        "schema_version": 5,
         "updated_at": "",
         "source_requirements_updated_at": "",
         "floors": [],
@@ -297,21 +298,31 @@ def build_hourly_load_model(requirements):
             "area_m2": zone.get("area_m2"),
             "occupancy": zone.get("occupancy"),
             "indoor_cooling_setpoint_c": effective(zone, requirements, "indoor_cooling_setpoint_c"),
+            "indoor_heating_setpoint_c": effective(zone, requirements, "indoor_heating_setpoint_c"),
             "heat_sources": [seed_heat_source(source, room_id, index) for index, source in enumerate(zone.get("heat_sources", []), start=1)],
             "cooling_load": deepcopy(zone.get("cooling_load", {})),
             "cooling_load_conditions": deepcopy(requirements.get("cooling_load_conditions", {})),
+            "heating_load_conditions": seed_heating_conditions(requirements),
             "schedule_assignments": {"people": "", "lighting": "", "outside_air": "", "infiltration": "", "equipment": {}, "solar": {}},
             "unapproved_components": default_room_components(),
         }
         rooms.append(room)
     return {
-        "schema_version": 4,
+        "schema_version": 5,
         "updated_at": timestamp(),
         "source_requirements_updated_at": requirements.get("updated_at", ""),
         "floors": floors,
         "zones": zones,
         "rooms": rooms,
     }
+
+
+def seed_heating_conditions(requirements):
+    """Carry the reviewed project winter condition onto the room, never a default."""
+    conditions = deepcopy(requirements.get("heating_load_conditions", {})) or {}
+    if conditions.get("outdoor_winter_db_c") is None:
+        conditions["outdoor_winter_db_c"] = requirements.get("outdoor_winter_db_c")
+    return conditions
 
 
 def seed_heat_source(source, room_id, index):
@@ -364,7 +375,7 @@ def validate_hourly_load_model(raw):
             if source_room_id == room["room_id"]:
                 raise ValueError(f"Room {room['room_id']} component '{component['component_id']}' cannot reference itself as a source room.")
     return {
-        "schema_version": 4,
+        "schema_version": 5,
         "updated_at": timestamp(),
         "source_requirements_updated_at": text(raw.get("source_requirements_updated_at", ""), "Hourly load model source requirements timestamp"),
         "floors": checked_floors,
@@ -393,7 +404,7 @@ def migrate_hourly_model(raw):
                     "zone_id": zone_id, "name": zone_id, "floor_id": "unassigned",
                     "verification_status": "provisional", "source": "Migrated from schema-v1 room overlay; assign a reviewed floor.", "citations": [],
                 })
-    result["schema_version"] = 4
+    result["schema_version"] = 5
     return result
 
 
@@ -467,6 +478,7 @@ def validate_room(raw, index):
         raise ValueError(f"Room {room_id} needs a source when {verification_status}.")
     cooling = validate_zone_cooling_load(raw.get("cooling_load", {}))
     conditions = validate_cooling_load_conditions(raw.get("cooling_load_conditions", {}))
+    heating_conditions = validate_heating_load_conditions(raw.get("heating_load_conditions", {}))
     sources, source_ids = [], set()
     for source_index, raw_source in enumerate(raw.get("heat_sources", []), start=1):
         heat_source = validate_hourly_heat_source(raw_source, room_id, source_index)
@@ -491,9 +503,11 @@ def validate_room(raw, index):
         "area_m2": optional_number(raw.get("area_m2"), f"Room {room_id} area", 0, 1000000),
         "occupancy": optional_number(raw.get("occupancy"), f"Room {room_id} occupancy", 0, 1000000),
         "indoor_cooling_setpoint_c": optional_number(raw.get("indoor_cooling_setpoint_c"), f"Room {room_id} cooling setpoint", -100, 100),
+        "indoor_heating_setpoint_c": optional_number(raw.get("indoor_heating_setpoint_c"), f"Room {room_id} heating setpoint", -100, 100),
         "heat_sources": sources,
         "cooling_load": cooling,
         "cooling_load_conditions": conditions,
+        "heating_load_conditions": heating_conditions,
         "schedule_assignments": assignments,
         "unapproved_components": components,
     }
@@ -695,22 +709,40 @@ def calculate_hourly_load_report(requirements, schedule_library, scenarios, mode
         return report
     for scenario in selected:
         report["scenario_results"].append(calculate_scenario(requirements, schedule_library, model, scenario, infiltration_gate))
-    all_rooms = [room for scenario in report["scenario_results"] for room in scenario["rooms"]]
+    heating_results = [scenario for scenario in report["scenario_results"] if scenario["mode"] == "heating"]
+    cooling_results = [scenario for scenario in report["scenario_results"] if scenario["mode"] != "heating"]
+    all_rooms = [room for scenario in cooling_results for room in scenario["rooms"]]
     if not any(room["status"] != "blocked" for room in all_rooms):
         report["blocked_reasons"].append("No selected scenario produced a complete room result.")
         report["blocked_reasons"].extend(reason for scenario in report["scenario_results"] for reason in scenario["blocked_reasons"])
-        attach_readiness(report, model, requirements, coverage)
-        return report
-    readiness_result = attach_readiness(report, model, requirements, coverage)
-    report["included_scope_peak"] = governing_peak(report["scenario_results"], "included_scope_peak")
-    if readiness_result["scope_summary"]["complete_scope"] and readiness_result["status"] == "review_ready":
+        attach_readiness(report, model, requirements, coverage, scenario_results=cooling_results)
+        report["warnings"] = [warning for scenario in report["scenario_results"] for warning in scenario["warnings"]]
+        return block_partial_heating(report, heating_results)
+    readiness_result = attach_readiness(report, model, requirements, coverage, scenario_results=cooling_results)
+    report["included_scope_peak"] = governing_peak(cooling_results, "included_scope_peak")
+    if readiness_result["scope_summary"]["complete_scope"] and readiness_result["status"] == "review_ready" and not heating_results:
         report["project_peak"] = deepcopy(report["included_scope_peak"])
     report["warnings"] = [warning for scenario in report["scenario_results"] for warning in scenario["warnings"]]
+    return block_partial_heating(report, heating_results)
+
+
+def block_partial_heating(report, heating_results):
+    """Heating carries envelope conduction only, so it is never publishable."""
+    if not heating_results:
+        return report
+    report["blocked_reasons"].extend(
+        reason for scenario in heating_results for reason in scenario["blocked_reasons"]
+        if reason not in report["blocked_reasons"]
+    )
+    report["project_peak"] = {}
+    report["status"] = "blocked"
     return report
 
 
-def attach_readiness(report, model, requirements, coverage, envelope_input=None):
-    readiness_result = assess_cooling_readiness(report, model, requirements.get("updated_at", ""), coverage, envelope_input)
+def attach_readiness(report, model, requirements, coverage, envelope_input=None, scenario_results=None):
+    """Cooling readiness never assesses heating scenarios, which are partial."""
+    view = report if scenario_results is None else {**report, "scenario_results": scenario_results}
+    readiness_result = assess_cooling_readiness(view, model, requirements.get("updated_at", ""), coverage, envelope_input)
     report["status"] = readiness_result["status"]
     report["readiness"] = {"status": readiness_result["status"], "issues": readiness_result["issues"]}
     report["scope_summary"] = readiness_result["scope_summary"]
@@ -745,9 +777,8 @@ def calculate_scenario(requirements, library, model, scenario, infiltration_gate
         "scope_summary": {},
         "warnings": [], "blocked_reasons": [],
     }
-    if scenario["mode"] != "cooling":
-        result["blocked_reasons"].append("Heating design-day scenarios are stored but hourly heating calculation is not implemented.")
-        return result
+    if scenario["mode"] == "heating":
+        return calculate_heating_scenario(model, scenario, result)
     scenario_missing, scenario_provisional = scenario_ready(scenario)
     if scenario_missing:
         result["blocked_reasons"].extend(scenario_missing)
@@ -804,6 +835,22 @@ def scenario_ready(scenario):
             elif item["status"] == "provisional":
                 provisional = True
     return missing, provisional
+
+
+def calculate_heating_scenario(model, scenario, result):
+    """Partial heating support: reviewed envelope conduction, never publishable."""
+    scenario_missing, _ = scenario_ready(scenario)
+    if scenario_missing:
+        result["blocked_reasons"].extend(scenario_missing)
+        return result
+    zones = {zone["zone_id"]: zone for zone in model["zones"]}
+    result["rooms"] = [calculate_heating_room_hours(scenario, room, zones[room["zone_id"]]) for room in model["rooms"]]
+    result["scope_summary"] = {"heating_scope": "envelope_conduction_only"}
+    result["warnings"].append(
+        "Heating envelope conduction is calculated; remaining heating components are not implemented."
+    )
+    result["blocked_reasons"].extend(HEATING_UNIMPLEMENTED)
+    return result
 
 
 def calculate_room_hours(requirements, library, scenario, room, zone, infiltration_gate):
@@ -909,6 +956,79 @@ def infiltration_schedule_missing(room):
         return [f"a dedicated infiltration schedule separate from the outside-air schedule "
                 f"(both are assigned '{infiltration_schedule}')"]
     return []
+
+
+HEATING_UNIMPLEMENTED = (
+    "heating outside-air and infiltration losses are not implemented",
+    "heating internal-gain credit rules are not implemented",
+    "heating safety factors are not implemented",
+)
+
+
+def room_heating_static_missing(room, zone=None):
+    """Static inputs the heating envelope conduction calculation needs."""
+    load = room["cooling_load"]
+    conditions = room.get("heating_load_conditions", {})
+    required = {
+        "room name": room["name"],
+        "room source": room["source"],
+        "area": room["area_m2"],
+        "indoor heating setpoint": room.get("indoor_heating_setpoint_c"),
+        "outdoor winter dry-bulb": conditions.get("outdoor_winter_db_c"),
+        "heating-load conditions source": conditions.get("source"),
+    }
+    missing = [label for label, value in required.items() if value in (None, "")]
+    surfaces = load.get("envelope_surfaces", [])
+    if not surfaces and not load.get("envelope_not_applicable"):
+        missing.append("envelope surfaces or internal-room declaration")
+    for surface in surfaces:
+        for key, label in (("surface_id", "surface ID"), ("area_m2", "area"), ("u_value_w_m2k", "U-value"), ("source", "source")):
+            if surface.get(key) in (None, ""):
+                missing.append(f"{surface.get('surface_id', 'surface')} {label}")
+        if surface.get("boundary_method") == "fixed_adjacent_temperature" and surface.get("boundary_temperature_c") is None:
+            missing.append(f"{surface.get('surface_id', 'surface')} adjacent boundary temperature")
+    setpoint = room.get("indoor_heating_setpoint_c")
+    outdoor = conditions.get("outdoor_winter_db_c")
+    if setpoint is not None and outdoor is not None and outdoor >= setpoint:
+        missing.append("a winter outdoor dry-bulb below the indoor heating setpoint")
+    return missing
+
+
+def calculate_heating_room_hours(scenario, room, zone):
+    """Envelope conduction only: never a complete room heating load."""
+    result = {
+        "room_id": room["room_id"], "name": room["name"], "zone_id": room["zone_id"], "status": "blocked",
+        "hours": [], "peak": {}, "warnings": [], "blocked_reasons": [],
+    }
+    static_missing = room_heating_static_missing(room, zone)
+    if static_missing:
+        result["blocked_reasons"].extend(static_missing)
+        return result
+    setpoint = room["indoor_heating_setpoint_c"]
+    surfaces = room["cooling_load"].get("envelope_surfaces", [])
+    for weather in scenario["hours"]:
+        conduction = heating_envelope_load(surfaces, weather["outdoor_dry_bulb_c"]["value"], setpoint)
+        result["hours"].append({
+            "hour": weather["hour"],
+            "components": {"heating_envelope": conduction},
+            "envelope_conduction_kw": conduction["total_kw"],
+            "subtotal_kw": conduction["total_kw"],
+            "scope": "envelope_conduction_only",
+        })
+    result["peak"] = heating_peak(result["hours"])
+    result["warnings"].append(
+        "Heating result covers reviewed envelope conduction only; it is not a complete room heating load."
+    )
+    result["status"] = "draft" if room_is_provisional(room) else "envelope_conduction_ready"
+    return result
+
+
+def heating_peak(hours):
+    if not hours:
+        return {}
+    highest = max(row["envelope_conduction_kw"] for row in hours)
+    tied = [row["hour"] for row in hours if row["envelope_conduction_kw"] == highest]
+    return {"envelope_conduction_kw": highest, "tied_hours": tied, "display_hour": tied[0], "scope": "envelope_conduction_only"}
 
 
 def resolved_profiles(library, day_type, room):

@@ -96,6 +96,39 @@ def envelope_load(surfaces, outdoor_db_c, indoor_db_c):
     )
 
 
+def heating_envelope_load(surfaces, outdoor_db_c, indoor_db_c):
+    """Steady-state winter fabric conduction, reported as a positive heat loss.
+
+    Uses the same reviewed surface fabric as the cooling calculation: a surface
+    with a fixed adjacent boundary keeps its own reviewed boundary temperature,
+    every other surface sees the winter outdoor dry-bulb. No solar, no thermal
+    mass and no internal-gain credit are applied here.
+    """
+    total_kw = 0.0
+    rows = []
+    for surface in surfaces:
+        boundary_db_c = surface.get("boundary_temperature_c")
+        if boundary_db_c is None:
+            boundary_db_c = outdoor_db_c
+        loss_kw = surface["area_m2"] * surface["u_value_w_m2k"] * (indoor_db_c - boundary_db_c) / 1000
+        total_kw += loss_kw
+        rows.append({
+            "surface_id": surface["surface_id"],
+            "orientation": surface["orientation"],
+            "boundary_method": surface.get("boundary_method", "external"),
+            "boundary_temperature_c": boundary_db_c,
+            "construction_id": surface.get("construction_id", ""),
+            "construction_revision": surface.get("construction_revision"),
+            "loss_kw": round(loss_kw, 4),
+        })
+    return contribution(
+        "heating_envelope",
+        total_kw,
+        inputs={"surfaces": rows, "outdoor_db_c": outdoor_db_c, "indoor_db_c": indoor_db_c},
+        formula="surface area × U-value × (indoor heating setpoint − surface boundary temperature) ÷ 1000",
+    )
+
+
 def solar_load(surfaces):
     total_kw = 0.0
     rows = []
