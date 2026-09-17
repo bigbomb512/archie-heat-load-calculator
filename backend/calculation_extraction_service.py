@@ -6,6 +6,7 @@ import hashlib
 from pathlib import Path
 
 from ai.calculation_extraction import EXTRACTOR_VERSION, extract_calculation_input_evidence
+from ai.calculator_draft import build_calculator_draft
 from ai.drawing_coverage import source_fingerprint
 
 
@@ -97,4 +98,20 @@ def post(web, project, data):
     if not reused:
         _write(paths["calculation_input_evidence"], stored)
     _attach_to_fusion(root, stored)
-    return {"id": project["id"], "calculation_input_evidence": stored, "summary": _summary(stored), "status": "current", "snapshot_reused": reused, "artifact_url": web.safe_link(paths["calculation_input_evidence"])}
+    draft_url = ""
+    draft = None
+    coverage = _read(paths["drawing_coverage"])
+    building = _read(paths["building_evidence"])
+    thermal = _read(root / "thermal_model.json")
+    if coverage and building and thermal:
+        fusion = _read(root / "architect_evidence_fusion.json")
+        draft = build_calculator_draft(
+            thermal, building, coverage,
+            source_artifacts={name: str(root / f"{name}.json") for name in ("thermal_model", "building_evidence", "drawing_coverage", "thermal_evidence")},
+            thermal_evidence=_read(root / "thermal_evidence.json"),
+            evidence_fusion=fusion,
+        )
+        draft_path = root / "calculator_draft.json"
+        _write(draft_path, draft)
+        draft_url = web.safe_link(draft_path)
+    return {"id": project["id"], "calculation_input_evidence": stored, "summary": _summary(stored), "status": "current", "snapshot_reused": reused, "artifact_url": web.safe_link(paths["calculation_input_evidence"]), "calculator_draft": draft or {}, "calculator_draft_url": draft_url}

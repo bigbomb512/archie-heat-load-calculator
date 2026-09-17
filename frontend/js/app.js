@@ -10,6 +10,7 @@ function optionalElement(id){
 let DATA = null, FILTER = "rel", PICK = new Set(), CUR = null, DEBUG = false, PACKET = null, ROOM_SUGGESTIONS = [];
 let CALCULATOR_DRAFT = null, DRAFT_PREVIEW_TOKEN = "", DRAFT_DIRTY = false;
 let ENVELOPE_LIBRARY = {constructions: [], windows: [], shading_records: []}, ENVELOPE_MODEL = {surfaces: []};
+let GLAZING_GATE = {}, SHADING_GATE = {}, GROUND_CONTACT_GATE = {};
 let CALCULATOR_INPUT_SET = null, CALCULATOR_INPUT_OVERRIDES = {revision: 0, records: []}, PROJECT_CONTEXT = {};
 // Legacy projects/tests that predate the input-snapshot workflow may not
 // expose /api/calculator-inputs at all. Once that endpoint responds, the
@@ -458,6 +459,12 @@ requiredElement("btnPreviewCalculatorDraft").addEventListener("click", () => sav
 requiredElement("btnApplyCalculatorDraft").addEventListener("click", () => saveCalculatorDraft("apply"));
 requiredElement("btnCalculateVentilation").addEventListener("click", calculateVentilation);
 requiredElement("btnSaveInfiltrationGate").addEventListener("click", saveInfiltrationGate);
+requiredElement("btnSaveGlazingGate").addEventListener("click", saveGlazingGate);
+requiredElement("btnSaveShadingGate").addEventListener("click", saveShadingGate);
+requiredElement("btnSaveGroundContactGate").addEventListener("click", saveGroundContactGate);
+requiredElement("btnSaveDynamicThermalMassGate").addEventListener("click", saveDynamicThermalMassGate);
+requiredElement("btnSaveSolarRadiationGate").addEventListener("click", saveSolarRadiationGate);
+requiredElement("btnSaveRoomCouplingGate").addEventListener("click", saveRoomCouplingGate);
 requiredElement("btnBuildHourlyModel").addEventListener("click", () => saveHourlyModel("build"));
 requiredElement("btnAddFloor").addEventListener("click", () => addHourlyFloor());
 requiredElement("btnAddHourlyZone").addEventListener("click", () => addHourlyZone());
@@ -469,6 +476,7 @@ requiredElement("btnSaveProjectContext").addEventListener("click", saveProjectCo
 requiredElement("btnSaveCalculatorOverride").addEventListener("click", saveCalculatorOverride);
 requiredElement("btnRefreshResearch").addEventListener("click", refreshResearch);
 requiredElement("btnAddConstruction").addEventListener("click", () => addEnvelopeConstruction());
+requiredElement("btnAddWindow").addEventListener("click", () => addEnvelopeWindow());
 requiredElement("btnAddBoundary").addEventListener("click", () => addEnvelopeBoundary());
 requiredElement("btnSaveEnvelope").addEventListener("click", saveEnvelope);
 requiredElement("btnMigrateEnvelope").addEventListener("click", migrateEnvelope);
@@ -957,6 +965,12 @@ function showDesignRequirements(requirements = {}, readiness = {}, roomSuggestio
   loadEnvelope();
   loadHourlyModel();
   loadInfiltrationGate();
+  loadGlazingGate();
+  loadShadingGate();
+  loadGroundContactGate();
+  loadDynamicThermalMassGate();
+  loadSolarRadiationGate();
+  loadRoomCouplingGate();
   loadHourlyLoadReport();
   loadCalculatorInputs();
 }
@@ -978,27 +992,76 @@ function addEnvelopeConstruction(record = {}){
   requiredElement("envelopeConstructions").appendChild(row);
 }
 
+function addEnvelopeWindow(record = {}){
+  const row = document.createElement("div");
+  row.className = "envelope-window";
+  const citation = record.citations?.[0]?.reference || "";
+  row.innerHTML = `<input class="window-id" placeholder="Window ID" value="${esc(record.record_id || "")}">
+    <input class="window-title" placeholder="Window title / tag" value="${esc(record.title || "")}">
+    <input class="window-u" type="number" min="0.001" step="0.001" placeholder="Overall U W/m²K" value="${record.u_value_w_m2k ?? ""}">
+    <select class="window-u-basis"><option value="">U-value basis</option><option value="overall_window">Overall window</option></select>
+    <input class="window-shgc" type="number" min="0" max="1" step="0.01" placeholder="SHGC (or leave blank)">
+    <input class="window-transmission" type="number" min="0" max="1" step="0.01" placeholder="Solar transmission (or leave blank)">
+    <input class="window-frame" type="number" min="0" max="1" step="0.01" placeholder="Frame fraction" value="${record.frame_fraction ?? ""}">
+    <input class="window-glass-correction" type="number" min="0" max="1" step="0.01" placeholder="Glass correction" value="${record.glass_area_correction ?? ""}">
+    <input class="window-internal-shade" type="number" min="0" max="1" step="0.01" placeholder="Internal shade factor" value="${record.internal_shading_factor ?? ""}">
+    <select class="window-status"><option value="missing">Missing</option><option value="provisional">Provisional</option><option value="confirmed">Confirmed</option></select>
+    <input class="window-source" placeholder="Reviewed source" value="${esc(record.source || "")}">
+    <input class="window-citation" placeholder="Citation reference" value="${esc(citation)}">
+    <button class="btn ghost mini" type="button">Remove</button>`;
+  row.querySelector(".window-u-basis").value = record.u_value_basis || "";
+  row.querySelector(".window-shgc").value = record.shgc ?? "";
+  row.querySelector(".window-transmission").value = record.solar_transmission_factor ?? "";
+  row.querySelector(".window-status").value = record.review_status || "missing";
+  row.querySelector("button").addEventListener("click", () => row.remove());
+  requiredElement("envelopeWindowsRows").appendChild(row);
+}
+
 function addEnvelopeBoundary(surface = {}){
   const row = document.createElement("div");
   row.className = "envelope-boundary";
   row.innerHTML = `<input class="boundary-id" placeholder="Surface ID" value="${esc(surface.surface_id || "")}">
     <input class="boundary-zone" placeholder="Owner zone ID" value="${esc(surface.owner_zone_id || "")}">
-    <select class="boundary-kind"><option value="opaque_wall">Wall</option><option value="roof">Roof</option><option value="floor">Floor</option><option value="ceiling">Ceiling</option><option value="partition">Partition</option><option value="glazing">Glazing (stored)</option></select>
+    <input class="boundary-room" placeholder="Owner room ID (glazing)" value="${esc(surface.owner_room_id || "")}">
+    <select class="boundary-kind"><option value="opaque_wall">Wall</option><option value="roof">Roof</option><option value="floor">Floor</option><option value="ceiling">Ceiling</option><option value="partition">Partition</option><option value="glazing">Glazing</option></select>
     <select class="boundary-orientation"><option value="N">N</option><option value="NE">NE</option><option value="E">E</option><option value="SE">SE</option><option value="S">S</option><option value="SW">SW</option><option value="W">W</option><option value="NW">NW</option><option value="horizontal">Horizontal</option><option value="internal">Internal</option></select>
     <input class="boundary-area" type="number" min="0.001" step="0.01" placeholder="Area m²" value="${surface.area_m2 ?? ""}">
+    <select class="boundary-area-basis"><option value="legacy_net_opaque">Net opaque / legacy</option><option value="net_opaque">Net opaque</option><option value="gross_with_confirmed_openings">Gross minus confirmed openings</option></select>
+    <input class="boundary-linked-openings" placeholder="Linked glazing IDs (comma-separated)" value="${esc((surface.linked_opening_surface_ids || []).join(", "))}">
+    <select class="boundary-opening-coverage"><option value="missing">Opening coverage missing</option><option value="proposed">Opening coverage proposed</option><option value="confirmed">All openings confirmed</option></select>
     <input class="boundary-construction" placeholder="Construction ID" value="${esc(surface.construction_id || "")}">
-    <select class="boundary-method"><option value="external">External</option><option value="fixed_adjacent_temperature">Fixed adjacent temp</option><option value="outdoor_offset">Outdoor offset (stored)</option><option value="proportional_ambient_difference">Proportional (stored)</option></select>
+    <input class="boundary-window" placeholder="Window record ID (glazing)" value="${esc(surface.window_id || "")}">
+    <input class="boundary-opening-tag" placeholder="Opening tag" value="${esc(surface.opening_tag || "")}">
+    <input class="boundary-opening-width" type="number" min="0.001" step="0.001" placeholder="Opening width m" value="${surface.opening_width_m ?? ""}">
+    <input class="boundary-opening-height" type="number" min="0.001" step="0.001" placeholder="Opening height m" value="${surface.opening_height_m ?? ""}">
+    <input class="boundary-opening-quantity" type="number" min="1" step="1" placeholder="Opening quantity" value="${surface.opening_quantity ?? ""}">
+    <input class="boundary-explicit-opening" type="number" min="0.001" step="0.001" placeholder="Explicit opening area m²" value="${surface.explicit_opening_area_m2 ?? ""}">
+    <input class="boundary-explicit-glass" type="number" min="0.001" step="0.001" placeholder="Explicit glass area m²" value="${surface.explicit_glass_area_m2 ?? ""}">
+    <select class="boundary-opening-mapping"><option value="missing">Opening mapping missing</option><option value="proposed">Opening mapping proposed</option><option value="confirmed">Opening mapping confirmed</option><option value="conflict">Opening mapping conflict</option></select>
+    <select class="boundary-method"><option value="external">External</option><option value="fixed_adjacent_temperature">Fixed adjacent temp</option><option value="ground_contact">Ground contact</option><option value="outdoor_offset">Outdoor offset (stored)</option><option value="proportional_ambient_difference">Proportional (stored)</option></select>
     <input class="boundary-temp" type="number" step="0.1" placeholder="Adjacent °C" value="${surface.adjacent_temperature_c ?? ""}">
+    <input class="boundary-ground-temp" type="number" step="0.1" placeholder="Ground °C" value="${surface.ground_temperature_c ?? ""}">
+    <input class="boundary-adjacent-id" placeholder="Adjacent boundary ID (partition)" value="${esc(surface.adjacent_boundary_id || "")}">
+    <input class="boundary-adjacent-source" placeholder="Adjacent temperature source" value="${esc(surface.adjacent_temperature_source || "")}">
+    <input class="boundary-adjacent-citation" placeholder="Adjacent temperature citation" value="${esc(surface.adjacent_temperature_citations?.[0]?.reference || "")}">
+    <input class="boundary-ground-source" placeholder="Ground temperature source" value="${esc(surface.ground_temperature_source || "")}">
+    <input class="boundary-ground-citation" placeholder="Ground temperature citation" value="${esc(surface.ground_temperature_citations?.[0]?.reference || "")}">
+    <input class="boundary-shading-records" placeholder="Geometric shading record ID" value="${esc((surface.shading_record_ids || []).join(", "))}">
     <select class="boundary-status"><option value="missing">Missing</option><option value="provisional">Provisional</option><option value="confirmed">Confirmed</option></select>
     <input class="boundary-source" placeholder="Reviewed source" value="${esc(surface.source || "")}">
     <label class="boundary-solar"><input class="boundary-solar-enabled" type="checkbox" ${surface.manual_solar?.enabled ? "checked" : ""}> Manual solar</label>
     <input class="boundary-solar-design" type="number" min="0" step="0.1" placeholder="Solar W/m²" value="${surface.manual_solar?.solar_design_w_m2 ?? ""}">
+    <input class="boundary-solar-incident" type="number" min="0" step="0.1" placeholder="Glazing incident W/m²" value="${surface.manual_solar?.incident_solar_w_m2 ?? ""}">
     <input class="boundary-solar-gain" type="number" min="0" max="1" step="0.01" placeholder="Gain factor" value="${surface.manual_solar?.solar_gain_factor ?? ""}">
     <input class="boundary-solar-shade" type="number" min="0" max="1" step="0.01" placeholder="Shade factor" value="${surface.manual_solar?.shading_factor ?? ""}">
+    <input class="boundary-solar-external" type="number" min="0" max="1" step="0.01" placeholder="External shading factor" value="${surface.manual_solar?.external_shading_factor ?? ""}">
     <select class="boundary-solar-status"><option value="missing">Missing</option><option value="provisional">Provisional</option><option value="confirmed">Confirmed</option></select>
     <input class="boundary-solar-source" placeholder="Manual solar source" value="${esc(surface.manual_solar?.source || "")}">
     <button class="btn ghost mini" type="button">Remove</button>`;
   row.querySelector(".boundary-kind").value = surface.kind || "opaque_wall";
+  row.querySelector(".boundary-area-basis").value = surface.area_basis || "legacy_net_opaque";
+  row.querySelector(".boundary-opening-coverage").value = surface.opening_coverage_status || "missing";
+  row.querySelector(".boundary-opening-mapping").value = surface.opening_mapping_status || "missing";
   row.querySelector(".boundary-orientation").value = surface.orientation || "N";
   row.querySelector(".boundary-method").value = surface.boundary_method || "external";
   row.querySelector(".boundary-status").value = surface.review_status || "missing";
@@ -1021,7 +1084,9 @@ function parseEnvelopeRecords(id, label){
 
 function readEnvelope(){
   const constructionById = new Map((ENVELOPE_LIBRARY.constructions || []).map(item => [item.record_id, item]));
+  const windowById = new Map((ENVELOPE_LIBRARY.windows || []).map(item => [item.record_id, item]));
   const surfaceById = new Map((ENVELOPE_MODEL.surfaces || []).map(item => [item.surface_id, item]));
+  const windowRows = [...document.querySelectorAll(".envelope-window")];
   return {
     envelope_library: {
       constructions: [...document.querySelectorAll(".envelope-construction")].map(row => ({...(constructionById.get(row.querySelector(".env-id").value.trim()) || {}),
@@ -1029,17 +1094,29 @@ function readEnvelope(){
         kind: row.querySelector(".env-kind").value, u_value_w_m2k: blankToNull(row.querySelector(".env-u").value), absorptivity: blankToNull(row.querySelector(".env-abs").value),
         review_status: row.querySelector(".env-status").value, source: row.querySelector(".env-source").value.trim(), citations: constructionById.get(row.querySelector(".env-id").value.trim())?.citations || [],
       })),
-      windows: parseEnvelopeRecords("envelopeWindows", "Window records"), shading_records: parseEnvelopeRecords("envelopeShading", "Shading records"),
+      windows: windowRows.length ? windowRows.map(row => {
+        const id = row.querySelector(".window-id").value.trim(), original = windowById.get(id) || {};
+        const citation = row.querySelector(".window-citation").value.trim(), originalCitation = original.citations?.[0]?.reference || "";
+        return {...original, record_id: id, title: row.querySelector(".window-title").value.trim(), revision: original.revision || 1,
+          u_value_w_m2k: blankToNull(row.querySelector(".window-u").value), u_value_basis: row.querySelector(".window-u-basis").value,
+          shgc: blankToNull(row.querySelector(".window-shgc").value), solar_transmission_factor: blankToNull(row.querySelector(".window-transmission").value),
+          frame_fraction: blankToNull(row.querySelector(".window-frame").value), glass_area_correction: blankToNull(row.querySelector(".window-glass-correction").value),
+          internal_shading_factor: blankToNull(row.querySelector(".window-internal-shade").value), review_status: row.querySelector(".window-status").value,
+          source: row.querySelector(".window-source").value.trim(), citations: citation === originalCitation ? (original.citations || []) : (citation ? [{reference: citation, page: null, excerpt: ""}] : [])};
+      }) : parseEnvelopeRecords("envelopeWindows", "Window records"), shading_records: parseEnvelopeRecords("envelopeShading", "Shading records"),
     },
     envelope_model: {
       active_for_calculation: requiredElement("envelopeActive").checked,
       surfaces: [...document.querySelectorAll(".envelope-boundary")].map(row => ({...(surfaceById.get(row.querySelector(".boundary-id").value.trim()) || {}),
-        surface_id: row.querySelector(".boundary-id").value.trim(), owner_zone_id: row.querySelector(".boundary-zone").value.trim(), owner_room_id: "",
+        surface_id: row.querySelector(".boundary-id").value.trim(), owner_zone_id: row.querySelector(".boundary-zone").value.trim(), owner_room_id: row.querySelector(".boundary-room").value.trim(),
         kind: row.querySelector(".boundary-kind").value, orientation: row.querySelector(".boundary-orientation").value,
-        area_m2: blankToNull(row.querySelector(".boundary-area").value), construction_id: row.querySelector(".boundary-construction").value.trim(), window_id: "", shading_record_ids: [],
-        boundary_method: row.querySelector(".boundary-method").value, adjacent_temperature_c: blankToNull(row.querySelector(".boundary-temp").value),
+        area_m2: blankToNull(row.querySelector(".boundary-area").value), area_basis: row.querySelector(".boundary-area-basis").value,
+        linked_opening_surface_ids: row.querySelector(".boundary-linked-openings").value.split(",").map(value => value.trim()).filter(Boolean), opening_coverage_status: row.querySelector(".boundary-opening-coverage").value,
+        construction_id: row.querySelector(".boundary-construction").value.trim(), window_id: row.querySelector(".boundary-window").value.trim(), shading_record_ids: row.querySelector(".boundary-shading-records").value.split(",").map(value => value.trim()).filter(Boolean),
+        opening_tag: row.querySelector(".boundary-opening-tag").value.trim(), opening_width_m: blankToNull(row.querySelector(".boundary-opening-width").value), opening_height_m: blankToNull(row.querySelector(".boundary-opening-height").value), opening_quantity: blankToNull(row.querySelector(".boundary-opening-quantity").value), explicit_opening_area_m2: blankToNull(row.querySelector(".boundary-explicit-opening").value), explicit_glass_area_m2: blankToNull(row.querySelector(".boundary-explicit-glass").value), opening_mapping_status: row.querySelector(".boundary-opening-mapping").value,
+        boundary_method: row.querySelector(".boundary-method").value, adjacent_temperature_c: blankToNull(row.querySelector(".boundary-temp").value), ground_temperature_c: blankToNull(row.querySelector(".boundary-ground-temp").value), adjacent_boundary_id: row.querySelector(".boundary-adjacent-id").value.trim(), adjacent_temperature_source: row.querySelector(".boundary-adjacent-source").value.trim(), adjacent_temperature_citations: (() => { const citation = row.querySelector(".boundary-adjacent-citation").value.trim(); return citation ? [{reference: citation, page: null, excerpt: "Reviewed adjacent temperature"}] : []; })(), ground_temperature_source: row.querySelector(".boundary-ground-source").value.trim(), ground_temperature_citations: (() => { const citation = row.querySelector(".boundary-ground-citation").value.trim(); return citation ? [{reference: citation, page: null, excerpt: "Reviewed ground temperature"}] : []; })(),
         review_status: row.querySelector(".boundary-status").value, source: row.querySelector(".boundary-source").value.trim(), citations: surfaceById.get(row.querySelector(".boundary-id").value.trim())?.citations || [],
-        manual_solar: {...(surfaceById.get(row.querySelector(".boundary-id").value.trim())?.manual_solar || {}), enabled: row.querySelector(".boundary-solar-enabled").checked, solar_design_w_m2: blankToNull(row.querySelector(".boundary-solar-design").value), solar_gain_factor: blankToNull(row.querySelector(".boundary-solar-gain").value), shading_factor: blankToNull(row.querySelector(".boundary-solar-shade").value), review_status: row.querySelector(".boundary-solar-status").value, source: row.querySelector(".boundary-solar-source").value.trim(), citations: surfaceById.get(row.querySelector(".boundary-id").value.trim())?.manual_solar?.citations || []},
+        manual_solar: {...(surfaceById.get(row.querySelector(".boundary-id").value.trim())?.manual_solar || {}), enabled: row.querySelector(".boundary-solar-enabled").checked, solar_design_w_m2: blankToNull(row.querySelector(".boundary-solar-design").value), incident_solar_w_m2: blankToNull(row.querySelector(".boundary-solar-incident").value), solar_gain_factor: blankToNull(row.querySelector(".boundary-solar-gain").value), shading_factor: blankToNull(row.querySelector(".boundary-solar-shade").value), external_shading_factor: blankToNull(row.querySelector(".boundary-solar-external").value), review_status: row.querySelector(".boundary-solar-status").value, source: row.querySelector(".boundary-solar-source").value.trim(), citations: surfaceById.get(row.querySelector(".boundary-id").value.trim())?.manual_solar?.citations || []},
       })),
     },
   };
@@ -1050,6 +1127,8 @@ function showEnvelope(library = {}, model = {}, readiness = {}){
   ENVELOPE_MODEL = model;
   requiredElement("envelopeConstructions").innerHTML = "";
   (library.constructions || []).forEach(addEnvelopeConstruction);
+  requiredElement("envelopeWindowsRows").innerHTML = "";
+  (library.windows || []).forEach(addEnvelopeWindow);
   requiredElement("envelopeWindows").value = JSON.stringify(library.windows || [], null, 2);
   requiredElement("envelopeShading").value = JSON.stringify(library.shading_records || [], null, 2);
   requiredElement("envelopeSurfaces").innerHTML = "";
@@ -1059,6 +1138,7 @@ function showEnvelope(library = {}, model = {}, readiness = {}){
     ...(readiness.included || []).map(item => ["Included", item]),
     ...(readiness.blocked || []).map(item => ["Blocked", item]),
     ...(readiness.stored_not_calculated || []).map(item => ["Stored only", item]),
+    ...(readiness.draft_only || []).map(item => ["Draft-only exclusion", item]),
   ];
   requiredElement("envelopeStatus").textContent = readiness.active_for_calculation ? `${readiness.status || "review required"} · reviewed model active` : "Legacy envelope remains active until reviewed model is saved and activated.";
   requiredElement("envelopeReadiness").innerHTML = rows.length ? rows.map(([state, item]) => `<article class="review-item"><div><b>${esc(state)} · ${esc(item.surface_id)}</b><span>${esc(item.kind || "surface")} · ${esc(item.reason || "reviewed steady-state opaque input")}</span></div></article>`).join("") : "<div class=\"review-empty\"><b>No reviewed envelope surfaces</b><span>Add reviewed records or seed legacy values as provisional.</span></div>";
@@ -1184,8 +1264,14 @@ function showCalculationInputEvidence(evidence = {}, summary = {}, status = "not
       ? `${status} · ${summary.candidate_count || 0} candidates · ${counts.active || 0} active · ${counts.proposed || 0} proposed · ${counts.blocked || 0} blocked · ${counts.evidence_only || 0} evidence-only`
       : "Build the numerical-input evidence register after the architect packet is analysed.";
   const categoryText = Object.entries(summary.category_counts || {}).map(([key, value]) => `${key}: ${value.count || 0}`).join(" · ");
+  const geometry = evidence.geometry_resolution || {};
+  const geometryProofs = (geometry.entities || []).filter(item => item.kind === "room_geometry_proof");
+  const geometryIssues = (geometry.review_items || []).filter(item => ["geometry", "geometry_area", "scale"].includes(item.field));
+  const geometrySummary = geometryProofs.length || geometryIssues.length
+    ? `<article class="review-item"><div><b>Room geometry and area proofs</b><span>${esc(`${geometry.summary?.confirmed_room_geometry_count || 0} confirmed · ${geometryProofs.length} boundary proofs · ${geometryIssues.length} geometry exceptions`)}</span><small>Derived areas need a closed calibrated boundary, a room-label witness, and an independent supporting witness. 3D pages remain cross-check-only.</small></div></article><div class="geometry-proof-list">${geometryProofs.map(proof => { const value = proof.value || {}; const calibration = value.calibration || {}; return `<article class="review-item readiness-${esc(proof.geometry_status === "geometry_confirmed" ? "review_ready" : "blocked")}"><div><b>${esc(proof.label || "Room boundary")} · ${esc(proof.geometry_status || "geometry_proposed")}</b><span>${value.area_m2 ? `${esc(value.area_m2)} m² derived area` : "Area cannot be derived yet"}</span><small>Level ${esc(proof.level_candidate || "unresolved")} · page ${esc(proof.source?.page || "?")} · ${esc((value.boundary_wall_ids || []).length)} boundary walls · scale ${calibration.mm_per_px ? `${esc(calibration.mm_per_px)} mm/px` : "not proven"}</small>${proof.unresolved_fields?.length ? `<small>Missing: ${esc(proof.unresolved_fields.join(", "))}</small>` : ""}</div></article>`; }).join("")}${geometryIssues.map(item => `<article class="review-item readiness-blocked"><div><b>Geometry exception · ${esc(item.affected_id || "room")}</b><span>${esc(item.reason || "Geometry evidence needs another witness.")}</span><small>Page ${esc(item.page || "?")} · ${esc(item.remediation || "Review the cited geometry.")}</small></div></article>`).join("")}</div>`
+    : "";
   requiredElement("calculationEvidenceSummary").innerHTML = evidence?.fingerprint
-    ? `<article class="review-item"><div><b>Calculation-input evidence register</b><span>${esc(categoryText || "No categories extracted")}</span><small>Rooms referenced: ${esc((summary.affected_room_labels || []).join(", ") || "None")}</small></div>${artifactUrl ? `<a class="btn ghost mini" href="${esc(artifactUrl)}" target="_blank" rel="noopener">Open evidence JSON</a>` : ""}</article>${evidence.binding ? `<article class="review-item"><div><b>Evidence binding</b><span>${esc(`${evidence.binding.relationships?.length || 0} relationships · ${evidence.binding.conflicts?.length || 0} conflicts · ${evidence.binding.observations?.length || 0} observations`)}</span><small>Labels, table cells, image witnesses, PDF candidates, and manual vision records are linked by source page and stable evidence identity. 3D/image-only records remain cross-checks.</small></div></article>` : ""}`
+    ? `<article class="review-item"><div><b>Calculation-input evidence register</b><span>${esc(categoryText || "No categories extracted")}</span><small>Rooms referenced: ${esc((summary.affected_room_labels || []).join(", ") || "None")}</small></div>${artifactUrl ? `<a class="btn ghost mini" href="${esc(artifactUrl)}" target="_blank" rel="noopener">Open evidence JSON</a>` : ""}</article>${geometrySummary}${evidence.binding ? `<article class="review-item"><div><b>Evidence binding</b><span>${esc(`${evidence.binding.relationships?.length || 0} relationships · ${evidence.binding.conflicts?.length || 0} conflicts · ${evidence.binding.observations?.length || 0} observations`)}</span><small>Labels, table cells, image witnesses, PDF candidates, and manual vision records are linked by source page and stable evidence identity. 3D/image-only records remain cross-checks.</small></div></article>` : ""}`
     : "";
   const rows = (evidence.candidates || []).slice(0, 80);
   const bindingIssues = (evidence.binding?.conflicts || []).map(item => `<article class="review-item readiness-blocked"><div><b>Binding conflict · ${esc(item.label || item.target || item.kind)}</b><span>${esc(item.reason || "Competing evidence requires review.")}</span><small>Pages ${esc((item.pages || []).join(", ") || "not cited")}</small></div></article>`).join("");
@@ -1756,6 +1842,216 @@ async function saveInfiltrationGate(){
   } catch (error) { toast("Infiltration gate failed", error.message); }
 }
 
+function showGlazingGate(gate = {}, readiness = {}){
+  GLAZING_GATE = gate || {};
+  requiredElement("glazingGateStatus").value = gate.approval_status || "placeholder";
+  requiredElement("glazingEngineerName").value = gate.engineer_name || "";
+  requiredElement("glazingEngineerCredential").value = gate.engineer_credential || "";
+  requiredElement("glazingApprovedAt").value = gate.approved_at || "";
+  requiredElement("glazingMethodCitation").value = gate.method_citation || "";
+  requiredElement("glazingScope").value = gate.scope || "Reviewed glazing conduction and manual hourly solar transmission only.";
+  requiredElement("glazingGateCitation").value = gate.citations?.[0]?.reference || "";
+  requiredElement("glazingGateStatusText").textContent = readiness.message || "Glazing method gate has not been saved.";
+}
+
+async function loadGlazingGate(){
+  if (!DATA?.id) return;
+  try {
+    const res = await fetch(`/api/glazing-method-gate?project_id=${encodeURIComponent(DATA.id)}`);
+    const data = await res.json();
+    if (!res.ok || data.error) return;
+    showGlazingGate(data.glazing_method_gate || {}, data.readiness || {});
+  } catch (_) { /* Gate is optional until a project has a review folder. */ }
+}
+
+async function saveGlazingGate(){
+  if (!DATA?.id) return;
+  const citation = requiredElement("glazingGateCitation").value.trim();
+  const gate = {
+    ...GLAZING_GATE,
+    approval_status: requiredElement("glazingGateStatus").value,
+    engineer_name: requiredElement("glazingEngineerName").value.trim(),
+    engineer_credential: requiredElement("glazingEngineerCredential").value.trim(),
+    approved_at: requiredElement("glazingApprovedAt").value.trim(),
+    method_citation: requiredElement("glazingMethodCitation").value.trim(),
+    scope: requiredElement("glazingScope").value.trim(),
+    citations: citation ? [{reference: citation, page: null, excerpt: "Approved glazing method gate"}] : [],
+  };
+  try {
+    const res = await fetch("/api/glazing-method-gate", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({project_id: DATA.id, glazing_method_gate: gate})});
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || "Could not save glazing method gate.");
+    showGlazingGate(data.glazing_method_gate || {}, data.readiness || {});
+    CALCULATOR_INPUT_SET = null;
+    toast("Glazing method gate saved", data.readiness?.message || "Reassemble cooling inputs before calculating.");
+  } catch (error) { toast("Glazing method gate failed", error.message); }
+}
+
+function showShadingGate(gate = {}, readiness = {}){
+  SHADING_GATE = gate || {};
+  requiredElement("shadingGateStatus").value = gate.approval_status || "placeholder";
+  requiredElement("shadingEngineerName").value = gate.engineer_name || "";
+  requiredElement("shadingEngineerCredential").value = gate.engineer_credential || "";
+  requiredElement("shadingApprovedAt").value = gate.approved_at || "";
+  requiredElement("shadingMethodCitation").value = gate.method_citation || "";
+  requiredElement("shadingScope").value = gate.scope || "Reviewed glazing external shading from cited geometry and cited hourly sun positions only.";
+  requiredElement("shadingGateCitation").value = gate.citations?.[0]?.reference || "";
+  requiredElement("shadingGateStatusText").textContent = readiness.message || "Shading method gate has not been saved.";
+}
+
+async function loadShadingGate(){
+  if (!DATA?.id) return;
+  try {
+    const res = await fetch(`/api/shading-method-gate?project_id=${encodeURIComponent(DATA.id)}`);
+    const data = await res.json();
+    if (!res.ok || data.error) return;
+    showShadingGate(data.shading_method_gate || {}, data.readiness || {});
+  } catch (_) { /* Optional until a project has a review folder. */ }
+}
+
+async function saveShadingGate(){
+  if (!DATA?.id) return;
+  const citation = requiredElement("shadingGateCitation").value.trim();
+  const gate = {
+    ...SHADING_GATE,
+    approval_status: requiredElement("shadingGateStatus").value,
+    engineer_name: requiredElement("shadingEngineerName").value.trim(),
+    engineer_credential: requiredElement("shadingEngineerCredential").value.trim(),
+    approved_at: requiredElement("shadingApprovedAt").value.trim(),
+    method_citation: requiredElement("shadingMethodCitation").value.trim(),
+    scope: requiredElement("shadingScope").value.trim(),
+    citations: citation ? [{reference: citation, page: null, excerpt: "Approved shading method gate"}] : [],
+  };
+  try {
+    const res = await fetch("/api/shading-method-gate", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({project_id: DATA.id, shading_method_gate: gate})});
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || "Could not save shading method gate.");
+    showShadingGate(data.shading_method_gate || {}, data.readiness || {});
+    CALCULATOR_INPUT_SET = null;
+    toast("Shading method gate saved", data.readiness?.message || "Reassemble cooling inputs before calculating.");
+  } catch (error) { toast("Shading method gate failed", error.message); }
+}
+
+function showGroundContactGate(gate = {}, readiness = {}){
+  GROUND_CONTACT_GATE = gate || {};
+  requiredElement("groundContactGateStatus").value = gate.approval_status || "placeholder";
+  requiredElement("groundContactEngineerName").value = gate.engineer_name || "";
+  requiredElement("groundContactEngineerCredential").value = gate.engineer_credential || "";
+  requiredElement("groundContactApprovedAt").value = gate.approved_at || "";
+  requiredElement("groundContactMethodCitation").value = gate.method_citation || "";
+  requiredElement("groundContactScope").value = gate.scope || "Reviewed steady-state ground-contact floor conduction only.";
+  requiredElement("groundContactGateCitation").value = gate.citations?.[0]?.reference || "";
+  requiredElement("groundContactGateStatusText").textContent = readiness.message || "Ground-contact method gate has not been saved.";
+}
+
+async function loadGroundContactGate(){
+  if (!DATA?.id) return;
+  try {
+    const res = await fetch(`/api/ground-contact-method-gate?project_id=${encodeURIComponent(DATA.id)}`);
+    const data = await res.json();
+    if (!res.ok || data.error) return;
+    showGroundContactGate(data.ground_contact_method_gate || {}, data.readiness || {});
+  } catch (_) { /* Optional until a project has a review folder. */ }
+}
+
+async function saveGroundContactGate(){
+  if (!DATA?.id) return;
+  const citation = requiredElement("groundContactGateCitation").value.trim();
+  const gate = {
+    ...GROUND_CONTACT_GATE,
+    approval_status: requiredElement("groundContactGateStatus").value,
+    engineer_name: requiredElement("groundContactEngineerName").value.trim(),
+    engineer_credential: requiredElement("groundContactEngineerCredential").value.trim(),
+    approved_at: requiredElement("groundContactApprovedAt").value.trim(),
+    method_citation: requiredElement("groundContactMethodCitation").value.trim(),
+    scope: requiredElement("groundContactScope").value.trim(),
+    citations: citation ? [{reference: citation, page: null, excerpt: "Approved ground-contact method gate"}] : [],
+  };
+  try {
+    const res = await fetch("/api/ground-contact-method-gate", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({project_id: DATA.id, ground_contact_method_gate: gate})});
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || "Could not save ground-contact method gate.");
+    showGroundContactGate(data.ground_contact_method_gate || {}, data.readiness || {});
+    CALCULATOR_INPUT_SET = null;
+    toast("Ground-contact method gate saved", data.readiness?.message || "Reassemble cooling inputs before calculating.");
+  } catch (error) { toast("Ground-contact gate failed", error.message); }
+}
+
+function showAdvancedGate(prefix, gate = {}, readiness = {}, fallbackScope = ""){
+  requiredElement(`${prefix}GateStatus`).value = gate.approval_status || "placeholder";
+  requiredElement(`${prefix}EngineerName`).value = gate.engineer_name || "";
+  requiredElement(`${prefix}EngineerCredential`).value = gate.engineer_credential || "";
+  requiredElement(`${prefix}ApprovedAt`).value = gate.approved_at || "";
+  requiredElement(`${prefix}MethodCitation`).value = gate.method_citation || "";
+  requiredElement(`${prefix}Scope`).value = gate.scope || fallbackScope;
+  requiredElement(`${prefix}GateCitation`).value = gate.citations?.[0]?.reference || "";
+  requiredElement(`${prefix}GateStatusText`).textContent = readiness.message || "Method gate has not been saved.";
+}
+
+async function loadDynamicThermalMassGate(){
+  if (!DATA?.id) return;
+  try {
+    const res = await fetch(`/api/dynamic-thermal-mass-method-gate?project_id=${encodeURIComponent(DATA.id)}`);
+    const data = await res.json();
+    if (!res.ok || data.error) return;
+    showAdvancedGate("dynamicThermalMass", data.dynamic_thermal_mass_method_gate || {}, data.readiness || {}, "First-order hourly resistance-capacitance envelope response only.");
+  } catch (_) { /* Optional until a project has a review folder. */ }
+}
+
+async function saveAdvancedGate(prefix, endpoint, key, title){
+  if (!DATA?.id) return;
+  const citation = requiredElement(`${prefix}GateCitation`).value.trim();
+  const gate = {
+    approval_status: requiredElement(`${prefix}GateStatus`).value,
+    engineer_name: requiredElement(`${prefix}EngineerName`).value.trim(),
+    engineer_credential: requiredElement(`${prefix}EngineerCredential`).value.trim(),
+    approved_at: requiredElement(`${prefix}ApprovedAt`).value.trim(),
+    method_citation: requiredElement(`${prefix}MethodCitation`).value.trim(),
+    scope: requiredElement(`${prefix}Scope`).value.trim(),
+    citations: citation ? [{reference: citation, page: null, excerpt: `Approved ${title} method gate`}] : [],
+  };
+  try {
+    const res = await fetch(endpoint, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({project_id: DATA.id, [key]: gate})});
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || `Could not save ${title} method gate.`);
+    showAdvancedGate(prefix, data[key] || {}, data.readiness || {});
+    CALCULATOR_INPUT_SET = null;
+    toast(`${title} method gate saved`, data.readiness?.message || "Reassemble cooling inputs before calculating.");
+  } catch (error) { toast(`${title} gate failed`, error.message); }
+}
+
+function saveDynamicThermalMassGate(){
+  return saveAdvancedGate("dynamicThermalMass", "/api/dynamic-thermal-mass-method-gate", "dynamic_thermal_mass_method_gate", "Dynamic thermal-mass");
+}
+
+async function loadSolarRadiationGate(){
+  if (!DATA?.id) return;
+  try {
+    const res = await fetch(`/api/solar-radiation-method-gate?project_id=${encodeURIComponent(DATA.id)}`);
+    const data = await res.json();
+    if (!res.ok || data.error) return;
+    showAdvancedGate("solarRadiation", data.solar_radiation_method_gate || {}, data.readiness || {}, "Cited hourly incident surface irradiance only.");
+  } catch (_) { /* Optional until a project has a review folder. */ }
+}
+
+function saveSolarRadiationGate(){
+  return saveAdvancedGate("solarRadiation", "/api/solar-radiation-method-gate", "solar_radiation_method_gate", "Solar-radiation");
+}
+
+async function loadRoomCouplingGate(){
+  if (!DATA?.id) return;
+  try {
+    const res = await fetch(`/api/room-to-room-coupling-method-gate?project_id=${encodeURIComponent(DATA.id)}`);
+    const data = await res.json();
+    if (!res.ok || data.error) return;
+    showAdvancedGate("roomCoupling", data.room_to_room_coupling_method_gate || {}, data.readiness || {}, "Two-node hourly dynamic room-to-room partition coupling only.");
+  } catch (_) { /* Optional until a project has a review folder. */ }
+}
+
+function saveRoomCouplingGate(){
+  return saveAdvancedGate("roomCoupling", "/api/room-to-room-coupling-method-gate", "room_to_room_coupling_method_gate", "Room-to-room coupling");
+}
+
 async function saveHourlyModel(action){
   if (!DATA?.id) return;
   requiredElement("btnSaveHourlyModel").disabled = true;
@@ -1872,13 +2168,16 @@ function showCalculatorInputs(inputSet = {}, context = {}, overrides = {}){
   const candidateDefaults = inputSet.research_defaults_unavailable || [];
   const unavailableDefaults = candidateDefaults.map(row => `${row.record_id}: ${row.reason || "not eligible"}`).join(" · ");
   const candidateReport = candidateDefaults.length ? `<details class="review-item input-register-group"><summary><b>Default-candidate pack</b><span>${candidateDefaults.length} candidate${candidateDefaults.length === 1 ? "" : "s"} cannot affect this calculation</span></summary>${candidateDefaults.map(row => `<div class="input-register-row"><div><b>${esc(row.category || "candidate")} · ${esc(row.record_id)}</b><span>${esc((row.binding_targets || []).join(", ") || "No calculator target")}</span><small>${esc(row.publisher || "")} · ${esc(row.citation || "citation missing")} · scope: ${esc(JSON.stringify(row.scope || {}))} · ${esc(row.reason || "not eligible")}</small></div></div>`).join("")}</details>` : "";
+  const defaultCoverage = inputSet.research_default_coverage || {};
+  const coverageRows = (defaultCoverage.required || []).filter(row => row.status !== "released");
+  const defaultCoverageReport = defaultCoverage.pack_version ? `<details class="review-item input-register-group"><summary><b>Default-pack coverage</b><span>${esc(defaultCoverage.status || "unknown")} · ${coverageRows.length} unresolved binding${coverageRows.length === 1 ? "" : "s"}</span></summary>${coverageRows.slice(0, 40).map(row => `<div class="input-register-row"><div><b>${esc(row.category)} · ${esc(row.target)}</b><span>${esc(row.status)}</span><small>scope: ${esc(JSON.stringify(row.scope || {}))}${row.record_ids?.length ? ` · candidate records: ${esc(row.record_ids.join(", "))}` : ""}</small></div></div>`).join("")}</details>` : "";
   const releaseState = inputSet?.snapshot_stale ? (inputSet?.current_source_pack_release || {}) : (inputSet?.source_pack_release || {});
   const releaseVersions = releaseState.released_pack_versions || [];
   const releasedBy = (releaseState.releases || []).map(row => `${row.engineer?.name || "Engineer"} (${row.engineer?.credential || "credential not recorded"}) · expires ${row.expiry || "not recorded"}`).join(" · ");
   const releaseNote = releaseVersions.length
     ? `Engineer-released packs: ${releaseVersions.join(", ")}${releasedBy ? ` · ${releasedBy}` : ""}`
     : "No engineer-released source pack is available; candidates cannot affect this calculation.";
-  requiredElement("calculatorInputSummary").innerHTML = inputSet?.input_fingerprint ? `${coverageCard}<article class="review-item"><div><b>Resolved input register</b><span>${esc(resolved.length)} fields · ${esc(counts.project_evidence || 0)} project evidence · ${esc(counts.derived_evidence || 0)} derived · ${esc(counts.approved_default || 0)} approved defaults · ${esc(counts.project_override || 0)} overrides</span><small>Policy: ${esc(inputSet.policy_version || "")}; source pack: ${esc(inputSet.source_pack_version || "not selected")}</small><small>${esc(releaseNote)}</small>${unavailableDefaults ? `<small>Unavailable source records: ${esc(unavailableDefaults)}</small>` : ""}</div></article>${candidateReport}${register}` : "";
+  requiredElement("calculatorInputSummary").innerHTML = inputSet?.input_fingerprint ? `${coverageCard}<article class="review-item"><div><b>Resolved input register</b><span>${esc(resolved.length)} fields · ${esc(counts.project_evidence || 0)} project evidence · ${esc(counts.derived_evidence || 0)} derived · ${esc(counts.approved_default || 0)} approved defaults · ${esc(counts.project_override || 0)} overrides</span><small>Policy: ${esc(inputSet.policy_version || "")}; source pack: ${esc(inputSet.source_pack_version || "not selected")}</small><small>${esc(releaseNote)}</small>${unavailableDefaults ? `<small>Unavailable source records: ${esc(unavailableDefaults)}</small>` : ""}</div></article>${candidateReport}${defaultCoverageReport}${register}` : "";
   const issues = inputSet?.snapshot_stale ? (currentAssembly.issues || []) : (inputSet?.issues || []);
   const issueRows = issues.slice().sort((a, b) => ({blocked: 0, draft: 1}[a.status] ?? 2) - ({blocked: 0, draft: 1}[b.status] ?? 2));
   requiredElement("calculatorInputIssues").innerHTML = issueRows.length
@@ -1991,10 +2290,26 @@ function drawHourlyLoadReport(report = {}, artifactStatus = "not_calculated"){
         + `(sensible ${Number(infiltration.sensible_kw || 0).toFixed(2)} kW, latent ${Number(infiltration.latent_kw || 0).toFixed(2)} kW)`
         + `<br><small>Peak hour ${esc(room.peak?.hour ?? "—")} · ${Number(input.resolved_flow_lps || 0).toFixed(2)} L/s resolved, ${Number(input.applied_flow_lps || 0).toFixed(2)} L/s applied · volume ${volume} · schedule ${Number(input.schedule_factor ?? 0).toFixed(2)} · signed diagnostics: ${Number(input.raw_signed_sensible_kw || 0).toFixed(2)} sensible / ${Number(input.raw_signed_latent_kw || 0).toFixed(2)} latent kW</small></li>`;
     }).filter(Boolean);
+    const glazingRows = (scenario.rooms || []).map(room => {
+      const conduction = room.peak?.components?.glazing_conduction;
+      const solar = room.peak?.components?.glazing_solar;
+      if (!conduction && !solar) return "";
+      const input = conduction?.inputs || solar?.inputs || conduction?.input_rows?.[0] || solar?.input_rows?.[0] || {};
+      return `<li><b>${esc(room.name || room.room_id)}</b> · ${Number(conduction?.total_kw || 0).toFixed(2)} kW conduction / ${Number(solar?.total_kw || 0).toFixed(2)} kW solar`
+        + `<br><small>Peak hour ${esc(room.peak?.hour ?? "—")} · opening ${Number(input.opening_area_m2 || 0).toFixed(2)} m² · glass ${Number(input.corrected_glass_area_m2 || 0).toFixed(2)} m² · schedule ${Number(input.schedule_factor ?? 0).toFixed(2)} · cited reviewed glazing</small></li>`;
+    }).filter(Boolean);
+    const couplingRows = (scenario.rooms || []).map(room => {
+      const rows = Object.values(room.peak?.components || {}).filter(component => component?.name === "dynamic_partition");
+      if (!rows.length) return "";
+      return `<li><b>${esc(room.name || room.room_id)}</b> · ${rows.reduce((sum, row) => sum + Number(row.total_kw || 0), 0).toFixed(2)} kW dynamic partition transfer`
+        + `<br><small>Peak hour ${esc(room.peak?.hour ?? "—")} · equal-and-opposite transfer retained in the coupling audit</small></li>`;
+    }).filter(Boolean);
     return `<article class="heat-load-result"><b>${esc(scenario.title || scenario.scenario_id)} · ${esc(scenario.status)}</b>
       <span>Included-scope subtotal peak ${Number(peak.design_total_kw || 0).toFixed(2)} kW${scenario.scope_summary?.complete_scope ? "" : " · not a complete project duty"}</span>
       ${blocked.length ? `<span>Omitted rooms: ${esc(blocked.map(item => item.room_id).join(", "))}</span>` : ""}
-      ${infiltrationRows.length ? `<details><summary>Infiltration at each room governing hour</summary><ul class="audit-list">${infiltrationRows.join("")}</ul></details>` : ""}</article>`;
+      ${infiltrationRows.length ? `<details><summary>Infiltration at each room governing hour</summary><ul class="audit-list">${infiltrationRows.join("")}</ul></details>` : ""}
+      ${glazingRows.length ? `<details><summary>Reviewed glazing at each room governing hour</summary><ul class="audit-list">${glazingRows.join("")}</ul></details>` : ""}
+      ${couplingRows.length ? `<details><summary>Dynamic partitions at each room governing hour</summary><ul class="audit-list">${couplingRows.join("")}</ul></details>` : ""}</article>`;
   }), ...scopeRows].join("");
 }
 

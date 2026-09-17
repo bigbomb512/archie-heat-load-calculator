@@ -11,8 +11,16 @@ from ai.design_requirements import (
     validate_design_requirements,
     validate_zone_cooling_load,
 )
-from ai.heat_loads import envelope_load, equipment_load, infiltration_load, lighting_load, outside_air_load, people_load, solar_load
+from ai.heat_loads import contribution, envelope_load, equipment_load, infiltration_load, lighting_load, outside_air_load, people_load, solar_load
 from ai.infiltration_gate import METHOD_ID as INFILTRATION_METHOD_ID, empty_infiltration_method_gate, gate_is_approved, validate_infiltration_method_gate
+from ai.glazing_calculation import calculate_glazing
+from ai.glazing_gate import empty_glazing_method_gate, gate_is_approved as glazing_gate_is_approved, validate_glazing_method_gate
+from ai.shading_gate import empty_shading_method_gate, gate_is_approved as shading_gate_is_approved, validate_shading_method_gate
+from ai.shading_geometry import geometric_shading_factor
+from ai.envelope_method_gates import dynamic_thermal_mass_gate_is_approved as dynamic_mass_gate_is_approved, solar_radiation_gate_is_approved
+from ai.thermal_mass import calculate_first_order_rc
+from ai.solar_radiation import absorbed_solar_gain_kw, validate_solar_radiation_source
+from ai.room_coupling import empty_room_coupling_method_gate, room_coupling_gate_is_approved, solve_dynamic_partition, validate_room_coupling_method_gate
 from ai.site_design_conditions import validate_citations
 from ai.cooling_readiness import assess_cooling_readiness, room_component_issues, topology_issues
 
@@ -626,6 +634,7 @@ def validate_assignments(raw, room_id, source_ids, cooling):
     if unknown_equipment:
         raise ValueError(f"Room {room_id} assigns schedules to unknown heat sources: {', '.join(sorted(unknown_equipment))}.")
     surface_ids = {str(item.get("surface_id", "")) for item in cooling.get("envelope_surfaces", [])}
+    surface_ids.update(str(item.get("surface_id", "")) for item in cooling.get("glazing_surfaces", []))
     unknown_solar = set(solar) - surface_ids
     if unknown_solar:
         raise ValueError(f"Room {room_id} assigns schedules to unknown surfaces: {', '.join(sorted(unknown_solar))}.")
@@ -650,13 +659,16 @@ def hourly_model_summary(model, requirements=None):
     })
 
 
-def calculate_hourly_load_report(requirements, schedule_library, scenarios, model, selected_scenario_ids, coverage=None, infiltration_gate=None):
+def calculate_hourly_load_report(requirements, schedule_library, scenarios, model, selected_scenario_ids, coverage=None, infiltration_gate=None, glazing_gate=None, shading_gate=None, dynamic_mass_gate=None, radiation_gate=None, radiation_source=None, coupling_gate=None):
     requirements = requirements_snapshot(requirements)
     schedule_library = artifact_snapshot(schedule_library, validate_schedule_library)
     scenarios = artifact_snapshot(scenarios, validate_design_day_scenarios)
     model = artifact_snapshot(model, validate_hourly_load_model)
     coverage = coverage or {}
     infiltration_gate = validate_infiltration_method_gate(infiltration_gate or empty_infiltration_method_gate())
+    glazing_gate = validate_glazing_method_gate(glazing_gate or empty_glazing_method_gate())
+    shading_gate = validate_shading_method_gate(shading_gate or empty_shading_method_gate())
+    coupling_gate = validate_room_coupling_method_gate(coupling_gate or empty_room_coupling_method_gate())
     stale = model.get("source_requirements_updated_at") != requirements.get("updated_at")
     selected = select_scenarios(scenarios, selected_scenario_ids)
     report = {
@@ -669,10 +681,14 @@ def calculate_hourly_load_report(requirements, schedule_library, scenarios, mode
             "design_day_scenarios_updated_at": scenarios.get("updated_at", ""),
             "hourly_load_model_updated_at": model.get("updated_at", ""),
             "infiltration_method_gate_updated_at": infiltration_gate.get("updated_at", ""),
+            "glazing_method_gate_updated_at": glazing_gate.get("updated_at", ""),
+            "shading_method_gate_updated_at": shading_gate.get("updated_at", ""),
+            "room_to_room_coupling_method_gate_updated_at": coupling_gate.get("updated_at", ""),
         },
         "excluded_components": [
-            "partitions", "minimum supply air", "extract/spill/transfer/make-up air",
-            "vapour/steam/process latent loads", "dynamic thermal mass", "detailed glazing physics",
+            "dynamic room-to-room partition coupling", "minimum supply air", "extract/spill/transfer/make-up air",
+            "vapour/steam/process latent loads", "dynamic thermal mass",
+            "room-to-room dynamic partition coupling",
             "AHU coil effects", "fan/duct effects", "heat recovery", "plant loads",
         ],
         "scenario_results": [],
@@ -694,7 +710,7 @@ def calculate_hourly_load_report(requirements, schedule_library, scenarios, mode
         attach_readiness(report, model, requirements, coverage)
         return report
     for scenario in selected:
-        report["scenario_results"].append(calculate_scenario(requirements, schedule_library, model, scenario, infiltration_gate))
+        report["scenario_results"].append(calculate_scenario(requirements, schedule_library, model, scenario, infiltration_gate, glazing_gate, shading_gate, dynamic_mass_gate, radiation_gate, radiation_source, coupling_gate))
     all_rooms = [room for scenario in report["scenario_results"] for room in scenario["rooms"]]
     if not any(room["status"] != "blocked" for room in all_rooms):
         report["blocked_reasons"].append("No selected scenario produced a complete room result.")
@@ -737,7 +753,7 @@ def select_scenarios(scenarios, selected_ids):
     return [lookup[item] for item in selected_ids]
 
 
-def calculate_scenario(requirements, library, model, scenario, infiltration_gate):
+def calculate_scenario(requirements, library, model, scenario, infiltration_gate, glazing_gate=None, shading_gate=None, dynamic_mass_gate=None, radiation_gate=None, radiation_source=None, coupling_gate=None):
     result = {
         "scenario_id": scenario["scenario_id"], "title": scenario["title"], "mode": scenario["mode"],
         "representative_month": scenario["representative_month"], "day_type": scenario["day_type"],
@@ -753,7 +769,23 @@ def calculate_scenario(requirements, library, model, scenario, infiltration_gate
         result["blocked_reasons"].extend(scenario_missing)
         return result
     zones = {zone["zone_id"]: zone for zone in model["zones"]}
-    room_results = [calculate_room_hours(requirements, library, scenario, room, zones[room["zone_id"]], infiltration_gate) for room in model["rooms"]]
+    coupling_gate = validate_room_coupling_method_gate(coupling_gate or empty_room_coupling_method_gate())
+    coupling_states = {}
+    coupling_cache = {}
+    for room in model["rooms"]:
+        for surface in room["cooling_load"].get("envelope_surfaces", []):
+            record = surface.get("room_coupling", {})
+            if record.get("enabled"):
+                coupling_states.setdefault(record["coupling_id"], {
+                    "owner": record["initial_owner_state_temperature_c"],
+                    "adjacent": record["initial_adjacent_state_temperature_c"],
+                })
+    room_results = [calculate_room_hours(
+        requirements, library, scenario, room, zones[room["zone_id"]], infiltration_gate,
+        glazing_gate, shading_gate, dynamic_mass_gate, radiation_gate, radiation_source,
+        coupling_gate=coupling_gate, all_rooms=model["rooms"], coupling_states=coupling_states,
+        coupling_cache=coupling_cache,
+    ) for room in model["rooms"]]
     result["rooms"] = room_results
     calculated_rooms = [room for room in room_results if room["status"] != "blocked"]
     if not calculated_rooms:
@@ -806,13 +838,22 @@ def scenario_ready(scenario):
     return missing, provisional
 
 
-def calculate_room_hours(requirements, library, scenario, room, zone, infiltration_gate):
+def calculate_room_hours(requirements, library, scenario, room, zone, infiltration_gate, glazing_gate=None, shading_gate=None, dynamic_mass_gate=None, radiation_gate=None, radiation_source=None, coupling_gate=None, all_rooms=None, coupling_states=None, coupling_cache=None):
     component_scope = room_component_scope(room)
     result = {
         "room_id": room["room_id"], "name": room["name"], "zone_id": room["zone_id"], "status": "blocked",
         "hours": [], "peak": {}, "warnings": [], "blocked_reasons": [], "room_input_scope": component_scope,
     }
-    static_missing = room_static_missing(room, zone, infiltration_gate)
+    coupling_gate = validate_room_coupling_method_gate(coupling_gate or empty_room_coupling_method_gate())
+    all_rooms = all_rooms or [room]
+    coupling_states = coupling_states if coupling_states is not None else {}
+    coupling_cache = coupling_cache if coupling_cache is not None else {}
+    static_missing = room_static_missing(room, zone, infiltration_gate, glazing_gate, coupling_gate)
+    room_ids = {candidate.get("room_id") for candidate in all_rooms}
+    for surface in room["cooling_load"].get("envelope_surfaces", []):
+        record = surface.get("room_coupling", {})
+        if record.get("enabled") and record.get("adjacent_room_id") not in room_ids:
+            static_missing.append(f"room-to-room coupling references unknown adjacent room '{record.get('adjacent_room_id', '')}'")
     if static_missing:
         result["blocked_reasons"].extend(static_missing)
         return result
@@ -827,16 +868,39 @@ def calculate_room_hours(requirements, library, scenario, room, zone, infiltrati
         result["warnings"].append("Known room airflow or moisture inputs are stored but excluded until an approved calculation method exists.")
     if component_scope["not_assessed"]:
         result["warnings"].append("Room airflow or moisture input categories have not been assessed.")
+    dynamic_states = {
+        surface["surface_id"]: surface.get("dynamic_thermal_mass", {}).get("initial_state_temperature_c", room["indoor_cooling_setpoint_c"])
+        for surface in room["cooling_load"].get("envelope_surfaces", [])
+        if surface.get("dynamic_thermal_mass", {}).get("enabled")
+    }
+    checked_radiation_source = validate_solar_radiation_source(radiation_source or {})
+    coupling_blockers = []
+    room_by_id = {candidate.get("room_id"): candidate for candidate in all_rooms}
     for weather in scenario["hours"]:
         hour = weather["hour"]
-        contributions = room_contributions(room, zone, infiltration_gate, profiles, hour, weather, scenario["atmospheric_pressure_kpa"]["value"])
+        coupling_results = resolve_dynamic_couplings(
+            room, room_by_id, weather, coupling_gate, coupling_states, coupling_cache, hour,
+        )
+        coupling_blockers.extend(
+            row.get("reason", "Dynamic partition coupling did not converge.")
+            for row in coupling_results.values() if row.get("status") == "blocked"
+        )
+        contributions = room_contributions(
+            room, zone, infiltration_gate, profiles, hour, weather,
+            scenario["atmospheric_pressure_kpa"]["value"], glazing_gate=glazing_gate, shading_gate=shading_gate,
+            dynamic_mass_gate=dynamic_mass_gate, radiation_gate=radiation_gate, radiation_source=checked_radiation_source,
+            dynamic_states=dynamic_states, coupling_results=coupling_results,
+        )
         result["hours"].append(hour_total(hour, contributions, room["cooling_load"]["safety_factor"]))
+    if coupling_blockers:
+        result["blocked_reasons"].extend(sorted(set(coupling_blockers)))
+        return result
     result["peak"] = peak(result["hours"])
     result["status"] = "draft" if provisional else "review_ready"
     return result
 
 
-def room_static_missing(room, zone=None, infiltration_gate=None):
+def room_static_missing(room, zone=None, infiltration_gate=None, glazing_gate=None, coupling_gate=None):
     load = room["cooling_load"]
     conditions = room["cooling_load_conditions"]
     required = {
@@ -861,6 +925,15 @@ def room_static_missing(room, zone=None, infiltration_gate=None):
         for key, label in (("surface_id", "surface ID"), ("area_m2", "area"), ("u_value_w_m2k", "U-value"), ("solar_design_w_m2", "design solar"), ("solar_gain_factor", "solar gain"), ("shading_factor", "shading"), ("source", "source")):
             if surface.get(key) in (None, ""):
                 missing.append(f"{surface.get('surface_id', 'surface')} {label}")
+    glazing = load.get("glazing_surfaces", [])
+    if glazing and not glazing_gate_is_approved(glazing_gate):
+        missing.append("approved glazing method gate")
+    for surface in glazing:
+        if not surface.get("owner_room_id") or surface.get("owner_room_id") != room["room_id"]:
+            missing.append(f"{surface.get('surface_id', 'glazing')} owning room mapping")
+    coupling_gate = validate_room_coupling_method_gate(coupling_gate or empty_room_coupling_method_gate())
+    if any(surface.get("room_coupling", {}).get("enabled") for surface in load.get("envelope_surfaces", [])) and not room_coupling_gate_is_approved(coupling_gate):
+        missing.append("approved room-to-room coupling method gate")
     active = active_infiltration_components(room)
     if len(active) > 1:
         ids = ", ".join(sorted(item.get("component_id", "") for item in active))
@@ -916,6 +989,7 @@ def resolved_profiles(library, day_type, room):
     required = {
         **{f"equipment:{source['source_id']}": assignments["equipment"].get(source["source_id"], "") for source in room["heat_sources"] if heat_source_is_timed(source)},
         **{f"solar:{surface['surface_id']}": assignments["solar"].get(surface["surface_id"], "") for surface in room["cooling_load"].get("envelope_surfaces", []) if solar_is_timed(surface)},
+        **{f"solar:{surface['surface_id']}": assignments["solar"].get(surface["surface_id"], "") for surface in room["cooling_load"].get("glazing_surfaces", []) if glazing_solar_is_timed(surface)},
     }
     if people_is_timed(room):
         required["people"] = assignments["people"]
@@ -950,6 +1024,11 @@ def heat_source_is_timed(source):
 
 def solar_is_timed(surface):
     return float(surface.get("area_m2", 0)) * float(surface.get("solar_design_w_m2", 0)) * float(surface.get("solar_gain_factor", 0)) * float(surface.get("shading_factor", 0)) != 0
+
+
+def glazing_solar_is_timed(surface):
+    manual = surface.get("manual_solar", {})
+    return bool(manual.get("enabled")) and float(manual.get("incident_solar_w_m2", manual.get("solar_design_w_m2", 0)) or 0) != 0
 
 
 def people_is_timed(room):
@@ -1003,6 +1082,8 @@ def room_is_provisional(room):
         return True
     if any(surface.get("verification_status") != "confirmed" for surface in room["cooling_load"].get("envelope_surfaces", [])):
         return True
+    if any(surface.get("verification_status") != "confirmed" for surface in room["cooling_load"].get("glazing_surfaces", [])):
+        return True
     for component in room["unapproved_components"]:
         if component["component_type"] == "infiltration" and component["calculation_status"] == "calculated":
             if component["verification_status"] != "confirmed":
@@ -1025,23 +1106,62 @@ def room_component_scope(room):
     return result
 
 
-def room_contributions(room, zone, infiltration_gate, profiles, hour, weather, pressure):
+def room_contributions(room, zone, infiltration_gate, profiles, hour, weather, pressure, glazing_gate=None, shading_gate=None, dynamic_mass_gate=None, radiation_gate=None, radiation_source=None, dynamic_states=None, coupling_results=None):
     load = room["cooling_load"]
     people = scale(people_load(room["occupancy"], load["people_sensible_w_per_person"], load["people_latent_w_per_person"], load["people_diversity_factor"]), schedule_factor(profiles, "people", hour), "people")
     lighting = scale(lighting_load(room["area_m2"], load["lighting_w_m2"], load["lighting_diversity_factor"]), schedule_factor(profiles, "lighting", hour), "lighting")
     equipment = [scale(equipment_load([source]), schedule_factor(profiles, f"equipment:{source['source_id']}", hour), "equipment_refrigeration") for source in room["heat_sources"]]
-    envelope = envelope_load(room["cooling_load"].get("envelope_surfaces", []), weather["outdoor_dry_bulb_c"]["value"], room["indoor_cooling_setpoint_c"])
+    surfaces = hourly_envelope_surfaces(room["cooling_load"].get("envelope_surfaces", []), hour)
+    static_surfaces = []
+    dynamic = []
+    dynamic_states = dynamic_states if dynamic_states is not None else {}
+    coupling_results = coupling_results or {}
+    for surface in surfaces:
+        coupling_record = surface.get("room_coupling", {})
+        if coupling_record.get("enabled"):
+            resolved = coupling_results.get(coupling_record.get("coupling_id"))
+            if resolved and resolved.get("status") == "calculated" and resolved.get("room_role") == "owner":
+                dynamic.append(contribution("dynamic_partition", resolved["owner_sensible_kw"], inputs=resolved, formula=resolved["formula"]))
+            continue
+        dynamic_record = surface.get("dynamic_thermal_mass", {})
+        if dynamic_record.get("enabled") and dynamic_mass_gate_is_approved(dynamic_mass_gate):
+            previous = dynamic_states.get(surface["surface_id"], dynamic_record.get("initial_state_temperature_c", room["indoor_cooling_setpoint_c"]))
+            boundary = surface.get("boundary_temperature_c")
+            if boundary is None:
+                boundary = weather["outdoor_dry_bulb_c"]["value"]
+            irradiance = 0.0
+            if (surface.get("solar_radiation_source_id") and solar_radiation_gate_is_approved(radiation_gate)
+                    and radiation_source and radiation_source.get("source_id") == surface.get("solar_radiation_source_id")):
+                irradiance = radiation_source["hours"][hour]["irradiance_w_m2"]
+            rc = calculate_first_order_rc(dynamic_record, boundary, room["indoor_cooling_setpoint_c"], previous,
+                                          irradiance_w_m2=irradiance,
+                                          method_id=dynamic_mass_gate.get("method_id", ""),
+                                          gate_version=dynamic_mass_gate.get("updated_at", ""))
+            dynamic_states[surface["surface_id"]] = rc["state_temperature_c"]
+            dynamic.append(contribution("dynamic_thermal_mass", rc["sensible_kw"], inputs=rc, formula=rc["formula"]))
+        else:
+            static_surfaces.append(surface)
+    envelope = envelope_load(static_surfaces, weather["outdoor_dry_bulb_c"]["value"], room["indoor_cooling_setpoint_c"])
     solar = []
-    for surface in room["cooling_load"].get("envelope_surfaces", []):
+    for surface in static_surfaces:
+        if surface.get("solar_radiation_source_id") and solar_radiation_gate_is_approved(radiation_gate):
+            if radiation_source and radiation_source.get("source_id") == surface.get("solar_radiation_source_id"):
+                gain = absorbed_solar_gain_kw(radiation_source, hour, surface["area_m2"], surface.get("solar_absorptance", 0.0))
+                solar.append(contribution("solar_radiation", gain, inputs={"surface_id": surface["surface_id"], "source_id": radiation_source["source_id"], "source_fingerprint": radiation_source.get("fingerprint", ""), "hour": hour}, formula="cited surface irradiance × area × absorptance ÷ 1000"))
+                continue
         timed_surface = deepcopy(surface)
         timed_surface["solar_design_w_m2"] *= schedule_factor(profiles, f"solar:{surface['surface_id']}", hour) if solar_is_timed(surface) else 0
         solar.append(solar_load([timed_surface]))
+    for resolved in coupling_results.values():
+        if resolved.get("status") == "calculated" and resolved.get("room_role") == "adjacent":
+            dynamic.append(contribution("dynamic_partition", resolved["adjacent_sensible_kw"], inputs=resolved, formula=resolved["formula"]))
     outside_air = outside_air_load(
         load["outside_air_lps"] * schedule_factor(profiles, "outside_air", hour), room["indoor_cooling_setpoint_c"],
         requirements_wet_bulb(room, "indoor_cooling_wet_bulb_c"), weather["outdoor_dry_bulb_c"]["value"],
         weather["outdoor_wet_bulb_c"]["value"], pressure,
     )
-    contributions = [people, lighting, *equipment, envelope, *solar, outside_air]
+    glazing = glazing_contributions(room, profiles, hour, weather, glazing_gate, shading_gate)
+    contributions = [people, lighting, *equipment, envelope, *dynamic, *solar, *glazing, outside_air]
     infiltration = infiltration_component(room)
     if infiltration.get("calculation_status") == "calculated":
         contributions.append(infiltration_load(
@@ -1052,6 +1172,105 @@ def room_contributions(room, zone, infiltration_gate, profiles, hour, weather, p
             method_id=infiltration.get("method_id", ""), gate_version=infiltration_gate.get("updated_at", ""),
         ))
     return contributions
+
+
+def resolve_dynamic_couplings(room, room_by_id, weather, coupling_gate, coupling_states, coupling_cache, hour):
+    """Resolve all dynamic partitions touching one room for one hour."""
+    if not room_coupling_gate_is_approved(coupling_gate):
+        return {}
+    result = {}
+    room_id = room.get("room_id", "")
+    for candidate in room_by_id.values():
+        for surface in candidate.get("cooling_load", {}).get("envelope_surfaces", []):
+            record = surface.get("room_coupling", {})
+            if not record.get("enabled"):
+                continue
+            is_owner = record.get("owner_room_id") == room_id
+            is_adjacent = record.get("adjacent_room_id") == room_id
+            if not is_owner and not is_adjacent:
+                continue
+            coupling_id = record.get("coupling_id", "")
+            cache_key = (coupling_id, int(hour))
+            if cache_key not in coupling_cache:
+                adjacent = room_by_id.get(record.get("adjacent_room_id"))
+                owner = room_by_id.get(record.get("owner_room_id"))
+                if owner is None or adjacent is None:
+                    coupling_cache[cache_key] = {"status": "blocked", "reason": "dynamic partition needs both explicit room owners"}
+                elif owner.get("indoor_cooling_setpoint_c") is None or adjacent.get("indoor_cooling_setpoint_c") is None:
+                    coupling_cache[cache_key] = {"status": "blocked", "reason": "dynamic partition needs both room cooling setpoints"}
+                else:
+                    state = coupling_states.setdefault(coupling_id, {
+                        "owner": record["initial_owner_state_temperature_c"],
+                        "adjacent": record["initial_adjacent_state_temperature_c"],
+                    })
+                    solved = solve_dynamic_partition(
+                        record,
+                        owner["indoor_cooling_setpoint_c"],
+                        adjacent["indoor_cooling_setpoint_c"],
+                        state["owner"], state["adjacent"],
+                        gate_version=coupling_gate.get("updated_at", ""),
+                    )
+                    if solved.get("status") == "calculated":
+                        state["owner"] = solved["owner_state_temperature_c"]
+                        state["adjacent"] = solved["adjacent_state_temperature_c"]
+                    coupling_cache[cache_key] = solved
+            solved = deepcopy(coupling_cache[cache_key])
+            solved["room_role"] = "owner" if is_owner else "adjacent"
+            result[coupling_id] = solved
+    return result
+
+
+def hourly_envelope_surfaces(surfaces, hour):
+    """Resolve an optional cited 24-hour boundary profile for this hour."""
+    result = []
+    for surface in surfaces:
+        item = deepcopy(surface)
+        profile = item.get("boundary_temperature_profile") or {}
+        values = profile.get("values") if isinstance(profile, dict) else None
+        if isinstance(values, list) and len(values) == 24:
+            item["boundary_temperature_c"] = values[int(hour)]
+        result.append(item)
+    return result
+
+
+def glazing_contributions(room, profiles, hour, weather, glazing_gate, shading_gate=None):
+    """Keep conduction and solar separate in the hourly audit register."""
+    if not glazing_gate_is_approved(glazing_gate):
+        return []
+    result = []
+    for surface in room["cooling_load"].get("glazing_surfaces", []):
+        manual = deepcopy(surface.get("manual_solar", {}))
+        factor = schedule_factor(profiles, f"solar:{surface['surface_id']}", hour) if glazing_solar_is_timed(surface) else 0.0
+        incident = manual.get("incident_solar_w_m2", manual.get("solar_design_w_m2", 0)) or 0.0
+        manual["incident_solar_w_m2"] = incident * factor
+        geometric = surface.get("geometric_shading")
+        shading_audit = {}
+        if geometric and shading_gate_is_approved(shading_gate):
+            resolved = geometric_shading_factor(surface, geometric, hour)
+            if resolved.get("status") == "calculated":
+                manual["external_shading_factor"] = resolved["external_shading_factor"]
+                shading_audit = {"mode": "geometric", **resolved, "record_id": geometric.get("record_id", "")}
+        if not shading_audit:
+            shading_audit = {"mode": "manual", "external_shading_factor": manual.get("external_shading_factor", manual.get("shading_factor"))}
+        boundary = weather["outdoor_dry_bulb_c"]["value"] if surface.get("boundary_method") == "external" else surface.get("boundary_temperature_c")
+        calculated = calculate_glazing(surface, surface.get("window", {}), manual,
+                                       boundary_temperature_c=boundary,
+                                       indoor_temperature_c=room["indoor_cooling_setpoint_c"])
+        if calculated.get("status") != "calculated":
+            continue
+        inputs = {
+            **calculated.get("operands", {}), "surface_id": surface.get("surface_id", ""),
+            "schedule_factor": factor, "gate_version": glazing_gate.get("updated_at", ""),
+            "citations": calculated.get("citations", {}), "formulas": calculated.get("formulas", {}),
+            "opening_area_m2": calculated.get("opening_area_m2"), "glass_area_m2": calculated.get("glass_area_m2"),
+            "corrected_glass_area_m2": calculated.get("corrected_glass_area_m2"),
+            "external_shading": shading_audit,
+        }
+        result.append(contribution("glazing_conduction", calculated["raw_signed_conduction_kw"], inputs=inputs,
+                                   formula=calculated["formulas"]["conduction"]))
+        result.append(contribution("glazing_solar", calculated["solar_gain_kw"], inputs=inputs,
+                                   formula=calculated["formulas"]["solar"]))
+    return result
 
 
 def requirements_wet_bulb(room, key):

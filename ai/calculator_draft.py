@@ -7,7 +7,6 @@ import json
 import math
 import re
 
-from ai.building_evidence import slug
 from ai.site_design_conditions import validate_citations
 from ai.hourly_loads import (
     DAY_TYPES, empty_hourly_load_model, empty_schedule_library,

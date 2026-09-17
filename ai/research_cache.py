@@ -119,12 +119,16 @@ def validate_source_pack_release_manifest(raw):
                 raise ValueError(f"Released pack {release_id} needs the approving engineer name and credential.")
             if not _parse_time(release.get("approved_at")):
                 raise ValueError(f"Released pack {release_id} needs an ISO approval date.")
+            if not str(release.get("approval_reference", "")).strip():
+                raise ValueError(f"Released pack {release_id} needs an approval reference.")
         expiry = release.get("expiry", "")
         if expiry and not _parse_time(expiry):
             raise ValueError(f"Release {release_id} has an invalid expiry date.")
         scope = release.get("scope") or {}
         if not isinstance(scope, dict):
             raise ValueError(f"Release {release_id} scope must be an object.")
+        if status == "released" and not scope:
+            raise ValueError(f"Released pack {release_id} needs an applicable scope.")
         records, record_ids = [], set()
         for record in release.get("records", []):
             if not isinstance(record, dict):
@@ -137,6 +141,8 @@ def validate_source_pack_release_manifest(raw):
             record_ids.add(record_id)
         if status == "released" and not records:
             raise ValueError(f"Released pack {release_id} must list at least one approved record hash.")
+        if status == "released" and not expiry:
+            raise ValueError(f"Released pack {release_id} needs an expiry date.")
         releases.append({
             "release_id": release_id, "pack_version": pack_version, "status": status,
             "engineer": {"name": str(engineer.get("name", "")).strip(), "credential": str(engineer.get("credential", "")).strip()},
@@ -321,6 +327,8 @@ def validate_candidate_record(record):
             if not scope.get("scenario") or not any(scope.get(key) for key in ("locality", "state", "climate_zone")):
                 raise ValueError(f"Weather candidate {result['record_id']} needs scenario and locality, state, or climate-zone scope.")
             _validate_weather_profile(binding["value"])
+    if not result.get("source_pack_version"):
+        raise ValueError(f"Candidate {result['record_id']} needs a source_pack_version.")
     return result
 
 
@@ -402,6 +410,55 @@ def default_record_statuses(cache, scope=None, now=None, release_manifest=None):
         }
         for record in checked["records"]
     ]
+
+
+def default_pack_coverage(cache, scope=None, now=None, release_manifest=None):
+    """Report required default coverage without making any record eligible.
+
+    Candidate packs intentionally remain separate from project caches and from
+    engineer releases.  This read-only projection lets the resolver and UI
+    distinguish a missing category from a stored candidate that is awaiting
+    release or has a scope/hash problem.
+    """
+    checked = validate_cache(cache)
+    pack_version = checked.get("source_pack_version", "")
+    pack_path = Path(__file__).resolve().parents[1] / "config" / "au_cooling_default_pack.json"
+    try:
+        pack = json.loads(pack_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        pack = {}
+    if pack.get("pack_version") != pack_version:
+        return {"pack_version": pack_version, "status": "not_selected", "required": [], "missing": [], "available": []}
+    now = now or datetime.now(timezone.utc)
+    records = {row["record_id"]: row for row in checked["records"]}
+    required = pack.get("required_coverage", []) if isinstance(pack.get("required_coverage", []), list) else []
+    rows, missing, available = [], [], []
+    for item in required:
+        category, target = str(item.get("category", "")), str(item.get("target", ""))
+        requested_scope = item.get("scope") or {}
+        matches = []
+        for record in records.values():
+            if record.get("category") != category:
+                continue
+            for binding in record.get("bindings", []):
+                if binding.get("target") != target:
+                    continue
+                combined = dict(record.get("scope") or {})
+                combined.update(binding.get("scope") or {})
+                if all(combined.get(key) in (None, "", value) for key, value in requested_scope.items()):
+                    matches.append(record)
+        eligible = []
+        for record in matches:
+            status = source_record_release_status(checked, record, scope, now, release_manifest)
+            if status.get("eligible"):
+                eligible.append(record["record_id"])
+        state = "released" if eligible else ("candidate" if matches else "missing")
+        row = {"category": category, "target": target, "scope": deepcopy(requested_scope), "status": state,
+               "record_ids": sorted({record["record_id"] for record in matches}), "eligible_record_ids": sorted(eligible)}
+        rows.append(row)
+        (available if matches else missing).append(row)
+    return {"pack_version": pack_version, "status": "complete" if required and not missing and all(row["status"] == "released" for row in rows) else ("candidate" if available else "missing"),
+            "required": rows, "missing": missing, "available": available}
 
 
 def upsert_record(cache, record):

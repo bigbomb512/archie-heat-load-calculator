@@ -425,12 +425,13 @@ button,input{ font:inherit; color:inherit }
 .readiness-draft{ border-left:3px solid var(--warn) }
 .readiness-review_ready{ border-left:3px solid var(--accent) }
 .readiness-group h4{ margin:10px 0 6px; color:var(--ink); text-transform:capitalize }
-.envelope-construction,.envelope-boundary{ display:grid; gap:8px; align-items:center; padding:8px; border:1px solid var(--line-soft); border-radius:var(--r); background:var(--main-bg) }
+.envelope-construction,.envelope-window,.envelope-boundary{ display:grid; gap:8px; align-items:center; padding:8px; border:1px solid var(--line-soft); border-radius:var(--r); background:var(--main-bg) }
 .envelope-construction{ grid-template-columns:minmax(0,1fr) minmax(0,1fr) 100px 95px 100px 100px minmax(0,1fr) auto }
+.envelope-window{ grid-template-columns:repeat(3,minmax(110px,1fr)) 120px repeat(5,minmax(100px,1fr)) 100px minmax(150px,1fr) minmax(130px,1fr) auto }
 .envelope-boundary{ grid-template-columns:repeat(5,minmax(90px,1fr)) 110px 135px 90px 100px minmax(0,1fr) 95px repeat(3,90px) 100px minmax(0,1fr) auto }
-.envelope-construction input,.envelope-construction select,.envelope-boundary input,.envelope-boundary select{ border:1px solid var(--line); border-radius:var(--r); background:var(--panel); color:var(--text); padding:8px; min-width:0 }
+.envelope-construction input,.envelope-construction select,.envelope-window input,.envelope-window select,.envelope-boundary input,.envelope-boundary select{ border:1px solid var(--line); border-radius:var(--r); background:var(--panel); color:var(--text); padding:8px; min-width:0 }
 .boundary-solar{ display:flex; align-items:center; gap:5px; font-size:11px; color:var(--text-2) }
-@media(max-width:1200px){ .envelope-construction,.envelope-boundary,.hierarchy-row,.room-component{ grid-template-columns:repeat(3,minmax(0,1fr)) auto } }
+@media(max-width:1200px){ .envelope-construction,.envelope-window,.envelope-boundary,.hierarchy-row,.room-component{ grid-template-columns:repeat(3,minmax(0,1fr)) auto } }
 .heat-load-result{ display:grid; gap:6px; padding:10px 12px; border-top:1px solid var(--line); font-size:12px; color:var(--text-2) }
 .heat-load-result:first-child{ border-top:0 }
 .heat-load-result b{ color:var(--text) }
@@ -438,7 +439,7 @@ button,input{ font:inherit; color:inherit }
 .zone-actions{ padding:10px 12px 12px }
 @media(max-width:1200px){ .zone-heat-source,.envelope-surface{ grid-template-columns:repeat(3,minmax(0,1fr)) auto }.zone-heat-source .zone-heat-note,.envelope-surface .surface-source{ grid-column:1 / -1 } }
 @media(max-width:900px){ .heat-source,.zone-heat-source{ grid-template-columns:minmax(0,1fr) 70px 100px 110px auto }.heat-source .heat-source-note,.zone-heat-source .zone-heat-note{ grid-column:1 / -1 }.envelope-surface{ grid-template-columns:repeat(2,minmax(0,1fr)) auto } }
-@media(max-width:760px){ .requirements-form,.zone-fields,.zone-load-fields,.zone-ventilation-fields,.envelope-construction,.envelope-boundary,.hierarchy-row,.room-input-grid,.room-input-grid fieldset,.room-component{ grid-template-columns:1fr }.heat-source,.zone-heat-source,.envelope-surface{ grid-template-columns:1fr 80px 90px auto }.heat-source .heat-source-note,.zone-heat-source .zone-heat-note,.envelope-surface .surface-source{ grid-column:1 / -1 }.zone-editor summary,.envelope-storage summary,.room-input-card summary{ align-items:flex-start; flex-direction:column }.zone-warning{ text-align:left } }
+@media(max-width:760px){ .requirements-form,.zone-fields,.zone-load-fields,.zone-ventilation-fields,.envelope-construction,.envelope-window,.envelope-boundary,.hierarchy-row,.room-input-grid,.room-input-grid fieldset,.room-component{ grid-template-columns:1fr }.heat-source,.zone-heat-source,.envelope-surface{ grid-template-columns:1fr 80px 90px auto }.heat-source .heat-source-note,.zone-heat-source .zone-heat-note,.envelope-surface .surface-source{ grid-column:1 / -1 }.zone-editor summary,.envelope-storage summary,.room-input-card summary{ align-items:flex-start; flex-direction:column }.zone-warning{ text-align:left } }
 .debug-panel{ padding-bottom:16px }
 .debug-panel .scored{ padding:16px 18px 0; margin:0 }
 .debug-panel .grid{ padding:0 18px }

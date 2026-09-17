@@ -11,8 +11,6 @@ from ai.ai_packet import load_json
 
 MAX_MATCHES_PER_PAGE = 140
 MAX_REJECTIONS_PER_PAGE = 180
-BOUNDARY_DIMENSION_VALUES = {8075, 8205, 6585, 5535, 5655, 3650, 3530, 1810, 950, 670}
-LOCAL_FIXTURE_DIMENSION_VALUES = {600, 800, 880, 1000, 1200, 1500}
 BOUNDARY_DIMENSION_WORDS = ["overall", "c.o.s", "cos", "boundary", "lease", "setout", "set out"]
 DEFAULT_RENDER_DPI = 180
 
@@ -160,9 +158,11 @@ def dimension_category(text):
     seen = f"{text.get('text_seen', '')} {text.get('context', '')} {text.get('nearby_text', '')}".lower()
     if any(word in seen for word in BOUNDARY_DIMENSION_WORDS):
         return "major_boundary"
-    if value in BOUNDARY_DIMENSION_VALUES:
-        return "major_boundary"
-    if value in LOCAL_FIXTURE_DIMENSION_VALUES or value <= 1500:
+    # Do not classify by a project's observed numeric dimensions.  Drawing
+    # sets use different units and scales; only explicit semantic context may
+    # identify a boundary dimension.  A small dimension remains a generic
+    # local/opening candidate for downstream matching.
+    if isinstance(value, (int, float)) and value <= 1500:
         return "local_fixture"
     return "setout_or_opening"
 

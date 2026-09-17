@@ -81,6 +81,55 @@ def compare_case(case, archie_report):
     return report
 
 
+def validate_stage6_benchmark_release(case):
+    """Validate the separate authorisation needed for a Stage 6 benchmark.
+
+    A well-formed comparison is not a validation claim.  This gate requires a
+    project owner to record the authorised benchmark source and release before
+    any future caller could label a comparison validated.
+    """
+    case = validate_benchmark_case(case)
+    release = case.get("stage6_release") or {}
+    required = ("status", "engineer_name", "engineer_credential", "approved_at", "scope", "citations")
+    missing = [key for key in required if not release.get(key)]
+    if release.get("status") != "approved":
+        missing.append("approved Stage 6 benchmark release")
+    if not isinstance(release.get("citations"), list) or not release.get("citations"):
+        missing.append("release citation")
+    if missing:
+        raise ValueError("Stage 6 benchmark is not authorised: " + ", ".join(dict.fromkeys(missing)) + ".")
+    if case_missing_material(case):
+        raise ValueError("Stage 6 benchmark cannot be authorised with incomplete source or reconciliation material.")
+    if any(item.get("status") == "unresolved" for item in mapped_inputs(case)):
+        raise ValueError("Stage 6 benchmark cannot be authorised with unresolved input reconciliation.")
+    return case
+
+
+def compare_stage6_benchmark_case(case, archie_report, *, report_is_current=True):
+    """Compare a Stage 6 case while keeping validation explicitly unavailable."""
+    report = compare_case(case, archie_report)
+    report["stage6_validation"] = {
+        "status": "not_authorised",
+        "validated": False,
+        "report_is_current": bool(report_is_current),
+    }
+    try:
+        validate_stage6_benchmark_release(case)
+    except ValueError as error:
+        report["stage6_validation"]["reason"] = str(error)
+        report["status"] = "blocked"
+        report["final_parity_allowed"] = False
+        return report
+    if not report_is_current:
+        report["stage6_validation"]["reason"] = "The Archie report is stale and cannot be compared."
+        report["status"] = "blocked"
+        report["final_parity_allowed"] = False
+        return report
+    report["stage6_validation"].update({"status": "comparison_ready", "reason": "Comparison only; validated remains unavailable in Stage 6."})
+    report["final_parity_allowed"] = False
+    return report
+
+
 def mapped_inputs(case):
     """Flatten explicit family mappings while preserving legacy reconciliation rows."""
     records = list(case.get("input_reconciliation", []))

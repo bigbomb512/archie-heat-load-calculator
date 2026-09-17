@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Create a complete, private manual-vision handoff for Drawing 6.
 
-This does not modify calculator artifacts. It renders every architect page
-and includes the machine-readable context available for each page (structured
-PDF text, OCR, vector witnesses, and existing calculation candidates). Role
-metadata tells the manual ChatGPT workflow what each page can legitimately
-prove; it does not turn every page into primary geometry evidence.
+This does not modify calculator artifacts. It indexes every architect page,
+renders only the bounded ranked context plus a separate exception appendix, and
+includes machine-readable context (structured PDF text, OCR, vector witnesses,
+and existing calculation candidates). Role/capability metadata tells the
+manual ChatGPT workflow what each page can legitimately prove; it does not turn
+every page into primary geometry evidence.
 """
 
 import argparse
@@ -13,15 +14,12 @@ import hashlib
 import json
 import subprocess
 from pathlib import Path
+import sys
 
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
-PRIORITY_PAGES = {
-    16: {"role": "3d_crosscheck", "purpose": "Visual consistency only; no scale or primary dimensions."},
-    20: {"role": "primary_geometry_plan", "purpose": "Room boundaries, dimensions, labels, and wall/opening relationships."},
-    21: {"role": "supporting_geometry_plan", "purpose": "Floor finishes, room notes, and supporting boundary evidence."},
-    22: {"role": "reflected_ceiling_service", "purpose": "Ceiling heights, ceiling transitions, and lighting evidence."},
-    26: {"role": "opening_elevation", "purpose": "Storefront/elevation opening evidence and vertical dimensions."},
-}
+from ai.vision_extraction import build_ranked_context
 
 ROLE_PURPOSES = {
     "main_floor_plan": "Primary room geometry, dimensions, labels, and wall/opening relationships.",
@@ -70,6 +68,8 @@ def build(project_dir):
         old.unlink()
     page_rows = {row.get("page"): row for row in ai_input.get("drawing_set", {}).get("pages", [])}
     coverage = load(project_dir / "drawing_coverage.json")
+    context_selection = build_ranked_context(ai_input, coverage)
+    context_by_page = {row["page"]: row for row in context_selection.get("pages", [])}
     coverage_roles = {row.get("page"): row for row in coverage.get("page_roles", [])}
     spatial_ocr = load(project_dir / "spatial_ocr.json")
     ocr_by_page = {row.get("page"): row for row in spatial_ocr.get("pages", [])}
@@ -95,21 +95,19 @@ def build(project_dir):
     for row in ai_input.get("drawing_set", {}).get("pages", []):
         page = row.get("page")
         role_row = coverage_roles.get(page, {})
-        role = role_row.get("proposed_role", "reference")
+        context_row = context_by_page.get(page, {})
+        role = context_row.get("role") or role_row.get("proposed_role", "reference")
         selected[page] = {
             "role": role,
             "purpose": ROLE_PURPOSES.get(role, "Supporting architect evidence; do not infer unsupported values."),
             "capabilities": role_row.get("capabilities", []),
             "capability_map": role_row.get("capability_map", {}),
             "relevance": role_row.get("relevance", {}),
-            "selection": role_row.get("selection", "reference_only"),
-            "selection_reasons": role_row.get("selection_reasons", []),
+            "selection": context_row.get("context_selection", "reference_only"),
+            "selection_reasons": context_row.get("context_selection_reasons") or role_row.get("selection_reasons", []),
             "identity": role_row.get("identity", {}),
             "related_pages": role_row.get("related_pages", []),
         }
-    for page, meta in PRIORITY_PAGES.items():
-        if page in selected:
-            selected[page].update(meta)
     manifest_pages = []
     for page in sorted(selected):
         meta = selected[page]
@@ -168,12 +166,13 @@ def build(project_dir):
     context = {
         "source_pdf": str(pdf),
         "source_fingerprint": source_fingerprint(ai_input),
+        "context_selection": context_selection,
         "pages": manifest_pages,
         "existing_page_roles": coverage.get("page_roles", []),
         "existing_candidates": existing_candidates,
         "rules": [
             "Use only facts directly visible or explicitly printed on the cited page.",
-            "Process every page in this packet. Use the role/capability map to decide what each page can prove.",
+            "Use the ranked main context for extraction; consult the separate exception appendix only when it can resolve or challenge a selected fact.",
             "Every observation must cite page, drawing number, excerpt, and coordinates or table cell when available.",
             "A 3D page is cross-check evidence only and cannot supply scale, dimensions, or room area.",
             "Do not infer occupancy, schedules, U-values, thermal boundaries, glazing performance, or equipment heat-to-space values.",
@@ -184,6 +183,7 @@ def build(project_dir):
     (output / "page_index.json").write_text(json.dumps({
         "schema_version": 1,
         "source_fingerprint": source_fingerprint(ai_input),
+        "context_selection": context_selection,
         "page_count": len(manifest_pages),
         "pages": manifest_pages,
     }, indent=2), encoding="utf-8")
@@ -199,7 +199,8 @@ areas, schedules, U-values, thermal boundaries, occupancy, or equipment heat.
 Use page numbers, drawing numbers, role/capability metadata, and the supplied
 source text/OCR/vector evidence from context.json. Pages with reference-only
 or 3D roles are still useful context, but cannot provide primary dimensions.
-Page 16 and all other 3D/render pages are cross-check-only.
+3D/render pages are cross-check-only. Reference-only pages remain indexed but
+are not part of the main context unless a later targeted review requests them.
 
 Return this shape:
 
@@ -243,13 +244,14 @@ any cooling or heating result.
         "schema_version": 2,
         "source_pdf": str(pdf),
         "source_fingerprint": source_fingerprint(ai_input),
+        "context_selection": context_selection,
         "page_count": len(manifest_pages),
         "architect_page_count": len(manifest_pages),
         "pages": manifest_pages,
         "context": "context.json",
         "page_index": "page_index.json",
         "prompt": "prompt.md",
-        "selected_page_count": len([row for row in manifest_pages if row.get("image", "").startswith("pages/")]),
+        "selected_page_count": len(context_selection.get("main_context_pages", [])),
         "exception_page_count": len([row for row in manifest_pages if row.get("image", "").startswith("exceptions/")]),
         "instructions": [
             "Upload prompt.md, context.json, page_index.json, pages/, and exceptions/ to the manual ChatGPT workflow.",

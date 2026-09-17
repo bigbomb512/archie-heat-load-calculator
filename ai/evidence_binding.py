@@ -9,7 +9,6 @@ calculate loads or approve engineering inputs.
 from copy import deepcopy
 import hashlib
 import json
-import re
 
 
 BINDING_SCHEMA_VERSION = 1

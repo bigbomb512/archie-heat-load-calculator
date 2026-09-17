@@ -1,8 +1,10 @@
 # Reviewed envelope and boundary calculation slice
 
-This slice adds per-project reviewed envelope artifacts for cooling calculations.
-It does not implement detailed glazing, dynamic conduction, geometric shading,
-heating, AHU, plant, or annual analysis.
+This slice adds per-project reviewed envelope artifacts for cooling calculations,
+including gated manual-solar glazing, bounded geometric-shading records, and
+fixed-temperature partitions. It does not implement dynamic conduction,
+solar-position/radiation methods beyond the manual basis, heating, AHU, plant,
+or annual analysis.
 
 ## Artifacts
 
@@ -17,8 +19,10 @@ Construction records use `record_id`, `revision`, `review_status`, `source`, and
 `orientation`, `area_m2`, `construction_id`, `boundary_method`, and the same
 review evidence. IDs are lowercase stable IDs.
 
-`external` and `fixed_adjacent_temperature` are the only boundary methods that
-can contribute. Fixed-adjacent surfaces require `adjacent_temperature_c`.
+`external`, `fixed_adjacent_temperature`, and the separately gated
+`ground_contact` method can contribute when their records are complete. Fixed-
+adjacent surfaces require `adjacent_temperature_c`; ground-contact surfaces
+require the approved ground-contact method gate and a cited temperature basis.
 `outdoor_offset` and `proportional_ambient_difference` are retained as explicit
 stored methods and are excluded until their method is reviewed and implemented.
 
@@ -39,8 +43,9 @@ adjacent temperature. Manual solar retains the existing explicit designer-input
 formula and needs its own confirmed source.
 
 The active model blocks cooling reports when it contains provisional,
-unsupported, or stored-not-calculated surfaces. This avoids silently omitting
-glazing, frames, internal shades, overhangs, fins, reveals, or adjacent
+unsupported, or stored-not-calculated surfaces. Glazing and geometric shading
+also require their own gates and complete cited inputs; this avoids silently
+omitting glazing, frames, internal shades, overhangs, fins, reveals, or adjacent
 obstruction geometry.
 
 ## Migration and API

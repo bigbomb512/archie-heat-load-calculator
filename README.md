@@ -12,13 +12,25 @@ It does **not** own HVAC layout, equipment placement, routing, CAD actions, or d
 - Manual AI packets for visual/evidence review.
 - External-research handoff packets for a web-enabled AI or researcher; every external fact must have a direct citation and remains review-required.
 - Evidence-aware hourly cooling reports with explicit blocked, draft, and review-ready states.
-- Reviewed per-project opaque-envelope libraries and boundary models, including
-  exterior and fixed-adjacent-temperature steady-state cooling conduction.
+- Reviewed per-project envelope libraries and boundary models, including
+  exterior, fixed-adjacent-temperature and gated ground-contact steady-state
+  conduction, reviewed glazing with manual hourly solar, controlled geometric
+  shading records, and gated first-order RC thermal-mass/cited surface-
+  irradiance contracts.
 - Site conditions, schedules, design-day scenarios, reviewed floor/zone/room overlays, readiness, and parity-report scaffolding.
 - Room-owned evidence records for unsupported airflow and moisture/process inputs. They are captured as confirmed absent, stored-not-calculated, or unassessed; they never silently change cooling totals.
 - Evidence-to-calculator draft bridge: cited drawing/thermal evidence becomes versioned proposals that an engineer can accept, edit, reject, or mark as needing evidence before anything is applied to the hourly model.
 
-The current cooling method is limited to its declared inputs. Stored infiltration, transfer/extract/make-up air, vapour/steam, and process latent inputs remain explicit exclusions until an approved method exists. It is not CAMEL+/DA09 parity, equipment selection, heating design, AHU/plant analysis, annual analysis, or geometric shading.
+The current cooling method is limited to its declared inputs. Infiltration can
+contribute only when its project method gate, air-path declaration, schedule,
+volume and cited room input are complete. Stored transfer/extract/make-up air,
+vapour/steam, and process latent inputs remain explicit exclusions until their
+methods exist. Glazing, geometric shading, partitions and ground contact are
+similarly gated and remain excluded when evidence or approval is incomplete.
+This is not CAMEL+/DA09 parity, equipment selection, heating design, AHU/plant
+analysis, or annual analysis. The advanced RC and irradiance methods are not
+enabled merely because their artifacts exist: each requires its own approved
+method gate plus complete cited surface/source records.
 
 ## Run locally
 
@@ -33,6 +45,27 @@ brew install poppler
 ```
 
 Open `http://127.0.0.1:8000`.
+
+Before opening a pull request, run the dependency-free quality and repository
+hygiene checks:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 tools/check_python_quality.py
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. python3 tests/test_repository_hygiene.py
+```
+
+For every meaningful code change, the mandatory developer smoke gate runs the
+same checks plus the independent calculation sanity vectors, regression scripts,
+frontend syntax/contract checks, and a Git whitespace check:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. python3 tools/mandatory_smoke_gate.py
+```
+
+It intentionally omits the local-socket video test in restricted environments;
+run `python3 tools/mandatory_smoke_gate.py --include-video` when socket binding
+is permitted. A passing gate is development confidence only, not engineering or
+CAMEL+ validation.
 
 `start_web` uses `.venv/bin/python` when available, otherwise it uses `python3` (or
 the optional `PYTHON_BIN` environment variable). It never relies on a developer's

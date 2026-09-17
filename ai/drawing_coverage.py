@@ -69,6 +69,11 @@ def build_drawing_coverage(ai_input, spatial_ocr=None, vector_geometry=None):
         })
     for role in page_roles:
         role["related_pages"] = related_by_page.get(role.get("page"), [])
+    # Keep context selection in the authoritative page register.  The import
+    # is local to avoid coupling the low-level classifier to the provider
+    # orchestration module at import time.
+    from ai.vision_extraction import build_ranked_context
+    context_selection = build_ranked_context({"drawing_set": {"pages": pages}}, {"page_roles": page_roles})
     return {
         "version": 4,
         "source_pdf": ai_input.get("source_pdf", ""),
@@ -88,6 +93,7 @@ def build_drawing_coverage(ai_input, spatial_ocr=None, vector_geometry=None):
         "sheet_register": [sheet_entry(page) for page in pages],
         "page_roles": page_roles,
         "page_relationships": page_relationships,
+        "context_selection": context_selection,
         "levels": levels,
         "cross_sheet_links": cross_sheet_links(levels),
         "coverage_exceptions": exceptions,
@@ -181,7 +187,7 @@ def classify_page_roles(pages, ai_input, spatial_ocr=None, vector_geometry=None)
         elif detected_type in {"render_or_photo", "perspective_or_3d"} or any(term in title for term in ("3d", "perspective", "render", "isometric")):
             role = "3d_render"
             evidence.append("render/perspective classification or title")
-        elif ((title == "dimension plan" or page.get("drawing_number") == "202" and "dimension" in title)
+        elif (title == "dimension plan"
               and detected_type not in {"cover_or_drawing_list", "render_or_photo"}
               and page.get("plan_role") != "reference_context"):
             role = "main_floor_plan"
@@ -524,7 +530,19 @@ def relate_pages(page_roles, pages):
             if left_numbers & right_numbers:
                 basis.append("shared explicit drawing reference")
             compatible = {"main_floor_plan", "primary_geometry_plan", "supporting_geometry_plan", "reflected_ceiling_plan", "services_or_lighting_plan", "opening_elevation", "elevation_or_section", "3d_render"}
-            if left.get("proposed_role") in compatible and right.get("proposed_role") in compatible and (left.get("level_name") or right.get("level_name") or left.get("page") in {20, 21, 22, 26}):
+            # When labels or explicit sheet references are unavailable, link
+            # only genuinely calculation-relevant page roles.  Do not rely on
+            # a fixture's physical page numbers: different architect packets
+            # use different sheet ordering and numbering.
+            relevant_roles = {"main_floor_plan", "primary_geometry_plan", "supporting_geometry_plan",
+                              "reflected_ceiling_plan", "services_or_lighting_plan", "opening_elevation",
+                              "elevation_or_section", "3d_render"}
+            if (left.get("proposed_role") in compatible and right.get("proposed_role") in compatible
+                    and (left.get("level_name") or right.get("level_name")
+                         or left.get("proposed_role") in relevant_roles
+                         and right.get("proposed_role") in relevant_roles)
+                    and left.get("selection") != "reference_only"
+                    and right.get("selection") != "reference_only"):
                 if {left.get("proposed_role"), right.get("proposed_role")} != {"3d_render"}:
                     basis.append("compatible architect evidence roles")
             if not basis:

@@ -20,6 +20,8 @@ from ai.envelope import (
     validate_envelope_model,
 )
 from ai.heat_loads import envelope_load, solar_load
+from ai.shading_gate import empty_shading_method_gate
+from ai.envelope_method_gates import empty_ground_contact_method_gate
 import backend.web_app as web_app
 
 
@@ -41,7 +43,7 @@ def model():
         "active_for_calculation": True,
         "surfaces": [
             {"surface_id": "wall-n", "owner_zone_id": "zone_001", "kind": "opaque_wall", "orientation": "N", "area_m2": 10, "construction_id": "wall-a", "window_id": "", "shading_record_ids": [], "boundary_method": "external", "review_status": "confirmed", "source": "Reviewed drawings", "citations": [], "manual_solar": {"enabled": True, "solar_design_w_m2": 300, "solar_gain_factor": 0.5, "shading_factor": 0.8, "review_status": "confirmed", "source": "Reviewed manual solar basis", "citations": []}},
-            {"surface_id": "partition-east", "owner_zone_id": "zone_001", "kind": "partition", "orientation": "internal", "area_m2": 12, "construction_id": "partition-a", "window_id": "", "shading_record_ids": [], "boundary_method": "fixed_adjacent_temperature", "adjacent_temperature_c": 30, "review_status": "confirmed", "source": "Reviewed adjacent room basis", "citations": [], "manual_solar": {"enabled": False}},
+            {"surface_id": "partition-east", "owner_zone_id": "zone_001", "owner_room_id": "room_001", "kind": "partition", "orientation": "internal", "area_m2": 12, "construction_id": "partition-a", "window_id": "", "shading_record_ids": [], "boundary_method": "fixed_adjacent_temperature", "adjacent_temperature_c": 30, "adjacent_boundary_id": "adjacent-east", "adjacent_temperature_source": "Reviewed adjacent room basis", "adjacent_temperature_citations": [{"reference": "Adjacent basis", "page": 1, "excerpt": "30 C"}], "review_status": "confirmed", "source": "Reviewed adjacent room basis", "citations": [], "manual_solar": {"enabled": False}},
         ],
     }
 
@@ -66,6 +68,16 @@ def main():
     expected = (10 * 0.5 * (35 - 24) + 12 * 1.0 * (30 - 24)) / 1000
     check("external and fixed adjacent boundary temperatures calculate independently", conduction["total_kw"] == round(expected, 4) and conduction["inputs"]["surfaces"][1]["boundary_temperature_c"] == 30)
     check("manual solar retains its reviewed basis", solar_load(included)["total_kw"] == 1.2)
+
+    ground = deepcopy(reviewed_model)
+    ground["surfaces"] = [{"surface_id": "ground-floor", "owner_zone_id": "zone_001", "kind": "floor", "orientation": "horizontal", "area_m2": 20, "construction_id": "wall-a", "window_id": "", "shading_record_ids": [], "boundary_method": "ground_contact", "ground_temperature_c": 16, "ground_temperature_source": "Geotechnical design brief", "ground_temperature_citations": [{"reference": "GB-01", "page": 2, "excerpt": "16 C ground basis"}], "review_status": "confirmed", "source": "Geotechnical design brief", "citations": [], "manual_solar": {"enabled": False}}]
+    ground = validate_envelope_model(ground, reviewed_library)
+    _included, _blocked, _stored = normalize_surfaces(reviewed_library, ground)
+    check("ground-contact floor stays gated", not _included and _blocked and "method gate" in _blocked[0]["reason"])
+    ground_gate = empty_ground_contact_method_gate()
+    ground_gate.update({"approval_status": "approved", "engineer_name": "A. Engineer", "engineer_credential": "CPEng", "approved_at": "2026-09-16", "method_citation": "GB-01", "citations": [{"reference": "GB-01", "page": 2, "excerpt": "Approved method"}]})
+    _included, _blocked, _stored = normalize_surfaces(reviewed_library, ground, ground_gate)
+    check("approved ground-contact floor calculates", len(_included) == 1 and not _blocked)
 
     base = requirements()
     migrated_library, migrated_model = migrate_legacy_envelope(base)
@@ -107,6 +119,11 @@ def main():
             saved_model = web_app.api_save_envelope_model(Request(json.dumps({"project_id": "p1", "envelope_model": model()}), "/api/envelope-model"))
             read_model = web_app.api_envelope_model(Request("", "/api/envelope-model?project_id=p1"))
             check("envelope API persists versioned project artifacts", saved_library["url"].endswith("envelope_library.json") and saved_model["url"].endswith("envelope_model.json") and read_model["envelope_model"]["active_for_calculation"])
+            gate = empty_shading_method_gate()
+            gate.update({"approval_status": "approved", "engineer_name": "A. Engineer", "engineer_credential": "CPEng", "approved_at": "2026-09-16", "method_citation": "SM-01", "citations": [{"reference": "SM-01", "page": None, "excerpt": "Approved method"}]})
+            saved_gate = web_app.api_save_shading_method_gate(Request(json.dumps({"project_id": "p1", "shading_method_gate": gate}), "/api/shading-method-gate"))
+            read_gate = web_app.api_shading_method_gate(Request("", "/api/shading-method-gate?project_id=p1"))
+            check("shading gate API persists named engineer approval", saved_gate["readiness"]["status"] == "approved" and read_gate["shading_method_gate"]["approval_status"] == "approved")
     finally:
         web_app.project_by_id, web_app.update_project = originals
 

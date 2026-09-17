@@ -8,6 +8,7 @@ from ai.research_cache import (
     eligible_bindings,
     eligible_records,
     source_record_release_status,
+    default_pack_coverage,
     upsert_record,
     validate_record,
     validate_source_pack_release_manifest,
@@ -15,6 +16,12 @@ from ai.research_cache import (
 
 
 class ResearchCacheTests(unittest.TestCase):
+    def test_default_pack_coverage_reports_missing_and_candidate_bindings(self):
+        cache = {**empty_research_cache(), "source_pack_version": "au-cooling-v1"}
+        report = default_pack_coverage(cache)
+        self.assertEqual(report["status"], "missing")
+        self.assertTrue(report["missing"])
+
     def released_manifest(self, record_id="retail-lighting", content_hash="abc", scope=None):
         return validate_source_pack_release_manifest({
             "schema_version": 1,

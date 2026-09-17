@@ -24,8 +24,18 @@ from ai.thermal_model import build_thermal_evidence, build_thermal_model
 from ai.calculator_inputs import empty_overrides, empty_project_context, validate_overrides, validate_project_context
 from ai.design_requirements import empty_design_requirements, empty_zone_ventilation_requirements
 from ai.envelope import empty_envelope_library, empty_envelope_model
+from ai.envelope_method_gates import (
+    empty_ground_contact_method_gate,
+    empty_dynamic_thermal_mass_method_gate,
+    empty_solar_radiation_method_gate,
+)
+from ai.room_coupling import empty_room_coupling_method_gate
+from ai.solar_radiation import empty_solar_radiation_source
+from ai.glazing_gate import empty_glazing_method_gate
 from ai.hourly_loads import build_hourly_load_model, empty_design_day_scenarios, empty_hourly_load_model, empty_schedule_library, validate_hourly_load_model
+from ai.infiltration_gate import empty_infiltration_method_gate
 from ai.research_cache import empty_research_cache
+from ai.shading_gate import empty_shading_method_gate
 
 
 def load(path, default=None):
@@ -226,6 +236,15 @@ def bootstrap(source_dir, output_dir, manifest_path=None):
         "design_day_scenarios.json": empty_design_day_scenarios(),
         "envelope_library.json": empty_envelope_library(),
         "envelope_model.json": empty_envelope_model(),
+        "research_cache.json": empty_research_cache(),
+        "infiltration_method_gate.json": empty_infiltration_method_gate(),
+        "glazing_method_gate.json": empty_glazing_method_gate(),
+        "shading_method_gate.json": empty_shading_method_gate(),
+        "ground_contact_method_gate.json": empty_ground_contact_method_gate(),
+        "dynamic_thermal_mass_method_gate.json": empty_dynamic_thermal_mass_method_gate(),
+        "solar_radiation_method_gate.json": empty_solar_radiation_method_gate(),
+        "solar_radiation_source.json": empty_solar_radiation_source(),
+        "room_to_room_coupling_method_gate.json": empty_room_coupling_method_gate(),
     }
     for name, value in empty_artifacts.items():
         path = output_dir / name

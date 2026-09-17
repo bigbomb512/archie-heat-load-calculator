@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 
-"""Standalone, reviewed glazing calculations.
+"""Reviewed glazing calculations used by the gated hourly adapter.
 
-This module is not imported by the hourly calculation path.  It provides a
-small audited boundary for later reviewed-envelope integration.  Geometry,
-thermal, solar, and shading inputs must be explicit and cited.
+The hourly path calls this module only after the reviewed-envelope adapter
+supplies a complete, engineer-gated glazing record. Geometry, thermal, solar,
+and shading inputs must be explicit and cited.
 """
 
 from math import isfinite
@@ -81,9 +81,10 @@ def assess_glazing_eligibility(surface, window, manual_solar, *, boundary_temper
     if not window.get("source") or not window.get("citations"):
         issues.append("window source and citations are required")
     has_dimensions = all(surface.get(key) not in (None, "") for key in ("opening_width_m", "opening_height_m", "opening_quantity"))
+    has_opening_area = surface.get("explicit_opening_area_m2") not in (None, "")
     has_glass_area = surface.get("explicit_glass_area_m2") not in (None, "")
-    if not has_dimensions and not has_glass_area:
-        issues.append("positive opening dimensions or explicit glass area are required")
+    if not has_dimensions and not has_opening_area:
+        issues.append("positive opening dimensions or explicit opening area are required")
     if has_dimensions:
         try:
             opening_area(surface["opening_width_m"], surface["opening_height_m"], surface["opening_quantity"])
@@ -92,6 +93,11 @@ def assess_glazing_eligibility(surface, window, manual_solar, *, boundary_temper
     if has_glass_area:
         try:
             _positive(surface["explicit_glass_area_m2"], "explicit glass area")
+        except ValueError as error:
+            issues.append(str(error))
+    if has_opening_area:
+        try:
+            _positive(surface["explicit_opening_area_m2"], "explicit opening area")
         except ValueError as error:
             issues.append(str(error))
     if window.get("u_value_w_m2k") in (None, ""):
@@ -112,7 +118,7 @@ def assess_glazing_eligibility(surface, window, manual_solar, *, boundary_temper
     external_factor = manual_solar.get("external_shading_factor", manual_solar.get("shading_factor"))
     if external_factor in (None, ""):
         issues.append("external shading factor is missing")
-    if boundary_temperature_c is None and surface.get("boundary_temperature_c") is None and surface.get("adjacent_temperature_c") is None:
+    if surface.get("boundary_method") == "fixed_adjacent_temperature" and boundary_temperature_c is None and surface.get("boundary_temperature_c") is None and surface.get("adjacent_temperature_c") is None:
         issues.append("reviewed boundary temperature basis is missing")
     if indoor_temperature_c is None:
         issues.append("indoor temperature is required")
@@ -131,7 +137,7 @@ def calculate_glazing(surface, window, manual_solar, *, boundary_temperature_c=N
     if surface.get("opening_width_m") not in (None, ""):
         opening = opening_area(surface["opening_width_m"], surface["opening_height_m"], surface["opening_quantity"])
     else:
-        opening = _positive(surface["explicit_glass_area_m2"], "explicit glass area")
+        opening = _positive(surface["explicit_opening_area_m2"], "explicit opening area")
     resolved_glass = glass_area(opening_area_m2=opening,
                                 explicit_glass_area_m2=surface.get("explicit_glass_area_m2"),
                                 frame_fraction=window.get("frame_fraction"))

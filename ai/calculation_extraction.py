@@ -533,6 +533,13 @@ def _finalize_contract(result, pages):
     _enforce_contract(result["candidates"], pages)
     _add_record_relationships(result)
     available_witnesses = {o["observation_id"] for o in binding["observations"]}
+    # Geometry-proof witnesses are stable IDs owned by geometry_resolution;
+    # they are not raw OCR/vector observations but have already passed the
+    # closed-loop, scale, and independent-witness checks there.
+    available_witnesses.update(
+        row.get("witness_id") for row in (result.get("geometry_resolution", {}).get("witnesses", []) or [])
+        if row.get("witness_id")
+    )
     for row in result["candidates"]:
         if any(w not in available_witnesses for w in row["witness_ids"]):
             row["unresolved_fields"] = sorted(set(row["unresolved_fields"] + ["missing_witness"]))
@@ -572,6 +579,7 @@ def _geometry_candidates(geometry, source_fp, pages_by_number):
             if not any(raw.get(key) for key in ("room_id", "room_label", "target_wall_id", "wall_id")):
                 continue
         value = entity.get("value")
+        entity_value = deepcopy(value) if isinstance(value, dict) else {}
         status = "active" if kind == "area" and entity.get("geometry_status") == "geometry_confirmed" else "proposed"
         unresolved = list(entity.get("unresolved_fields", []))
         if kind == "area":
@@ -590,13 +598,19 @@ def _geometry_candidates(geometry, source_fp, pages_by_number):
             target, category, unit = f"{kind}.{label or 'unresolved'}", kind, "mm" if kind == "dimension" else ""
         else:
             continue
-        rows.append(_candidate(
+        row = _candidate(
             source_fp, page, target, category, deepcopy(value), unit,
             label=label, excerpt=str(source.get("excerpt", "")),
             method=entity.get("extraction_method", "geometry_resolution"), status=status,
             confidence=entity.get("confidence", "unknown"), witnesses=entity.get("witness_ids", []),
             unresolved=unresolved, room_id=label if kind in {"room", "area"} else "",
-        ))
+            derivation=deepcopy(entity_value.get("derivation", {})) if kind == "area" else None,
+        )
+        if kind == "area" and entity_value.get("geometry_proof_id"):
+            row["geometry_proof_id"] = entity_value["geometry_proof_id"]
+            row["room_geometry_entity_id"] = entity_value.get("room_entity_id", "")
+            row["calibration"] = deepcopy(entity_value.get("calibration", {}))
+        rows.append(row)
     return rows
 
 
@@ -688,6 +702,9 @@ def extract_calculation_input_evidence(ai_input, coverage=None, spatial_ocr=None
         geometry_confirmation=geometry_confirmation,
         vision_response=vision_response,
     )
+    # Keep the proof graph beside the candidate list so the current evidence
+    # view can show why a derived area is active or blocked.
+    result_geometry = deepcopy(geometry)
     candidates.extend(_geometry_candidates(geometry, source_fp, pages_by_number))
     _enforce_contract(candidates, pages)
     candidates.sort(key=lambda row: (row["candidate_id"], _fingerprint(row)))
@@ -704,6 +721,7 @@ def extract_calculation_input_evidence(ai_input, coverage=None, spatial_ocr=None
         "schema_version": SCHEMA_VERSION, "extractor_version": EXTRACTOR_VERSION, "source_pdf": ai_input.get("source_pdf", ""), "source_fingerprint": source_fp,
         "generated_from": "ai_input.json+architect_evidence", "generated_at": timestamp(),
         "candidates": candidates, "issues": issues, "categories": categories,
+        "geometry_resolution": result_geometry,
         "pages": [{"page": page.get("page"), "drawing_number": page.get("drawing_number", ""), "role": page.get("role", "")} for page in pages],
         "status": "blocked" if any(row.get("status") in {"blocked", "conflict"} for row in candidates) else "current",
         "fingerprint": _fingerprint({"extractor_version": EXTRACTOR_VERSION, "source_fingerprint": source_fp, "candidates": candidates, "issues": issues}),

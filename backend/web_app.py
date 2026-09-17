@@ -2,6 +2,7 @@
 
 import argparse
 from copy import deepcopy
+import hashlib
 import sys
 import html
 import json
@@ -40,6 +41,16 @@ from ai.hourly_loads import (
 )
 from ai.cooling_readiness import assess_cooling_readiness
 from ai.infiltration_gate import empty_infiltration_method_gate, gate_is_approved, validate_infiltration_method_gate
+from ai.glazing_gate import empty_glazing_method_gate, gate_is_approved as glazing_gate_is_approved, validate_glazing_method_gate
+from ai.shading_gate import empty_shading_method_gate, gate_is_approved as shading_gate_is_approved, validate_shading_method_gate
+from ai.envelope_method_gates import (
+    empty_ground_contact_method_gate, ground_contact_gate_is_approved, validate_ground_contact_method_gate,
+    empty_dynamic_thermal_mass_method_gate, dynamic_thermal_mass_gate_is_approved,
+    validate_dynamic_thermal_mass_method_gate, empty_solar_radiation_method_gate,
+    solar_radiation_gate_is_approved, validate_solar_radiation_method_gate,
+)
+from ai.solar_radiation import empty_solar_radiation_source, validate_solar_radiation_source
+from ai.room_coupling import empty_room_coupling_method_gate, room_coupling_gate_fingerprint, room_coupling_gate_is_approved, validate_room_coupling_method_gate
 from ai.calculator_inputs import (
     assemble_calculator_inputs,
     empty_overrides,
@@ -52,7 +63,9 @@ from ai.calculator_inputs import (
 from ai.research_cache import empty_research_cache, validate_cache, upsert_record
 from ai.drawing_coverage import build_drawing_coverage
 from ai.building_evidence import build_building_evidence
-from ai.calculation_extraction import normalise_for_hourly_model
+from ai.calculation_extraction import extract_calculation_input_evidence, normalise_for_hourly_model
+from ai.evidence_fusion import build_evidence_fusion
+from ai.calculator_draft import build_calculator_draft
 from ai.parity_harness import archie_results_from_heat_report, archie_results_from_hourly_load_report, compare_case, render_markdown, validate_benchmark_case
 from ai.thermal_model import apply_thermal_model, build_thermal_evidence, build_thermal_model
 from ai.calculator_draft import DraftConflict
@@ -162,6 +175,41 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(api_infiltration_method_gate(self))
             except Exception as error:
                 return self.send_json({"error": str(error)}, 400)
+        if self.path.startswith("/api/glazing-method-gate"):
+            try:
+                return self.send_json(api_glazing_method_gate(self))
+            except Exception as error:
+                return self.send_json({"error": str(error)}, 400)
+        if self.path.startswith("/api/shading-method-gate"):
+            try:
+                return self.send_json(api_shading_method_gate(self))
+            except Exception as error:
+                return self.send_json({"error": str(error)}, 400)
+        if self.path.startswith("/api/ground-contact-method-gate"):
+            try:
+                return self.send_json(api_ground_contact_method_gate(self))
+            except Exception as error:
+                return self.send_json({"error": str(error)}, 400)
+        if self.path.startswith("/api/dynamic-thermal-mass-method-gate"):
+            try:
+                return self.send_json(api_dynamic_thermal_mass_method_gate(self))
+            except Exception as error:
+                return self.send_json({"error": str(error)}, 400)
+        if self.path.startswith("/api/solar-radiation-method-gate"):
+            try:
+                return self.send_json(api_solar_radiation_method_gate(self))
+            except Exception as error:
+                return self.send_json({"error": str(error)}, 400)
+        if self.path.startswith("/api/solar-radiation-source"):
+            try:
+                return self.send_json(api_solar_radiation_source(self))
+            except Exception as error:
+                return self.send_json({"error": str(error)}, 400)
+        if self.path.startswith("/api/room-to-room-coupling-method-gate"):
+            try:
+                return self.send_json(api_room_to_room_coupling_method_gate(self))
+            except Exception as error:
+                return self.send_json({"error": str(error)}, 400)
         if self.path.startswith("/api/calculator-inputs"):
             try:
                 return self.send_json(api_calculator_inputs(self))
@@ -238,6 +286,20 @@ class Handler(SimpleHTTPRequestHandler):
             return self.save_hourly_load_report()
         if self.path == "/api/infiltration-method-gate":
             return self.save_infiltration_method_gate()
+        if self.path == "/api/glazing-method-gate":
+            return self.save_glazing_method_gate()
+        if self.path == "/api/shading-method-gate":
+            return self.save_shading_method_gate()
+        if self.path == "/api/ground-contact-method-gate":
+            return self.save_ground_contact_method_gate()
+        if self.path == "/api/dynamic-thermal-mass-method-gate":
+            return self.save_dynamic_thermal_mass_method_gate()
+        if self.path == "/api/solar-radiation-method-gate":
+            return self.save_solar_radiation_method_gate()
+        if self.path == "/api/solar-radiation-source":
+            return self.save_solar_radiation_source()
+        if self.path == "/api/room-to-room-coupling-method-gate":
+            return self.save_room_to_room_coupling_method_gate()
         if self.path == "/api/calculator-inputs":
             return self.save_calculator_inputs()
         if self.path == "/api/envelope-library":
@@ -347,6 +409,55 @@ class Handler(SimpleHTTPRequestHandler):
     def save_infiltration_method_gate(self):
         try:
             result = api_save_infiltration_method_gate(self)
+        except Exception as error:
+            return self.send_json({"error": str(error)}, 400)
+        self.send_json(result)
+
+    def save_glazing_method_gate(self):
+        try:
+            result = api_save_glazing_method_gate(self)
+        except Exception as error:
+            return self.send_json({"error": str(error)}, 400)
+        self.send_json(result)
+
+    def save_shading_method_gate(self):
+        try:
+            result = api_save_shading_method_gate(self)
+        except Exception as error:
+            return self.send_json({"error": str(error)}, 400)
+        self.send_json(result)
+
+    def save_ground_contact_method_gate(self):
+        try:
+            result = api_save_ground_contact_method_gate(self)
+        except Exception as error:
+            return self.send_json({"error": str(error)}, 400)
+        self.send_json(result)
+
+    def save_dynamic_thermal_mass_method_gate(self):
+        try:
+            result = api_save_dynamic_thermal_mass_method_gate(self)
+        except Exception as error:
+            return self.send_json({"error": str(error)}, 400)
+        self.send_json(result)
+
+    def save_solar_radiation_method_gate(self):
+        try:
+            result = api_save_solar_radiation_method_gate(self)
+        except Exception as error:
+            return self.send_json({"error": str(error)}, 400)
+        self.send_json(result)
+
+    def save_solar_radiation_source(self):
+        try:
+            result = api_save_solar_radiation_source(self)
+        except Exception as error:
+            return self.send_json({"error": str(error)}, 400)
+        self.send_json(result)
+
+    def save_room_to_room_coupling_method_gate(self):
+        try:
+            result = api_save_room_to_room_coupling_method_gate(self)
         except Exception as error:
             return self.send_json({"error": str(error)}, 400)
         self.send_json(result)
@@ -511,6 +622,81 @@ def api_analyse(request):
     return analysis_response(analyse_project(project))
 
 
+def _rebuild_evidence_chain(project):
+    """Build all derived PDF-evidence artifacts in one deterministic pass.
+
+    Analysis used to stop after page coverage and building evidence, leaving
+    calculation-input evidence and the calculator draft to a separate manual
+    action. This helper writes only derived artifacts; authored hourly,
+    schedule, envelope, context, and override files are not touched.
+    """
+    review_dir = Path(project["review_dir"])
+    ai_input = load_json(review_dir / "ai_input.json")
+    if not ai_input:
+        raise ValueError("The reviewed packet does not contain ai_input.json.")
+    spatial_ocr = load_json(review_dir / "spatial_ocr.json")
+    vector_geometry = load_json(review_dir / "vector_geometry.json")
+    vision_response = load_json(review_dir / "vision_response.json")
+    dimension_matches = load_json(review_dir / "dimension_wall_matches.json")
+    geometry_confirmation = load_json(review_dir / "geometry_confirmation.json")
+
+    coverage = build_drawing_coverage(ai_input, spatial_ocr, vector_geometry)
+    coverage_path = review_dir / "drawing_coverage.json"
+    coverage_path.write_text(json.dumps(coverage, indent=2), encoding="utf-8")
+    building = build_building_evidence(ai_input, coverage, spatial_ocr, vision_response)
+    building_path = review_dir / "building_evidence.json"
+    building_path.write_text(json.dumps(building, indent=2), encoding="utf-8")
+    calculation_evidence = extract_calculation_input_evidence(
+        ai_input, coverage, spatial_ocr, vector_geometry, vision_response,
+        building, dimension_matches, geometry_confirmation,
+    )
+    calculation_path = review_dir / "calculation_input_evidence.json"
+    calculation_path.write_text(json.dumps(calculation_evidence, indent=2), encoding="utf-8")
+
+    fusion = build_evidence_fusion(
+        ai_input, coverage, building, spatial_ocr, vector_geometry,
+        vision_response, dimension_matches, geometry_confirmation,
+    )
+    fusion["calculation_input_evidence"] = calculation_evidence
+    fusion["fingerprint"] = hashlib.sha256(json.dumps(
+        {key: value for key, value in fusion.items() if key != "fingerprint"},
+        sort_keys=True, separators=(",", ":"),
+    ).encode()).hexdigest()
+    fusion_path = review_dir / "architect_evidence_fusion.json"
+    fusion_path.write_text(json.dumps(fusion, indent=2), encoding="utf-8")
+
+    thermal_evidence = build_thermal_evidence(ai_input, spatial_ocr, vision_response, coverage, building)
+    thermal_model = build_thermal_model(thermal_evidence)
+    thermal_evidence_path = review_dir / "thermal_evidence.json"
+    thermal_model_path = review_dir / "thermal_model.json"
+    thermal_evidence_path.write_text(json.dumps(thermal_evidence, indent=2), encoding="utf-8")
+    thermal_model_path.write_text(json.dumps(thermal_model, indent=2), encoding="utf-8")
+    draft = build_calculator_draft(
+        thermal_model, building, coverage,
+        source_artifacts={
+            name: str(review_dir / f"{name}.json")
+            for name in ("thermal_model", "building_evidence", "drawing_coverage", "thermal_evidence")
+        },
+        thermal_evidence=thermal_evidence,
+        evidence_fusion=fusion,
+    )
+    draft_path = review_dir / "calculator_draft.json"
+    draft_path.write_text(json.dumps(draft, indent=2), encoding="utf-8")
+
+    project.update({
+        "drawing_coverage": str(coverage_path),
+        "building_evidence": str(building_path),
+        "calculation_input_evidence": str(calculation_path),
+        "evidence_fusion": str(fusion_path),
+        "architect_evidence_fusion": str(fusion_path),
+        "thermal_evidence": str(thermal_evidence_path),
+        "thermal_model": str(thermal_model_path),
+        "calculator_draft": str(draft_path),
+    })
+    return {"coverage": coverage, "building": building, "calculation_input_evidence": calculation_evidence,
+            "fusion": fusion, "thermal_model": thermal_model, "calculator_draft": draft}
+
+
 def analyse_project(project):
     pdf_path = Path(project["pdf"])
     review_dir = WEB_REVIEW / project["id"]
@@ -520,14 +706,6 @@ def analyse_project(project):
     ai_output = Path(result["review_dir"]) / "ai_input.json"
     ai_input = build_ai_packet(packet)
     ai_output.write_text(json.dumps(ai_input, indent=2), encoding="utf-8")
-    coverage_output = Path(result["review_dir"]) / "drawing_coverage.json"
-    coverage_output.write_text(json.dumps(build_drawing_coverage(
-        ai_input,
-        load_json(Path(result["review_dir"]) / "spatial_ocr.json"),
-        load_json(Path(result["review_dir"]) / "vector_geometry.json"),
-    ), indent=2), encoding="utf-8")
-    building_output = Path(result["review_dir"]) / "building_evidence.json"
-    building_output.write_text(json.dumps(build_building_evidence(ai_input, load_json(coverage_output)), indent=2), encoding="utf-8")
 
     project.update(
         {
@@ -536,14 +714,13 @@ def analyse_project(project):
             "packet": result["packet"],
             "html": result["html"],
             "ai_input": str(ai_output),
-            "drawing_coverage": str(coverage_output),
-            "building_evidence": str(building_output),
             "pages": result["kept_count"],
             "relevant": result["primary_count"],
             "analysis_version": ANALYSIS_VERSION,
             "updated_at": timestamp(),
         }
     )
+    _rebuild_evidence_chain(project)
     update_project(project)
     return project
 
@@ -599,6 +776,7 @@ def api_save_decisions(request):
     project["dimension_wall_matches"] = pipeline["dimension_wall_matches"]
     project["candidate_review"] = pipeline["candidate_review"]
     project["chatgpt_packet"] = pipeline["chatgpt_packet"]
+    _rebuild_evidence_chain(project)
     project["updated_at"] = timestamp()
     update_project(project)
     return {
@@ -623,6 +801,7 @@ def api_save_vision_response(request):
     if result.get("geometry_confirmation_path"):
         project["geometry_confirmation"] = result["geometry_confirmation_path"]
     project["reasoning_packet"] = result["reasoning_packet_raw"]
+    _rebuild_evidence_chain(project)
     project["updated_at"] = timestamp()
     update_project(project)
     return result["response"]
@@ -669,6 +848,8 @@ def hourly_paths(project):
         "model": review_dir / "hourly_load_model.json",
         "report": review_dir / "hourly_load_report.json",
         "coverage": review_dir / "drawing_coverage.json",
+        "thermal_evidence": review_dir / "thermal_evidence.json",
+        "thermal_model": review_dir / "thermal_model.json",
         "envelope_library": review_dir / "envelope_library.json",
         "envelope_model": review_dir / "envelope_model.json",
         "calculator_draft": review_dir / "calculator_draft.json",
@@ -680,6 +861,13 @@ def hourly_paths(project):
         "calculator_input_set": review_dir / "calculator_input_set.json",
         "calculator_input_sets": review_dir / "calculator_input_sets",
         "infiltration_method_gate": review_dir / "infiltration_method_gate.json",
+        "glazing_method_gate": review_dir / "glazing_method_gate.json",
+        "shading_method_gate": review_dir / "shading_method_gate.json",
+        "ground_contact_method_gate": review_dir / "ground_contact_method_gate.json",
+        "dynamic_thermal_mass_method_gate": review_dir / "dynamic_thermal_mass_method_gate.json",
+        "solar_radiation_method_gate": review_dir / "solar_radiation_method_gate.json",
+        "solar_radiation_source": review_dir / "solar_radiation_source.json",
+        "room_to_room_coupling_method_gate": review_dir / "room_to_room_coupling_method_gate.json",
     }
 
 
@@ -701,6 +889,24 @@ def api_infiltration_method_gate(request):
     return artifact_response(project, "infiltration_method_gate", gate, infiltration_gate_summary(gate), path)
 
 
+def glazing_gate_summary(gate):
+    gate = validate_glazing_method_gate(gate)
+    approved = glazing_gate_is_approved(gate)
+    return {
+        "status": "approved" if approved else "placeholder",
+        "message": "Reviewed glazing is eligible for manual-solar cooling calculations." if approved else "Glazing remains stored only until a named HVAC engineer approves this fixed method.",
+        "method_id": gate["method_id"], "approval_status": gate["approval_status"],
+    }
+
+
+def api_glazing_method_gate(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    path = hourly_paths(project)["glazing_method_gate"]
+    gate = load_json(path) if path.exists() else empty_glazing_method_gate()
+    return artifact_response(project, "glazing_method_gate", gate, glazing_gate_summary(gate), path)
+
+
 def api_save_infiltration_method_gate(request):
     data = read_json_body(request)
     project = project_by_id(data.get("project_id") or data.get("id", ""))
@@ -713,6 +919,228 @@ def api_save_infiltration_method_gate(request):
     project["updated_at"] = timestamp()
     update_project(project)
     return artifact_response(project, "infiltration_method_gate", gate, infiltration_gate_summary(gate), path)
+
+
+def api_save_glazing_method_gate(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    gate = validate_glazing_method_gate(data.get("glazing_method_gate", data.get("gate", {})))
+    gate["updated_at"] = timestamp()
+    path = hourly_paths(project)["glazing_method_gate"]
+    write_artifact(path, gate)
+    project["glazing_method_gate"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return artifact_response(project, "glazing_method_gate", gate, glazing_gate_summary(gate), path)
+
+
+def shading_gate_summary(gate):
+    gate = validate_shading_method_gate(gate)
+    approved = shading_gate_is_approved(gate)
+    return {
+        "status": "approved" if approved else "placeholder",
+        "message": "Confirmed geometric shading may replace the manual external shading factor." if approved else "Manual external shading remains the only available shading basis until a named HVAC engineer approves this method.",
+        "method_id": gate["method_id"], "approval_status": gate["approval_status"],
+    }
+
+
+def api_shading_method_gate(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    path = hourly_paths(project)["shading_method_gate"]
+    gate = load_json(path) if path.exists() else empty_shading_method_gate()
+    return artifact_response(project, "shading_method_gate", gate, shading_gate_summary(gate), path)
+
+
+def api_save_shading_method_gate(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    gate = validate_shading_method_gate(data.get("shading_method_gate", data.get("gate", {})))
+    gate["updated_at"] = timestamp()
+    path = hourly_paths(project)["shading_method_gate"]
+    write_artifact(path, gate)
+    project["shading_method_gate"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return artifact_response(project, "shading_method_gate", gate, shading_gate_summary(gate), path)
+
+
+def ground_contact_gate_summary(gate):
+    gate = validate_ground_contact_method_gate(gate)
+    approved = ground_contact_gate_is_approved(gate)
+    return {
+        "status": "approved" if approved else "placeholder",
+        "calculation_enabled": approved,
+        "method_id": gate["method_id"],
+        "message": "Ground-contact floors may calculate from cited temperatures." if approved else "Ground-contact floors remain excluded until this method is approved by a named HVAC engineer.",
+    }
+
+
+def api_ground_contact_method_gate(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    path = hourly_paths(project)["ground_contact_method_gate"]
+    gate = load_json(path) if path.exists() else empty_ground_contact_method_gate()
+    return artifact_response(project, "ground_contact_method_gate", gate, ground_contact_gate_summary(gate), path)
+
+
+def api_save_ground_contact_method_gate(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    gate = validate_ground_contact_method_gate(data.get("ground_contact_method_gate", data.get("gate", {})))
+    gate["updated_at"] = timestamp()
+    path = hourly_paths(project)["ground_contact_method_gate"]
+    write_artifact(path, gate)
+    project["ground_contact_method_gate"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return artifact_response(project, "ground_contact_method_gate", gate, ground_contact_gate_summary(gate), path)
+
+
+def advanced_gate_summary(gate, approved_message, blocked_message, checker):
+    gate = checker(gate)
+    approved = bool(gate and gate.get("approval_status") == "approved")
+    return {
+        "status": "approved" if approved else "placeholder",
+        "calculation_enabled": approved,
+        "method_id": gate.get("method_id", ""),
+        "approval_status": gate.get("approval_status", "placeholder"),
+        "message": approved_message if approved else blocked_message,
+    }
+
+
+def api_dynamic_thermal_mass_method_gate(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    path = hourly_paths(project)["dynamic_thermal_mass_method_gate"]
+    gate = load_json(path) if path.exists() else empty_dynamic_thermal_mass_method_gate()
+    summary = advanced_gate_summary(
+        gate,
+        "First-order RC thermal mass is eligible for explicitly sourced surfaces.",
+        "Dynamic thermal mass remains excluded until a named HVAC engineer approves this method.",
+        validate_dynamic_thermal_mass_method_gate,
+    )
+    return artifact_response(project, "dynamic_thermal_mass_method_gate", gate, summary, path)
+
+
+def api_save_dynamic_thermal_mass_method_gate(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    gate = validate_dynamic_thermal_mass_method_gate(data.get("dynamic_thermal_mass_method_gate", data.get("gate", {})))
+    gate["updated_at"] = timestamp()
+    path = hourly_paths(project)["dynamic_thermal_mass_method_gate"]
+    write_artifact(path, gate)
+    project["dynamic_thermal_mass_method_gate"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    summary = advanced_gate_summary(
+        gate,
+        "First-order RC thermal mass is eligible for explicitly sourced surfaces.",
+        "Dynamic thermal mass remains excluded until a named HVAC engineer approves this method.",
+        validate_dynamic_thermal_mass_method_gate,
+    )
+    return artifact_response(project, "dynamic_thermal_mass_method_gate", gate, summary, path)
+
+
+def api_solar_radiation_method_gate(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    path = hourly_paths(project)["solar_radiation_method_gate"]
+    gate = load_json(path) if path.exists() else empty_solar_radiation_method_gate()
+    summary = advanced_gate_summary(
+        gate,
+        "Cited hourly surface irradiance is eligible for explicitly sourced surfaces.",
+        "Solar-radiation inputs remain excluded until a named HVAC engineer approves this method.",
+        validate_solar_radiation_method_gate,
+    )
+    return artifact_response(project, "solar_radiation_method_gate", gate, summary, path)
+
+
+def api_save_solar_radiation_method_gate(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    gate = validate_solar_radiation_method_gate(data.get("solar_radiation_method_gate", data.get("gate", {})))
+    gate["updated_at"] = timestamp()
+    path = hourly_paths(project)["solar_radiation_method_gate"]
+    write_artifact(path, gate)
+    project["solar_radiation_method_gate"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    summary = advanced_gate_summary(
+        gate,
+        "Cited hourly surface irradiance is eligible for explicitly sourced surfaces.",
+        "Solar-radiation inputs remain excluded until a named HVAC engineer approves this method.",
+        validate_solar_radiation_method_gate,
+    )
+    return artifact_response(project, "solar_radiation_method_gate", gate, summary, path)
+
+
+def api_solar_radiation_source(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    path = hourly_paths(project)["solar_radiation_source"]
+    source = load_json(path) if path.exists() else empty_solar_radiation_source()
+    source = validate_solar_radiation_source(source) if path.exists() else source
+    return artifact_response(project, "solar_radiation_source", source, {
+        "status": "complete" if path.exists() else "missing",
+        "fingerprint": source.get("fingerprint", ""),
+        "message": "Cited 24-hour surface irradiance is available." if path.exists() else "A cited 24-hour surface irradiance source is required.",
+    }, path)
+
+
+def api_save_solar_radiation_source(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    source = validate_solar_radiation_source(data.get("solar_radiation_source", data.get("source", data)))
+    source["updated_at"] = timestamp()
+    path = hourly_paths(project)["solar_radiation_source"]
+    write_artifact(path, source)
+    project["solar_radiation_source"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return artifact_response(project, "solar_radiation_source", source, {
+        "status": "complete", "fingerprint": source["fingerprint"],
+        "message": "Cited 24-hour surface irradiance is available.",
+    }, path)
+
+
+def api_room_to_room_coupling_method_gate(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    path = hourly_paths(project)["room_to_room_coupling_method_gate"]
+    gate = load_json(path) if path.exists() else empty_room_coupling_method_gate()
+    gate = validate_room_coupling_method_gate(gate)
+    return artifact_response(project, "room_to_room_coupling_method_gate", gate, {
+        "status": "approved" if room_coupling_gate_is_approved(gate) else "placeholder",
+        "calculation_enabled": room_coupling_gate_is_approved(gate),
+        "method_id": gate.get("method_id", ""),
+        "message": "Dynamic room-to-room coupling is eligible for complete records." if room_coupling_gate_is_approved(gate) else "Dynamic room-to-room coupling remains excluded until a named HVAC engineer approves this method.",
+    }, path)
+
+
+def api_save_room_to_room_coupling_method_gate(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    gate = validate_room_coupling_method_gate(data.get("room_to_room_coupling_method_gate", data.get("gate", {})))
+    gate["updated_at"] = timestamp()
+    path = hourly_paths(project)["room_to_room_coupling_method_gate"]
+    write_artifact(path, gate)
+    project["room_to_room_coupling_method_gate"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return artifact_response(project, "room_to_room_coupling_method_gate", gate, {
+        "status": "approved" if room_coupling_gate_is_approved(gate) else "placeholder",
+        "calculation_enabled": room_coupling_gate_is_approved(gate),
+        "method_id": gate.get("method_id", ""),
+        "message": "Dynamic room-to-room coupling is eligible for complete records." if room_coupling_gate_is_approved(gate) else "Dynamic room-to-room coupling remains excluded until a named HVAC engineer approves this method.",
+    }, path)
 
 
 def envelope_artifacts(project):
@@ -732,12 +1160,19 @@ def envelope_artifacts(project):
     return library, model
 
 
+def ground_contact_gate_for_project(project):
+    path = hourly_paths(project)["ground_contact_method_gate"]
+    return load_json(path) if path.exists() else empty_ground_contact_method_gate()
+
+
 def api_envelope_library(request):
     query = parse_qs(urlparse(request.path).query)
     project = project_by_id(query.get("project_id", [""])[0])
     library, model = envelope_artifacts(project)
     path = hourly_paths(project)["envelope_library"]
-    return artifact_response(project, "envelope_library", library, envelope_summary(library, model), path)
+    paths = hourly_paths(project)
+    gate = load_json(paths["glazing_method_gate"]) if paths["glazing_method_gate"].exists() else empty_glazing_method_gate()
+    return artifact_response(project, "envelope_library", library, envelope_summary(library, model, gate, None, ground_contact_gate_for_project(project)), path)
 
 
 def api_envelope_model(request):
@@ -745,7 +1180,9 @@ def api_envelope_model(request):
     project = project_by_id(query.get("project_id", [""])[0])
     library, model = envelope_artifacts(project)
     path = hourly_paths(project)["envelope_model"]
-    response = artifact_response(project, "envelope_model", model, envelope_summary(library, model), path)
+    paths = hourly_paths(project)
+    gate = load_json(paths["glazing_method_gate"]) if paths["glazing_method_gate"].exists() else empty_glazing_method_gate()
+    response = artifact_response(project, "envelope_model", model, envelope_summary(library, model, gate, None, ground_contact_gate_for_project(project)), path)
     response["envelope_library_url"] = safe_link(hourly_paths(project)["envelope_library"]) if hourly_paths(project)["envelope_library"].exists() else ""
     return response
 
@@ -763,7 +1200,8 @@ def api_save_envelope_library(request):
     project["envelope_library"] = str(paths["envelope_library"])
     project["updated_at"] = timestamp()
     update_project(project)
-    return artifact_response(project, "envelope_library", library, envelope_summary(library, model), paths["envelope_library"])
+    gate = load_json(paths["glazing_method_gate"]) if paths["glazing_method_gate"].exists() else empty_glazing_method_gate()
+    return artifact_response(project, "envelope_library", library, envelope_summary(library, model, gate, None, ground_contact_gate_for_project(project)), paths["envelope_library"])
 
 
 def api_save_envelope_model(request):
@@ -789,7 +1227,8 @@ def api_save_envelope_model(request):
     project["envelope_model"] = str(paths["envelope_model"])
     project["updated_at"] = timestamp()
     update_project(project)
-    return artifact_response(project, "envelope_model", model, envelope_summary(library, model), paths["envelope_model"])
+    gate = load_json(paths["glazing_method_gate"]) if paths["glazing_method_gate"].exists() else empty_glazing_method_gate()
+    return artifact_response(project, "envelope_model", model, envelope_summary(library, model, gate, None, ground_contact_gate_for_project(project)), paths["envelope_model"])
 
 
 def validate_active_envelope_owners(model, paths):
@@ -942,8 +1381,15 @@ def _assemble_project_inputs(project, selected_scenario_ids=None):
     if missing:
         return {"status": "blocked", "missing_artifacts": missing, "issues": []}, paths
     library, envelope_model = envelope_artifacts(project)
-    requirements, envelope_inputs = apply_reviewed_envelope_to_requirements(load_json(paths["requirements"]), library, envelope_model)
-    model = apply_reviewed_envelope_to_hourly_model(load_json(paths["model"]), library, envelope_model)
+    glazing_gate = load_json(paths["glazing_method_gate"]) if paths["glazing_method_gate"].exists() else empty_glazing_method_gate()
+    shading_gate = load_json(paths["shading_method_gate"]) if paths["shading_method_gate"].exists() else empty_shading_method_gate()
+    ground_contact_gate = ground_contact_gate_for_project(project)
+    dynamic_mass_gate = load_json(paths["dynamic_thermal_mass_method_gate"]) if paths["dynamic_thermal_mass_method_gate"].exists() else empty_dynamic_thermal_mass_method_gate()
+    radiation_gate = load_json(paths["solar_radiation_method_gate"]) if paths["solar_radiation_method_gate"].exists() else empty_solar_radiation_method_gate()
+    radiation_source = load_json(paths["solar_radiation_source"]) if paths["solar_radiation_source"].exists() else empty_solar_radiation_source()
+    coupling_gate = load_json(paths["room_to_room_coupling_method_gate"]) if paths["room_to_room_coupling_method_gate"].exists() else empty_room_coupling_method_gate()
+    requirements, envelope_inputs = apply_reviewed_envelope_to_requirements(load_json(paths["requirements"]), library, envelope_model, glazing_gate, shading_gate, ground_contact_gate)
+    model = apply_reviewed_envelope_to_hourly_model(load_json(paths["model"]), library, envelope_model, glazing_gate, shading_gate, ground_contact_gate)
     fusion = load_json(paths["evidence_fusion"]) if paths["evidence_fusion"].exists() else {}
     calculation_input_evidence = load_json(paths["calculation_input_evidence"]) if paths["calculation_input_evidence"].exists() else {}
     if paths["calculation_input_evidence"].exists():
@@ -957,6 +1403,13 @@ def _assemble_project_inputs(project, selected_scenario_ids=None):
         fusion=fusion, research_cache=research, envelope=envelope_inputs,
         project_context=_input_context(paths), overrides=_input_overrides(paths), requirements=requirements,
         infiltration_gate=load_json(paths["infiltration_method_gate"]) if paths["infiltration_method_gate"].exists() else empty_infiltration_method_gate(),
+        glazing_gate=glazing_gate,
+        shading_gate=shading_gate,
+        ground_contact_gate=ground_contact_gate,
+        dynamic_thermal_mass_gate=dynamic_mass_gate,
+        solar_radiation_gate=radiation_gate,
+        solar_radiation_source=radiation_source,
+        room_to_room_coupling_gate=coupling_gate,
         calculation_input_evidence=calculation_input_evidence,
     )
     return assembled, paths
@@ -983,7 +1436,7 @@ def api_calculator_inputs(request, selected_scenario_ids=None):
     display["current_source_pack_release"] = deepcopy(assembled.get("source_pack_release", {}))
     if not snapshot:
         display["source_pack_release"] = deepcopy(assembled.get("source_pack_release", {}))
-    display["artifact_links"] = {name: safe_link(paths[name]) for name in ("model", "schedules", "scenarios", "research_cache", "evidence_fusion", "calculation_input_evidence", "project_context", "calculator_input_overrides", "calculator_input_set") if paths[name].exists()}
+    display["artifact_links"] = {name: safe_link(paths[name]) for name in ("model", "schedules", "scenarios", "research_cache", "evidence_fusion", "calculation_input_evidence", "calculator_draft", "thermal_evidence", "thermal_model", "project_context", "calculator_input_overrides", "calculator_input_set", "infiltration_method_gate", "glazing_method_gate", "shading_method_gate", "ground_contact_method_gate", "dynamic_thermal_mass_method_gate", "solar_radiation_method_gate", "solar_radiation_source", "room_to_room_coupling_method_gate") if paths[name].exists()}
     display["latest_snapshot"] = pointer
     count_source = display if snapshot else assembled
     return {
@@ -1004,6 +1457,7 @@ def api_calculator_inputs(request, selected_scenario_ids=None):
         "source_pack_version": assembled.get("source_pack_version", display.get("source_pack_version", "")),
         "research_defaults_available": deepcopy(assembled.get("research_defaults_available", display.get("research_defaults_available", []))),
         "research_defaults_unavailable": deepcopy(assembled.get("research_defaults_unavailable", display.get("research_defaults_unavailable", []))),
+        "research_default_coverage": deepcopy(assembled.get("research_default_coverage", display.get("research_default_coverage", {}))),
         "source_pack_release": deepcopy(assembled.get("source_pack_release", display.get("source_pack_release", {}))),
         "artifact_links": deepcopy(display.get("artifact_links", {})),
     }
@@ -1080,6 +1534,7 @@ def api_save_calculator_inputs(request):
         "defaults_used": [row for row in stored.get("resolved_inputs", []) if row.get("resolution_status") == "approved_default"],
         "derivations": [row for row in stored.get("resolved_inputs", []) if row.get("resolution_status") == "derived_evidence"],
         "research_defaults_unavailable": deepcopy(stored.get("research_defaults_unavailable", [])),
+        "research_default_coverage": deepcopy(stored.get("research_default_coverage", {})),
         "issues": deepcopy(stored.get("issues", [])),
         "excluded_components": deepcopy(stored.get("excluded_components", [])),
     }
@@ -1096,7 +1551,14 @@ def api_save_hourly_load_report(request):
         raise ValueError("Save " + ", ".join(missing) + " before calculating an hourly cooling report.")
     coverage = load_json(paths["coverage"]) if paths["coverage"].exists() else {}
     library, envelope_model = envelope_artifacts(project)
-    requirements, envelope_inputs = apply_reviewed_envelope_to_requirements(load_json(paths["requirements"]), library, envelope_model)
+    raw_glazing_gate = load_json(paths["glazing_method_gate"]) if paths["glazing_method_gate"].exists() else empty_glazing_method_gate()
+    raw_shading_gate = load_json(paths["shading_method_gate"]) if paths["shading_method_gate"].exists() else empty_shading_method_gate()
+    ground_contact_gate = ground_contact_gate_for_project(project)
+    dynamic_mass_gate = load_json(paths["dynamic_thermal_mass_method_gate"]) if paths["dynamic_thermal_mass_method_gate"].exists() else empty_dynamic_thermal_mass_method_gate()
+    radiation_gate = load_json(paths["solar_radiation_method_gate"]) if paths["solar_radiation_method_gate"].exists() else empty_solar_radiation_method_gate()
+    radiation_source = load_json(paths["solar_radiation_source"]) if paths["solar_radiation_source"].exists() else empty_solar_radiation_source()
+    coupling_gate = load_json(paths["room_to_room_coupling_method_gate"]) if paths["room_to_room_coupling_method_gate"].exists() else empty_room_coupling_method_gate()
+    requirements, envelope_inputs = apply_reviewed_envelope_to_requirements(load_json(paths["requirements"]), library, envelope_model, raw_glazing_gate, raw_shading_gate, ground_contact_gate)
     input_set_fingerprint = data.get("input_set_fingerprint", "")
     input_set, _pointer = _load_input_snapshot(paths, input_set_fingerprint)
     if input_set_fingerprint and not input_set:
@@ -1111,17 +1573,35 @@ def api_save_hourly_load_report(request):
         model, schedules, scenarios = materialize_cooling_payload(input_set)
         selected_scenarios = input_set.get("selected_scenario_ids", [])
     else:
-        model = apply_reviewed_envelope_to_hourly_model(load_json(paths["model"]), library, envelope_model)
+        model = apply_reviewed_envelope_to_hourly_model(load_json(paths["model"]), library, envelope_model, raw_glazing_gate, raw_shading_gate, ground_contact_gate)
         schedules, scenarios = load_json(paths["schedules"]), load_json(paths["scenarios"])
         selected_scenarios = data.get("selected_scenario_ids", data.get("scenario_ids", []))
     raw_gate = load_json(paths["infiltration_method_gate"]) if paths["infiltration_method_gate"].exists() else empty_infiltration_method_gate()
     infiltration_gate = input_set.get("payload", {}).get("infiltration_method_gate", raw_gate) if input_set else raw_gate
-    report = calculate_hourly_load_report(requirements, schedules, scenarios, model, selected_scenarios, coverage, infiltration_gate)
+    glazing_gate = input_set.get("payload", {}).get("glazing_method_gate", raw_glazing_gate) if input_set else raw_glazing_gate
+    shading_gate = input_set.get("payload", {}).get("shading_method_gate", raw_shading_gate) if input_set else raw_shading_gate
+    dynamic_mass_gate = input_set.get("payload", {}).get("dynamic_thermal_mass_method_gate", dynamic_mass_gate) if input_set else dynamic_mass_gate
+    radiation_gate = input_set.get("payload", {}).get("solar_radiation_method_gate", radiation_gate) if input_set else radiation_gate
+    radiation_source = input_set.get("payload", {}).get("solar_radiation_source", radiation_source) if input_set else radiation_source
+    coupling_gate = input_set.get("payload", {}).get("room_to_room_coupling_method_gate", coupling_gate) if input_set else coupling_gate
+    report = calculate_hourly_load_report(
+        requirements, schedules, scenarios, model, selected_scenarios, coverage,
+        infiltration_gate, glazing_gate, shading_gate, dynamic_mass_gate,
+        radiation_gate, radiation_source, coupling_gate,
+    )
     report["input_fingerprints"]["envelope_library_updated_at"] = library.get("updated_at", "")
     report["input_fingerprints"]["envelope_model_updated_at"] = envelope_model.get("updated_at", "")
     report["input_fingerprints"]["research_cache_fingerprint"] = draft_service.fingerprint(load_json(paths["research_cache"]) if paths["research_cache"].exists() else empty_research_cache())
     report["input_fingerprints"]["evidence_fusion_fingerprint"] = load_json(paths["evidence_fusion"]).get("fingerprint", "") if paths["evidence_fusion"].exists() else ""
     report["input_fingerprints"]["infiltration_method_gate_updated_at"] = infiltration_gate.get("updated_at", "")
+    report["input_fingerprints"]["glazing_method_gate_updated_at"] = glazing_gate.get("updated_at", "")
+    report["input_fingerprints"]["shading_method_gate_updated_at"] = shading_gate.get("updated_at", "")
+    report["input_fingerprints"]["ground_contact_method_gate_updated_at"] = ground_contact_gate.get("updated_at", "")
+    report["input_fingerprints"]["dynamic_thermal_mass_method_gate_updated_at"] = dynamic_mass_gate.get("updated_at", "")
+    report["input_fingerprints"]["solar_radiation_method_gate_updated_at"] = radiation_gate.get("updated_at", "")
+    report["input_fingerprints"]["solar_radiation_source_fingerprint"] = radiation_source.get("fingerprint", "")
+    report["input_fingerprints"]["room_to_room_coupling_method_gate_updated_at"] = coupling_gate.get("updated_at", "")
+    report["input_fingerprints"]["room_to_room_coupling_method_gate_fingerprint"] = room_coupling_gate_fingerprint(coupling_gate)
     if input_set:
         report["input_fingerprints"]["calculator_input_set_fingerprint"] = input_set["input_fingerprint"]
         report["input_fingerprints"]["project_context_fingerprint"] = _input_context(paths).get("fingerprint", "")
@@ -1144,9 +1624,81 @@ def api_save_hourly_load_report(request):
         for name in ("thermal_model", "thermal_evidence", "building_evidence")
     })
     report["envelope_input"] = envelope_inputs
-    report["excluded_components"] = sorted(set(report["excluded_components"] + [
-        "dynamic thermal mass", "detailed glazing physics", "geometric shading", "AHU coil effects", "fan/duct effects", "heat recovery", "plant loads", "heating",
-    ]))
+    # Advanced methods are opt-in per method gate and per eligible surface.  A
+    # saved approval alone must not make an empty or incomplete method appear
+    # active in the report.
+    model_surfaces = [
+        surface
+        for room in model.get("rooms", [])
+        for surface in room.get("cooling_load", {}).get("envelope_surfaces", [])
+    ]
+    dynamic_surfaces = [
+        surface for surface in model_surfaces
+        if surface.get("dynamic_thermal_mass", {}).get("enabled")
+    ]
+    dynamic_active = dynamic_thermal_mass_gate_is_approved(dynamic_mass_gate) and bool(dynamic_surfaces)
+    radiation_surfaces = [
+        surface for surface in model_surfaces
+        if surface.get("solar_radiation_source_id")
+        and surface.get("solar_radiation_source_id") == radiation_source.get("source_id")
+    ]
+    radiation_active = (
+        solar_radiation_gate_is_approved(radiation_gate)
+        and bool(radiation_source.get("fingerprint"))
+        and bool(radiation_surfaces)
+    )
+    coupling_surfaces = [
+        surface for surface in model_surfaces
+        if surface.get("room_coupling", {}).get("enabled")
+    ]
+    coupling_active = room_coupling_gate_is_approved(coupling_gate) and bool(coupling_surfaces)
+    exclusions = [
+        *([] if dynamic_active else ["dynamic thermal mass"]),
+        *([] if radiation_active else ["solar-position/radiation beyond the manual hourly basis"]),
+        *([] if coupling_active else ["dynamic room-to-room partition coupling"]),
+        "AHU coil effects", "fan/duct effects", "heat recovery", "plant loads", "heating",
+    ]
+    if not envelope_inputs.get("glazing_included"):
+        exclusions.append("detailed glazing physics")
+    if not any(surface.get("geometric_shading") for surface in envelope_inputs.get("glazing_included", [])):
+        exclusions.append("geometric shading where its method gate or geometry is incomplete")
+    report["excluded_components"] = sorted(set(report["excluded_components"] + exclusions))
+    report["advanced_envelope_methods"] = {
+        "dynamic_thermal_mass": {
+            "method_id": dynamic_mass_gate.get("method_id", ""),
+            "status": "approved" if dynamic_thermal_mass_gate_is_approved(dynamic_mass_gate) else "placeholder",
+            "calculation_enabled": dynamic_active,
+            "eligible_surface_ids": [surface.get("surface_id", "") for surface in dynamic_surfaces],
+            "reason": (
+                "Approved gate and enabled dynamic surfaces are eligible for the hourly RC path."
+                if dynamic_active else
+                "Requires an approved gate and at least one enabled, validated dynamic surface."
+            ),
+        },
+        "solar_radiation": {
+            "method_id": radiation_gate.get("method_id", ""),
+            "status": "approved" if solar_radiation_gate_is_approved(radiation_gate) else "placeholder",
+            "source_fingerprint": radiation_source.get("fingerprint", ""),
+            "calculation_enabled": radiation_active,
+            "eligible_surface_ids": [surface.get("surface_id", "") for surface in radiation_surfaces],
+            "reason": (
+                "Approved gate, cited source, and uniquely linked surfaces are eligible for hourly radiation."
+                if radiation_active else
+                "Requires an approved gate, a cited 24-hour source, and surfaces linked to that source."
+            ),
+        },
+        "room_to_room_coupling": {
+            "method_id": coupling_gate.get("method_id", ""),
+            "status": "approved" if room_coupling_gate_is_approved(coupling_gate) else "placeholder",
+            "calculation_enabled": coupling_active,
+            "eligible_surface_ids": [surface.get("surface_id", "") for surface in coupling_surfaces],
+            "reason": (
+                "Approved gate and explicitly linked dynamic partition surfaces are eligible."
+                if coupling_active else
+                "Requires an approved gate and explicitly linked, cited coupling surfaces."
+            ),
+        },
+    }
     readiness = assess_cooling_readiness(report, model, requirements.get("updated_at", ""), coverage, envelope_inputs)
     report["readiness"] = {"status": readiness["status"], "issues": readiness["issues"]}
     report["scope_summary"] = readiness["scope_summary"]
@@ -1164,6 +1716,13 @@ def api_save_hourly_load_report(request):
         "envelope_model": {"artifact_url": safe_link(paths["envelope_model"]) if paths["envelope_model"].exists() else "", "updated_at": envelope_model.get("updated_at", "")},
         "drawing_coverage": {"artifact_url": safe_link(paths["coverage"]) if paths["coverage"].exists() else "", "updated_at": coverage.get("updated_at", "")},
         "infiltration_method_gate": {"artifact_url": safe_link(paths["infiltration_method_gate"]) if paths["infiltration_method_gate"].exists() else "", "updated_at": infiltration_gate.get("updated_at", "")},
+        "glazing_method_gate": {"artifact_url": safe_link(paths["glazing_method_gate"]) if paths["glazing_method_gate"].exists() else "", "updated_at": glazing_gate.get("updated_at", "")},
+        "shading_method_gate": {"artifact_url": safe_link(paths["shading_method_gate"]) if paths["shading_method_gate"].exists() else "", "updated_at": shading_gate.get("updated_at", "")},
+        "ground_contact_method_gate": {"artifact_url": safe_link(paths["ground_contact_method_gate"]) if paths["ground_contact_method_gate"].exists() else "", "updated_at": ground_contact_gate.get("updated_at", "")},
+        "dynamic_thermal_mass_method_gate": {"artifact_url": safe_link(paths["dynamic_thermal_mass_method_gate"]) if paths["dynamic_thermal_mass_method_gate"].exists() else "", "updated_at": dynamic_mass_gate.get("updated_at", "")},
+        "solar_radiation_method_gate": {"artifact_url": safe_link(paths["solar_radiation_method_gate"]) if paths["solar_radiation_method_gate"].exists() else "", "updated_at": radiation_gate.get("updated_at", "")},
+        "solar_radiation_source": {"artifact_url": safe_link(paths["solar_radiation_source"]) if paths["solar_radiation_source"].exists() else "", "fingerprint": radiation_source.get("fingerprint", "")},
+        "room_to_room_coupling_method_gate": {"artifact_url": safe_link(paths["room_to_room_coupling_method_gate"]) if paths["room_to_room_coupling_method_gate"].exists() else "", "updated_at": coupling_gate.get("updated_at", "")},
     }
     if input_set:
         report["input_artifacts"]["calculator_input_set"] = {"artifact_url": report["calculator_input_set"]["artifact_url"], "updated_at": input_set.get("created_at", "")}
@@ -1280,7 +1839,15 @@ def api_save_calculation_input_evidence(request):
     data = read_json_body(request)
     project = project_by_id(data.get("project_id") or data.get("id", ""))
     ensure_review_dir(project)
-    return calculation_extraction_service.post(sys.modules[__name__], project, data)
+    result = calculation_extraction_service.post(sys.modules[__name__], project, data)
+    review_dir = Path(project["review_dir"])
+    project["calculation_input_evidence"] = str(review_dir / "calculation_input_evidence.json")
+    project["evidence_fusion"] = str(review_dir / "architect_evidence_fusion.json")
+    if (review_dir / "calculator_draft.json").exists():
+        project["calculator_draft"] = str(review_dir / "calculator_draft.json")
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return result
 
 
 def api_save_vision_extraction(request):
@@ -1662,6 +2229,21 @@ def current_hourly_load_report_path(project):
     expected["evidence_fusion_fingerprint"] = load_json(paths["evidence_fusion"]).get("fingerprint", "") if paths["evidence_fusion"].exists() else ""
     raw_gate = load_json(paths["infiltration_method_gate"]) if paths["infiltration_method_gate"].exists() else empty_infiltration_method_gate()
     expected["infiltration_method_gate_updated_at"] = raw_gate.get("updated_at", "")
+    glazing_gate = load_json(paths["glazing_method_gate"]) if paths["glazing_method_gate"].exists() else empty_glazing_method_gate()
+    expected["glazing_method_gate_updated_at"] = glazing_gate.get("updated_at", "")
+    shading_gate = load_json(paths["shading_method_gate"]) if paths["shading_method_gate"].exists() else empty_shading_method_gate()
+    expected["shading_method_gate_updated_at"] = shading_gate.get("updated_at", "")
+    ground_contact_gate = ground_contact_gate_for_project(project)
+    expected["ground_contact_method_gate_updated_at"] = ground_contact_gate.get("updated_at", "")
+    dynamic_mass_gate = load_json(paths["dynamic_thermal_mass_method_gate"]) if paths["dynamic_thermal_mass_method_gate"].exists() else empty_dynamic_thermal_mass_method_gate()
+    expected["dynamic_thermal_mass_method_gate_updated_at"] = dynamic_mass_gate.get("updated_at", "")
+    radiation_gate = load_json(paths["solar_radiation_method_gate"]) if paths["solar_radiation_method_gate"].exists() else empty_solar_radiation_method_gate()
+    expected["solar_radiation_method_gate_updated_at"] = radiation_gate.get("updated_at", "")
+    radiation_source = load_json(paths["solar_radiation_source"]) if paths["solar_radiation_source"].exists() else empty_solar_radiation_source()
+    expected["solar_radiation_source_fingerprint"] = radiation_source.get("fingerprint", "")
+    coupling_gate = load_json(paths["room_to_room_coupling_method_gate"]) if paths["room_to_room_coupling_method_gate"].exists() else empty_room_coupling_method_gate()
+    expected["room_to_room_coupling_method_gate_updated_at"] = coupling_gate.get("updated_at", "")
+    expected["room_to_room_coupling_method_gate_fingerprint"] = room_coupling_gate_fingerprint(coupling_gate)
     if "calculator_input_set_fingerprint" in fingerprints:
         snapshot, _pointer = _load_input_snapshot(paths, fingerprints["calculator_input_set_fingerprint"])
         if not snapshot:
@@ -1761,6 +2343,11 @@ def analysis_response(project):
         "packet_url": optional_link(project.get("packet")),
         "ai_input_url": optional_link(project.get("ai_input")),
         "drawing_coverage_url": optional_link(project.get("drawing_coverage")),
+        "calculation_input_evidence_url": optional_link(project.get("calculation_input_evidence")),
+        "evidence_fusion_url": optional_link(project.get("evidence_fusion") or project.get("architect_evidence_fusion")),
+        "calculator_draft_url": optional_link(project.get("calculator_draft")),
+        "thermal_evidence_url": optional_link(project.get("thermal_evidence")),
+        "thermal_model_url": optional_link(project.get("thermal_model")),
         "chatgpt_packet": link_pipeline_files(project.get("chatgpt_packet", {})),
         "reasoning_packet": link_pipeline_files(project.get("reasoning_packet", {})),
         "has_reasoning_packet": bool(project.get("reasoning_packet")),

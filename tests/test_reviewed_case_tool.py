@@ -8,6 +8,7 @@ import tempfile
 import unittest
 
 from tools.create_reviewed_cooling_case import bootstrap, prepare
+from backend.web_app import _rebuild_evidence_chain
 
 
 class ReviewedCaseToolTests(unittest.TestCase):
@@ -58,6 +59,10 @@ class ReviewedCaseToolTests(unittest.TestCase):
             self.assertEqual(set(first["created"]), {
                 "project_context.json", "calculator_input_overrides.json", "hourly_load_model.json",
                 "schedule_library.json", "design_day_scenarios.json", "envelope_library.json", "envelope_model.json",
+                "research_cache.json", "infiltration_method_gate.json", "glazing_method_gate.json",
+                "shading_method_gate.json", "ground_contact_method_gate.json",
+                "dynamic_thermal_mass_method_gate.json", "solar_radiation_method_gate.json",
+                "solar_radiation_source.json", "room_to_room_coupling_method_gate.json",
             })
             model = json.loads((output / "hourly_load_model.json").read_text(encoding="utf-8"))
             self.assertEqual([row["room_id"] for row in model["rooms"]], ["room_01"])
@@ -65,6 +70,25 @@ class ReviewedCaseToolTests(unittest.TestCase):
             second = bootstrap(source, output)
             self.assertEqual(second["created"], [])
             self.assertEqual((output / "hourly_load_model.json").read_bytes(), original)
+
+    def test_evidence_chain_builds_calculation_register_and_draft(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "ai_input.json").write_text(json.dumps({
+                "source_pdf": "/private/drawing.pdf",
+                "drawing_set": {"pages": [{
+                    "page": 1, "drawing_number": "A-01", "title": "Level 1 plan",
+                    "sheet_classification": "floor_plan",
+                    "structured_content": {"markdown": "Cool Room AREA: 18.4 m²"},
+                }]},
+            }), encoding="utf-8")
+            for name in ("spatial_ocr", "vector_geometry", "vision_response", "dimension_wall_matches", "geometry_confirmation"):
+                (root / f"{name}.json").write_text("{}", encoding="utf-8")
+            result = _rebuild_evidence_chain({"review_dir": str(root)})
+            self.assertTrue(result["calculation_input_evidence"]["candidates"])
+            self.assertTrue((root / "calculation_input_evidence.json").exists())
+            self.assertTrue((root / "architect_evidence_fusion.json").exists())
+            self.assertTrue((root / "calculator_draft.json").exists())
 
 
 if __name__ == "__main__":

@@ -20,7 +20,7 @@ from ai.evidence_fusion import build_evidence_fusion
 from ai.geometry_review import normalise_vision
 from ai.thermal_model import build_thermal_evidence, build_thermal_model
 from ai.vision_extraction import (
-    empty_settings, estimate, extraction_schema, file_hash, select_page_groups,
+    build_ranked_context, empty_settings, estimate, extraction_schema, file_hash, select_page_groups,
     timestamp, validate_provider_output, validate_settings,
     vision_response_from_extraction,
 )
@@ -87,6 +87,10 @@ def _available(ai_input, coverage):
     return select_page_groups(ai_input, coverage)
 
 
+def _context_selection(ai_input, coverage):
+    return build_ranked_context(ai_input, coverage)
+
+
 def _response(web, project):
     paths = _paths(project)
     paths["root"].mkdir(parents=True, exist_ok=True)
@@ -94,9 +98,11 @@ def _response(web, project):
     ai_input = _read(paths["ai_input"], {})
     coverage = _read(paths["coverage"], {})
     groups = _available(ai_input, coverage) if ai_input else []
+    context_selection = _context_selection(ai_input, coverage) if ai_input else {}
     settings = _settings(paths)
     return {
         "id": project["id"], "settings": settings, "available_groups": groups,
+        "context_selection": context_selection,
         "estimate": estimate(settings, groups, _cost_per_group()), "job": job,
         "provider_configured": bool(os.environ.get("OPENAI_API_KEY")),
         "model": settings.get("model") or os.environ.get("ARCHIE_VISION_MODEL", "gpt-5"),
@@ -164,10 +170,16 @@ def _manifest(paths, ai_input, groups, settings, summary):
             image_path = _page_image(ai_input, page["page"], pages_dir / f"page-{page['page']}.png")
             members.append({**page, "image_path": str(image_path), "image_sha256": file_hash(image_path)})
         manifest_groups.append({**group, "pages": members})
+    context_selection = _context_selection(ai_input, _read(paths["coverage"], {}))
     manifest = {
         "schema_version": 1, "run_id": run_id, "created_at": timestamp(),
         "source_fingerprint": source_fingerprint(ai_input), "settings": settings,
         "estimate": summary, "groups": manifest_groups,
+        "context_selection": context_selection,
+        "main_context_pages": context_selection.get("main_context_pages", []),
+        "exception_pages": context_selection.get("exception_pages", []),
+        "selection_policy_version": context_selection.get("policy_version", ""),
+        "selection_fingerprint": context_selection.get("fingerprint", ""),
     }
     _atomic_json(run_dir / "request_manifest.json", manifest)
     return manifest, run_dir
@@ -311,7 +323,8 @@ def _start(web, project, data, retry=False):
         raise ValueError("A vision extraction job is already active.")
     manifest, run_dir = _manifest(paths, ai_input, groups, settings, summary)
     job = {"schema_version": 1, "run_id": manifest["run_id"], "status": "queued", "started_at": timestamp(),
-           "finished_at": "", "source_fingerprint": manifest["source_fingerprint"], "estimate": summary,
+           "finished_at": "", "source_fingerprint": manifest["source_fingerprint"],
+           "selection_fingerprint": manifest.get("selection_fingerprint", ""), "estimate": summary,
            "total_groups": len(manifest["groups"]), "completed_groups": 0, "current_group": "", "error": "",
            "manifest_path": str(run_dir / "request_manifest.json"), "retry_of": previous.get("run_id", "") if retry else ""}
     _atomic_json(paths["job"], job)

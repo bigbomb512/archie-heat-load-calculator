@@ -102,6 +102,12 @@ Accepted evidence is not automatically a complete cooling input. Occupancy,
 schedules, setpoints, internal gains, envelope properties, and source status
 must still pass hourly readiness validation.
 
+The envelope editor exposes separate method gates for infiltration, reviewed
+glazing/manual solar, geometric shading, and ground-contact floors. A gate is
+an engineering-method approval record, not a substitute for room-specific
+geometry, construction, boundary, schedule, or source evidence. Unapproved or
+incomplete records remain visible but do not enter a complete project duty.
+
 ## 4. Calculate and interpret readiness
 
 Use `POST /api/hourly-load-report` with selected scenario IDs. Results mean:

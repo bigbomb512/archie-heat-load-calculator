@@ -11,7 +11,6 @@ from copy import deepcopy
 import hashlib
 import json
 import math
-import re
 
 
 def fingerprint(value):
@@ -108,6 +107,183 @@ def geometry_status_for_room(room):
     return room.get("geometry_status") or "label_detected"
 
 
+def _distance(left, right):
+    return math.hypot(left[0] - right[0], left[1] - right[1])
+
+
+def _bbox_center(raw):
+    """Return a label centre from the common OCR/vector rectangle shapes."""
+    if isinstance(raw, dict):
+        raw = raw.get("bbox") or raw.get("bbox_px") or raw.get("coordinates")
+    if not isinstance(raw, (list, tuple)) or len(raw) < 4:
+        return None
+    try:
+        x1, y1, x2, y2 = (float(raw[index]) for index in range(4))
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(value) for value in (x1, y1, x2, y2)):
+        return None
+    return [(x1 + x2) / 2.0, (y1 + y2) / 2.0]
+
+
+def _point_in_polygon(point, polygon):
+    """Strict enough for label-to-room matching; a boundary point is accepted."""
+    if not valid_point(point) or not polygon_is_simple(polygon):
+        return False
+    x, y = point
+    inside = False
+    for left, right in zip(polygon, polygon[1:]):
+        if abs((right[0] - left[0]) * (y - left[1]) - (right[1] - left[1]) * (x - left[0])) < 1e-7:
+            if min(left[0], right[0]) - 1e-7 <= x <= max(left[0], right[0]) + 1e-7 and min(left[1], right[1]) - 1e-7 <= y <= max(left[1], right[1]) + 1e-7:
+                return True
+        if (left[1] > y) != (right[1] > y):
+            crossing = (right[0] - left[0]) * (y - left[1]) / (right[1] - left[1]) + left[0]
+            if x < crossing:
+                inside = not inside
+    return inside
+
+
+def _wall_lines(page):
+    """Return only plausible wall vectors; dimension and fixture lines are excluded."""
+    lines = []
+    for row in page.get("line_candidates", []) or []:
+        start, end = row.get("start_px"), row.get("end_px")
+        if not (valid_point(start) and valid_point(end)) or _distance(start, end) <= 1e-6:
+            continue
+        hint = str(row.get("candidate_role_hint", "")).casefold()
+        identifier = str(row.get("candidate_id", "")).casefold()
+        if any(value in hint or value in identifier for value in ("dimension", "fixture", "joinery", "annotation")):
+            continue
+        # Vector extraction calls uncertain physical lines "possible_wall".
+        # Do not promote a line solely because it is visually nearby.
+        if hint and not any(value in hint for value in ("wall", "partition", "boundary", "physical")):
+            continue
+        lines.append({"wall_id": row.get("candidate_id", ""), "start": list(start), "end": list(end), "raw": row})
+    return [row for row in lines if row["wall_id"]]
+
+
+def _closed_wall_loops(lines, tolerance=1.0):
+    """Find unambiguous closed wall components by shared vector endpoints.
+
+    This intentionally does not bridge visual gaps. A branch, open chain, or
+    uncertain snap is evidence only, not a room boundary.
+    """
+    nodes = []
+    indexed = []
+
+    def node_for(point):
+        for index, existing in enumerate(nodes):
+            if _distance(existing, point) <= tolerance:
+                return index
+        nodes.append(list(point))
+        return len(nodes) - 1
+
+    adjacency = defaultdict(list)
+    for line in lines:
+        start, end = node_for(line["start"]), node_for(line["end"])
+        if start == end:
+            continue
+        edge = {**line, "start_node": start, "end_node": end}
+        indexed.append(edge)
+        adjacency[start].append(edge)
+        adjacency[end].append(edge)
+
+    loops, visited = [], set()
+    for edge in indexed:
+        edge_id = edge["wall_id"]
+        if edge_id in visited:
+            continue
+        component_edges, stack, component_nodes = [], [edge], set()
+        while stack:
+            current = stack.pop()
+            current_id = current["wall_id"]
+            if current_id in {item["wall_id"] for item in component_edges}:
+                continue
+            component_edges.append(current)
+            component_nodes.update((current["start_node"], current["end_node"]))
+            for node in (current["start_node"], current["end_node"]):
+                stack.extend(item for item in adjacency[node] if item["wall_id"] not in {row["wall_id"] for row in component_edges})
+        visited.update(item["wall_id"] for item in component_edges)
+        # A simple loop has exactly two incident wall segments at every node.
+        if len(component_edges) < 3 or any(len(adjacency[node]) != 2 for node in component_nodes):
+            continue
+        path, previous, node = [], None, next(iter(component_nodes))
+        while True:
+            path.append(nodes[node])
+            candidates = [item for item in adjacency[node] if item is not previous]
+            if not candidates:
+                break
+            current = candidates[0]
+            next_node = current["end_node"] if current["start_node"] == node else current["start_node"]
+            previous, node = current, next_node
+            if node == next(iter(component_nodes)):
+                path.append(nodes[node])
+                break
+            if len(path) > len(component_edges) + 1:
+                break
+        if len(path) == len(component_edges) + 1 and path[0] == path[-1] and polygon_is_simple(path):
+            loops.append({"points_px": path, "wall_ids": sorted(item["wall_id"] for item in component_edges)})
+    return loops
+
+
+def _label_points(spatial_ocr, room, page_number):
+    wanted = normalise_label(room.get("name"))
+    points = []
+    for page in (spatial_ocr or {}).get("pages", []):
+        if page.get("page") != page_number:
+            continue
+        for item in page.get("room_label_candidates", []) or []:
+            if not isinstance(item, dict) or normalise_label(item.get("text")) != wanted:
+                continue
+            status = str(item.get("status", "room_label")).casefold()
+            if status and status not in {"room_label", "room", "candidate", "confirmed"}:
+                continue
+            point = _bbox_center(item)
+            if point:
+                points.append({"point": point, "raw": item})
+    for evidence in room.get("evidence", []) or []:
+        if not isinstance(evidence, dict) or evidence.get("page") != page_number:
+            continue
+        point = _bbox_center(evidence)
+        if point:
+            points.append({"point": point, "raw": evidence})
+    return points
+
+
+def _scale_from_dimension_links(page_number, lines, dimension_matches):
+    """Calibrate pixels to millimetres from explicit dimension-to-wall links."""
+    walls = {row["wall_id"]: row for row in lines}
+    dimensions = {}
+    links = []
+    for page in (dimension_matches or {}).get("pages", []):
+        if page.get("page") != page_number:
+            continue
+        for row in page.get("dimension_span_candidates", []) or []:
+            identifier = row.get("dimension_candidate_id") or row.get("dimension_id")
+            if identifier and isinstance(row.get("value_mm"), (int, float)) and row["value_mm"] > 0:
+                dimensions[identifier] = row["value_mm"]
+        for row in page.get("dimension_wall_links", []) or []:
+            dimension_id = row.get("dimension_candidate_id") or row.get("dimension_id")
+            wall_id = row.get("target_wall_id") or row.get("wall_id")
+            value = row.get("value_mm", dimensions.get(dimension_id))
+            wall = walls.get(wall_id)
+            if not wall or not isinstance(value, (int, float)) or value <= 0:
+                continue
+            length_px = _distance(wall["start"], wall["end"])
+            if length_px <= 1e-6:
+                continue
+            links.append({"dimension_id": dimension_id, "wall_id": wall_id, "value_mm": float(value), "length_px": length_px, "mm_per_px": float(value) / length_px})
+    if not links:
+        return None, []
+    factors = [row["mm_per_px"] for row in links]
+    reference = sum(factors) / len(factors)
+    # Multiple printed dimensions must agree. One valid directly-linked
+    # dimension is sufficient for calibration; a disagreement blocks it.
+    if any(abs(value - reference) / reference > 0.02 for value in factors):
+        return None, links
+    return reference, links
+
+
 def build_geometry_resolution(ai_input, coverage=None, building=None, spatial_ocr=None, vector_geometry=None,
                               dimension_matches=None, geometry_confirmation=None, vision_response=None):
     """Create page capabilities, witnesses, relationships and review issues."""
@@ -194,6 +370,7 @@ def build_geometry_resolution(ai_input, coverage=None, building=None, spatial_oc
         })
 
     room_entities = []
+    room_entities_by_source_id = {}
     for level in building.get("levels", []):
         evidence = level.get("evidence") or []
         page = next((item.get("page") for item in evidence if isinstance(item, dict) and item.get("page") is not None), None)
@@ -215,6 +392,7 @@ def build_geometry_resolution(ai_input, coverage=None, building=None, spatial_oc
             unresolved=room.get("unresolved_fields", []), level=level,
         )
         room_entities.append(room_entity)
+        room_entities_by_source_id[room.get("id", room_entity["entity_id"])] = room_entity
         for item in evidence:
             page = item.get("page")
             witness = add_witness(page, room.get("name", ""), "room", item.get("excerpt", ""), room.get("extraction_method", "structured_pdf"), room.get("confidence", "unknown"), item.get("bbox_px", ""), page_by_number.get(page, {}).get("proposed_role"))
@@ -367,6 +545,160 @@ def build_geometry_resolution(ai_input, coverage=None, building=None, spatial_oc
                 "independent_witness": True, "cross_check_only": False,
             })
 
+    # Resolve a derived room area only from an actual closed wall loop,
+    # explicit linked dimensions, a spatially linked room label, and a second
+    # independent architect witness.  This is deliberately separate from the
+    # pre-existing explicit-room-area path above.
+    vector_pages = {
+        row.get("page"): row for row in ((vector_geometry or {}).get("geometry_key_points") or {}).get("pages", [])
+    }
+    vision_rooms = [
+        row for row in ((vision_response or {}).get("result", {}).get("auto_extraction", {}).get("entities", []) or [])
+        if isinstance(row, dict) and row.get("kind") == "room"
+    ]
+
+    def room_pages(room):
+        return {item.get("page") for item in room.get("evidence", []) if isinstance(item, dict) and item.get("page") is not None}
+
+    def independent_room_witnesses(room, primary_page, level):
+        witnesses = []
+        # A different plan/finish/section page is independent only when it
+        # carries an explicit geometry/region/area witness, rather than merely
+        # repeating the room name in a legend or note.
+        for item in room.get("evidence", []) or []:
+            if not isinstance(item, dict) or item.get("page") == primary_page:
+                continue
+            candidate_page = page_by_number.get(item.get("page"), {})
+            role = candidate_page.get("proposed_role", "")
+            if role in {"3d_render", "3d_reference", "reference", "legend_or_general_notes"}:
+                continue
+            explicit_geometry = any(item.get(key) for key in ("geometry_reference", "boundary_reference", "region_reference", "area_m2", "area"))
+            if explicit_geometry:
+                witnesses.append({"page": item.get("page"), "kind": "cross_page_geometry", "evidence": item,
+                                 "method": "building_evidence_cross_page", "confidence": room.get("confidence", "unknown")})
+        for item in vision_rooms:
+            if normalise_label(item.get("label")) != normalise_label(room.get("name")) or item.get("page") == primary_page:
+                continue
+            if level and item.get("level_name") and normalise_label(item.get("level_name")) != normalise_label(level):
+                continue
+            candidate_page = page_by_number.get(item.get("page"), {})
+            if candidate_page.get("proposed_role") in {"3d_render", "3d_reference", "reference"}:
+                continue
+            if item.get("geometry_status") == "geometry_confirmed" and (item.get("boundary_reference") or item.get("witnesses")):
+                witnesses.append({"page": item.get("page"), "kind": "validated_vision_geometry", "evidence": item,
+                                 "method": "manual_vision_response", "confidence": item.get("confidence", "unknown")})
+        return witnesses
+
+    for room in building.get("spaces", []):
+        source_room_id = room.get("id")
+        room_entity = room_entities_by_source_id.get(source_room_id)
+        if not room_entity:
+            continue
+        level = room.get("level_name") or room_entity.get("level_candidate", "")
+        candidate_pages = room_pages(room)
+        # A room can be labelled on a finish plan while its vector boundary is
+        # on a separate dimension plan. Include only plan pages carrying the
+        # exact spatial OCR label and a compatible level; never add pages from
+        # page order or visual resemblance.
+        for page_number, page_meta in page_by_number.items():
+            if page_meta.get("proposed_role") not in {"main_floor_plan", "primary_geometry_plan", "supporting_geometry_plan", "floor_plan"}:
+                continue
+            page_level = page_meta.get("level_name", "")
+            if level and page_level and normalise_label(level) != normalise_label(page_level):
+                continue
+            if _label_points(spatial_ocr, room, page_number):
+                candidate_pages.add(page_number)
+        for page_number in sorted(candidate_pages):
+            page_meta = page_by_number.get(page_number, {})
+            if page_meta.get("proposed_role") not in {"main_floor_plan", "primary_geometry_plan", "supporting_geometry_plan", "floor_plan"}:
+                continue
+            vector_page = vector_pages.get(page_number, {})
+            lines = _wall_lines(vector_page)
+            loops = _closed_wall_loops(lines)
+            scale, scale_links = _scale_from_dimension_links(page_number, lines, dimension_matches)
+            label_points = _label_points(spatial_ocr, room, page_number)
+            matched = []
+            for loop in loops:
+                labels_inside = [item for item in label_points if _point_in_polygon(item["point"], loop["points_px"])]
+                if len(labels_inside) == 1:
+                    matched.append((loop, labels_inside[0]))
+            if len(matched) > 1:
+                conflict_id = "geometry_conflict_" + fingerprint([source_fp, "room_loop", room.get("name"), level, page_number, [row[0]["wall_ids"] for row in matched]])[:16]
+                conflicts.append({"conflict_id": conflict_id, "kind": "room_boundary_ambiguous", "entity_ids": [room_entity["entity_id"]],
+                                  "pages": [page_number], "status": "review_required",
+                                  "reason": "The room label is inside more than one compatible closed wall loop."})
+                continue
+            if not matched:
+                continue
+            loop, label_witness = matched[0]
+            unresolved = []
+            if not level:
+                unresolved.append("floor_identity")
+            if scale is None:
+                unresolved.append("scale_calibration")
+            independent = independent_room_witnesses(room, page_number, level)
+            if not independent:
+                unresolved.append("independent_geometry_witness")
+            wall_witnesses = [
+                add_witness(page_number, wall_id, "boundary_wall", {"wall_id": wall_id}, "pdf_vector_geometry",
+                            role=page_meta.get("proposed_role"))
+                for wall_id in loop["wall_ids"]
+            ]
+            label_record = add_witness(page_number, room.get("name", ""), "room_label_in_boundary", label_witness["raw"],
+                                       "spatial_ocr", role=page_meta.get("proposed_role"))
+            dimension_witnesses = [
+                add_witness(page_number, row.get("dimension_id", ""), "dimension_to_wall", row, "dimension_wall_matcher",
+                            role=page_meta.get("proposed_role"))
+                for row in scale_links
+            ]
+            supporting_witnesses = [
+                add_witness(row["page"], room.get("name", ""), row["kind"], row["evidence"], row["method"], row["confidence"],
+                            role=page_by_number.get(row["page"], {}).get("proposed_role"))
+                for row in independent
+            ]
+            all_witness_ids = [row["witness_id"] for row in wall_witnesses + [label_record] + dimension_witnesses + supporting_witnesses]
+            area_m2 = round(polygon_area(loop["points_px"]) * scale * scale / 1_000_000.0, 6) if scale else None
+            proof_value = {
+                "room_entity_id": room_entity["entity_id"], "room_source_id": source_room_id,
+                "points_px": loop["points_px"], "boundary_wall_ids": loop["wall_ids"],
+                "calibration": {"mm_per_px": scale, "dimension_links": scale_links, "consistency_tolerance": "2%"},
+                "label_witness_id": label_record["witness_id"], "independent_witness_ids": [row["witness_id"] for row in supporting_witnesses],
+                "area_m2": area_m2,
+                "derivation": {
+                    "formula": "shoelace_area_px2 × (mm_per_px²) ÷ 1,000,000",
+                    "operands": {"polygon_area_px2": polygon_area(loop["points_px"]), "mm_per_px": scale},
+                    "rounding": "6 decimal places",
+                },
+            }
+            proof_status = "geometry_confirmed" if not unresolved and area_m2 and area_m2 > 0 else "geometry_review_required"
+            proof = add_entity(page_number, room.get("name", ""), "room_geometry_proof", proof_value, proof_status,
+                               "calibrated_closed_wall_loop", "high" if proof_status == "geometry_confirmed" else "medium",
+                               location="|".join(loop["wall_ids"]), witness_ids=all_witness_ids, unresolved=unresolved, level=level)
+            relationships.append({"relationship_id": "room_boundary_proof_" + fingerprint([proof["entity_id"], room_entity["entity_id"]])[:16],
+                                  "kind": "room_to_calibrated_boundary", "entity_ids": [room_entity["entity_id"], proof["entity_id"]],
+                                  "pages": [page_number], "basis": "closed_wall_loop+label_inside+dimension_calibration",
+                                  "status": "confirmed" if proof_status == "geometry_confirmed" else "proposed",
+                                  "independent_witness": bool(independent), "cross_check_only": False})
+            if proof_status == "geometry_confirmed":
+                room_entity["geometry_status"] = "geometry_confirmed"
+                room_entity["witness_ids"] = sorted(set(room_entity.get("witness_ids", []) + all_witness_ids))
+                room_entity.setdefault("value", {})["geometry_proof_id"] = proof["entity_id"]
+                review_items[:] = [
+                    item for item in review_items
+                    if not (item.get("affected_id") == room.get("id", "") and item.get("field") == "geometry")
+                ]
+                add_entity(page_number, room.get("name", ""), "area", {**proof_value, "geometry_proof_id": proof["entity_id"]},
+                           "geometry_confirmed", "derived_room_area", "high", location=proof["entity_id"],
+                           witness_ids=all_witness_ids, level=level)
+            else:
+                review_items.append({
+                    "item_id": "geometry_issue_" + fingerprint([room.get("id"), page_number, "proof", sorted(unresolved)])[:16],
+                    "affected_id": room.get("id", ""), "status": "blocked", "field": "geometry_area",
+                    "source_artifact": "geometry_resolution", "page": page_number,
+                    "reason": "Closed room boundary found, but " + ", ".join(unresolved) + " is required before its area can be used.",
+                    "remediation": "Add the missing cited witness or keep this room geometry proposed.",
+                })
+
     # A page with no scale can still contribute labels and dimensions, but it
     # cannot produce a derived area or confirmed boundary.
     for page in page_register:
@@ -401,5 +733,6 @@ def build_geometry_resolution(ai_input, coverage=None, building=None, spatial_oc
             "conflict_count": len(conflicts),
             "review_item_count": len(review_items),
             "three_d_crosscheck_pages": [row.get("page") for row in render_pages],
+            "confirmed_room_geometry_count": len([row for row in entities if row.get("kind") == "room_geometry_proof" and row.get("geometry_status") == "geometry_confirmed"]),
         },
     }
