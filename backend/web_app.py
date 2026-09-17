@@ -69,7 +69,10 @@ from ai.building_evidence import build_building_evidence
 from ai.calculation_extraction import extract_calculation_input_evidence, normalise_for_hourly_model
 from ai.evidence_fusion import build_evidence_fusion
 from ai.calculator_draft import build_calculator_draft
-from ai.parity_harness import archie_results_from_heat_report, archie_results_from_hourly_load_report, compare_case, render_markdown, validate_benchmark_case
+from ai.benchmark_acceptance import engine_fingerprint as benchmark_engine_fingerprint
+from backend import benchmark_service
+from ai.benchmark_reporting import render_html as render_benchmark_html, render_csv as render_benchmark_csv
+from ai.parity_harness import archie_results_from_heat_report, archie_results_from_hourly_load_report, render_markdown, validate_benchmark_case
 from ai.thermal_model import apply_thermal_model, build_thermal_evidence, build_thermal_model
 from ai.calculator_draft import DraftConflict
 from backend import draft_service
@@ -2017,6 +2020,7 @@ def api_save_hourly_load_report(request):
     if input_set:
         report["input_artifacts"]["calculator_input_set"] = {"artifact_url": report["calculator_input_set"]["artifact_url"], "updated_at": input_set.get("created_at", "")}
     previous_report_fingerprint = productization.fingerprint(load_json(paths["report"])) if paths["report"].exists() else ""
+    report["calculation_engine_fingerprint"] = benchmark_engine_fingerprint()
     write_artifact(paths["report"], report)
     new_report_fingerprint = productization.fingerprint(report)
     if previous_report_fingerprint != new_report_fingerprint:
@@ -2315,14 +2319,24 @@ def api_parity_report(request):
     case_path = parity_dir / "benchmark_case.json"
     report_path = parity_dir / "reports" / "parity_report.json"
     markdown_path = parity_dir / "reports" / "parity_report.md"
+    html_path = parity_dir / "reports" / "parity_report.html"
+    csv_path = parity_dir / "reports" / "parity_report.csv"
+    case = load_json(case_path) if case_path.exists() else {}
+    saved = load_json(report_path) if report_path.exists() else {}
+    report = benchmark_service.read(sys.modules[__name__], project, case, saved) if saved else saved
+    acceptance_stale = report.get("validation", {}).get("status") == "stale"
+    exports_outdated = ((saved.get("status") == "validated" and report.get("status") != "validated")
+                        or bool(saved.get("validation") and saved.get("validation") != report.get("validation")))
     return {
         "id": project["id"],
-        "case": load_json(case_path) if case_path.exists() else {},
-        "report": load_json(report_path) if report_path.exists() else {},
+        "case": case,
+        "report": report,
         "case_url": safe_link(case_path) if case_path.exists() else "",
-        "report_url": safe_link(report_path) if report_path.exists() else "",
-        "markdown_url": safe_link(markdown_path) if markdown_path.exists() else "",
-        "status": "current" if project.get("parity_report") and report_path.exists() else ("stale" if report_path.exists() else "not_run"),
+        "report_url": safe_link(report_path) if report_path.exists() and not exports_outdated else "",
+        "markdown_url": safe_link(markdown_path) if markdown_path.exists() and not exports_outdated else "",
+        "html_url": safe_link(html_path) if html_path.exists() and not exports_outdated else "",
+        "csv_url": safe_link(csv_path) if csv_path.exists() and not exports_outdated else "",
+        "status": "stale" if acceptance_stale else "current" if project.get("parity_report") and report_path.exists() else ("stale" if report_path.exists() else "not_run"),
     }
 
 
@@ -2340,6 +2354,8 @@ def api_save_parity_report(request):
     case_path = parity_dir / "benchmark_case.json"
     report_path = parity_dir / "reports" / "parity_report.json"
     markdown_path = parity_dir / "reports" / "parity_report.md"
+    html_path = parity_dir / "reports" / "parity_report.html"
+    csv_path = parity_dir / "reports" / "parity_report.csv"
     heat_path = current_heat_load_report_path(project, review_dir / "design_requirements.json")
     hourly_path = current_hourly_load_report_path(project)
     archie_results = data.get("archie_results")
@@ -2348,10 +2364,13 @@ def api_save_parity_report(request):
             archie_results_from_hourly_load_report(load_json(hourly_path)) if hourly_path
             else (archie_results_from_heat_report(load_json(heat_path)) if heat_path else {"peak": {}, "rooms": [], "zones": []})
         )
-    report = compare_case(case, archie_results)
+    report = benchmark_service.prepare(sys.modules[__name__], project, case, archie_results,
+                                       action=data.get("action", "build"), data=data)
     case_path.write_text(json.dumps(case, indent=2), encoding="utf-8")
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     markdown_path.write_text(render_markdown(report), encoding="utf-8")
+    html_path.write_text(render_benchmark_html(report), encoding="utf-8")
+    csv_path.write_text(render_benchmark_csv(report), encoding="utf-8")
     project["parity_case"] = str(case_path)
     project["parity_report"] = str(report_path)
     project["updated_at"] = timestamp()
@@ -2363,6 +2382,8 @@ def api_save_parity_report(request):
         "case_url": safe_link(case_path),
         "report_url": safe_link(report_path),
         "markdown_url": safe_link(markdown_path),
+        "html_url": safe_link(html_path),
+        "csv_url": safe_link(csv_path),
     }
 
 
