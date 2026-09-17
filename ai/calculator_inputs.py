@@ -32,6 +32,7 @@ from ai.envelope_method_gates import (
 )
 from ai.solar_radiation import empty_solar_radiation_source, validate_solar_radiation_source
 from ai.room_coupling import empty_room_coupling_method_gate, validate_room_coupling_method_gate
+from ai.heating_gate import empty_heating_method_gate, validate_heating_method_gate
 from ai.research_cache import (
     default_record_statuses,
     default_pack_coverage,
@@ -622,6 +623,7 @@ def assemble_calculator_inputs(hourly_model, schedule_library, scenarios, select
                                glazing_gate=None, shading_gate=None, ground_contact_gate=None,
                                dynamic_thermal_mass_gate=None, solar_radiation_gate=None,
                                solar_radiation_source=None, room_to_room_coupling_gate=None,
+                               heating_gate=None,
                                calculation_input_evidence=None, source_pack_releases=None):
     """Resolve cooling inputs without mutating the supplied project artifacts."""
     release_manifest = validate_source_pack_release_manifest(source_pack_releases) if source_pack_releases is not None else source_pack_release_manifest()
@@ -649,6 +651,7 @@ def assemble_calculator_inputs(hourly_model, schedule_library, scenarios, select
         "solar_radiation_method_gate": solar_radiation_gate,
         "solar_radiation_source": solar_radiation_source,
         "room_to_room_coupling_method_gate": room_to_room_coupling_gate,
+        "heating_method_gate": heating_gate,
         "research_source_pack_releases": release_manifest,
     }.items()}
     model, library, scenario_library = validate_hourly_load_model(deepcopy(hourly_model)), validate_schedule_library(deepcopy(schedule_library)), validate_design_day_scenarios(deepcopy(scenarios))
@@ -660,6 +663,7 @@ def assemble_calculator_inputs(hourly_model, schedule_library, scenarios, select
     checked_radiation_gate = validate_solar_radiation_method_gate(solar_radiation_gate or empty_solar_radiation_method_gate())
     checked_radiation_source = validate_solar_radiation_source(solar_radiation_source or empty_solar_radiation_source())
     checked_coupling_gate = validate_room_coupling_method_gate(room_to_room_coupling_gate or empty_room_coupling_method_gate())
+    checked_heating_gate = validate_heating_method_gate(heating_gate or empty_heating_method_gate())
     cache = validate_cache(research_cache or {"schema_version": 1, "revision": 0, "records": []})
     context = validate_project_context(project_context)
     # Direct callers from the pre-context API retain a useful legacy readiness
@@ -717,7 +721,8 @@ def assemble_calculator_inputs(hourly_model, schedule_library, scenarios, select
                     "dynamic_thermal_mass_method_gate": deepcopy(checked_dynamic_gate),
                     "solar_radiation_method_gate": deepcopy(checked_radiation_gate),
                     "solar_radiation_source": deepcopy(checked_radiation_source),
-                    "room_to_room_coupling_method_gate": deepcopy(checked_coupling_gate)},
+                    "room_to_room_coupling_method_gate": deepcopy(checked_coupling_gate),
+                    "heating_method_gate": deepcopy(checked_heating_gate)},
     }
     core["input_fingerprint"] = _fingerprint(_stable(core))
     result = deepcopy(core)

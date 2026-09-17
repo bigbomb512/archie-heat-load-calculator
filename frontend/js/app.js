@@ -15,7 +15,7 @@ let CALCULATOR_INPUT_SET = null, CALCULATOR_INPUT_OVERRIDES = {revision: 0, reco
 // Legacy projects/tests that predate the input-snapshot workflow may not
 // expose /api/calculator-inputs at all. Once that endpoint responds, the
 // explicit Assemble → Calculate gate is enforced.
-let CALCULATOR_INPUTS_AVAILABLE = false;
+let CALCULATOR_INPUTS_AVAILABLE = false, CALCULATOR_EXCEPTION_ROWS = [], CALCULATOR_EXCEPTION_TOTAL = 0;
 let VISION_EXTRACTION = null, VISION_POLL = null;
 
 /* ---- theme -------------------------------------------------------------
@@ -160,7 +160,7 @@ function showResults(data){
   requiredElement("fRel").classList.add("on"); requiredElement("fAll").classList.remove("on");
   requiredElement("btnConfirm").disabled = false;
   requiredElement("btnConfirmTop").classList.remove("hide");
-  drawSummary(); drawReviewList(); drawGrid(); drawAside(); loadProjects();
+  drawSummary(); drawReviewList(); drawGrid(); drawAside(); loadProjects(); loadProjectProductization();
   if (PACKET?.zip || PACKET?.prompt) showVisionPanel();
   if (data.has_reasoning_packet) showDesignRequirements(data.design_requirements);
 }
@@ -465,16 +465,31 @@ requiredElement("btnSaveGroundContactGate").addEventListener("click", saveGround
 requiredElement("btnSaveDynamicThermalMassGate").addEventListener("click", saveDynamicThermalMassGate);
 requiredElement("btnSaveSolarRadiationGate").addEventListener("click", saveSolarRadiationGate);
 requiredElement("btnSaveRoomCouplingGate").addEventListener("click", saveRoomCouplingGate);
+requiredElement("btnSaveHeatingGate").addEventListener("click", saveHeatingGate);
 requiredElement("btnBuildHourlyModel").addEventListener("click", () => saveHourlyModel("build"));
 requiredElement("btnAddFloor").addEventListener("click", () => addHourlyFloor());
 requiredElement("btnAddHourlyZone").addEventListener("click", () => addHourlyZone());
 requiredElement("btnAddHourlyRoom").addEventListener("click", () => addHourlyRoom());
 requiredElement("btnSaveHourlyModel").addEventListener("click", () => saveHourlyModel("save"));
 requiredElement("btnCalculateHourlyLoad").addEventListener("click", calculateHourlyLoad);
+requiredElement("btnCalculateHeatingLoad").addEventListener("click", calculateHeatingLoad);
+requiredElement("btnRefreshProjectHealth").addEventListener("click", loadProjectProductization);
+requiredElement("btnBuildCoolingPackage").addEventListener("click", () => buildReportPackage("cooling"));
+requiredElement("btnBuildHeatingPackage").addEventListener("click", () => buildReportPackage("heating"));
+requiredElement("btnExportProject").addEventListener("click", exportProjectArchive);
+requiredElement("btnImportProject").addEventListener("click", () => requiredElement("projectArchiveInput").click());
+requiredElement("projectArchiveInput").addEventListener("change", event => {
+  const file = event.target.files?.[0];
+  if (file) importProjectArchive(file);
+  event.target.value = "";
+});
 requiredElement("btnAssembleCalculatorInputs").addEventListener("click", assembleCalculatorInputs);
 requiredElement("btnSaveProjectContext").addEventListener("click", saveProjectContext);
 requiredElement("btnSaveCalculatorOverride").addEventListener("click", saveCalculatorOverride);
 requiredElement("btnRefreshResearch").addEventListener("click", refreshResearch);
+requiredElement("calculatorInputIssues").addEventListener("click", event => {
+  if (event.target.closest("[data-load-more-exceptions]")) loadMoreCalculatorExceptions();
+});
 requiredElement("btnAddConstruction").addEventListener("click", () => addEnvelopeConstruction());
 requiredElement("btnAddWindow").addEventListener("click", () => addEnvelopeWindow());
 requiredElement("btnAddBoundary").addEventListener("click", () => addEnvelopeBoundary());
@@ -972,7 +987,10 @@ function showDesignRequirements(requirements = {}, readiness = {}, roomSuggestio
   loadSolarRadiationGate();
   loadRoomCouplingGate();
   loadHourlyLoadReport();
+  loadHeatingMethodGate();
+  loadHourlyHeatingLoadReport();
   loadCalculatorInputs();
+  loadProjectProductization();
 }
 
 function addEnvelopeConstruction(record = {}){
@@ -1649,6 +1667,16 @@ function addHourlyRoom(room = {}){
         <label>Ceiling height mm<input class="room-ceiling-height" type="number" min="1" step="1" value="${room.ceiling_height_mm ?? ""}"></label>
         <label>Occupancy<input class="room-occupancy" type="number" min="0" step="any" value="${room.occupancy ?? ""}"></label>
         <label>Cooling setpoint °C<input class="room-setpoint" type="number" step="any" value="${room.indoor_cooling_setpoint_c ?? ""}"></label>
+        <label>Heating setpoint °C<input class="room-heating-setpoint" type="number" step="any" value="${room.indoor_heating_setpoint_c ?? ""}"></label>
+        <label>Heating applicability<select class="room-heating-applicability"><option value="not_assessed">Not assessed</option><option value="confirmed">Confirmed</option><option value="not_applicable">Not applicable</option></select></label>
+        <label>Heating setpoint source<input class="room-heating-source" value="${esc(room.heating_setpoint_source || "")}" placeholder="Cited project source"></label>
+        <label>Heating citation<input class="room-heating-citation" value="${esc(room.heating_citations?.[0]?.reference || "")}" placeholder="Reference"></label>
+        <label>Heating internal-gain decision<select class="room-heating-gain-status"><option value="not_assessed">Not assessed</option><option value="confirmed">Confirmed sensible-only credit</option><option value="not_applicable">Not applicable</option></select></label>
+        <label>Gain-policy source<input class="room-heating-gain-source" value="${esc(room.heating_internal_gain_source || "")}" placeholder="Cited policy/source"></label>
+        <label>Gain-policy citation<input class="room-heating-gain-citation" value="${esc(room.heating_internal_gain_citations?.[0]?.reference || "")}" placeholder="Reference"></label>
+        <label>Heating safety factor<input class="room-heating-safety" type="number" min="1" step="0.01" value="${room.heating_safety_factor ?? ""}" placeholder="Explicit, e.g. 1.0"></label>
+        <label>Safety-factor source<input class="room-heating-safety-source" value="${esc(room.heating_safety_factor_source || "")}" placeholder="Cited basis"></label>
+        <label>Safety-factor citation<input class="room-heating-safety-citation" value="${esc(room.heating_safety_factor_citations?.[0]?.reference || "")}" placeholder="Reference"></label>
         <label>People sensible W/person<input class="room-people-sensible" type="number" min="0" step="any" value="${cooling.people_sensible_w_per_person ?? ""}"></label>
         <label>People latent W/person<input class="room-people-latent" type="number" min="0" step="any" value="${cooling.people_latent_w_per_person ?? ""}"></label>
         <label>People diversity<input class="room-people-diversity" type="number" min="0" step="any" value="${cooling.people_diversity_factor ?? ""}"></label>
@@ -1676,6 +1704,8 @@ function addHourlyRoom(room = {}){
   card.querySelector(".hourly-room-status").value = room.verification_status || "missing";
   card.querySelector(".room-cooling-status").value = cooling.verification_status || "missing";
   card.querySelector(".room-condition-status").value = conditions.verification_status || "missing";
+  card.querySelector(".room-heating-applicability").value = room.heating_applicability || "not_assessed";
+  card.querySelector(".room-heating-gain-status").value = room.heating_internal_gain_status || "not_assessed";
   card.querySelectorAll(".room-component").forEach((row, index) => {
     const componentId = row.querySelector(".room-component-id").value;
     const component = components.find(item => item.component_id === componentId) || components[index];
@@ -1776,6 +1806,17 @@ function readHourlyModel(){
       area_m2: blankToNull(card.querySelector(".room-area").value), occupancy: blankToNull(card.querySelector(".room-occupancy").value),
       ceiling_height_mm: blankToNull(card.querySelector(".room-ceiling-height").value),
       indoor_cooling_setpoint_c: blankToNull(card.querySelector(".room-setpoint").value), cooling_load: load, cooling_load_conditions: conditions,
+      indoor_heating_setpoint_c: blankToNull(card.querySelector(".room-heating-setpoint").value),
+      heating_applicability: card.querySelector(".room-heating-applicability").value,
+      heating_setpoint_source: card.querySelector(".room-heating-source").value.trim(),
+      heating_citations: card.querySelector(".room-heating-citation").value.trim() ? [{reference: card.querySelector(".room-heating-citation").value.trim(), page: null, excerpt: "Room heating setpoint basis"}] : [],
+      heating_internal_gain_policy: "explicit_sensible_only",
+      heating_internal_gain_status: card.querySelector(".room-heating-gain-status").value,
+      heating_internal_gain_source: card.querySelector(".room-heating-gain-source").value.trim(),
+      heating_internal_gain_citations: card.querySelector(".room-heating-gain-citation").value.trim() ? [{reference: card.querySelector(".room-heating-gain-citation").value.trim(), page: null, excerpt: "Heating internal-gain credit decision"}] : [],
+      heating_safety_factor: blankToNull(card.querySelector(".room-heating-safety").value),
+      heating_safety_factor_source: card.querySelector(".room-heating-safety-source").value.trim(),
+      heating_safety_factor_citations: card.querySelector(".room-heating-safety-citation").value.trim() ? [{reference: card.querySelector(".room-heating-safety-citation").value.trim(), page: null, excerpt: "Heating safety factor basis"}] : [],
       schedule_assignments: {...(existing.schedule_assignments || {}), people: card.querySelector(".room-people-schedule").value.trim(), lighting: card.querySelector(".room-lighting-schedule").value.trim(), outside_air: card.querySelector(".room-outside-air-schedule").value.trim(), infiltration: card.querySelector(".room-infiltration-schedule").value.trim()},
       unapproved_components: components,
     };
@@ -2052,6 +2093,49 @@ function saveRoomCouplingGate(){
   return saveAdvancedGate("roomCoupling", "/api/room-to-room-coupling-method-gate", "room_to_room_coupling_method_gate", "Room-to-room coupling");
 }
 
+async function loadHeatingMethodGate(){
+  if (!DATA?.id) return;
+  try {
+    const res = await fetch(`/api/heating-method-gate?project_id=${encodeURIComponent(DATA.id)}`);
+    const data = await res.json();
+    if (!res.ok || data.error) return;
+    showHeatingMethodGate(data.heating_method_gate || {}, data.readiness || {});
+  } catch (_) { /* Heating is optional until a project has a review folder. */ }
+}
+
+function showHeatingMethodGate(gate = {}, readiness = {}){
+  requiredElement("heatingGateStatus").value = gate.approval_status || "placeholder";
+  requiredElement("heatingEngineerName").value = gate.engineer_name || "";
+  requiredElement("heatingEngineerCredential").value = gate.engineer_credential || "";
+  requiredElement("heatingApprovedAt").value = gate.approved_at || "";
+  requiredElement("heatingMethodCitation").value = gate.method_citation || "";
+  requiredElement("heatingScope").value = gate.scope || "Separate hourly room heating conduction and sensible air-load method.";
+  requiredElement("heatingGateCitation").value = gate.citations?.[0]?.reference || "";
+  requiredElement("heatingGateStatusText").textContent = readiness.message || "Heating method gate has not been saved.";
+}
+
+async function saveHeatingGate(){
+  if (!DATA?.id) return;
+  const citation = requiredElement("heatingGateCitation").value.trim();
+  const gate = {
+    approval_status: requiredElement("heatingGateStatus").value,
+    engineer_name: requiredElement("heatingEngineerName").value.trim(),
+    engineer_credential: requiredElement("heatingEngineerCredential").value.trim(),
+    approved_at: requiredElement("heatingApprovedAt").value.trim(),
+    method_citation: requiredElement("heatingMethodCitation").value.trim(),
+    scope: requiredElement("heatingScope").value.trim(),
+    citations: citation ? [{reference: citation, page: null, excerpt: "Approved heating method gate"}] : [],
+  };
+  try {
+    const res = await fetch("/api/heating-method-gate", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({project_id: DATA.id, heating_method_gate: gate})});
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || "Could not save the heating method gate.");
+    showHeatingMethodGate(data.heating_method_gate || {}, data.readiness || {});
+    CALCULATOR_INPUT_SET = null;
+    toast("Heating method gate saved", data.readiness?.message || "Reassemble inputs before calculating.");
+  } catch (error) { toast("Heating gate failed", error.message); }
+}
+
 async function saveHourlyModel(action){
   if (!DATA?.id) return;
   requiredElement("btnSaveHourlyModel").disabled = true;
@@ -2143,6 +2227,36 @@ function calculatorInputValue(value){
   return String(value);
 }
 
+function renderCalculatorExceptions(){
+  const rows = CALCULATOR_EXCEPTION_ROWS;
+  const issueMarkup = rows.length
+    ? rows.map(issue => {
+      const source = [issue.source_artifact, issue.source_drawing && `drawing ${issue.source_drawing}`, issue.source_page && `page ${issue.source_page}`].filter(Boolean).join(" · ");
+      const conflicts = issue.competing_values?.length ? `<small>Competing values: ${esc(JSON.stringify(issue.competing_values))}</small>` : "";
+      return `<article class="review-item readiness-${esc(issue.severity === "blocking" ? "blocked" : "draft")}" data-exception-id="${esc(issue.exception_id || "")}"><div><b>${esc(issue.category || "Exception")} · ${esc(issue.affected_id || "project")}</b><span>${esc(issue.reason || "Resolve this input before calculating.")}</span><small>${esc(issue.severity || "warning")} · ${esc(issue.status || "pending")} · ${esc(source || issue.source_artifact || "source unavailable")}</small>${issue.excerpt ? `<small>Evidence: ${esc(issue.excerpt)}</small>` : ""}${conflicts}<small>Remediation: ${esc(issue.remediation || "Resolve the cited input before continuing.")}</small></div></article>`;
+    }).join("")
+    : `<article class="review-empty"><span>No material exceptions are currently recorded.</span></article>`;
+  const more = CALCULATOR_EXCEPTION_ROWS.length < CALCULATOR_EXCEPTION_TOTAL
+    ? `<button class="btn ghost mini" type="button" data-load-more-exceptions aria-label="Load more calculator exceptions">Load more exceptions</button>` : "";
+  requiredElement("calculatorInputIssues").innerHTML = `<div class="draft-group-title">Ranked calculation exceptions <small>Showing ${rows.length} of ${CALCULATOR_EXCEPTION_TOTAL}</small></div>${issueMarkup}${more}`;
+}
+
+async function loadMoreCalculatorExceptions(){
+  if (!DATA?.id || CALCULATOR_EXCEPTION_ROWS.length >= CALCULATOR_EXCEPTION_TOTAL) return;
+  try {
+    const query = `/api/calculator-inputs?project_id=${encodeURIComponent(DATA.id)}&exception_offset=${CALCULATOR_EXCEPTION_ROWS.length}&exception_limit=40`;
+    const res = await fetch(query);
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.message || data.error || "Could not load more exceptions.");
+    const next = data.normalized_exceptions || data.calculator_input_set?.normalized_exceptions || [];
+    CALCULATOR_EXCEPTION_ROWS = CALCULATOR_EXCEPTION_ROWS.concat(next);
+    CALCULATOR_EXCEPTION_TOTAL = Number(data.exception_total || CALCULATOR_EXCEPTION_ROWS.length);
+    renderCalculatorExceptions();
+  } catch (error) {
+    toast("Exception list unavailable", error.message);
+  }
+}
+
 function showCalculatorInputs(inputSet = {}, context = {}, overrides = {}){
   CALCULATOR_INPUT_SET = inputSet?.input_fingerprint ? inputSet : null;
   CALCULATOR_INPUT_OVERRIDES = overrides || {revision: 0, records: []};
@@ -2178,11 +2292,9 @@ function showCalculatorInputs(inputSet = {}, context = {}, overrides = {}){
     ? `Engineer-released packs: ${releaseVersions.join(", ")}${releasedBy ? ` · ${releasedBy}` : ""}`
     : "No engineer-released source pack is available; candidates cannot affect this calculation.";
   requiredElement("calculatorInputSummary").innerHTML = inputSet?.input_fingerprint ? `${coverageCard}<article class="review-item"><div><b>Resolved input register</b><span>${esc(resolved.length)} fields · ${esc(counts.project_evidence || 0)} project evidence · ${esc(counts.derived_evidence || 0)} derived · ${esc(counts.approved_default || 0)} approved defaults · ${esc(counts.project_override || 0)} overrides</span><small>Policy: ${esc(inputSet.policy_version || "")}; source pack: ${esc(inputSet.source_pack_version || "not selected")}</small><small>${esc(releaseNote)}</small>${unavailableDefaults ? `<small>Unavailable source records: ${esc(unavailableDefaults)}</small>` : ""}</div></article>${candidateReport}${defaultCoverageReport}${register}` : "";
-  const issues = inputSet?.snapshot_stale ? (currentAssembly.issues || []) : (inputSet?.issues || []);
-  const issueRows = issues.slice().sort((a, b) => ({blocked: 0, draft: 1}[a.status] ?? 2) - ({blocked: 0, draft: 1}[b.status] ?? 2));
-  requiredElement("calculatorInputIssues").innerHTML = issueRows.length
-    ? `<div class="draft-group-title">Ranked calculation exceptions</div>${issueRows.map(issue => `<article class="review-item readiness-${esc(issue.status || "blocked")}"><div><b>${esc(issue.status || "blocked")} · ${esc(issue.affected_id || "project")}</b><span>${esc(issue.reason || "Resolve this input before calculating.")}</span><small>${esc(issue.source_artifact || "")}${issue.input_id ? ` · ${esc(issue.input_id)}` : ""}</small></div></article>`).join("")}`
-    : inputSet?.input_fingerprint ? "<article class=\"review-item\"><div><b>No assembly exceptions</b><span>Check the report readiness after calculation; unsupported components remain visible there.</span></div></article>" : "";
+  CALCULATOR_EXCEPTION_ROWS = inputSet.normalized_exceptions || inputSet.exceptions || (inputSet?.snapshot_stale ? (currentAssembly.issues || []) : (inputSet?.issues || []));
+  CALCULATOR_EXCEPTION_TOTAL = Number(inputSet.exception_total || CALCULATOR_EXCEPTION_ROWS.length);
+  renderCalculatorExceptions();
 }
 
 async function loadCalculatorInputs(){
@@ -2342,6 +2454,146 @@ async function calculateHourlyLoad(){
     toast("Cooling report failed", error.message);
   }
   requiredElement("btnCalculateHourlyLoad").disabled = false;
+}
+
+function drawHeatingLoadReport(report = {}, artifactStatus = "not_calculated", staleReasons = []){
+  const status = report.status || artifactStatus;
+  const readiness = report.readiness || {};
+  requiredElement("heatingReportStatus").textContent = artifactStatus === "stale"
+    ? `Heating report is stale. ${staleReasons.join("; ") || "Reassemble inputs and calculate again."}`
+    : `${status} · readiness ${readiness.status || status} · ${report.scenario_results?.length || 0} winter scenario(s) · ${report.scope_summary?.complete_scope ? "complete room scope" : "included room scope only"}`;
+  const scenarios = report.scenario_results || [];
+  const scenarioMarkup = scenarios.map(scenario => {
+    const peak = scenario.included_scope_peak || {};
+    const blocked = scenario.scope_summary?.blocked_rooms || [];
+    const roomRows = (scenario.rooms || []).map(room => {
+      const components = room.peak?.components || {};
+      const value = name => Number(components[name]?.total_kw || 0).toFixed(2);
+      const credit = Math.abs(Number(components.heating_internal_gain_credit?.total_kw || 0)).toFixed(2);
+      const safety = Number(room.peak?.safety_allowance_kw || 0).toFixed(2);
+      const omitted = components.heating_internal_gain_credit?.inputs?.omitted_sources || [];
+      return `<li><b>${esc(room.name || room.room_id)}</b> · ${esc(room.status)} · ${Number(room.peak?.design_total_kw || 0).toFixed(2)} kW`
+        + `<br><small>Envelope ${value("heating_envelope")} · glazing ${value("heating_glazing_conduction")} · outside air ${value("heating_outside_air")} · infiltration ${value("heating_infiltration")} · sensible credit −${credit} · safety +${safety} · governing hour ${esc(room.peak?.hour ?? "—")}</small>`
+        + (omitted.length ? `<br><small>Uncredited equipment: ${esc(omitted.map(item => item.source_id || "unidentified").join(", "))}</small>` : "")
+        + `</li>`;
+    }).join("");
+    return `<article class="heat-load-result"><b>${esc(scenario.title || scenario.scenario_id)} · ${esc(scenario.status)}</b>`
+      + `<span>Included-scope heating peak ${Number(peak.design_total_kw || 0).toFixed(2)} kW${scenario.scope_summary?.complete_scope ? "" : " · not a complete project duty"}</span>`
+      + (blocked.length ? `<span>Omitted rooms: ${esc(blocked.map(item => item.room_id).join(", "))}</span>` : "")
+      + (roomRows ? `<details open><summary>Heating room components</summary><ul class="audit-list">${roomRows}</ul></details>` : "")
+      + `</article>`;
+  }).join("");
+  const blockedMarkup = (report.blocked_reasons || []).map(reason => `<article class="heat-load-result"><b>Heating blocked</b><span>${esc(reason)}</span></article>`).join("");
+  const readinessMarkup = readiness.issues?.length ? `<article class="heat-load-result"><b>Heating readiness issues</b><ul class="audit-list">${readiness.issues.map(issue => `<li>${esc(issue.reason)} — ${esc(issue.remediation || "Resolve the cited input.")}</li>`).join("")}</ul></article>` : "";
+  requiredElement("heatingLoadResults").innerHTML = (scenarioMarkup || blockedMarkup) + readinessMarkup;
+}
+
+function drawProjectHealth(health = {}, audit = {}){
+  const issues = health.normalized_exceptions || health.issues || [];
+  requiredElement("projectHealthStatus").textContent = `${health.status || "unknown"} · ${issues.length} issue${issues.length === 1 ? "" : "s"}`;
+  requiredElement("projectHealthResults").innerHTML = issues.length
+    ? issues.map(issue => `<article class="review-item readiness-${esc(issue.severity === "blocking" ? "blocked" : "draft")}"><div><b>${esc(issue.code || issue.category || "project issue")} · ${esc(issue.affected_id || "project")}</b><span>${esc(issue.message || issue.reason || "Review this project issue.")}</span><small>${esc(issue.artifact || issue.source_artifact || "")} · ${esc(issue.remediation || "Resolve the issue before continuing.")}</small></div></article>`).join("")
+    : `<article class="review-item readiness-review_ready"><div><b>Project health is clear</b><span>Required artifacts are present and no stale report was detected.</span></div></article>`;
+  const events = audit.events || [];
+  requiredElement("projectAuditResults").innerHTML = events.length
+    ? events.slice().reverse().map(event => `<article class="review-item"><div><b>${esc(event.action)} · ${esc(event.target)}</b><span>${esc(event.result)} · ${esc(event.timestamp)}</span><small>${esc(event.new_fingerprint || event.error_code || "")}</small></div></article>`).join("")
+    : `<article class="review-empty"><span>No audit events recorded yet.</span></article>`;
+  requiredElement("projectHealthStatus").focus({preventScroll: true});
+}
+
+async function loadProjectProductization(){
+  if (!DATA?.id) return;
+  try {
+    const [healthRes, auditRes] = await Promise.all([
+      fetch(`/api/project-health?project_id=${encodeURIComponent(DATA.id)}`),
+      fetch(`/api/audit-log?project_id=${encodeURIComponent(DATA.id)}&limit=20`),
+    ]);
+    const health = await healthRes.json();
+    const audit = await auditRes.json();
+    if (!healthRes.ok || health.error) throw new Error(health.error || "Could not load project health.");
+    drawProjectHealth(health, audit);
+  } catch (error) {
+    requiredElement("projectHealthStatus").textContent = "Project health unavailable.";
+    requiredElement("projectHealthResults").innerHTML = `<article class="review-item readiness-blocked"><div><b>Could not load project health</b><span>${esc(error.message)}</span></div></article>`;
+  }
+}
+
+async function buildReportPackage(reportType){
+  if (!DATA?.id) return toast("No project selected", "Open a project before building a package.");
+  try {
+    const res = await fetch("/api/report-package", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({project_id: DATA.id, report_type: reportType})});
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.message || data.error || "Could not build report package.");
+    requiredElement("projectPackageResults").innerHTML = `<article class="review-item"><div><b>${esc(reportType)} package created</b><span>${esc(data.status)} · ${esc(data.package?.manifest?.package_fingerprint || "")}</span><small>${esc(data.package?.manifest?.renderer || "renderer unavailable")}</small></div><a class="btn ghost mini" href="${esc(data.html_url)}" target="_blank" rel="noopener">Open HTML</a><a class="btn ghost mini" href="${esc(data.pdf_url)}" target="_blank" rel="noopener">Open PDF</a></article>`;
+    requiredElement("projectPackageResults").focus?.({preventScroll: true});
+    await loadProjectProductization();
+  } catch (error) { toast("Report package failed", error.message); }
+}
+
+async function exportProjectArchive(){
+  if (!DATA?.id) return toast("No project selected", "Open a project before exporting.");
+  try {
+    const res = await fetch("/api/project-export", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({project_id: DATA.id})});
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.message || data.error || "Could not export project.");
+    requiredElement("projectPackageResults").innerHTML = `<article class="review-item"><div><b>Project export ready</b><span>${esc(data.archive_fingerprint || "")}</span></div><a class="btn ghost mini" href="${esc(data.artifact_url)}" download>Download archive</a></article>`;
+    requiredElement("projectPackageResults").focus?.({preventScroll: true});
+    await loadProjectProductization();
+  } catch (error) { toast("Project export failed", error.message); }
+}
+
+async function importProjectArchive(file){
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let binary = "";
+    const chunkSize = 0x8000;
+    for (let index = 0; index < bytes.length; index += chunkSize) {
+      binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+    }
+    const archiveBase64 = btoa(binary);
+    const res = await fetch("/api/project-import", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({archive_base64: archiveBase64}),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.message || data.error || "Could not import project archive.");
+    await loadProjects();
+    toast("Project imported", `${data.id} is available in the project list.`);
+  } catch (error) {
+    toast("Project import failed", error.message);
+  }
+}
+
+async function loadHourlyHeatingLoadReport(){
+  if (!DATA?.id) return;
+  try {
+    const res = await fetch(`/api/hourly-heating-load-report?project_id=${encodeURIComponent(DATA.id)}`);
+    const data = await res.json();
+    if (!res.ok || data.error) return;
+    drawHeatingLoadReport(data.hourly_heating_load_report || {}, data.status || "not_calculated", data.stale_reasons || []);
+  } catch (_) { /* Heating report is optional until winter inputs exist. */ }
+}
+
+async function calculateHeatingLoad(){
+  if (!DATA?.id) return;
+  if (CALCULATOR_INPUTS_AVAILABLE && (!CALCULATOR_INPUT_SET?.input_fingerprint || CALCULATOR_INPUT_SET.snapshot_stale)) {
+    return toast("Assemble inputs first", "Create or refresh the immutable calculator-input snapshot before calculating heating.");
+  }
+  requiredElement("btnCalculateHeatingLoad").disabled = true;
+  requiredElement("heatingReportStatus").textContent = "Calculating the hourly heating report…";
+  try {
+    const ids = requiredElement("heatingScenarioIds").value.split(",").map(value => value.trim()).filter(Boolean);
+    const res = await fetch("/api/hourly-heating-load-report", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({project_id: DATA.id, selected_scenario_ids: ids, input_set_fingerprint: CALCULATOR_INPUT_SET?.input_fingerprint || ""})});
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || "Could not calculate the heating report.");
+    drawHeatingLoadReport(data.hourly_heating_load_report, data.status);
+    toast("Heating report calculated", `Status: ${data.hourly_heating_load_report.status}.`);
+  } catch (error) {
+    requiredElement("heatingReportStatus").textContent = "Could not calculate the heating report.";
+    toast("Heating report failed", error.message);
+  }
+  requiredElement("btnCalculateHeatingLoad").disabled = false;
 }
 
 async function calculateVentilation(){

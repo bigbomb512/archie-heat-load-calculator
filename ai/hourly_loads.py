@@ -10,6 +10,7 @@ from ai.design_requirements import (
     validate_cooling_load_conditions,
     validate_design_requirements,
     validate_zone_cooling_load,
+    optional_safety_factor,
 )
 from ai.heat_loads import contribution, envelope_load, equipment_load, infiltration_load, lighting_load, outside_air_load, people_load, solar_load
 from ai.infiltration_gate import METHOD_ID as INFILTRATION_METHOD_ID, empty_infiltration_method_gate, gate_is_approved, validate_infiltration_method_gate
@@ -305,6 +306,17 @@ def build_hourly_load_model(requirements):
             "area_m2": zone.get("area_m2"),
             "occupancy": zone.get("occupancy"),
             "indoor_cooling_setpoint_c": effective(zone, requirements, "indoor_cooling_setpoint_c"),
+            "indoor_heating_setpoint_c": effective(zone, requirements, "indoor_heating_setpoint_c"),
+            "heating_applicability": "not_assessed",
+            "heating_setpoint_source": "",
+            "heating_citations": [],
+            "heating_internal_gain_policy": "explicit_sensible_only",
+            "heating_internal_gain_status": "not_assessed",
+            "heating_internal_gain_source": "",
+            "heating_internal_gain_citations": [],
+            "heating_safety_factor": None,
+            "heating_safety_factor_source": "",
+            "heating_safety_factor_citations": [],
             "heat_sources": [seed_heat_source(source, room_id, index) for index, source in enumerate(zone.get("heat_sources", []), start=1)],
             "cooling_load": deepcopy(zone.get("cooling_load", {})),
             "cooling_load_conditions": deepcopy(requirements.get("cooling_load_conditions", {})),
@@ -475,6 +487,33 @@ def validate_room(raw, index):
         raise ValueError(f"Room {room_id} needs a source when {verification_status}.")
     cooling = validate_zone_cooling_load(raw.get("cooling_load", {}))
     conditions = validate_cooling_load_conditions(raw.get("cooling_load_conditions", {}))
+    heating_applicability = raw.get("heating_applicability", "not_assessed")
+    if heating_applicability not in {"not_assessed", "confirmed", "not_applicable"}:
+        raise ValueError(f"Room {room_id} heating applicability is invalid.")
+    heating_setpoint = optional_number(raw.get("indoor_heating_setpoint_c"), f"Room {room_id} heating setpoint", -100, 100)
+    heating_source = text(raw.get("heating_setpoint_source", ""), f"Room {room_id} heating setpoint source")
+    heating_citations = validate_citations(raw.get("heating_citations", []), f"Room {room_id} heating setpoint")
+    if heating_applicability == "confirmed" and (heating_setpoint is None or not heating_source or not heating_citations):
+        raise ValueError(f"Room {room_id} confirmed heating applicability needs a setpoint and source.")
+    if heating_applicability == "not_applicable" and heating_setpoint is not None:
+        raise ValueError(f"Room {room_id} not-applicable heating cannot have a setpoint.")
+    heating_internal_gain_policy = raw.get("heating_internal_gain_policy", "explicit_sensible_only")
+    if heating_internal_gain_policy != "explicit_sensible_only":
+        raise ValueError(f"Room {room_id} heating internal-gain policy is fixed to explicit_sensible_only.")
+    heating_internal_gain_status = raw.get("heating_internal_gain_status", "not_assessed")
+    if heating_internal_gain_status not in {"not_assessed", "confirmed", "not_applicable"}:
+        raise ValueError(f"Room {room_id} heating internal-gain status is invalid.")
+    heating_internal_gain_source = text(raw.get("heating_internal_gain_source", ""), f"Room {room_id} heating internal-gain source")
+    heating_internal_gain_citations = validate_citations(raw.get("heating_internal_gain_citations", []), f"Room {room_id} heating internal-gain policy")
+    if heating_internal_gain_status == "confirmed" and (not heating_internal_gain_source or not heating_internal_gain_citations):
+        raise ValueError(f"Room {room_id} confirmed heating internal-gain policy needs a source and citation.")
+    if heating_internal_gain_status == "not_applicable" and (heating_internal_gain_source == "" or not heating_internal_gain_citations):
+        raise ValueError(f"Room {room_id} not-applicable heating internal-gain policy needs a source and citation.")
+    heating_safety_factor = optional_safety_factor(raw.get("heating_safety_factor"), f"Room {room_id} heating safety factor")
+    heating_safety_source = text(raw.get("heating_safety_factor_source", ""), f"Room {room_id} heating safety factor source")
+    heating_safety_citations = validate_citations(raw.get("heating_safety_factor_citations", []), f"Room {room_id} heating safety factor")
+    if heating_safety_factor is not None and (not heating_safety_source or not heating_safety_citations):
+        raise ValueError(f"Room {room_id} heating safety factor needs a source and citation.")
     sources, source_ids = [], set()
     for source_index, raw_source in enumerate(raw.get("heat_sources", []), start=1):
         heat_source = validate_hourly_heat_source(raw_source, room_id, source_index)
@@ -499,6 +538,17 @@ def validate_room(raw, index):
         "area_m2": optional_number(raw.get("area_m2"), f"Room {room_id} area", 0, 1000000),
         "occupancy": optional_number(raw.get("occupancy"), f"Room {room_id} occupancy", 0, 1000000),
         "indoor_cooling_setpoint_c": optional_number(raw.get("indoor_cooling_setpoint_c"), f"Room {room_id} cooling setpoint", -100, 100),
+        "indoor_heating_setpoint_c": heating_setpoint,
+        "heating_applicability": heating_applicability,
+        "heating_setpoint_source": heating_source,
+        "heating_citations": heating_citations,
+        "heating_internal_gain_policy": heating_internal_gain_policy,
+        "heating_internal_gain_status": heating_internal_gain_status,
+        "heating_internal_gain_source": heating_internal_gain_source,
+        "heating_internal_gain_citations": heating_internal_gain_citations,
+        "heating_safety_factor": heating_safety_factor,
+        "heating_safety_factor_source": heating_safety_source,
+        "heating_safety_factor_citations": heating_safety_citations,
         "heat_sources": sources,
         "cooling_load": cooling,
         "cooling_load_conditions": conditions,
@@ -617,6 +667,31 @@ def validate_hourly_heat_source(raw, room_id, index):
         raise ValueError(f"Room {room_id} heat source {index} needs a stable source ID.")
     result = deepcopy(raw)
     result["source_id"] = source_id
+    credit_status = raw.get("heating_credit_status", "not_assessed")
+    if credit_status not in {"not_assessed", "confirmed", "not_applicable"}:
+        raise ValueError(f"Room {room_id} heat source {source_id} heating credit status is invalid.")
+    credit_watts = raw.get("heating_heat_to_space_watts")
+    if credit_watts not in (None, ""):
+        try:
+            credit_watts = float(credit_watts)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"Room {room_id} heat source {source_id} heating heat-to-space value must be numeric.") from error
+        if credit_watts < 0:
+            raise ValueError(f"Room {room_id} heat source {source_id} heating heat-to-space value cannot be negative.")
+    else:
+        credit_watts = None
+    credit_source = text(raw.get("heating_credit_source", ""), f"Room {room_id} heat source {source_id} heating credit source")
+    credit_citations = validate_citations(raw.get("heating_credit_citations", []), f"Room {room_id} heat source {source_id} heating credit")
+    if credit_status == "confirmed" and (credit_watts is None or not credit_source or not credit_citations):
+        raise ValueError(f"Room {room_id} heat source {source_id} confirmed heating credit needs heat-to-space value, source, and citation.")
+    if credit_status == "not_applicable" and (credit_watts is not None or not credit_source or not credit_citations):
+        raise ValueError(f"Room {room_id} heat source {source_id} not-applicable heating credit needs a source and citation only.")
+    result.update({
+        "heating_credit_status": credit_status,
+        "heating_heat_to_space_watts": credit_watts,
+        "heating_credit_source": credit_source,
+        "heating_credit_citations": credit_citations,
+    })
     return result
 
 

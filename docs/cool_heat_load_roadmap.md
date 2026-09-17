@@ -20,7 +20,7 @@ The current backend is the handoff boundary for a later frontend. No CAMEL-like 
 
 ## Executive status
 
-The project now has a solid **V1 hourly cooling foundation**, but it is not yet a complete cooling design tool and it does not calculate heating, AHU coil load or plant duty.
+The project now has a solid **V1 hourly cooling foundation** and a separate gated hourly heating foundation. It is not yet a complete cooling/heating design tool and does not calculate AHU coil load or plant duty.
 
 ### Completed foundations
 
@@ -37,7 +37,7 @@ The project now has a solid **V1 hourly cooling foundation**, but it is not yet 
 
 ### Not yet a supported calculation result
 
-- Heating load, heating peak timing or heating design output.
+- Approved benchmark validation for heating and heating design release.
 - Dynamic thermal mass, room-to-room dynamic adjacent-space coupling, advanced adjacent-temperature profiles and vapour-gain modelling. Infiltration cooling, reviewed manual-solar glazing, controlled geometric shading, fixed-temperature partitions and ground-contact floors have isolated implementations, each subject to complete project evidence and a method gate where required; the first-order RC thermal-mass and cited surface-irradiance contracts are now also stored and fingerprinted behind separate Stage 6 gates, but do not activate merely because a record exists.
 - AHU airflow allocation, coils, fans, ducts, heat recovery, preconditioning or psychrometric state paths.
 - Chiller, boiler, circuits, pumps, pipe effects, unitary-equipment inclusion or primary-plant aggregation.
@@ -203,7 +203,7 @@ HVAC-engineer gate is approved.
 - Add tests for winter physical validity, heat-loss direction, competing heating peaks and output status.
 - Keep cooling and heating reports, exclusions and readiness separate until a combined result has an approved definition.
 
-**Dependencies:** reviewed envelope/adjacent-condition scope and approved heating method. Existing heating scenarios are storage-ready only; they are not calculated today.
+**Dependencies:** reviewed envelope/adjacent-condition scope and approved heating method. The separate heating runner now supports draft and review-ready room/zone/floor/project results when its cited inputs and gate are complete.
 
 **Exit criteria:** a cited, engineer-reviewed heating report with its own component trace and validated reference cases.
 

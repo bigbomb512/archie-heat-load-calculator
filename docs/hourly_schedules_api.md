@@ -60,7 +60,7 @@ The schedule semantic is a generic load fraction. Assign it explicitly to people
 
 ## Design-day scenarios
 
-`GET`/`POST /api/design-day-scenarios` manages `design_day_scenarios.json`. Each scenario has a stable ID, title, mode (`cooling` or `heating`), representative month, day type, evidence status, source, citations, and pressure field. Cooling scenarios have 24 distinct rows `0`–`23`; every row carries cited outdoor DB and WB fields, with `WB <= DB`. Heating scenarios can be stored now, but the v1 runner reports that hourly heating is not implemented.
+`GET`/`POST /api/design-day-scenarios` manages `design_day_scenarios.json`. Each scenario has a stable ID, title, mode (`cooling` or `heating`), representative month, day type, evidence status, source, citations, and pressure field. Cooling and heating scenarios have 24 distinct rows `0`–`23`; every row carries cited outdoor DB and WB fields, with `WB <= DB`. Heating scenarios are calculated through the separate `/api/hourly-heating-load-report` path and never alter cooling reports.
 
 ## Hourly room model
 
