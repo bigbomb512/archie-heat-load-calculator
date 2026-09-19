@@ -12,7 +12,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from backend.productization import (
     append_audit_event, build_report_package, cached_report_summary, export_project, import_project,
-    normalise_exceptions, project_health, read_audit_events, stable_exception_id, validate_audit_chain,
+    empty_exception_decisions, normalise_exceptions, project_health, read_audit_events, stable_exception_id,
+    upsert_exception_decision, validate_audit_chain, validate_exception_decisions,
 )
 
 
@@ -37,6 +38,9 @@ def main():
         check("exception IDs are stable regardless of evidence order", stable_exception_id("source", scope="room", affected_id="room-1", category="area", field="m2") == stable_exception_id("source", scope="room", affected_id="room-1", category="area", field="m2"))
         exceptions = normalise_exceptions([{"code": "missing_area", "scope": "room", "affected_id": "room-1", "artifact": "calculation_input_evidence.json", "message": "Area missing"}], source_fingerprint="source")
         check("normalized exceptions retain actionable fields", exceptions[0]["code"] == "missing_area" and exceptions[0]["artifact"] == "calculation_input_evidence.json" and exceptions[0]["remediation"])
+        decisions = upsert_exception_decision(empty_exception_decisions(), exception_id=exceptions[0]["exception_id"], decision="needs_evidence", reviewer="reviewer", note="Need a second witness", source_fingerprint="source")
+        decisions = upsert_exception_decision(decisions, exception_id=exceptions[0]["exception_id"], decision="accepted", reviewer="reviewer", note="Witness added", source_fingerprint="source")
+        check("exception decisions persist history", validate_exception_decisions(decisions)["decisions"][0]["decision"] == "accepted" and len(decisions["decisions"][0]["decision_history"]) == 1)
 
         report = {
             "status": "draft", "scope_summary": {"active_room_ids": ["room-1"], "included_room_ids": ["room-1"], "complete_scope": False},
@@ -59,6 +63,7 @@ def main():
         project = {"id": "p1", "name": "Test project", "review_dir": str(root), "pdf": "/private/source.pdf"}
         archive = export_project(project)
         check("export excludes the private PDF", "source_pdf_included" in archive["manifest"] and not archive["manifest"]["source_pdf_included"])
+        check("export includes generated report PDF", any(row["path"].endswith("report.pdf") for row in archive["manifest"]["artifacts"]))
         imported = import_project(Path(archive["archive_path"]).read_bytes(), Path(folder) / "imports", "p1-imported")
         check("import creates a separate project", imported["project_id"] == "p1-imported" and Path(imported["review_dir"]).exists())
 

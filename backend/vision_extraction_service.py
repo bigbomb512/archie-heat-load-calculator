@@ -224,7 +224,12 @@ def _prompt(group):
         "page", "drawing_number", "drawing_number_candidates", "title", "role", "level_name",
         "structured_text", "capability_map", "relevance", "selection", "selection_reasons", "related_pages",
     }} for page in group["pages"]]
-    return "Selected ranked evidence group:\n" + json.dumps({"group_id": group["group_id"], "pages": pages}, indent=2) + "\nReturn exactly one group object inside the required groups array. Cite supplied page and drawing identity candidates; do not invent values."
+    return ("Selected ranked evidence group:\n" + json.dumps({"group_id": group["group_id"], "pages": pages}, indent=2)
+            + "\nReturn exactly one group object inside the required groups array. Cite supplied page and drawing identity candidates."
+            + " Dates are never drawing numbers; embedded detail scales never calibrate the main plan; 3D pages are cross-check only."
+            + " Legends, title blocks, schedules, and generic notes do not create rooms. Do not guess."
+            + " For room geometry, provide boundary_points_px or an ordered wall_ids sequence, dimension_ids, level_name,"
+            + " and an independent_witness_page when visibly supported; otherwise leave geometry proposed or unresolved.")
 
 
 def _provider(settings):

@@ -349,20 +349,37 @@ def build_geometry_resolution(ai_input, coverage=None, building=None, spatial_oc
     # artifact. This is metadata, not calculator eligibility.
     page_register = []
     for page in pages:
+        identity_status = (page.get("identity") or {}).get("status", page.get("drawing_number_status", "missing"))
+        state_chain = ["page_discovered"]
+        if identity_status == "confirmed":
+            state_chain.append("page_identity_resolved")
+        elif identity_status == "ambiguous":
+            state_chain.append("page_identity_conflict")
+        if page.get("selection") in {"primary_context", "supporting_context", "cross_check_context"}:
+            state_chain.append("page_selected")
+        if page.get("text_available") or page.get("ocr_available") or page.get("vector_available"):
+            state_chain.append("evidence_extracted")
+        if page.get("proposed_role") in {"main_floor_plan", "primary_geometry_plan", "supporting_geometry_plan"}:
+            state_chain.append("geometry_proposed")
         page_register.append({
             "page": page.get("page"),
             "drawing_number": _page_identity(page),
             "drawing_number_candidates": (page.get("identity") or {}).get("drawing_number_candidates", []),
             "title": page.get("title", ""),
             "title_candidates": (page.get("identity") or {}).get("title_candidates", []),
-            "identity_status": (page.get("identity") or {}).get("status", page.get("drawing_number_status", "missing")),
+            "identity_status": identity_status,
+            "resolution_state": state_chain[-1],
+            "state_chain": state_chain,
             "proposed_role": page.get("proposed_role", ""),
             "capabilities": page.get("capabilities", []),
             "capability_map": page.get("capability_map", {}),
             "relevance": page.get("relevance", {}),
             "selection": page.get("selection", "reference_only"),
             "level_candidate": page.get("level_name", ""),
+            "level_candidates": page.get("level_candidates", []),
             "scale_candidates": page.get("scale_candidates", []),
+            "main_scale": page.get("main_scale", ""),
+            "scale_status": page.get("scale_status", "missing"),
             "text_available": bool(page.get("text_available", True)),
             "ocr_available": bool(page.get("ocr_available", False)),
             "vector_available": bool(page.get("vector_available", False)),
@@ -556,6 +573,40 @@ def build_geometry_resolution(ai_input, coverage=None, building=None, spatial_oc
         row for row in ((vision_response or {}).get("result", {}).get("auto_extraction", {}).get("entities", []) or [])
         if isinstance(row, dict) and row.get("kind") == "room"
     ]
+
+    # AI geometry is a proposed witness only.  Preserve a validated shape (or
+    # ordered wall sequence) in the graph so reviewers can inspect it, but do
+    # not let it bypass the deterministic vector-loop, scale, level, and
+    # independent-witness gates below.
+    for item in vision_rooms:
+        points = item.get("boundary_points_px") or item.get("boundary_points") or []
+        wall_ids = [str(value) for value in item.get("wall_ids", []) if value]
+        valid_shape = polygon_is_simple(points) if points else bool(wall_ids)
+        unresolved = list(item.get("unresolved_fields", []) or [])
+        if not valid_shape:
+            unresolved.append("validated_boundary_shape")
+        if not item.get("level_name"):
+            unresolved.append("floor_identity")
+        if not item.get("dimension_ids"):
+            unresolved.append("dimension_wall_binding")
+        proposal = add_entity(
+            item.get("page"), item.get("label", ""), "room_geometry_proposal",
+            {"boundary_points_px": points, "wall_ids": wall_ids,
+             "dimension_ids": item.get("dimension_ids", []),
+             "independent_witness_page": item.get("independent_witness_page")},
+            "geometry_proposed" if valid_shape else "geometry_review_required",
+            "manual_vision_response", item.get("confidence", "unknown"),
+            location="|".join(wall_ids) or str(item.get("boundary_reference", "")),
+            unresolved=sorted(set(unresolved)), level=item.get("level_name", ""),
+            witness_ids=[str(row.get("reference")) for row in item.get("witnesses", []) if isinstance(row, dict) and row.get("reference")],
+        )
+        relationships.append({
+            "relationship_id": "vision_geometry_proposal_" + fingerprint([proposal["entity_id"], item.get("independent_witness_page")])[:16],
+            "kind": "vision_geometry_proposal", "entity_ids": [proposal["entity_id"]],
+            "pages": sorted({value for value in (item.get("page"), item.get("independent_witness_page")) if value is not None}),
+            "basis": "validated_ai_geometry_schema", "status": "proposed",
+            "independent_witness": bool(item.get("independent_witness_page")), "cross_check_only": False,
+        })
 
     def room_pages(room):
         return {item.get("page") for item in room.get("evidence", []) if isinstance(item, dict) and item.get("page") is not None}

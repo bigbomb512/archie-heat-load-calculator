@@ -352,10 +352,28 @@
           <div class="requirements-form"><label>Selected heating scenario IDs<input id="heatingScenarioIds" placeholder="e.g. winter_design_day"></label></div>
           <div class="bar"><span class="conf" id="heatingReportStatus">Save reviewed hourly inputs before calculating heating.</span></div>
           <div id="heatingLoadResults"></div>
+          <section class="calculator-draft-panel" id="ahuAirsideSection" aria-labelledby="ahuAirsideHeading">
+            <div class="panel-head"><div><div class="micro">Cooling air-side</div><h3 id="ahuAirsideHeading">AHU and coil duty</h3></div><button class="btn key" id="btnCalculateAhuLoad" type="button">Calculate AHU report</button></div>
+            <p class="fine">AHUs consume coincident room loads using explicit reviewed topology, airflow, state points, fan/duct effects, and coil inputs. They do not infer airflow or system type from room names.</p>
+            <div class="bar"><span class="conf" id="ahuAirsideStatus" role="status" aria-live="polite">Configure AHU systems and air paths before calculating.</span></div>
+            <div id="ahuAirsideResults" class="review-list"></div>
+          </section>
+          <section class="calculator-draft-panel" id="plantSection" aria-labelledby="plantHeading">
+            <div class="panel-head"><div><div class="micro">Cooling plant</div><h3 id="plantHeading">Plant and hydraulic duty</h3></div><button class="btn key" id="btnCalculatePlantLoad" type="button">Calculate plant report</button></div>
+            <p class="fine">Plant duty uses explicit AHU → circuit → plant ownership, same-hour coincidence, reviewed diversity, pump power, and pipe effects. Boilers and package units remain visible but excluded from central cooling duty.</p>
+            <div class="bar"><span class="conf" id="plantStatus" role="status" aria-live="polite">Configure plant systems and circuits after the AHU report.</span></div>
+            <div id="plantResults" class="review-list"></div>
+          </section>
+          <section class="calculator-draft-panel" id="annualSection" aria-labelledby="annualHeading">
+            <div class="panel-head"><div><div class="micro">Annual analysis</div><h3 id="annualHeading">8,760-hour energy analysis</h3></div><button class="btn key" id="btnCalculateAnnual" type="button">Calculate annual report</button></div>
+            <p class="fine">Annual analysis uses cited EPW/TMY weather, an explicit 365-day calendar, room schedules, and the current immutable calculator-input snapshot. Missing or unapproved annual inputs remain blocked or draft-only.</p>
+            <div class="bar"><span class="conf" id="annualStatus" role="status" aria-live="polite">Configure annual weather and calendar before calculating.</span></div>
+            <div id="annualResults" class="review-list"></div>
+          </section>
           <section class="calculator-draft-panel" id="productizationSection" aria-labelledby="productizationHeading">
             <div class="panel-head"><div><div class="micro">Project record</div><h3 id="productizationHeading">Health, audit and report package</h3></div><button class="btn ghost mini" id="btnRefreshProjectHealth" type="button">Refresh health</button></div>
             <p class="fine">Packages preserve the exact report and input snapshot used. Exports contain authored artifacts and source references, not private PDFs or rendered page images.</p>
-            <div class="bar"><span class="conf" id="projectHealthStatus" tabindex="-1" role="status" aria-live="polite">Loading project health…</span><button class="btn ghost mini" id="btnBuildCoolingPackage" type="button">Package cooling</button><button class="btn ghost mini" id="btnBuildHeatingPackage" type="button">Package heating</button><button class="btn ghost mini" id="btnExportProject" type="button">Export project</button><button class="btn ghost mini" id="btnImportProject" type="button">Import archive</button><input id="projectArchiveInput" type="file" accept=".zip,application/zip" class="hide" aria-label="Select a project archive to import"></div>
+            <div class="bar"><span class="conf" id="projectHealthStatus" tabindex="-1" role="status" aria-live="polite">Loading project health…</span><button class="btn ghost mini" id="btnBuildCoolingPackage" type="button">Package cooling</button><button class="btn ghost mini" id="btnBuildHeatingPackage" type="button">Package heating</button><button class="btn ghost mini" id="btnBuildAnnualPackage" type="button">Package annual</button><button class="btn ghost mini" id="btnBuildAhuPackage" type="button">Package AHU</button><button class="btn ghost mini" id="btnBuildPlantPackage" type="button">Package plant</button><button class="btn ghost mini" id="btnExportProject" type="button">Export project</button><button class="btn ghost mini" id="btnImportProject" type="button">Import archive</button><input id="projectArchiveInput" type="file" accept=".zip,application/zip" class="hide" aria-label="Select a project archive to import"></div>
             <div id="projectHealthResults" class="review-list"></div>
             <div id="projectPackageResults" class="review-list" tabindex="-1" aria-live="polite"></div>
             <details><summary>Recent audit history</summary><div id="projectAuditResults" class="review-list"></div></details>

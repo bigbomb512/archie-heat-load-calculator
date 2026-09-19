@@ -1221,7 +1221,12 @@ def room_contributions(room, zone, infiltration_gate, profiles, hour, weather, p
     for surface in static_surfaces:
         if surface.get("solar_radiation_source_id") and solar_radiation_gate_is_approved(radiation_gate):
             if radiation_source and radiation_source.get("source_id") == surface.get("solar_radiation_source_id"):
-                gain = absorbed_solar_gain_kw(radiation_source, hour, surface["area_m2"], surface.get("solar_absorptance", 0.0))
+                annual_values = radiation_source.get("annual_irradiance_by_surface", {})
+                irradiance = annual_values.get(surface.get("surface_id")) if isinstance(annual_values, dict) else None
+                if irradiance is not None:
+                    gain = round(float(irradiance) * surface["area_m2"] * surface.get("solar_absorptance", 0.0) / 1000.0, 6)
+                else:
+                    gain = absorbed_solar_gain_kw(radiation_source, hour, surface["area_m2"], surface.get("solar_absorptance", 0.0))
                 solar.append(contribution("solar_radiation", gain, inputs={"surface_id": surface["surface_id"], "source_id": radiation_source["source_id"], "source_fingerprint": radiation_source.get("fingerprint", ""), "hour": hour}, formula="cited surface irradiance × area × absorptance ÷ 1000"))
                 continue
         timed_surface = deepcopy(surface)

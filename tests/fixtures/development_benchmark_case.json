@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "environment": "development_only",
+  "warning": "Synthetic benchmark fixture; not an authorised reference case.",
+  "case_id": "development-room-zone-cooling",
+  "authorisation": {"da09_reference": "development_only", "camel_export": "development_only"},
+  "source_files": {"drawings": "", "camel_input_or_export": "", "camel_results": "", "da09_basis": "", "assumption_register": ""},
+  "input_mapping": {
+    "location_design_conditions": [{"field": "location", "status": "matched"}],
+    "schedules": [{"field": "schedules", "status": "matched"}],
+    "room_zone_hierarchy": [{"field": "room_zone", "status": "matched"}],
+    "surfaces": [{"field": "surfaces", "status": "matched"}],
+    "glazing": [{"field": "glazing", "status": "matched"}],
+    "shading": [{"field": "shading", "status": "matched"}],
+    "partitions": [{"field": "partitions", "status": "matched"}],
+    "storage_mass": [{"field": "storage_mass", "status": "matched"}],
+    "people": [{"field": "people", "status": "matched"}],
+    "lighting": [{"field": "lighting", "status": "matched"}],
+    "equipment": [{"field": "equipment", "status": "matched"}],
+    "infiltration": [{"field": "infiltration", "status": "matched"}],
+    "outside_air": [{"field": "outside_air", "status": "matched"}]
+  },
+  "input_reconciliation": [],
+  "reference_results": {
+    "peak": {"month": "January", "hour": 15},
+    "rooms": [{"room_id": "fixture-room", "sensible_kw": 1, "latent_kw": 0, "total_kw": 1, "components": {"solar": 0, "lighting": 1}}],
+    "zones": [{"zone_id": "fixture-zone", "sensible_kw": 1, "latent_kw": 0, "total_kw": 1, "components": {"solar": 0}}]
+  },
+  "comparison_policy": {
+    "tolerance_status": "development_only",
+    "component_tolerance_percent": 1,
+    "total_tolerance_percent": 1,
+    "absolute_tolerance_kw": 0.001,
+    "rounding_policy": "Synthetic test only",
+    "excluded_components": []
+  }
+}

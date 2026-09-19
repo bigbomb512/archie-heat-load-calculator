@@ -14,6 +14,7 @@ import io
 import json
 from pathlib import Path, PurePosixPath
 import re
+import shutil
 import time
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -24,6 +25,84 @@ ARCHIVE_VERSION = "stage12-archive-v1"
 AUDIT_VERSION = "stage12-audit-v1"
 _SAFE_MEMBER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 _SUMMARY_CACHE = {}
+_HEALTH_CACHE = {}
+
+
+def empty_exception_decisions():
+    return {"schema_version": 1, "revision": 0, "decisions": []}
+
+
+def validate_exception_decisions(raw):
+    if not isinstance(raw, dict):
+        raise ValueError("Exception decisions must be an object.")
+    result = {**empty_exception_decisions(), **deepcopy(raw)}
+    decisions = result.get("decisions", [])
+    if not isinstance(decisions, list):
+        raise ValueError("Exception decisions must be a list.")
+    seen = set()
+    checked = []
+    allowed = {"pending", "accepted", "rejected", "needs_evidence"}
+    for item in decisions:
+        if not isinstance(item, dict) or not item.get("exception_id"):
+            raise ValueError("Each exception decision requires an exception_id.")
+        exception_id = str(item["exception_id"])
+        decision = str(item.get("decision", "pending"))
+        if decision not in allowed:
+            raise ValueError(f"Unsupported exception decision '{decision}'.")
+        if exception_id in seen:
+            raise ValueError(f"Exception decision '{exception_id}' is duplicated.")
+        seen.add(exception_id)
+        history = item.get("decision_history", [])
+        if not isinstance(history, list):
+            raise ValueError(f"Exception decision history for '{exception_id}' must be a list.")
+        checked.append({**item, "exception_id": exception_id, "decision": decision, "decision_history": history})
+    result["decisions"] = checked
+    result["revision"] = int(result.get("revision", 0) or 0)
+    result["fingerprint"] = fingerprint({key: value for key, value in result.items() if key != "fingerprint"})
+    return result
+
+
+def upsert_exception_decision(current, *, exception_id, decision, reviewer="", note="", source_fingerprint="", remediation_target=""):
+    result = validate_exception_decisions(current)
+    timestamp = _now()
+    rows = list(result["decisions"])
+    existing = next((row for row in rows if row["exception_id"] == exception_id), None)
+    history = list(existing.get("decision_history", [])) if existing else []
+    if existing:
+        history.append({"decision": existing.get("decision", "pending"), "reviewer": existing.get("reviewer", ""), "note": existing.get("note", ""), "timestamp": existing.get("updated_at", "")})
+        updated = {**existing, "decision": decision, "reviewer": reviewer, "note": note, "updated_at": timestamp, "source_fingerprint": source_fingerprint, "remediation_target": remediation_target, "decision_history": history}
+        rows[rows.index(existing)] = updated
+    else:
+        rows.append({"exception_id": exception_id, "decision": decision, "reviewer": reviewer, "note": note, "updated_at": timestamp, "source_fingerprint": source_fingerprint, "remediation_target": remediation_target, "decision_history": history})
+    result["revision"] = int(result.get("revision", 0)) + 1
+    result["decisions"] = rows
+    return validate_exception_decisions(result)
+
+
+def safe_evidence_links(root, item):
+    """Map project-relative evidence references to safe URLs without exposing paths."""
+    root = Path(root)
+    links = {}
+    for key in ("source_artifact", "artifact", "crop_url", "thumbnail", "overlay", "source_crop"):
+        value = item.get(key, "") if isinstance(item, dict) else ""
+        if not value:
+            continue
+        candidate = Path(str(value))
+        if not candidate.is_absolute():
+            candidate = root / candidate
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            links[key] = ""
+            continue
+        links[key] = str(candidate) if candidate.is_file() else ""
+    return links
+
+
+def record_change_if_fingerprint_changed(root, *, action, target, previous_fingerprint, new_fingerprint, affected_ids=None, related_fingerprint="", actor="local_user"):
+    if previous_fingerprint == new_fingerprint:
+        return None
+    return append_audit_event(root, action=action, target=target, actor=actor, previous_fingerprint=previous_fingerprint, new_fingerprint=new_fingerprint, related_fingerprint=related_fingerprint, affected_ids=affected_ids, result="success")
 
 
 def fingerprint(value):
@@ -152,7 +231,7 @@ def append_audit_event(root, *, action, target, actor="local_user", result="succ
     return event
 
 
-def read_audit_events(root, *, action="", target="", affected_id="", limit=200):
+def read_audit_events(root, *, action="", target="", affected_id="", limit=200, offset=0):
     path = Path(root) / "audit_log.jsonl"
     if not path.exists():
         return []
@@ -171,7 +250,8 @@ def read_audit_events(root, *, action="", target="", affected_id="", limit=200):
         if affected_id and affected_id not in event.get("affected_ids", []):
             continue
         events.append(event)
-    return events[-max(1, min(int(limit), 1000)):]
+    start = max(0, int(offset))
+    return events[start:start + max(1, min(int(limit), 1000))]
 
 
 def validate_audit_chain(root):
@@ -225,12 +305,31 @@ def _minimal_pdf(lines):
     return bytes(output)
 
 
+def _render_browser_pdf(html_path, pdf_path):
+    """Render canonical HTML when Playwright and a local browser are available."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return "minimal-pdf-fallback-v1"
+    try:
+        with sync_playwright() as playwright:
+            browser_type = playwright.chromium
+            browser = browser_type.launch(headless=True)
+            page = browser.new_page()
+            page.goto(Path(html_path).resolve().as_uri(), wait_until="networkidle")
+            page.pdf(path=str(pdf_path), format="A4", print_background=True)
+            browser.close()
+        return "playwright-chromium"
+    except Exception:
+        return "minimal-pdf-fallback-v1"
+
+
 def _report_summary(report, report_type):
     scenarios = report.get("scenario_results", [])
     readiness = report.get("readiness", {})
     scope = report.get("scope_summary", {})
     peak = report.get("project_peak") or report.get("included_scope_peak") or {}
-    return {
+    summary = {
         "report_type": report_type,
         "status": report.get("status", "unknown"),
         "readiness_status": readiness.get("status", report.get("status", "unknown")),
@@ -249,6 +348,12 @@ def _report_summary(report, report_type):
         "method_gate_statuses": report.get("advanced_envelope_methods", {}),
         "citations": report.get("citations", report.get("source_register", [])),
     }
+    if report_type == "annual":
+        summary.update({
+            "annual_sections": {name: {"status": value.get("status"), "annual_energy_kwh": value.get("annual_energy_kwh", 0.0), "peak_kw": value.get("peak_kw", 0.0), "monthly_kwh": value.get("monthly_kwh", {})} for name, value in report.items() if name in {"cooling", "heating", "ahu", "plant"} and isinstance(value, dict)},
+            "annual_input_fingerprints": report.get("input_fingerprints", {}),
+        })
+    return summary
 
 
 def cached_report_summary(report, report_type):
@@ -288,7 +393,8 @@ def build_report_package(project, paths, report_type, report, *, current=True, s
     if stale_reasons:
         summary["stale_reasons"] = stale_reasons
     snapshot_fingerprint = report.get("input_fingerprints", {}).get("calculator_input_set_fingerprint", "")
-    package_fingerprint = fingerprint({"version": PACKAGE_VERSION, "report_type": report_type, "report": report_hash, "snapshot": snapshot_fingerprint, "artifacts": rows})
+    renderer_hint = "playwright-chromium" if shutil.which("playwright") else "minimal-pdf-fallback-v1"
+    package_fingerprint = fingerprint({"version": PACKAGE_VERSION, "report_type": report_type, "report": report_hash, "snapshot": snapshot_fingerprint, "artifacts": rows, "renderer": renderer_hint})
     package_root = root / "report_packages" / package_fingerprint
     package_root.mkdir(parents=True, exist_ok=True)
     report_copy["_report_fingerprint"] = report_hash
@@ -298,6 +404,7 @@ def build_report_package(project, paths, report_type, report, *, current=True, s
     manifest_path = package_root / "manifest.json"
     if not html_path.exists():
         html_path.write_text(html_body, encoding="utf-8")
+    renderer = renderer_hint
     if not pdf_path.exists():
         pdf_lines = ["Archie " + report_type, "Dependency-free fallback PDF; HTML is canonical.", f"Status: {summary['status']}", f"Complete scope: {summary['complete_scope']}", f"Report fingerprint: {report_hash}", f"Input snapshot: {snapshot_fingerprint}"]
         for scenario in summary.get("scenario_results", []):
@@ -305,8 +412,13 @@ def build_report_package(project, paths, report_type, report, *, current=True, s
             for room in scenario.get("rooms", []):
                 peak = room.get("peak", {})
                 pdf_lines.append(f"Room {room.get('room_id', 'unknown')}: {room.get('status', 'unknown')} · {peak.get('design_total_kw', peak.get('peak_kw', '—'))} kW")
+        if report_type == "annual":
+            for name, section in summary.get("annual_sections", {}).items():
+                pdf_lines.append(f"{name.title()}: {section.get('annual_energy_kwh', 0.0)} kWh · peak {section.get('peak_kw', 0.0)} kW")
         pdf_lines.extend(f"Issue: {item.get('reason', item)}" for item in summary["readiness_issues"])
         pdf_path.write_bytes(_minimal_pdf(pdf_lines))
+        if renderer_hint == "playwright-chromium":
+            renderer = _render_browser_pdf(html_path, pdf_path)
     artifact_root = package_root / "artifacts"
     source_by_relative = {}
     for source in artifact_paths:
@@ -328,7 +440,8 @@ def build_report_package(project, paths, report_type, report, *, current=True, s
         "package_fingerprint": package_fingerprint, "report_type": report_type,
         "report_fingerprint": report_hash, "calculator_input_set_fingerprint": snapshot_fingerprint,
         "source_artifacts": rows, "generated_at": _now(), "current_report": bool(current and not stale_reasons),
-        "stale_reasons": stale_reasons, "renderer": "minimal-pdf-fallback-v1", "pdf_sha256": file_hash(pdf_path),
+        "stale_reasons": stale_reasons, "renderer": renderer, "pdf_sha256": file_hash(pdf_path),
+        "artifact_count": len(rows), "artifact_bytes": sum(row["size_bytes"] for row in rows),
         "files": ["manifest.json", "report.html", "report.pdf"] + [f"artifacts/{row['path']}" for row in rows],
     }
     if manifest_path.exists():
@@ -340,13 +453,16 @@ def build_report_package(project, paths, report_type, report, *, current=True, s
 
 def _archive_candidates(root):
     root = Path(root)
-    allowed_suffixes = {".json", ".jsonl", ".md", ".html"}
+    allowed_suffixes = {".json", ".jsonl", ".md", ".html", ".csv", ".pdf"}
     excluded_parts = {"uploads", "images", "screenshots", "thumbnails", "overlays", "manual_vision_handoff"}
     paths = []
     for path in root.rglob("*"):
         if not path.is_file() or path.suffix.lower() not in allowed_suffixes:
             continue
-        if any(part in excluded_parts for part in path.relative_to(root).parts):
+        relative = path.relative_to(root)
+        if path.suffix.lower() == ".pdf" and (not relative.parts or relative.parts[0] != "report_packages"):
+            continue
+        if any(part in excluded_parts for part in relative.parts):
             continue
         paths.append(path)
     return sorted(paths, key=lambda path: path.relative_to(root).as_posix())
@@ -466,3 +582,19 @@ def project_health(project, paths, *, stale_report_names=None):
     status = "blocked" if any(item["severity"] == "blocking" for item in issues) else ("attention_required" if issues else "healthy")
     source_fingerprint = fingerprint({"project": project.get("id"), "issues": issues})
     return {"status": status, "issues": issues, "normalized_exceptions": normalise_exceptions(issues, source_fingerprint=source_fingerprint), "recovery_actions": sorted({item["remediation"] for item in issues})}
+
+
+def cached_project_health(project, paths, *, stale_report_names=None):
+    root = Path(project.get("review_dir", ""))
+    signature = []
+    for name, path in sorted(paths.items()):
+        candidate = Path(path) if path else None
+        if candidate and candidate.exists():
+            stat = candidate.stat()
+            signature.append((name, stat.st_mtime_ns, stat.st_size))
+        else:
+            signature.append((name, None))
+    key = (project.get("id", ""), tuple(signature), tuple(sorted(stale_report_names or [])))
+    if key not in _HEALTH_CACHE:
+        _HEALTH_CACHE[key] = project_health(project, paths, stale_report_names=stale_report_names)
+    return deepcopy(_HEALTH_CACHE[key])

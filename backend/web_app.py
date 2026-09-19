@@ -81,6 +81,41 @@ from backend import calculation_extraction_service
 from backend import vision_extraction_service
 from backend import productization
 from ai.ventilation import calculate_ventilation_report
+from ai.ahu_airside import (
+    calculate_ahu_report,
+    empty_ahu_systems,
+    empty_air_side_method_gate,
+    empty_air_side_model,
+    air_side_gate_is_approved,
+    validate_air_side_method_gate,
+    validate_air_side_model,
+    validate_ahu_systems,
+)
+from ai.plant_hydraulics import (
+    calculate_plant_report,
+    empty_hydraulic_circuits,
+    empty_plant_method_gate,
+    empty_plant_systems,
+    plant_gate_is_approved,
+    validate_hydraulic_circuits,
+    validate_plant_method_gate,
+    validate_plant_systems,
+)
+from ai.annual_energy import (
+    annual_gate_is_approved,
+    annual_hourly_csv,
+    annual_monthly_csv,
+    calculate_annual_report,
+    empty_annual_calendar,
+    empty_annual_method_gate,
+    empty_annual_radiation,
+    empty_annual_weather,
+    import_epw,
+    validate_annual_calendar,
+    validate_annual_method_gate,
+    validate_annual_radiation,
+    validate_annual_weather,
+)
 from ai.geometry_review import normalise_vision
 from ai.reasoning_packet import create_reasoning_packet_from_vision
 from pdf_pipeline.extractors import count_pdf_pages
@@ -192,6 +227,71 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json(api_hourly_load_model(self))
         if self.path.startswith("/api/hourly-load-report"):
             return self.send_json(api_hourly_load_report(self))
+        if self.path.startswith("/api/air-side-method-gate"):
+            try:
+                return self.send_json(api_air_side_method_gate(self))
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if self.path.startswith("/api/ahu-systems"):
+            try:
+                return self.send_json(api_ahu_systems(self))
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if self.path.startswith("/api/air-side-model"):
+            try:
+                return self.send_json(api_air_side_model(self))
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if self.path.startswith("/api/hourly-ahu-load-report"):
+            try:
+                return self.send_json(api_hourly_ahu_load_report(self))
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if self.path.startswith("/api/plant-method-gate"):
+            try:
+                return self.send_json(api_plant_method_gate(self))
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if self.path.startswith("/api/plant-systems"):
+            try:
+                return self.send_json(api_plant_systems(self))
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if self.path.startswith("/api/hydraulic-circuits"):
+            try:
+                return self.send_json(api_hydraulic_circuits(self))
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if self.path.startswith("/api/hourly-plant-load-report"):
+            try:
+                return self.send_json(api_hourly_plant_load_report(self))
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if self.path.startswith("/api/annual-weather"):
+            try:
+                return self.send_json(api_annual_weather(self))
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if self.path.startswith("/api/annual-calendar"):
+            try:
+                return self.send_json(api_annual_calendar(self))
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if self.path.startswith("/api/annual-radiation"):
+            try:
+                return self.send_json(api_annual_radiation(self))
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if self.path.startswith("/api/annual-method-gate"):
+            try:
+                return self.send_json(api_annual_method_gate(self))
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if self.path.startswith("/api/annual-energy-report"):
+            try:
+                return self.send_json(api_annual_energy_report(self))
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
         if self.path.startswith("/api/infiltration-method-gate"):
             try:
                 return self.send_json(api_infiltration_method_gate(self))
@@ -316,6 +416,32 @@ class Handler(SimpleHTTPRequestHandler):
             return self.save_hourly_load_model()
         if self.path == "/api/hourly-load-report":
             return self.save_hourly_load_report()
+        if self.path == "/api/air-side-method-gate":
+            return self.save_air_side_method_gate()
+        if self.path == "/api/ahu-systems":
+            return self.save_ahu_systems()
+        if self.path == "/api/air-side-model":
+            return self.save_air_side_model()
+        if self.path == "/api/hourly-ahu-load-report":
+            return self.save_hourly_ahu_load_report()
+        if self.path == "/api/plant-method-gate":
+            return self.save_plant_method_gate()
+        if self.path == "/api/plant-systems":
+            return self.save_plant_systems()
+        if self.path == "/api/hydraulic-circuits":
+            return self.save_hydraulic_circuits()
+        if self.path == "/api/hourly-plant-load-report":
+            return self.save_hourly_plant_load_report()
+        if self.path == "/api/annual-weather":
+            return self.save_annual_weather()
+        if self.path == "/api/annual-calendar":
+            return self.save_annual_calendar()
+        if self.path == "/api/annual-radiation":
+            return self.save_annual_radiation()
+        if self.path == "/api/annual-method-gate":
+            return self.save_annual_method_gate()
+        if self.path == "/api/annual-energy-report":
+            return self.save_annual_energy_report()
         if self.path == "/api/infiltration-method-gate":
             return self.save_infiltration_method_gate()
         if self.path == "/api/glazing-method-gate":
@@ -448,6 +574,97 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json({"error": str(error)}, 400)
         self.send_json(result)
 
+    def save_air_side_method_gate(self):
+        try:
+            result = api_save_air_side_method_gate(self)
+        except Exception as error:
+            return self.send_json(product_error(error), 400)
+        self.send_json(result)
+
+    def save_ahu_systems(self):
+        try:
+            result = api_save_ahu_systems(self)
+        except Exception as error:
+            return self.send_json(product_error(error), 400)
+        self.send_json(result)
+
+    def save_air_side_model(self):
+        try:
+            result = api_save_air_side_model(self)
+        except Exception as error:
+            return self.send_json(product_error(error), 400)
+        self.send_json(result)
+
+    def save_hourly_ahu_load_report(self):
+        try:
+            result = api_save_hourly_ahu_load_report(self)
+        except Exception as error:
+            return self.send_json(product_error(error), 400)
+        self.send_json(result)
+
+    def save_plant_method_gate(self):
+        try:
+            result = api_save_plant_method_gate(self)
+        except Exception as error:
+            return self.send_json(product_error(error), 400)
+        self.send_json(result)
+
+    def save_plant_systems(self):
+        try:
+            result = api_save_plant_systems(self)
+        except Exception as error:
+            return self.send_json(product_error(error), 400)
+        self.send_json(result)
+
+    def save_hydraulic_circuits(self):
+        try:
+            result = api_save_hydraulic_circuits(self)
+        except Exception as error:
+            return self.send_json(product_error(error), 400)
+        self.send_json(result)
+
+    def save_hourly_plant_load_report(self):
+        try:
+            result = api_save_hourly_plant_load_report(self)
+        except Exception as error:
+            return self.send_json(product_error(error), 400)
+        self.send_json(result)
+
+    def save_annual_weather(self):
+        try:
+            result = api_save_annual_weather(self)
+        except Exception as error:
+            return self.send_json(product_error(error), 400)
+        self.send_json(result)
+
+    def save_annual_calendar(self):
+        try:
+            result = api_save_annual_calendar(self)
+        except Exception as error:
+            return self.send_json(product_error(error), 400)
+        self.send_json(result)
+
+    def save_annual_radiation(self):
+        try:
+            result = api_save_annual_radiation(self)
+        except Exception as error:
+            return self.send_json(product_error(error), 400)
+        self.send_json(result)
+
+    def save_annual_method_gate(self):
+        try:
+            result = api_save_annual_method_gate(self)
+        except Exception as error:
+            return self.send_json(product_error(error), 400)
+        self.send_json(result)
+
+    def save_annual_energy_report(self):
+        try:
+            result = api_save_annual_energy_report(self)
+        except Exception as error:
+            return self.send_json(product_error(error), 400)
+        self.send_json(result)
+
     def save_infiltration_method_gate(self):
         try:
             result = api_save_infiltration_method_gate(self)
@@ -545,10 +762,11 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             result = api_save_calculator_inputs(self)
         except CalculatorInputConflict as error:
-            return self.send_json({"error": str(error), "code": "calculator_input_conflict", "conflict": True,
-                                   "changed_sources": error.changed_sources, "action": "reload_and_reassemble"}, 409)
+            payload = product_error(error)
+            payload.update({"conflict": True, "action": "reload_and_reassemble"})
+            return self.send_json(payload, 409)
         except Exception as error:
-            return self.send_json({"error": str(error)}, 400)
+            return self.send_json(product_error(error), 400)
         self.send_json(result)
 
     def save_envelope_library(self):
@@ -949,7 +1167,26 @@ def hourly_paths(project):
         "solar_radiation_source": review_dir / "solar_radiation_source.json",
         "room_to_room_coupling_method_gate": review_dir / "room_to_room_coupling_method_gate.json",
         "heating_method_gate": review_dir / "heating_method_gate.json",
+        "ahu_systems": review_dir / "ahu_systems.json",
+        "air_side_model": review_dir / "air_side_model.json",
+        "air_side_method_gate": review_dir / "air_side_method_gate.json",
+        "ahu_report": review_dir / "hourly_ahu_load_report.json",
+        "plant_systems": review_dir / "plant_systems.json",
+        "hydraulic_circuits": review_dir / "hydraulic_circuits.json",
+        "plant_method_gate": review_dir / "plant_method_gate.json",
+        "plant_report": review_dir / "hourly_plant_load_report.json",
+        "annual_weather": review_dir / "annual_weather.json",
+        "annual_calendar": review_dir / "annual_calendar.json",
+        "annual_radiation": review_dir / "annual_radiation.json",
+        "annual_method_gate": review_dir / "annual_method_gate.json",
+        "annual_report": review_dir / "annual_energy_report.json",
+        "exception_decisions": review_dir / "exception_decisions.json",
     }
+
+
+def _load_json_or(path, default=None):
+    path = Path(path)
+    return load_json(path) if path.exists() else ({} if default is None else deepcopy(default))
 
 
 def product_error(error):
@@ -993,16 +1230,18 @@ def api_project_health(request):
         stale.append("hourly_load_report.json")
     if paths["heating_report"].exists() and current_hourly_heating_load_report_path(project) is None:
         stale.append("hourly_heating_load_report.json")
-    health = productization.project_health(project, paths, stale_report_names=stale)
+    if paths["annual_report"].exists() and current_annual_energy_report_path(project) is None:
+        stale.append("annual_energy_report.json")
+    health = productization.cached_project_health(project, paths, stale_report_names=stale)
     package_root = root / "report_packages"
     current_report_hashes = {}
-    for report_type, path in (("cooling", paths["report"]), ("heating", paths["heating_report"])):
+    for report_type, path in (("cooling", paths["report"]), ("heating", paths["heating_report"]), ("annual", paths["annual_report"]), ("ahu", paths["ahu_report"]), ("plant", paths["plant_report"])):
         if Path(path).is_file():
-            report_copy = load_json(path, {})
+            report_copy = _load_json_or(path)
             report_copy.pop("_report_fingerprint", None)
             current_report_hashes[report_type] = productization.fingerprint(report_copy)
     for manifest_path in (package_root.glob("*/manifest.json") if package_root.exists() else []):
-        manifest = load_json(manifest_path, {})
+        manifest = _load_json_or(manifest_path)
         report_type = manifest.get("report_type")
         if manifest.get("current_report") and report_type in current_report_hashes and manifest.get("report_fingerprint") != current_report_hashes[report_type]:
             health["issues"].append({"code": "report_package_stale", "severity": "blocking", "scope": "project", "affected_id": project["id"], "artifact": manifest_path.relative_to(root).as_posix(), "message": "A current report package no longer matches the stored report.", "remediation": "Build a new report package from the current report."})
@@ -1020,8 +1259,15 @@ def api_audit_log(request):
     if not project.get("review_dir"):
         return {"id": project["id"], "events": [], "chain_valid": True, "artifact_url": ""}
     root = Path(project["review_dir"])
-    events = productization.read_audit_events(root, action=query.get("action", [""])[0], target=query.get("target", [""])[0], affected_id=query.get("affected_id", [""])[0], limit=query.get("limit", [200])[0])
-    return {"id": project["id"], "events": events, "chain_valid": productization.validate_audit_chain(root), "artifact_url": safe_link(root / "audit_log.jsonl") if (root / "audit_log.jsonl").exists() else ""}
+    try:
+        limit = min(1000, max(1, int(query.get("limit", [200])[0])))
+        offset = max(0, int(query.get("offset", [0])[0]))
+    except (TypeError, ValueError):
+        limit, offset = 200, 0
+    filters = {"action": query.get("action", [""])[0], "target": query.get("target", [""])[0], "affected_id": query.get("affected_id", [""])[0]}
+    events = productization.read_audit_events(root, **filters, limit=limit, offset=offset)
+    total = len(productization.read_audit_events(root, **filters, limit=100000))
+    return {"id": project["id"], "events": events, "event_total": total, "offset": offset, "limit": limit, "has_more": offset + len(events) < total, "chain_valid": productization.validate_audit_chain(root), "artifact_url": safe_link(root / "audit_log.jsonl") if (root / "audit_log.jsonl").exists() else ""}
 
 
 def _report_package_inputs(project, report_type):
@@ -1030,6 +1276,18 @@ def _report_package_inputs(project, report_type):
         report_path = paths["heating_report"]
         current = current_hourly_heating_load_report_path(project)
         stale = [] if current else (["heating report is stale"] if report_path.exists() else ["heating report has not been calculated"])
+    elif report_type == "annual":
+        report_path = paths["annual_report"]
+        current = current_annual_energy_report_path(project)
+        stale = [] if current else (["annual report is stale"] if report_path.exists() else ["annual report has not been calculated"])
+    elif report_type == "ahu":
+        report_path = paths["ahu_report"]
+        current = current_hourly_ahu_load_report_path(project)
+        stale = [] if current else (["AHU report is stale"] if report_path.exists() else ["AHU report has not been calculated"])
+    elif report_type == "plant":
+        report_path = paths["plant_report"]
+        current = current_hourly_plant_load_report_path(project)
+        stale = [] if current else (["plant report is stale"] if report_path.exists() else ["plant report has not been calculated"])
     else:
         report_path = paths["report"]
         current = current_hourly_load_report_path(project)
@@ -1041,8 +1299,8 @@ def api_report_package(request):
     query = parse_qs(urlparse(request.path).query)
     project = project_by_id(query.get("project_id", [""])[0])
     report_type = query.get("report_type", ["cooling"])[0]
-    if report_type not in {"cooling", "heating"}:
-        raise ValueError("report_type must be cooling or heating")
+    if report_type not in {"cooling", "heating", "annual", "ahu", "plant"}:
+        raise ValueError("report_type must be cooling, heating, annual, ahu, or plant")
     _paths, root = _product_artifacts(project)
     package_root = root / "report_packages"
     packages = []
@@ -1067,6 +1325,8 @@ def api_save_report_package(request):
     if current and not report.get("input_fingerprints", {}).get("calculator_input_set_fingerprint"):
         raise ValueError("A current report package requires an immutable calculator-input snapshot.")
     artifact_paths = [path for path in paths.values() if Path(path).is_file()]
+    if report_type == "annual":
+        artifact_paths.extend(path for path in (report_path.with_name("annual_hourly_profile.csv"), report_path.with_name("annual_monthly_summary.csv")) if path.is_file())
     result = productization.build_report_package(project, paths, report_type, report, current=bool(current), stale_reasons=stale, artifact_paths=artifact_paths)
     productization.append_audit_event(root, action="report_package_generated", target=f"{report_type}_report", related_fingerprint=result["manifest"]["report_fingerprint"], new_fingerprint=result["package_fingerprint"], result="success")
     return {"id": project["id"], "report_type": report_type, "status": "current" if current and not stale else "historical", "package": result, "artifact_url": safe_link(Path(result["artifact_url"]) / "manifest.json"), "html_url": safe_link(result["html_path"]), "pdf_url": safe_link(result["pdf_path"])}
@@ -1408,6 +1668,571 @@ def api_save_room_to_room_coupling_method_gate(request):
     }, path)
 
 
+def air_side_gate_summary(gate):
+    gate = validate_air_side_method_gate(gate)
+    approved = air_side_gate_is_approved(gate)
+    return {
+        "status": "approved" if approved else "placeholder",
+        "approval_status": gate.get("approval_status", "placeholder"),
+        "calculation_enabled": True,
+        "review_ready_enabled": approved,
+        "method_id": gate.get("method_id", ""),
+        "fingerprint": gate.get("fingerprint", ""),
+        "message": "AHU reports may be review-ready for complete inputs." if approved else "AHU reports remain draft-only until a named HVAC engineer approves this method gate.",
+    }
+
+
+def _ahu_artifacts(project):
+    paths = hourly_paths(project)
+    systems = validate_ahu_systems(load_json(paths["ahu_systems"]) if paths["ahu_systems"].exists() else empty_ahu_systems())
+    model = validate_air_side_model(load_json(paths["air_side_model"]) if paths["air_side_model"].exists() else empty_air_side_model(), {row["ahu_id"] for row in systems["systems"]})
+    gate = validate_air_side_method_gate(load_json(paths["air_side_method_gate"]) if paths["air_side_method_gate"].exists() else empty_air_side_method_gate())
+    return paths, systems, model, gate
+
+
+def api_air_side_method_gate(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    path = hourly_paths(project)["air_side_method_gate"]
+    gate = validate_air_side_method_gate(load_json(path) if path.exists() else empty_air_side_method_gate())
+    return artifact_response(project, "air_side_method_gate", gate, air_side_gate_summary(gate), path)
+
+
+def api_save_air_side_method_gate(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    gate = validate_air_side_method_gate(data.get("air_side_method_gate", data.get("gate", {})))
+    gate["updated_at"] = timestamp()
+    gate = validate_air_side_method_gate(gate)
+    path = hourly_paths(project)["air_side_method_gate"]
+    write_artifact(path, gate)
+    project["air_side_method_gate"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return artifact_response(project, "air_side_method_gate", gate, air_side_gate_summary(gate), path)
+
+
+def api_ahu_systems(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    path = hourly_paths(project)["ahu_systems"]
+    raw = load_json(path) if path.exists() else empty_ahu_systems()
+    systems = validate_ahu_systems(raw)
+    return artifact_response(project, "ahu_systems", systems, {
+        "count": len(systems["systems"]),
+        "reviewed_count": sum(row["review_status"] == "confirmed" for row in systems["systems"]),
+        "message": "Explicit AHU topology is available." if systems["systems"] else "No AHU systems have been configured.",
+    }, path)
+
+
+def api_save_ahu_systems(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    raw = data.get("ahu_systems", data.get("systems", data))
+    systems = validate_ahu_systems(raw)
+    path = hourly_paths(project)["ahu_systems"]
+    systems["updated_at"] = timestamp()
+    write_artifact(path, systems)
+    project["ahu_systems"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return artifact_response(project, "ahu_systems", systems, {"count": len(systems["systems"])}, path)
+
+
+def api_air_side_model(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    paths = hourly_paths(project)
+    systems = validate_ahu_systems(load_json(paths["ahu_systems"]) if paths["ahu_systems"].exists() else empty_ahu_systems())
+    path = paths["air_side_model"]
+    model = validate_air_side_model(load_json(path) if path.exists() else empty_air_side_model(), {row["ahu_id"] for row in systems["systems"]})
+    return artifact_response(project, "air_side_model", model, {
+        "airflow_count": len(model["airflow_records"]),
+        "fan_count": len(model["fans"]),
+        "message": "Explicit air-side paths are available." if model["airflow_records"] else "No air-side paths have been configured.",
+    }, path)
+
+
+def api_save_air_side_model(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    paths = hourly_paths(project)
+    systems = validate_ahu_systems(load_json(paths["ahu_systems"]) if paths["ahu_systems"].exists() else empty_ahu_systems())
+    raw = data.get("air_side_model", data.get("model", data))
+    model = validate_air_side_model(raw, {row["ahu_id"] for row in systems["systems"]})
+    model["updated_at"] = timestamp()
+    path = paths["air_side_model"]
+    write_artifact(path, model)
+    project["air_side_model"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return artifact_response(project, "air_side_model", model, {"airflow_count": len(model["airflow_records"])}, path)
+
+
+def _current_ahu_fingerprints(project):
+    paths, systems, model, gate = _ahu_artifacts(project)
+    current_room_report = current_hourly_load_report_path(project)
+    return {
+        "calculator_input_snapshot_fingerprint": _load_json_or(paths["calculator_input_set"]).get("input_fingerprint", ""),
+        "hourly_load_report_fingerprint": productization.fingerprint(_load_json_or(current_room_report)) if current_room_report else "",
+        "ahu_systems_fingerprint": productization.fingerprint(systems),
+        "air_side_model_fingerprint": productization.fingerprint(model),
+        "air_side_method_gate_fingerprint": gate.get("fingerprint", ""),
+        "schedules_fingerprint": productization.fingerprint(_load_json_or(paths["schedules"])),
+        "scenarios_fingerprint": productization.fingerprint(_load_json_or(paths["scenarios"])),
+        "project_context_fingerprint": productization.fingerprint(_load_json_or(paths["project_context"])),
+        "overrides_fingerprint": productization.fingerprint(_load_json_or(paths["calculator_input_overrides"])),
+    }
+
+
+def current_hourly_ahu_load_report_path(project):
+    if not project.get("review_dir"):
+        return None
+    paths = hourly_paths(project)
+    candidate = existing_path(project.get("ahu_report"), paths["ahu_report"])
+    if not candidate:
+        return None
+    report = _load_json_or(candidate)
+    saved = report.get("input_fingerprints", {})
+    return candidate if saved and saved == _current_ahu_fingerprints(project) else None
+
+
+def api_hourly_ahu_load_report(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    paths = hourly_paths(project)
+    current = current_hourly_ahu_load_report_path(project)
+    report = load_json(current) if current else (load_json(paths["ahu_report"]) if paths["ahu_report"].exists() else {})
+    return {
+        "id": project["id"], "hourly_ahu_load_report": report,
+        "status": "current" if current else ("stale" if paths["ahu_report"].exists() else "not_calculated"),
+        "stale_reasons": [] if current else (["AHU report dependencies changed; recalculate explicitly."] if paths["ahu_report"].exists() else []),
+        "url": safe_link(current) if current else "", "artifact_url": safe_link(paths["ahu_report"]) if paths["ahu_report"].exists() else "",
+    }
+
+
+def api_save_hourly_ahu_load_report(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    paths, systems, model, gate = _ahu_artifacts(project)
+    requested_snapshot = data.get("snapshot_fingerprint") or data.get("calculator_input_snapshot_fingerprint") or data.get("input_set_fingerprint", "")
+    pointer = _load_json_or(paths["calculator_input_set"])
+    current_snapshot = pointer.get("input_fingerprint", "")
+    if not requested_snapshot or requested_snapshot != current_snapshot:
+        raise ValueError("A current calculator-input snapshot fingerprint is required for AHU calculation.")
+    room_report_path = current_hourly_load_report_path(project)
+    if not room_report_path:
+        raise ValueError("A current hourly room-load report is required before AHU calculation.")
+    room_report = load_json(room_report_path)
+    report = calculate_ahu_report(
+        room_report, systems, model, gate,
+        selected_ahu_ids=data.get("selected_ahu_ids"),
+        scenario_ids=data.get("scenario_ids") or data.get("selected_scenario_ids"),
+        snapshot_fingerprint=requested_snapshot,
+    )
+    report["input_fingerprints"] = _current_ahu_fingerprints(project)
+    report["updated_at"] = timestamp()
+    path = paths["ahu_report"]
+    write_artifact(path, report)
+    project["ahu_report"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return {"id": project["id"], "hourly_ahu_load_report": report, "status": report.get("status", "blocked"), "url": safe_link(path), "artifact_url": safe_link(path)}
+
+
+def plant_gate_summary(gate):
+    gate = validate_plant_method_gate(gate)
+    approved = plant_gate_is_approved(gate)
+    return {
+        "status": "approved" if approved else "placeholder",
+        "approval_status": gate.get("approval_status", "placeholder"),
+        "calculation_enabled": True,
+        "review_ready_enabled": approved,
+        "method_id": gate.get("method_id", ""),
+        "fingerprint": gate.get("fingerprint", ""),
+        "message": "Cooling plant reports may be review-ready for complete inputs." if approved else "Cooling plant reports remain draft-only until a named HVAC engineer approves this method gate.",
+    }
+
+
+def _plant_artifacts(project):
+    paths = hourly_paths(project)
+    raw_ahu = load_json(paths["ahu_systems"]) if paths["ahu_systems"].exists() else empty_ahu_systems()
+    ahu = validate_ahu_systems(raw_ahu)
+    raw_circuits = load_json(paths["hydraulic_circuits"]) if paths["hydraulic_circuits"].exists() else empty_hydraulic_circuits()
+    raw_plants = load_json(paths["plant_systems"]) if paths["plant_systems"].exists() else empty_plant_systems()
+    # Validate plant references first, then validate circuits against those plant IDs.
+    circuit_ids = {str(row.get("circuit_id", "")) for row in raw_circuits.get("circuits", []) if isinstance(row, dict)}
+    plants = validate_plant_systems(raw_plants, {row["ahu_id"] for row in ahu["systems"]}, circuit_ids)
+    circuits = validate_hydraulic_circuits(raw_circuits, {row["plant_id"] for row in plants["systems"]}, {row["ahu_id"] for row in ahu["systems"]})
+    gate_path = paths["plant_method_gate"]
+    gate = validate_plant_method_gate(load_json(gate_path) if gate_path.exists() else empty_plant_method_gate())
+    return paths, plants, circuits, gate
+
+
+def api_plant_method_gate(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    path = hourly_paths(project)["plant_method_gate"]
+    gate = validate_plant_method_gate(load_json(path) if path.exists() else empty_plant_method_gate())
+    return artifact_response(project, "plant_method_gate", gate, plant_gate_summary(gate), path)
+
+
+def api_save_plant_method_gate(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    gate = validate_plant_method_gate(data.get("plant_method_gate", data.get("gate", {})))
+    gate["updated_at"] = timestamp()
+    gate = validate_plant_method_gate(gate)
+    path = hourly_paths(project)["plant_method_gate"]
+    write_artifact(path, gate)
+    project["plant_method_gate"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return artifact_response(project, "plant_method_gate", gate, plant_gate_summary(gate), path)
+
+
+def api_plant_systems(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    paths = hourly_paths(project)
+    ahu = validate_ahu_systems(load_json(paths["ahu_systems"]) if paths["ahu_systems"].exists() else empty_ahu_systems())
+    circuits = load_json(paths["hydraulic_circuits"]) if paths["hydraulic_circuits"].exists() else empty_hydraulic_circuits()
+    plants = validate_plant_systems(load_json(paths["plant_systems"]) if paths["plant_systems"].exists() else empty_plant_systems(), {row["ahu_id"] for row in ahu["systems"]}, {row.get("circuit_id") for row in circuits.get("circuits", [])})
+    return artifact_response(project, "plant_systems", plants, {
+        "count": len(plants["systems"]),
+        "cooling_count": sum(row["plant_type"] == "chiller" for row in plants["systems"]),
+        "deferred_count": sum(row["plant_type"] != "chiller" for row in plants["systems"]),
+        "message": "Explicit plant records are available." if plants["systems"] else "No plant records have been configured.",
+    }, paths["plant_systems"])
+
+
+def api_save_plant_systems(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    paths = hourly_paths(project)
+    ahu = validate_ahu_systems(load_json(paths["ahu_systems"]) if paths["ahu_systems"].exists() else empty_ahu_systems())
+    circuits = load_json(paths["hydraulic_circuits"]) if paths["hydraulic_circuits"].exists() else empty_hydraulic_circuits()
+    raw = data.get("plant_systems", data.get("systems", data))
+    plants = validate_plant_systems(raw, {row["ahu_id"] for row in ahu["systems"]}, {row.get("circuit_id") for row in circuits.get("circuits", [])})
+    plants["updated_at"] = timestamp()
+    write_artifact(paths["plant_systems"], plants)
+    project["plant_systems"] = str(paths["plant_systems"])
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return artifact_response(project, "plant_systems", plants, {"count": len(plants["systems"])}, paths["plant_systems"])
+
+
+def api_hydraulic_circuits(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    paths = hourly_paths(project)
+    ahu = validate_ahu_systems(load_json(paths["ahu_systems"]) if paths["ahu_systems"].exists() else empty_ahu_systems())
+    plants = validate_plant_systems(load_json(paths["plant_systems"]) if paths["plant_systems"].exists() else empty_plant_systems(), {row["ahu_id"] for row in ahu["systems"]})
+    circuits = validate_hydraulic_circuits(load_json(paths["hydraulic_circuits"]) if paths["hydraulic_circuits"].exists() else empty_hydraulic_circuits(), {row["plant_id"] for row in plants["systems"]}, {row["ahu_id"] for row in ahu["systems"]})
+    return artifact_response(project, "hydraulic_circuits", circuits, {
+        "count": len(circuits["circuits"]),
+        "cooling_count": sum(row["circuit_type"] == "chilled_water" for row in circuits["circuits"]),
+        "message": "Explicit hydraulic circuit records are available." if circuits["circuits"] else "No hydraulic circuits have been configured.",
+    }, paths["hydraulic_circuits"])
+
+
+def api_save_hydraulic_circuits(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    paths = hourly_paths(project)
+    ahu = validate_ahu_systems(load_json(paths["ahu_systems"]) if paths["ahu_systems"].exists() else empty_ahu_systems())
+    plants = validate_plant_systems(load_json(paths["plant_systems"]) if paths["plant_systems"].exists() else empty_plant_systems(), {row["ahu_id"] for row in ahu["systems"]})
+    raw = data.get("hydraulic_circuits", data.get("circuits", data))
+    circuits = validate_hydraulic_circuits(raw, {row["plant_id"] for row in plants["systems"]}, {row["ahu_id"] for row in ahu["systems"]})
+    circuits["updated_at"] = timestamp()
+    write_artifact(paths["hydraulic_circuits"], circuits)
+    project["hydraulic_circuits"] = str(paths["hydraulic_circuits"])
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return artifact_response(project, "hydraulic_circuits", circuits, {"count": len(circuits["circuits"])}, paths["hydraulic_circuits"])
+
+
+def _current_plant_fingerprints(project):
+    paths, plants, circuits, gate = _plant_artifacts(project)
+    ahu_report = current_hourly_ahu_load_report_path(project)
+    return {
+        "calculator_input_snapshot_fingerprint": _load_json_or(paths["calculator_input_set"]).get("input_fingerprint", ""),
+        "hourly_ahu_load_report_fingerprint": productization.fingerprint(_load_json_or(ahu_report)) if ahu_report else "",
+        "plant_systems_fingerprint": productization.fingerprint(plants),
+        "hydraulic_circuits_fingerprint": productization.fingerprint(circuits),
+        "plant_method_gate_fingerprint": gate.get("fingerprint", ""),
+        "schedules_fingerprint": productization.fingerprint(_load_json_or(paths["schedules"])),
+        "scenarios_fingerprint": productization.fingerprint(_load_json_or(paths["scenarios"])),
+        "project_context_fingerprint": productization.fingerprint(_load_json_or(paths["project_context"])),
+        "overrides_fingerprint": productization.fingerprint(_load_json_or(paths["calculator_input_overrides"])),
+    }
+
+
+def current_hourly_plant_load_report_path(project):
+    if not project.get("review_dir"):
+        return None
+    paths = hourly_paths(project)
+    candidate = existing_path(project.get("plant_report"), paths["plant_report"])
+    if not candidate:
+        return None
+    report = _load_json_or(candidate)
+    saved = report.get("input_fingerprints", {})
+    return candidate if saved and saved == _current_plant_fingerprints(project) else None
+
+
+def api_hourly_plant_load_report(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    paths = hourly_paths(project)
+    current = current_hourly_plant_load_report_path(project)
+    report = load_json(current) if current else (load_json(paths["plant_report"]) if paths["plant_report"].exists() else {})
+    return {
+        "id": project["id"], "hourly_plant_load_report": report,
+        "status": "current" if current else ("stale" if paths["plant_report"].exists() else "not_calculated"),
+        "stale_reasons": [] if current else (["Plant report dependencies changed; recalculate explicitly."] if paths["plant_report"].exists() else []),
+        "url": safe_link(current) if current else "", "artifact_url": safe_link(paths["plant_report"]) if paths["plant_report"].exists() else "",
+    }
+
+
+def api_save_hourly_plant_load_report(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    paths, plants, circuits, gate = _plant_artifacts(project)
+    requested_snapshot = data.get("snapshot_fingerprint") or data.get("calculator_input_snapshot_fingerprint") or data.get("input_set_fingerprint", "")
+    pointer = _load_json_or(paths["calculator_input_set"])
+    if not requested_snapshot or requested_snapshot != pointer.get("input_fingerprint", ""):
+        raise ValueError("A current calculator-input snapshot fingerprint is required for plant calculation.")
+    ahu_report_path = current_hourly_ahu_load_report_path(project)
+    if not ahu_report_path:
+        raise ValueError("A current hourly AHU report is required before plant calculation.")
+    report = calculate_plant_report(load_json(ahu_report_path), plants, circuits, gate, selected_plant_ids=data.get("selected_plant_ids"), scenario_ids=data.get("scenario_ids") or data.get("selected_scenario_ids"), snapshot_fingerprint=requested_snapshot)
+    report["input_fingerprints"] = _current_plant_fingerprints(project)
+    report["updated_at"] = timestamp()
+    path = paths["plant_report"]
+    write_artifact(path, report)
+    project["plant_report"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return {"id": project["id"], "hourly_plant_load_report": report, "status": report.get("status", "blocked"), "url": safe_link(path), "artifact_url": safe_link(path)}
+
+
+def _annual_artifacts(project):
+    paths = hourly_paths(project)
+    weather = validate_annual_weather(load_json(paths["annual_weather"]) if paths["annual_weather"].exists() else empty_annual_weather()) if paths["annual_weather"].exists() else empty_annual_weather()
+    calendar = validate_annual_calendar(load_json(paths["annual_calendar"]) if paths["annual_calendar"].exists() else empty_annual_calendar()) if paths["annual_calendar"].exists() else empty_annual_calendar()
+    radiation = validate_annual_radiation(load_json(paths["annual_radiation"]) if paths["annual_radiation"].exists() else empty_annual_radiation()) if paths["annual_radiation"].exists() else empty_annual_radiation()
+    gate = validate_annual_method_gate(load_json(paths["annual_method_gate"]) if paths["annual_method_gate"].exists() else empty_annual_method_gate())
+    return paths, weather, calendar, radiation, gate
+
+
+def _annual_summary(artifact, kind):
+    if kind == "weather":
+        return {"status": "current", "record_count": len(artifact.get("records", [])), "expected_records": 8760, "fingerprint": artifact.get("fingerprint", "")}
+    if kind == "calendar":
+        return {"status": "current", "date_count": len(artifact.get("dates", [])), "expected_dates": 365, "holiday_count": len(artifact.get("holidays", [])), "fingerprint": artifact.get("fingerprint", "")}
+    if kind == "radiation":
+        return {"status": "current", "surface_count": len(artifact.get("surfaces", [])), "fingerprint": artifact.get("fingerprint", "")}
+    approved = annual_gate_is_approved(artifact)
+    return {"status": "approved" if approved else "placeholder", "approval_status": artifact.get("approval_status", "placeholder"), "review_ready_enabled": approved, "fingerprint": artifact.get("fingerprint", "")}
+
+
+def api_annual_weather(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    paths, weather, _, _, _ = _annual_artifacts(project)
+    return artifact_response(project, "annual_weather", weather, _annual_summary(weather, "weather"), paths["annual_weather"])
+
+
+def api_save_annual_weather(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    epw_text = data.get("epw_text")
+    if epw_text is not None:
+        weather = import_epw(
+            epw_text,
+            weather_id=data.get("weather_id", ""),
+            source=data.get("source", ""),
+            citations=data.get("citations", []),
+            location=data.get("location", ""),
+            timezone_name=data.get("timezone", ""),
+        )
+    else:
+        raw = data.get("annual_weather", data.get("weather", data))
+        weather = validate_annual_weather(raw)
+    path = hourly_paths(project)["annual_weather"]
+    write_artifact(path, weather)
+    project["annual_weather"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return artifact_response(project, "annual_weather", weather, _annual_summary(weather, "weather"), path)
+
+
+def api_annual_calendar(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    paths, _, calendar, _, _ = _annual_artifacts(project)
+    return artifact_response(project, "annual_calendar", calendar, _annual_summary(calendar, "calendar"), paths["annual_calendar"])
+
+
+def api_save_annual_calendar(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    calendar = validate_annual_calendar(data.get("annual_calendar", data.get("calendar", data)))
+    path = hourly_paths(project)["annual_calendar"]
+    write_artifact(path, calendar)
+    project["annual_calendar"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return artifact_response(project, "annual_calendar", calendar, _annual_summary(calendar, "calendar"), path)
+
+
+def api_annual_radiation(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    paths, _, _, radiation, _ = _annual_artifacts(project)
+    return artifact_response(project, "annual_radiation", radiation, _annual_summary(radiation, "radiation"), paths["annual_radiation"])
+
+
+def api_save_annual_radiation(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    radiation = validate_annual_radiation(data.get("annual_radiation", data.get("radiation", data)))
+    path = hourly_paths(project)["annual_radiation"]
+    write_artifact(path, radiation)
+    project["annual_radiation"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return artifact_response(project, "annual_radiation", radiation, _annual_summary(radiation, "radiation"), path)
+
+
+def api_annual_method_gate(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    paths, _, _, _, gate = _annual_artifacts(project)
+    return artifact_response(project, "annual_method_gate", gate, _annual_summary(gate, "gate"), paths["annual_method_gate"])
+
+
+def api_save_annual_method_gate(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    gate = validate_annual_method_gate(data.get("annual_method_gate", data.get("gate", data)))
+    gate["updated_at"] = timestamp()
+    gate = validate_annual_method_gate(gate)
+    path = hourly_paths(project)["annual_method_gate"]
+    write_artifact(path, gate)
+    project["annual_method_gate"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return artifact_response(project, "annual_method_gate", gate, _annual_summary(gate, "gate"), path)
+
+
+def _current_annual_fingerprints(project):
+    paths, weather, calendar, radiation, gate = _annual_artifacts(project)
+    snapshot = _load_json_or(paths["calculator_input_set"])
+    return {
+        "annual_weather_fingerprint": weather.get("fingerprint", ""),
+        "annual_calendar_fingerprint": calendar.get("fingerprint", ""),
+        "annual_radiation_fingerprint": radiation.get("fingerprint", ""),
+        "annual_method_gate_fingerprint": gate.get("fingerprint", ""),
+        "calculator_input_snapshot_fingerprint": snapshot.get("input_fingerprint", ""),
+        "schedule_library_fingerprint": productization.fingerprint(_load_json_or(paths["schedules"])),
+        "hourly_load_model_fingerprint": productization.fingerprint(_load_json_or(paths["model"])),
+        "envelope_model_fingerprint": productization.fingerprint(_load_json_or(paths["envelope_model"])),
+        "glazing_gate_fingerprint": productization.fingerprint(_load_json_or(paths["glazing_method_gate"])),
+        "shading_gate_fingerprint": productization.fingerprint(_load_json_or(paths["shading_method_gate"])),
+        "infiltration_gate_fingerprint": productization.fingerprint(_load_json_or(paths["infiltration_method_gate"])),
+        "heating_gate_fingerprint": productization.fingerprint(_load_json_or(paths["heating_method_gate"])),
+        "ahu_systems_fingerprint": productization.fingerprint(_load_json_or(paths["ahu_systems"])),
+        "air_side_model_fingerprint": productization.fingerprint(_load_json_or(paths["air_side_model"])),
+        "plant_systems_fingerprint": productization.fingerprint(_load_json_or(paths["plant_systems"])),
+        "hydraulic_circuits_fingerprint": productization.fingerprint(_load_json_or(paths["hydraulic_circuits"])),
+        "project_context_fingerprint": productization.fingerprint(_load_json_or(paths["project_context"])),
+        "overrides_fingerprint": productization.fingerprint(_load_json_or(paths["calculator_input_overrides"])),
+    }
+
+
+def current_annual_energy_report_path(project):
+    paths = hourly_paths(project)
+    candidate = existing_path(project.get("annual_report"), paths["annual_report"])
+    if not candidate:
+        return None
+    report = _load_json_or(candidate)
+    return candidate if report.get("input_fingerprints") == _current_annual_fingerprints(project) else None
+
+
+def api_annual_energy_report(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    paths = hourly_paths(project)
+    current = current_annual_energy_report_path(project)
+    report = load_json(current) if current else (load_json(paths["annual_report"]) if paths["annual_report"].exists() else {})
+    return {
+        "id": project["id"], "annual_energy_report": report,
+        "status": "current" if current else ("stale" if paths["annual_report"].exists() else "not_calculated"),
+        "stale_reasons": [] if current else (["Annual inputs changed; recalculate explicitly."] if paths["annual_report"].exists() else []),
+        "hourly_csv_url": safe_link(paths["annual_report"].with_name("annual_hourly_profile.csv")) if paths["annual_report"].with_name("annual_hourly_profile.csv").exists() else "",
+        "monthly_csv_url": safe_link(paths["annual_report"].with_name("annual_monthly_summary.csv")) if paths["annual_report"].with_name("annual_monthly_summary.csv").exists() else "",
+    }
+
+
+def api_save_annual_energy_report(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    paths, weather, calendar, radiation, gate = _annual_artifacts(project)
+    missing = [name for name, artifact in (("annual_weather", weather), ("annual_calendar", calendar)) if not artifact.get("fingerprint")]
+    if missing:
+        raise ValueError("Save valid " + ", ".join(missing) + " before calculating annual energy.")
+    requested_snapshot = data.get("snapshot_fingerprint") or data.get("calculator_input_snapshot_fingerprint") or data.get("input_set_fingerprint", "")
+    pointer = _load_json_or(paths["calculator_input_set"])
+    if not requested_snapshot or requested_snapshot != pointer.get("input_fingerprint", ""):
+        raise CalculatorInputConflict("A current calculator-input snapshot is required before calculating annual energy.", ["calculator_input_set"])
+    input_set, _ = _load_input_snapshot(paths, requested_snapshot)
+    if not input_set:
+        raise CalculatorInputConflict("The requested calculator-input snapshot is unavailable.", ["calculator_input_set"])
+    current_assembly, _ = _assemble_project_inputs(project, input_set.get("selected_scenario_ids", []))
+    if current_assembly.get("input_fingerprint") != requested_snapshot:
+        raise CalculatorInputConflict("Calculator inputs are stale. Assemble inputs again before annual analysis.", ["calculator_input_set"])
+    model, schedules, _ = materialize_cooling_payload(input_set)
+    payload = input_set.get("payload", {})
+    requirements = payload.get("requirements") or (load_json(paths["requirements"]) if paths["requirements"].exists() else {})
+    report = calculate_annual_report(
+        requirements, schedules, model, weather, calendar, annual_radiation=radiation, annual_gate=gate,
+        heating_gate=payload.get("heating_method_gate") or (_load_json_or(paths["heating_method_gate"]) if paths["heating_method_gate"].exists() else empty_heating_method_gate()),
+        infiltration_gate=payload.get("infiltration_method_gate") or (_load_json_or(paths["infiltration_method_gate"]) if paths["infiltration_method_gate"].exists() else empty_infiltration_method_gate()),
+        glazing_gate=payload.get("glazing_method_gate") or (_load_json_or(paths["glazing_method_gate"]) if paths["glazing_method_gate"].exists() else empty_glazing_method_gate()),
+        shading_gate=_load_json_or(paths["shading_method_gate"]) if paths["shading_method_gate"].exists() else empty_shading_method_gate(),
+        dynamic_mass_gate=_load_json_or(paths["dynamic_thermal_mass_method_gate"]) if paths["dynamic_thermal_mass_method_gate"].exists() else empty_dynamic_thermal_mass_method_gate(),
+        radiation_gate=_load_json_or(paths["solar_radiation_method_gate"]) if paths["solar_radiation_method_gate"].exists() else empty_solar_radiation_method_gate(),
+        project_context=_input_context(paths), calculator_input_snapshot_fingerprint=requested_snapshot,
+        selected_sections=data.get("selected_sections"),
+        ahu_systems=_load_json_or(paths["ahu_systems"]) if paths["ahu_systems"].exists() else {},
+        plant_systems=_load_json_or(paths["plant_systems"]) if paths["plant_systems"].exists() else {},
+    )
+    report["input_fingerprints"] = _current_annual_fingerprints(project)
+    report["updated_at"] = timestamp()
+    path = paths["annual_report"]
+    write_artifact(path, report)
+    path.with_name("annual_hourly_profile.csv").write_text(annual_hourly_csv(report), encoding="utf-8")
+    path.with_name("annual_monthly_summary.csv").write_text(annual_monthly_csv(report), encoding="utf-8")
+    project["annual_report"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return {"id": project["id"], "annual_energy_report": report, "status": report.get("status", "blocked"), "artifact_url": safe_link(path), "hourly_csv_url": safe_link(path.with_name("annual_hourly_profile.csv")), "monthly_csv_url": safe_link(path.with_name("annual_monthly_summary.csv"))}
+
+
 def envelope_artifacts(project):
     paths = hourly_paths(project)
     raw_library = load_json(paths["envelope_library"]) if paths["envelope_library"].exists() else empty_envelope_library()
@@ -1711,10 +2536,22 @@ def api_calculator_inputs(request, selected_scenario_ids=None):
         exception_offset, exception_limit = 0, 40
     display["normalized_exceptions"] = normalized_exceptions[exception_offset:exception_offset + exception_limit]
     display["exception_total"] = len(normalized_exceptions)
+    decisions = productization.validate_exception_decisions(
+        load_json(paths["exception_decisions"]) if paths["exception_decisions"].exists() else productization.empty_exception_decisions()
+    )
+    decision_map = {row["exception_id"]: row for row in decisions["decisions"]}
+    for row in display["normalized_exceptions"]:
+        raw_links = productization.safe_evidence_links(paths["exception_decisions"].parent, row)
+        row["evidence_links"] = {key: safe_link(value) for key, value in raw_links.items() if value}
+        saved = decision_map.get(row["exception_id"])
+        if saved and (not saved.get("source_fingerprint") or saved.get("source_fingerprint") == current_fingerprint):
+            row.update({"reviewer_decision": saved.get("decision", "pending"), "decision_history": saved.get("decision_history", []), "reviewer": saved.get("reviewer", ""), "decision_note": saved.get("note", "")})
+        elif saved:
+            row.update({"reviewer_decision": "pending", "decision_history": saved.get("decision_history", []), "decision_stale": True})
     display["current_source_pack_release"] = deepcopy(assembled.get("source_pack_release", {}))
     if not snapshot:
         display["source_pack_release"] = deepcopy(assembled.get("source_pack_release", {}))
-    display["artifact_links"] = {name: safe_link(paths[name]) for name in ("model", "schedules", "scenarios", "research_cache", "evidence_fusion", "calculation_input_evidence", "calculator_draft", "thermal_evidence", "thermal_model", "project_context", "calculator_input_overrides", "calculator_input_set", "infiltration_method_gate", "glazing_method_gate", "shading_method_gate", "ground_contact_method_gate", "dynamic_thermal_mass_method_gate", "solar_radiation_method_gate", "solar_radiation_source", "room_to_room_coupling_method_gate") if paths[name].exists()}
+    display["artifact_links"] = {name: safe_link(paths[name]) for name in ("model", "schedules", "scenarios", "research_cache", "evidence_fusion", "calculation_input_evidence", "calculator_draft", "thermal_evidence", "thermal_model", "project_context", "calculator_input_overrides", "calculator_input_set", "exception_decisions", "infiltration_method_gate", "glazing_method_gate", "shading_method_gate", "ground_contact_method_gate", "dynamic_thermal_mass_method_gate", "solar_radiation_method_gate", "solar_radiation_source", "room_to_room_coupling_method_gate", "annual_weather", "annual_calendar", "annual_radiation", "annual_method_gate", "annual_report") if paths[name].exists()}
     display["latest_snapshot"] = pointer
     count_source = display if snapshot else assembled
     return {
@@ -1740,6 +2577,7 @@ def api_calculator_inputs(request, selected_scenario_ids=None):
         "research_default_coverage": deepcopy(assembled.get("research_default_coverage", display.get("research_default_coverage", {}))),
         "source_pack_release": deepcopy(assembled.get("source_pack_release", display.get("source_pack_release", {}))),
         "artifact_links": deepcopy(display.get("artifact_links", {})),
+        "exception_decisions": decisions,
     }
 
 
@@ -1749,8 +2587,28 @@ def api_save_calculator_inputs(request):
     ensure_review_dir(project)
     paths = hourly_paths(project)
     action = data.get("action", "assemble")
-    if action not in {"assemble", "save_research_record", "save_context", "save_override", "refresh_research"}:
+    if action not in {"assemble", "save_research_record", "save_context", "save_override", "refresh_research", "save_exception_decision"}:
         raise ValueError("Unsupported calculator-input action.")
+    if action == "save_exception_decision":
+        path = paths["exception_decisions"]
+        current = productization.validate_exception_decisions(load_json(path) if path.exists() else productization.empty_exception_decisions())
+        exception_id = str(data.get("exception_id", "")).strip()
+        if not exception_id:
+            raise ValueError("exception_id is required.")
+        updated = productization.upsert_exception_decision(
+            current,
+            exception_id=exception_id,
+            decision=data.get("decision", "pending"),
+            reviewer=data.get("reviewer", ""),
+            note=data.get("note", ""),
+            source_fingerprint=data.get("source_fingerprint", ""),
+            remediation_target=data.get("remediation_target", ""),
+        )
+        _atomic_write(path, updated)
+        productization.record_change_if_fingerprint_changed(path.parent, action="exception_decision_saved", target=path.name, previous_fingerprint=productization.fingerprint(current), new_fingerprint=productization.fingerprint(updated), affected_ids=[exception_id])
+        project["updated_at"] = timestamp()
+        update_project(project)
+        return {"id": project["id"], "exception_decisions": updated, "status": "current", "artifact_url": safe_link(path)}
     if action == "save_context":
         context = validate_project_context(data.get("project_context", data.get("context", {})))
         expected_revision = data.get("expected_revision")
