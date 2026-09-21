@@ -139,6 +139,7 @@ test("design-input verification controls save with the reasoning packet", async 
 
   await page.goto("/");
   await page.evaluate(() => { show("vRes"); showDesignRequirements({}, {}, [{ label: "Sales area", area: "30m2", source_page: 1 }]); });
+  await page.getByRole("button", {name: "2 Confirm project inputs"}).click();
   await page.locator("#reqOccupancy").fill("18");
   await page.locator("#reqOccupancyStatus").selectOption("confirmed");
   await page.locator("#reqOccupancySource").fill("Client brief");
@@ -157,6 +158,25 @@ test("design-input verification controls save with the reasoning packet", async 
 
   await expect(page.locator("#requirementsLinks")).toContainText("refreshed reasoning packet");
   expect(errors).toEqual([]);
+});
+
+test("guided contractor workflow reveals only the current stage", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/");
+  await page.evaluate(requirements => {
+    DATA = { id: "demo-project" };
+    show("vRes");
+    showDesignRequirements(requirements, {}, []);
+  }, coolingRequirements);
+
+  await expect(page.locator("#calculatorDraftHeading")).toBeVisible();
+  await expect(page.locator("#designRequirementsForm")).toBeHidden();
+  await page.getByRole("button", {name: "2 Confirm project inputs"}).click();
+  await expect(page.locator("#designRequirementsForm")).toBeVisible();
+  await expect(page.locator("#calculatorInputSection")).toBeHidden();
+  await page.getByRole("button", {name: "Show all tools"}).click();
+  await expect(page.locator("#calculatorInputSection")).toBeVisible();
+  await expect(page.locator("#btnShowAllWorkflowTools")).toHaveText("Return to guided workflow");
 });
 
 test("hourly cooling workflow displays a labelled partial draft", async ({ page }) => {
@@ -204,6 +224,7 @@ test("hourly cooling workflow displays a labelled partial draft", async ({ page 
     show("vRes");
     showDesignRequirements(requirements, {}, []);
   }, coolingRequirements);
+  await page.getByRole("button", {name: "3 Complete the building model"}).click();
   const infiltration = page.locator(".room-component").first();
   await infiltration.locator(".room-component-state").selectOption("stored_not_calculated");
   await infiltration.locator(".room-component-value").fill("0.25");
@@ -211,6 +232,7 @@ test("hourly cooling workflow displays a labelled partial draft", async ({ page 
   await infiltration.locator(".room-component-status").selectOption("confirmed");
   await infiltration.locator(".room-component-source").fill("Site note");
   await page.locator("#btnSaveHourlyModel").click();
+  await page.getByRole("button", {name: "4 Calculate cooling"}).click();
   await page.locator("#hourlyScenarioIds").fill("summer_day");
   await page.locator("#btnCalculateHourlyLoad").click();
 
@@ -306,6 +328,7 @@ test("AI input assembly saves one project scope and calculates from an immutable
   });
   await page.goto("/");
   await page.evaluate(requirements => { DATA = {id: "demo-project"}; show("vRes"); showDesignRequirements(requirements, {}, []); }, coolingRequirements);
+  await page.getByRole("button", {name: "4 Calculate cooling"}).click();
   await page.locator("#hourlyScenarioIds").fill("summer_day");
   await page.locator("#calculatorInputSection details").first().evaluate(element => { element.open = true; });
   await page.locator("#contextScopeMode").selectOption("all_rooms");
@@ -348,6 +371,7 @@ test("ventilation calculation displays outside-air and exhaust evidence", async 
     show("vRes");
     showDesignRequirements(requirements, {}, []);
   }, ventilationRequirements);
+  await page.getByRole("button", {name: "5 Review and package"}).click();
   await page.locator("#btnCalculateVentilation").click();
 
   await expect(page.locator("#ventilationStatus")).toContainText("Outside air 90.0 L/s");
@@ -377,6 +401,7 @@ test("reviewed envelope editor saves a confirmed opaque boundary", async ({ page
   });
   await page.goto("/");
   await page.evaluate(requirements => { DATA = { id: "demo-project" }; show("vRes"); showDesignRequirements(requirements, {}, []); }, coolingRequirements);
+  await page.getByRole("button", {name: "3 Complete the building model"}).click();
   await page.locator("#btnAddConstruction").click();
   await page.locator(".envelope-construction .env-id").fill("wall-a");
   await page.locator(".envelope-construction .env-title").fill("Reviewed wall");

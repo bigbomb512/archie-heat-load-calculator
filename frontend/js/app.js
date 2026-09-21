@@ -18,6 +18,14 @@ let CALCULATOR_INPUT_SET = null, CALCULATOR_INPUT_OVERRIDES = {revision: 0, reco
 let CALCULATOR_INPUTS_AVAILABLE = false, CALCULATOR_EXCEPTION_ROWS = [], CALCULATOR_EXCEPTION_TOTAL = 0;
 let VISION_EXTRACTION = null, VISION_POLL = null;
 let WINDOW_SCAN_POLL = null, SITE_ORIENTATION = {};
+const CONTRACTOR_WORKFLOW_STORAGE_KEY = "archie-contractor-workflow-stage";
+const CONTRACTOR_STAGES = {
+  evidence: "Review the drawing evidence and resolve only the exceptions that Archie found.",
+  project: "Confirm the project brief and operating conditions that are not present in the architect’s PDF.",
+  model: "Check the building model. Optional methods stay out of the way until you need them.",
+  calculate: "Assemble the immutable cooling inputs, then calculate the hourly design-day result.",
+  deliver: "Review the result, resolve any remaining scope warnings, then create a calculation package.",
+};
 
 /* ---- theme -------------------------------------------------------------
    Dark by default. A saved choice wins; otherwise follow the system. The
@@ -161,7 +169,7 @@ function showResults(data){
   requiredElement("fRel").classList.add("on"); requiredElement("fAll").classList.remove("on");
   requiredElement("btnConfirm").disabled = false;
   requiredElement("btnConfirmTop").classList.remove("hide");
-  drawSummary(); drawReviewList(); drawGrid(); drawAside(); loadProjects(); loadProjectProductization();
+  drawSummary(); drawReviewList(); drawGrid(); drawAside(); loadProjects();
   if (PACKET?.zip || PACKET?.prompt) showVisionPanel();
   if (data.has_reasoning_packet) showDesignRequirements(data.design_requirements);
 }
@@ -449,6 +457,8 @@ requiredElement("btnVisionEstimate").addEventListener("click", () => visionExtra
 requiredElement("btnVisionStart").addEventListener("click", () => visionExtractionAction("start"));
 requiredElement("btnVisionCancel").addEventListener("click", () => visionExtractionAction("cancel"));
 requiredElement("btnVisionRetry").addEventListener("click", () => visionExtractionAction("retry"));
+requiredElement("btnOpenPreliminaryJourney").addEventListener("click", () => focusWorkflowTarget("aiPreliminaryHeading"));
+requiredElement("btnOpenReviewedJourney").addEventListener("click", () => focusWorkflowTarget("designRequirementsPanel"));
 requiredElement("btnSaveAiPreliminarySettings").addEventListener("click", () => aiPreliminaryAction("save_settings"));
 requiredElement("btnRunAiPreliminary").addEventListener("click", () => aiPreliminaryAction("run"));
 requiredElement("btnSaveAiPreliminaryProposal").addEventListener("click", () => aiPreliminaryAction("save_placeholder_proposal"));
@@ -519,6 +529,15 @@ requiredElement("btnAddWindow").addEventListener("click", () => addEnvelopeWindo
 requiredElement("btnAddBoundary").addEventListener("click", () => addEnvelopeBoundary());
 requiredElement("btnSaveEnvelope").addEventListener("click", saveEnvelope);
 requiredElement("btnMigrateEnvelope").addEventListener("click", migrateEnvelope);
+requiredElement("btnShowAllWorkflowTools").addEventListener("click", () => {
+  const current = requiredElement("designRequirementsPanel").dataset.contractorStage;
+  setContractorWorkflowStage(current === "all" ? "evidence" : "all");
+});
+requiredElement("btnToggleOptionalTools").addEventListener("click", toggleOptionalWorkflowTools);
+requiredElement("btnToggleProjectInputs").addEventListener("click", toggleOptionalProjectInputs);
+document.querySelectorAll("[data-contractor-stage]").forEach(button => button.addEventListener("click", () => {
+  setContractorWorkflowStage(button.dataset.contractorStage);
+}));
 
 async function confirmSelection(){
   if (!DATA || !PICK.size) return toast("Nothing selected", "Include at least one page before confirming.");
@@ -557,6 +576,96 @@ function showVisionPanel(){
   loadVisionExtraction();
   loadAiPreliminary();
   loadWindowScan();
+}
+
+function focusWorkflowTarget(id){
+  const target = requiredElement(id);
+  if (target.classList.contains("hide")) {
+    return toast("Complete the previous step first", "Confirm the selected drawings before opening the reviewed workspace.");
+  }
+  target.scrollIntoView({behavior: "smooth", block: "start"});
+  target.setAttribute("tabindex", "-1");
+  target.focus({preventScroll: true});
+}
+
+function configureContractorWorkflow(){
+  const panel = requiredElement("designRequirementsPanel");
+  let stage = "evidence";
+  [...panel.children].forEach(child => {
+    if (child.id === "contractorJourney" || child.classList.contains("workflow-links")) return;
+    if (child.id === "designRequirementsForm") stage = "project";
+    if (child.id === "envelopeSection") stage = "model";
+    if (child.id === "calculatorInputSection") stage = "calculate";
+    if (child.id === "heatingReportSection") stage = "deliver";
+    if (child.id === "productizationSection") stage = "deliver";
+    child.dataset.contractorStage = stage;
+  });
+
+  [
+    "infiltrationGateSection", "glazingGateSection", "shadingGateSection",
+    "groundContactGateSection", "dynamicThermalMassGateSection",
+    "solarRadiationGateSection", "siteOrientationSection", "roomCouplingGateSection",
+    "heatingGateSection",
+  ].forEach(id => requiredElement(id).dataset.workflowOptional = "true");
+
+  const essentialProjectFields = new Set([
+    "reqSpaceUsage", "reqOccupancy", "reqOccupancyStatus", "reqOccupancySource",
+    "reqOperatingHours", "reqCooling", "reqSummer", "reqConditionsStatus",
+    "reqConditionsSource", "reqFreshAir", "reqFreshAirStatus", "reqFreshAirSource",
+    "reqCeilingHeight", "reqCeilingStatus", "reqCeilingSource",
+  ]);
+  requiredElement("designRequirementsForm").querySelectorAll("label").forEach(label => {
+    const field = label.querySelector("input, select, textarea");
+    if (field && !essentialProjectFields.has(field.id)) label.classList.add("project-input-optional");
+  });
+}
+
+function setContractorWorkflowStage(stage, {focus = true} = {}){
+  const panel = requiredElement("designRequirementsPanel");
+  const normalizedStage = stage === "all" ? "all" : (CONTRACTOR_STAGES[stage] ? stage : "evidence");
+  const showAll = normalizedStage === "all";
+  const showOptional = panel.dataset.showOptionalTools === "true" || showAll;
+  [...panel.children].forEach(child => {
+    if (!child.dataset.contractorStage) return;
+    const isActiveStage = showAll || child.dataset.contractorStage === normalizedStage;
+    const isOptional = child.dataset.workflowOptional === "true";
+    child.classList.toggle("workflow-stage-hidden", !isActiveStage || (isOptional && !showOptional));
+  });
+  panel.dataset.contractorStage = normalizedStage;
+  panel.classList.toggle("contractor-show-all", showAll);
+  document.querySelectorAll("[data-contractor-stage]").forEach(button => {
+    const current = !showAll && button.dataset.contractorStage === normalizedStage;
+    button.setAttribute("aria-current", current ? "step" : "false");
+  });
+  requiredElement("contractorJourneyStatus").textContent = showAll
+    ? "All engineering editors are visible. Return to a guided step whenever you want a shorter workspace."
+    : CONTRACTOR_STAGES[normalizedStage];
+  requiredElement("btnShowAllWorkflowTools").textContent = showAll ? "Return to guided workflow" : "Show all tools";
+  localStorage.setItem(CONTRACTOR_WORKFLOW_STORAGE_KEY, normalizedStage);
+  if (!showAll && focus) focusFirstWorkflowElement(panel, normalizedStage);
+}
+
+function focusFirstWorkflowElement(panel, stage){
+  const first = [...panel.children].find(child => child.dataset.contractorStage === stage && !child.classList.contains("workflow-stage-hidden"));
+  if (!first) return;
+  first.scrollIntoView({behavior: "smooth", block: "start"});
+}
+
+function toggleOptionalWorkflowTools(){
+  const panel = requiredElement("designRequirementsPanel");
+  panel.dataset.showOptionalTools = panel.dataset.showOptionalTools === "true" ? "false" : "true";
+  requiredElement("btnToggleOptionalTools").textContent = panel.dataset.showOptionalTools === "true"
+    ? "Hide optional methods"
+    : "Show optional methods";
+  setContractorWorkflowStage(panel.dataset.contractorStage || "evidence");
+}
+
+function toggleOptionalProjectInputs(){
+  const form = requiredElement("designRequirementsForm");
+  const expanded = form.classList.toggle("show-optional-project-inputs");
+  requiredElement("btnToggleProjectInputs").textContent = expanded
+    ? "Hide optional project fields"
+    : "Show optional project fields";
 }
 
 async function loadWindowScan(){
@@ -1170,6 +1279,8 @@ function readDesignRequirements(){
 
 function showDesignRequirements(requirements = {}, readiness = {}, roomSuggestions = ROOM_SUGGESTIONS, heatLoadReport = {}, heatLoadStatus = "not_calculated", ventilationReport = {}, ventilationStatus = "not_calculated", heatLoadReportUrl = ""){
   requiredElement("designRequirementsPanel").classList.remove("hide");
+  configureContractorWorkflow();
+  setContractorWorkflowStage(localStorage.getItem(CONTRACTOR_WORKFLOW_STORAGE_KEY) || "evidence", {focus: false});
   ROOM_SUGGESTIONS = roomSuggestions || [];
   Object.entries(requirementFields).forEach(([key, id]) => {
     requiredElement(id).value = requirements[key] ?? "";

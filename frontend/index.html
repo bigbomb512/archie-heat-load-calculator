@@ -65,7 +65,7 @@
 
       <!-- upload -->
       <section id="vUpload">
-        <div class="intro"><h2>Heat load calculator</h2><p>Start with your drawings, review the project inputs, then calculate separate cooling and heating reports.</p><ol><li>Upload and confirm drawings</li><li>Review rooms, conditions and envelope inputs</li><li>Calculate and review the reports</li></ol><p class="fine">Heating remains a separate, cited, approval-gated workflow. It never changes the cooling total.</p></div>
+        <div class="intro"><h2>Heat load calculator</h2><p>Upload the architect’s PDF, let Archie prepare a draft whole-building estimate, then review only the decisions that materially affect the result.</p><ol><li>Upload the drawing set</li><li>Run Archie AI and review exceptions</li><li>Calculate, package and share the result</li></ol><p class="fine">The AI preliminary estimate is clearly marked draft-only. The reviewed cooling workflow remains available when you need a cited engineering record.</p></div>
         <div class="drop" id="drop">
           <div class="mark">
             <svg viewBox="0 0 24 24"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5"/><path d="M3 15v3a3 3 0 0 0 3 3h12a3 3 0 0 0 3-3v-3"/></svg>
@@ -171,6 +171,17 @@
             <button class="btn ghost mini hide" id="btnVisionRetry" type="button">Retry</button>
           </div>
           <div class="review-list" id="visionLinks"></div>
+          <section class="contractor-ai-route" aria-labelledby="contractorAiRouteHeading">
+            <div>
+              <div class="micro">Recommended path</div>
+              <h4 id="contractorAiRouteHeading">Get a draft whole-building estimate first</h4>
+              <p>Set the project consent and budget once, then run Archie AI. It assembles a draft-only cooling model from the drawing set and presents high-impact assumptions for review.</p>
+            </div>
+            <div class="contractor-ai-route-actions">
+              <button class="btn key" id="btnOpenPreliminaryJourney" type="button">Set up Archie AI estimate</button>
+              <button class="btn ghost" id="btnOpenReviewedJourney" type="button">Open reviewed workflow</button>
+            </div>
+          </section>
           <section class="calculator-draft-panel" aria-labelledby="aiPreliminaryHeading">
             <h4 id="aiPreliminaryHeading">AI preliminary whole-building estimate</h4>
             <p class="fine">Uses controlled Australia-first preliminary profiles with the existing hourly cooling engine. It is always a draft estimate, never engineering reviewed or validated. The reviewed calculator inputs below are not changed.</p>
@@ -239,6 +250,24 @@
         </div>
 
         <div class="review-panel hide" id="designRequirementsPanel">
+          <section class="contractor-journey" id="contractorJourney" aria-labelledby="contractorJourneyHeading">
+            <div class="contractor-journey-head">
+              <div><div class="micro">Guided contractor workflow</div><h3 id="contractorJourneyHeading">One decision at a time</h3></div>
+              <button class="btn ghost mini" id="btnShowAllWorkflowTools" type="button">Show all tools</button>
+            </div>
+            <p id="contractorJourneyStatus" role="status" aria-live="polite">Start with the evidence Archie found. You can return to any step without losing work.</p>
+            <div class="contractor-steps" aria-label="Guided workflow steps">
+              <button type="button" data-contractor-stage="evidence"><span>1</span>Review AI evidence</button>
+              <button type="button" data-contractor-stage="project"><span>2</span>Confirm project inputs</button>
+              <button type="button" data-contractor-stage="model"><span>3</span>Complete the building model</button>
+              <button type="button" data-contractor-stage="calculate"><span>4</span>Calculate cooling</button>
+              <button type="button" data-contractor-stage="deliver"><span>5</span>Review and package</button>
+            </div>
+            <div class="contractor-journey-actions">
+              <button class="btn ghost mini" id="btnToggleOptionalTools" type="button">Show optional methods</button>
+              <button class="btn ghost mini" id="btnToggleProjectInputs" type="button">Show optional project fields</button>
+            </div>
+          </section>
           <nav class="workflow-links" aria-label="Calculator sections"><a href="#designRequirementsForm">Project inputs</a><a href="#envelopeSection">Envelope</a><a href="#roomsSection">Floors and rooms</a><a href="#reportSection">Cooling report</a></nav>
           <div class="panel-head">
             <div>
