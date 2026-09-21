@@ -235,6 +235,35 @@ def add_vision_entities(result, vision_response, pages):
                 "level_name": row.get("level_name", ""), "geometry": {"vision_witnesses": row.get("witnesses", [])},
                 "geometry_status": row.get("geometry_status", "geometry_proposed"),
             }, status=status, **common)
+    layered = vision_response.get("result", {}).get("layered_geometry", {})
+    for layered_page in layered.get("pages", []) if isinstance(layered, dict) else []:
+        page = page_by_number.get(layered_page.get("page"))
+        if not page:
+            continue
+        for row in layered_page.get("thermal_surface_candidates", []) or []:
+            if not isinstance(row, dict):
+                continue
+            record(result, "surfaces", page, {
+                "surface_id": row.get("surface_id", ""),
+                "kind": row.get("physical_type", "unresolved"),
+                "surface_label": row.get("label", ""),
+                "thermal_role": row.get("thermal_role", "unresolved"),
+                "boundary_condition": row.get("boundary_condition", "unresolved"),
+                "owner_room_id": row.get("owner_room_id", ""),
+                "owner_zone_id": row.get("owner_zone_id", ""),
+                "adjacent_room_id": row.get("adjacent_room_id", ""),
+                "adjacent_space_id": row.get("adjacent_space_id", ""),
+                "opening_ids": row.get("opening_ids", []),
+                "geometry": {"boundary_points_px": row.get("boundary_points_px", []), "wall_ids": row.get("wall_ids", [])},
+                "geometry_status": "geometry_proposed",
+                "classification_confidence": row.get("confidence", "low"),
+                "classification_assumptions": row.get("assumptions", []),
+                "classification_conflicts": row.get("conflicts", []),
+                "evidence_refs": row.get("evidence_refs", []),
+            }, status="inferred", extraction_method="ai_thermal_surface_classification",
+               excerpt=row.get("source_crop", ""), ai_verified=False,
+               unresolved_fields=row.get("unresolved_fields", []), vision_witnesses=row.get("evidence_refs", []),
+               source_type="vision_extraction", candidate_fingerprint=row.get("surface_id", ""))
     result.setdefault("vision_conflicts", []).extend(extraction.get("conflicts", []))
     result.setdefault("vision_missing_evidence", []).extend(extraction.get("missing_evidence", []))
 

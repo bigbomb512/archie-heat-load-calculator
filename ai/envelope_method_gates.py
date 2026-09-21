@@ -94,6 +94,13 @@ def empty_solar_radiation_method_gate():
     )
 
 
+WEATHER_FACADE_POLICY = {
+    "basis": "cited_hourly_horizontal_weather_pvlib_isotropic_v1",
+    "requires_orientation": True,
+    "unsupported": ["uncited_weather_lookup", "inferred_ground_reflectance", "annual_analysis"],
+}
+
+
 def _validate_advanced_gate(raw, empty, label):
     if not isinstance(raw, dict):
         raise ValueError(f"{label} method gate must be a JSON object.")
@@ -106,7 +113,10 @@ def _validate_advanced_gate(raw, empty, label):
     for field in ("engineer_name", "engineer_credential", "approved_at", "method_citation", "scope"):
         result[field] = str(result.get(field, "") or "").strip()
     result["citations"] = validate_citations(raw.get("citations", []), f"{label} method gate")
-    if result.get("policy") != empty()["policy"]:
+    allowed_policies = [empty()["policy"]]
+    if label == "Solar-radiation":
+        allowed_policies.append(WEATHER_FACADE_POLICY)
+    if result.get("policy") not in allowed_policies:
         raise ValueError(f"{label} method policy is fixed for V1.")
     if result["approval_status"] == "approved":
         missing = [field.replace("_", " ") for field in ("engineer_name", "engineer_credential", "approved_at", "method_citation", "scope") if not result[field]]
@@ -129,3 +139,7 @@ def dynamic_thermal_mass_gate_is_approved(gate):
 
 def solar_radiation_gate_is_approved(gate):
     return bool(gate and gate.get("approval_status") == "approved" and gate.get("method_id") == SOLAR_RADIATION_METHOD_ID)
+
+
+def solar_radiation_weather_gate_is_approved(gate):
+    return solar_radiation_gate_is_approved(gate) and gate.get("policy") == WEATHER_FACADE_POLICY

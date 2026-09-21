@@ -10,12 +10,13 @@ other stored records remain excluded.
 """
 
 from copy import deepcopy
+from ai.site_orientation import facade_for_opening, validate_site_orientation
 from datetime import datetime, timezone
 import re
 
 from ai.site_design_conditions import validate_citations
 from ai.glazing_calculation import assess_glazing_eligibility, opening_area
-from ai.glazing_gate import empty_glazing_method_gate, gate_is_approved, validate_glazing_method_gate
+from ai.glazing_gate import empty_glazing_method_gate, gate_is_approved, validate_glazing_method_gate, weather_facade_gate_is_approved
 from ai.shading_gate import empty_shading_method_gate, gate_is_approved as shading_gate_is_approved, validate_shading_method_gate
 from ai.shading_geometry import assess_geometric_shading
 from ai.envelope_method_gates import empty_ground_contact_method_gate, ground_contact_gate_is_approved, validate_ground_contact_method_gate
@@ -81,6 +82,9 @@ def validate_construction(raw, index):
 
 def validate_window(raw, index):
     row = common_record(raw, index, "window")
+    property_source_type = raw.get("property_source_type", "legacy_cited_record")
+    if property_source_type not in {"", "legacy_cited_record", "project_pdf_schedule", "supplier_datasheet", "builder_landlord_document", "project_override"}:
+        raise ValueError(f"Window {row['record_id']} has an unsupported property source type.")
     row.update({
         "u_value_w_m2k": positive_number(raw.get("u_value_w_m2k"), f"Window {row['record_id']} U-value", required=False),
         "u_value_basis": choice(raw.get("u_value_basis", "") or "", {"", "overall_window"}, f"Window {row['record_id']} U-value basis"),
@@ -90,11 +94,16 @@ def validate_window(raw, index):
         "glass_area_correction": optional_factor(raw.get("glass_area_correction"), f"Window {row['record_id']} glass-area correction"),
         "internal_shading_factor": optional_factor(raw.get("internal_shading_factor"), f"Window {row['record_id']} internal shading factor"),
         "internal_shading": text(raw.get("internal_shading", ""), f"Window {row['record_id']} internal shading"),
+        "property_source_type": property_source_type,
+        "property_applicability": text(raw.get("property_applicability", ""), f"Window {row['record_id']} property applicability"),
         "geometry": raw.get("geometry", {}),
         "calculation_status": "reviewed_glazing_candidate",
     })
     if not isinstance(row["geometry"], dict):
         raise ValueError(f"Window {row['record_id']} geometry must be an object.")
+    if row["review_status"] == "confirmed" and property_source_type != "legacy_cited_record":
+        if not property_source_type or not row["source"] or not row["citations"] or not row["property_applicability"]:
+            raise ValueError(f"Confirmed window {row['record_id']} needs property source type, source, citations and applicability.")
     return row
 
 
@@ -126,11 +135,12 @@ def validate_shading(raw, index):
         normalized_positions.append({"hour": hour, "azimuth_deg": azimuth, "altitude_deg": altitude})
     row.update({
         "kind": kind,
+        "sun_position_basis": choice(raw.get("sun_position_basis", "cited_hourly"), {"cited_hourly", "weather_computed"}, f"Shading record {row['record_id']} sun position basis"),
         "geometry": normalized_geometry,
         "hourly_sun_positions": normalized_positions,
         "calculation_status": "stored_not_calculated",
     })
-    if kind == "geometric_v1" and row["review_status"] == "confirmed":
+    if kind == "geometric_v1" and row["review_status"] == "confirmed" and row["sun_position_basis"] == "cited_hourly":
         # This validates the cited sun-vector structure without activating it.
         issues = assess_geometric_shading({"orientation": "N", "opening_mapping_status": "confirmed", "review_status": "confirmed", "opening_width_m": 1, "opening_height_m": 1}, row)
         issues = [issue for issue in issues if issue not in {"a cardinal glazing orientation is required", "confirmed opening mapping is required", "confirmed glazing surface review is required"}]
@@ -200,8 +210,35 @@ def validate_surface(raw, index, construction_ids, window_ids, shading_ids):
         "owner_zone_id": stable_id(raw.get("owner_zone_id", ""), f"Envelope surface {surface_id} owner zone ID"),
         "owner_room_id": text(raw.get("owner_room_id", ""), f"Envelope surface {surface_id} owner room ID"),
         "opening_mapping_status": choice(raw.get("opening_mapping_status", "missing"), {"missing", "proposed", "confirmed", "conflict"}, f"Envelope surface {surface_id} opening mapping status"),
+        "geometry_mode": choice(raw.get("geometry_mode", "engineering_reviewed"), {"engineering_reviewed", "preliminary_ai_estimate"}, f"Envelope surface {surface_id} geometry mode"),
+        "opening_evidence_id": text(raw.get("opening_evidence_id", ""), f"Envelope surface {surface_id} opening evidence ID"),
+        "host_surface_id": text(raw.get("host_surface_id", ""), f"Envelope surface {surface_id} host surface ID"),
+        "host_wall_evidence_id": text(raw.get("host_wall_evidence_id", ""), f"Envelope surface {surface_id} host wall evidence ID"),
+        "solar_basis": choice(raw.get("solar_basis", "manual"), {"manual", "weather_facade"}, f"Envelope surface {surface_id} solar basis"),
+        "solar_shading_mode": choice(raw.get("solar_shading_mode", "manual"), {"manual", "geometric"}, f"Envelope surface {surface_id} solar shading mode"),
+        "direct_shading_factor": optional_factor(raw.get("direct_shading_factor"), f"Envelope surface {surface_id} direct shading factor"),
+        "diffuse_shading_factor": optional_factor(raw.get("diffuse_shading_factor"), f"Envelope surface {surface_id} diffuse shading factor"),
+        "diffuse_shading_source": text(raw.get("diffuse_shading_source", ""), f"Envelope surface {surface_id} diffuse shading source"),
+        "diffuse_shading_citations": validate_citations(raw.get("diffuse_shading_citations", []), f"Envelope surface {surface_id} diffuse shading"),
         "kind": kind,
+        # AI classification is provenance/eligibility metadata. The legacy
+        # `kind` and `boundary_method` fields remain authoritative for load
+        # formulas and historical records.
+        "physical_type": text(raw.get("physical_type", ""), f"Envelope surface {surface_id} physical type"),
+        "thermal_role": text(raw.get("thermal_role", ""), f"Envelope surface {surface_id} thermal role"),
+        "boundary_condition": text(raw.get("boundary_condition", ""), f"Envelope surface {surface_id} boundary condition"),
+        "adjacent_room_id": text(raw.get("adjacent_room_id", ""), f"Envelope surface {surface_id} adjacent room ID"),
+        "adjacent_space_id": text(raw.get("adjacent_space_id", ""), f"Envelope surface {surface_id} adjacent space ID"),
+        "classification_status": text(raw.get("classification_status", ""), f"Envelope surface {surface_id} classification status"),
+        "classification_confidence": text(raw.get("classification_confidence", ""), f"Envelope surface {surface_id} classification confidence"),
+        "classification_assumptions": deepcopy(raw.get("classification_assumptions", [])),
+        "classification_conflicts": deepcopy(raw.get("classification_conflicts", [])),
+        "classification_evidence_refs": deepcopy(raw.get("classification_evidence_refs", [])),
+        "classification_fingerprint": text(raw.get("classification_fingerprint", ""), f"Envelope surface {surface_id} classification fingerprint"),
         "orientation": choice(raw.get("orientation", ""), ORIENTATIONS, f"Envelope surface {surface_id} orientation"),
+        "azimuth_deg": optional_number(raw.get("azimuth_deg"), f"Envelope surface {surface_id} true-north azimuth", 0, 359.999999),
+        "external_exposure": choice(raw.get("external_exposure", "unresolved"), {"unresolved", "external", "internal"}, f"Envelope surface {surface_id} exposure"),
+        "orientation_source_fingerprint": text(raw.get("orientation_source_fingerprint", ""), f"Envelope surface {surface_id} orientation source fingerprint"),
         "area_m2": positive_number(raw.get("area_m2"), f"Envelope surface {surface_id} area", required=kind != "glazing" and raw.get("review_status", "missing") == "confirmed"),
         "area_basis": choice(raw.get("area_basis", "legacy_net_opaque"), OPAQUE_AREA_BASES, f"Envelope surface {surface_id} area basis"),
         "linked_opening_surface_ids": string_list(raw.get("linked_opening_surface_ids", []), f"Envelope surface {surface_id} linked opening surface IDs"),
@@ -354,12 +391,12 @@ def migrate_legacy_envelope(requirements):
     return validate_envelope_library({"constructions": constructions}), validate_envelope_model({"active_for_calculation": False, "surfaces": surfaces}, {"constructions": constructions})
 
 
-def envelope_summary(library, model, glazing_gate=None, shading_gate=None, ground_contact_gate=None):
+def envelope_summary(library, model, glazing_gate=None, shading_gate=None, ground_contact_gate=None, opening_register=None):
     library = validate_envelope_library(library)
     model = validate_envelope_model(model, library)
     ground_contact_gate = validate_ground_contact_method_gate(ground_contact_gate or empty_ground_contact_method_gate())
     included, blocked, stored = normalize_surfaces(library, model, ground_contact_gate)
-    glazing_included, glazing_blocked, glazing_stored = normalize_glazing_surfaces(library, model, glazing_gate, shading_gate)
+    glazing_included, glazing_blocked, glazing_stored = normalize_glazing_surfaces(library, model, glazing_gate, shading_gate, opening_register)
     needs_review = bool(blocked or glazing_blocked or glazing_stored or not model["active_for_calculation"])
     return {
         "status": "review_required" if needs_review else "ready",
@@ -452,6 +489,9 @@ def resolve_opaque_area(surface, surfaces):
         if not opening or opening["kind"] != "glazing" or opening["opening_mapping_status"] != "confirmed" or opening["review_status"] != "confirmed":
             missing.append(opening_id)
             continue
+        if opening.get("host_surface_id") and opening["host_surface_id"] != surface["surface_id"]:
+            missing.append(opening_id)
+            continue
         area = opening_area_for_surface(opening)
         if area is None:
             missing.append(opening_id)
@@ -476,7 +516,7 @@ def opening_area_for_surface(surface):
     return None
 
 
-def normalize_glazing_surfaces(library, model, glazing_gate=None, shading_gate=None):
+def normalize_glazing_surfaces(library, model, glazing_gate=None, shading_gate=None, opening_register=None, site_orientation=None):
     """Return reviewed glazing rows separately from opaque envelope rows.
 
     Keeping this path separate prevents a window from being silently treated
@@ -489,6 +529,9 @@ def normalize_glazing_surfaces(library, model, glazing_gate=None, shading_gate=N
     shading_gate = validate_shading_method_gate(shading_gate or empty_shading_method_gate())
     windows = {item["record_id"]: item for item in library["windows"]}
     shading_records = {item["record_id"]: item for item in library["shading_records"]}
+    opening_evidence = {row.get("opening_id"): row for row in (opening_register or {}).get("openings", [])}
+    model_surfaces = {row["surface_id"]: row for row in model["surfaces"]}
+    orientation = validate_site_orientation(site_orientation) if site_orientation else None
     included, blocked, stored = [], [], []
     for item in model["surfaces"]:
         if item["kind"] != "glazing":
@@ -502,7 +545,52 @@ def normalize_glazing_surfaces(library, model, glazing_gate=None, shading_gate=N
         manual = item["manual_solar"]
         # Indoor/outdoor temperatures are supplied by the hourly room/scenario
         # adapter. This gate validates the reviewed geometry/property record.
-        issues = assess_glazing_eligibility(item, window, manual, indoor_temperature_c=0)
+        basis = item.get("solar_basis", "manual")
+        issues = assess_glazing_eligibility(item, window, manual, indoor_temperature_c=0, solar_basis=basis)
+        if basis == "weather_facade":
+            if not weather_facade_gate_is_approved(gate):
+                issues.append("approved weather-façade glazing method policy is required")
+            evidence = opening_evidence.get(item["opening_evidence_id"])
+            host = model_surfaces.get(item["host_surface_id"])
+            aligned_facade = facade_for_opening(orientation, item["opening_evidence_id"], item["host_surface_id"]) if orientation else None
+            evidence_facade = evidence.get("facade") if evidence else ""
+            if not evidence_facade and aligned_facade and aligned_facade.get("status") == "reviewed":
+                evidence_facade = aligned_facade.get("cardinal", "")
+            if aligned_facade and (aligned_facade.get("status") != "reviewed" or aligned_facade.get("exposure") != "external"):
+                issues.append("reviewed external tenancy façade alignment is required for weather solar")
+            if item["azimuth_deg"] is not None and (not aligned_facade or aligned_facade.get("status") != "reviewed"
+                                                        or aligned_facade.get("azimuth_deg") != item["azimuth_deg"]
+                                                        or item["orientation_source_fingerprint"] != orientation.get("fingerprint")):
+                issues.append("true-north azimuth needs a matching current site-orientation artifact")
+            if not evidence or evidence.get("status") not in {"ai_estimated", "reviewed"}:
+                issues.append("unique plan opening evidence is required")
+            elif (evidence.get("owner_room_id") != item["owner_room_id"] or evidence.get("owner_zone_id") != item["owner_zone_id"]
+                  or evidence_facade != item["orientation"] or evidence.get("host_wall_id") != item["host_wall_evidence_id"]):
+                issues.append("opening room, zone, façade, or host-wall evidence conflicts")
+            if evidence and evidence.get("external_exposure") == "internal":
+                issues.append("internal glazing cannot use outdoor weather-façade solar")
+            coverage = (evidence or {}).get("opening_coverage") or {}
+            if (evidence or {}).get("review_type") == "glazing_system" and host and host.get("area_basis") == "gross_with_confirmed_openings" and coverage.get("status") != "complete":
+                issues.append("cited complete opening coverage is required before gross-wall subtraction")
+            if evidence and item.get("geometry_mode") == "engineering_reviewed" and not evidence.get("citations"):
+                issues.append("reviewed plan opening geometry needs a source citation")
+            if not host or host["kind"] != "opaque_wall" or item["surface_id"] not in host["linked_opening_surface_ids"]:
+                issues.append("opening requires one linked host opaque wall")
+            if evidence and all(item.get(key) is not None for key in ("opening_width_m", "opening_height_m", "opening_quantity")):
+                if (abs(item["opening_width_m"] - evidence["width_m"]) > 0.005
+                    or abs(item["opening_height_m"] - evidence["height_m"]) > 0.005
+                    or item["opening_quantity"] != evidence["quantity"]):
+                    issues.append("reviewed opening dimensions conflict with AI evidence")
+            if item["orientation"] not in {"N", "NE", "E", "SE", "S", "SW", "W", "NW"}:
+                issues.append("reviewed façade orientation is required")
+            if not item["solar_radiation_source_id"]:
+                issues.append("cited scenario-linked solar weather source is required")
+            if item["diffuse_shading_factor"] is None or not item["diffuse_shading_source"] or not item["diffuse_shading_citations"]:
+                issues.append("reviewed diffuse shading treatment is required")
+            if item["solar_shading_mode"] == "manual" and item["direct_shading_factor"] is None:
+                issues.append("explicit direct shading factor is required")
+            if item["solar_shading_mode"] == "geometric" and len(item["shading_record_ids"]) != 1:
+                issues.append("one geometric shading record is required")
         if window and window.get("u_value_basis") != "overall_window":
             issues.append("overall-window U-value basis is required")
         if item["boundary_method"] == "fixed_adjacent_temperature" and item.get("adjacent_temperature_c") is None:
@@ -524,20 +612,35 @@ def normalize_glazing_surfaces(library, model, glazing_gate=None, shading_gate=N
                     shading_warnings.append("manual external shading remains active because the linked geometric shading record is unavailable")
                 else:
                     geometry_issues = assess_geometric_shading(item, candidate)
+                    if basis == "weather_facade" and candidate.get("sun_position_basis") == "weather_computed":
+                        geometry_issues = [issue for issue in geometry_issues if issue != "24 cited hourly sun positions are required"]
                     if geometry_issues:
                         shading_warnings.append("manual external shading remains active: " + "; ".join(geometry_issues))
                     else:
                         geometric_shading = deepcopy(candidate)
+        if basis == "weather_facade" and item["solar_shading_mode"] == "geometric" and geometric_shading is None:
+            summary["reason"] = "; ".join(shading_warnings) or "reviewed geometric shading is incomplete"
+            blocked.append(summary)
+            continue
+        preliminary = item.get("geometry_mode") == "preliminary_ai_estimate"
         included.append({
             "surface_id": item["surface_id"], "owner_zone_id": item["owner_zone_id"], "owner_room_id": item["owner_room_id"],
+            "opening_evidence_id": item["opening_evidence_id"], "host_surface_id": item["host_surface_id"], "host_wall_evidence_id": item["host_wall_evidence_id"],
+            "solar_basis": basis, "solar_radiation_source_id": item["solar_radiation_source_id"],
+            "solar_shading_mode": item["solar_shading_mode"], "direct_shading_factor": item["direct_shading_factor"],
+            "diffuse_shading_factor": item["diffuse_shading_factor"], "diffuse_shading_source": item["diffuse_shading_source"],
+            "diffuse_shading_citations": deepcopy(item["diffuse_shading_citations"]),
             "orientation": item["orientation"], "boundary_method": item["boundary_method"],
+            "azimuth_deg": item["azimuth_deg"], "external_exposure": item["external_exposure"],
+            "orientation_source_fingerprint": item["orientation_source_fingerprint"],
             "boundary_temperature_c": item["adjacent_temperature_c"] if item["boundary_method"] == "fixed_adjacent_temperature" else None,
-            "adjacent_temperature_c": item["adjacent_temperature_c"], "review_status": "confirmed",
+            "adjacent_temperature_c": item["adjacent_temperature_c"], "review_status": item["review_status"],
+            "geometry_mode": item["geometry_mode"],
             "opening_mapping_status": item["opening_mapping_status"], "opening_width_m": item["opening_width_m"],
             "opening_height_m": item["opening_height_m"], "opening_quantity": item["opening_quantity"],
             "explicit_opening_area_m2": item["explicit_opening_area_m2"], "explicit_glass_area_m2": item["explicit_glass_area_m2"],
             "window": deepcopy(window), "manual_solar": deepcopy(manual), "source": item["source"], "citations": deepcopy(item["citations"]),
-            "verification_status": "confirmed", "method_id": gate["method_id"], "gate_updated_at": gate.get("updated_at", ""),
+            "verification_status": "provisional" if preliminary else "confirmed", "method_id": gate["method_id"], "gate_updated_at": gate.get("updated_at", ""),
             "geometric_shading": geometric_shading, "shading_warnings": shading_warnings,
         })
     return included, blocked, stored
@@ -590,7 +693,7 @@ def calculation_exclusion(surface, constructions, ground_contact_gate=None):
     return ""
 
 
-def apply_reviewed_envelope_to_requirements(requirements, library, model, glazing_gate=None, shading_gate=None, ground_contact_gate=None):
+def apply_reviewed_envelope_to_requirements(requirements, library, model, glazing_gate=None, shading_gate=None, ground_contact_gate=None, opening_register=None, site_orientation=None):
     """Return a copy with reviewed envelope rows substituted by zone.
 
     The reviewed artifact is authoritative only when active.  Legacy rows are
@@ -601,7 +704,7 @@ def apply_reviewed_envelope_to_requirements(requirements, library, model, glazin
     if not model["active_for_calculation"]:
         return result, {"source": "legacy", "included": [], "blocked": [], "stored_not_calculated": [], "draft_only": []}
     included, blocked, stored = normalize_surfaces(library, model, ground_contact_gate)
-    glazing_included, glazing_blocked, glazing_stored = normalize_glazing_surfaces(library, model, glazing_gate, shading_gate)
+    glazing_included, glazing_blocked, glazing_stored = normalize_glazing_surfaces(library, model, glazing_gate, shading_gate, opening_register, site_orientation)
     zone_ids = {zone.get("zone_id", "") for zone in result.get("zones", [])}
     unknown_owner = [surface for surface in included if surface["owner_zone_id"] not in zone_ids]
     if unknown_owner:
@@ -625,13 +728,13 @@ def apply_reviewed_envelope_to_requirements(requirements, library, model, glazin
     }
 
 
-def apply_reviewed_envelope_to_hourly_model(hourly_model, library, model, glazing_gate=None, shading_gate=None, ground_contact_gate=None):
+def apply_reviewed_envelope_to_hourly_model(hourly_model, library, model, glazing_gate=None, shading_gate=None, ground_contact_gate=None, opening_register=None, site_orientation=None):
     result = deepcopy(hourly_model)
     model = validate_envelope_model(model, library)
     if not model["active_for_calculation"]:
         return result
     included, _, _ = normalize_surfaces(library, model, ground_contact_gate)
-    glazing, _, _ = normalize_glazing_surfaces(library, model, glazing_gate, shading_gate)
+    glazing, _, _ = normalize_glazing_surfaces(library, model, glazing_gate, shading_gate, opening_register, site_orientation)
     by_zone, partitions_by_room = {}, {}
     for surface in included:
         if surface["kind"] == "partition":

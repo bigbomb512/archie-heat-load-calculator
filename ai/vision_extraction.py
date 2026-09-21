@@ -354,7 +354,7 @@ def extraction_schema():
     """Strict, bounded output shape accepted from the provider."""
     entity = {
         "type": "object", "additionalProperties": False,
-        "required": ["kind", "page", "drawing_number", "label", "level_name", "area_m2", "ceiling_height_mm", "width_mm", "height_mm", "unit", "geometry_status", "boundary_reference", "opening_tag", "surface_kind", "orientation", "witnesses", "excerpt", "confidence", "unresolved_fields"],
+        "required": ["kind", "page", "drawing_number", "label", "level_name", "area_m2", "ceiling_height_mm", "width_mm", "height_mm", "unit", "geometry_status", "boundary_reference", "opening_tag", "surface_kind", "orientation", "preliminary_profile_id", "witnesses", "excerpt", "confidence", "unresolved_fields"],
         "properties": {
             "kind": {"type": "string", "enum": sorted(ENTITY_KINDS)},
             "page": {"type": "integer"}, "drawing_number": {"type": "string"}, "label": {"type": "string"}, "level_name": {"type": "string"},
@@ -366,6 +366,10 @@ def extraction_schema():
             "dimension_ids": {"type": "array", "items": {"type": "string"}},
             "independent_witness_page": {"type": ["integer", "null"]},
             "opening_tag": {"type": "string"}, "surface_kind": {"type": "string"}, "orientation": {"type": "string"},
+            # Optional controlled vocabulary only. The provider never returns
+            # thermal numbers; the preliminary assembler maps this selection
+            # to its local, versioned assumption pack.
+            "preliminary_profile_id": {"type": "string", "enum": ["", "retail", "office", "hospitality", "storage", "residential", "generic_conditioned_room"]},
             "witnesses": {"type": "array", "items": {"type": "object", "additionalProperties": False, "required": ["page", "kind", "reference"], "properties": {"page": {"type": "integer"}, "kind": {"type": "string"}, "reference": {"type": "string"}}}},
             "excerpt": {"type": "string"}, "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
             "unresolved_fields": {"type": "array", "items": {"type": "string"}},
@@ -407,6 +411,8 @@ def validate_provider_output(raw, groups):
                 raise ValueError("Vision extraction entities need a label and a cited excerpt.")
             if row.get("geometry_status") not in GEOMETRY_STATES or row.get("confidence") not in {"low", "medium", "high"}:
                 raise ValueError("Vision extraction geometry status or confidence is invalid.")
+            if row.get("preliminary_profile_id", "") not in {"", "retail", "office", "hospitality", "storage", "residential", "generic_conditioned_room"}:
+                raise ValueError("Vision extraction preliminary profile selection is invalid.")
             for key in ("area_m2", "ceiling_height_mm", "width_mm", "height_mm"):
                 if row.get(key) is not None and not _positive(row[key]):
                     raise ValueError(f"Vision extraction {key} must be positive when present.")

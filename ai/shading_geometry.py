@@ -6,7 +6,7 @@ from math import cos, radians, tan
 FACADE_AZIMUTHS = {"N": 0, "NE": 45, "E": 90, "SE": 135, "S": 180, "SW": 225, "W": 270, "NW": 315}
 
 
-def assess_geometric_shading(surface, record):
+def assess_geometric_shading(surface, record, *, position_override=None):
     if not isinstance(surface, dict) or not isinstance(record, dict):
         return ["surface and shading record are required"]
     issues = []
@@ -26,6 +26,8 @@ def assess_geometric_shading(surface, record):
     elif not any(float(geometry.get(key, 0) or 0) > 0 for key in ("overhang_depth_m", "left_fin_depth_m", "right_fin_depth_m", "reveal_depth_m", "obstruction_altitude_deg")):
         issues.append("at least one positive shading dimension or obstruction altitude is required")
     positions = record.get("hourly_sun_positions", [])
+    if position_override is not None:
+        positions = [{"hour": hour, "azimuth_deg": position_override["azimuth_deg"], "altitude_deg": position_override["altitude_deg"]} for hour in range(24)]
     if not isinstance(positions, list) or len(positions) != 24:
         issues.append("24 cited hourly sun positions are required")
     else:
@@ -42,12 +44,12 @@ def assess_geometric_shading(surface, record):
     return list(dict.fromkeys(issues))
 
 
-def geometric_shading_factor(surface, record, hour):
+def geometric_shading_factor(surface, record, hour, *, position_override=None):
     """Return an auditable 0–1 external factor.  It never estimates sun data."""
-    issues = assess_geometric_shading(surface, record)
+    issues = assess_geometric_shading(surface, record, position_override=position_override)
     if issues:
         return {"status": "blocked", "unresolved_requirements": issues}
-    position = next(item for item in record["hourly_sun_positions"] if int(item["hour"]) == int(hour))
+    position = position_override or next(item for item in record["hourly_sun_positions"] if int(item["hour"]) == int(hour))
     azimuth, altitude = float(position["azimuth_deg"]), float(position["altitude_deg"])
     geometry = record["geometry"]
     facade = FACADE_AZIMUTHS[surface["orientation"]]

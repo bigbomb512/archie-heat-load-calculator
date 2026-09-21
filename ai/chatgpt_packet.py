@@ -379,6 +379,12 @@ For each readable major dimension, use its actual arrows/ticks, witness lines, a
 
 All dimensions are millimetres unless the drawing explicitly states another unit. C.O.S. dimensions must set `site_confirm_required` to true. Coordinates remain in full-image `image_px`; do not calculate plan_px or CAD coordinates.
 
+For every room whose boundary can be read, also return a `room_geometry_candidates` entry. The AI is the primary interpreter: assign the visible wall segments to the room and assign the dimension lines to those wall segments. Use an ordered, closed `boundary_points_px` polygon when possible, otherwise provide `ordered_wall_ids` and let the validator report whether they form a loop. Include the room label, level, wall IDs, dimension IDs, explicit `dimension_wall_links`, confidence, source page/crop, assumptions, conflicts, and any independent witness page. Do not create a candidate for a room that is only mentioned in a legend, note, title block, schedule, or 3D image.
+
+For every physical surface that affects thermal boundaries, also return a `thermal_surface_candidates` entry. Reason across plans, elevations, sections, schedules, details, and 3D cross-checks: an exterior edge/elevation can support `external`; a wall between identified rooms can support `room_to_room`; a corridor, mall, plant-room, or other unconditioned adjacency can support `fixed_adjacent`; section evidence distinguishes `roof` from `ceiling_below_roof`; slab-on-ground evidence supports `ground_contact`. Do not classify legends, dimensions, furniture, title blocks, detail bubbles, symbols, or 3D-only objects as thermal surfaces. Never invent construction, U-values, boundary temperatures, radiation, or equipment heat. Include physical type, thermal role, boundary condition, owner/adjacent room or space, wall/opening IDs, geometry, evidence references, confidence, assumptions, conflicts, and unresolved fields.
+
+For each plan window or door opening, return an `opening_candidates` entry. Identify its visible tag, level, exact owning room, host wall ID, façade orientation, cited width/height/quantity, source crop, and explicit elevation/section/schedule links. Use tag + level + room + façade + geometry together; a repeated tag or multiple plausible owners is a conflict. Never confirm by proximity alone. Return unmatched elevation/schedule entries as proposed candidates with no owner. A schedule may supply a cited overall-window U-value and exactly one SHGC or transmission factor, but never guess thermal properties from glass appearance. Keep total opening area distinct from glass area.
+
 Never treat detail bubbles, section/elevation markers, sheet references, revision-cloud tags, or symbol tags as dimensions. Values listed as `unknown_numeric_annotations` are not dimensions yet: promote one only when the image visibly shows its own dimension line with arrows/ticks or witness lines, and record that positive visible evidence. Never promote `detail_or_sheet_reference` values.
 
 Return valid JSON only in this exact shape:
@@ -407,6 +413,52 @@ Return valid JSON only in this exact shape:
         ],
         "dimension_wall_links": [
           {"measurement_id": "P5-WD-001", "dimension_id": "P5-VDIMTXT-001", "target_wall_id": "P5-VWALL-001", "confidence": "low|medium|high", "should_use_for_calculation": false, "site_confirm_required": false, "visible_evidence": ["dimension span and witness lines align with the wall"]}
+        ],
+        "room_geometry_candidates": [
+          {
+            "room_geometry_id": "P5-VROOM-001",
+            "label": "Room name",
+            "level_name": "Level 1",
+            "boundary_points_px": [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]],
+            "ordered_wall_ids": ["P5-VWALL-001", "P5-VWALL-002"],
+            "dimension_ids": ["P5-VDIMTXT-001"],
+            "independent_witnesses": [{"page": 6, "reference": "finish-region-001"}],
+            "confidence": "low|medium|high",
+            "confidence_score": 0.0,
+            "scale_mm_per_px": 0.0,
+            "source_pages": [5],
+            "source_crop": "vision_evidence/page_005_crop_001.png",
+            "assumptions": [],
+            "conflicts": []
+          }
+        ],
+        "thermal_surface_candidates": [
+          {
+            "surface_id": "P5-VSURFACE-001",
+            "physical_type": "wall|roof|floor|ceiling|partition|glazing|shaft|column|non_surface",
+            "thermal_role": "external|ground_contact|fixed_adjacent|room_to_room|roof_void|ceiling_below_roof|internal_floor|unresolved",
+            "boundary_condition": "outside|ground|conditioned_space|unconditioned_space|corridor|plant_room|roof_void|unresolved",
+            "label": "External wall W01",
+            "level_name": "Level 1",
+            "owner_room_id": "room_01",
+            "owner_zone_id": "zone_01",
+            "adjacent_room_id": "",
+            "adjacent_space_id": "corridor_01",
+            "boundary_points_px": [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]],
+            "wall_ids": ["P5-VWALL-001"],
+            "opening_ids": [],
+            "evidence_refs": [{"page": 6, "reference": "south elevation"}],
+            "source_crop": "vision_evidence/page_005_crop_001.png",
+            "confidence": "low|medium|high",
+            "confidence_score": 0.0,
+            "independent_witnesses": [],
+            "assumptions": [],
+            "conflicts": [],
+            "unresolved_fields": []
+          }
+        ],
+        "opening_candidates": [
+          {"opening_id": "P5-VOPEN-001", "tag": "W01", "drawing_number": "A-201", "level_name": "Level 1", "owner_room_id": "room_01", "owner_zone_id": "zone_01", "host_wall_id": "P5-VWALL-001", "facade": "N", "width_m": 1.2, "height_m": 1.5, "quantity": 1, "opening_bbox_px": [0, 0, 0, 0], "elevation_refs": [{"page": 8, "reference": "W01 elevation"}], "section_refs": [], "schedule_refs": [{"page": 12, "reference": "W01 schedule"}], "source_pages": [5, 8, 12], "source_crop": "vision_evidence/page_005_crop_001.png", "source_excerpt": "W01 on north wall", "window_properties": {"u_value_w_m2k": null, "shgc": null, "source": "", "citations": []}, "citations": [{"page": 5, "excerpt": "W01"}], "confidence": "low|medium|high", "confidence_score": 0.0, "competing_matches": [], "assumptions": [], "unresolved_fields": []}
         ],
         "unassigned_dimensions": [{"dimension_id": "P5-VDIMTXT-002", "reason": "target wall is not visually proven"}],
         "conflicts": []
