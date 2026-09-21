@@ -196,7 +196,7 @@ class OpenAIResponsesProvider:
             content.append({"type": "input_image", "image_url": f"data:image/png;base64,{encoded}", "detail": "high"})
         payload = {
             "model": self.model, "store": False,
-            "instructions": "Extract only architect-drawing topology and geometry. Never infer loads, U-values, weather, occupancy, schedules, or thermal performance. Cite only supplied pages and return the strict JSON schema.",
+            "instructions": "Extract architect-drawing topology and geometry. Never infer loads, U-values, weather, occupancy, schedules, or thermal performance. For a room only, you may select one controlled preliminary profile ID from the supplied schema when the room use is visually explicit; otherwise use the generic profile or leave it blank. Cite only supplied pages and return the strict JSON schema.",
             "input": [{"role": "user", "content": content}],
             "text": {"format": {"type": "json_schema", "name": "architect_geometry_extraction", "strict": True, "schema": extraction_schema()}},
         }
@@ -224,7 +224,7 @@ def _prompt(group):
         "page", "drawing_number", "drawing_number_candidates", "title", "role", "level_name",
         "structured_text", "capability_map", "relevance", "selection", "selection_reasons", "related_pages",
     }} for page in group["pages"]]
-    return "Selected ranked evidence group:\n" + json.dumps({"group_id": group["group_id"], "pages": pages}, indent=2) + "\nReturn exactly one group object inside the required groups array. Cite supplied page and drawing identity candidates; do not invent values."
+    return "Selected ranked evidence group:\n" + json.dumps({"group_id": group["group_id"], "pages": pages}, indent=2) + "\nFor room entities, preliminary_profile_id may only be one of retail, office, hospitality, storage, residential, generic_conditioned_room, or empty. It is a controlled category selection, not a licence to invent numerical inputs. Return exactly one group object inside the required groups array. Cite supplied page and drawing identity candidates; do not invent values."
 
 
 def _provider(settings):
@@ -296,6 +296,17 @@ def _run(web, project_id, run_id, manifest):
         _atomic_json(run_dir / "normalized_output.json", validated)
         project = web.project_by_id(project_id)
         links = _materialize(web, project, paths, manifest, validated)
+        # This is deliberately best-effort: a preliminary-model failure must
+        # never invalidate a successfully validated evidence-only extraction.
+        try:
+            from backend import ai_preliminary_service
+            ai_preliminary_service.provider_completed(web, project)
+        except Exception as preliminary_error:
+            root = paths["root"]
+            _atomic_json(root / "ai_preliminary_run.json", {
+                "schema_version": 1, "status": "provider_completed_preliminary_failed", "finished_at": timestamp(),
+                "message": str(preliminary_error)[:500],
+            })
         _update_job(paths, run_id, status="completed", completed_groups=len(manifest["groups"]), finished_at=timestamp(), artifact_links=links, error="")
     except Exception as error:
         message = str(error).replace(os.environ.get("OPENAI_API_KEY", ""), "[redacted]")

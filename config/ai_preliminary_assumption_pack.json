@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "pack_id": "australia-first-ai-preliminary",
+  "version": "au-preliminary-v2",
+  "title": "Australia-first AI preliminary cooling profiles",
+  "status": "product_owned_preliminary_only",
+  "profiles": {
+    "retail": {"label": "Retail", "occupancy_density_people_m2": 0.15, "people_sensible_w": 75, "people_latent_w": 55, "people_diversity": 0.85, "lighting_w_m2": 12, "lighting_diversity": 0.9, "equipment_w_m2": 8, "equipment_diversity": 0.75, "equipment_space_gain": 0.8, "outside_air_lps_person": 7.5, "outside_air_lps_m2": 0.3, "fallback_area_m2": 80, "weekday_profile": "retail", "wall_u_w_m2k": 0.6, "roof_u_w_m2k": 0.5, "glazing_u_w_m2k": 5.8, "shgc": 0.45},
+    "office": {"label": "Office", "occupancy_density_people_m2": 0.1, "people_sensible_w": 75, "people_latent_w": 55, "people_diversity": 0.85, "lighting_w_m2": 10, "lighting_diversity": 0.9, "equipment_w_m2": 15, "equipment_diversity": 0.8, "equipment_space_gain": 0.9, "outside_air_lps_person": 7.5, "outside_air_lps_m2": 0.3, "fallback_area_m2": 60, "weekday_profile": "office", "wall_u_w_m2k": 0.6, "roof_u_w_m2k": 0.5, "glazing_u_w_m2k": 5.8, "shgc": 0.45},
+    "hospitality": {"label": "Hospitality", "occupancy_density_people_m2": 0.3, "people_sensible_w": 75, "people_latent_w": 55, "people_diversity": 0.9, "lighting_w_m2": 14, "lighting_diversity": 0.9, "equipment_w_m2": 25, "equipment_diversity": 0.8, "equipment_space_gain": 0.8, "outside_air_lps_person": 7.5, "outside_air_lps_m2": 0.3, "fallback_area_m2": 100, "weekday_profile": "hospitality", "wall_u_w_m2k": 0.6, "roof_u_w_m2k": 0.5, "glazing_u_w_m2k": 5.8, "shgc": 0.45},
+    "storage": {"label": "Storage", "occupancy_density_people_m2": 0.03, "people_sensible_w": 75, "people_latent_w": 55, "people_diversity": 0.6, "lighting_w_m2": 6, "lighting_diversity": 0.85, "equipment_w_m2": 2, "equipment_diversity": 0.7, "equipment_space_gain": 0.8, "outside_air_lps_person": 7.5, "outside_air_lps_m2": 0.15, "fallback_area_m2": 50, "weekday_profile": "storage", "wall_u_w_m2k": 0.6, "roof_u_w_m2k": 0.5, "glazing_u_w_m2k": 5.8, "shgc": 0.45},
+    "residential": {"label": "Residential", "occupancy_density_people_m2": 0.04, "people_sensible_w": 75, "people_latent_w": 55, "people_diversity": 0.8, "lighting_w_m2": 8, "lighting_diversity": 0.85, "equipment_w_m2": 10, "equipment_diversity": 0.75, "equipment_space_gain": 0.85, "outside_air_lps_person": 7.5, "outside_air_lps_m2": 0.15, "fallback_area_m2": 75, "weekday_profile": "residential", "wall_u_w_m2k": 0.6, "roof_u_w_m2k": 0.5, "glazing_u_w_m2k": 5.8, "shgc": 0.45},
+    "generic_conditioned_room": {"label": "Generic conditioned room — low confidence", "occupancy_density_people_m2": 0.08, "people_sensible_w": 75, "people_latent_w": 55, "people_diversity": 0.8, "lighting_w_m2": 10, "lighting_diversity": 0.85, "equipment_w_m2": 8, "equipment_diversity": 0.75, "equipment_space_gain": 0.8, "outside_air_lps_person": 7.5, "outside_air_lps_m2": 0.3, "fallback_area_m2": 50, "weekday_profile": "generic", "wall_u_w_m2k": 0.6, "roof_u_w_m2k": 0.5, "glazing_u_w_m2k": 5.8, "shgc": 0.45}
+  },
+  "preliminary_envelope": {
+    "status": "product_owned_preliminary_only",
+    "opaque_solar_gain_factor": 0.25,
+    "glazing_frame_fraction": 0.15,
+    "glazing_glass_area_correction": 1.0,
+    "glazing_internal_shading_factor": 1.0,
+    "shading_categories": {"unshaded": 1.0, "partial": 0.65, "deep": 0.3},
+    "cardinal_solar_profiles_w_m2": {
+      "N": [0, 0, 0, 0, 0, 0, 0, 20, 70, 160, 280, 390, 470, 500, 470, 380, 260, 130, 40, 0, 0, 0, 0, 0],
+      "E": [0, 0, 0, 0, 0, 0, 0, 80, 260, 430, 470, 360, 210, 80, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      "S": [0, 0, 0, 0, 0, 0, 0, 5, 20, 45, 70, 90, 105, 110, 100, 75, 45, 20, 5, 0, 0, 0, 0, 0],
+      "W": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 20, 80, 210, 360, 470, 500, 430, 260, 80, 0, 0, 0, 0, 0]
+    }
+  },
+  "scenario": {"indoor_dry_bulb_c": 24, "indoor_wet_bulb_c": 18, "pressure_kpa": 101.325, "safety_factor": 1.1, "hours": [{"db": 27, "wb": 20}, {"db": 27, "wb": 20}, {"db": 26, "wb": 20}, {"db": 26, "wb": 20}, {"db": 26, "wb": 20}, {"db": 26, "wb": 20}, {"db": 27, "wb": 20}, {"db": 28, "wb": 20}, {"db": 29, "wb": 21}, {"db": 30, "wb": 21}, {"db": 31, "wb": 22}, {"db": 32, "wb": 22}, {"db": 33, "wb": 23}, {"db": 34, "wb": 23}, {"db": 35, "wb": 24}, {"db": 36, "wb": 24}, {"db": 36, "wb": 24}, {"db": 35, "wb": 24}, {"db": 34, "wb": 23}, {"db": 32, "wb": 22}, {"db": 30, "wb": 21}, {"db": 29, "wb": 21}, {"db": 28, "wb": 20}, {"db": 27, "wb": 20}]}
+}

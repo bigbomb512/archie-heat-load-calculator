@@ -8,6 +8,14 @@ from ai.site_design_conditions import validate_citations
 
 METHOD_ID = "reviewed_glazing_manual_solar_v1"
 APPROVAL_STATES = {"placeholder", "approved"}
+WEATHER_FACADE_GLAZING_POLICY = {
+    "solar_basis": "cited_horizontal_weather_facade_v1",
+    "u_value_basis": "overall_window",
+    "opening_mapping": "exact_room_owned_opening_evidence_required",
+    "opaque_area_policy": "net_opaque_or_gross_minus_complete_confirmed_openings",
+    "safety_factor_policy": "existing_room_factor_once",
+    "unsupported": ["uncited_weather", "inferred_glazing_properties", "dynamic_shading", "annual_analysis"],
+}
 
 
 def timestamp():
@@ -51,8 +59,8 @@ def validate_glazing_method_gate(raw):
     for field in ("engineer_name", "engineer_credential", "approved_at", "method_citation", "scope"):
         result[field] = str(result.get(field, "") or "").strip()
     result["citations"] = validate_citations(raw.get("citations", []), "Glazing method gate")
-    if result.get("policy") != empty_glazing_method_gate()["policy"]:
-        raise ValueError("Glazing method policy is fixed for V1; create a new approved method for a policy change.")
+    if result.get("policy") not in {"manual": empty_glazing_method_gate()["policy"], "weather": WEATHER_FACADE_GLAZING_POLICY}.values():
+        raise ValueError("Glazing method policy must be the fixed manual or weather-façade V1 policy.")
     if result["approval_status"] == "approved":
         missing = [field.replace("_", " ") for field in ("engineer_name", "engineer_credential", "approved_at", "method_citation", "scope") if not result[field]]
         if missing or not result["citations"]:
@@ -64,3 +72,7 @@ def validate_glazing_method_gate(raw):
 
 def gate_is_approved(gate):
     return bool(gate and gate.get("approval_status") == "approved" and gate.get("method_id") == METHOD_ID)
+
+
+def weather_facade_gate_is_approved(gate):
+    return gate_is_approved(gate) and gate.get("policy") == WEATHER_FACADE_GLAZING_POLICY

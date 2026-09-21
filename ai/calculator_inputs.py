@@ -624,7 +624,8 @@ def assemble_calculator_inputs(hourly_model, schedule_library, scenarios, select
                                dynamic_thermal_mass_gate=None, solar_radiation_gate=None,
                                solar_radiation_source=None, room_to_room_coupling_gate=None,
                                heating_gate=None,
-                               calculation_input_evidence=None, source_pack_releases=None):
+                               calculation_input_evidence=None, source_pack_releases=None,
+                               site_orientation=None):
     """Resolve cooling inputs without mutating the supplied project artifacts."""
     release_manifest = validate_source_pack_release_manifest(source_pack_releases) if source_pack_releases is not None else source_pack_release_manifest()
     # Calculation-input evidence is a first-class normalized source.  Direct
@@ -650,6 +651,7 @@ def assemble_calculator_inputs(hourly_model, schedule_library, scenarios, select
         "dynamic_thermal_mass_method_gate": dynamic_thermal_mass_gate,
         "solar_radiation_method_gate": solar_radiation_gate,
         "solar_radiation_source": solar_radiation_source,
+        **({"site_orientation": site_orientation} if site_orientation is not None else {}),
         "room_to_room_coupling_method_gate": room_to_room_coupling_gate,
         "heating_method_gate": heating_gate,
         "research_source_pack_releases": release_manifest,
@@ -721,6 +723,7 @@ def assemble_calculator_inputs(hourly_model, schedule_library, scenarios, select
                     "dynamic_thermal_mass_method_gate": deepcopy(checked_dynamic_gate),
                     "solar_radiation_method_gate": deepcopy(checked_radiation_gate),
                     "solar_radiation_source": deepcopy(checked_radiation_source),
+                    **({"site_orientation": deepcopy(site_orientation)} if site_orientation is not None else {}),
                     "room_to_room_coupling_method_gate": deepcopy(checked_coupling_gate),
                     "heating_method_gate": deepcopy(checked_heating_gate)},
     }

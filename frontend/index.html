@@ -171,6 +171,66 @@
             <button class="btn ghost mini hide" id="btnVisionRetry" type="button">Retry</button>
           </div>
           <div class="review-list" id="visionLinks"></div>
+          <section class="calculator-draft-panel" aria-labelledby="aiPreliminaryHeading">
+            <h4 id="aiPreliminaryHeading">AI preliminary whole-building estimate</h4>
+            <p class="fine">Uses controlled Australia-first preliminary profiles with the existing hourly cooling engine. It is always a draft estimate, never engineering reviewed or validated. The reviewed calculator inputs below are not changed.</p>
+            <div class="requirements-form">
+              <label><input id="aiPreliminaryAuto" type="checkbox"> Automatically run the provider after PDF analysis when consent, budget and server configuration are available.</label>
+              <label><input id="aiPreliminaryConsent" type="checkbox"> I approve this project’s bounded architect evidence being sent to the configured AI provider.</label>
+              <label>Maximum provider budget (AUD)<input id="aiPreliminaryBudget" type="number" min="0.01" step="0.01" placeholder="Required for automatic provider run"></label>
+            </div>
+            <div class="bar"><span class="conf" id="aiPreliminaryStatus" role="status">Preliminary model not assembled.</span>
+              <button class="btn ghost mini" id="btnSaveAiPreliminarySettings" type="button">Save settings</button>
+              <button class="btn ghost mini" id="btnRunAiPreliminary" type="button">Run provider</button>
+              <button class="btn ghost mini" id="btnSaveAiPreliminaryProposal" type="button">Save AI proposal</button>
+              <button class="btn key mini" id="btnAssembleAiPreliminary" type="button">Assemble draft model</button>
+              <button class="btn ghost mini" id="btnCalculateAiPreliminary" type="button">Calculate draft load</button>
+            </div>
+            <details>
+              <summary>Draft AI topology, envelope, and opening proposal</summary>
+              <p class="fine">For placeholder-AI development or correction only. Each room, external surface, and opening needs an owner, physical source page, and positive geometry. This never edits reviewed inputs.</p>
+              <label for="aiPreliminaryProposal">Proposal JSON<textarea id="aiPreliminaryProposal" rows="10" spellcheck="false" placeholder='{"rooms": [], "surfaces": [], "openings": []}'></textarea></label>
+            </details>
+            <div class="review-list" id="aiPreliminaryResults"></div>
+          </section>
+          <section class="calculator-draft-panel" aria-labelledby="windowScanHeading">
+            <h4 id="windowScanHeading">All-page window discovery</h4>
+            <p class="fine">Separate opt-in scan: every physical page, including renders, photos and reference pages, in batches of at most eight. It does not approve openings or glazing properties.</p>
+            <label><input id="windowScanConfirm" type="checkbox"> I approve sending every architect page for window analysis.</label>
+            <div class="bar"><span id="windowScanStatus" role="status">Estimate before starting.</span>
+              <button class="btn ghost mini" id="btnWindowScanEstimate" type="button">Estimate all pages</button>
+              <button class="btn key" id="btnWindowScanStart" type="button">Scan all pages</button>
+              <button class="btn ghost mini hide" id="btnWindowScanRetry" type="button">Retry failed batches</button>
+              <button class="btn ghost mini hide" id="btnWindowScanCancel" type="button">Cancel scan</button>
+            </div>
+            <div class="review-list" id="windowScanResults"></div>
+            <details><summary>Review proposed shopfront glazing</summary><p class="fine">Confirm a room-owned glazing system from the AI sightings. This records geometry and exposure only; add a cited U-value and exactly one solar property in the reviewed window library before calculation.</p>
+              <div class="requirements-form">
+                <label for="windowOpeningId">Proposed opening cluster<input id="windowOpeningId" list="windowOpeningChoices" placeholder="opening_…"></label><datalist id="windowOpeningChoices"></datalist>
+                <label>Review type<select id="windowReviewType"><option value="glazing_system">Shopfront glazing system</option><option value="opening">Single opening</option></select></label>
+                <label>System name<input id="windowReviewSystemName" placeholder="e.g. Main shopfront glazing"></label>
+                <label>Owner room ID<input id="windowReviewRoom" placeholder="room-…"></label>
+                <label>Owner zone ID<input id="windowReviewZone" placeholder="zone-…"></label>
+                <label>Host wall evidence ID<input id="windowReviewHostWall" placeholder="wall-…"></label>
+                <label>Level<input id="windowReviewLevel" placeholder="Level 1"></label>
+                <label>Overall width (m)<input id="windowReviewWidth" type="number" min="0.001" step="0.001"></label>
+                <label>Overall height (m)<input id="windowReviewHeight" type="number" min="0.001" step="0.001"></label>
+                <label>Quantity<input id="windowReviewQuantity" type="number" min="1" step="1" value="1"></label>
+                <label>External exposure<select id="windowReviewExposure"><option value="external">External</option><option value="internal">Internal / mall-facing</option></select></label>
+                <label>Glass area basis<select id="windowReviewGlassBasis"><option value="reviewed_frame_fraction">Reviewed frame fraction in window record</option><option value="explicit_glass_area">Explicit glass area</option></select></label>
+                <label>Explicit glass area (m²)<input id="windowReviewGlassArea" type="number" min="0.001" step="0.001"></label>
+                <label><input id="windowReviewGlazedDoors" type="checkbox"> Include glazed doors in this system</label>
+                <label>Host-wall opening coverage<select id="windowReviewCoverage"><option value="complete">All host-wall openings covered</option><option value="incomplete">Coverage incomplete</option></select></label>
+                <label>Coverage evidence source<input id="windowReviewCoverageSource" placeholder="Plan/elevation source"></label>
+                <label>Coverage citation<input id="windowReviewCoverageCitation" placeholder="Drawing/page reference"></label>
+                <label>System evidence source<input id="windowReviewSource" placeholder="Plan and shopfront elevation"></label>
+                <label>System citation<input id="windowReviewCitation" placeholder="Drawing/page reference"></label>
+                <label>Review mode<select id="windowReviewMode"><option value="preliminary_ai_estimate">Preliminary AI estimate — draft only</option><option value="engineering_reviewed">Engineering reviewed</option></select></label>
+              </div>
+              <button class="btn ghost mini" id="btnWindowOpeningReview" type="button">Save glazing-system review</button>
+              <details><summary>Advanced JSON fallback</summary><label for="windowOpeningReview">Opening review JSON</label><textarea id="windowOpeningReview" rows="5" spellcheck="false" placeholder='{"review_type":"glazing_system", ...}'></textarea></details>
+            </details>
+          </section>
           <details class="advanced-import"><summary>Advanced recovery: import pre-generated vision JSON</summary>
             <p class="fine">This fallback uses the same local validation rules. It is not the primary workflow.</p>
             <textarea id="visionJson" rows="10" spellcheck="false" placeholder='{"provider":"chatgpt_manual","result":{"layered_geometry":{"pages":[]}}}'></textarea>
@@ -207,6 +267,9 @@
             <div class="bar"><span class="conf" id="calculationEvidenceStatus">Build the numerical-input evidence register after the architect packet is analysed.</span></div>
             <div class="review-list" id="calculationEvidenceSummary"></div>
             <div class="review-list" id="calculationEvidenceCandidates"></div>
+            <section class="review-list" id="componentInterpretations" aria-labelledby="componentInterpretationsHeading">
+              <div class="review-empty"><b id="componentInterpretationsHeading">AI component interpretations</b><span>Build calculation-input evidence to review AI display names and confidence separately from calculation inputs.</span></div>
+            </section>
           </section>
           <form id="designRequirementsForm" class="requirements-form">
             <label>Space usage<input id="reqSpaceUsage" type="text" placeholder="e.g. retail tenancy"></label>
@@ -270,6 +333,7 @@
           <div class="panel-head"><div><div class="micro">Window library</div><h3>Reviewed glazing records</h3></div><button class="btn ghost mini" id="btnAddWindow" type="button">Add window</button></div>
           <p class="fine">Use an overall-window U-value and exactly one solar property. These values need cited project evidence; Archie never fills them with defaults.</p>
           <div id="envelopeWindowsRows" class="envelope-editor"></div>
+          <div id="envelopeOpeningEvidence" class="review-list" aria-live="polite"></div>
           <details class="envelope-storage"><summary><span><b>Advanced evidence import</b><small>Shading geometry remains stored only; use this JSON fallback for imported records.</small></span></summary><div class="requirements-form"><label>Window records (JSON fallback)<textarea id="envelopeWindows" rows="5" placeholder='[{"record_id":"window-1", ...}]'></textarea></label><label>Shading records (JSON)<textarea id="envelopeShading" rows="5" placeholder='[{"record_id":"shade-1", ...}]'></textarea></label></div></details>
           <div class="panel-head"><div><div class="micro">Boundary model</div><h3>Room and zone envelope surfaces</h3></div><button class="btn ghost mini" id="btnAddBoundary" type="button">Add boundary</button></div>
           <div id="envelopeSurfaces" class="envelope-editor"></div>
@@ -288,9 +352,9 @@
             <div class="bar"><span class="conf" id="infiltrationGateStatusText">Loading infiltration method gate…</span></div>
           </section>
           <section class="calculator-draft-panel" id="glazingGateSection" aria-labelledby="glazingGateHeading">
-            <div class="panel-head"><div><div class="micro">Approved method gate</div><h3 id="glazingGateHeading">Reviewed glazing and manual solar</h3></div><button class="btn ghost mini" id="btnSaveGlazingGate" type="button">Save method gate</button></div>
-            <p class="fine">This feature uses cited opening geometry, overall-window U-values, one cited solar property, and a reviewed manual hourly solar basis. It excludes automatic solar position and geometric shading.</p>
-            <div class="requirements-form"><label>Gate status<select id="glazingGateStatus"><option value="placeholder">Placeholder — disabled</option><option value="approved">Approved</option></select></label><label>Engineer name<input id="glazingEngineerName" placeholder="Named HVAC engineer"></label><label>Credential<input id="glazingEngineerCredential" placeholder="e.g. CPEng / licence"></label><label>Approval date<input id="glazingApprovedAt" type="date"></label><label>Method citation<input id="glazingMethodCitation" placeholder="Approved method reference"></label><label>Scope<textarea id="glazingScope" rows="2"></textarea></label><label>Gate citation<input id="glazingGateCitation" placeholder="Reference"></label></div>
+            <div class="panel-head"><div><div class="micro">Approved method gate</div><h3 id="glazingGateHeading">Reviewed glazing and façade solar</h3></div><button class="btn ghost mini" id="btnSaveGlazingGate" type="button">Save method gate</button></div>
+            <p class="fine">Manual solar stays available. Weather-façade solar also needs a matched opening, cited 24-hour weather, reviewed orientation and shading, and the approved radiation gate.</p>
+            <div class="requirements-form"><label>Gate status<select id="glazingGateStatus"><option value="placeholder">Placeholder — disabled</option><option value="approved">Approved</option></select></label><label>Glazing method policy<select id="glazingGatePolicy"><option value="manual">Reviewed manual solar</option><option value="weather_facade">Cited weather + façade</option></select></label><label>Engineer name<input id="glazingEngineerName" placeholder="Named HVAC engineer"></label><label>Credential<input id="glazingEngineerCredential" placeholder="e.g. CPEng / licence"></label><label>Approval date<input id="glazingApprovedAt" type="date"></label><label>Method citation<input id="glazingMethodCitation" placeholder="Approved method reference"></label><label>Scope<textarea id="glazingScope" rows="2"></textarea></label><label>Gate citation<input id="glazingGateCitation" placeholder="Reference"></label></div>
             <div class="bar"><span class="conf" id="glazingGateStatusText">Loading glazing method gate…</span></div>
           </section>
           <section class="calculator-draft-panel" id="shadingGateSection" aria-labelledby="shadingGateHeading">
@@ -313,9 +377,32 @@
           </section>
           <section class="calculator-draft-panel" id="solarRadiationGateSection" aria-labelledby="solarRadiationGateHeading">
             <div class="panel-head"><div><div class="micro">Approved method gate</div><h3 id="solarRadiationGateHeading">Cited surface irradiance</h3></div><button class="btn ghost mini" id="btnSaveSolarRadiationGate" type="button">Save method gate</button></div>
-            <p class="fine">This gate controls a separately cited 24-hour surface-plane irradiance artifact. It does not browse for weather or replace the existing manual solar basis silently.</p>
-            <div class="requirements-form"><label>Gate status<select id="solarRadiationGateStatus"><option value="placeholder">Placeholder — disabled</option><option value="approved">Approved</option></select></label><label>Engineer name<input id="solarRadiationEngineerName" placeholder="Named HVAC engineer"></label><label>Credential<input id="solarRadiationEngineerCredential" placeholder="e.g. CPEng / licence"></label><label>Approval date<input id="solarRadiationApprovedAt" type="date"></label><label>Method citation<input id="solarRadiationMethodCitation" placeholder="Approved method reference"></label><label>Scope<textarea id="solarRadiationScope" rows="2"></textarea></label><label>Gate citation<input id="solarRadiationGateCitation" placeholder="Reference"></label></div>
+            <p class="fine">Choose cited surface-plane irradiance or a cited 24-hour horizontal DNI/DHI/GHI weather series for façade transposition. No live weather lookup or silent replacement of manual solar occurs.</p>
+            <div class="requirements-form"><label>Gate status<select id="solarRadiationGateStatus"><option value="placeholder">Placeholder — disabled</option><option value="approved">Approved</option></select></label><label>Radiation method policy<select id="solarRadiationPolicy"><option value="surface_plane">Cited surface-plane values</option><option value="weather_facade">Cited horizontal weather + façade</option></select></label><label>Engineer name<input id="solarRadiationEngineerName" placeholder="Named HVAC engineer"></label><label>Credential<input id="solarRadiationEngineerCredential" placeholder="e.g. CPEng / licence"></label><label>Approval date<input id="solarRadiationApprovedAt" type="date"></label><label>Method citation<input id="solarRadiationMethodCitation" placeholder="Approved method reference"></label><label>Scope<textarea id="solarRadiationScope" rows="2"></textarea></label><label>Gate citation<input id="solarRadiationGateCitation" placeholder="Reference"></label></div>
             <div class="bar"><span class="conf" id="solarRadiationGateStatusText">Loading solar-radiation method gate…</span></div>
+            <label for="solarRadiationSourceJson">Cited 24-hour solar source JSON</label>
+            <textarea id="solarRadiationSourceJson" rows="7" spellcheck="false" aria-describedby="solarRadiationSourceStatus"></textarea>
+            <div class="bar"><span class="conf" id="solarRadiationSourceStatus" role="status">No solar source loaded.</span><button class="btn ghost mini" id="btnSaveSolarRadiationSource" type="button">Save solar source</button></div>
+          </section>
+          <section class="calculator-draft-panel" id="siteOrientationSection" aria-labelledby="siteOrientationHeading">
+            <h3 id="siteOrientationHeading">Site and façade orientation</h3>
+            <p class="fine">An address lookup locates a site, not a tenancy façade. Confirm north alignment, the exact host wall, outward side, and exterior exposure before using a true-north azimuth.</p>
+            <label for="siteOrientationAddress">Confirmed NSW site address</label><input id="siteOrientationAddress" placeholder="Street address, suburb, NSW">
+            <label><input id="siteOrientationConsent" type="checkbox"> I confirm this address and approve sending it to NSW Spatial Services.</label>
+            <div class="bar"><button class="btn ghost mini" id="btnSiteOrientationLookup" type="button">Look up NSW address</button><span id="siteOrientationStatus" role="status">No site orientation loaded.</span></div>
+            <label for="siteOrientationAddressCandidate">NSW address candidate</label><select id="siteOrientationAddressCandidate"><option value="">Choose a returned address point</option></select>
+            <div class="bar"><button class="btn ghost mini" id="btnSiteOrientationImagery" type="button">Look up dated aerial imagery at selected point</button></div>
+            <div id="siteOrientationImageryResults" class="review-list" aria-live="polite"></div>
+            <label for="siteOrientationJson">Cited tenancy/facade alignment JSON</label><textarea id="siteOrientationJson" rows="7" spellcheck="false"></textarea>
+            <div class="bar"><button class="btn ghost mini" id="btnSaveSiteOrientation" type="button">Save reviewed orientation</button></div>
+            <details><summary>Upload cited map or survey (fallback outside NSW)</summary>
+              <label for="siteOrientationFile">Map/survey PNG, JPEG or PDF</label><input id="siteOrientationFile" type="file" accept="image/png,image/jpeg,application/pdf">
+              <label for="siteOrientationSource">Source publisher</label><input id="siteOrientationSource">
+              <label for="siteOrientationCitation">Map/survey citation</label><input id="siteOrientationCitation">
+              <label for="siteOrientationImageDate">Imagery date if known</label><input id="siteOrientationImageDate" type="date">
+              <button class="btn ghost mini" id="btnUploadSiteOrientation" type="button">Upload cited evidence</button>
+            </details>
+            <div class="review-list" id="siteOrientationFacades"></div>
           </section>
           <section class="calculator-draft-panel" id="roomCouplingGateSection" aria-labelledby="roomCouplingGateHeading">
             <div class="panel-head"><div><div class="micro">Approved method gate</div><h3 id="roomCouplingGateHeading">Dynamic room-to-room partitions</h3></div><button class="btn ghost mini" id="btnSaveRoomCouplingGate" type="button">Save method gate</button></div>

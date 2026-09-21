@@ -138,10 +138,63 @@ def layered_page_issues(page, known_candidate_ids=None, annotation_kinds=None):
         dimension_ids = {item.get("dimension_id") for item in page.get("dimension_candidates", []) if item.get("dimension_id")}
         for link in page.get("dimension_wall_links", []):
             issues.extend(layered_link_issues(page_number, link, wall_ids, fixture_ids, dimension_ids))
+        for room in page.get("room_geometry_candidates", []):
+            issues.extend(room_geometry_candidate_issues(page_number, room, wall_ids, dimension_ids))
+        for surface in page.get("thermal_surface_candidates", []):
+            issues.extend(thermal_surface_candidate_issues(page_number, surface, wall_ids))
         if page.get("geometry_readiness") == "vision_layered" and not page.get("outer_boundary_walls"):
             issues.append(issue(page_number, {}, "layered_geometry.outer_boundary_walls", "vision-layered geometry requires at least one outer boundary wall"))
         if page.get("geometry_readiness") == "vision_layered" and not page.get("dimension_candidates"):
             issues.append(issue(page_number, {}, "layered_geometry.dimension_candidates", "vision-layered geometry requires visible dimensions or an explicit lower readiness"))
+    return issues
+
+
+def thermal_surface_candidate_issues(page_number, item, wall_ids):
+    """Validate AI thermal roles without approving thermal properties."""
+    issues = []
+    physical = item.get("physical_type") or item.get("classification")
+    role = item.get("thermal_role")
+    boundary = item.get("boundary_condition")
+    if not item.get("surface_id"):
+        issues.append(issue(page_number, item, "layered_geometry.surface_id", "surface_id is required"))
+    if physical not in {"wall", "roof", "floor", "ceiling", "partition", "glazing", "shaft", "column", "non_surface"}:
+        issues.append(issue(page_number, item, "layered_geometry.physical_type", "unsupported physical surface type"))
+    if role not in {"external", "ground_contact", "fixed_adjacent", "room_to_room", "roof_void", "ceiling_below_roof", "internal_floor", "unresolved"}:
+        issues.append(issue(page_number, item, "layered_geometry.thermal_role", "unsupported thermal role"))
+    if boundary not in {"outside", "ground", "conditioned_space", "unconditioned_space", "corridor", "plant_room", "roof_void", "unresolved"}:
+        issues.append(issue(page_number, item, "layered_geometry.boundary_condition", "unsupported boundary condition"))
+    if item.get("wall_ids"):
+        for wall_id in item.get("wall_ids", []):
+            if wall_id not in wall_ids:
+                issues.append(issue(page_number, item, "layered_geometry.wall_ids", f"unknown wall id {wall_id}"))
+    if item.get("confidence") not in {"low", "medium", "high"}:
+        issues.append(issue(page_number, item, "layered_geometry.confidence", "confidence must be low, medium, or high"))
+    if not item.get("evidence_refs") and not item.get("source_pages"):
+        issues.append(issue(page_number, item, "layered_geometry.evidence_refs", "source evidence references are required"))
+    return issues
+
+
+def room_geometry_candidate_issues(page_number, item, wall_ids, dimension_ids):
+    """Validate AI room proposals without deciding calculator eligibility."""
+    issues = []
+    if not item.get("room_geometry_id"):
+        issues.append(issue(page_number, item, "layered_geometry.room_geometry_id", "room geometry id is required"))
+    if not (item.get("label") or item.get("room_label")):
+        issues.append(issue(page_number, item, "layered_geometry.room_label", "room label is required"))
+    points = item.get("boundary_points_px") or []
+    if points and (len(points) < 4 or points[0] != points[-1]):
+        issues.append(issue(page_number, item, "layered_geometry.boundary_points_px", "boundary points must be a closed polygon"))
+    for wall_id in item.get("wall_ids", []) or item.get("ordered_wall_ids", []) or []:
+        if wall_id not in wall_ids:
+            issues.append(issue(page_number, item, "layered_geometry.wall_ids", f"unknown wall id {wall_id}"))
+    for dimension_id in item.get("dimension_ids", []):
+        if dimension_id not in dimension_ids:
+            issues.append(issue(page_number, item, "layered_geometry.dimension_ids", f"unknown dimension id {dimension_id}"))
+    confidence = item.get("confidence")
+    if confidence not in {"low", "medium", "high"}:
+        issues.append(issue(page_number, item, "layered_geometry.confidence", "confidence must be low, medium, or high"))
+    if not item.get("source_pages"):
+        issues.append(issue(page_number, item, "layered_geometry.source_pages", "source pages are required"))
     return issues
 
 

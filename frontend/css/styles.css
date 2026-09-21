@@ -307,6 +307,9 @@ button,input{ font:inherit; color:inherit }
 }
 .review-item:last-child{ border-bottom:0 }
 .review-item b,.review-empty b{ display:block; font-size:13.5px; font-weight:600 }
+.opening-sightings{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px}
+.opening-sighting{display:flex;flex-direction:column;max-width:150px;min-width:96px}
+.opening-sighting img{max-width:100%;height:auto;border:1px solid var(--line);border-radius:4px}
 .review-item span,.review-empty span{ display:block; color:var(--text-2);
   font-size:12.5px; margin-top:2px }
 .review-empty{ padding:18px; color:var(--text) }

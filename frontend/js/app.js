@@ -17,6 +17,7 @@ let CALCULATOR_INPUT_SET = null, CALCULATOR_INPUT_OVERRIDES = {revision: 0, reco
 // explicit Assemble → Calculate gate is enforced.
 let CALCULATOR_INPUTS_AVAILABLE = false, CALCULATOR_EXCEPTION_ROWS = [], CALCULATOR_EXCEPTION_TOTAL = 0;
 let VISION_EXTRACTION = null, VISION_POLL = null;
+let WINDOW_SCAN_POLL = null, SITE_ORIENTATION = {};
 
 /* ---- theme -------------------------------------------------------------
    Dark by default. A saved choice wins; otherwise follow the system. The
@@ -448,12 +449,34 @@ requiredElement("btnVisionEstimate").addEventListener("click", () => visionExtra
 requiredElement("btnVisionStart").addEventListener("click", () => visionExtractionAction("start"));
 requiredElement("btnVisionCancel").addEventListener("click", () => visionExtractionAction("cancel"));
 requiredElement("btnVisionRetry").addEventListener("click", () => visionExtractionAction("retry"));
+requiredElement("btnSaveAiPreliminarySettings").addEventListener("click", () => aiPreliminaryAction("save_settings"));
+requiredElement("btnRunAiPreliminary").addEventListener("click", () => aiPreliminaryAction("run"));
+requiredElement("btnSaveAiPreliminaryProposal").addEventListener("click", () => aiPreliminaryAction("save_placeholder_proposal"));
+requiredElement("btnAssembleAiPreliminary").addEventListener("click", () => aiPreliminaryAction("assemble"));
+requiredElement("btnCalculateAiPreliminary").addEventListener("click", () => aiPreliminaryAction("calculate"));
+requiredElement("btnWindowScanEstimate").addEventListener("click", loadWindowScan);
+requiredElement("btnWindowScanStart").addEventListener("click", () => windowScanAction("start"));
+requiredElement("btnWindowScanRetry").addEventListener("click", () => windowScanAction("retry"));
+requiredElement("btnWindowScanCancel").addEventListener("click", () => windowScanAction("cancel"));
+requiredElement("btnWindowOpeningReview").addEventListener("click", saveWindowOpeningReview);
+requiredElement("btnSiteOrientationLookup").addEventListener("click", lookupSiteOrientation);
+requiredElement("btnSiteOrientationImagery").addEventListener("click", lookupSiteOrientationImagery);
+requiredElement("btnSaveSiteOrientation").addEventListener("click", saveSiteOrientation);
+requiredElement("btnUploadSiteOrientation").addEventListener("click", uploadSiteOrientationEvidence);
 requiredElement("btnAddHeatSource").addEventListener("click", () => addHeatSource());
 requiredElement("btnAddZone").addEventListener("click", () => addZone());
 requiredElement("btnSaveRequirements").addEventListener("click", saveDesignRequirements);
 requiredElement("btnBuildThermalModel").addEventListener("click", () => saveThermalModel("build"));
 requiredElement("btnBuildCalculatorDraft").addEventListener("click", () => saveCalculatorDraft("build"));
 requiredElement("btnBuildCalculationEvidence").addEventListener("click", buildCalculationInputEvidence);
+requiredElement("componentInterpretations").addEventListener("click", event => {
+  const save = event.target.closest("[data-save-component-interpretation]");
+  const unlock = event.target.closest("[data-unlock-component-interpretation]");
+  const apply = event.target.closest("[data-apply-component-interpretations]");
+  if (save) saveComponentInterpretationReview(save.closest("[data-component-interpretation]"));
+  if (unlock) unlockComponentInterpretation(unlock.dataset.unlockComponentInterpretation, unlock.dataset.field);
+  if (apply) applyComponentInterpretationProposals();
+});
 requiredElement("btnSaveCalculatorReview").addEventListener("click", () => saveCalculatorDraft("save_review"));
 requiredElement("btnPreviewCalculatorDraft").addEventListener("click", () => saveCalculatorDraft("preview_apply"));
 requiredElement("btnApplyCalculatorDraft").addEventListener("click", () => saveCalculatorDraft("apply"));
@@ -464,6 +487,7 @@ requiredElement("btnSaveShadingGate").addEventListener("click", saveShadingGate)
 requiredElement("btnSaveGroundContactGate").addEventListener("click", saveGroundContactGate);
 requiredElement("btnSaveDynamicThermalMassGate").addEventListener("click", saveDynamicThermalMassGate);
 requiredElement("btnSaveSolarRadiationGate").addEventListener("click", saveSolarRadiationGate);
+requiredElement("btnSaveSolarRadiationSource").addEventListener("click", saveSolarRadiationSource);
 requiredElement("btnSaveRoomCouplingGate").addEventListener("click", saveRoomCouplingGate);
 requiredElement("btnSaveHeatingGate").addEventListener("click", saveHeatingGate);
 requiredElement("btnBuildHourlyModel").addEventListener("click", () => saveHourlyModel("build"));
@@ -531,6 +555,155 @@ async function confirmSelection(){
 function showVisionPanel(){
   requiredElement("visionPanel").classList.remove("hide");
   loadVisionExtraction();
+  loadAiPreliminary();
+  loadWindowScan();
+}
+
+async function loadWindowScan(){
+  if (!DATA?.id) return;
+  try {
+    const response = await fetch(`/api/window-scan?project_id=${encodeURIComponent(DATA.id)}`);
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || "Could not load window scan.");
+    drawWindowScan(data);
+  } catch (error) { requiredElement("windowScanStatus").textContent = error.message; }
+}
+
+function drawWindowScan(data){
+  const estimate = data.estimate || {}, job = data.job || {}, register = data.register || {};
+  const cost = estimate.estimate_available ? `$${Number(estimate.estimated_cost_aud).toFixed(2)} AUD` : "cost rate not configured";
+  requiredElement("windowScanStatus").textContent = `${estimate.page_count || 0} pages · ${estimate.batch_count || 0} batches + matching · ${cost} · ${job.status || data.register_status || "not scanned"}${job.total_batches ? ` · ${job.completed_batches || 0}/${job.total_batches} done` : ""}${job.error ? ` · ${job.error}` : ""}`;
+  const active = ["queued", "running", "cancel_requested"].includes(job.status);
+  requiredElement("btnWindowScanStart").disabled = active || !estimate.estimate_available;
+  requiredElement("btnWindowScanRetry").classList.toggle("hide", !["failed", "cancelled", "interrupted"].includes(job.status));
+  requiredElement("btnWindowScanCancel").classList.toggle("hide", !active);
+  const openings = register.openings || [];
+  requiredElement("windowOpeningChoices").innerHTML = openings.map(row => `<option value="${esc(row.opening_id)}">${esc(row.system_name || row.tag || "Untitled opening")} · page ${esc(row.page || "?")}</option>`).join("");
+  requiredElement("windowScanResults").innerHTML = openings.length
+    ? `<p class="fine">${esc(register.pages_inspected?.length || 0)} pages inspected · ${esc(register.sightings?.length || 0)} sightings · ${esc(openings.length)} proposed clusters. Rebuild calculation-input evidence to view these in the envelope workflow.</p>` + openingEvidenceMarkup(openings, false, true)
+    : `<p class="fine">${esc(register.pages_inspected?.length || 0)} pages inspected. No window sightings have been recorded.</p>`;
+  requiredElement("windowScanResults").querySelectorAll("[data-review-opening]").forEach(button => button.addEventListener("click", () => {
+    const opening = openings.find(row => row.opening_id === button.dataset.reviewOpening);
+    if (!opening) return;
+    requiredElement("windowOpeningId").value = opening.opening_id;
+    requiredElement("windowReviewSystemName").value = opening.system_name || opening.tag || "Shopfront glazing system";
+    requiredElement("windowReviewLevel").value = opening.level_name || "";
+    requiredElement("windowReviewWidth").value = opening.width_m ?? "";
+    requiredElement("windowReviewHeight").value = opening.height_m ?? "";
+    requiredElement("windowReviewQuantity").value = opening.quantity ?? 1;
+    // The structured controls are the normal path. Keep the JSON area empty
+    // unless a reviewer deliberately chooses the advanced fallback.
+    requiredElement("windowOpeningReview").value = "";
+    requiredElement("windowOpeningId").closest("details").open = true;
+  }));
+  if (WINDOW_SCAN_POLL) clearTimeout(WINDOW_SCAN_POLL);
+  if (active) WINDOW_SCAN_POLL = setTimeout(loadWindowScan, 2000);
+}
+
+async function windowScanAction(action){
+  if (!DATA?.id) return;
+  try {
+    if (["start", "retry"].includes(action)) await visionExtractionAction("estimate");
+    const response = await fetch("/api/window-scan", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({
+      project_id: DATA.id, action, confirm_all_pages: requiredElement("windowScanConfirm").checked,
+    })});
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || "Window scan failed.");
+    drawWindowScan(data);
+  } catch (error) { toast("Window scan", error.message); }
+}
+
+async function saveWindowOpeningReview(){
+  try {
+    const advanced = requiredElement("windowOpeningReview").value.trim();
+    const review = advanced ? JSON.parse(advanced) : {
+      review_type: requiredElement("windowReviewType").value,
+      system_name: requiredElement("windowReviewSystemName").value.trim(),
+      owner_room_id: requiredElement("windowReviewRoom").value.trim(), owner_zone_id: requiredElement("windowReviewZone").value.trim(),
+      host_wall_id: requiredElement("windowReviewHostWall").value.trim(), level_name: requiredElement("windowReviewLevel").value.trim(),
+      width_m: blankToNull(requiredElement("windowReviewWidth").value), height_m: blankToNull(requiredElement("windowReviewHeight").value),
+      quantity: Number(requiredElement("windowReviewQuantity").value), external_exposure: requiredElement("windowReviewExposure").value,
+      includes_glazed_doors: requiredElement("windowReviewGlazedDoors").checked,
+      glass_area_basis: requiredElement("windowReviewGlassBasis").value,
+      explicit_glass_area_m2: blankToNull(requiredElement("windowReviewGlassArea").value),
+      opening_coverage: {status: requiredElement("windowReviewCoverage").value, source: requiredElement("windowReviewCoverageSource").value.trim(), citations: (() => { const reference = requiredElement("windowReviewCoverageCitation").value.trim(); return reference ? [{reference, page: null, excerpt: "Reviewed host-wall opening coverage"}] : []; })()},
+      source: requiredElement("windowReviewSource").value.trim(), citations: (() => { const reference = requiredElement("windowReviewCitation").value.trim(); return reference ? [{reference, page: null, excerpt: "Reviewed shopfront glazing system"}] : []; })(),
+      review_mode: requiredElement("windowReviewMode").value,
+    };
+    const response = await fetch("/api/window-scan", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({
+      project_id: DATA.id, action:"review_opening", opening_id:requiredElement("windowOpeningId").value.trim(), review,
+    })});
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || "Opening review failed.");
+    drawWindowScan(data);
+    toast("Opening review saved", "Rebuild calculation-input evidence before assembling a new snapshot.");
+  } catch (error) { toast("Opening review", error.message); }
+}
+
+async function loadSiteOrientation(){
+  if (!DATA?.id) return;
+  try {
+    const response = await fetch(`/api/site-orientation?project_id=${encodeURIComponent(DATA.id)}`);
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || "Could not load site orientation.");
+    drawSiteOrientation(data);
+  } catch (error) { requiredElement("siteOrientationStatus").textContent = error.message; }
+}
+
+function drawSiteOrientation(data){
+  SITE_ORIENTATION = data.site_orientation || {};
+  requiredElement("siteOrientationAddress").value = SITE_ORIENTATION.site_address || "";
+  requiredElement("siteOrientationJson").value = JSON.stringify(SITE_ORIENTATION, null, 2);
+  const lookup = SITE_ORIENTATION.address_lookup || {};
+  requiredElement("siteOrientationStatus").textContent = `${data.status || "placeholder"} · ${lookup.candidates?.length || 0} address candidates · ${SITE_ORIENTATION.facades?.length || 0} mapped façades. Address alone never confirms a tenancy.`;
+  requiredElement("siteOrientationAddressCandidate").innerHTML = `<option value="">Choose a returned address point</option>${(lookup.candidates || []).map(row => `<option value="${esc(row.object_id)}">${esc(row.formatted_address || "Unnamed NSW address")} · ${esc(row.unit || "no unit")} · ${esc(row.level || "no level")}</option>`).join("")}`;
+  requiredElement("siteOrientationAddressCandidate").value = String(SITE_ORIENTATION.selected_address_object_id || "");
+  const imagery = SITE_ORIENTATION.imagery_lookup || {};
+  requiredElement("siteOrientationImageryResults").innerHTML = (imagery.candidates || []).map(row => `<article class="review-item"><div><b>${esc(row.imagery_date || "Date unavailable")} · ${esc(row.block_name || "NSW imagery")}</b><small>${esc(row.block_type || "Unknown imagery type")} · ${esc(row.resolution_cm || "?")} cm. Image date is evidence context, not a confirmed tenancy or façade direction.</small></div></article>`).join("") || `<p class="fine">No dated imagery candidates selected. A cited map or survey can be uploaded instead.</p>`;
+  requiredElement("siteOrientationFacades").innerHTML = (SITE_ORIENTATION.facades || []).map(row => `<article class="review-item"><div><b>${esc(row.host_surface_id)} · ${esc(row.status)} · ${esc(row.cardinal || "unknown")} ${row.azimuth_deg == null ? "" : `${esc(row.azimuth_deg)}°`}</b><span>${esc(row.exposure || "unresolved")} · openings ${esc((row.opening_ids || []).join(", ") || "none")}</span><small>${esc((row.issues || []).join("; ") || "Reviewed alignment")}</small></div></article>`).join("");
+}
+
+async function siteOrientationAction(payload){
+  const response = await fetch("/api/site-orientation", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({project_id:DATA.id, ...payload})});
+  const data = await response.json();
+  if (!response.ok || data.error) throw new Error(data.error || "Site orientation request failed.");
+  drawSiteOrientation(data);
+  return data;
+}
+
+async function lookupSiteOrientation(){
+  try {
+    await siteOrientationAction({action:"lookup", site_address:requiredElement("siteOrientationAddress").value.trim(), state:"NSW", confirm_address:requiredElement("siteOrientationConsent").checked});
+    toast("NSW address candidates", "Select and cite exact tenancy landmarks before assigning a façade azimuth.");
+  } catch (error) { toast("Site lookup", error.message); }
+}
+
+async function lookupSiteOrientationImagery(){
+  try {
+    const selected = requiredElement("siteOrientationAddressCandidate").value;
+    if (!selected) throw new Error("Choose the exact address candidate first.");
+    await siteOrientationAction({action:"lookup_imagery", address_object_id:Number(selected), confirm_imagery:requiredElement("siteOrientationConsent").checked});
+    toast("Aerial imagery dates", "These dates do not establish the tenancy, host wall, or façade orientation.");
+  } catch (error) { toast("Imagery lookup", error.message); }
+}
+
+async function saveSiteOrientation(){
+  try {
+    await siteOrientationAction({action:"save", site_orientation:JSON.parse(requiredElement("siteOrientationJson").value)});
+    toast("Orientation saved", "Reassemble calculator inputs before using changed façade evidence.");
+  } catch (error) { toast("Site orientation", error.message); }
+}
+
+async function uploadSiteOrientationEvidence(){
+  try {
+    const file = requiredElement("siteOrientationFile").files[0];
+    if (!file || file.size > 20 * 1024 * 1024) throw new Error("Choose a PNG, JPEG or PDF no larger than 20 MB.");
+    const encoded = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(",")[1]); reader.onerror = reject; reader.readAsDataURL(file); });
+    await siteOrientationAction({action:"upload_map", mime_type:file.type, base64:encoded,
+      source:requiredElement("siteOrientationSource").value.trim(), citation:requiredElement("siteOrientationCitation").value.trim(),
+      imagery_date:requiredElement("siteOrientationImageDate").value});
+    toast("Site evidence uploaded", "Now cite its alignment and the exact tenancy façade in the orientation record.");
+  } catch (error) { toast("Site evidence", error.message); }
 }
 
 function visionSettings(){
@@ -580,6 +753,61 @@ async function visionExtractionAction(action){
     drawVisionExtraction(data);
     if (action === "start") toast("AI extraction started", "Only selected architect evidence is being processed.");
   } catch (error) { toast("AI extraction", error.message); }
+}
+
+function aiPreliminarySettings(){
+  return {
+    automatic_analysis_enabled: requiredElement("aiPreliminaryAuto").checked,
+    saved_project_consent: requiredElement("aiPreliminaryConsent").checked,
+    maximum_provider_budget_aud: requiredElement("aiPreliminaryBudget").value === "" ? null : Number(requiredElement("aiPreliminaryBudget").value),
+  };
+}
+
+async function loadAiPreliminary(){
+  if (!DATA?.id) return;
+  try {
+    const response = await fetch(`/api/ai-preliminary-model?project_id=${encodeURIComponent(DATA.id)}`);
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || "Could not load the AI preliminary model.");
+    drawAiPreliminary(data);
+  } catch (error) { requiredElement("aiPreliminaryStatus").textContent = error.message; }
+}
+
+function drawAiPreliminary(data){
+  const settings = data.settings || {}, run = data.run || {}, report = data.hourly_ai_preliminary_load_report || {};
+  requiredElement("aiPreliminaryAuto").checked = !!settings.automatic_analysis_enabled;
+  requiredElement("aiPreliminaryConsent").checked = !!settings.saved_project_consent;
+  requiredElement("aiPreliminaryBudget").value = settings.maximum_provider_budget_aud ?? "";
+  const proposal = run.manual_placeholder_proposal || (run.manual_placeholder_entities?.length ? {rooms: run.manual_placeholder_entities} : null);
+  if (proposal && document.activeElement !== requiredElement("aiPreliminaryProposal")) requiredElement("aiPreliminaryProposal").value = JSON.stringify(proposal, null, 2);
+  const stale = (data.stale_reasons || []).join(", ");
+  requiredElement("aiPreliminaryStatus").textContent = `${data.status || "not_calculated"}${run.status ? ` · ${run.status}` : ""}${stale ? ` · stale: ${stale}` : ""}${run.message ? ` · ${run.message}` : ""}`;
+  const peak = report.included_scope_peak || {};
+  const coverage = report.assumption_coverage || {};
+  const queue = report.review_queue || data.model?.review_queue || [];
+  const surfaces = report.preliminary_surface_summary || data.model?.surface_summary || {};
+  const refrigeration = report.refrigeration_process_exclusions || data.model?.excluded_spaces || [];
+  requiredElement("aiPreliminaryResults").innerHTML = report.label ? `
+    <article class="review-item"><div><b>${esc(report.label)}</b><span>Included-scope peak: ${peak.design_total_kw ?? "—"} kW. Low-confidence assumptions: ${coverage.low_confidence_count ?? queue.length}. Unsupported components remain explicit exclusions.</span></div></article>
+    <article class="review-item"><div><b>AI preliminary envelope coverage</b><span>Surfaces: ${surfaces.included ?? 0} included, ${surfaces.blocked ?? 0} blocked, ${surfaces.excluded ?? 0} excluded. Openings: ${surfaces.openings_included ?? 0} included, ${surfaces.openings_excluded ?? 0} excluded. Unknown shading is explicitly treated as unshaded and queued for review.</span></div></article>
+    ${refrigeration.map(item => `<article class="review-item"><div><b>${esc(item.room_name || "Refrigeration/process room")}</b><span>${esc(item.reason || "Excluded from the comfort-HVAC subtotal.")}</span></div></article>`).join("")}
+    ${queue.slice(0, 8).map(item => `<article class="review-item"><div><b>${esc(item.room_id)} · ${esc(item.field)}</b><span>${esc(item.confidence_band)} confidence · ${esc(item.rationale || "Review this assumption.")}</span></div></article>`).join("")}` : "<span>Save settings, then assemble a local placeholder-AI draft or run the configured provider.</span>";
+}
+
+async function aiPreliminaryAction(action){
+  if (!DATA?.id) return toast("No project selected", "Open or analyse a project first.");
+  try {
+    const payload = {project_id: DATA.id, action, settings: aiPreliminarySettings()};
+    if (action === "save_placeholder_proposal") {
+      try { payload.placeholder_proposal = JSON.parse(requiredElement("aiPreliminaryProposal").value); }
+      catch { throw new Error("Proposal JSON is invalid."); }
+    }
+    const response = await fetch("/api/ai-preliminary-model", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || "AI preliminary action failed.");
+    drawAiPreliminary(data);
+    if (action === "calculate") toast("AI preliminary estimate calculated", "This result remains draft-only and does not change reviewed cooling inputs.");
+  } catch (error) { toast("AI preliminary estimate", error.message); }
 }
 
 async function submitVisionResponse(){
@@ -985,6 +1213,8 @@ function showDesignRequirements(requirements = {}, readiness = {}, roomSuggestio
   loadGroundContactGate();
   loadDynamicThermalMassGate();
   loadSolarRadiationGate();
+  loadSolarRadiationSource();
+  loadSiteOrientation();
   loadRoomCouplingGate();
   loadHourlyLoadReport();
   loadHeatingMethodGate();
@@ -1014,6 +1244,7 @@ function addEnvelopeWindow(record = {}){
   const row = document.createElement("div");
   row.className = "envelope-window";
   const citation = record.citations?.[0]?.reference || "";
+  const citationExcerpt = record.citations?.[0]?.excerpt || "";
   row.innerHTML = `<input class="window-id" placeholder="Window ID" value="${esc(record.record_id || "")}">
     <input class="window-title" placeholder="Window title / tag" value="${esc(record.title || "")}">
     <input class="window-u" type="number" min="0.001" step="0.001" placeholder="Overall U W/m²K" value="${record.u_value_w_m2k ?? ""}">
@@ -1024,13 +1255,17 @@ function addEnvelopeWindow(record = {}){
     <input class="window-glass-correction" type="number" min="0" max="1" step="0.01" placeholder="Glass correction" value="${record.glass_area_correction ?? ""}">
     <input class="window-internal-shade" type="number" min="0" max="1" step="0.01" placeholder="Internal shade factor" value="${record.internal_shading_factor ?? ""}">
     <select class="window-status"><option value="missing">Missing</option><option value="provisional">Provisional</option><option value="confirmed">Confirmed</option></select>
+    <select class="window-property-source-type"><option value="">Property source type</option><option value="project_pdf_schedule">Project PDF schedule</option><option value="supplier_datasheet">Supplier data sheet</option><option value="builder_landlord_document">Builder / landlord document</option><option value="project_override">Cited project override</option></select>
     <input class="window-source" placeholder="Reviewed source" value="${esc(record.source || "")}">
     <input class="window-citation" placeholder="Citation reference" value="${esc(citation)}">
+    <input class="window-citation-excerpt" placeholder="Schedule row / data-sheet excerpt" value="${esc(citationExcerpt)}">
+    <input class="window-applicability" placeholder="Applicability note" value="${esc(record.property_applicability || "")}">
     <button class="btn ghost mini" type="button">Remove</button>`;
   row.querySelector(".window-u-basis").value = record.u_value_basis || "";
   row.querySelector(".window-shgc").value = record.shgc ?? "";
   row.querySelector(".window-transmission").value = record.solar_transmission_factor ?? "";
   row.querySelector(".window-status").value = record.review_status || "missing";
+  row.querySelector(".window-property-source-type").value = record.property_source_type || "";
   row.querySelector("button").addEventListener("click", () => row.remove());
   requiredElement("envelopeWindowsRows").appendChild(row);
 }
@@ -1043,6 +1278,9 @@ function addEnvelopeBoundary(surface = {}){
     <input class="boundary-room" placeholder="Owner room ID (glazing)" value="${esc(surface.owner_room_id || "")}">
     <select class="boundary-kind"><option value="opaque_wall">Wall</option><option value="roof">Roof</option><option value="floor">Floor</option><option value="ceiling">Ceiling</option><option value="partition">Partition</option><option value="glazing">Glazing</option></select>
     <select class="boundary-orientation"><option value="N">N</option><option value="NE">NE</option><option value="E">E</option><option value="SE">SE</option><option value="S">S</option><option value="SW">SW</option><option value="W">W</option><option value="NW">NW</option><option value="horizontal">Horizontal</option><option value="internal">Internal</option></select>
+    <input class="boundary-azimuth" type="number" min="0" max="359.999" step="0.001" placeholder="True-north outward azimuth °" value="${surface.azimuth_deg ?? ""}">
+    <select class="boundary-exposure"><option value="unresolved">Exposure unresolved</option><option value="external">External exposure reviewed</option><option value="internal">Internal exposure reviewed</option></select>
+    <button class="btn ghost mini boundary-apply-azimuth" type="button">Use reviewed site azimuth</button>
     <input class="boundary-area" type="number" min="0.001" step="0.01" placeholder="Area m²" value="${surface.area_m2 ?? ""}">
     <select class="boundary-area-basis"><option value="legacy_net_opaque">Net opaque / legacy</option><option value="net_opaque">Net opaque</option><option value="gross_with_confirmed_openings">Gross minus confirmed openings</option></select>
     <input class="boundary-linked-openings" placeholder="Linked glazing IDs (comma-separated)" value="${esc((surface.linked_opening_surface_ids || []).join(", "))}">
@@ -1050,12 +1288,16 @@ function addEnvelopeBoundary(surface = {}){
     <input class="boundary-construction" placeholder="Construction ID" value="${esc(surface.construction_id || "")}">
     <input class="boundary-window" placeholder="Window record ID (glazing)" value="${esc(surface.window_id || "")}">
     <input class="boundary-opening-tag" placeholder="Opening tag" value="${esc(surface.opening_tag || "")}">
+    <input class="boundary-opening-evidence" placeholder="Opening evidence ID" value="${esc(surface.opening_evidence_id || "")}">
+    <input class="boundary-host-wall" placeholder="Host opaque surface ID" value="${esc(surface.host_surface_id || "")}">
+    <input class="boundary-host-wall-evidence" placeholder="Host wall evidence ID" value="${esc(surface.host_wall_evidence_id || "")}">
     <input class="boundary-opening-width" type="number" min="0.001" step="0.001" placeholder="Opening width m" value="${surface.opening_width_m ?? ""}">
     <input class="boundary-opening-height" type="number" min="0.001" step="0.001" placeholder="Opening height m" value="${surface.opening_height_m ?? ""}">
     <input class="boundary-opening-quantity" type="number" min="1" step="1" placeholder="Opening quantity" value="${surface.opening_quantity ?? ""}">
     <input class="boundary-explicit-opening" type="number" min="0.001" step="0.001" placeholder="Explicit opening area m²" value="${surface.explicit_opening_area_m2 ?? ""}">
     <input class="boundary-explicit-glass" type="number" min="0.001" step="0.001" placeholder="Explicit glass area m²" value="${surface.explicit_glass_area_m2 ?? ""}">
     <select class="boundary-opening-mapping"><option value="missing">Opening mapping missing</option><option value="proposed">Opening mapping proposed</option><option value="confirmed">Opening mapping confirmed</option><option value="conflict">Opening mapping conflict</option></select>
+    <select class="boundary-geometry-mode"><option value="engineering_reviewed">Engineering reviewed geometry</option><option value="preliminary_ai_estimate">Preliminary AI geometry — draft only</option></select>
     <select class="boundary-method"><option value="external">External</option><option value="fixed_adjacent_temperature">Fixed adjacent temp</option><option value="ground_contact">Ground contact</option><option value="outdoor_offset">Outdoor offset (stored)</option><option value="proportional_ambient_difference">Proportional (stored)</option></select>
     <input class="boundary-temp" type="number" step="0.1" placeholder="Adjacent °C" value="${surface.adjacent_temperature_c ?? ""}">
     <input class="boundary-ground-temp" type="number" step="0.1" placeholder="Ground °C" value="${surface.ground_temperature_c ?? ""}">
@@ -1065,6 +1307,13 @@ function addEnvelopeBoundary(surface = {}){
     <input class="boundary-ground-source" placeholder="Ground temperature source" value="${esc(surface.ground_temperature_source || "")}">
     <input class="boundary-ground-citation" placeholder="Ground temperature citation" value="${esc(surface.ground_temperature_citations?.[0]?.reference || "")}">
     <input class="boundary-shading-records" placeholder="Geometric shading record ID" value="${esc((surface.shading_record_ids || []).join(", "))}">
+    <select class="boundary-solar-basis"><option value="manual">Manual incident solar</option><option value="weather_facade">Weather + façade solar</option></select>
+    <input class="boundary-radiation-source" placeholder="Solar weather source ID" value="${esc(surface.solar_radiation_source_id || "")}">
+    <select class="boundary-solar-shading-mode"><option value="manual">Explicit direct factor</option><option value="geometric">Reviewed geometry</option></select>
+    <input class="boundary-direct-factor" type="number" min="0" max="1" step="0.01" placeholder="Direct shade factor" value="${surface.direct_shading_factor ?? ""}">
+    <input class="boundary-diffuse-factor" type="number" min="0" max="1" step="0.01" placeholder="Diffuse shade factor" value="${surface.diffuse_shading_factor ?? ""}">
+    <input class="boundary-diffuse-source" placeholder="Diffuse treatment source" value="${esc(surface.diffuse_shading_source || "")}">
+    <input class="boundary-diffuse-citation" placeholder="Diffuse treatment citation" value="${esc(surface.diffuse_shading_citations?.[0]?.reference || "")}">
     <select class="boundary-status"><option value="missing">Missing</option><option value="provisional">Provisional</option><option value="confirmed">Confirmed</option></select>
     <input class="boundary-source" placeholder="Reviewed source" value="${esc(surface.source || "")}">
     <label class="boundary-solar"><input class="boundary-solar-enabled" type="checkbox" ${surface.manual_solar?.enabled ? "checked" : ""}> Manual solar</label>
@@ -1075,16 +1324,29 @@ function addEnvelopeBoundary(surface = {}){
     <input class="boundary-solar-external" type="number" min="0" max="1" step="0.01" placeholder="External shading factor" value="${surface.manual_solar?.external_shading_factor ?? ""}">
     <select class="boundary-solar-status"><option value="missing">Missing</option><option value="provisional">Provisional</option><option value="confirmed">Confirmed</option></select>
     <input class="boundary-solar-source" placeholder="Manual solar source" value="${esc(surface.manual_solar?.source || "")}">
-    <button class="btn ghost mini" type="button">Remove</button>`;
+    <button class="btn ghost mini boundary-remove" type="button">Remove</button>`;
   row.querySelector(".boundary-kind").value = surface.kind || "opaque_wall";
   row.querySelector(".boundary-area-basis").value = surface.area_basis || "legacy_net_opaque";
   row.querySelector(".boundary-opening-coverage").value = surface.opening_coverage_status || "missing";
   row.querySelector(".boundary-opening-mapping").value = surface.opening_mapping_status || "missing";
+  row.querySelector(".boundary-geometry-mode").value = surface.geometry_mode || "engineering_reviewed";
+  row.querySelector(".boundary-solar-basis").value = surface.solar_basis || "manual";
+  row.querySelector(".boundary-solar-shading-mode").value = surface.solar_shading_mode || "manual";
   row.querySelector(".boundary-orientation").value = surface.orientation || "N";
+  row.querySelector(".boundary-exposure").value = surface.external_exposure || "unresolved";
   row.querySelector(".boundary-method").value = surface.boundary_method || "external";
   row.querySelector(".boundary-status").value = surface.review_status || "missing";
   row.querySelector(".boundary-solar-status").value = surface.manual_solar?.review_status || "missing";
-  row.querySelector("button").addEventListener("click", () => row.remove());
+  row.querySelector(".boundary-apply-azimuth").addEventListener("click", () => {
+    const host = row.querySelector(".boundary-host-wall").value.trim();
+    const opening = row.querySelector(".boundary-opening-evidence").value.trim();
+    const facade = (SITE_ORIENTATION.facades || []).find(item => item.host_surface_id === host && item.opening_ids?.includes(opening));
+    if (!facade || facade.status !== "reviewed") return toast("Orientation unresolved", "Review the exact tenancy, host façade and opening in Site orientation first.");
+    row.querySelector(".boundary-azimuth").value = facade.azimuth_deg;
+    row.querySelector(".boundary-exposure").value = facade.exposure;
+    toast("Site azimuth applied", `${facade.azimuth_deg}° true north, ${facade.exposure} exposure. Save the envelope to record it.`);
+  });
+  row.querySelector(".boundary-remove").addEventListener("click", () => row.remove());
   requiredElement("envelopeSurfaces").appendChild(row);
 }
 
@@ -1115,12 +1377,14 @@ function readEnvelope(){
       windows: windowRows.length ? windowRows.map(row => {
         const id = row.querySelector(".window-id").value.trim(), original = windowById.get(id) || {};
         const citation = row.querySelector(".window-citation").value.trim(), originalCitation = original.citations?.[0]?.reference || "";
+        const excerpt = row.querySelector(".window-citation-excerpt").value.trim(), originalExcerpt = original.citations?.[0]?.excerpt || "";
         return {...original, record_id: id, title: row.querySelector(".window-title").value.trim(), revision: original.revision || 1,
           u_value_w_m2k: blankToNull(row.querySelector(".window-u").value), u_value_basis: row.querySelector(".window-u-basis").value,
           shgc: blankToNull(row.querySelector(".window-shgc").value), solar_transmission_factor: blankToNull(row.querySelector(".window-transmission").value),
           frame_fraction: blankToNull(row.querySelector(".window-frame").value), glass_area_correction: blankToNull(row.querySelector(".window-glass-correction").value),
           internal_shading_factor: blankToNull(row.querySelector(".window-internal-shade").value), review_status: row.querySelector(".window-status").value,
-          source: row.querySelector(".window-source").value.trim(), citations: citation === originalCitation ? (original.citations || []) : (citation ? [{reference: citation, page: null, excerpt: ""}] : [])};
+          property_source_type: row.querySelector(".window-property-source-type").value, property_applicability: row.querySelector(".window-applicability").value.trim(),
+          source: row.querySelector(".window-source").value.trim(), citations: citation === originalCitation && excerpt === originalExcerpt ? (original.citations || []) : (citation ? [{reference: citation, page: null, excerpt}] : [])};
       }) : parseEnvelopeRecords("envelopeWindows", "Window records"), shading_records: parseEnvelopeRecords("envelopeShading", "Shading records"),
     },
     envelope_model: {
@@ -1128,10 +1392,13 @@ function readEnvelope(){
       surfaces: [...document.querySelectorAll(".envelope-boundary")].map(row => ({...(surfaceById.get(row.querySelector(".boundary-id").value.trim()) || {}),
         surface_id: row.querySelector(".boundary-id").value.trim(), owner_zone_id: row.querySelector(".boundary-zone").value.trim(), owner_room_id: row.querySelector(".boundary-room").value.trim(),
         kind: row.querySelector(".boundary-kind").value, orientation: row.querySelector(".boundary-orientation").value,
+        azimuth_deg: blankToNull(row.querySelector(".boundary-azimuth").value), external_exposure: row.querySelector(".boundary-exposure").value,
+        orientation_source_fingerprint: SITE_ORIENTATION?.fingerprint || surfaceById.get(row.querySelector(".boundary-id").value.trim())?.orientation_source_fingerprint || "",
         area_m2: blankToNull(row.querySelector(".boundary-area").value), area_basis: row.querySelector(".boundary-area-basis").value,
         linked_opening_surface_ids: row.querySelector(".boundary-linked-openings").value.split(",").map(value => value.trim()).filter(Boolean), opening_coverage_status: row.querySelector(".boundary-opening-coverage").value,
         construction_id: row.querySelector(".boundary-construction").value.trim(), window_id: row.querySelector(".boundary-window").value.trim(), shading_record_ids: row.querySelector(".boundary-shading-records").value.split(",").map(value => value.trim()).filter(Boolean),
-        opening_tag: row.querySelector(".boundary-opening-tag").value.trim(), opening_width_m: blankToNull(row.querySelector(".boundary-opening-width").value), opening_height_m: blankToNull(row.querySelector(".boundary-opening-height").value), opening_quantity: blankToNull(row.querySelector(".boundary-opening-quantity").value), explicit_opening_area_m2: blankToNull(row.querySelector(".boundary-explicit-opening").value), explicit_glass_area_m2: blankToNull(row.querySelector(".boundary-explicit-glass").value), opening_mapping_status: row.querySelector(".boundary-opening-mapping").value,
+        opening_tag: row.querySelector(".boundary-opening-tag").value.trim(), opening_evidence_id: row.querySelector(".boundary-opening-evidence").value.trim(), host_surface_id: row.querySelector(".boundary-host-wall").value.trim(), host_wall_evidence_id: row.querySelector(".boundary-host-wall-evidence").value.trim(), opening_width_m: blankToNull(row.querySelector(".boundary-opening-width").value), opening_height_m: blankToNull(row.querySelector(".boundary-opening-height").value), opening_quantity: blankToNull(row.querySelector(".boundary-opening-quantity").value), explicit_opening_area_m2: blankToNull(row.querySelector(".boundary-explicit-opening").value), explicit_glass_area_m2: blankToNull(row.querySelector(".boundary-explicit-glass").value), opening_mapping_status: row.querySelector(".boundary-opening-mapping").value, geometry_mode: row.querySelector(".boundary-geometry-mode").value,
+        solar_basis: row.querySelector(".boundary-solar-basis").value, solar_radiation_source_id: row.querySelector(".boundary-radiation-source").value.trim(), solar_shading_mode: row.querySelector(".boundary-solar-shading-mode").value, direct_shading_factor: blankToNull(row.querySelector(".boundary-direct-factor").value), diffuse_shading_factor: blankToNull(row.querySelector(".boundary-diffuse-factor").value), diffuse_shading_source: row.querySelector(".boundary-diffuse-source").value.trim(), diffuse_shading_citations: (() => { const citation = row.querySelector(".boundary-diffuse-citation").value.trim(); return citation ? [{reference: citation, page: null, excerpt: "Reviewed diffuse-shading treatment"}] : []; })(),
         boundary_method: row.querySelector(".boundary-method").value, adjacent_temperature_c: blankToNull(row.querySelector(".boundary-temp").value), ground_temperature_c: blankToNull(row.querySelector(".boundary-ground-temp").value), adjacent_boundary_id: row.querySelector(".boundary-adjacent-id").value.trim(), adjacent_temperature_source: row.querySelector(".boundary-adjacent-source").value.trim(), adjacent_temperature_citations: (() => { const citation = row.querySelector(".boundary-adjacent-citation").value.trim(); return citation ? [{reference: citation, page: null, excerpt: "Reviewed adjacent temperature"}] : []; })(), ground_temperature_source: row.querySelector(".boundary-ground-source").value.trim(), ground_temperature_citations: (() => { const citation = row.querySelector(".boundary-ground-citation").value.trim(); return citation ? [{reference: citation, page: null, excerpt: "Reviewed ground temperature"}] : []; })(),
         review_status: row.querySelector(".boundary-status").value, source: row.querySelector(".boundary-source").value.trim(), citations: surfaceById.get(row.querySelector(".boundary-id").value.trim())?.citations || [],
         manual_solar: {...(surfaceById.get(row.querySelector(".boundary-id").value.trim())?.manual_solar || {}), enabled: row.querySelector(".boundary-solar-enabled").checked, solar_design_w_m2: blankToNull(row.querySelector(".boundary-solar-design").value), incident_solar_w_m2: blankToNull(row.querySelector(".boundary-solar-incident").value), solar_gain_factor: blankToNull(row.querySelector(".boundary-solar-gain").value), shading_factor: blankToNull(row.querySelector(".boundary-solar-shade").value), external_shading_factor: blankToNull(row.querySelector(".boundary-solar-external").value), review_status: row.querySelector(".boundary-solar-status").value, source: row.querySelector(".boundary-solar-source").value.trim(), citations: surfaceById.get(row.querySelector(".boundary-id").value.trim())?.manual_solar?.citations || []},
@@ -1165,11 +1432,17 @@ function showEnvelope(library = {}, model = {}, readiness = {}){
 async function loadEnvelope(){
   if (!DATA?.id) return;
   try {
-    const [libraryRes, modelRes] = await Promise.all([
+    const [libraryRes, modelRes, evidenceRes] = await Promise.all([
       fetch("/api/envelope-library?project_id=" + encodeURIComponent(DATA.id)), fetch("/api/envelope-model?project_id=" + encodeURIComponent(DATA.id)),
+      fetch("/api/calculation-input-evidence?project_id=" + encodeURIComponent(DATA.id)),
     ]);
     const library = await libraryRes.json(), model = await modelRes.json();
     if (libraryRes.ok && modelRes.ok && !library.error && !model.error) showEnvelope(library.envelope_library, model.envelope_model, model.readiness);
+    if (evidenceRes.ok) {
+      const evidence = await evidenceRes.json();
+      const openings = evidence.calculation_input_evidence?.opening_register?.openings || [];
+      requiredElement("envelopeOpeningEvidence").innerHTML = openingEvidenceMarkup(openings, true);
+    }
   } catch {}
 }
 
@@ -1274,7 +1547,84 @@ async function loadCalculatorDraft(){
   } catch {}
 }
 
-function showCalculationInputEvidence(evidence = {}, summary = {}, status = "not_built", artifactUrl = ""){
+function openingEvidenceMarkup(openings = [], showEmpty = false, reviewable = false){
+  if (!openings.length) return showEmpty ? '<div class="review-empty"><b>No AI-linked plan openings yet</b><span>Build calculation-input evidence from a structured geometry handoff, then confirm each opening against the plan and schedule.</span></div>' : "";
+  return `<div class="draft-group-title">Opening evidence and façade matching</div>${openings.slice(0, 80).map(item => {
+    const preview = item.crop_preview_url || item.page_preview_url;
+    const matchText = (item.evidence_refs || []).map(ref => `${ref.kind}: page ${ref.page}${ref.reference ? ` (${ref.reference})` : ""}`).join(" · ");
+    const competing = (item.competing_matches || []).map(match => typeof match === "string" ? match : JSON.stringify(match));
+    const property = item.proposed_window_properties || {};
+    const proposal = item.properties_status === "evidence_only_until_reviewed_window_record"
+      ? `Cited property proposal: U ${esc(property.u_value_w_m2k ?? "?")} W/m²K · SHGC/transmission ${esc(property.shgc ?? property.solar_transmission_factor ?? "?")} · confirm in Window library.`
+      : "Cited overall-window U-value and SHGC/transmission still required.";
+    const sightings = (item.sightings || []).map(sighting => `<span class="opening-sighting">${sighting.page_preview_url ? `<a href="${esc(sighting.page_preview_url)}" target="_blank" rel="noopener"><img src="${esc(sighting.page_preview_url)}" alt="${esc(sighting.view_type)} sighting on page ${esc(sighting.page)}" loading="lazy" width="96"></a>` : ""}<small>Page ${esc(sighting.page)} · ${esc(sighting.view_type)} · ${esc(sighting.appearance_status)} · ${esc((sighting.landmarks || []).join(", "))}</small></span>`).join("");
+    return `<article class="review-item readiness-${item.status === "ai_estimated" ? "draft" : "blocked"}"><div><b>${esc(item.system_name || item.tag || "Untagged opening")} · ${esc(item.status)}</b><span>${esc(item.opening_id)} · room ${esc(item.owner_room_id || "unresolved")} · host ${esc(item.host_wall_id || "unresolved")} · exposure ${esc(item.external_exposure || "unresolved")} · façade ${esc(item.facade || "unresolved")}</span><small>Page ${esc(item.page || "?")} · drawing ${esc(item.drawing_number || "unresolved")} · level ${esc(item.level_name || "unresolved")} · ${esc(item.width_m || "?")} × ${esc(item.height_m || "?")} m · ${esc(matchText || item.match_reason || "No supporting match")}</small>${item.source_excerpt ? `<small>Excerpt: ${esc(String(item.source_excerpt).slice(0, 300))}</small>` : ""}${item.unresolved_fields?.length ? `<small>Resolve: ${esc(item.unresolved_fields.join("; "))}</small>` : ""}${competing.length ? `<small>Competing matches: ${esc(competing.join(" | "))}</small>` : ""}<small>${proposal}</small><small>Confirm exact room, host wall, opening area and exterior exposure.</small>${sightings ? `<div class="opening-sightings">${sightings}</div>` : ""}</div>${reviewable ? `<button class="btn ghost mini" type="button" data-review-opening="${esc(item.opening_id)}">Review this system</button>` : ""}${!sightings && preview ? `<a href="${esc(preview)}" target="_blank" rel="noopener"><img src="${esc(preview)}" alt="Opening ${esc(item.tag || item.opening_id)} on page ${esc(item.page)}" loading="lazy" width="96"></a>` : ""}</article>`;
+  }).join("")}${openings.length > 80 ? `<p class="fine">Showing 80 of ${openings.length} openings; inspect the evidence register for the remainder.</p>` : ""}`;
+}
+
+function componentInterpretationsMarkup(artifact = {}, status = "not_built", artifactUrl = ""){
+  const rows = artifact.interpretations || [];
+  const stale = status === "stale";
+  const cards = rows.slice(0, 80).map(row => {
+    const locks = row.reviewer_locks || {};
+    const proposal = row.latest_ai_proposal || {};
+    const refs = row.evidence_refs || [];
+    const conflicts = row.competing_updates || [];
+    const field = (name, locked) => locked ? `<small>Reviewer locked · AI proposal held for review</small>` : "";
+    return `<article class="review-item readiness-${esc(stale ? "blocked" : row.confidence_band === "high" ? "review_ready" : "draft")}" data-component-interpretation="${esc(row.component_id)}"><div><b>${esc(row.display_name || row.original_label || "Unnamed component")}</b><span>${esc(row.canonical_type)} · confidence ${esc(Number(row.confidence_score || 0).toFixed(2))} (${esc(row.confidence_band || "low")})</span><small>Original PDF label: ${esc(row.original_label || "not recorded")} · immutable ID ${esc(row.component_id)}</small><small>${esc(row.rationale || "No AI rationale has been supplied.")}</small><small>Evidence: ${esc(refs.map(ref => `${ref.drawing_number || ref.reference || "source"}${ref.page ? ` p.${ref.page}` : ""}`).join(" · ") || "none")}</small>${conflicts.length ? `<small>New AI proposal available for: ${esc(conflicts.flatMap(item => item.fields || []).join(", "))}</small>` : ""}</div><div class="requirements-form"><label>AI display name<input data-interpretation-name value="${esc(row.display_name || "")}" ${stale ? "disabled" : ""}>${field("display_name", locks.display_name)}</label><label>Confidence (0–1)<input data-interpretation-confidence type="number" min="0" max="1" step="0.01" value="${esc(row.confidence_score ?? 0)}" ${stale ? "disabled" : ""}>${field("confidence", locks.confidence)}</label><label class="checkbox-label"><input data-interpretation-lock-name type="checkbox" ${locks.display_name ? "checked" : ""} ${stale ? "disabled" : ""}> Lock name</label><label class="checkbox-label"><input data-interpretation-lock-confidence type="checkbox" ${locks.confidence ? "checked" : ""} ${stale ? "disabled" : ""}> Lock confidence</label><label>Reviewer<input data-interpretation-reviewer placeholder="Name / initials" ${stale ? "disabled" : ""}></label><label>Review note<input data-interpretation-note placeholder="Why this wording/confidence was chosen" ${stale ? "disabled" : ""}></label></div><div class="bar">${!stale ? `<button class="btn ghost mini" type="button" data-save-component-interpretation>Save review</button>${locks.display_name ? `<button class="btn ghost mini" type="button" data-unlock-component-interpretation="${esc(row.component_id)}" data-field="display_name">Unlock name and restore AI</button>` : ""}${locks.confidence ? `<button class="btn ghost mini" type="button" data-unlock-component-interpretation="${esc(row.component_id)}" data-field="confidence">Unlock confidence and restore AI</button>` : ""}` : `<small>Interpretations are stale because their source evidence changed. Rebuild calculation-input evidence first.</small>`}</div></article>`;
+  }).join("");
+  return `<details class="review-item input-register-group" ${rows.length ? "open" : ""}><summary><b>AI component interpretations</b><span>${rows.length} proposal-only name/confidence record${rows.length === 1 ? "" : "s"} · ${esc(status)}</span></summary><p class="fine">These labels and confidence scores only prioritise review. They never change canonical type, geometry, ownership, properties, eligibility, or load calculations.</p>${artifactUrl ? `<a class="btn ghost mini" href="${esc(artifactUrl)}" target="_blank" rel="noopener">Open interpretation JSON</a>` : ""}<details><summary><b>Apply placeholder/API AI proposals</b></summary><p class="fine">Paste a JSON array using component_id, display_name, confidence_score, rationale, evidence_refs, provider, model, and prompt_policy_fingerprint. Locked reviewer fields are retained and shown as competing proposals.</p><textarea id="componentInterpretationProposals" rows="7" placeholder='[{"component_id":"component_…","display_name":"External shopfront","confidence_score":0.86,"rationale":"…","evidence_refs":[{"page":1,"reference":"A-101","excerpt":"…"}],"provider":"manual_placeholder","model":"local","prompt_policy_fingerprint":"policy-v1"}]' ${stale ? "disabled" : ""}></textarea><div class="bar">${!stale ? `<button class="btn ghost mini" type="button" data-apply-component-interpretations>Apply AI proposals</button>` : ""}</div></details>${cards || `<div class="review-empty"><b>No normalized components yet</b><span>Build the calculation-input evidence register first.</span></div>`}${rows.length > 80 ? `<p class="fine">Showing 80 of ${rows.length} interpretation records.</p>` : ""}</details>`;
+}
+
+async function saveComponentInterpretationReview(card){
+  if (!DATA?.id || !card) return;
+  try {
+    const payload = {
+      component_id: card.dataset.componentInterpretation,
+      display_name: card.querySelector("[data-interpretation-name]").value.trim(),
+      confidence_score: Number(card.querySelector("[data-interpretation-confidence]").value),
+      lock_display_name: card.querySelector("[data-interpretation-lock-name]").checked,
+      lock_confidence: card.querySelector("[data-interpretation-lock-confidence]").checked,
+      note: card.querySelector("[data-interpretation-note]").value.trim(),
+    };
+    const reviewer = card.querySelector("[data-interpretation-reviewer]").value.trim() || "local_user";
+    const res = await fetch("/api/calculation-input-evidence", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({project_id: DATA.id, action:"save_component_interpretation_review", reviewer, interpretation: payload})});
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || "Could not save the interpretation review.");
+    showComponentInterpretations(data.component_interpretations, data.component_interpretations_status, data.component_interpretations_url);
+    toast("Interpretation review saved", "The display label and confidence remain advisory only.");
+  } catch (error) { toast("Interpretation review failed", error.message); }
+}
+
+async function unlockComponentInterpretation(componentId, field){
+  if (!DATA?.id) return;
+  try {
+    const res = await fetch("/api/calculation-input-evidence", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({project_id: DATA.id, action:"unlock_component_interpretation_field", component_id: componentId, field, reviewer:"local_user"})});
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || "Could not unlock the interpretation field.");
+    showComponentInterpretations(data.component_interpretations, data.component_interpretations_status, data.component_interpretations_url);
+  } catch (error) { toast("Interpretation unlock failed", error.message); }
+}
+
+async function applyComponentInterpretationProposals(){
+  if (!DATA?.id) return;
+  try {
+    const proposalInput = document.querySelector("#componentInterpretationProposals");
+    const raw = proposalInput?.value.trim() || "";
+    const updates = JSON.parse(raw || "[]");
+    const res = await fetch("/api/calculation-input-evidence", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({project_id: DATA.id, action:"apply_component_interpretations", actor:"manual_placeholder_ai", updates})});
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || "Could not apply AI proposals.");
+    showComponentInterpretations(data.component_interpretations, data.component_interpretations_status, data.component_interpretations_url);
+    toast("AI interpretation proposals applied", data.competing_update_component_ids?.length ? "Reviewer-locked fields were retained as competing proposals." : "Unlocked display fields were updated.");
+  } catch (error) { toast("AI proposal failed", error.message); }
+}
+
+function showComponentInterpretations(artifact = {}, status = "not_built", artifactUrl = ""){
+  requiredElement("componentInterpretations").innerHTML = componentInterpretationsMarkup(artifact, status, artifactUrl);
+}
+
+function showCalculationInputEvidence(evidence = {}, summary = {}, status = "not_built", artifactUrl = "", interpretations = {}, interpretationsStatus = "not_built", interpretationsUrl = ""){
   const counts = summary.status_counts || {};
   requiredElement("calculationEvidenceStatus").textContent = status === "stale"
     ? "Calculation-input evidence is stale; rebuild it from the current architect packet."
@@ -1283,19 +1633,22 @@ function showCalculationInputEvidence(evidence = {}, summary = {}, status = "not
       : "Build the numerical-input evidence register after the architect packet is analysed.";
   const categoryText = Object.entries(summary.category_counts || {}).map(([key, value]) => `${key}: ${value.count || 0}`).join(" · ");
   const geometry = evidence.geometry_resolution || {};
-  const geometryProofs = (geometry.entities || []).filter(item => item.kind === "room_geometry_proof");
+  const geometryProofs = (geometry.entities || []).filter(item => ["room_geometry_proof", "ai_room_geometry"].includes(item.kind));
   const geometryIssues = (geometry.review_items || []).filter(item => ["geometry", "geometry_area", "scale"].includes(item.field));
   const geometrySummary = geometryProofs.length || geometryIssues.length
-    ? `<article class="review-item"><div><b>Room geometry and area proofs</b><span>${esc(`${geometry.summary?.confirmed_room_geometry_count || 0} confirmed · ${geometryProofs.length} boundary proofs · ${geometryIssues.length} geometry exceptions`)}</span><small>Derived areas need a closed calibrated boundary, a room-label witness, and an independent supporting witness. 3D pages remain cross-check-only.</small></div></article><div class="geometry-proof-list">${geometryProofs.map(proof => { const value = proof.value || {}; const calibration = value.calibration || {}; return `<article class="review-item readiness-${esc(proof.geometry_status === "geometry_confirmed" ? "review_ready" : "blocked")}"><div><b>${esc(proof.label || "Room boundary")} · ${esc(proof.geometry_status || "geometry_proposed")}</b><span>${value.area_m2 ? `${esc(value.area_m2)} m² derived area` : "Area cannot be derived yet"}</span><small>Level ${esc(proof.level_candidate || "unresolved")} · page ${esc(proof.source?.page || "?")} · ${esc((value.boundary_wall_ids || []).length)} boundary walls · scale ${calibration.mm_per_px ? `${esc(calibration.mm_per_px)} mm/px` : "not proven"}</small>${proof.unresolved_fields?.length ? `<small>Missing: ${esc(proof.unresolved_fields.join(", "))}</small>` : ""}</div></article>`; }).join("")}${geometryIssues.map(item => `<article class="review-item readiness-blocked"><div><b>Geometry exception · ${esc(item.affected_id || "room")}</b><span>${esc(item.reason || "Geometry evidence needs another witness.")}</span><small>Page ${esc(item.page || "?")} · ${esc(item.remediation || "Review the cited geometry.")}</small></div></article>`).join("")}</div>`
+    ? `<article class="review-item"><div><b>Room geometry and area proofs</b><span>${esc(`${geometry.summary?.confirmed_room_geometry_count || 0} confirmed · ${geometryProofs.length} boundary proofs · ${geometryIssues.length} geometry exceptions`)}</span><small>Derived areas need a closed calibrated boundary, a room-label witness, and an independent supporting witness. 3D pages remain cross-check-only.</small></div></article><div class="geometry-proof-list">${geometryProofs.map(proof => { const value = proof.value || {}; const calibration = value.calibration || {}; const readiness = proof.geometry_status === "geometry_confirmed" ? "review_ready" : proof.geometry_status === "ai_estimated" ? "draft" : "blocked"; return `<article class="review-item readiness-${esc(readiness)}"><div><b>${esc(proof.label || "Room boundary")} · ${esc(proof.geometry_status || "geometry_proposed")}</b><span>${value.area_m2 ? `${esc(value.area_m2)} m² derived area` : "Area cannot be derived yet"}</span><small>Level ${esc(proof.level_candidate || "unresolved")} · page ${esc(proof.source?.page || "?")} · ${esc((value.boundary_wall_ids || value.wall_ids || []).length)} boundary walls · scale ${calibration.mm_per_px ? `${esc(calibration.mm_per_px)} mm/px` : "not proven"}</small>${proof.unresolved_fields?.length ? `<small>Missing: ${esc(proof.unresolved_fields.join(", "))}</small>` : ""}${proof.review_warnings?.length ? `<small>Review warnings: ${esc(proof.review_warnings.join(", "))}</small>` : ""}</div></article>`; }).join("")}${geometryIssues.map(item => `<article class="review-item readiness-blocked"><div><b>Geometry exception · ${esc(item.affected_id || "room")}</b><span>${esc(item.reason || "Geometry evidence needs another witness.")}</span><small>Page ${esc(item.page || "?")} · ${esc(item.remediation || "Review the cited geometry.")}</small></div></article>`).join("")}</div>`
     : "";
+  const openingRows = evidence.opening_register?.openings || [];
+  const openingSummary = openingRows.length ? `<div class="geometry-entity-list">${openingEvidenceMarkup(openingRows)}</div>` : "";
   requiredElement("calculationEvidenceSummary").innerHTML = evidence?.fingerprint
-    ? `<article class="review-item"><div><b>Calculation-input evidence register</b><span>${esc(categoryText || "No categories extracted")}</span><small>Rooms referenced: ${esc((summary.affected_room_labels || []).join(", ") || "None")}</small></div>${artifactUrl ? `<a class="btn ghost mini" href="${esc(artifactUrl)}" target="_blank" rel="noopener">Open evidence JSON</a>` : ""}</article>${geometrySummary}${evidence.binding ? `<article class="review-item"><div><b>Evidence binding</b><span>${esc(`${evidence.binding.relationships?.length || 0} relationships · ${evidence.binding.conflicts?.length || 0} conflicts · ${evidence.binding.observations?.length || 0} observations`)}</span><small>Labels, table cells, image witnesses, PDF candidates, and manual vision records are linked by source page and stable evidence identity. 3D/image-only records remain cross-checks.</small></div></article>` : ""}`
+    ? `<article class="review-item"><div><b>Calculation-input evidence register</b><span>${esc(categoryText || "No categories extracted")}</span><small>Rooms referenced: ${esc((summary.affected_room_labels || []).join(", ") || "None")}</small></div>${artifactUrl ? `<a class="btn ghost mini" href="${esc(artifactUrl)}" target="_blank" rel="noopener">Open evidence JSON</a>` : ""}</article>${geometrySummary}${openingSummary}${evidence.binding ? `<article class="review-item"><div><b>Evidence binding</b><span>${esc(`${evidence.binding.relationships?.length || 0} relationships · ${evidence.binding.conflicts?.length || 0} conflicts · ${evidence.binding.observations?.length || 0} observations`)}</span><small>Labels, table cells, image witnesses, PDF candidates, and manual vision records are linked by source page and stable evidence identity. 3D/image-only records remain cross-checks.</small></div></article>` : ""}`
     : "";
   const rows = (evidence.candidates || []).slice(0, 80);
   const bindingIssues = (evidence.binding?.conflicts || []).map(item => `<article class="review-item readiness-blocked"><div><b>Binding conflict · ${esc(item.label || item.target || item.kind)}</b><span>${esc(item.reason || "Competing evidence requires review.")}</span><small>Pages ${esc((item.pages || []).join(", ") || "not cited")}</small></div></article>`).join("");
   requiredElement("calculationEvidenceCandidates").innerHTML = rows.length || bindingIssues
     ? `<div class="draft-group-title">Extracted values and exceptions</div>${rows.map(row => `<article class="review-item readiness-${esc(row.status === "active" ? "review_ready" : row.status === "evidence_only" ? "draft" : "blocked")}"><div><b>${esc(row.category)} · ${esc(row.target)}</b><span>${esc(typeof row.value === "object" ? JSON.stringify(row.value) : `${row.value ?? "—"} ${row.unit || ""}`)}</span><small>${esc(row.status)} · ${esc(row.source?.drawing_number || "")}, page ${esc(row.source?.page || "?")} · ${esc(row.source?.excerpt || "")}</small>${row.binding_status ? `<small>Binding: ${esc(row.binding_status)} · ${esc(row.binding_basis || "")}</small>` : ""}${row.unresolved_fields?.length ? `<small>Unresolved: ${esc(row.unresolved_fields.join(", "))}</small>` : ""}</div></article>`).join("")}${bindingIssues}`
     : "";
+  showComponentInterpretations(interpretations, interpretationsStatus, interpretationsUrl);
 }
 
 async function loadCalculationInputEvidence(){
@@ -1303,7 +1656,7 @@ async function loadCalculationInputEvidence(){
   try {
     const res = await fetch(`/api/calculation-input-evidence?project_id=${encodeURIComponent(DATA.id)}`);
     const data = await res.json();
-    if (res.ok && !data.error) showCalculationInputEvidence(data.calculation_input_evidence || {}, data.summary || {}, data.status || "not_built", data.artifact_url || "");
+    if (res.ok && !data.error) showCalculationInputEvidence(data.calculation_input_evidence || {}, data.summary || {}, data.status || "not_built", data.artifact_url || "", data.component_interpretations || {}, data.component_interpretations_status || "not_built", data.component_interpretations_url || "");
   } catch (_) { /* Evidence extraction is optional until the packet is analysed. */ }
 }
 
@@ -1316,7 +1669,7 @@ async function buildCalculationInputEvidence(){
     const res = await fetch("/api/calculation-input-evidence", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({project_id: DATA.id, action: "build"})});
     const data = await res.json();
     if (!res.ok || data.error) throw new Error(data.error || "Could not extract calculation inputs.");
-    showCalculationInputEvidence(data.calculation_input_evidence || {}, data.summary || {}, data.status || "current", data.artifact_url || "");
+    showCalculationInputEvidence(data.calculation_input_evidence || {}, data.summary || {}, data.status || "current", data.artifact_url || "", data.component_interpretations || {}, data.component_interpretations_status || "current", data.component_interpretations_url || "");
     toast("Calculation-input evidence built", `${data.summary?.candidate_count || 0} cited candidates recorded. Review unresolved values before assembly.`);
   } catch (error) { requiredElement("calculationEvidenceStatus").textContent = "Calculation-input extraction failed."; toast("Extraction failed", error.message); }
   button.disabled = false;
@@ -1397,6 +1750,7 @@ function geometryReviewMarkup(draft){
   const pages = draft.page_roles || [];
   const fusion = draft.evidence_fusion || {};
   const geometry = fusion.geometry_resolution || {};
+  const thermalSurfaces = geometry.thermal_surface_ledger?.surfaces || [];
   const witnesses = geometry.witnesses || [];
   const entities = geometry.entities || [];
   const pageGroups = {};
@@ -1442,8 +1796,9 @@ function geometryReviewMarkup(draft){
     const unresolved = (entity.unresolved_fields || []).join(", ");
     return `<article class="review-item geometry-entity"><div><b>${esc(entity.kind)} · ${esc(displayValue)}</b><span>Page ${esc(sourcePage)} · ${esc((entity.geometry_status || "proposed").replaceAll("_", " "))}</span><small>${esc(entity.extraction_method || "evidence")} · confidence ${esc(entity.confidence || "unknown")}${unresolved ? ` · unresolved: ${esc(unresolved)}` : ""}</small></div></article>`;
   }).join("");
+  const thermalSurfaceCards = thermalSurfaces.slice(0, 80).map(surface => `<article class="review-item geometry-entity"><div><b>${esc(surface.physical_type || "surface")} · ${esc(surface.thermal_role || "unresolved")}</b><span>${esc(surface.surface_id)} · ${esc(surface.status || "proposed")}${surface.thermal_eligible ? " · thermal eligible" : " · excluded from load"}</span><small>Room ${esc(surface.owner_room_id || "unresolved")} · boundary ${esc(surface.boundary_condition || "unresolved")} · page ${esc(surface.page || "?")} · confidence ${esc(surface.confidence || "unknown")}</small>${surface.unresolved_fields?.length ? `<small>Unresolved: ${esc(surface.unresolved_fields.join(", "))}</small>` : ""}${surface.remediation ? `<small>Remediation: ${esc(surface.remediation)}</small>` : ""}</div></article>`).join("");
   const readiness = rooms.length ? `${statusCounts.geometry_confirmed || 0} geometry confirmed · ${statusCounts.geometry_review_required || 0} review required · ${(statusCounts.label_detected || 0) + (statusCounts.geometry_proposed || 0)} label/proposed` : "No room candidates yet";
-  return `<section class="geometry-review-workspace"><div class="draft-group-title">Geometry review workspace</div><div class="geometry-review-intro"><div><b>Resolve topology from evidence</b><span>${esc(readiness)} · ${floors.length} floor candidate${floors.length === 1 ? "" : "s"} · ${zones.length} zone candidates · ${pages.length} architect pages indexed.</span></div><span class="conf">No calculation inputs are changed here.</span></div><div class="geometry-page-groups">${groupSummary || `<span class="fine">Build the calculator draft to populate page groups.</span>`}</div><div class="geometry-room-list">${roomCards || `<article class="review-empty"><b>Room geometry is not ready</b><span>Build evidence and calculator proposals first; unresolved rooms remain excluded.</span></article>`}</div>${entityCards ? `<div class="geometry-entity-list"><div class="draft-group-title">Dimensions, walls, openings, and level witnesses</div>${entityCards}</div>` : ""}</section>`;
+  return `<section class="geometry-review-workspace"><div class="draft-group-title">Geometry review workspace</div><div class="geometry-review-intro"><div><b>Resolve topology from evidence</b><span>${esc(readiness)} · ${floors.length} floor candidate${floors.length === 1 ? "" : "s"} · ${zones.length} zone candidates · ${pages.length} architect pages indexed.</span></div><span class="conf">No calculation inputs are changed here.</span></div><div class="geometry-page-groups">${groupSummary || `<span class="fine">Build the calculator draft to populate page groups.</span>`}</div><div class="geometry-room-list">${roomCards || `<article class="review-empty"><b>Room geometry is not ready</b><span>Build evidence and calculator proposals first; unresolved rooms remain excluded.</span></article>`}</div>${thermalSurfaceCards ? `<div class="geometry-entity-list"><div class="draft-group-title">AI thermal-surface ledger</div>${thermalSurfaceCards}</div>` : ""}${entityCards ? `<div class="geometry-entity-list"><div class="draft-group-title">Dimensions, walls, openings, and level witnesses</div>${entityCards}</div>` : ""}</section>`;
 }
 
 function calculatorDraftCandidateMarkup(item, savedDecision){
@@ -1885,6 +2240,7 @@ async function saveInfiltrationGate(){
 
 function showGlazingGate(gate = {}, readiness = {}){
   GLAZING_GATE = gate || {};
+  requiredElement("glazingGatePolicy").value = gate.policy?.solar_basis === "cited_horizontal_weather_facade_v1" ? "weather_facade" : "manual";
   requiredElement("glazingGateStatus").value = gate.approval_status || "placeholder";
   requiredElement("glazingEngineerName").value = gate.engineer_name || "";
   requiredElement("glazingEngineerCredential").value = gate.engineer_credential || "";
@@ -1910,6 +2266,7 @@ async function saveGlazingGate(){
   const citation = requiredElement("glazingGateCitation").value.trim();
   const gate = {
     ...GLAZING_GATE,
+    policy: requiredElement("glazingGatePolicy").value === "weather_facade" ? {solar_basis: "cited_horizontal_weather_facade_v1", u_value_basis: "overall_window", opening_mapping: "exact_room_owned_opening_evidence_required", opaque_area_policy: "net_opaque_or_gross_minus_complete_confirmed_openings", safety_factor_policy: "existing_room_factor_once", unsupported: ["uncited_weather", "inferred_glazing_properties", "dynamic_shading", "annual_analysis"]} : undefined,
     approval_status: requiredElement("glazingGateStatus").value,
     engineer_name: requiredElement("glazingEngineerName").value.trim(),
     engineer_credential: requiredElement("glazingEngineerCredential").value.trim(),
@@ -1918,6 +2275,7 @@ async function saveGlazingGate(){
     scope: requiredElement("glazingScope").value.trim(),
     citations: citation ? [{reference: citation, page: null, excerpt: "Approved glazing method gate"}] : [],
   };
+  if (!gate.policy) delete gate.policy;
   try {
     const res = await fetch("/api/glazing-method-gate", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({project_id: DATA.id, glazing_method_gate: gate})});
     const data = await res.json();
@@ -2019,6 +2377,7 @@ async function saveGroundContactGate(){
 }
 
 function showAdvancedGate(prefix, gate = {}, readiness = {}, fallbackScope = ""){
+  if (prefix === "solarRadiation") requiredElement("solarRadiationPolicy").value = gate.policy?.basis === "cited_hourly_horizontal_weather_pvlib_isotropic_v1" ? "weather_facade" : "surface_plane";
   requiredElement(`${prefix}GateStatus`).value = gate.approval_status || "placeholder";
   requiredElement(`${prefix}EngineerName`).value = gate.engineer_name || "";
   requiredElement(`${prefix}EngineerCredential`).value = gate.engineer_credential || "";
@@ -2051,6 +2410,7 @@ async function saveAdvancedGate(prefix, endpoint, key, title){
     scope: requiredElement(`${prefix}Scope`).value.trim(),
     citations: citation ? [{reference: citation, page: null, excerpt: `Approved ${title} method gate`}] : [],
   };
+  if (prefix === "solarRadiation" && requiredElement("solarRadiationPolicy").value === "weather_facade") gate.policy = {basis: "cited_hourly_horizontal_weather_pvlib_isotropic_v1", requires_orientation: true, unsupported: ["uncited_weather_lookup", "inferred_ground_reflectance", "annual_analysis"]};
   try {
     const res = await fetch(endpoint, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({project_id: DATA.id, [key]: gate})});
     const data = await res.json();
@@ -2077,6 +2437,29 @@ async function loadSolarRadiationGate(){
 
 function saveSolarRadiationGate(){
   return saveAdvancedGate("solarRadiation", "/api/solar-radiation-method-gate", "solar_radiation_method_gate", "Solar-radiation");
+}
+
+async function loadSolarRadiationSource(){
+  if (!DATA?.id) return;
+  try {
+    const res = await fetch(`/api/solar-radiation-source?project_id=${encodeURIComponent(DATA.id)}`);
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || "Could not load solar source.");
+    requiredElement("solarRadiationSourceJson").value = JSON.stringify(data.solar_radiation_source || {}, null, 2);
+    requiredElement("solarRadiationSourceStatus").textContent = data.readiness?.message || data.status || "Solar source loaded.";
+  } catch (error) { requiredElement("solarRadiationSourceStatus").textContent = error.message; }
+}
+
+async function saveSolarRadiationSource(){
+  if (!DATA?.id) return;
+  try {
+    const source = JSON.parse(requiredElement("solarRadiationSourceJson").value);
+    const res = await fetch("/api/solar-radiation-source", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({project_id: DATA.id, solar_radiation_source: source})});
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || "Could not save solar source.");
+    requiredElement("solarRadiationSourceStatus").textContent = `Saved cited source · ${data.readiness?.fingerprint || data.solar_radiation_source?.fingerprint || "fingerprint pending"}. Reassemble calculator inputs.`;
+    CALCULATOR_INPUT_SET = null;
+  } catch (error) { requiredElement("solarRadiationSourceStatus").textContent = `Solar source not saved: ${error.message}`; }
 }
 
 async function loadRoomCouplingGate(){
@@ -2406,9 +2789,13 @@ function drawHourlyLoadReport(report = {}, artifactStatus = "not_calculated"){
       const conduction = room.peak?.components?.glazing_conduction;
       const solar = room.peak?.components?.glazing_solar;
       if (!conduction && !solar) return "";
-      const input = conduction?.inputs || solar?.inputs || conduction?.input_rows?.[0] || solar?.input_rows?.[0] || {};
+      const input = solar?.input_rows?.[0] || conduction?.input_rows?.[0] || solar?.inputs || conduction?.inputs || {};
+      const weatherRows = (solar?.input_rows || []).filter(row => row.solar_basis === "weather_facade").map(row => {
+        const irradiance = row.facade_irradiance || {}, shading = row.external_shading || {};
+        return `<small>Opening ${esc(row.opening_evidence_id || row.surface_id || "unresolved")} · host ${esc(row.host_surface_id || "unresolved")} · ${esc(irradiance.orientation || "?")} façade · sun ${Number(irradiance.solar_altitude_deg || 0).toFixed(1)}° altitude / ${Number(irradiance.solar_azimuth_deg || 0).toFixed(1)}° azimuth · direct ${Number(irradiance.direct_w_m2 || 0).toFixed(1)}, sky ${Number(irradiance.sky_diffuse_w_m2 || 0).toFixed(1)}, ground ${Number(irradiance.ground_diffuse_w_m2 || 0).toFixed(1)} W/m² · ${esc(shading.mode || "manual")} direct factor ${Number(shading.direct_shading_factor ?? shading.external_shading_factor ?? 0).toFixed(2)} / diffuse factor ${Number(shading.diffuse_shading_factor ?? 0).toFixed(2)} · source ${esc(irradiance.source_id || "unresolved")}</small>`;
+      });
       return `<li><b>${esc(room.name || room.room_id)}</b> · ${Number(conduction?.total_kw || 0).toFixed(2)} kW conduction / ${Number(solar?.total_kw || 0).toFixed(2)} kW solar`
-        + `<br><small>Peak hour ${esc(room.peak?.hour ?? "—")} · opening ${Number(input.opening_area_m2 || 0).toFixed(2)} m² · glass ${Number(input.corrected_glass_area_m2 || 0).toFixed(2)} m² · schedule ${Number(input.schedule_factor ?? 0).toFixed(2)} · cited reviewed glazing</small></li>`;
+        + `<br><small>Peak hour ${esc(room.peak?.hour ?? "—")} · opening ${Number(input.opening_area_m2 || 0).toFixed(2)} m² · glass ${Number(input.corrected_glass_area_m2 || 0).toFixed(2)} m² · schedule ${Number(input.schedule_factor ?? 0).toFixed(2)} · cited reviewed glazing</small>${weatherRows.length ? `<br>${weatherRows.join("<br>")}` : ""}</li>`;
     }).filter(Boolean);
     const couplingRows = (scenario.rooms || []).map(room => {
       const rows = Object.values(room.peak?.components || {}).filter(component => component?.name === "dynamic_partition");
