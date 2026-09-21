@@ -3,20 +3,21 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Archie Heat Load Calculator</title>
-<link rel="icon" href="/frontend/assets/images/archie-mark.svg" type="image/svg+xml">
+<title>Toki — Heat load workspace</title>
+<link rel="icon" href="/frontend/assets/images/toki-icon-exact.png?v=3" type="image/png">
 <link rel="stylesheet" href="/frontend/css/styles.css">
 <link rel="stylesheet" href="/frontend/css/simple.css">
-<link rel="stylesheet" href="/frontend/css/workspace-theme.css">
 <link rel="stylesheet" href="/frontend/css/brand.css">
+<link rel="stylesheet" href="/frontend/css/workspace-theme.css">
+<link rel="stylesheet" href="/frontend/css/hvac-identity.css">
 </head>
-<body>
+<body class="hvac-app">
 <a class="skip-link" href="#main">Skip to calculator</a>
 <div class="shell">
 
   <!-- ============ sidebar ============ -->
   <aside class="side">
-    <div class="logo"><a class="logo-home" href="/frontend/landing.html" aria-label="Archie home"><img class="brand-icon" src="/frontend/assets/images/archie-mark.svg" alt=""><strong>Archie<br><small>Heat Load Calculator</small></strong></a><a class="home-link" href="/frontend/landing.html">Back to website ↗</a></div>
+    <div class="logo"><a class="logo-home" href="/frontend/landing.html" aria-label="Toki home"><img class="toki-exact-wordmark" src="/frontend/assets/images/toki-wordmark-exact.png" alt="Toki"></a></div>
 
     <nav class="nav">
       <button class="on" id="navCurrent">
@@ -37,14 +38,14 @@
         Settings
       </button>
     </nav>
-    <div class="foot">Heat load workspace</div>
+    <div class="foot"><span class="workspace-avatar">T</span><div><b>Your workspace</b><span>Drawings to decisions</span></div><a href="/frontend/landing.html" aria-label="Back to website">↗</a></div>
   </aside>
 
   <!-- ============ main ============ -->
   <main class="main" id="main" tabindex="-1">
     <header class="top">
       <h1 id="topTitle">New analysis</h1>
-      <div class="sub" id="topSub">Upload an architect's drawing set to begin</div>
+      <div class="sub" id="topSub">Drawing analysis &amp; cooling loads</div>
       <div class="right">
         <button class="iconbtn" id="theme" aria-label="Switch between light and dark">
           <svg class="moon" viewBox="0 0 24 24">
@@ -65,17 +66,19 @@
 
       <!-- upload -->
       <section id="vUpload">
-        <div class="intro"><h2>Heat load calculator</h2><p>Start with your drawings, review the project inputs, then calculate an hourly cooling report.</p><ol><li>Upload and confirm drawings</li><li>Review rooms, conditions and envelope inputs</li><li>Calculate and review the report</li></ol><p class="fine">Cooling reports show missing inputs and review status. Heating calculations are not yet available.</p></div>
-        <div class="drop" id="drop">
-          <div class="mark">
-            <svg viewBox="0 0 24 24"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5"/><path d="M3 15v3a3 3 0 0 0 3 3h12a3 3 0 0 0 3-3v-3"/></svg>
-          </div>
-          <h2>Upload a drawing set</h2>
-          <p>Upload a PDF to identify relevant drawings. Review the selected pages before continuing.</p>
-          <label class="lbl" for="pdf">Choose PDF</label>
-          <input id="pdf" type="file" accept="application/pdf">
-          <p class="fine">Floor plans, elevations, sections, specifications and notes — all in one file.</p>
+        <div class="intro">
+          <div class="welcome-mark toki-symbol" aria-hidden="true"></div>
+          <div class="welcome-label">TOKI / BUILDING SERVICES</div>
+          <h2>Engineering comfort.<br>With less groundwork.</h2>
+          <p>Bring your drawings. Turn project information into<br class="desktop-break"> reviewed inputs and a clear cooling report.</p>
         </div>
+        <div class="drop" id="drop">
+          <div class="drawing-label"><span>PROJECT INTAKE</span><span>PDF / DRAWING SET</span></div>
+          <div class="upload-heading"><span class="document-symbol" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/></svg></span><div><h2>Start with your drawings</h2><p>Drop your architectural PDF here to begin.</p></div></div>
+          <div class="upload-bottom"><div class="upload-picker"><label class="lbl" for="pdf">Choose PDF</label><input id="pdf" type="file" accept="application/pdf"></div><span class="file-hint">Plans, sections &amp; specifications</span></div>
+        </div>
+        <ol class="workflow-preview" aria-label="Analysis workflow"><li><span>1</span>Upload drawings</li><li><span>2</span>Review inputs</li><li><span>3</span>Calculate cooling</li></ol>
+        <p class="scope-note">You review the inputs before calculation.<br>Hourly cooling reports available. Heating calculations coming later.</p>
       </section>
 
       <!-- uploaded -->

@@ -3,21 +3,22 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Archie — heat load calculator</title>
-<meta name="description" content="Review building evidence, organise project inputs and calculate hourly design-day cooling loads with Archie.">
+<title>Toki — heat load calculator</title>
+<meta name="description" content="Review building evidence, organise project inputs and calculate hourly design-day cooling loads with Toki.">
 <link rel="stylesheet" href="/frontend/css/landing.css">
 <link rel="stylesheet" href="/frontend/css/landing-polish.css">
 <link rel="stylesheet" href="/frontend/css/brand.css">
 <link rel="stylesheet" href="/frontend/css/architecture.css">
-<link rel="icon" href="/frontend/assets/images/archie-mark.svg" type="image/svg+xml">
+<link rel="icon" href="/frontend/assets/images/toki-icon-exact.png?v=3" type="image/png">
+<link rel="stylesheet" href="/frontend/css/hvac-identity.css">
 </head>
-<body>
+<body class="hvac-site">
 <a class="landing-skip" href="#main">Skip to content</a>
 
 <!-- ============ nav ============ -->
 <header class="nav" id="nav">
   <div class="wrap">
-    <a class="wordmark" href="/frontend/landing.html"><img class="brand-icon" src="/frontend/assets/images/archie-mark.svg" alt="">Archie<span class="rule"></span><span class="tag">Heat load</span></a>
+    <a class="wordmark" href="/frontend/landing.html"><img class="toki-exact-wordmark" src="/frontend/assets/images/toki-wordmark-exact.png" alt="Toki"><span class="rule"></span><span class="tag">Heat load</span></a>
     <nav class="navlinks">
       <a href="#method">Method</a>
       <a href="#evidence">Evidence</a>
@@ -32,9 +33,9 @@
 <div class="city-hero__shade" aria-hidden="true"></div>
 <div class="wrap city-hero__layout">
 <div class="city-hero__copy">
-<p class="kicker">For mechanical &amp; HVAC engineers</p>
-<h1 id="hero-title">Building comfort.<br>Grounded in<br> the details.</h1>
-<p class="city-hero__intro">From building plans to cooling loads, with the evidence alongside every input and engineering judgement at the centre.</p>
+<p class="kicker">BUILDING SERVICES / HEAT LOAD ANALYSIS</p>
+<h1 id="hero-title">Sound engineering.<br><em>Smarter tools.</em></h1>
+<p class="city-hero__intro">Less time working through drawings. More time designing comfortable buildings. Bring AI-assisted drawing review and traceable cooling calculations into your everyday workflow.</p>
 <div class="actions"><a class="btn btn-primary" href="/">Open the calculator <span aria-hidden="true">↗</span></a><a class="city-hero__link" href="#workflow">Explore the workflow ↓</a></div>
 <p class="city-hero__note">PDF drawings · Reviewed inputs · Hourly cooling loads</p>
 
@@ -54,8 +55,8 @@
       <h2 class="h2" data-anim="left" style="--d:80ms">From a PDF set to a defensible load.</h2>
 
       <div class="offsetpair" aria-hidden="true">
-        <figure class="offsetpair__a" data-anim="left"><img src="/frontend/assets/images/photo/residential.webp" alt="" loading="lazy"></figure>
-        <figure class="offsetpair__b" data-anim="clarify" style="--d:180ms"><img src="/frontend/assets/images/photo/office-min.webp" alt="" loading="lazy"></figure>
+        <figure class="offsetpair__a" data-anim="left"><img src="/frontend/assets/images/photo/hvac-installation.png" alt="" loading="lazy"></figure>
+        <figure class="offsetpair__b" data-anim="clarify" style="--d:180ms"><img src="/frontend/assets/images/photo/hvac-plan-review.png" alt="" loading="lazy"></figure>
       </div>
 
       <ol class="steps">
@@ -73,7 +74,7 @@
       <div class="split-text">
         <p class="kicker" data-anim="left">Evidence</p>
         <h2 class="h2" data-anim="left" style="--d:80ms">A number you can put in front of a reviewer.</h2>
-        <p class="lede">Load calculations get challenged. Archie keeps the chain intact, so when someone asks where a U-value or an occupancy figure came from, the answer is one click away rather than a memory of a meeting.</p>
+        <p class="lede">Load calculations get challenged. Toki keeps the chain intact, so when someone asks where a U-value or an occupancy figure came from, the answer is one click away rather than a memory of a meeting.</p>
         <ul class="ticks">
           <li>Source references kept alongside reviewed drawing facts</li>
           <li>Unsupported values held as explicit exclusions, never quietly filled</li>
@@ -96,9 +97,9 @@
 
 <section class="band shortcut-section" id="workflow" aria-labelledby="workflow-title">
 <div class="wrap">
-<div class="shortcut-heading"><div><p class="kicker">The Archie workflow</p><h2 class="h2" id="workflow-title">Less input work.<br>More engineering judgement.</h2></div><p>From PDF to heat load: AI prepares the inputs and brings unresolved engineering decisions to the engineer before calculating.</p></div>
+<div class="shortcut-heading"><div><p class="kicker">The Toki workflow</p><h2 class="h2" id="workflow-title">Less input work.<br>More engineering judgement.</h2></div><p>From PDF to heat load: AI prepares the inputs and brings unresolved engineering decisions to the engineer before calculating.</p></div>
 <div class="workflow-composition">
-<aside class="workflow-context"><img src="/frontend/assets/images/photo/office-bright.webp" alt="Sunlit office with ceiling services and perimeter glazing" loading="lazy"><div class="workflow-context__copy"><p class="kicker">THE BUILDING BEHIND THE NUMBERS</p><h3>Every room.<br>Every surface.<br>Every decision.</h3><p>Bring the physical building and its design conditions together before reviewing the load.</p><dl><div><dt>Envelope</dt><dd>Walls, roofs, glazing and shading</dd></div><div><dt>Conditions</dt><dd>Weather, occupancy and schedules</dd></div><div><dt>Review</dt><dd>Sources, assumptions and decisions</dd></div></dl></div></aside>
+<aside class="workflow-context"><img src="/frontend/assets/images/photo/hvac-site-inspection.png" alt="HVAC engineers inspecting mechanical services with project drawings" loading="lazy"><div class="workflow-context__copy"><p class="kicker">THE BUILDING BEHIND THE NUMBERS</p><h3>Every room.<br>Every surface.<br>Every decision.</h3><p>Bring the physical building and its design conditions together before reviewing the load.</p><dl><div><dt>Envelope</dt><dd>Walls, roofs, glazing and shading</dd></div><div><dt>Conditions</dt><dd>Weather, occupancy and schedules</dd></div><div><dt>Review</dt><dd>Sources, assumptions and decisions</dd></div></dl></div></aside>
 <div class="workflow-diagram">
 <ol class="ai-workflow" aria-label="PDF to engineer-reviewed heat load">
 <li class="flow-node"><span class="flow-num" aria-hidden="true">01</span><div><h3>PDF</h3></div></li>
@@ -113,7 +114,7 @@
 </ol>
 </div>
 </div>
-<p class="workflow-note">This is the target workflow. Archie’s current calculation scope is limited to its supported cooling methods.</p>
+<p class="workflow-note">This is the target workflow. Toki’s current calculation scope is limited to its supported cooling methods.</p>
 </div></section>
   <!-- ============ statement ============ -->
   <section class="band band-quote">
@@ -143,7 +144,7 @@
 
   <footer class="foot">
     <div class="wrap">
-      <span class="foot-mark">Archie</span>
+      <span class="foot-mark">Toki</span>
       <span class="footnote">Heat load calculation · evidence-first</span><a href="#method">Method</a><a href="#evidence">Evidence</a><a href="/">Open calculator ↗</a>
     </div>
   </footer>
