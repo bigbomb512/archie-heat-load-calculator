@@ -13,7 +13,6 @@ import re
 
 from ai.hourly_loads import (
     DAY_TYPES,
-    empty_day_profile,
     room_static_missing,
     scenario_ready,
     validate_design_day_scenarios,
@@ -21,8 +20,22 @@ from ai.hourly_loads import (
     validate_schedule_library,
 )
 from ai.infiltration_gate import gate_is_approved, validate_infiltration_method_gate
+from ai.glazing_gate import gate_is_approved as glazing_gate_is_approved, validate_glazing_method_gate
+from ai.shading_gate import validate_shading_method_gate
+from ai.envelope_method_gates import (
+    empty_ground_contact_method_gate,
+    validate_ground_contact_method_gate,
+    empty_dynamic_thermal_mass_method_gate,
+    validate_dynamic_thermal_mass_method_gate,
+    empty_solar_radiation_method_gate,
+    validate_solar_radiation_method_gate,
+)
+from ai.solar_radiation import empty_solar_radiation_source, validate_solar_radiation_source
+from ai.room_coupling import empty_room_coupling_method_gate, validate_room_coupling_method_gate
+from ai.heating_gate import empty_heating_method_gate, validate_heating_method_gate
 from ai.research_cache import (
     default_record_statuses,
+    default_pack_coverage,
     eligible_bindings,
     source_pack_release_manifest,
     validate_source_pack_release_manifest,
@@ -357,18 +370,50 @@ def _is_active_room(context, room_id):
 
 
 def _default_schedule(library, room, component, scenario, binding):
-    raw = binding.get("value")
-    values = raw.get("values") if isinstance(raw, dict) else raw
-    if not isinstance(values, list) or len(values) != 24 or any(not isinstance(value, (int, float)) or isinstance(value, bool) or value < 0 or value > 1 for value in values):
-        return None
-    schedule_id = re.sub(r"[^a-z0-9_-]", "-", f"default-{binding['record_id']}-{room['room_id']}-{component}".lower()).strip("-")
+    """Create a schedule only from a complete, cited day-type set."""
+    bindings = binding.get("profiles") if isinstance(binding, dict) and "profiles" in binding else {scenario["day_type"]: binding}
+    if set(bindings) != set(DAY_TYPES):
+        # Compatibility path for pre-pack authored records: they are already a
+        # complete project profile even though the old schema had no day type.
+        if len(bindings) != 1 or next(iter(bindings.values())).get("scope", {}).get("day_type"):
+            return None
+        bindings = {day_type: next(iter(bindings.values())) for day_type in DAY_TYPES}
+    profiles = {}
+    for day_type in DAY_TYPES:
+        raw = bindings[day_type].get("value")
+        values = raw.get("values") if isinstance(raw, dict) else raw
+        if not isinstance(values, list) or len(values) != 24 or any(not isinstance(value, (int, float)) or isinstance(value, bool) or value < 0 or value > 1 for value in values):
+            return None
+        profiles[day_type] = {"values": values, "status": "confirmed", "source": f"Approved default {bindings[day_type]['record_id']}", "citations": [{"reference": bindings[day_type].get("citation", bindings[day_type]["record_id"]), "page": None, "excerpt": bindings[day_type].get("excerpt", "")}]}
+    first_binding = next(iter(bindings.values()))
+    schedule_id = re.sub(r"[^a-z0-9_-]", "-", f"default-{first_binding['record_id']}-{room['room_id']}-{component}".lower()).strip("-")
     if any(row["schedule_id"] == schedule_id for row in library["schedules"]):
         return schedule_id
-    citation = {"reference": binding.get("citation", binding["record_id"]), "page": None, "excerpt": binding.get("excerpt", "")}
-    profiles = {day_type: empty_day_profile() for day_type in DAY_TYPES}
-    profiles[scenario["day_type"]] = {"values": values, "status": "confirmed", "source": f"Approved default {binding['record_id']}", "citations": [citation]}
-    library["schedules"].append({"schedule_id": schedule_id, "title": f"Default {component} schedule", "description": "Approved scoped default; only the selected scenario day type is supplied.", "status": "confirmed", "source": f"Approved default {binding['record_id']}", "citations": [citation], "day_profiles": profiles})
+    citations = [{"reference": item.get("citation", item["record_id"]), "page": None, "excerpt": item.get("excerpt", "")} for item in bindings.values()]
+    library["schedules"].append({"schedule_id": schedule_id, "title": f"Default {component} schedule", "description": "Approved scoped default with complete weekday, Saturday, and Sunday/holiday profiles.", "status": "confirmed", "source": f"Approved default {first_binding['record_id']}", "citations": citations, "day_profiles": profiles})
     return schedule_id
+
+
+def _schedule_default_bindings(cache, component, scope, release_manifest):
+    """Return one eligible binding for every supported day type, or ``None``."""
+    candidates = eligible_bindings(cache, f"schedule.{component}", scope, release_manifest=release_manifest)
+    by_day, unscoped = {}, []
+    # Source packs may use the human-facing names ``weekend`` and ``holiday``;
+    # the hourly model deliberately uses the more specific canonical names.
+    day_aliases = {"weekend": "saturday", "holiday": "sunday_holiday"}
+    for row in candidates:
+        day_type = day_aliases.get((row.get("scope") or {}).get("day_type"), (row.get("scope") or {}).get("day_type"))
+        if day_type:
+            by_day.setdefault(day_type, []).append(row)
+        else:
+            unscoped.append(row)
+    if by_day:
+        if any(len(by_day.get(day_type, [])) != 1 for day_type in DAY_TYPES):
+            return None
+        return {day_type: by_day[day_type][0] for day_type in DAY_TYPES}
+    if len(unscoped) == 1:
+        return {day_type: unscoped[0] for day_type in DAY_TYPES}
+    return None
 
 
 def _record_issues(records, issues, room_id):
@@ -402,7 +447,10 @@ def _coverage_summary(model, included, excluded, issues, records, context):
             unresolved_supported.setdefault(room_id, []).append(issue.get("reason", "Unresolved supported input"))
     outside_scope = sorted(room_ids - scoped)
     active_excluded = sorted(set(excluded) & scoped)
-    complete_scope = bool(scoped) and set(scoped) == set(included) and not blocked and not draft_only and not active_excluded
+    project_blockers = [row for row in issues if row.get("affected_id") in {"project", None}
+                        and row.get("status") in {"blocked", "draft"}]
+    complete_scope = (bool(scoped) and set(scoped) == set(included) and not blocked
+                      and not draft_only and not active_excluded and not project_blockers)
     return {
         "active_room_ids": sorted(scoped),
         "included_room_ids": sorted(set(included)),
@@ -414,11 +462,11 @@ def _coverage_summary(model, included, excluded, issues, records, context):
         "unsupported_components_by_room": unsupported,
         "unresolved_supported_inputs_by_room": {key: sorted(set(value)) for key, value in unresolved_supported.items()},
         "complete_scope": complete_scope,
-        "project_blockers": [row for row in issues if row.get("affected_id") in {"project", None}],
+        "project_blockers": project_blockers,
     }
 
 
-def _apply_room_defaults(model, library, scenarios, fusion, cache, context, overrides, selected, infiltration_gate, release_manifest=None):
+def _apply_room_defaults(model, library, scenarios, fusion, cache, context, overrides, selected, infiltration_gate, glazing_gate, release_manifest=None):
     resolved, issues, included, excluded = [], [], [], []
     scenario_map = {row["scenario_id"]: row for row in scenarios["scenarios"]}
     zones = {zone["zone_id"]: zone for zone in model["zones"]}
@@ -489,13 +537,14 @@ def _apply_room_defaults(model, library, scenarios, fusion, cache, context, over
             for component in ("people", "lighting", "outside_air"):
                 if room["schedule_assignments"].get(component):
                     continue
-                bindings = eligible_bindings(cache, f"schedule.{component}", {**scope, "day_type": primary["day_type"]}, release_manifest=release_manifest)
-                if len(bindings) == 1:
-                    schedule_id = _default_schedule(library, room, component, primary, bindings[0])
+                bindings = _schedule_default_bindings(cache, component, scope, release_manifest)
+                if bindings:
+                    schedule_id = _default_schedule(library, room, component, primary, {"profiles": bindings})
                     if schedule_id:
                         room["schedule_assignments"][component] = schedule_id
-                        citation = {"reference": bindings[0].get("citation", bindings[0]["record_id"]), "page": None, "excerpt": bindings[0].get("excerpt", "")}
-                        records.append(_source_record("approved_default", _room_target(room_id, f"schedule_assignments.{component}"), schedule_id, "profile", source_id=bindings[0]["record_id"], source=bindings[0].get("publisher", "Approved source pack"), citations=[citation], rule="engineer-released cited 24-hour room-use schedule", default_scope=bindings[0].get("scope", {}), source_pack_release=bindings[0].get("source_pack_release", {})))
+                        first = bindings[primary["day_type"]]
+                        citations = [{"reference": item.get("citation", item["record_id"]), "page": None, "excerpt": item.get("excerpt", "")} for item in bindings.values()]
+                        records.append(_source_record("approved_default", _room_target(room_id, f"schedule_assignments.{component}"), schedule_id, "profile", source_id=first["record_id"], source=first.get("publisher", "Approved source pack"), citations=citations, rule="engineer-released cited complete day-type room-use schedule", default_scope=first.get("scope", {}), source_pack_release=first.get("source_pack_release", {})))
         timed_components = {
             "people": float(room.get("occupancy") or 0) * (float(room["cooling_load"].get("people_sensible_w_per_person") or 0) + float(room["cooling_load"].get("people_latent_w_per_person") or 0)) * float(room["cooling_load"].get("people_diversity_factor") or 0),
             "lighting": float(room.get("area_m2") or 0) * float(room["cooling_load"].get("lighting_w_m2") or 0) * float(room["cooling_load"].get("lighting_diversity_factor") or 0),
@@ -508,6 +557,17 @@ def _apply_room_defaults(model, library, scenarios, fusion, cache, context, over
             else:
                 timed_components["infiltration"] = float(infiltration.get("value") or 0)
                 records.append(_source_record("project_evidence", _room_target(room_id, "infiltration"), infiltration.get("value"), infiltration.get("unit", ""), source_id=infiltration.get("component_id", ""), source=infiltration.get("source", ""), citations=infiltration.get("citations", []), rule="approved project-local infiltration input"))
+        glazing_rows = room["cooling_load"].get("glazing_surfaces", [])
+        if glazing_rows:
+            if not glazing_gate_is_approved(glazing_gate):
+                issues.append({"status": "blocked", "affected_id": room_id, "reason": "The glazing method gate is not approved by a named HVAC engineer.", "source_artifact": "glazing_method_gate.json"})
+            for surface in glazing_rows:
+                records.append(_source_record(
+                    "project_evidence", _room_target(room_id, f"cooling_load.glazing_surfaces.{surface.get('surface_id', '')}"),
+                    surface.get("surface_id", ""), "reviewed_glazing", source_id=surface.get("surface_id", ""),
+                    source=surface.get("source", ""), citations=surface.get("citations", []),
+                    rule="approved project-local reviewed glazing input" if glazing_gate_is_approved(glazing_gate) else "glazing gate approval is required",
+                ))
         for component, magnitude in timed_components.items():
             if magnitude and not room["schedule_assignments"].get(component):
                 issues.append({"status": "blocked", "affected_id": room_id, "reason": f"{component} schedule assignment is missing.", "source_artifact": "schedule_library.json"})
@@ -522,7 +582,7 @@ def _apply_room_defaults(model, library, scenarios, fusion, cache, context, over
                 "source_artifact": "hourly_load_model.json",
             })
         _record_issues(records, issues, room_id)
-        if room_static_missing(room, zones.get(room["zone_id"]), infiltration_gate):
+        if room_static_missing(room, zones.get(room["zone_id"]), infiltration_gate, glazing_gate):
             excluded.append(room_id)
         else:
             included.append(room_id)
@@ -560,18 +620,52 @@ def _apply_weather_defaults(scenarios, selected, cache, context, release_manifes
 def assemble_calculator_inputs(hourly_model, schedule_library, scenarios, selected_scenario_ids=None,
                                fusion=None, research_cache=None, envelope=None, *, project_context=None,
                                overrides=None, requirements=None, infiltration_gate=None,
-                               calculation_input_evidence=None, source_pack_releases=None):
+                               glazing_gate=None, shading_gate=None, ground_contact_gate=None,
+                               dynamic_thermal_mass_gate=None, solar_radiation_gate=None,
+                               solar_radiation_source=None, room_to_room_coupling_gate=None,
+                               heating_gate=None,
+                               calculation_input_evidence=None, source_pack_releases=None,
+                               site_orientation=None):
     """Resolve cooling inputs without mutating the supplied project artifacts."""
     release_manifest = validate_source_pack_release_manifest(source_pack_releases) if source_pack_releases is not None else source_pack_release_manifest()
+    # Calculation-input evidence is a first-class normalized source.  Direct
+    # callers may provide it separately from the fusion artifact, so merge it
+    # before field resolution rather than relying on the web adapter to do so.
+    merged_fusion = deepcopy(fusion or {})
+    if calculation_input_evidence:
+        existing = list((merged_fusion.get("calculation_input_evidence") or {}).get("candidates", []))
+        incoming = list((calculation_input_evidence or {}).get("candidates", []))
+        by_id = {row.get("candidate_id"): row for row in existing if isinstance(row, dict) and row.get("candidate_id")}
+        for row in incoming:
+            if isinstance(row, dict) and row.get("candidate_id"):
+                by_id[row["candidate_id"]] = row
+        merged_fusion["calculation_input_evidence"] = {**(merged_fusion.get("calculation_input_evidence") or {}), "candidates": list(by_id.values())}
     fingerprints = {name: _fingerprint(_stable(value or {})) for name, value in {
-        "hourly_model": hourly_model, "schedule_library": schedule_library, "scenarios": scenarios, "fusion": fusion,
+        "hourly_model": hourly_model, "schedule_library": schedule_library, "scenarios": scenarios, "fusion": merged_fusion,
         "calculation_input_evidence": calculation_input_evidence,
         "research_cache": research_cache, "envelope": envelope, "project_context": project_context,
         "overrides": overrides, "requirements": requirements, "infiltration_method_gate": infiltration_gate,
+        "glazing_method_gate": glazing_gate,
+        "shading_method_gate": shading_gate,
+        "ground_contact_method_gate": ground_contact_gate,
+        "dynamic_thermal_mass_method_gate": dynamic_thermal_mass_gate,
+        "solar_radiation_method_gate": solar_radiation_gate,
+        "solar_radiation_source": solar_radiation_source,
+        **({"site_orientation": site_orientation} if site_orientation is not None else {}),
+        "room_to_room_coupling_method_gate": room_to_room_coupling_gate,
+        "heating_method_gate": heating_gate,
         "research_source_pack_releases": release_manifest,
     }.items()}
     model, library, scenario_library = validate_hourly_load_model(deepcopy(hourly_model)), validate_schedule_library(deepcopy(schedule_library)), validate_design_day_scenarios(deepcopy(scenarios))
     checked_infiltration_gate = validate_infiltration_method_gate(infiltration_gate or {})
+    checked_glazing_gate = validate_glazing_method_gate(glazing_gate or {})
+    checked_shading_gate = validate_shading_method_gate(shading_gate or {})
+    checked_ground_contact_gate = validate_ground_contact_method_gate(ground_contact_gate or empty_ground_contact_method_gate())
+    checked_dynamic_gate = validate_dynamic_thermal_mass_method_gate(dynamic_thermal_mass_gate or empty_dynamic_thermal_mass_method_gate())
+    checked_radiation_gate = validate_solar_radiation_method_gate(solar_radiation_gate or empty_solar_radiation_method_gate())
+    checked_radiation_source = validate_solar_radiation_source(solar_radiation_source or empty_solar_radiation_source())
+    checked_coupling_gate = validate_room_coupling_method_gate(room_to_room_coupling_gate or empty_room_coupling_method_gate())
+    checked_heating_gate = validate_heating_method_gate(heating_gate or empty_heating_method_gate())
     cache = validate_cache(research_cache or {"schema_version": 1, "revision": 0, "records": []})
     context = validate_project_context(project_context)
     # Direct callers from the pre-context API retain a useful legacy readiness
@@ -583,8 +677,31 @@ def assemble_calculator_inputs(hourly_model, schedule_library, scenarios, select
     checked_overrides = validate_overrides(overrides)
     selected = sorted(set(selected_scenario_ids or [row["scenario_id"] for row in scenario_library["scenarios"] if row.get("mode") == "cooling"]))
     weather_records, weather_issues = _apply_weather_defaults(scenario_library, selected, cache, context, release_manifest)
-    room_records, room_issues, included, excluded = _apply_room_defaults(model, library, scenario_library, fusion or {}, cache, context, checked_overrides, selected, checked_infiltration_gate, release_manifest)
+    room_records, room_issues, included, excluded = _apply_room_defaults(model, library, scenario_library, merged_fusion, cache, context, checked_overrides, selected, checked_infiltration_gate, checked_glazing_gate, release_manifest)
     issues = weather_issues + room_issues
+    # Reviewed-envelope exclusions are part of input readiness, not merely a
+    # report-time warning. Keep the affected surface visible while also adding
+    # one project-level issue so coverage cannot be reported complete when an
+    # active envelope model contains an unresolved or stored-only surface.
+    if envelope:
+        for row in envelope.get("blocked", []) or []:
+            issues.append({
+                "status": "blocked", "affected_id": row.get("surface_id", "surface"),
+                "reason": row.get("reason", "Reviewed envelope surface is blocked."),
+                "source_artifact": "envelope_model.json", "effect": "blocks_envelope",
+            })
+        for row in (envelope.get("stored_not_calculated", []) or []) + (envelope.get("draft_only", []) or []):
+            issues.append({
+                "status": "draft", "affected_id": row.get("surface_id", "surface"),
+                "reason": row.get("reason", "Reviewed envelope data is stored but not eligible for calculation."),
+                "source_artifact": "envelope_model.json", "effect": "draft_only_envelope",
+            })
+        if envelope.get("blocked") or envelope.get("stored_not_calculated") or envelope.get("draft_only"):
+            issues.append({
+                "status": "blocked" if envelope.get("blocked") else "draft", "affected_id": "project",
+                "reason": "Reviewed envelope model contains unresolved or stored-only surfaces; complete scope cannot be declared.",
+                "source_artifact": "envelope_model.json", "effect": "blocks_complete_scope",
+            })
     if not model["rooms"]:
         issues.append({"status": "blocked", "affected_id": "project", "reason": "No rooms are available for calculation.", "source_artifact": "hourly_load_model.json"})
     coverage = _coverage_summary(model, included, excluded, issues, weather_records + room_records, context)
@@ -599,7 +716,16 @@ def assemble_calculator_inputs(hourly_model, schedule_library, scenarios, select
         "resolved_inputs": sorted(weather_records + room_records, key=lambda row: row["input_id"]), "issues": issues,
         "excluded_components": ["unresolved or unsupported airflow and moisture inputs remain excluded until an approved calculation method exists"],
         "payload": {"hourly_model": model, "schedule_library": library, "scenarios": scenario_library,
-                    "infiltration_method_gate": deepcopy(checked_infiltration_gate)},
+                    "infiltration_method_gate": deepcopy(checked_infiltration_gate),
+                    "glazing_method_gate": deepcopy(checked_glazing_gate),
+                    "shading_method_gate": deepcopy(checked_shading_gate),
+                    "ground_contact_method_gate": deepcopy(checked_ground_contact_gate),
+                    "dynamic_thermal_mass_method_gate": deepcopy(checked_dynamic_gate),
+                    "solar_radiation_method_gate": deepcopy(checked_radiation_gate),
+                    "solar_radiation_source": deepcopy(checked_radiation_source),
+                    **({"site_orientation": deepcopy(site_orientation)} if site_orientation is not None else {}),
+                    "room_to_room_coupling_method_gate": deepcopy(checked_coupling_gate),
+                    "heating_method_gate": deepcopy(checked_heating_gate)},
     }
     core["input_fingerprint"] = _fingerprint(_stable(core))
     result = deepcopy(core)
@@ -616,6 +742,7 @@ def assemble_calculator_inputs(hourly_model, schedule_library, scenarios, select
     }
     result["research_defaults_available"] = [row for row in record_statuses if row["eligible"]]
     result["research_defaults_unavailable"] = [row for row in record_statuses if not row["eligible"]]
+    result["research_default_coverage"] = default_pack_coverage(cache, release_manifest=release_manifest)
     return result
 
 

@@ -236,6 +236,16 @@ class CalculatorInputTests(unittest.TestCase):
         self.assertEqual(area["resolution_status"], "project_evidence")
         self.assertEqual(area["unit"], "m2")
 
+    def test_envelope_blockers_are_carried_into_assembly_readiness(self):
+        result = assemble_calculator_inputs(
+            self.default_backed_model(), {"schedules": []}, scenario(), ["summer"],
+            research_cache=self.default_cache(), project_context=self.context(),
+            envelope={"blocked": [{"surface_id": "wall-1", "reason": "missing reviewed U-value"}]},
+        )
+        self.assertFalse(result["coverage_summary"]["complete_scope"])
+        self.assertIn(result["status"], {"blocked", "draft"})
+        self.assertTrue(any(item["affected_id"] == "wall-1" for item in result["issues"]))
+
 
 if __name__ == "__main__":
     unittest.main()

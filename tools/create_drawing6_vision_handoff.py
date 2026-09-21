@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Create a complete, private manual-vision handoff for Drawing 6.
 
-This does not modify calculator artifacts. It renders every architect page
-and includes the machine-readable context available for each page (structured
-PDF text, OCR, vector witnesses, and existing calculation candidates). Role
-metadata tells the manual ChatGPT workflow what each page can legitimately
-prove; it does not turn every page into primary geometry evidence.
+This does not modify calculator artifacts. It indexes every architect page,
+renders only the bounded ranked context plus a separate exception appendix, and
+includes machine-readable context (structured PDF text, OCR, vector witnesses,
+and existing calculation candidates). Role/capability metadata tells the
+manual ChatGPT workflow what each page can legitimately prove; it does not turn
+every page into primary geometry evidence.
 """
 
 import argparse
@@ -13,15 +14,12 @@ import hashlib
 import json
 import subprocess
 from pathlib import Path
+import sys
 
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
-PRIORITY_PAGES = {
-    16: {"role": "3d_crosscheck", "purpose": "Visual consistency only; no scale or primary dimensions."},
-    20: {"role": "primary_geometry_plan", "purpose": "Room boundaries, dimensions, labels, and wall/opening relationships."},
-    21: {"role": "supporting_geometry_plan", "purpose": "Floor finishes, room notes, and supporting boundary evidence."},
-    22: {"role": "reflected_ceiling_service", "purpose": "Ceiling heights, ceiling transitions, and lighting evidence."},
-    26: {"role": "opening_elevation", "purpose": "Storefront/elevation opening evidence and vertical dimensions."},
-}
+from ai.vision_extraction import build_ranked_context
 
 ROLE_PURPOSES = {
     "main_floor_plan": "Primary room geometry, dimensions, labels, and wall/opening relationships.",
@@ -70,6 +68,8 @@ def build(project_dir):
         old.unlink()
     page_rows = {row.get("page"): row for row in ai_input.get("drawing_set", {}).get("pages", [])}
     coverage = load(project_dir / "drawing_coverage.json")
+    context_selection = build_ranked_context(ai_input, coverage)
+    context_by_page = {row["page"]: row for row in context_selection.get("pages", [])}
     coverage_roles = {row.get("page"): row for row in coverage.get("page_roles", [])}
     spatial_ocr = load(project_dir / "spatial_ocr.json")
     ocr_by_page = {row.get("page"): row for row in spatial_ocr.get("pages", [])}
@@ -95,21 +95,19 @@ def build(project_dir):
     for row in ai_input.get("drawing_set", {}).get("pages", []):
         page = row.get("page")
         role_row = coverage_roles.get(page, {})
-        role = role_row.get("proposed_role", "reference")
+        context_row = context_by_page.get(page, {})
+        role = context_row.get("role") or role_row.get("proposed_role", "reference")
         selected[page] = {
             "role": role,
             "purpose": ROLE_PURPOSES.get(role, "Supporting architect evidence; do not infer unsupported values."),
             "capabilities": role_row.get("capabilities", []),
             "capability_map": role_row.get("capability_map", {}),
             "relevance": role_row.get("relevance", {}),
-            "selection": role_row.get("selection", "reference_only"),
-            "selection_reasons": role_row.get("selection_reasons", []),
+            "selection": context_row.get("context_selection", "reference_only"),
+            "selection_reasons": context_row.get("context_selection_reasons") or role_row.get("selection_reasons", []),
             "identity": role_row.get("identity", {}),
             "related_pages": role_row.get("related_pages", []),
         }
-    for page, meta in PRIORITY_PAGES.items():
-        if page in selected:
-            selected[page].update(meta)
     manifest_pages = []
     for page in sorted(selected):
         meta = selected[page]
@@ -132,7 +130,11 @@ def build(project_dir):
             "role": meta["role"],
             "purpose": meta["purpose"],
             "capabilities": meta.get("capabilities", []),
-            "level_candidate": row.get("level_name", ""),
+            "level_candidate": role_row.get("level_name", row.get("level_name", "")),
+            "level_candidates": role_row.get("level_candidates", row.get("level_candidates", [])),
+            "scale_candidates": role_row.get("scale_candidates", row.get("scale_candidates", [])),
+            "main_scale": role_row.get("main_scale", row.get("main_scale", "")),
+            "scale_status": role_row.get("scale_status", row.get("scale_status", "missing")),
             "classification_evidence": role_row.get("classification_evidence", row.get("classification_evidence", [])),
             "authority_status": role_row.get("authority_status", "proposed"),
             "geometry_eligible": bool(role_row.get("geometry_eligible", False)),
@@ -168,12 +170,13 @@ def build(project_dir):
     context = {
         "source_pdf": str(pdf),
         "source_fingerprint": source_fingerprint(ai_input),
+        "context_selection": context_selection,
         "pages": manifest_pages,
         "existing_page_roles": coverage.get("page_roles", []),
         "existing_candidates": existing_candidates,
         "rules": [
             "Use only facts directly visible or explicitly printed on the cited page.",
-            "Process every page in this packet. Use the role/capability map to decide what each page can prove.",
+            "Use the ranked main context for extraction; consult the separate exception appendix only when it can resolve or challenge a selected fact.",
             "Every observation must cite page, drawing number, excerpt, and coordinates or table cell when available.",
             "A 3D page is cross-check evidence only and cannot supply scale, dimensions, or room area.",
             "Do not infer occupancy, schedules, U-values, thermal boundaries, glazing performance, or equipment heat-to-space values.",
@@ -184,6 +187,7 @@ def build(project_dir):
     (output / "page_index.json").write_text(json.dumps({
         "schema_version": 1,
         "source_fingerprint": source_fingerprint(ai_input),
+        "context_selection": context_selection,
         "page_count": len(manifest_pages),
         "pages": manifest_pages,
     }, indent=2), encoding="utf-8")
@@ -199,7 +203,21 @@ areas, schedules, U-values, thermal boundaries, occupancy, or equipment heat.
 Use page numbers, drawing numbers, role/capability metadata, and the supplied
 source text/OCR/vector evidence from context.json. Pages with reference-only
 or 3D roles are still useful context, but cannot provide primary dimensions.
-Page 16 and all other 3D/render pages are cross-check-only.
+3D/render pages are cross-check-only. Reference-only pages remain indexed but
+are not part of the main context unless a later targeted review requests them.
+
+Identity and geometry guardrails:
+- Dates (for example 26.02.26) are never drawing numbers. Use the normalized
+  title-block drawing identity supplied in the page index, and cite the physical
+  PDF page as the stable fallback.
+- The main-sheet scale must be cited from the title block. An embedded detail
+  scale such as 1:2 is detail-only and must never calibrate the plan.
+- Do not create rooms from legends, title blocks, schedules, supplier tables,
+  general notes, or generic labels. Do not use 3D proportions for dimensions.
+- A geometry proposal must include the room label and bbox, level candidate,
+  ordered wall IDs or boundary points, linked dimension IDs, an independent
+  witness page, confidence, and conflicts. If any item is missing, report it
+  in unresolved_fields and leave the geometry proposed.
 
 Return this shape:
 
@@ -215,6 +233,12 @@ Return this shape:
       "value": null,
       "unit": "",
       "coordinates": null,
+      "label_bbox": null,
+      "level_candidate": "",
+      "wall_ids": [],
+      "dimension_ids": [],
+      "boundary_points_px": [],
+      "independent_witness_page": null,
       "table_cell": null,
       "excerpt": "exact visible text or a concise visual witness",
       "extraction_method": "pdf_text|ocr|vector|vision",
@@ -236,20 +260,21 @@ cannot be uniquely matched to a plan element, create a conflict. If a ceiling
 height cannot be allocated to a room, keep it unresolved. Use stable IDs based
 on source page/drawing/entity/location, never array position. Do not output
 any cooling or heating result.
-"""
+    """
     (output / "prompt.md").write_text(prompt, encoding="utf-8")
     manifest = {
         "artifact": "manual_vision_handoff",
         "schema_version": 2,
         "source_pdf": str(pdf),
         "source_fingerprint": source_fingerprint(ai_input),
+        "context_selection": context_selection,
         "page_count": len(manifest_pages),
         "architect_page_count": len(manifest_pages),
         "pages": manifest_pages,
         "context": "context.json",
         "page_index": "page_index.json",
         "prompt": "prompt.md",
-        "selected_page_count": len([row for row in manifest_pages if row.get("image", "").startswith("pages/")]),
+        "selected_page_count": len(context_selection.get("main_context_pages", [])),
         "exception_page_count": len([row for row in manifest_pages if row.get("image", "").startswith("exceptions/")]),
         "instructions": [
             "Upload prompt.md, context.json, page_index.json, pages/, and exceptions/ to the manual ChatGPT workflow.",

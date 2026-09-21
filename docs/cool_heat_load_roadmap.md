@@ -20,7 +20,7 @@ The current backend is the handoff boundary for a later frontend. No CAMEL-like 
 
 ## Executive status
 
-The project now has a solid **V1 hourly cooling foundation**, but it is not yet a complete cooling design tool and it does not calculate heating, AHU coil load or plant duty.
+The project now has a solid **V1 hourly cooling foundation** and a separate gated hourly heating foundation. It is not yet a complete cooling/heating design tool and does not calculate AHU coil load or plant duty.
 
 ### Completed foundations
 
@@ -37,8 +37,8 @@ The project now has a solid **V1 hourly cooling foundation**, but it is not yet 
 
 ### Not yet a supported calculation result
 
-- Heating load, heating peak timing or heating design output.
-- Dynamic thermal mass, detailed glazing, geometric shading, partitions/adjacent-space heat transfer and vapour-gain modelling. Infiltration cooling has an isolated implementation but remains disabled for a project until its HVAC-engineer method gate is approved.
+- Approved benchmark validation for heating and heating design release.
+- Dynamic thermal mass, room-to-room dynamic adjacent-space coupling, advanced adjacent-temperature profiles and vapour-gain modelling. Infiltration cooling, reviewed manual-solar glazing, controlled geometric shading, fixed-temperature partitions and ground-contact floors have isolated implementations, each subject to complete project evidence and a method gate where required; the first-order RC thermal-mass and cited surface-irradiance contracts are now also stored and fingerprinted behind separate Stage 6 gates, but do not activate merely because a record exists.
 - AHU airflow allocation, coils, fans, ducts, heat recovery, preconditioning or psychrometric state paths.
 - Chiller, boiler, circuits, pumps, pipe effects, unitary-equipment inclusion or primary-plant aggregation.
 - Annual/month-by-month weather simulation, CAMEL-compatible graphs/tables, printable issue reports or frontend workflows.
@@ -50,12 +50,12 @@ The project now has a solid **V1 hourly cooling foundation**, but it is not yet 
 | Project/site/design conditions | Partial | Cited site packet, status, summer/winter fields and API | Reviewed station/climate workflow; no default climate data |
 | Schedules/peak timing | Partial | 24-hour reusable schedules; coincident room/zone/project cooling peak | AHU and plant coincidence |
 | Opaque envelope/storage mass | Partial | Cited evidence and steady-state entered envelope load | Reviewed constructions, dynamic mass/conduction |
-| Windows/glazing/internal shading | Partial | Opening evidence; manual solar basis per surface | Glazing/window library and detailed solar/transmission |
-| External shading | Partial | Drawing evidence and manual solar schedule assignment | Geometry, solar-position and obstruction engine |
+| Windows/glazing/internal shading | Implemented behind review gate | Reviewed opening/window records; manual hourly solar; separate conduction and solar audit | Complete project evidence and benchmark validation |
+| External shading | Controlled V1 behind review gate | Cited overhang/fin/reveal/obstruction geometry and cited hourly sun vectors replace the manual external factor | Solar-position sourcing, diffuse/dynamic shading and annual analysis |
 | AHU/zone/room hierarchy | Partial | Reviewed zones and room overlay linked by `zone_id` | Editable AHU → zone → room system model |
 | Room physical data/airflow | Partial | Area, height, occupancy and preliminary air-balance inputs | Infiltration, vapour, minimum supply, transfer/extract/duct model |
 | Internal gains | Partial | Scheduled people, lighting and equipment/refrigeration | Steam, return-air allocation, verified equipment libraries |
-| Partitions/adjacent conditions | Partial | Evidence and exception flags | Boundary-condition heat-transfer model |
+| Partitions/adjacent conditions | Implemented behind review gate | Fixed-temperature partitions, explicit adjacent boundaries and gated ground-contact floors | Room-to-room dynamic coupling and advanced boundary profiles |
 | HVAC system type/mapping | Not started | No authoritative system model | Engineer-selected systems and constraints |
 | AHU outside air/heat recovery/preconditioning | Partial | Preliminary zone outside-air/air balance | System aggregation and air-treatment models |
 | Coils/psychrometrics/fans/ducts | Partial | Outdoor-air psychrometric load and cooling safety factor | Coil, ADP/bypass, fans, ducts, heating safety |
@@ -64,9 +64,11 @@ The project now has a solid **V1 hourly cooling foundation**, but it is not yet 
 
 The bridge is complete for model entry: source evidence can be rebuilt, reviewed,
 saved, previewed and applied additively into the hourly topology, schedule and
-inactive envelope artifacts. Calculation-method work remains deliberately
-separate; detailed glazing, geometric shading, infiltration, transfer air,
-heating, AHU, plant, annual analysis and CAMEL+ validation are still excluded.
+inactive envelope artifacts. The current cooling methods are deliberately gated:
+infiltration, reviewed glazing, geometric shading, fixed partitions and ground
+contact can contribute only when their project evidence and method requirements
+are complete. Dynamic thermal mass, advanced solar/radiation, transfer air,
+heating, AHU, plant, annual analysis and CAMEL+ validation remain excluded.
 
 Of the 14 calculation areas in the checklist, 12 have a deliberately limited foundation and 2 (system type/mapping and primary plant) have not started. “Partial” means the prerequisite data/evidence or a limited calculation is available; it does **not** mean the CAMEL+ capability is reproduced or ready for equipment selection.
 
@@ -201,7 +203,7 @@ HVAC-engineer gate is approved.
 - Add tests for winter physical validity, heat-loss direction, competing heating peaks and output status.
 - Keep cooling and heating reports, exclusions and readiness separate until a combined result has an approved definition.
 
-**Dependencies:** reviewed envelope/adjacent-condition scope and approved heating method. Existing heating scenarios are storage-ready only; they are not calculated today.
+**Dependencies:** reviewed envelope/adjacent-condition scope and approved heating method. The separate heating runner now supports draft and review-ready room/zone/floor/project results when its cited inputs and gate are complete.
 
 **Exit criteria:** a cited, engineer-reviewed heating report with its own component trace and validated reference cases.
 

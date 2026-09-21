@@ -11,7 +11,7 @@ full milestone roadmap is in [`docs/cool_heat_load_roadmap.md`](docs/cool_heat_l
 - [x] Bind image, OCR, table, vector and manual-vision observations to stable
   room/opening identities; keep ambiguous matches as conflicts and 3D as
   cross-check-only evidence.
-- [ ] Use the existing evidence-fusion output in the frontend to review page
+- [x] Use the existing evidence-fusion output in the frontend to review page
   groups, room witnesses, floor identity, geometry status and area evidence.
 - [ ] Apply only reviewed floor → zone → room topology without overwriting
   authored records, then complete the supported room cooling inputs.
@@ -21,11 +21,11 @@ full milestone roadmap is in [`docs/cool_heat_load_roadmap.md`](docs/cool_heat_l
 The temporary calculation harness below is internal development support. It is
 not a contractor workflow and does not block the geometry-review product work.
 
-- [ ] Add temporary internal calculation sanity tests; do not expose equations
+- [x] Add temporary internal calculation sanity tests; do not expose equations
   or QA workflow to contractors. Useful checks may later be retained as
   ordinary regression tests, but this temporary harness is not a product
   feature.
-- [ ] Add independent numeric regression cases for psychrometrics, moist-air
+- [x] Add independent numeric regression cases for psychrometrics, moist-air
   enthalpy, specific volume, outside-air load, infiltration, conduction, solar,
   safety factors, and coincident room/zone/floor peaks.
 - [ ] Resolve and document the sign policy for negative conduction and negative

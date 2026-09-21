@@ -198,3 +198,14 @@ not calculator fields. Plan/elevation, ceiling/service, opening/schedule, and
 3D relationships retain their matching basis and citations. 3D observations
 are cross-check-only. Geometry resolution writes derived evidence and draft
 candidates; it does not modify the hourly model, envelope model, or reports.
+
+### Ground-contact envelope method
+
+Ground-contact floors use a separate `ground_contact_fixed_v1` method gate. The
+method is steady-state only: an eligible surface needs an approved named
+engineer gate, a reviewed construction/U-value, a cited owning room and area,
+and an explicit cited ground temperature or complete 24-hour temperature
+profile. No soil dynamics, groundwater response, or outdoor-temperature
+fallback is permitted. The gate and temperature evidence are included in
+calculator-input and report fingerprints; changing either makes dependent
+snapshots stale without rewriting historical reports.

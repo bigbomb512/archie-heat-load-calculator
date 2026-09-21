@@ -1,0 +1,151 @@
+{
+  "schema_version": 1,
+  "pack_version": "au-cooling-v1",
+  "environment": "development_only",
+  "title": "Synthetic complete Australia-first candidate pack (tests only)",
+  "source": {
+    "url": "https://www.abcb.gov.au/development-only/archie-test-fixture",
+    "publisher": "Synthetic development fixture — not an ABCB release",
+    "retrieved_at": "2026-09-18T00:00:00+10:00",
+    "citation": "Synthetic test fixture; not for engineering use",
+    "content_hash": "development-fixture-pack-v1"
+  },
+  "release_status": "candidate",
+  "release_note": "Development-only values. Never use in a project calculation or treat as an engineering release.",
+  "required_coverage": [
+    {"category": "weather", "target": "scenario.weather_profile"},
+    {"category": "indoor_cooling_condition", "target": "room.indoor_cooling_setpoint_c"},
+    {"category": "indoor_cooling_condition", "target": "room.indoor_cooling_wet_bulb_c"},
+    {"category": "safety_allowance", "target": "room.safety_factor"},
+    {"category": "occupancy_default", "target": "room.occupancy_density_per_m2"},
+    {"category": "people_gain_default", "target": "room.people_sensible_w_per_person"},
+    {"category": "people_gain_default", "target": "room.people_latent_w_per_person"},
+    {"category": "people_gain_default", "target": "room.people_diversity_factor"},
+    {"category": "lighting_density_default", "target": "room.lighting_w_m2"},
+    {"category": "lighting_density_default", "target": "room.lighting_diversity_factor"},
+    {"category": "ventilation_requirement", "target": "room.outside_air_lps_per_person"},
+    {"category": "ventilation_requirement", "target": "room.outside_air_lps_per_m2"},
+    {"category": "schedule_default", "target": "schedule.people", "scope": {"day_type": "weekday"}},
+    {"category": "schedule_default", "target": "schedule.people", "scope": {"day_type": "weekend"}},
+    {"category": "schedule_default", "target": "schedule.people", "scope": {"day_type": "holiday"}},
+    {"category": "schedule_default", "target": "schedule.lighting", "scope": {"day_type": "weekday"}},
+    {"category": "schedule_default", "target": "schedule.lighting", "scope": {"day_type": "weekend"}},
+    {"category": "schedule_default", "target": "schedule.lighting", "scope": {"day_type": "holiday"}},
+    {"category": "schedule_default", "target": "schedule.outside_air", "scope": {"day_type": "weekday"}},
+    {"category": "schedule_default", "target": "schedule.outside_air", "scope": {"day_type": "weekend"}},
+    {"category": "schedule_default", "target": "schedule.outside_air", "scope": {"day_type": "holiday"}}
+  ],
+  "records": [
+    {
+      "record_id": "development-weather-profile",
+      "category": "weather",
+      "scope": {"country": "AU", "climate_zone": "development_fixture", "scenario": "summer"},
+      "value": {"description": "synthetic 24-hour weather"},
+      "unit": "profile",
+      "bindings": [{"target": "scenario.weather_profile", "value": {"hours": [{"hour": 0, "outdoor_dry_bulb_c": 24, "outdoor_wet_bulb_c": 18}, {"hour": 1, "outdoor_dry_bulb_c": 24, "outdoor_wet_bulb_c": 18}, {"hour": 2, "outdoor_dry_bulb_c": 24, "outdoor_wet_bulb_c": 18}, {"hour": 3, "outdoor_dry_bulb_c": 24, "outdoor_wet_bulb_c": 18}, {"hour": 4, "outdoor_dry_bulb_c": 24, "outdoor_wet_bulb_c": 18}, {"hour": 5, "outdoor_dry_bulb_c": 25, "outdoor_wet_bulb_c": 18}, {"hour": 6, "outdoor_dry_bulb_c": 26, "outdoor_wet_bulb_c": 19}, {"hour": 7, "outdoor_dry_bulb_c": 27, "outdoor_wet_bulb_c": 20}, {"hour": 8, "outdoor_dry_bulb_c": 28, "outdoor_wet_bulb_c": 20}, {"hour": 9, "outdoor_dry_bulb_c": 29, "outdoor_wet_bulb_c": 21}, {"hour": 10, "outdoor_dry_bulb_c": 30, "outdoor_wet_bulb_c": 21}, {"hour": 11, "outdoor_dry_bulb_c": 31, "outdoor_wet_bulb_c": 22}, {"hour": 12, "outdoor_dry_bulb_c": 32, "outdoor_wet_bulb_c": 22}, {"hour": 13, "outdoor_dry_bulb_c": 32, "outdoor_wet_bulb_c": 22}, {"hour": 14, "outdoor_dry_bulb_c": 32, "outdoor_wet_bulb_c": 22}, {"hour": 15, "outdoor_dry_bulb_c": 31, "outdoor_wet_bulb_c": 22}, {"hour": 16, "outdoor_dry_bulb_c": 30, "outdoor_wet_bulb_c": 21}, {"hour": 17, "outdoor_dry_bulb_c": 29, "outdoor_wet_bulb_c": 21}, {"hour": 18, "outdoor_dry_bulb_c": 28, "outdoor_wet_bulb_c": 20}, {"hour": 19, "outdoor_dry_bulb_c": 27, "outdoor_wet_bulb_c": 20}, {"hour": 20, "outdoor_dry_bulb_c": 26, "outdoor_wet_bulb_c": 19}, {"hour": 21, "outdoor_dry_bulb_c": 25, "outdoor_wet_bulb_c": 19}, {"hour": 22, "outdoor_dry_bulb_c": 25, "outdoor_wet_bulb_c": 18}, {"hour": 23, "outdoor_dry_bulb_c": 24, "outdoor_wet_bulb_c": 18}], "atmospheric_pressure_kpa": 101.325}, "unit": "profile", "scope": {"scenario": "summer"}}],
+      "citation": "Synthetic test fixture; not for engineering use",
+      "review_status": "proposed",
+      "expiry": "2099-12-31T00:00:00+00:00"
+    },
+    {
+      "record_id": "development-indoor-conditions",
+      "category": "indoor_cooling_condition",
+      "scope": {"country": "AU", "room_use": "development_fixture"},
+      "value": "synthetic indoor conditions",
+      "unit": "C",
+      "bindings": [
+        {"target": "room.indoor_cooling_setpoint_c", "value": 24, "unit": "C", "scope": {"room_use": "development_fixture"}},
+        {"target": "room.indoor_cooling_wet_bulb_c", "value": 18, "unit": "C", "scope": {"room_use": "development_fixture"}}
+      ],
+      "citation": "Synthetic test fixture; not for engineering use",
+      "review_status": "proposed",
+      "expiry": "2099-12-31T00:00:00+00:00"
+    },
+    {
+      "record_id": "development-safety-factor",
+      "category": "safety_allowance",
+      "scope": {"country": "AU", "room_use": "development_fixture"},
+      "value": 1.1,
+      "unit": "factor",
+      "bindings": [{"target": "room.safety_factor", "value": 1.1, "unit": "", "scope": {"room_use": "development_fixture"}}],
+      "citation": "Synthetic test fixture; not for engineering use",
+      "review_status": "proposed",
+      "expiry": "2099-12-31T00:00:00+00:00"
+    },
+    {
+      "record_id": "development-occupancy",
+      "category": "occupancy_default",
+      "scope": {"country": "AU", "room_use": "development_fixture"},
+      "value": 0.1,
+      "unit": "people/m2",
+      "bindings": [{"target": "room.occupancy_density_per_m2", "value": 0.1, "unit": "people/m2", "scope": {"room_use": "development_fixture"}}],
+      "citation": "Synthetic test fixture; not for engineering use",
+      "review_status": "proposed",
+      "expiry": "2099-12-31T00:00:00+00:00"
+    },
+    {
+      "record_id": "development-people-gains",
+      "category": "people_gain_default",
+      "scope": {"country": "AU", "room_use": "development_fixture"},
+      "value": "synthetic people gains",
+      "unit": "W/person",
+      "bindings": [
+        {"target": "room.people_sensible_w_per_person", "value": 75, "unit": "W/person", "scope": {"room_use": "development_fixture"}},
+        {"target": "room.people_latent_w_per_person", "value": 55, "unit": "W/person", "scope": {"room_use": "development_fixture"}},
+        {"target": "room.people_diversity_factor", "value": 1, "unit": "", "scope": {"room_use": "development_fixture"}}
+      ],
+      "citation": "Synthetic test fixture; not for engineering use",
+      "review_status": "proposed",
+      "expiry": "2099-12-31T00:00:00+00:00"
+    },
+    {
+      "record_id": "development-lighting",
+      "category": "lighting_density_default",
+      "scope": {"country": "AU", "room_use": "development_fixture"},
+      "value": "synthetic lighting basis",
+      "unit": "W/m2",
+      "bindings": [
+        {"target": "room.lighting_w_m2", "value": 10, "unit": "W/m2", "scope": {"room_use": "development_fixture"}},
+        {"target": "room.lighting_diversity_factor", "value": 1, "unit": "", "scope": {"room_use": "development_fixture"}}
+      ],
+      "citation": "Synthetic test fixture; not for engineering use",
+      "review_status": "proposed",
+      "expiry": "2099-12-31T00:00:00+00:00"
+    },
+    {
+      "record_id": "development-outside-air",
+      "category": "ventilation_requirement",
+      "scope": {"country": "AU", "room_use": "development_fixture"},
+      "value": "synthetic outside-air basis",
+      "unit": "L/s/person",
+      "bindings": [
+        {"target": "room.outside_air_lps_per_person", "value": 10, "unit": "L/s/person", "scope": {"room_use": "development_fixture"}},
+        {"target": "room.outside_air_lps_per_m2", "value": 0.3, "unit": "L/s/m2", "scope": {"room_use": "development_fixture"}}
+      ],
+      "citation": "Synthetic test fixture; not for engineering use",
+      "review_status": "proposed",
+      "expiry": "2099-12-31T00:00:00+00:00"
+    },
+    {
+      "record_id": "development-schedules",
+      "category": "schedule_default",
+      "scope": {"country": "AU", "room_use": "development_fixture"},
+      "value": "synthetic complete day-type profiles",
+      "unit": "profile",
+      "bindings": [
+        {"target": "schedule.people", "value": [0,0,0,0,0,0,0,0.2,0.5,0.8,1,1,1,1,1,1,0.8,0.5,0.2,0,0,0,0,0], "unit": "profile", "scope": {"day_type": "weekday"}},
+        {"target": "schedule.people", "value": [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], "unit": "profile", "scope": {"day_type": "weekend"}},
+        {"target": "schedule.people", "value": [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], "unit": "profile", "scope": {"day_type": "holiday"}},
+        {"target": "schedule.lighting", "value": [0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.5,1,1,1,1,1,1,1,1,1,1,0.5,0.1,0.1,0.1,0.1,0.1], "unit": "profile", "scope": {"day_type": "weekday"}},
+        {"target": "schedule.lighting", "value": [0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1], "unit": "profile", "scope": {"day_type": "weekend"}},
+        {"target": "schedule.lighting", "value": [0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1], "unit": "profile", "scope": {"day_type": "holiday"}},
+        {"target": "schedule.outside_air", "value": [0,0,0,0,0,0,0,0.2,0.5,0.8,1,1,1,1,1,1,0.8,0.5,0.2,0,0,0,0,0], "unit": "profile", "scope": {"day_type": "weekday"}},
+        {"target": "schedule.outside_air", "value": [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], "unit": "profile", "scope": {"day_type": "weekend"}},
+        {"target": "schedule.outside_air", "value": [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], "unit": "profile", "scope": {"day_type": "holiday"}}
+      ],
+      "citation": "Synthetic test fixture; not for engineering use",
+      "review_status": "proposed",
+      "expiry": "2099-12-31T00:00:00+00:00"
+    }
+  ]
+}

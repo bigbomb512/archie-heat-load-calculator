@@ -117,6 +117,8 @@ def assess_cooling_readiness(report, model, requirements_updated_at="", coverage
             issues.append(issue("blocked", "surface", row.get("surface_id", ""), row.get("reason", "Envelope surface is blocked."), "envelope_model"))
         for row in envelope_input.get("stored_not_calculated", []):
             issues.append(issue("blocked", "surface", row.get("surface_id", ""), "Stored-not-calculated envelope data prevents a complete reviewed-envelope result.", "envelope_model"))
+        for row in envelope_input.get("draft_only", []):
+            issues.append(issue("draft", "surface", row.get("surface_id", ""), row.get("reason", "Reviewed glazing is excluded from this included-scope subtotal."), "envelope_model"))
 
     if coverage.get("coverage_exceptions"):
         for row in coverage["coverage_exceptions"]:
@@ -148,7 +150,9 @@ def assess_cooling_readiness(report, model, requirements_updated_at="", coverage
             "status": "complete" if not stored and not unassessed else "incomplete",
         })
     incomplete_component_rooms = [row["room_id"] for row in room_input_coverage if row["status"] != "complete"]
-    complete_scope = bool(active_room_ids) and set(active_room_ids) == included_room_ids and not blocked_rooms and not incomplete_component_rooms
+    complete_scope = (bool(active_room_ids) and set(active_room_ids) == included_room_ids
+                      and not blocked_rooms and not incomplete_component_rooms
+                      and not (envelope_input or {}).get("draft_only", []))
     if not included_room_ids:
         status = "blocked"
     elif any(item["status"] == "blocked" for item in issues):

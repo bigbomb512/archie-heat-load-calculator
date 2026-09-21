@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 
 import argparse
+import base64
 from copy import deepcopy
+import hashlib
 import sys
 import html
 import json
@@ -40,6 +42,19 @@ from ai.hourly_loads import (
 )
 from ai.cooling_readiness import assess_cooling_readiness
 from ai.infiltration_gate import empty_infiltration_method_gate, gate_is_approved, validate_infiltration_method_gate
+from ai.glazing_gate import empty_glazing_method_gate, gate_is_approved as glazing_gate_is_approved, validate_glazing_method_gate
+from ai.shading_gate import empty_shading_method_gate, gate_is_approved as shading_gate_is_approved, validate_shading_method_gate
+from ai.envelope_method_gates import (
+    empty_ground_contact_method_gate, ground_contact_gate_is_approved, validate_ground_contact_method_gate,
+    empty_dynamic_thermal_mass_method_gate, dynamic_thermal_mass_gate_is_approved,
+    validate_dynamic_thermal_mass_method_gate, empty_solar_radiation_method_gate,
+    solar_radiation_gate_is_approved, validate_solar_radiation_method_gate,
+)
+from ai.solar_radiation import empty_solar_radiation_source, validate_solar_radiation_source
+from ai.site_orientation import validate_site_orientation
+from ai.room_coupling import empty_room_coupling_method_gate, room_coupling_gate_fingerprint, room_coupling_gate_is_approved, validate_room_coupling_method_gate
+from ai.heating_gate import empty_heating_method_gate, heating_gate_fingerprint, heating_gate_is_approved, validate_heating_method_gate
+from ai.heating_loads import calculate_heating_report
 from ai.calculator_inputs import (
     assemble_calculator_inputs,
     empty_overrides,
@@ -52,15 +67,57 @@ from ai.calculator_inputs import (
 from ai.research_cache import empty_research_cache, validate_cache, upsert_record
 from ai.drawing_coverage import build_drawing_coverage
 from ai.building_evidence import build_building_evidence
-from ai.calculation_extraction import normalise_for_hourly_model
-from ai.parity_harness import archie_results_from_heat_report, archie_results_from_hourly_load_report, compare_case, render_markdown, validate_benchmark_case
+from ai.calculation_extraction import extract_calculation_input_evidence, normalise_for_hourly_model
+from ai.evidence_fusion import build_evidence_fusion
+from ai.calculator_draft import build_calculator_draft
+from ai import component_interpretations
+from ai.benchmark_acceptance import engine_fingerprint as benchmark_engine_fingerprint
+from backend import benchmark_service
+from ai.benchmark_reporting import render_html as render_benchmark_html, render_csv as render_benchmark_csv
+from ai.parity_harness import archie_results_from_heat_report, archie_results_from_hourly_load_report, render_markdown, validate_benchmark_case
 from ai.thermal_model import apply_thermal_model, build_thermal_evidence, build_thermal_model
 from ai.calculator_draft import DraftConflict
 from backend import draft_service
 from backend import evidence_fusion_service
 from backend import calculation_extraction_service
-from backend import vision_extraction_service
+from backend import vision_extraction_service, window_scan_service, site_orientation_service, ai_preliminary_service
+from backend import productization
 from ai.ventilation import calculate_ventilation_report
+from ai.ahu_airside import (
+    calculate_ahu_report,
+    empty_ahu_systems,
+    empty_air_side_method_gate,
+    empty_air_side_model,
+    air_side_gate_is_approved,
+    validate_air_side_method_gate,
+    validate_air_side_model,
+    validate_ahu_systems,
+)
+from ai.plant_hydraulics import (
+    calculate_plant_report,
+    empty_hydraulic_circuits,
+    empty_plant_method_gate,
+    empty_plant_systems,
+    plant_gate_is_approved,
+    validate_hydraulic_circuits,
+    validate_plant_method_gate,
+    validate_plant_systems,
+)
+from ai.annual_energy import (
+    annual_gate_is_approved,
+    annual_hourly_csv,
+    annual_monthly_csv,
+    calculate_annual_report,
+    empty_annual_calendar,
+    empty_annual_method_gate,
+    empty_annual_radiation,
+    empty_annual_weather,
+    import_epw,
+    validate_annual_calendar,
+    validate_annual_method_gate,
+    validate_annual_radiation,
+    validate_annual_weather,
+)
 from ai.geometry_review import normalise_vision
 from ai.reasoning_packet import create_reasoning_packet_from_vision
 from pdf_pipeline.extractors import count_pdf_pages
@@ -147,6 +204,21 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_file(FRONTEND / "index.html", "text/html")
         if self.path == "/api/projects":
             return self.send_json(project_list())
+        if self.path.startswith("/api/project-health"):
+            try:
+                return self.send_json(api_project_health(self))
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if self.path.startswith("/api/audit-log"):
+            try:
+                return self.send_json(api_audit_log(self))
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if self.path.startswith("/api/report-package"):
+            try:
+                return self.send_json(api_report_package(self))
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
         if self.path.startswith("/api/site-design-conditions"):
             return self.send_json(api_site_design_conditions(self))
         if self.path.startswith("/api/schedules"):
@@ -157,9 +229,129 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json(api_hourly_load_model(self))
         if self.path.startswith("/api/hourly-load-report"):
             return self.send_json(api_hourly_load_report(self))
+        if self.path.startswith("/api/air-side-method-gate"):
+            try:
+                return self.send_json(api_air_side_method_gate(self))
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if self.path.startswith("/api/ahu-systems"):
+            try:
+                return self.send_json(api_ahu_systems(self))
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if self.path.startswith("/api/air-side-model"):
+            try:
+                return self.send_json(api_air_side_model(self))
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if self.path.startswith("/api/hourly-ahu-load-report"):
+            try:
+                return self.send_json(api_hourly_ahu_load_report(self))
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if self.path.startswith("/api/plant-method-gate"):
+            try:
+                return self.send_json(api_plant_method_gate(self))
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if self.path.startswith("/api/plant-systems"):
+            try:
+                return self.send_json(api_plant_systems(self))
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if self.path.startswith("/api/hydraulic-circuits"):
+            try:
+                return self.send_json(api_hydraulic_circuits(self))
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if self.path.startswith("/api/hourly-plant-load-report"):
+            try:
+                return self.send_json(api_hourly_plant_load_report(self))
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if self.path.startswith("/api/annual-weather"):
+            try:
+                return self.send_json(api_annual_weather(self))
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if self.path.startswith("/api/annual-calendar"):
+            try:
+                return self.send_json(api_annual_calendar(self))
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if self.path.startswith("/api/annual-radiation"):
+            try:
+                return self.send_json(api_annual_radiation(self))
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if self.path.startswith("/api/annual-method-gate"):
+            try:
+                return self.send_json(api_annual_method_gate(self))
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if self.path.startswith("/api/annual-energy-report"):
+            try:
+                return self.send_json(api_annual_energy_report(self))
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if self.path.startswith("/api/ai-preliminary-model"):
+            try:
+                return self.send_json(api_ai_preliminary_model(self))
+            except Exception as error:
+                return self.send_json({"error": str(error)}, 400)
+        if self.path.startswith("/api/hourly-ai-preliminary-load-report"):
+            try:
+                return self.send_json(api_hourly_ai_preliminary_load_report(self))
+            except Exception as error:
+                return self.send_json({"error": str(error)}, 400)
         if self.path.startswith("/api/infiltration-method-gate"):
             try:
                 return self.send_json(api_infiltration_method_gate(self))
+            except Exception as error:
+                return self.send_json({"error": str(error)}, 400)
+        if self.path.startswith("/api/glazing-method-gate"):
+            try:
+                return self.send_json(api_glazing_method_gate(self))
+            except Exception as error:
+                return self.send_json({"error": str(error)}, 400)
+        if self.path.startswith("/api/shading-method-gate"):
+            try:
+                return self.send_json(api_shading_method_gate(self))
+            except Exception as error:
+                return self.send_json({"error": str(error)}, 400)
+        if self.path.startswith("/api/ground-contact-method-gate"):
+            try:
+                return self.send_json(api_ground_contact_method_gate(self))
+            except Exception as error:
+                return self.send_json({"error": str(error)}, 400)
+        if self.path.startswith("/api/dynamic-thermal-mass-method-gate"):
+            try:
+                return self.send_json(api_dynamic_thermal_mass_method_gate(self))
+            except Exception as error:
+                return self.send_json({"error": str(error)}, 400)
+        if self.path.startswith("/api/solar-radiation-method-gate"):
+            try:
+                return self.send_json(api_solar_radiation_method_gate(self))
+            except Exception as error:
+                return self.send_json({"error": str(error)}, 400)
+        if self.path.startswith("/api/solar-radiation-source"):
+            try:
+                return self.send_json(api_solar_radiation_source(self))
+            except Exception as error:
+                return self.send_json({"error": str(error)}, 400)
+        if self.path.startswith("/api/room-to-room-coupling-method-gate"):
+            try:
+                return self.send_json(api_room_to_room_coupling_method_gate(self))
+            except Exception as error:
+                return self.send_json({"error": str(error)}, 400)
+        if self.path.startswith("/api/heating-method-gate"):
+            try:
+                return self.send_json(api_heating_method_gate(self))
+            except Exception as error:
+                return self.send_json({"error": str(error)}, 400)
+        if self.path.startswith("/api/hourly-heating-load-report"):
+            try:
+                return self.send_json(api_hourly_heating_load_report(self))
             except Exception as error:
                 return self.send_json({"error": str(error)}, 400)
         if self.path.startswith("/api/calculator-inputs"):
@@ -208,6 +400,16 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(api_vision_extraction(self))
             except Exception as error:
                 return self.send_json({"error": str(error)}, 400)
+        if self.path.startswith("/api/window-scan"):
+            try:
+                return self.send_json(api_window_scan(self))
+            except Exception as error:
+                return self.send_json({"error": str(error)}, 400)
+        if self.path.startswith("/api/site-orientation"):
+            try:
+                return self.send_json(api_site_orientation(self))
+            except Exception as error:
+                return self.send_json({"error": str(error)}, 400)
         if self.path.startswith("/api/parity-report"):
             try:
                 return self.send_json(api_parity_report(self))
@@ -236,8 +438,62 @@ class Handler(SimpleHTTPRequestHandler):
             return self.save_hourly_load_model()
         if self.path == "/api/hourly-load-report":
             return self.save_hourly_load_report()
+        if self.path == "/api/air-side-method-gate":
+            return self.save_air_side_method_gate()
+        if self.path == "/api/ahu-systems":
+            return self.save_ahu_systems()
+        if self.path == "/api/air-side-model":
+            return self.save_air_side_model()
+        if self.path == "/api/hourly-ahu-load-report":
+            return self.save_hourly_ahu_load_report()
+        if self.path == "/api/plant-method-gate":
+            return self.save_plant_method_gate()
+        if self.path == "/api/plant-systems":
+            return self.save_plant_systems()
+        if self.path == "/api/hydraulic-circuits":
+            return self.save_hydraulic_circuits()
+        if self.path == "/api/hourly-plant-load-report":
+            return self.save_hourly_plant_load_report()
+        if self.path == "/api/annual-weather":
+            return self.save_annual_weather()
+        if self.path == "/api/annual-calendar":
+            return self.save_annual_calendar()
+        if self.path == "/api/annual-radiation":
+            return self.save_annual_radiation()
+        if self.path == "/api/annual-method-gate":
+            return self.save_annual_method_gate()
+        if self.path == "/api/annual-energy-report":
+            return self.save_annual_energy_report()
+        if self.path == "/api/ai-preliminary-model":
+            return self.save_ai_preliminary_model()
+        if self.path == "/api/hourly-ai-preliminary-load-report":
+            return self.save_hourly_ai_preliminary_load_report()
         if self.path == "/api/infiltration-method-gate":
             return self.save_infiltration_method_gate()
+        if self.path == "/api/glazing-method-gate":
+            return self.save_glazing_method_gate()
+        if self.path == "/api/shading-method-gate":
+            return self.save_shading_method_gate()
+        if self.path == "/api/ground-contact-method-gate":
+            return self.save_ground_contact_method_gate()
+        if self.path == "/api/dynamic-thermal-mass-method-gate":
+            return self.save_dynamic_thermal_mass_method_gate()
+        if self.path == "/api/solar-radiation-method-gate":
+            return self.save_solar_radiation_method_gate()
+        if self.path == "/api/solar-radiation-source":
+            return self.save_solar_radiation_source()
+        if self.path == "/api/room-to-room-coupling-method-gate":
+            return self.save_room_to_room_coupling_method_gate()
+        if self.path == "/api/heating-method-gate":
+            return self.save_heating_method_gate()
+        if self.path == "/api/hourly-heating-load-report":
+            return self.save_hourly_heating_load_report()
+        if self.path == "/api/report-package":
+            return self.save_report_package()
+        if self.path == "/api/project-export":
+            return self.save_project_export()
+        if self.path == "/api/project-import":
+            return self.save_project_import()
         if self.path == "/api/calculator-inputs":
             return self.save_calculator_inputs()
         if self.path == "/api/envelope-library":
@@ -260,6 +516,10 @@ class Handler(SimpleHTTPRequestHandler):
             return self.save_calculation_input_evidence()
         if self.path == "/api/vision-extraction":
             return self.save_vision_extraction()
+        if self.path == "/api/window-scan":
+            return self.save_window_scan()
+        if self.path == "/api/site-orientation":
+            return self.save_site_orientation()
         if self.path == "/api/parity-report":
             return self.save_parity_report()
         if self.path == "/process":
@@ -344,6 +604,111 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json({"error": str(error)}, 400)
         self.send_json(result)
 
+    def save_air_side_method_gate(self):
+        try:
+            result = api_save_air_side_method_gate(self)
+        except Exception as error:
+            return self.send_json(product_error(error), 400)
+        self.send_json(result)
+
+    def save_ahu_systems(self):
+        try:
+            result = api_save_ahu_systems(self)
+        except Exception as error:
+            return self.send_json(product_error(error), 400)
+        self.send_json(result)
+
+    def save_air_side_model(self):
+        try:
+            result = api_save_air_side_model(self)
+        except Exception as error:
+            return self.send_json(product_error(error), 400)
+        self.send_json(result)
+
+    def save_hourly_ahu_load_report(self):
+        try:
+            result = api_save_hourly_ahu_load_report(self)
+        except Exception as error:
+            return self.send_json(product_error(error), 400)
+        self.send_json(result)
+
+    def save_plant_method_gate(self):
+        try:
+            result = api_save_plant_method_gate(self)
+        except Exception as error:
+            return self.send_json(product_error(error), 400)
+        self.send_json(result)
+
+    def save_plant_systems(self):
+        try:
+            result = api_save_plant_systems(self)
+        except Exception as error:
+            return self.send_json(product_error(error), 400)
+        self.send_json(result)
+
+    def save_hydraulic_circuits(self):
+        try:
+            result = api_save_hydraulic_circuits(self)
+        except Exception as error:
+            return self.send_json(product_error(error), 400)
+        self.send_json(result)
+
+    def save_hourly_plant_load_report(self):
+        try:
+            result = api_save_hourly_plant_load_report(self)
+        except Exception as error:
+            return self.send_json(product_error(error), 400)
+        self.send_json(result)
+
+    def save_annual_weather(self):
+        try:
+            result = api_save_annual_weather(self)
+        except Exception as error:
+            return self.send_json(product_error(error), 400)
+        self.send_json(result)
+
+    def save_annual_calendar(self):
+        try:
+            result = api_save_annual_calendar(self)
+        except Exception as error:
+            return self.send_json(product_error(error), 400)
+        self.send_json(result)
+
+    def save_annual_radiation(self):
+        try:
+            result = api_save_annual_radiation(self)
+        except Exception as error:
+            return self.send_json(product_error(error), 400)
+        self.send_json(result)
+
+    def save_annual_method_gate(self):
+        try:
+            result = api_save_annual_method_gate(self)
+        except Exception as error:
+            return self.send_json(product_error(error), 400)
+        self.send_json(result)
+
+    def save_annual_energy_report(self):
+        try:
+            result = api_save_annual_energy_report(self)
+        except Exception as error:
+            return self.send_json(product_error(error), 400)
+        self.send_json(result)
+
+    def save_ai_preliminary_model(self):
+        try:
+            result = api_save_ai_preliminary_model(self)
+        except Exception as error:
+            return self.send_json({"error": str(error)}, 400)
+        self.send_json(result)
+
+    def save_hourly_ai_preliminary_load_report(self):
+        try:
+            result = api_save_hourly_ai_preliminary_load_report(self)
+        except Exception as error:
+            return self.send_json({"error": str(error)}, 400)
+        self.send_json(result)
+
     def save_infiltration_method_gate(self):
         try:
             result = api_save_infiltration_method_gate(self)
@@ -351,14 +716,101 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json({"error": str(error)}, 400)
         self.send_json(result)
 
+    def save_glazing_method_gate(self):
+        try:
+            result = api_save_glazing_method_gate(self)
+        except Exception as error:
+            return self.send_json({"error": str(error)}, 400)
+        self.send_json(result)
+
+    def save_shading_method_gate(self):
+        try:
+            result = api_save_shading_method_gate(self)
+        except Exception as error:
+            return self.send_json({"error": str(error)}, 400)
+        self.send_json(result)
+
+    def save_ground_contact_method_gate(self):
+        try:
+            result = api_save_ground_contact_method_gate(self)
+        except Exception as error:
+            return self.send_json({"error": str(error)}, 400)
+        self.send_json(result)
+
+    def save_dynamic_thermal_mass_method_gate(self):
+        try:
+            result = api_save_dynamic_thermal_mass_method_gate(self)
+        except Exception as error:
+            return self.send_json({"error": str(error)}, 400)
+        self.send_json(result)
+
+    def save_solar_radiation_method_gate(self):
+        try:
+            result = api_save_solar_radiation_method_gate(self)
+        except Exception as error:
+            return self.send_json({"error": str(error)}, 400)
+        self.send_json(result)
+
+    def save_solar_radiation_source(self):
+        try:
+            result = api_save_solar_radiation_source(self)
+        except Exception as error:
+            return self.send_json({"error": str(error)}, 400)
+        self.send_json(result)
+
+    def save_room_to_room_coupling_method_gate(self):
+        try:
+            result = api_save_room_to_room_coupling_method_gate(self)
+        except Exception as error:
+            return self.send_json({"error": str(error)}, 400)
+        self.send_json(result)
+
+    def save_heating_method_gate(self):
+        try:
+            result = api_save_heating_method_gate(self)
+        except Exception as error:
+            return self.send_json({"error": str(error)}, 400)
+        self.send_json(result)
+
+    def save_hourly_heating_load_report(self):
+        try:
+            result = api_save_hourly_heating_load_report(self)
+        except CalculatorInputConflict as error:
+            return self.send_json({"error": str(error), "code": "calculator_input_conflict", "conflict": True, "changed_sources": error.changed_sources, "action": "reload_and_reassemble"}, 409)
+        except Exception as error:
+            return self.send_json({"error": str(error)}, 400)
+        self.send_json(result)
+
+    def save_report_package(self):
+        try:
+            result = api_save_report_package(self)
+        except Exception as error:
+            return self.send_json(product_error(error), 400)
+        self.send_json(result)
+
+    def save_project_export(self):
+        try:
+            result = api_save_project_export(self)
+        except Exception as error:
+            return self.send_json(product_error(error), 400)
+        self.send_json(result)
+
+    def save_project_import(self):
+        try:
+            result = api_save_project_import(self)
+        except Exception as error:
+            return self.send_json(product_error(error), 400)
+        self.send_json(result)
+
     def save_calculator_inputs(self):
         try:
             result = api_save_calculator_inputs(self)
         except CalculatorInputConflict as error:
-            return self.send_json({"error": str(error), "code": "calculator_input_conflict", "conflict": True,
-                                   "changed_sources": error.changed_sources, "action": "reload_and_reassemble"}, 409)
+            payload = product_error(error)
+            payload.update({"conflict": True, "action": "reload_and_reassemble"})
+            return self.send_json(payload, 409)
         except Exception as error:
-            return self.send_json({"error": str(error)}, 400)
+            return self.send_json(product_error(error), 400)
         self.send_json(result)
 
     def save_envelope_library(self):
@@ -423,6 +875,20 @@ class Handler(SimpleHTTPRequestHandler):
     def save_vision_extraction(self):
         try:
             result = api_save_vision_extraction(self)
+        except Exception as error:
+            return self.send_json({"error": str(error)}, 400)
+        self.send_json(result)
+
+    def save_window_scan(self):
+        try:
+            result = api_save_window_scan(self)
+        except Exception as error:
+            return self.send_json({"error": str(error)}, 400)
+        self.send_json(result)
+
+    def save_site_orientation(self):
+        try:
+            result = api_save_site_orientation(self)
         except Exception as error:
             return self.send_json({"error": str(error)}, 400)
         self.send_json(result)
@@ -511,6 +977,89 @@ def api_analyse(request):
     return analysis_response(analyse_project(project))
 
 
+def _rebuild_evidence_chain(project):
+    """Build all derived PDF-evidence artifacts in one deterministic pass.
+
+    Analysis used to stop after page coverage and building evidence, leaving
+    calculation-input evidence and the calculator draft to a separate manual
+    action. This helper writes only derived artifacts; authored hourly,
+    schedule, envelope, context, and override files are not touched.
+    """
+    review_dir = Path(project["review_dir"])
+    ai_input = load_json(review_dir / "ai_input.json")
+    if not ai_input:
+        raise ValueError("The reviewed packet does not contain ai_input.json.")
+    spatial_ocr = load_json(review_dir / "spatial_ocr.json")
+    vector_geometry = load_json(review_dir / "vector_geometry.json")
+    vision_response = load_json(review_dir / "vision_response.json")
+    dimension_matches = load_json(review_dir / "dimension_wall_matches.json")
+    geometry_confirmation = load_json(review_dir / "geometry_confirmation.json")
+
+    coverage = build_drawing_coverage(ai_input, spatial_ocr, vector_geometry)
+    coverage_path = review_dir / "drawing_coverage.json"
+    coverage_path.write_text(json.dumps(coverage, indent=2), encoding="utf-8")
+    building = build_building_evidence(ai_input, coverage, spatial_ocr, vision_response)
+    building_path = review_dir / "building_evidence.json"
+    building_path.write_text(json.dumps(building, indent=2), encoding="utf-8")
+    calculation_evidence = extract_calculation_input_evidence(
+        ai_input, coverage, spatial_ocr, vector_geometry, vision_response,
+        building, dimension_matches, geometry_confirmation,
+    )
+    calculation_path = review_dir / "calculation_input_evidence.json"
+    calculation_path.write_text(json.dumps(calculation_evidence, indent=2), encoding="utf-8")
+
+    fusion = build_evidence_fusion(
+        ai_input, coverage, building, spatial_ocr, vector_geometry,
+        vision_response, dimension_matches, geometry_confirmation,
+    )
+    fusion["calculation_input_evidence"] = calculation_evidence
+    fusion["fingerprint"] = hashlib.sha256(json.dumps(
+        {key: value for key, value in fusion.items() if key != "fingerprint"},
+        sort_keys=True, separators=(",", ":"),
+    ).encode()).hexdigest()
+    fusion_path = review_dir / "architect_evidence_fusion.json"
+    fusion_path.write_text(json.dumps(fusion, indent=2), encoding="utf-8")
+
+    thermal_evidence = build_thermal_evidence(ai_input, spatial_ocr, vision_response, coverage, building)
+    thermal_model = build_thermal_model(thermal_evidence)
+    thermal_evidence_path = review_dir / "thermal_evidence.json"
+    thermal_model_path = review_dir / "thermal_model.json"
+    thermal_evidence_path.write_text(json.dumps(thermal_evidence, indent=2), encoding="utf-8")
+    thermal_model_path.write_text(json.dumps(thermal_model, indent=2), encoding="utf-8")
+    draft = build_calculator_draft(
+        thermal_model, building, coverage,
+        source_artifacts={
+            name: str(review_dir / f"{name}.json")
+            for name in ("thermal_model", "building_evidence", "drawing_coverage", "thermal_evidence")
+        },
+        thermal_evidence=thermal_evidence,
+        evidence_fusion=fusion,
+    )
+    draft_path = review_dir / "calculator_draft.json"
+    draft_path.write_text(json.dumps(draft, indent=2), encoding="utf-8")
+    interpretations_path = review_dir / "component_interpretations.json"
+    interpretations = component_interpretations.build_artifact(
+        load_json(interpretations_path) if interpretations_path.exists() else {}, fusion=fusion,
+        calculation_evidence=calculation_evidence, calculator_draft=draft,
+    )
+    interpretations_path.write_text(json.dumps(interpretations, indent=2), encoding="utf-8")
+
+    project.update({
+        "drawing_coverage": str(coverage_path),
+        "building_evidence": str(building_path),
+        "calculation_input_evidence": str(calculation_path),
+        "evidence_fusion": str(fusion_path),
+        "architect_evidence_fusion": str(fusion_path),
+        "thermal_evidence": str(thermal_evidence_path),
+        "thermal_model": str(thermal_model_path),
+        "calculator_draft": str(draft_path),
+        "component_interpretations": str(interpretations_path),
+    })
+    return {"coverage": coverage, "building": building, "calculation_input_evidence": calculation_evidence,
+            "fusion": fusion, "thermal_model": thermal_model, "calculator_draft": draft,
+            "component_interpretations": interpretations}
+
+
 def analyse_project(project):
     pdf_path = Path(project["pdf"])
     review_dir = WEB_REVIEW / project["id"]
@@ -520,14 +1069,6 @@ def analyse_project(project):
     ai_output = Path(result["review_dir"]) / "ai_input.json"
     ai_input = build_ai_packet(packet)
     ai_output.write_text(json.dumps(ai_input, indent=2), encoding="utf-8")
-    coverage_output = Path(result["review_dir"]) / "drawing_coverage.json"
-    coverage_output.write_text(json.dumps(build_drawing_coverage(
-        ai_input,
-        load_json(Path(result["review_dir"]) / "spatial_ocr.json"),
-        load_json(Path(result["review_dir"]) / "vector_geometry.json"),
-    ), indent=2), encoding="utf-8")
-    building_output = Path(result["review_dir"]) / "building_evidence.json"
-    building_output.write_text(json.dumps(build_building_evidence(ai_input, load_json(coverage_output)), indent=2), encoding="utf-8")
 
     project.update(
         {
@@ -536,14 +1077,16 @@ def analyse_project(project):
             "packet": result["packet"],
             "html": result["html"],
             "ai_input": str(ai_output),
-            "drawing_coverage": str(coverage_output),
-            "building_evidence": str(building_output),
             "pages": result["kept_count"],
             "relevant": result["primary_count"],
             "analysis_version": ANALYSIS_VERSION,
             "updated_at": timestamp(),
         }
     )
+    _rebuild_evidence_chain(project)
+    # The reviewed workflow remains unchanged. This only records an isolated
+    # preliminary provider state when the project has explicitly opted in.
+    ai_preliminary_service.after_pdf_analysis(sys.modules[__name__], project)
     update_project(project)
     return project
 
@@ -599,6 +1142,7 @@ def api_save_decisions(request):
     project["dimension_wall_matches"] = pipeline["dimension_wall_matches"]
     project["candidate_review"] = pipeline["candidate_review"]
     project["chatgpt_packet"] = pipeline["chatgpt_packet"]
+    _rebuild_evidence_chain(project)
     project["updated_at"] = timestamp()
     update_project(project)
     return {
@@ -623,6 +1167,7 @@ def api_save_vision_response(request):
     if result.get("geometry_confirmation_path"):
         project["geometry_confirmation"] = result["geometry_confirmation_path"]
     project["reasoning_packet"] = result["reasoning_packet_raw"]
+    _rebuild_evidence_chain(project)
     project["updated_at"] = timestamp()
     update_project(project)
     return result["response"]
@@ -668,7 +1213,10 @@ def hourly_paths(project):
         "scenarios": review_dir / "design_day_scenarios.json",
         "model": review_dir / "hourly_load_model.json",
         "report": review_dir / "hourly_load_report.json",
+        "heating_report": review_dir / "hourly_heating_load_report.json",
         "coverage": review_dir / "drawing_coverage.json",
+        "thermal_evidence": review_dir / "thermal_evidence.json",
+        "thermal_model": review_dir / "thermal_model.json",
         "envelope_library": review_dir / "envelope_library.json",
         "envelope_model": review_dir / "envelope_model.json",
         "calculator_draft": review_dir / "calculator_draft.json",
@@ -680,7 +1228,206 @@ def hourly_paths(project):
         "calculator_input_set": review_dir / "calculator_input_set.json",
         "calculator_input_sets": review_dir / "calculator_input_sets",
         "infiltration_method_gate": review_dir / "infiltration_method_gate.json",
+        "glazing_method_gate": review_dir / "glazing_method_gate.json",
+        "shading_method_gate": review_dir / "shading_method_gate.json",
+        "ground_contact_method_gate": review_dir / "ground_contact_method_gate.json",
+        "dynamic_thermal_mass_method_gate": review_dir / "dynamic_thermal_mass_method_gate.json",
+        "solar_radiation_method_gate": review_dir / "solar_radiation_method_gate.json",
+        "solar_radiation_source": review_dir / "solar_radiation_source.json",
+        "site_orientation": review_dir / "site_orientation.json",
+        "room_to_room_coupling_method_gate": review_dir / "room_to_room_coupling_method_gate.json",
+        "heating_method_gate": review_dir / "heating_method_gate.json",
+        "ahu_systems": review_dir / "ahu_systems.json",
+        "air_side_model": review_dir / "air_side_model.json",
+        "air_side_method_gate": review_dir / "air_side_method_gate.json",
+        "ahu_report": review_dir / "hourly_ahu_load_report.json",
+        "plant_systems": review_dir / "plant_systems.json",
+        "hydraulic_circuits": review_dir / "hydraulic_circuits.json",
+        "plant_method_gate": review_dir / "plant_method_gate.json",
+        "plant_report": review_dir / "hourly_plant_load_report.json",
+        "annual_weather": review_dir / "annual_weather.json",
+        "annual_calendar": review_dir / "annual_calendar.json",
+        "annual_radiation": review_dir / "annual_radiation.json",
+        "annual_method_gate": review_dir / "annual_method_gate.json",
+        "annual_report": review_dir / "annual_energy_report.json",
+        "exception_decisions": review_dir / "exception_decisions.json",
+        "component_interpretations": review_dir / "component_interpretations.json",
     }
+
+
+def _load_json_or(path, default=None):
+    path = Path(path)
+    return load_json(path) if path.exists() else ({} if default is None else deepcopy(default))
+
+
+def product_error(error):
+    """Return the common actionable error envelope for Stage 12 endpoints."""
+    if isinstance(error, CalculatorInputConflict):
+        return {
+            "error": str(error), "code": "calculator_input_conflict", "message": str(error),
+            "affected_artifact": "calculator_input_set.json", "remediation": "Reload the project and assemble inputs again.",
+            "retryable": True, "changed_sources": error.changed_sources,
+        }
+    message = str(error)
+    code = "project_productization_error"
+    if "unsafe path" in message.lower() or "hash mismatch" in message.lower():
+        code = "project_archive_invalid"
+    elif "stale" in message.lower():
+        code = "report_stale"
+    return {"error": message, "code": code, "message": message, "affected_artifact": "", "remediation": "Review the project health details and resolve the listed issue.", "retryable": False, "changed_sources": []}
+
+
+def _product_artifacts(project):
+    paths = hourly_paths(project)
+    root = Path(project["review_dir"])
+    return paths, root
+
+
+def api_project_health(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    if not project.get("review_dir"):
+        return {
+            "id": project["id"],
+            "status": "blocked",
+            "issues": [{"code": "review_workspace_missing", "severity": "blocking", "message": "This project has no reviewed workspace yet.", "remediation": "Analyse the uploaded drawing set before using project records."}],
+            "recovery_actions": ["Analyse the project PDF"],
+            "artifact_links": {},
+            "audit_log_url": "",
+        }
+    paths, root = _product_artifacts(project)
+    stale = []
+    if paths["report"].exists() and current_hourly_load_report_path(project) is None:
+        stale.append("hourly_load_report.json")
+    if paths["heating_report"].exists() and current_hourly_heating_load_report_path(project) is None:
+        stale.append("hourly_heating_load_report.json")
+    if paths["annual_report"].exists() and current_annual_energy_report_path(project) is None:
+        stale.append("annual_energy_report.json")
+    health = productization.cached_project_health(project, paths, stale_report_names=stale)
+    package_root = root / "report_packages"
+    current_report_hashes = {}
+    for report_type, path in (("cooling", paths["report"]), ("heating", paths["heating_report"]), ("annual", paths["annual_report"]), ("ahu", paths["ahu_report"]), ("plant", paths["plant_report"])):
+        if Path(path).is_file():
+            report_copy = _load_json_or(path)
+            report_copy.pop("_report_fingerprint", None)
+            current_report_hashes[report_type] = productization.fingerprint(report_copy)
+    for manifest_path in (package_root.glob("*/manifest.json") if package_root.exists() else []):
+        manifest = _load_json_or(manifest_path)
+        report_type = manifest.get("report_type")
+        if manifest.get("current_report") and report_type in current_report_hashes and manifest.get("report_fingerprint") != current_report_hashes[report_type]:
+            health["issues"].append({"code": "report_package_stale", "severity": "blocking", "scope": "project", "affected_id": project["id"], "artifact": manifest_path.relative_to(root).as_posix(), "message": "A current report package no longer matches the stored report.", "remediation": "Build a new report package from the current report."})
+    if health["issues"]:
+        health["normalized_exceptions"] = productization.normalise_exceptions(health["issues"], source_fingerprint=productization.fingerprint(health["issues"]))
+        if any(item.get("severity") == "blocking" for item in health["issues"]):
+            health["status"] = "blocked"
+    health.update({"id": project["id"], "audit_log_url": safe_link(root / "audit_log.jsonl") if (root / "audit_log.jsonl").exists() else "", "artifact_links": {name: safe_link(path) for name, path in paths.items() if Path(path).is_file()}})
+    return health
+
+
+def api_audit_log(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    if not project.get("review_dir"):
+        return {"id": project["id"], "events": [], "chain_valid": True, "artifact_url": ""}
+    root = Path(project["review_dir"])
+    try:
+        limit = min(1000, max(1, int(query.get("limit", [200])[0])))
+        offset = max(0, int(query.get("offset", [0])[0]))
+    except (TypeError, ValueError):
+        limit, offset = 200, 0
+    filters = {"action": query.get("action", [""])[0], "target": query.get("target", [""])[0], "affected_id": query.get("affected_id", [""])[0]}
+    events = productization.read_audit_events(root, **filters, limit=limit, offset=offset)
+    total = len(productization.read_audit_events(root, **filters, limit=100000))
+    return {"id": project["id"], "events": events, "event_total": total, "offset": offset, "limit": limit, "has_more": offset + len(events) < total, "chain_valid": productization.validate_audit_chain(root), "artifact_url": safe_link(root / "audit_log.jsonl") if (root / "audit_log.jsonl").exists() else ""}
+
+
+def _report_package_inputs(project, report_type):
+    paths, root = _product_artifacts(project)
+    if report_type == "heating":
+        report_path = paths["heating_report"]
+        current = current_hourly_heating_load_report_path(project)
+        stale = [] if current else (["heating report is stale"] if report_path.exists() else ["heating report has not been calculated"])
+    elif report_type == "annual":
+        report_path = paths["annual_report"]
+        current = current_annual_energy_report_path(project)
+        stale = [] if current else (["annual report is stale"] if report_path.exists() else ["annual report has not been calculated"])
+    elif report_type == "ahu":
+        report_path = paths["ahu_report"]
+        current = current_hourly_ahu_load_report_path(project)
+        stale = [] if current else (["AHU report is stale"] if report_path.exists() else ["AHU report has not been calculated"])
+    elif report_type == "plant":
+        report_path = paths["plant_report"]
+        current = current_hourly_plant_load_report_path(project)
+        stale = [] if current else (["plant report is stale"] if report_path.exists() else ["plant report has not been calculated"])
+    else:
+        report_path = paths["report"]
+        current = current_hourly_load_report_path(project)
+        stale = [] if current else (["cooling report is stale"] if report_path.exists() else ["cooling report has not been calculated"])
+    return paths, root, report_path, current, stale
+
+
+def api_report_package(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    report_type = query.get("report_type", ["cooling"])[0]
+    if report_type not in {"cooling", "heating", "annual", "ahu", "plant"}:
+        raise ValueError("report_type must be cooling, heating, annual, ahu, or plant")
+    _paths, root = _product_artifacts(project)
+    package_root = root / "report_packages"
+    packages = []
+    if package_root.exists():
+        for manifest_path in sorted(package_root.glob("*/manifest.json"), reverse=True):
+            manifest = load_json(manifest_path)
+            if manifest.get("report_type") == report_type:
+                packages.append({"manifest": manifest, "artifact_url": safe_link(manifest_path.parent), "html_url": safe_link(manifest_path.parent / "report.html"), "pdf_url": safe_link(manifest_path.parent / "report.pdf")})
+    return {"id": project["id"], "report_type": report_type, "packages": packages[:50]}
+
+
+def api_save_report_package(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    report_type = data.get("report_type", "cooling")
+    paths, root, report_path, current, stale = _report_package_inputs(project, report_type)
+    if not report_path.exists():
+        raise ValueError(f"No {report_type} report exists to package.")
+    if stale and not data.get("allow_historical", False):
+        raise ValueError(f"Cannot create a current package: {'; '.join(stale)}")
+    report = load_json(report_path)
+    if current and not report.get("input_fingerprints", {}).get("calculator_input_set_fingerprint"):
+        raise ValueError("A current report package requires an immutable calculator-input snapshot.")
+    artifact_paths = [path for path in paths.values() if Path(path).is_file()]
+    if report_type == "annual":
+        artifact_paths.extend(path for path in (report_path.with_name("annual_hourly_profile.csv"), report_path.with_name("annual_monthly_summary.csv")) if path.is_file())
+    result = productization.build_report_package(project, paths, report_type, report, current=bool(current), stale_reasons=stale, artifact_paths=artifact_paths)
+    productization.append_audit_event(root, action="report_package_generated", target=f"{report_type}_report", related_fingerprint=result["manifest"]["report_fingerprint"], new_fingerprint=result["package_fingerprint"], result="success")
+    return {"id": project["id"], "report_type": report_type, "status": "current" if current and not stale else "historical", "package": result, "artifact_url": safe_link(Path(result["artifact_url"]) / "manifest.json"), "html_url": safe_link(result["html_path"]), "pdf_url": safe_link(result["pdf_path"])}
+
+
+def api_save_project_export(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    result = productization.export_project(project)
+    productization.append_audit_event(project["review_dir"], action="project_exported", target="project_archive", new_fingerprint=result["archive_fingerprint"], result="success")
+    return {"id": project["id"], "status": "current", "archive_fingerprint": result["archive_fingerprint"], "manifest": result["manifest"], "artifact_url": safe_link(result["archive_path"])}
+
+
+def api_save_project_import(request):
+    data = read_json_body(request)
+    encoded = data.get("archive_base64", "")
+    if encoded:
+        archive_bytes = base64.b64decode(encoded, validate=True)
+    elif data.get("archive_path"):
+        archive_bytes = Path(data["archive_path"]).read_bytes()
+    else:
+        raise ValueError("Provide archive_base64 or a local archive_path.")
+    archive_hint = hashlib.sha256(archive_bytes).hexdigest()[:12]
+    project_id = data.get("new_project_id") or f"imported-{archive_hint}"
+    destination = WEB_REVIEW
+    imported = productization.import_project(archive_bytes, destination, project_id)
+    project = {"id": project_id, "name": imported["project_name"], "review_dir": imported["review_dir"], "pdf": imported.get("source_pdf", ""), "analysed": True, "pages": 0, "relevant": 0, "created_at": timestamp(), "updated_at": timestamp(), "source_available": imported["source_available"]}
+    update_project(project)
+    productization.append_audit_event(imported["review_dir"], action="project_imported", target="project_archive", new_fingerprint=archive_hint, result="success")
+    return {"id": project_id, "project": project, "status": "imported", "source_available": imported["source_available"], "imported_artifacts": imported.get("imported_artifacts", []), "skipped_artifacts": imported.get("skipped_artifacts", []), "invalid_artifacts": imported.get("invalid_artifacts", []), "unavailable_sources": imported.get("unavailable_sources", []), "manifest": imported["archive_manifest"]}
 
 
 def infiltration_gate_summary(gate):
@@ -701,6 +1448,24 @@ def api_infiltration_method_gate(request):
     return artifact_response(project, "infiltration_method_gate", gate, infiltration_gate_summary(gate), path)
 
 
+def glazing_gate_summary(gate):
+    gate = validate_glazing_method_gate(gate)
+    approved = glazing_gate_is_approved(gate)
+    return {
+        "status": "approved" if approved else "placeholder",
+        "message": "Reviewed glazing is eligible for manual-solar cooling calculations." if approved else "Glazing remains stored only until a named HVAC engineer approves this fixed method.",
+        "method_id": gate["method_id"], "approval_status": gate["approval_status"],
+    }
+
+
+def api_glazing_method_gate(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    path = hourly_paths(project)["glazing_method_gate"]
+    gate = load_json(path) if path.exists() else empty_glazing_method_gate()
+    return artifact_response(project, "glazing_method_gate", gate, glazing_gate_summary(gate), path)
+
+
 def api_save_infiltration_method_gate(request):
     data = read_json_body(request)
     project = project_by_id(data.get("project_id") or data.get("id", ""))
@@ -713,6 +1478,830 @@ def api_save_infiltration_method_gate(request):
     project["updated_at"] = timestamp()
     update_project(project)
     return artifact_response(project, "infiltration_method_gate", gate, infiltration_gate_summary(gate), path)
+
+
+def api_save_glazing_method_gate(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    gate = validate_glazing_method_gate(data.get("glazing_method_gate", data.get("gate", {})))
+    gate["updated_at"] = timestamp()
+    path = hourly_paths(project)["glazing_method_gate"]
+    write_artifact(path, gate)
+    project["glazing_method_gate"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return artifact_response(project, "glazing_method_gate", gate, glazing_gate_summary(gate), path)
+
+
+def shading_gate_summary(gate):
+    gate = validate_shading_method_gate(gate)
+    approved = shading_gate_is_approved(gate)
+    return {
+        "status": "approved" if approved else "placeholder",
+        "message": "Confirmed geometric shading may replace the manual external shading factor." if approved else "Manual external shading remains the only available shading basis until a named HVAC engineer approves this method.",
+        "method_id": gate["method_id"], "approval_status": gate["approval_status"],
+    }
+
+
+def api_shading_method_gate(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    path = hourly_paths(project)["shading_method_gate"]
+    gate = load_json(path) if path.exists() else empty_shading_method_gate()
+    return artifact_response(project, "shading_method_gate", gate, shading_gate_summary(gate), path)
+
+
+def api_save_shading_method_gate(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    gate = validate_shading_method_gate(data.get("shading_method_gate", data.get("gate", {})))
+    gate["updated_at"] = timestamp()
+    path = hourly_paths(project)["shading_method_gate"]
+    write_artifact(path, gate)
+    project["shading_method_gate"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return artifact_response(project, "shading_method_gate", gate, shading_gate_summary(gate), path)
+
+
+def ground_contact_gate_summary(gate):
+    gate = validate_ground_contact_method_gate(gate)
+    approved = ground_contact_gate_is_approved(gate)
+    return {
+        "status": "approved" if approved else "placeholder",
+        "calculation_enabled": approved,
+        "method_id": gate["method_id"],
+        "message": "Ground-contact floors may calculate from cited temperatures." if approved else "Ground-contact floors remain excluded until this method is approved by a named HVAC engineer.",
+    }
+
+
+def api_ground_contact_method_gate(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    path = hourly_paths(project)["ground_contact_method_gate"]
+    gate = load_json(path) if path.exists() else empty_ground_contact_method_gate()
+    return artifact_response(project, "ground_contact_method_gate", gate, ground_contact_gate_summary(gate), path)
+
+
+def api_save_ground_contact_method_gate(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    gate = validate_ground_contact_method_gate(data.get("ground_contact_method_gate", data.get("gate", {})))
+    gate["updated_at"] = timestamp()
+    path = hourly_paths(project)["ground_contact_method_gate"]
+    write_artifact(path, gate)
+    project["ground_contact_method_gate"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return artifact_response(project, "ground_contact_method_gate", gate, ground_contact_gate_summary(gate), path)
+
+
+def advanced_gate_summary(gate, approved_message, blocked_message, checker):
+    gate = checker(gate)
+    approved = bool(gate and gate.get("approval_status") == "approved")
+    return {
+        "status": "approved" if approved else "placeholder",
+        "calculation_enabled": approved,
+        "method_id": gate.get("method_id", ""),
+        "approval_status": gate.get("approval_status", "placeholder"),
+        "message": approved_message if approved else blocked_message,
+    }
+
+
+def api_dynamic_thermal_mass_method_gate(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    path = hourly_paths(project)["dynamic_thermal_mass_method_gate"]
+    gate = load_json(path) if path.exists() else empty_dynamic_thermal_mass_method_gate()
+    summary = advanced_gate_summary(
+        gate,
+        "First-order RC thermal mass is eligible for explicitly sourced surfaces.",
+        "Dynamic thermal mass remains excluded until a named HVAC engineer approves this method.",
+        validate_dynamic_thermal_mass_method_gate,
+    )
+    return artifact_response(project, "dynamic_thermal_mass_method_gate", gate, summary, path)
+
+
+def api_save_dynamic_thermal_mass_method_gate(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    gate = validate_dynamic_thermal_mass_method_gate(data.get("dynamic_thermal_mass_method_gate", data.get("gate", {})))
+    gate["updated_at"] = timestamp()
+    path = hourly_paths(project)["dynamic_thermal_mass_method_gate"]
+    write_artifact(path, gate)
+    project["dynamic_thermal_mass_method_gate"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    summary = advanced_gate_summary(
+        gate,
+        "First-order RC thermal mass is eligible for explicitly sourced surfaces.",
+        "Dynamic thermal mass remains excluded until a named HVAC engineer approves this method.",
+        validate_dynamic_thermal_mass_method_gate,
+    )
+    return artifact_response(project, "dynamic_thermal_mass_method_gate", gate, summary, path)
+
+
+def api_solar_radiation_method_gate(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    path = hourly_paths(project)["solar_radiation_method_gate"]
+    gate = load_json(path) if path.exists() else empty_solar_radiation_method_gate()
+    summary = advanced_gate_summary(
+        gate,
+        "Cited hourly surface irradiance is eligible for explicitly sourced surfaces.",
+        "Solar-radiation inputs remain excluded until a named HVAC engineer approves this method.",
+        validate_solar_radiation_method_gate,
+    )
+    return artifact_response(project, "solar_radiation_method_gate", gate, summary, path)
+
+
+def api_save_solar_radiation_method_gate(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    gate = validate_solar_radiation_method_gate(data.get("solar_radiation_method_gate", data.get("gate", {})))
+    gate["updated_at"] = timestamp()
+    path = hourly_paths(project)["solar_radiation_method_gate"]
+    write_artifact(path, gate)
+    project["solar_radiation_method_gate"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    summary = advanced_gate_summary(
+        gate,
+        "Cited hourly surface irradiance is eligible for explicitly sourced surfaces.",
+        "Solar-radiation inputs remain excluded until a named HVAC engineer approves this method.",
+        validate_solar_radiation_method_gate,
+    )
+    return artifact_response(project, "solar_radiation_method_gate", gate, summary, path)
+
+
+def api_solar_radiation_source(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    path = hourly_paths(project)["solar_radiation_source"]
+    source = load_json(path) if path.exists() else empty_solar_radiation_source()
+    source = validate_solar_radiation_source(source) if path.exists() else source
+    return artifact_response(project, "solar_radiation_source", source, {
+        "status": "complete" if path.exists() else "missing",
+        "fingerprint": source.get("fingerprint", ""),
+        "message": f"Cited 24-hour {source.get('irradiance_basis', 'surface-plane')} solar source is available." if path.exists() else "A cited 24-hour solar source is required.",
+    }, path)
+
+
+def api_save_solar_radiation_source(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    source = validate_solar_radiation_source(data.get("solar_radiation_source", data.get("source", data)))
+    source["updated_at"] = timestamp()
+    path = hourly_paths(project)["solar_radiation_source"]
+    write_artifact(path, source)
+    project["solar_radiation_source"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return artifact_response(project, "solar_radiation_source", source, {
+        "status": "complete", "fingerprint": source["fingerprint"],
+        "message": f"Cited 24-hour {source['irradiance_basis']} solar source is available.",
+    }, path)
+
+
+def api_room_to_room_coupling_method_gate(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    path = hourly_paths(project)["room_to_room_coupling_method_gate"]
+    gate = load_json(path) if path.exists() else empty_room_coupling_method_gate()
+    gate = validate_room_coupling_method_gate(gate)
+    return artifact_response(project, "room_to_room_coupling_method_gate", gate, {
+        "status": "approved" if room_coupling_gate_is_approved(gate) else "placeholder",
+        "calculation_enabled": room_coupling_gate_is_approved(gate),
+        "method_id": gate.get("method_id", ""),
+        "message": "Dynamic room-to-room coupling is eligible for complete records." if room_coupling_gate_is_approved(gate) else "Dynamic room-to-room coupling remains excluded until a named HVAC engineer approves this method.",
+    }, path)
+
+
+def heating_gate_summary(gate):
+    gate = validate_heating_method_gate(gate)
+    approved = heating_gate_is_approved(gate)
+    return {
+        "status": "approved" if approved else "placeholder",
+        "calculation_enabled": True,
+        "review_ready_enabled": approved,
+        "method_id": gate["method_id"],
+        "fingerprint": heating_gate_fingerprint(gate),
+        "message": "Heating calculations are approved for complete scope." if approved else "Heating calculations are development/draft-only until a named HVAC engineer approves this method gate.",
+    }
+
+
+def api_heating_method_gate(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    path = hourly_paths(project)["heating_method_gate"]
+    gate = load_json(path) if path.exists() else empty_heating_method_gate()
+    gate = validate_heating_method_gate(gate)
+    return artifact_response(project, "heating_method_gate", gate, heating_gate_summary(gate), path)
+
+
+def api_save_heating_method_gate(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    gate = validate_heating_method_gate(data.get("heating_method_gate", data.get("gate", {})))
+    gate["updated_at"] = timestamp()
+    gate["fingerprint"] = heating_gate_fingerprint(gate)
+    path = hourly_paths(project)["heating_method_gate"]
+    write_artifact(path, gate)
+    project["heating_method_gate"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return artifact_response(project, "heating_method_gate", gate, heating_gate_summary(gate), path)
+
+
+def api_save_room_to_room_coupling_method_gate(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    gate = validate_room_coupling_method_gate(data.get("room_to_room_coupling_method_gate", data.get("gate", {})))
+    gate["updated_at"] = timestamp()
+    path = hourly_paths(project)["room_to_room_coupling_method_gate"]
+    write_artifact(path, gate)
+    project["room_to_room_coupling_method_gate"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return artifact_response(project, "room_to_room_coupling_method_gate", gate, {
+        "status": "approved" if room_coupling_gate_is_approved(gate) else "placeholder",
+        "calculation_enabled": room_coupling_gate_is_approved(gate),
+        "method_id": gate.get("method_id", ""),
+        "message": "Dynamic room-to-room coupling is eligible for complete records." if room_coupling_gate_is_approved(gate) else "Dynamic room-to-room coupling remains excluded until a named HVAC engineer approves this method.",
+    }, path)
+
+
+def air_side_gate_summary(gate):
+    gate = validate_air_side_method_gate(gate)
+    approved = air_side_gate_is_approved(gate)
+    return {
+        "status": "approved" if approved else "placeholder",
+        "approval_status": gate.get("approval_status", "placeholder"),
+        "calculation_enabled": True,
+        "review_ready_enabled": approved,
+        "method_id": gate.get("method_id", ""),
+        "fingerprint": gate.get("fingerprint", ""),
+        "message": "AHU reports may be review-ready for complete inputs." if approved else "AHU reports remain draft-only until a named HVAC engineer approves this method gate.",
+    }
+
+
+def _ahu_artifacts(project):
+    paths = hourly_paths(project)
+    systems = validate_ahu_systems(load_json(paths["ahu_systems"]) if paths["ahu_systems"].exists() else empty_ahu_systems())
+    model = validate_air_side_model(load_json(paths["air_side_model"]) if paths["air_side_model"].exists() else empty_air_side_model(), {row["ahu_id"] for row in systems["systems"]})
+    gate = validate_air_side_method_gate(load_json(paths["air_side_method_gate"]) if paths["air_side_method_gate"].exists() else empty_air_side_method_gate())
+    return paths, systems, model, gate
+
+
+def api_air_side_method_gate(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    path = hourly_paths(project)["air_side_method_gate"]
+    gate = validate_air_side_method_gate(load_json(path) if path.exists() else empty_air_side_method_gate())
+    return artifact_response(project, "air_side_method_gate", gate, air_side_gate_summary(gate), path)
+
+
+def api_save_air_side_method_gate(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    gate = validate_air_side_method_gate(data.get("air_side_method_gate", data.get("gate", {})))
+    gate["updated_at"] = timestamp()
+    gate = validate_air_side_method_gate(gate)
+    path = hourly_paths(project)["air_side_method_gate"]
+    write_artifact(path, gate)
+    project["air_side_method_gate"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return artifact_response(project, "air_side_method_gate", gate, air_side_gate_summary(gate), path)
+
+
+def api_ahu_systems(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    path = hourly_paths(project)["ahu_systems"]
+    raw = load_json(path) if path.exists() else empty_ahu_systems()
+    systems = validate_ahu_systems(raw)
+    return artifact_response(project, "ahu_systems", systems, {
+        "count": len(systems["systems"]),
+        "reviewed_count": sum(row["review_status"] == "confirmed" for row in systems["systems"]),
+        "message": "Explicit AHU topology is available." if systems["systems"] else "No AHU systems have been configured.",
+    }, path)
+
+
+def api_save_ahu_systems(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    raw = data.get("ahu_systems", data.get("systems", data))
+    systems = validate_ahu_systems(raw)
+    path = hourly_paths(project)["ahu_systems"]
+    systems["updated_at"] = timestamp()
+    write_artifact(path, systems)
+    project["ahu_systems"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return artifact_response(project, "ahu_systems", systems, {"count": len(systems["systems"])}, path)
+
+
+def api_air_side_model(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    paths = hourly_paths(project)
+    systems = validate_ahu_systems(load_json(paths["ahu_systems"]) if paths["ahu_systems"].exists() else empty_ahu_systems())
+    path = paths["air_side_model"]
+    model = validate_air_side_model(load_json(path) if path.exists() else empty_air_side_model(), {row["ahu_id"] for row in systems["systems"]})
+    return artifact_response(project, "air_side_model", model, {
+        "airflow_count": len(model["airflow_records"]),
+        "fan_count": len(model["fans"]),
+        "message": "Explicit air-side paths are available." if model["airflow_records"] else "No air-side paths have been configured.",
+    }, path)
+
+
+def api_save_air_side_model(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    paths = hourly_paths(project)
+    systems = validate_ahu_systems(load_json(paths["ahu_systems"]) if paths["ahu_systems"].exists() else empty_ahu_systems())
+    raw = data.get("air_side_model", data.get("model", data))
+    model = validate_air_side_model(raw, {row["ahu_id"] for row in systems["systems"]})
+    model["updated_at"] = timestamp()
+    path = paths["air_side_model"]
+    write_artifact(path, model)
+    project["air_side_model"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return artifact_response(project, "air_side_model", model, {"airflow_count": len(model["airflow_records"])}, path)
+
+
+def _current_ahu_fingerprints(project):
+    paths, systems, model, gate = _ahu_artifacts(project)
+    current_room_report = current_hourly_load_report_path(project)
+    return {
+        "calculator_input_snapshot_fingerprint": _load_json_or(paths["calculator_input_set"]).get("input_fingerprint", ""),
+        "hourly_load_report_fingerprint": productization.fingerprint(_load_json_or(current_room_report)) if current_room_report else "",
+        "ahu_systems_fingerprint": productization.fingerprint(systems),
+        "air_side_model_fingerprint": productization.fingerprint(model),
+        "air_side_method_gate_fingerprint": gate.get("fingerprint", ""),
+        "schedules_fingerprint": productization.fingerprint(_load_json_or(paths["schedules"])),
+        "scenarios_fingerprint": productization.fingerprint(_load_json_or(paths["scenarios"])),
+        "project_context_fingerprint": productization.fingerprint(_load_json_or(paths["project_context"])),
+        "overrides_fingerprint": productization.fingerprint(_load_json_or(paths["calculator_input_overrides"])),
+    }
+
+
+def current_hourly_ahu_load_report_path(project):
+    if not project.get("review_dir"):
+        return None
+    paths = hourly_paths(project)
+    candidate = existing_path(project.get("ahu_report"), paths["ahu_report"])
+    if not candidate:
+        return None
+    report = _load_json_or(candidate)
+    saved = report.get("input_fingerprints", {})
+    return candidate if saved and saved == _current_ahu_fingerprints(project) else None
+
+
+def api_hourly_ahu_load_report(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    paths = hourly_paths(project)
+    current = current_hourly_ahu_load_report_path(project)
+    report = load_json(current) if current else (load_json(paths["ahu_report"]) if paths["ahu_report"].exists() else {})
+    return {
+        "id": project["id"], "hourly_ahu_load_report": report,
+        "status": "current" if current else ("stale" if paths["ahu_report"].exists() else "not_calculated"),
+        "stale_reasons": [] if current else (["AHU report dependencies changed; recalculate explicitly."] if paths["ahu_report"].exists() else []),
+        "url": safe_link(current) if current else "", "artifact_url": safe_link(paths["ahu_report"]) if paths["ahu_report"].exists() else "",
+    }
+
+
+def api_save_hourly_ahu_load_report(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    paths, systems, model, gate = _ahu_artifacts(project)
+    requested_snapshot = data.get("snapshot_fingerprint") or data.get("calculator_input_snapshot_fingerprint") or data.get("input_set_fingerprint", "")
+    pointer = _load_json_or(paths["calculator_input_set"])
+    current_snapshot = pointer.get("input_fingerprint", "")
+    if not requested_snapshot or requested_snapshot != current_snapshot:
+        raise ValueError("A current calculator-input snapshot fingerprint is required for AHU calculation.")
+    room_report_path = current_hourly_load_report_path(project)
+    if not room_report_path:
+        raise ValueError("A current hourly room-load report is required before AHU calculation.")
+    room_report = load_json(room_report_path)
+    report = calculate_ahu_report(
+        room_report, systems, model, gate,
+        selected_ahu_ids=data.get("selected_ahu_ids"),
+        scenario_ids=data.get("scenario_ids") or data.get("selected_scenario_ids"),
+        snapshot_fingerprint=requested_snapshot,
+    )
+    report["input_fingerprints"] = _current_ahu_fingerprints(project)
+    report["updated_at"] = timestamp()
+    path = paths["ahu_report"]
+    write_artifact(path, report)
+    project["ahu_report"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return {"id": project["id"], "hourly_ahu_load_report": report, "status": report.get("status", "blocked"), "url": safe_link(path), "artifact_url": safe_link(path)}
+
+
+def plant_gate_summary(gate):
+    gate = validate_plant_method_gate(gate)
+    approved = plant_gate_is_approved(gate)
+    return {
+        "status": "approved" if approved else "placeholder",
+        "approval_status": gate.get("approval_status", "placeholder"),
+        "calculation_enabled": True,
+        "review_ready_enabled": approved,
+        "method_id": gate.get("method_id", ""),
+        "fingerprint": gate.get("fingerprint", ""),
+        "message": "Cooling plant reports may be review-ready for complete inputs." if approved else "Cooling plant reports remain draft-only until a named HVAC engineer approves this method gate.",
+    }
+
+
+def _plant_artifacts(project):
+    paths = hourly_paths(project)
+    raw_ahu = load_json(paths["ahu_systems"]) if paths["ahu_systems"].exists() else empty_ahu_systems()
+    ahu = validate_ahu_systems(raw_ahu)
+    raw_circuits = load_json(paths["hydraulic_circuits"]) if paths["hydraulic_circuits"].exists() else empty_hydraulic_circuits()
+    raw_plants = load_json(paths["plant_systems"]) if paths["plant_systems"].exists() else empty_plant_systems()
+    # Validate plant references first, then validate circuits against those plant IDs.
+    circuit_ids = {str(row.get("circuit_id", "")) for row in raw_circuits.get("circuits", []) if isinstance(row, dict)}
+    plants = validate_plant_systems(raw_plants, {row["ahu_id"] for row in ahu["systems"]}, circuit_ids)
+    circuits = validate_hydraulic_circuits(raw_circuits, {row["plant_id"] for row in plants["systems"]}, {row["ahu_id"] for row in ahu["systems"]})
+    gate_path = paths["plant_method_gate"]
+    gate = validate_plant_method_gate(load_json(gate_path) if gate_path.exists() else empty_plant_method_gate())
+    return paths, plants, circuits, gate
+
+
+def api_plant_method_gate(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    path = hourly_paths(project)["plant_method_gate"]
+    gate = validate_plant_method_gate(load_json(path) if path.exists() else empty_plant_method_gate())
+    return artifact_response(project, "plant_method_gate", gate, plant_gate_summary(gate), path)
+
+
+def api_save_plant_method_gate(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    gate = validate_plant_method_gate(data.get("plant_method_gate", data.get("gate", {})))
+    gate["updated_at"] = timestamp()
+    gate = validate_plant_method_gate(gate)
+    path = hourly_paths(project)["plant_method_gate"]
+    write_artifact(path, gate)
+    project["plant_method_gate"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return artifact_response(project, "plant_method_gate", gate, plant_gate_summary(gate), path)
+
+
+def api_plant_systems(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    paths = hourly_paths(project)
+    ahu = validate_ahu_systems(load_json(paths["ahu_systems"]) if paths["ahu_systems"].exists() else empty_ahu_systems())
+    circuits = load_json(paths["hydraulic_circuits"]) if paths["hydraulic_circuits"].exists() else empty_hydraulic_circuits()
+    plants = validate_plant_systems(load_json(paths["plant_systems"]) if paths["plant_systems"].exists() else empty_plant_systems(), {row["ahu_id"] for row in ahu["systems"]}, {row.get("circuit_id") for row in circuits.get("circuits", [])})
+    return artifact_response(project, "plant_systems", plants, {
+        "count": len(plants["systems"]),
+        "cooling_count": sum(row["plant_type"] == "chiller" for row in plants["systems"]),
+        "deferred_count": sum(row["plant_type"] != "chiller" for row in plants["systems"]),
+        "message": "Explicit plant records are available." if plants["systems"] else "No plant records have been configured.",
+    }, paths["plant_systems"])
+
+
+def api_save_plant_systems(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    paths = hourly_paths(project)
+    ahu = validate_ahu_systems(load_json(paths["ahu_systems"]) if paths["ahu_systems"].exists() else empty_ahu_systems())
+    circuits = load_json(paths["hydraulic_circuits"]) if paths["hydraulic_circuits"].exists() else empty_hydraulic_circuits()
+    raw = data.get("plant_systems", data.get("systems", data))
+    plants = validate_plant_systems(raw, {row["ahu_id"] for row in ahu["systems"]}, {row.get("circuit_id") for row in circuits.get("circuits", [])})
+    plants["updated_at"] = timestamp()
+    write_artifact(paths["plant_systems"], plants)
+    project["plant_systems"] = str(paths["plant_systems"])
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return artifact_response(project, "plant_systems", plants, {"count": len(plants["systems"])}, paths["plant_systems"])
+
+
+def api_hydraulic_circuits(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    paths = hourly_paths(project)
+    ahu = validate_ahu_systems(load_json(paths["ahu_systems"]) if paths["ahu_systems"].exists() else empty_ahu_systems())
+    plants = validate_plant_systems(load_json(paths["plant_systems"]) if paths["plant_systems"].exists() else empty_plant_systems(), {row["ahu_id"] for row in ahu["systems"]})
+    circuits = validate_hydraulic_circuits(load_json(paths["hydraulic_circuits"]) if paths["hydraulic_circuits"].exists() else empty_hydraulic_circuits(), {row["plant_id"] for row in plants["systems"]}, {row["ahu_id"] for row in ahu["systems"]})
+    return artifact_response(project, "hydraulic_circuits", circuits, {
+        "count": len(circuits["circuits"]),
+        "cooling_count": sum(row["circuit_type"] == "chilled_water" for row in circuits["circuits"]),
+        "message": "Explicit hydraulic circuit records are available." if circuits["circuits"] else "No hydraulic circuits have been configured.",
+    }, paths["hydraulic_circuits"])
+
+
+def api_save_hydraulic_circuits(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    paths = hourly_paths(project)
+    ahu = validate_ahu_systems(load_json(paths["ahu_systems"]) if paths["ahu_systems"].exists() else empty_ahu_systems())
+    plants = validate_plant_systems(load_json(paths["plant_systems"]) if paths["plant_systems"].exists() else empty_plant_systems(), {row["ahu_id"] for row in ahu["systems"]})
+    raw = data.get("hydraulic_circuits", data.get("circuits", data))
+    circuits = validate_hydraulic_circuits(raw, {row["plant_id"] for row in plants["systems"]}, {row["ahu_id"] for row in ahu["systems"]})
+    circuits["updated_at"] = timestamp()
+    write_artifact(paths["hydraulic_circuits"], circuits)
+    project["hydraulic_circuits"] = str(paths["hydraulic_circuits"])
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return artifact_response(project, "hydraulic_circuits", circuits, {"count": len(circuits["circuits"])}, paths["hydraulic_circuits"])
+
+
+def _current_plant_fingerprints(project):
+    paths, plants, circuits, gate = _plant_artifacts(project)
+    ahu_report = current_hourly_ahu_load_report_path(project)
+    return {
+        "calculator_input_snapshot_fingerprint": _load_json_or(paths["calculator_input_set"]).get("input_fingerprint", ""),
+        "hourly_ahu_load_report_fingerprint": productization.fingerprint(_load_json_or(ahu_report)) if ahu_report else "",
+        "plant_systems_fingerprint": productization.fingerprint(plants),
+        "hydraulic_circuits_fingerprint": productization.fingerprint(circuits),
+        "plant_method_gate_fingerprint": gate.get("fingerprint", ""),
+        "schedules_fingerprint": productization.fingerprint(_load_json_or(paths["schedules"])),
+        "scenarios_fingerprint": productization.fingerprint(_load_json_or(paths["scenarios"])),
+        "project_context_fingerprint": productization.fingerprint(_load_json_or(paths["project_context"])),
+        "overrides_fingerprint": productization.fingerprint(_load_json_or(paths["calculator_input_overrides"])),
+    }
+
+
+def current_hourly_plant_load_report_path(project):
+    if not project.get("review_dir"):
+        return None
+    paths = hourly_paths(project)
+    candidate = existing_path(project.get("plant_report"), paths["plant_report"])
+    if not candidate:
+        return None
+    report = _load_json_or(candidate)
+    saved = report.get("input_fingerprints", {})
+    return candidate if saved and saved == _current_plant_fingerprints(project) else None
+
+
+def api_hourly_plant_load_report(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    paths = hourly_paths(project)
+    current = current_hourly_plant_load_report_path(project)
+    report = load_json(current) if current else (load_json(paths["plant_report"]) if paths["plant_report"].exists() else {})
+    return {
+        "id": project["id"], "hourly_plant_load_report": report,
+        "status": "current" if current else ("stale" if paths["plant_report"].exists() else "not_calculated"),
+        "stale_reasons": [] if current else (["Plant report dependencies changed; recalculate explicitly."] if paths["plant_report"].exists() else []),
+        "url": safe_link(current) if current else "", "artifact_url": safe_link(paths["plant_report"]) if paths["plant_report"].exists() else "",
+    }
+
+
+def api_save_hourly_plant_load_report(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    paths, plants, circuits, gate = _plant_artifacts(project)
+    requested_snapshot = data.get("snapshot_fingerprint") or data.get("calculator_input_snapshot_fingerprint") or data.get("input_set_fingerprint", "")
+    pointer = _load_json_or(paths["calculator_input_set"])
+    if not requested_snapshot or requested_snapshot != pointer.get("input_fingerprint", ""):
+        raise ValueError("A current calculator-input snapshot fingerprint is required for plant calculation.")
+    ahu_report_path = current_hourly_ahu_load_report_path(project)
+    if not ahu_report_path:
+        raise ValueError("A current hourly AHU report is required before plant calculation.")
+    report = calculate_plant_report(load_json(ahu_report_path), plants, circuits, gate, selected_plant_ids=data.get("selected_plant_ids"), scenario_ids=data.get("scenario_ids") or data.get("selected_scenario_ids"), snapshot_fingerprint=requested_snapshot)
+    report["input_fingerprints"] = _current_plant_fingerprints(project)
+    report["updated_at"] = timestamp()
+    path = paths["plant_report"]
+    write_artifact(path, report)
+    project["plant_report"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return {"id": project["id"], "hourly_plant_load_report": report, "status": report.get("status", "blocked"), "url": safe_link(path), "artifact_url": safe_link(path)}
+
+
+def _annual_artifacts(project):
+    paths = hourly_paths(project)
+    weather = validate_annual_weather(load_json(paths["annual_weather"]) if paths["annual_weather"].exists() else empty_annual_weather()) if paths["annual_weather"].exists() else empty_annual_weather()
+    calendar = validate_annual_calendar(load_json(paths["annual_calendar"]) if paths["annual_calendar"].exists() else empty_annual_calendar()) if paths["annual_calendar"].exists() else empty_annual_calendar()
+    radiation = validate_annual_radiation(load_json(paths["annual_radiation"]) if paths["annual_radiation"].exists() else empty_annual_radiation()) if paths["annual_radiation"].exists() else empty_annual_radiation()
+    gate = validate_annual_method_gate(load_json(paths["annual_method_gate"]) if paths["annual_method_gate"].exists() else empty_annual_method_gate())
+    return paths, weather, calendar, radiation, gate
+
+
+def _annual_summary(artifact, kind):
+    if kind == "weather":
+        return {"status": "current", "record_count": len(artifact.get("records", [])), "expected_records": 8760, "fingerprint": artifact.get("fingerprint", "")}
+    if kind == "calendar":
+        return {"status": "current", "date_count": len(artifact.get("dates", [])), "expected_dates": 365, "holiday_count": len(artifact.get("holidays", [])), "fingerprint": artifact.get("fingerprint", "")}
+    if kind == "radiation":
+        return {"status": "current", "surface_count": len(artifact.get("surfaces", [])), "fingerprint": artifact.get("fingerprint", "")}
+    approved = annual_gate_is_approved(artifact)
+    return {"status": "approved" if approved else "placeholder", "approval_status": artifact.get("approval_status", "placeholder"), "review_ready_enabled": approved, "fingerprint": artifact.get("fingerprint", "")}
+
+
+def api_annual_weather(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    paths, weather, _, _, _ = _annual_artifacts(project)
+    return artifact_response(project, "annual_weather", weather, _annual_summary(weather, "weather"), paths["annual_weather"])
+
+
+def api_save_annual_weather(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    epw_text = data.get("epw_text")
+    if epw_text is not None:
+        weather = import_epw(
+            epw_text,
+            weather_id=data.get("weather_id", ""),
+            source=data.get("source", ""),
+            citations=data.get("citations", []),
+            location=data.get("location", ""),
+            timezone_name=data.get("timezone", ""),
+        )
+    else:
+        raw = data.get("annual_weather", data.get("weather", data))
+        weather = validate_annual_weather(raw)
+    path = hourly_paths(project)["annual_weather"]
+    write_artifact(path, weather)
+    project["annual_weather"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return artifact_response(project, "annual_weather", weather, _annual_summary(weather, "weather"), path)
+
+
+def api_annual_calendar(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    paths, _, calendar, _, _ = _annual_artifacts(project)
+    return artifact_response(project, "annual_calendar", calendar, _annual_summary(calendar, "calendar"), paths["annual_calendar"])
+
+
+def api_save_annual_calendar(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    calendar = validate_annual_calendar(data.get("annual_calendar", data.get("calendar", data)))
+    path = hourly_paths(project)["annual_calendar"]
+    write_artifact(path, calendar)
+    project["annual_calendar"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return artifact_response(project, "annual_calendar", calendar, _annual_summary(calendar, "calendar"), path)
+
+
+def api_annual_radiation(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    paths, _, _, radiation, _ = _annual_artifacts(project)
+    return artifact_response(project, "annual_radiation", radiation, _annual_summary(radiation, "radiation"), paths["annual_radiation"])
+
+
+def api_save_annual_radiation(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    radiation = validate_annual_radiation(data.get("annual_radiation", data.get("radiation", data)))
+    path = hourly_paths(project)["annual_radiation"]
+    write_artifact(path, radiation)
+    project["annual_radiation"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return artifact_response(project, "annual_radiation", radiation, _annual_summary(radiation, "radiation"), path)
+
+
+def api_annual_method_gate(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    paths, _, _, _, gate = _annual_artifacts(project)
+    return artifact_response(project, "annual_method_gate", gate, _annual_summary(gate, "gate"), paths["annual_method_gate"])
+
+
+def api_save_annual_method_gate(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    gate = validate_annual_method_gate(data.get("annual_method_gate", data.get("gate", data)))
+    gate["updated_at"] = timestamp()
+    gate = validate_annual_method_gate(gate)
+    path = hourly_paths(project)["annual_method_gate"]
+    write_artifact(path, gate)
+    project["annual_method_gate"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return artifact_response(project, "annual_method_gate", gate, _annual_summary(gate, "gate"), path)
+
+
+def _current_annual_fingerprints(project):
+    paths, weather, calendar, radiation, gate = _annual_artifacts(project)
+    snapshot = _load_json_or(paths["calculator_input_set"])
+    return {
+        "annual_weather_fingerprint": weather.get("fingerprint", ""),
+        "annual_calendar_fingerprint": calendar.get("fingerprint", ""),
+        "annual_radiation_fingerprint": radiation.get("fingerprint", ""),
+        "annual_method_gate_fingerprint": gate.get("fingerprint", ""),
+        "calculator_input_snapshot_fingerprint": snapshot.get("input_fingerprint", ""),
+        "schedule_library_fingerprint": productization.fingerprint(_load_json_or(paths["schedules"])),
+        "hourly_load_model_fingerprint": productization.fingerprint(_load_json_or(paths["model"])),
+        "envelope_model_fingerprint": productization.fingerprint(_load_json_or(paths["envelope_model"])),
+        "glazing_gate_fingerprint": productization.fingerprint(_load_json_or(paths["glazing_method_gate"])),
+        "shading_gate_fingerprint": productization.fingerprint(_load_json_or(paths["shading_method_gate"])),
+        "infiltration_gate_fingerprint": productization.fingerprint(_load_json_or(paths["infiltration_method_gate"])),
+        "heating_gate_fingerprint": productization.fingerprint(_load_json_or(paths["heating_method_gate"])),
+        "ahu_systems_fingerprint": productization.fingerprint(_load_json_or(paths["ahu_systems"])),
+        "air_side_model_fingerprint": productization.fingerprint(_load_json_or(paths["air_side_model"])),
+        "plant_systems_fingerprint": productization.fingerprint(_load_json_or(paths["plant_systems"])),
+        "hydraulic_circuits_fingerprint": productization.fingerprint(_load_json_or(paths["hydraulic_circuits"])),
+        "project_context_fingerprint": productization.fingerprint(_load_json_or(paths["project_context"])),
+        "overrides_fingerprint": productization.fingerprint(_load_json_or(paths["calculator_input_overrides"])),
+    }
+
+
+def current_annual_energy_report_path(project):
+    paths = hourly_paths(project)
+    candidate = existing_path(project.get("annual_report"), paths["annual_report"])
+    if not candidate:
+        return None
+    report = _load_json_or(candidate)
+    return candidate if report.get("input_fingerprints") == _current_annual_fingerprints(project) else None
+
+
+def api_annual_energy_report(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    paths = hourly_paths(project)
+    current = current_annual_energy_report_path(project)
+    report = load_json(current) if current else (load_json(paths["annual_report"]) if paths["annual_report"].exists() else {})
+    return {
+        "id": project["id"], "annual_energy_report": report,
+        "status": "current" if current else ("stale" if paths["annual_report"].exists() else "not_calculated"),
+        "stale_reasons": [] if current else (["Annual inputs changed; recalculate explicitly."] if paths["annual_report"].exists() else []),
+        "hourly_csv_url": safe_link(paths["annual_report"].with_name("annual_hourly_profile.csv")) if paths["annual_report"].with_name("annual_hourly_profile.csv").exists() else "",
+        "monthly_csv_url": safe_link(paths["annual_report"].with_name("annual_monthly_summary.csv")) if paths["annual_report"].with_name("annual_monthly_summary.csv").exists() else "",
+    }
+
+
+def api_save_annual_energy_report(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    paths, weather, calendar, radiation, gate = _annual_artifacts(project)
+    missing = [name for name, artifact in (("annual_weather", weather), ("annual_calendar", calendar)) if not artifact.get("fingerprint")]
+    if missing:
+        raise ValueError("Save valid " + ", ".join(missing) + " before calculating annual energy.")
+    requested_snapshot = data.get("snapshot_fingerprint") or data.get("calculator_input_snapshot_fingerprint") or data.get("input_set_fingerprint", "")
+    pointer = _load_json_or(paths["calculator_input_set"])
+    if not requested_snapshot or requested_snapshot != pointer.get("input_fingerprint", ""):
+        raise CalculatorInputConflict("A current calculator-input snapshot is required before calculating annual energy.", ["calculator_input_set"])
+    input_set, _ = _load_input_snapshot(paths, requested_snapshot)
+    if not input_set:
+        raise CalculatorInputConflict("The requested calculator-input snapshot is unavailable.", ["calculator_input_set"])
+    current_assembly, _ = _assemble_project_inputs(project, input_set.get("selected_scenario_ids", []))
+    if current_assembly.get("input_fingerprint") != requested_snapshot:
+        raise CalculatorInputConflict("Calculator inputs are stale. Assemble inputs again before annual analysis.", ["calculator_input_set"])
+    model, schedules, _ = materialize_cooling_payload(input_set)
+    payload = input_set.get("payload", {})
+    requirements = payload.get("requirements") or (load_json(paths["requirements"]) if paths["requirements"].exists() else {})
+    report = calculate_annual_report(
+        requirements, schedules, model, weather, calendar, annual_radiation=radiation, annual_gate=gate,
+        heating_gate=payload.get("heating_method_gate") or (_load_json_or(paths["heating_method_gate"]) if paths["heating_method_gate"].exists() else empty_heating_method_gate()),
+        infiltration_gate=payload.get("infiltration_method_gate") or (_load_json_or(paths["infiltration_method_gate"]) if paths["infiltration_method_gate"].exists() else empty_infiltration_method_gate()),
+        glazing_gate=payload.get("glazing_method_gate") or (_load_json_or(paths["glazing_method_gate"]) if paths["glazing_method_gate"].exists() else empty_glazing_method_gate()),
+        shading_gate=_load_json_or(paths["shading_method_gate"]) if paths["shading_method_gate"].exists() else empty_shading_method_gate(),
+        dynamic_mass_gate=_load_json_or(paths["dynamic_thermal_mass_method_gate"]) if paths["dynamic_thermal_mass_method_gate"].exists() else empty_dynamic_thermal_mass_method_gate(),
+        radiation_gate=_load_json_or(paths["solar_radiation_method_gate"]) if paths["solar_radiation_method_gate"].exists() else empty_solar_radiation_method_gate(),
+        project_context=_input_context(paths), calculator_input_snapshot_fingerprint=requested_snapshot,
+        selected_sections=data.get("selected_sections"),
+        ahu_systems=_load_json_or(paths["ahu_systems"]) if paths["ahu_systems"].exists() else {},
+        plant_systems=_load_json_or(paths["plant_systems"]) if paths["plant_systems"].exists() else {},
+    )
+    report["input_fingerprints"] = _current_annual_fingerprints(project)
+    report["updated_at"] = timestamp()
+    path = paths["annual_report"]
+    write_artifact(path, report)
+    path.with_name("annual_hourly_profile.csv").write_text(annual_hourly_csv(report), encoding="utf-8")
+    path.with_name("annual_monthly_summary.csv").write_text(annual_monthly_csv(report), encoding="utf-8")
+    project["annual_report"] = str(path)
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return {"id": project["id"], "annual_energy_report": report, "status": report.get("status", "blocked"), "artifact_url": safe_link(path), "hourly_csv_url": safe_link(path.with_name("annual_hourly_profile.csv")), "monthly_csv_url": safe_link(path.with_name("annual_monthly_summary.csv"))}
 
 
 def envelope_artifacts(project):
@@ -732,12 +2321,24 @@ def envelope_artifacts(project):
     return library, model
 
 
+def opening_register_for_project(project):
+    path = hourly_paths(project)["calculation_input_evidence"]
+    return (load_json(path).get("opening_register") or {}) if path.exists() else {}
+
+
+def ground_contact_gate_for_project(project):
+    path = hourly_paths(project)["ground_contact_method_gate"]
+    return load_json(path) if path.exists() else empty_ground_contact_method_gate()
+
+
 def api_envelope_library(request):
     query = parse_qs(urlparse(request.path).query)
     project = project_by_id(query.get("project_id", [""])[0])
     library, model = envelope_artifacts(project)
     path = hourly_paths(project)["envelope_library"]
-    return artifact_response(project, "envelope_library", library, envelope_summary(library, model), path)
+    paths = hourly_paths(project)
+    gate = load_json(paths["glazing_method_gate"]) if paths["glazing_method_gate"].exists() else empty_glazing_method_gate()
+    return artifact_response(project, "envelope_library", library, envelope_summary(library, model, gate, None, ground_contact_gate_for_project(project), opening_register_for_project(project)), path)
 
 
 def api_envelope_model(request):
@@ -745,7 +2346,9 @@ def api_envelope_model(request):
     project = project_by_id(query.get("project_id", [""])[0])
     library, model = envelope_artifacts(project)
     path = hourly_paths(project)["envelope_model"]
-    response = artifact_response(project, "envelope_model", model, envelope_summary(library, model), path)
+    paths = hourly_paths(project)
+    gate = load_json(paths["glazing_method_gate"]) if paths["glazing_method_gate"].exists() else empty_glazing_method_gate()
+    response = artifact_response(project, "envelope_model", model, envelope_summary(library, model, gate, None, ground_contact_gate_for_project(project), opening_register_for_project(project)), path)
     response["envelope_library_url"] = safe_link(hourly_paths(project)["envelope_library"]) if hourly_paths(project)["envelope_library"].exists() else ""
     return response
 
@@ -763,7 +2366,8 @@ def api_save_envelope_library(request):
     project["envelope_library"] = str(paths["envelope_library"])
     project["updated_at"] = timestamp()
     update_project(project)
-    return artifact_response(project, "envelope_library", library, envelope_summary(library, model), paths["envelope_library"])
+    gate = load_json(paths["glazing_method_gate"]) if paths["glazing_method_gate"].exists() else empty_glazing_method_gate()
+    return artifact_response(project, "envelope_library", library, envelope_summary(library, model, gate, None, ground_contact_gate_for_project(project), opening_register_for_project(project)), paths["envelope_library"])
 
 
 def api_save_envelope_model(request):
@@ -789,7 +2393,8 @@ def api_save_envelope_model(request):
     project["envelope_model"] = str(paths["envelope_model"])
     project["updated_at"] = timestamp()
     update_project(project)
-    return artifact_response(project, "envelope_model", model, envelope_summary(library, model), paths["envelope_model"])
+    gate = load_json(paths["glazing_method_gate"]) if paths["glazing_method_gate"].exists() else empty_glazing_method_gate()
+    return artifact_response(project, "envelope_model", model, envelope_summary(library, model, gate, None, ground_contact_gate_for_project(project), opening_register_for_project(project)), paths["envelope_model"])
 
 
 def validate_active_envelope_owners(model, paths):
@@ -941,9 +2546,25 @@ def _assemble_project_inputs(project, selected_scenario_ids=None):
     missing = [name for name in required if not paths[name].exists()]
     if missing:
         return {"status": "blocked", "missing_artifacts": missing, "issues": []}, paths
+    if paths["calculation_input_evidence"].exists():
+        evidence = load_json(paths["calculation_input_evidence"])
+        if calculation_extraction_service.input_artifacts_current(Path(project["review_dir"]), evidence) is False:
+            return {"status": "blocked", "issues": [{"scope": "project", "status": "stale", "affected_id": "project",
+                    "source_artifact": "calculation_input_evidence.json", "reason": "AI or drawing evidence changed after the opening and geometry register was built.",
+                    "remediation": "Rebuild calculation-input evidence before assembling a new cooling snapshot."}]}, paths
     library, envelope_model = envelope_artifacts(project)
-    requirements, envelope_inputs = apply_reviewed_envelope_to_requirements(load_json(paths["requirements"]), library, envelope_model)
-    model = apply_reviewed_envelope_to_hourly_model(load_json(paths["model"]), library, envelope_model)
+    glazing_gate = load_json(paths["glazing_method_gate"]) if paths["glazing_method_gate"].exists() else empty_glazing_method_gate()
+    shading_gate = load_json(paths["shading_method_gate"]) if paths["shading_method_gate"].exists() else empty_shading_method_gate()
+    ground_contact_gate = ground_contact_gate_for_project(project)
+    dynamic_mass_gate = load_json(paths["dynamic_thermal_mass_method_gate"]) if paths["dynamic_thermal_mass_method_gate"].exists() else empty_dynamic_thermal_mass_method_gate()
+    radiation_gate = load_json(paths["solar_radiation_method_gate"]) if paths["solar_radiation_method_gate"].exists() else empty_solar_radiation_method_gate()
+    radiation_source = load_json(paths["solar_radiation_source"]) if paths["solar_radiation_source"].exists() else empty_solar_radiation_source()
+    coupling_gate = load_json(paths["room_to_room_coupling_method_gate"]) if paths["room_to_room_coupling_method_gate"].exists() else empty_room_coupling_method_gate()
+    heating_gate = load_json(paths["heating_method_gate"]) if paths["heating_method_gate"].exists() else empty_heating_method_gate()
+    opening_register = opening_register_for_project(project)
+    site_orientation = load_json(paths["site_orientation"]) if paths["site_orientation"].exists() else None
+    requirements, envelope_inputs = apply_reviewed_envelope_to_requirements(load_json(paths["requirements"]), library, envelope_model, glazing_gate, shading_gate, ground_contact_gate, opening_register, site_orientation)
+    model = apply_reviewed_envelope_to_hourly_model(load_json(paths["model"]), library, envelope_model, glazing_gate, shading_gate, ground_contact_gate, opening_register, site_orientation)
     fusion = load_json(paths["evidence_fusion"]) if paths["evidence_fusion"].exists() else {}
     calculation_input_evidence = load_json(paths["calculation_input_evidence"]) if paths["calculation_input_evidence"].exists() else {}
     if paths["calculation_input_evidence"].exists():
@@ -957,7 +2578,16 @@ def _assemble_project_inputs(project, selected_scenario_ids=None):
         fusion=fusion, research_cache=research, envelope=envelope_inputs,
         project_context=_input_context(paths), overrides=_input_overrides(paths), requirements=requirements,
         infiltration_gate=load_json(paths["infiltration_method_gate"]) if paths["infiltration_method_gate"].exists() else empty_infiltration_method_gate(),
+        glazing_gate=glazing_gate,
+        shading_gate=shading_gate,
+        ground_contact_gate=ground_contact_gate,
+        dynamic_thermal_mass_gate=dynamic_mass_gate,
+        solar_radiation_gate=radiation_gate,
+        solar_radiation_source=radiation_source,
+        room_to_room_coupling_gate=coupling_gate,
+        heating_gate=heating_gate,
         calculation_input_evidence=calculation_input_evidence,
+        site_orientation=site_orientation,
     )
     return assembled, paths
 
@@ -969,7 +2599,7 @@ def api_calculator_inputs(request, selected_scenario_ids=None):
     assembled, paths = _assemble_project_inputs(project, selected)
     snapshot, pointer = _load_input_snapshot(paths)
     current_fingerprint = assembled.get("input_fingerprint", "")
-    snapshot_stale = bool(snapshot and current_fingerprint and snapshot.get("input_fingerprint") != current_fingerprint)
+    snapshot_stale = bool(snapshot and (not current_fingerprint or snapshot.get("input_fingerprint") != current_fingerprint))
     display = snapshot or {}
     display["snapshot_stale"] = snapshot_stale
     display["current_assembled_fingerprint"] = current_fingerprint
@@ -980,10 +2610,33 @@ def api_calculator_inputs(request, selected_scenario_ids=None):
         "coverage_summary": assembled.get("coverage_summary", {}),
         "issues": assembled.get("issues", []),
     }
+    normalized_exceptions = productization.normalise_exceptions(
+        assembled.get("issues", []),
+        source_fingerprint=current_fingerprint or productization.fingerprint(assembled),
+    )
+    try:
+        exception_offset = max(0, int(query.get("exception_offset", [0])[0]))
+        exception_limit = min(100, max(1, int(query.get("exception_limit", [40])[0])))
+    except (TypeError, ValueError):
+        exception_offset, exception_limit = 0, 40
+    display["normalized_exceptions"] = normalized_exceptions[exception_offset:exception_offset + exception_limit]
+    display["exception_total"] = len(normalized_exceptions)
+    decisions = productization.validate_exception_decisions(
+        load_json(paths["exception_decisions"]) if paths["exception_decisions"].exists() else productization.empty_exception_decisions()
+    )
+    decision_map = {row["exception_id"]: row for row in decisions["decisions"]}
+    for row in display["normalized_exceptions"]:
+        raw_links = productization.safe_evidence_links(paths["exception_decisions"].parent, row)
+        row["evidence_links"] = {key: safe_link(value) for key, value in raw_links.items() if value}
+        saved = decision_map.get(row["exception_id"])
+        if saved and (not saved.get("source_fingerprint") or saved.get("source_fingerprint") == current_fingerprint):
+            row.update({"reviewer_decision": saved.get("decision", "pending"), "decision_history": saved.get("decision_history", []), "reviewer": saved.get("reviewer", ""), "decision_note": saved.get("note", "")})
+        elif saved:
+            row.update({"reviewer_decision": "pending", "decision_history": saved.get("decision_history", []), "decision_stale": True})
     display["current_source_pack_release"] = deepcopy(assembled.get("source_pack_release", {}))
     if not snapshot:
         display["source_pack_release"] = deepcopy(assembled.get("source_pack_release", {}))
-    display["artifact_links"] = {name: safe_link(paths[name]) for name in ("model", "schedules", "scenarios", "research_cache", "evidence_fusion", "calculation_input_evidence", "project_context", "calculator_input_overrides", "calculator_input_set") if paths[name].exists()}
+    display["artifact_links"] = {name: safe_link(paths[name]) for name in ("model", "schedules", "scenarios", "research_cache", "evidence_fusion", "calculation_input_evidence", "calculator_draft", "thermal_evidence", "thermal_model", "project_context", "calculator_input_overrides", "calculator_input_set", "exception_decisions", "infiltration_method_gate", "glazing_method_gate", "shading_method_gate", "ground_contact_method_gate", "dynamic_thermal_mass_method_gate", "solar_radiation_method_gate", "solar_radiation_source", "site_orientation", "room_to_room_coupling_method_gate", "component_interpretations", "ahu_systems", "air_side_model", "air_side_method_gate", "ahu_report", "plant_systems", "hydraulic_circuits", "plant_method_gate", "plant_report", "annual_weather", "annual_calendar", "annual_radiation", "annual_method_gate", "annual_report") if paths[name].exists()}
     display["latest_snapshot"] = pointer
     count_source = display if snapshot else assembled
     return {
@@ -1000,12 +2653,16 @@ def api_calculator_inputs(request, selected_scenario_ids=None):
             status: sum(row.get("resolution_status") == status for row in count_source.get("resolved_inputs", []))
             for status in ("project_evidence", "derived_evidence", "approved_default", "project_override", "blocked", "excluded")
         },
-        "exceptions": deepcopy(assembled.get("issues", display.get("issues", []))),
+        "exceptions": deepcopy(display["normalized_exceptions"]),
+        "normalized_exceptions": deepcopy(display["normalized_exceptions"]),
+        "exception_total": display["exception_total"],
         "source_pack_version": assembled.get("source_pack_version", display.get("source_pack_version", "")),
         "research_defaults_available": deepcopy(assembled.get("research_defaults_available", display.get("research_defaults_available", []))),
         "research_defaults_unavailable": deepcopy(assembled.get("research_defaults_unavailable", display.get("research_defaults_unavailable", []))),
+        "research_default_coverage": deepcopy(assembled.get("research_default_coverage", display.get("research_default_coverage", {}))),
         "source_pack_release": deepcopy(assembled.get("source_pack_release", display.get("source_pack_release", {}))),
         "artifact_links": deepcopy(display.get("artifact_links", {})),
+        "exception_decisions": decisions,
     }
 
 
@@ -1015,8 +2672,28 @@ def api_save_calculator_inputs(request):
     ensure_review_dir(project)
     paths = hourly_paths(project)
     action = data.get("action", "assemble")
-    if action not in {"assemble", "save_research_record", "save_context", "save_override", "refresh_research"}:
+    if action not in {"assemble", "save_research_record", "save_context", "save_override", "refresh_research", "save_exception_decision"}:
         raise ValueError("Unsupported calculator-input action.")
+    if action == "save_exception_decision":
+        path = paths["exception_decisions"]
+        current = productization.validate_exception_decisions(load_json(path) if path.exists() else productization.empty_exception_decisions())
+        exception_id = str(data.get("exception_id", "")).strip()
+        if not exception_id:
+            raise ValueError("exception_id is required.")
+        updated = productization.upsert_exception_decision(
+            current,
+            exception_id=exception_id,
+            decision=data.get("decision", "pending"),
+            reviewer=data.get("reviewer", ""),
+            note=data.get("note", ""),
+            source_fingerprint=data.get("source_fingerprint", ""),
+            remediation_target=data.get("remediation_target", ""),
+        )
+        _atomic_write(path, updated)
+        productization.record_change_if_fingerprint_changed(path.parent, action="exception_decision_saved", target=path.name, previous_fingerprint=productization.fingerprint(current), new_fingerprint=productization.fingerprint(updated), affected_ids=[exception_id])
+        project["updated_at"] = timestamp()
+        update_project(project)
+        return {"id": project["id"], "exception_decisions": updated, "status": "current", "artifact_url": safe_link(path)}
     if action == "save_context":
         context = validate_project_context(data.get("project_context", data.get("context", {})))
         expected_revision = data.get("expected_revision")
@@ -1026,6 +2703,7 @@ def api_save_calculator_inputs(request):
         context["revision"] = int(current_context.get("revision", 0)) + 1
         context["updated_at"] = timestamp()
         _atomic_write(paths["project_context"], context)
+        productization.append_audit_event(paths["project_context"].parent, action="project_context_saved", target=paths["project_context"].name, previous_fingerprint=productization.fingerprint(current_context), new_fingerprint=productization.fingerprint(context), affected_ids=context.get("conditioned_scope", {}).get("room_ids", []), result="success")
         project["project_context"] = str(paths["project_context"])
         project["updated_at"] = timestamp()
         update_project(project)
@@ -1037,6 +2715,7 @@ def api_save_calculator_inputs(request):
             raise CalculatorInputConflict("Calculator-input overrides changed; reload before saving.", ["calculator_input_overrides"])
         updated = upsert_override(current, data.get("override", {}))
         _atomic_write(paths["calculator_input_overrides"], updated)
+        productization.append_audit_event(paths["calculator_input_overrides"].parent, action="calculator_override_saved", target=paths["calculator_input_overrides"].name, previous_fingerprint=productization.fingerprint(current), new_fingerprint=productization.fingerprint(updated), result="success")
         project["calculator_input_overrides"] = str(paths["calculator_input_overrides"])
         project["updated_at"] = timestamp()
         update_project(project)
@@ -1053,6 +2732,7 @@ def api_save_calculator_inputs(request):
         record["released"] = False
         updated = upsert_record(current, record)
         _atomic_write(paths["research_cache"], updated)
+        productization.append_audit_event(paths["research_cache"].parent, action="research_candidate_saved", target=paths["research_cache"].name, previous_fingerprint=productization.fingerprint(current), new_fingerprint=productization.fingerprint(updated), result="success")
         project["updated_at"] = timestamp()
         update_project(project)
         return {"id": project["id"], "research_cache": updated, "artifact_url": safe_link(paths["research_cache"]), "status": "current"}
@@ -1065,10 +2745,20 @@ def api_save_calculator_inputs(request):
         changed_sources = sorted(name for name, expected in expected_sources.items() if actual_sources.get(name) != expected)
         if changed_sources:
             raise CalculatorInputConflict("Calculator inputs changed since this assembly started: " + ", ".join(changed_sources) + ". Reload and assemble again.", changed_sources)
+    previous_snapshot_fingerprint = load_json(paths["calculator_input_set"]).get("input_fingerprint", "") if paths["calculator_input_set"].exists() else ""
     snapshot_path, pointer, changed, stored = _store_input_snapshot(paths, assembled)
     stored["artifact_url"] = safe_link(snapshot_path)
     stored["latest_snapshot"] = pointer
     if changed:
+        productization.append_audit_event(
+            paths["calculator_input_set"].parent,
+            action="calculator_input_assembled",
+            target="calculator_input_set.json",
+            previous_fingerprint=previous_snapshot_fingerprint,
+            new_fingerprint=stored.get("input_fingerprint", ""),
+            affected_ids=stored.get("included_room_ids", []) + stored.get("blocked_room_ids", []),
+            result="success",
+        )
         project["updated_at"] = timestamp()
         update_project(project)
     return {
@@ -1080,6 +2770,7 @@ def api_save_calculator_inputs(request):
         "defaults_used": [row for row in stored.get("resolved_inputs", []) if row.get("resolution_status") == "approved_default"],
         "derivations": [row for row in stored.get("resolved_inputs", []) if row.get("resolution_status") == "derived_evidence"],
         "research_defaults_unavailable": deepcopy(stored.get("research_defaults_unavailable", [])),
+        "research_default_coverage": deepcopy(stored.get("research_default_coverage", {})),
         "issues": deepcopy(stored.get("issues", [])),
         "excluded_components": deepcopy(stored.get("excluded_components", [])),
     }
@@ -1096,7 +2787,16 @@ def api_save_hourly_load_report(request):
         raise ValueError("Save " + ", ".join(missing) + " before calculating an hourly cooling report.")
     coverage = load_json(paths["coverage"]) if paths["coverage"].exists() else {}
     library, envelope_model = envelope_artifacts(project)
-    requirements, envelope_inputs = apply_reviewed_envelope_to_requirements(load_json(paths["requirements"]), library, envelope_model)
+    raw_glazing_gate = load_json(paths["glazing_method_gate"]) if paths["glazing_method_gate"].exists() else empty_glazing_method_gate()
+    raw_shading_gate = load_json(paths["shading_method_gate"]) if paths["shading_method_gate"].exists() else empty_shading_method_gate()
+    ground_contact_gate = ground_contact_gate_for_project(project)
+    dynamic_mass_gate = load_json(paths["dynamic_thermal_mass_method_gate"]) if paths["dynamic_thermal_mass_method_gate"].exists() else empty_dynamic_thermal_mass_method_gate()
+    radiation_gate = load_json(paths["solar_radiation_method_gate"]) if paths["solar_radiation_method_gate"].exists() else empty_solar_radiation_method_gate()
+    radiation_source = load_json(paths["solar_radiation_source"]) if paths["solar_radiation_source"].exists() else empty_solar_radiation_source()
+    coupling_gate = load_json(paths["room_to_room_coupling_method_gate"]) if paths["room_to_room_coupling_method_gate"].exists() else empty_room_coupling_method_gate()
+    opening_register = opening_register_for_project(project)
+    site_orientation = load_json(paths["site_orientation"]) if paths["site_orientation"].exists() else None
+    requirements, envelope_inputs = apply_reviewed_envelope_to_requirements(load_json(paths["requirements"]), library, envelope_model, raw_glazing_gate, raw_shading_gate, ground_contact_gate, opening_register, site_orientation)
     input_set_fingerprint = data.get("input_set_fingerprint", "")
     input_set, _pointer = _load_input_snapshot(paths, input_set_fingerprint)
     if input_set_fingerprint and not input_set:
@@ -1111,17 +2811,37 @@ def api_save_hourly_load_report(request):
         model, schedules, scenarios = materialize_cooling_payload(input_set)
         selected_scenarios = input_set.get("selected_scenario_ids", [])
     else:
-        model = apply_reviewed_envelope_to_hourly_model(load_json(paths["model"]), library, envelope_model)
+        model = apply_reviewed_envelope_to_hourly_model(load_json(paths["model"]), library, envelope_model, raw_glazing_gate, raw_shading_gate, ground_contact_gate, opening_register, site_orientation)
         schedules, scenarios = load_json(paths["schedules"]), load_json(paths["scenarios"])
         selected_scenarios = data.get("selected_scenario_ids", data.get("scenario_ids", []))
     raw_gate = load_json(paths["infiltration_method_gate"]) if paths["infiltration_method_gate"].exists() else empty_infiltration_method_gate()
     infiltration_gate = input_set.get("payload", {}).get("infiltration_method_gate", raw_gate) if input_set else raw_gate
-    report = calculate_hourly_load_report(requirements, schedules, scenarios, model, selected_scenarios, coverage, infiltration_gate)
+    glazing_gate = input_set.get("payload", {}).get("glazing_method_gate", raw_glazing_gate) if input_set else raw_glazing_gate
+    shading_gate = input_set.get("payload", {}).get("shading_method_gate", raw_shading_gate) if input_set else raw_shading_gate
+    dynamic_mass_gate = input_set.get("payload", {}).get("dynamic_thermal_mass_method_gate", dynamic_mass_gate) if input_set else dynamic_mass_gate
+    radiation_gate = input_set.get("payload", {}).get("solar_radiation_method_gate", radiation_gate) if input_set else radiation_gate
+    radiation_source = input_set.get("payload", {}).get("solar_radiation_source", radiation_source) if input_set else radiation_source
+    coupling_gate = input_set.get("payload", {}).get("room_to_room_coupling_method_gate", coupling_gate) if input_set else coupling_gate
+    report = calculate_hourly_load_report(
+        requirements, schedules, scenarios, model, selected_scenarios, coverage,
+        infiltration_gate, glazing_gate, shading_gate, dynamic_mass_gate,
+        radiation_gate, radiation_source, coupling_gate,
+    )
     report["input_fingerprints"]["envelope_library_updated_at"] = library.get("updated_at", "")
     report["input_fingerprints"]["envelope_model_updated_at"] = envelope_model.get("updated_at", "")
     report["input_fingerprints"]["research_cache_fingerprint"] = draft_service.fingerprint(load_json(paths["research_cache"]) if paths["research_cache"].exists() else empty_research_cache())
     report["input_fingerprints"]["evidence_fusion_fingerprint"] = load_json(paths["evidence_fusion"]).get("fingerprint", "") if paths["evidence_fusion"].exists() else ""
     report["input_fingerprints"]["infiltration_method_gate_updated_at"] = infiltration_gate.get("updated_at", "")
+    report["input_fingerprints"]["glazing_method_gate_updated_at"] = glazing_gate.get("updated_at", "")
+    report["input_fingerprints"]["shading_method_gate_updated_at"] = shading_gate.get("updated_at", "")
+    report["input_fingerprints"]["ground_contact_method_gate_updated_at"] = ground_contact_gate.get("updated_at", "")
+    report["input_fingerprints"]["dynamic_thermal_mass_method_gate_updated_at"] = dynamic_mass_gate.get("updated_at", "")
+    report["input_fingerprints"]["solar_radiation_method_gate_updated_at"] = radiation_gate.get("updated_at", "")
+    report["input_fingerprints"]["solar_radiation_source_fingerprint"] = radiation_source.get("fingerprint", "")
+    if site_orientation is not None:
+        report["input_fingerprints"]["site_orientation_fingerprint"] = validate_site_orientation(site_orientation)["fingerprint"]
+    report["input_fingerprints"]["room_to_room_coupling_method_gate_updated_at"] = coupling_gate.get("updated_at", "")
+    report["input_fingerprints"]["room_to_room_coupling_method_gate_fingerprint"] = room_coupling_gate_fingerprint(coupling_gate)
     if input_set:
         report["input_fingerprints"]["calculator_input_set_fingerprint"] = input_set["input_fingerprint"]
         report["input_fingerprints"]["project_context_fingerprint"] = _input_context(paths).get("fingerprint", "")
@@ -1144,9 +2864,86 @@ def api_save_hourly_load_report(request):
         for name in ("thermal_model", "thermal_evidence", "building_evidence")
     })
     report["envelope_input"] = envelope_inputs
-    report["excluded_components"] = sorted(set(report["excluded_components"] + [
-        "dynamic thermal mass", "detailed glazing physics", "geometric shading", "AHU coil effects", "fan/duct effects", "heat recovery", "plant loads", "heating",
-    ]))
+    # Advanced methods are opt-in per method gate and per eligible surface.  A
+    # saved approval alone must not make an empty or incomplete method appear
+    # active in the report.
+    model_surfaces = [
+        surface
+        for room in model.get("rooms", [])
+        for surface in room.get("cooling_load", {}).get("envelope_surfaces", [])
+    ]
+    dynamic_surfaces = [
+        surface for surface in model_surfaces
+        if surface.get("dynamic_thermal_mass", {}).get("enabled")
+    ]
+    dynamic_active = dynamic_thermal_mass_gate_is_approved(dynamic_mass_gate) and bool(dynamic_surfaces)
+    radiation_surfaces = [
+        surface for surface in model_surfaces
+        if surface.get("solar_radiation_source_id")
+        and surface.get("solar_radiation_source_id") == radiation_source.get("source_id")
+    ]
+    radiation_surfaces.extend(
+        surface for surface in envelope_inputs.get("glazing_included", [])
+        if surface.get("solar_basis") == "weather_facade"
+        and surface.get("solar_radiation_source_id") == radiation_source.get("source_id")
+    )
+    radiation_active = (
+        solar_radiation_gate_is_approved(radiation_gate)
+        and bool(radiation_source.get("fingerprint"))
+        and bool(radiation_surfaces)
+    )
+    coupling_surfaces = [
+        surface for surface in model_surfaces
+        if surface.get("room_coupling", {}).get("enabled")
+    ]
+    coupling_active = room_coupling_gate_is_approved(coupling_gate) and bool(coupling_surfaces)
+    exclusions = [
+        *([] if dynamic_active else ["dynamic thermal mass"]),
+        *([] if radiation_active else ["solar-position/radiation beyond the manual hourly basis"]),
+        *([] if coupling_active else ["dynamic room-to-room partition coupling"]),
+        "AHU coil effects", "fan/duct effects", "heat recovery", "plant loads", "heating",
+    ]
+    if not envelope_inputs.get("glazing_included"):
+        exclusions.append("detailed glazing physics")
+    if not any(surface.get("geometric_shading") for surface in envelope_inputs.get("glazing_included", [])):
+        exclusions.append("geometric shading where its method gate or geometry is incomplete")
+    report["excluded_components"] = sorted(set(report["excluded_components"] + exclusions))
+    report["advanced_envelope_methods"] = {
+        "dynamic_thermal_mass": {
+            "method_id": dynamic_mass_gate.get("method_id", ""),
+            "status": "approved" if dynamic_thermal_mass_gate_is_approved(dynamic_mass_gate) else "placeholder",
+            "calculation_enabled": dynamic_active,
+            "eligible_surface_ids": [surface.get("surface_id", "") for surface in dynamic_surfaces],
+            "reason": (
+                "Approved gate and enabled dynamic surfaces are eligible for the hourly RC path."
+                if dynamic_active else
+                "Requires an approved gate and at least one enabled, validated dynamic surface."
+            ),
+        },
+        "solar_radiation": {
+            "method_id": radiation_gate.get("method_id", ""),
+            "status": "approved" if solar_radiation_gate_is_approved(radiation_gate) else "placeholder",
+            "source_fingerprint": radiation_source.get("fingerprint", ""),
+            "calculation_enabled": radiation_active,
+            "eligible_surface_ids": [surface.get("surface_id", "") for surface in radiation_surfaces],
+            "reason": (
+                "Approved gate, cited source, and uniquely linked surfaces are eligible for hourly radiation."
+                if radiation_active else
+                "Requires an approved gate, a cited 24-hour source, and surfaces linked to that source."
+            ),
+        },
+        "room_to_room_coupling": {
+            "method_id": coupling_gate.get("method_id", ""),
+            "status": "approved" if room_coupling_gate_is_approved(coupling_gate) else "placeholder",
+            "calculation_enabled": coupling_active,
+            "eligible_surface_ids": [surface.get("surface_id", "") for surface in coupling_surfaces],
+            "reason": (
+                "Approved gate and explicitly linked dynamic partition surfaces are eligible."
+                if coupling_active else
+                "Requires an approved gate and explicitly linked, cited coupling surfaces."
+            ),
+        },
+    }
     readiness = assess_cooling_readiness(report, model, requirements.get("updated_at", ""), coverage, envelope_inputs)
     report["readiness"] = {"status": readiness["status"], "issues": readiness["issues"]}
     report["scope_summary"] = readiness["scope_summary"]
@@ -1164,10 +2961,22 @@ def api_save_hourly_load_report(request):
         "envelope_model": {"artifact_url": safe_link(paths["envelope_model"]) if paths["envelope_model"].exists() else "", "updated_at": envelope_model.get("updated_at", "")},
         "drawing_coverage": {"artifact_url": safe_link(paths["coverage"]) if paths["coverage"].exists() else "", "updated_at": coverage.get("updated_at", "")},
         "infiltration_method_gate": {"artifact_url": safe_link(paths["infiltration_method_gate"]) if paths["infiltration_method_gate"].exists() else "", "updated_at": infiltration_gate.get("updated_at", "")},
+        "glazing_method_gate": {"artifact_url": safe_link(paths["glazing_method_gate"]) if paths["glazing_method_gate"].exists() else "", "updated_at": glazing_gate.get("updated_at", "")},
+        "shading_method_gate": {"artifact_url": safe_link(paths["shading_method_gate"]) if paths["shading_method_gate"].exists() else "", "updated_at": shading_gate.get("updated_at", "")},
+        "ground_contact_method_gate": {"artifact_url": safe_link(paths["ground_contact_method_gate"]) if paths["ground_contact_method_gate"].exists() else "", "updated_at": ground_contact_gate.get("updated_at", "")},
+        "dynamic_thermal_mass_method_gate": {"artifact_url": safe_link(paths["dynamic_thermal_mass_method_gate"]) if paths["dynamic_thermal_mass_method_gate"].exists() else "", "updated_at": dynamic_mass_gate.get("updated_at", "")},
+        "solar_radiation_method_gate": {"artifact_url": safe_link(paths["solar_radiation_method_gate"]) if paths["solar_radiation_method_gate"].exists() else "", "updated_at": radiation_gate.get("updated_at", "")},
+        "solar_radiation_source": {"artifact_url": safe_link(paths["solar_radiation_source"]) if paths["solar_radiation_source"].exists() else "", "fingerprint": radiation_source.get("fingerprint", "")},
+        "room_to_room_coupling_method_gate": {"artifact_url": safe_link(paths["room_to_room_coupling_method_gate"]) if paths["room_to_room_coupling_method_gate"].exists() else "", "updated_at": coupling_gate.get("updated_at", "")},
     }
     if input_set:
         report["input_artifacts"]["calculator_input_set"] = {"artifact_url": report["calculator_input_set"]["artifact_url"], "updated_at": input_set.get("created_at", "")}
+    previous_report_fingerprint = productization.fingerprint(load_json(paths["report"])) if paths["report"].exists() else ""
+    report["calculation_engine_fingerprint"] = benchmark_engine_fingerprint()
     write_artifact(paths["report"], report)
+    new_report_fingerprint = productization.fingerprint(report)
+    if previous_report_fingerprint != new_report_fingerprint:
+        productization.append_audit_event(paths["report"].parent, action="cooling_report_calculated", target=paths["report"].name, previous_fingerprint=previous_report_fingerprint, new_fingerprint=new_report_fingerprint, related_fingerprint=input_set_fingerprint, result="success")
     project["hourly_load_report"] = str(paths["report"])
     project["updated_at"] = timestamp()
     update_project(project)
@@ -1180,13 +2989,163 @@ def api_save_hourly_load_report(request):
     }
 
 
+def heating_report_stale_reasons(project):
+    if not project.get("review_dir"):
+        return ["project review directory is unavailable"]
+    paths = hourly_paths(project)
+    candidate = existing_path(project.get("hourly_heating_load_report"), paths["heating_report"])
+    if not candidate:
+        return []
+    report = load_json(candidate)
+    fingerprints = report.get("input_fingerprints", {})
+    heating_gate = load_json(paths["heating_method_gate"]) if paths["heating_method_gate"].exists() else empty_heating_method_gate()
+    expected = {
+        "schedule_library_updated_at": load_json(paths["schedules"]).get("updated_at", "") if paths["schedules"].exists() else "",
+        "design_day_scenarios_updated_at": load_json(paths["scenarios"]).get("updated_at", "") if paths["scenarios"].exists() else "",
+        "hourly_load_model_updated_at": load_json(paths["model"]).get("updated_at", "") if paths["model"].exists() else "",
+        "heating_method_gate_fingerprint": heating_gate_fingerprint(heating_gate),
+    }
+    for key, path_key in (("envelope_library_updated_at", "envelope_library"), ("envelope_model_updated_at", "envelope_model")):
+        expected[key] = load_json(paths[path_key]).get("updated_at", "") if paths[path_key].exists() else ""
+    infiltration_gate = load_json(paths["infiltration_method_gate"]) if paths["infiltration_method_gate"].exists() else empty_infiltration_method_gate()
+    expected["infiltration_method_gate_updated_at"] = infiltration_gate.get("updated_at", "")
+    glazing_gate = load_json(paths["glazing_method_gate"]) if paths["glazing_method_gate"].exists() else empty_glazing_method_gate()
+    expected["glazing_method_gate_updated_at"] = glazing_gate.get("updated_at", "")
+    expected["evidence_fusion_fingerprint"] = load_json(paths["evidence_fusion"]).get("fingerprint", "") if paths["evidence_fusion"].exists() else ""
+    if fingerprints.get("calculator_input_set_fingerprint"):
+        snapshot, _pointer = _load_input_snapshot(paths, fingerprints["calculator_input_set_fingerprint"])
+        if not snapshot:
+            return ["calculator input snapshot is unavailable"]
+        current_assembly, _ = _assemble_project_inputs(project, snapshot.get("selected_scenario_ids", []))
+        if current_assembly.get("input_fingerprint") != snapshot.get("input_fingerprint"):
+            return ["calculator input snapshot is stale"]
+        expected["calculator_input_set_fingerprint"] = snapshot.get("input_fingerprint", "")
+        expected["project_context_fingerprint"] = _input_context(paths).get("fingerprint", "")
+        expected["calculator_input_overrides_fingerprint"] = _input_overrides(paths).get("fingerprint", "")
+    if "selected_heating_scenario_ids" in fingerprints:
+        expected["selected_heating_scenario_ids"] = sorted(fingerprints.get("selected_heating_scenario_ids", []))
+    labels = {
+        "schedule_library_updated_at": "schedule library",
+        "design_day_scenarios_updated_at": "heating scenarios",
+        "hourly_load_model_updated_at": "heating room inputs",
+        "heating_method_gate_fingerprint": "heating method gate",
+        "envelope_library_updated_at": "envelope library",
+        "envelope_model_updated_at": "envelope model",
+        "infiltration_method_gate_updated_at": "infiltration method gate",
+        "glazing_method_gate_updated_at": "glazing method gate",
+        "evidence_fusion_fingerprint": "evidence fusion",
+        "selected_heating_scenario_ids": "selected heating scenarios",
+        "calculator_input_set_fingerprint": "calculator input snapshot",
+        "project_context_fingerprint": "project context",
+        "calculator_input_overrides_fingerprint": "calculator overrides",
+    }
+    return [f"{labels.get(key, key)} changed" for key, value in expected.items() if fingerprints.get(key) != value]
+
+
+def current_hourly_heating_load_report_path(project):
+    if not project.get("review_dir"):
+        return None
+    paths = hourly_paths(project)
+    candidate = existing_path(project.get("hourly_heating_load_report"), paths["heating_report"])
+    if not candidate:
+        return None
+    if heating_report_stale_reasons(project):
+        return None
+    return candidate
+
+
+def api_hourly_heating_load_report(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    paths = hourly_paths(project)
+    report_path = paths["heating_report"]
+    current = current_hourly_heating_load_report_path(project)
+    report = load_json(report_path) if report_path.exists() else {}
+    return {
+        "id": project["id"], "hourly_heating_load_report": report,
+        "status": "current" if current else ("stale" if report_path.exists() else "not_calculated"),
+        "artifact_url": safe_link(report_path) if report_path.exists() else "",
+        "stale_reasons": [] if current else heating_report_stale_reasons(project),
+        "heating_readiness": report.get("readiness", {}),
+        "heating_method_gate": heating_gate_summary(load_json(paths["heating_method_gate"]) if paths["heating_method_gate"].exists() else empty_heating_method_gate()),
+    }
+
+
+def api_save_hourly_heating_load_report(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    paths = hourly_paths(project)
+    required = ("schedules", "scenarios", "model")
+    missing = [name for name in required if not paths[name].exists()]
+    if missing:
+        raise ValueError("Save " + ", ".join(missing) + " before calculating a heating report.")
+    input_set_fingerprint = data.get("input_set_fingerprint", "")
+    if not input_set_fingerprint:
+        raise CalculatorInputConflict("A current calculator-input snapshot is required before calculating heating.", ["calculator_input_set"])
+    input_set, _pointer = _load_input_snapshot(paths, input_set_fingerprint)
+    if not input_set:
+        raise CalculatorInputConflict("The requested calculator-input snapshot is unavailable. Assemble inputs again before calculating heating.", ["calculator_input_set"])
+    current_assembly, _ = _assemble_project_inputs(project, input_set.get("selected_scenario_ids", []))
+    if current_assembly.get("input_fingerprint") != input_set.get("input_fingerprint"):
+        raise CalculatorInputConflict("Calculator inputs are stale. Assemble cooling inputs again before calculating heating.", ["calculator_input_set"])
+    model, schedules, scenarios = materialize_cooling_payload(input_set)
+    library, envelope_model = envelope_artifacts(project)
+    raw_glazing_gate = load_json(paths["glazing_method_gate"]) if paths["glazing_method_gate"].exists() else empty_glazing_method_gate()
+    raw_shading_gate = load_json(paths["shading_method_gate"]) if paths["shading_method_gate"].exists() else empty_shading_method_gate()
+    ground_contact_gate = ground_contact_gate_for_project(project)
+    requirements, envelope_inputs = apply_reviewed_envelope_to_requirements(load_json(paths["requirements"]), library, envelope_model, raw_glazing_gate, raw_shading_gate, ground_contact_gate)
+    heating_gate = input_set.get("payload", {}).get("heating_method_gate") or (load_json(paths["heating_method_gate"]) if paths["heating_method_gate"].exists() else empty_heating_method_gate())
+    infiltration_gate = input_set.get("payload", {}).get("infiltration_method_gate") or (load_json(paths["infiltration_method_gate"]) if paths["infiltration_method_gate"].exists() else empty_infiltration_method_gate())
+    glazing_gate = input_set.get("payload", {}).get("glazing_method_gate") or raw_glazing_gate
+    selected_ids = data.get("selected_scenario_ids", data.get("scenario_ids", []))
+    report = calculate_heating_report(requirements, schedules, scenarios, model, selected_ids, glazing_gate=glazing_gate, infiltration_gate=infiltration_gate, heating_gate=heating_gate, coverage=load_json(paths["coverage"]) if paths["coverage"].exists() else {})
+    report["input_fingerprints"].update({
+        "calculator_input_set_fingerprint": input_set["input_fingerprint"],
+        "project_context_fingerprint": _input_context(paths).get("fingerprint", ""),
+        "calculator_input_overrides_fingerprint": _input_overrides(paths).get("fingerprint", ""),
+        "envelope_library_updated_at": library.get("updated_at", ""),
+        "envelope_model_updated_at": envelope_model.get("updated_at", ""),
+        "infiltration_method_gate_updated_at": infiltration_gate.get("updated_at", ""),
+        "glazing_method_gate_updated_at": glazing_gate.get("updated_at", ""),
+        "evidence_fusion_fingerprint": load_json(paths["evidence_fusion"]).get("fingerprint", "") if paths["evidence_fusion"].exists() else "",
+        "selected_heating_scenario_ids": sorted(selected_ids),
+    })
+    report["input_artifacts"] = {
+        "calculator_input_set": {"artifact_url": safe_link(paths["calculator_input_sets"] / f"{input_set['input_fingerprint']}.json")},
+        "heating_method_gate": {"artifact_url": safe_link(paths["heating_method_gate"]) if paths["heating_method_gate"].exists() else ""},
+        "design_day_scenarios": {"artifact_url": safe_link(paths["scenarios"])},
+    }
+    previous_heating_report_fingerprint = productization.fingerprint(load_json(paths["heating_report"])) if paths["heating_report"].exists() else ""
+    write_artifact(paths["heating_report"], report)
+    new_heating_report_fingerprint = productization.fingerprint(report)
+    if previous_heating_report_fingerprint != new_heating_report_fingerprint:
+        productization.append_audit_event(paths["heating_report"].parent, action="heating_report_calculated", target=paths["heating_report"].name, previous_fingerprint=previous_heating_report_fingerprint, new_fingerprint=new_heating_report_fingerprint, related_fingerprint=input_set_fingerprint, result="success")
+    project["hourly_heating_load_report"] = str(paths["heating_report"])
+    project["updated_at"] = timestamp()
+    update_project(project)
+    current = current_hourly_heating_load_report_path(project)
+    return {"id": project["id"], "hourly_heating_load_report": report, "artifact_url": safe_link(paths["heating_report"]), "status": "current" if current else "stale"}
+
+
 def ensure_review_dir(project):
     if not project.get("review_dir"):
         raise ValueError("Analyse the PDF before saving hourly design-day inputs.")
 
 
 def write_artifact(path, artifact):
+    path = Path(path)
+    previous = ""
+    if path.exists():
+        try:
+            previous = productization.fingerprint(load_json(path))
+        except Exception:
+            previous = productization.file_hash(path)
+    new_fingerprint = productization.fingerprint(artifact)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(artifact, indent=2), encoding="utf-8")
+    if previous != new_fingerprint:
+        productization.append_audit_event(path.parent, action="artifact_written", target=path.name, previous_fingerprint=previous, new_fingerprint=new_fingerprint, result="success")
 
 
 def artifact_response(project, key, artifact, summary, path):
@@ -1269,6 +3228,39 @@ def api_vision_extraction(request):
     return vision_extraction_service.get(sys.modules[__name__], project)
 
 
+def api_ai_preliminary_model(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    ensure_review_dir(project)
+    return ai_preliminary_service.get(sys.modules[__name__], project)
+
+
+def api_hourly_ai_preliminary_load_report(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    ensure_review_dir(project)
+    result = ai_preliminary_service.get(sys.modules[__name__], project)
+    return {
+        "id": project["id"], "hourly_ai_preliminary_load_report": result.get("hourly_ai_preliminary_load_report", {}),
+        "status": result.get("status", "not_calculated"), "stale_reasons": result.get("stale_reasons", []),
+        "artifact_links": result.get("artifact_links", {}),
+    }
+
+
+def api_window_scan(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    ensure_review_dir(project)
+    return window_scan_service.get(sys.modules[__name__], project)
+
+
+def api_site_orientation(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    ensure_review_dir(project)
+    return site_orientation_service.get(sys.modules[__name__], project)
+
+
 def api_save_evidence_fusion(request):
     data = read_json_body(request)
     project = project_by_id(data.get("project_id") or data.get("id", ""))
@@ -1280,7 +3272,15 @@ def api_save_calculation_input_evidence(request):
     data = read_json_body(request)
     project = project_by_id(data.get("project_id") or data.get("id", ""))
     ensure_review_dir(project)
-    return calculation_extraction_service.post(sys.modules[__name__], project, data)
+    result = calculation_extraction_service.post(sys.modules[__name__], project, data)
+    review_dir = Path(project["review_dir"])
+    project["calculation_input_evidence"] = str(review_dir / "calculation_input_evidence.json")
+    project["evidence_fusion"] = str(review_dir / "architect_evidence_fusion.json")
+    if (review_dir / "calculator_draft.json").exists():
+        project["calculator_draft"] = str(review_dir / "calculator_draft.json")
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return result
 
 
 def api_save_vision_extraction(request):
@@ -1288,6 +3288,35 @@ def api_save_vision_extraction(request):
     project = project_by_id(data.get("project_id") or data.get("id", ""))
     ensure_review_dir(project)
     return vision_extraction_service.post(sys.modules[__name__], project, data)
+
+
+def api_save_ai_preliminary_model(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    return ai_preliminary_service.post(sys.modules[__name__], project, data)
+
+
+def api_save_hourly_ai_preliminary_load_report(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    data["action"] = "calculate"
+    return ai_preliminary_service.post(sys.modules[__name__], project, data)
+
+
+def api_save_window_scan(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    return window_scan_service.post(sys.modules[__name__], project, data)
+
+
+def api_save_site_orientation(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    return site_orientation_service.post(sys.modules[__name__], project, data)
 
 
 def api_save_calculator_draft(request):
@@ -1304,14 +3333,24 @@ def api_parity_report(request):
     case_path = parity_dir / "benchmark_case.json"
     report_path = parity_dir / "reports" / "parity_report.json"
     markdown_path = parity_dir / "reports" / "parity_report.md"
+    html_path = parity_dir / "reports" / "parity_report.html"
+    csv_path = parity_dir / "reports" / "parity_report.csv"
+    case = load_json(case_path) if case_path.exists() else {}
+    saved = load_json(report_path) if report_path.exists() else {}
+    report = benchmark_service.read(sys.modules[__name__], project, case, saved) if saved else saved
+    acceptance_stale = report.get("validation", {}).get("status") == "stale"
+    exports_outdated = ((saved.get("status") == "validated" and report.get("status") != "validated")
+                        or bool(saved.get("validation") and saved.get("validation") != report.get("validation")))
     return {
         "id": project["id"],
-        "case": load_json(case_path) if case_path.exists() else {},
-        "report": load_json(report_path) if report_path.exists() else {},
+        "case": case,
+        "report": report,
         "case_url": safe_link(case_path) if case_path.exists() else "",
-        "report_url": safe_link(report_path) if report_path.exists() else "",
-        "markdown_url": safe_link(markdown_path) if markdown_path.exists() else "",
-        "status": "current" if project.get("parity_report") and report_path.exists() else ("stale" if report_path.exists() else "not_run"),
+        "report_url": safe_link(report_path) if report_path.exists() and not exports_outdated else "",
+        "markdown_url": safe_link(markdown_path) if markdown_path.exists() and not exports_outdated else "",
+        "html_url": safe_link(html_path) if html_path.exists() and not exports_outdated else "",
+        "csv_url": safe_link(csv_path) if csv_path.exists() and not exports_outdated else "",
+        "status": "stale" if acceptance_stale else "current" if project.get("parity_report") and report_path.exists() else ("stale" if report_path.exists() else "not_run"),
     }
 
 
@@ -1329,6 +3368,8 @@ def api_save_parity_report(request):
     case_path = parity_dir / "benchmark_case.json"
     report_path = parity_dir / "reports" / "parity_report.json"
     markdown_path = parity_dir / "reports" / "parity_report.md"
+    html_path = parity_dir / "reports" / "parity_report.html"
+    csv_path = parity_dir / "reports" / "parity_report.csv"
     heat_path = current_heat_load_report_path(project, review_dir / "design_requirements.json")
     hourly_path = current_hourly_load_report_path(project)
     archie_results = data.get("archie_results")
@@ -1337,10 +3378,13 @@ def api_save_parity_report(request):
             archie_results_from_hourly_load_report(load_json(hourly_path)) if hourly_path
             else (archie_results_from_heat_report(load_json(heat_path)) if heat_path else {"peak": {}, "rooms": [], "zones": []})
         )
-    report = compare_case(case, archie_results)
+    report = benchmark_service.prepare(sys.modules[__name__], project, case, archie_results,
+                                       action=data.get("action", "build"), data=data)
     case_path.write_text(json.dumps(case, indent=2), encoding="utf-8")
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     markdown_path.write_text(render_markdown(report), encoding="utf-8")
+    html_path.write_text(render_benchmark_html(report), encoding="utf-8")
+    csv_path.write_text(render_benchmark_csv(report), encoding="utf-8")
     project["parity_case"] = str(case_path)
     project["parity_report"] = str(report_path)
     project["updated_at"] = timestamp()
@@ -1352,6 +3396,8 @@ def api_save_parity_report(request):
         "case_url": safe_link(case_path),
         "report_url": safe_link(report_path),
         "markdown_url": safe_link(markdown_path),
+        "html_url": safe_link(html_path),
+        "csv_url": safe_link(csv_path),
     }
 
 
@@ -1648,6 +3694,9 @@ def current_hourly_load_report_path(project):
     if not candidate or any(not paths[name].exists() for name in ("requirements", "schedules", "scenarios", "model")):
         return None
     report = load_json(candidate)
+    if paths["calculation_input_evidence"].exists() and calculation_extraction_service.input_artifacts_current(
+            Path(project["review_dir"]), load_json(paths["calculation_input_evidence"])) is False:
+        return None
     fingerprints = report.get("input_fingerprints", {})
     expected = {
         "requirements_updated_at": load_json(paths["requirements"]).get("updated_at", ""),
@@ -1662,6 +3711,23 @@ def current_hourly_load_report_path(project):
     expected["evidence_fusion_fingerprint"] = load_json(paths["evidence_fusion"]).get("fingerprint", "") if paths["evidence_fusion"].exists() else ""
     raw_gate = load_json(paths["infiltration_method_gate"]) if paths["infiltration_method_gate"].exists() else empty_infiltration_method_gate()
     expected["infiltration_method_gate_updated_at"] = raw_gate.get("updated_at", "")
+    glazing_gate = load_json(paths["glazing_method_gate"]) if paths["glazing_method_gate"].exists() else empty_glazing_method_gate()
+    expected["glazing_method_gate_updated_at"] = glazing_gate.get("updated_at", "")
+    shading_gate = load_json(paths["shading_method_gate"]) if paths["shading_method_gate"].exists() else empty_shading_method_gate()
+    expected["shading_method_gate_updated_at"] = shading_gate.get("updated_at", "")
+    ground_contact_gate = ground_contact_gate_for_project(project)
+    expected["ground_contact_method_gate_updated_at"] = ground_contact_gate.get("updated_at", "")
+    dynamic_mass_gate = load_json(paths["dynamic_thermal_mass_method_gate"]) if paths["dynamic_thermal_mass_method_gate"].exists() else empty_dynamic_thermal_mass_method_gate()
+    expected["dynamic_thermal_mass_method_gate_updated_at"] = dynamic_mass_gate.get("updated_at", "")
+    radiation_gate = load_json(paths["solar_radiation_method_gate"]) if paths["solar_radiation_method_gate"].exists() else empty_solar_radiation_method_gate()
+    expected["solar_radiation_method_gate_updated_at"] = radiation_gate.get("updated_at", "")
+    radiation_source = load_json(paths["solar_radiation_source"]) if paths["solar_radiation_source"].exists() else empty_solar_radiation_source()
+    expected["solar_radiation_source_fingerprint"] = radiation_source.get("fingerprint", "")
+    if paths["site_orientation"].exists():
+        expected["site_orientation_fingerprint"] = validate_site_orientation(load_json(paths["site_orientation"]))["fingerprint"]
+    coupling_gate = load_json(paths["room_to_room_coupling_method_gate"]) if paths["room_to_room_coupling_method_gate"].exists() else empty_room_coupling_method_gate()
+    expected["room_to_room_coupling_method_gate_updated_at"] = coupling_gate.get("updated_at", "")
+    expected["room_to_room_coupling_method_gate_fingerprint"] = room_coupling_gate_fingerprint(coupling_gate)
     if "calculator_input_set_fingerprint" in fingerprints:
         snapshot, _pointer = _load_input_snapshot(paths, fingerprints["calculator_input_set_fingerprint"])
         if not snapshot:
@@ -1761,6 +3827,11 @@ def analysis_response(project):
         "packet_url": optional_link(project.get("packet")),
         "ai_input_url": optional_link(project.get("ai_input")),
         "drawing_coverage_url": optional_link(project.get("drawing_coverage")),
+        "calculation_input_evidence_url": optional_link(project.get("calculation_input_evidence")),
+        "evidence_fusion_url": optional_link(project.get("evidence_fusion") or project.get("architect_evidence_fusion")),
+        "calculator_draft_url": optional_link(project.get("calculator_draft")),
+        "thermal_evidence_url": optional_link(project.get("thermal_evidence")),
+        "thermal_model_url": optional_link(project.get("thermal_model")),
         "chatgpt_packet": link_pipeline_files(project.get("chatgpt_packet", {})),
         "reasoning_packet": link_pipeline_files(project.get("reasoning_packet", {})),
         "has_reasoning_packet": bool(project.get("reasoning_packet")),
@@ -1926,8 +3997,18 @@ def project_by_id(project_id):
 
 def update_project(project):
     projects = load_projects()
+    previous = projects.get(project["id"])
     projects[project["id"]] = project
     save_projects(projects)
+    if project.get("review_dir") and (previous is None or productization.fingerprint(previous) != productization.fingerprint(project)):
+        productization.append_audit_event(
+            project["review_dir"],
+            action="project_metadata_updated",
+            target="project.json",
+            previous_fingerprint=productization.fingerprint(previous) if previous else "",
+            new_fingerprint=productization.fingerprint(project),
+            result="success",
+        )
 
 
 def load_projects():

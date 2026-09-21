@@ -42,7 +42,7 @@ EXHAUST_OUTCOMES = {"unknown", "not_required", "general_exhaust", "process_kitch
 ACTIVITY_OPTIONS = {"unknown", "none", "baking_or_cooking"}
 REQUIREMENT_OPTIONS = {"unknown", "required", "not_required"}
 HEAT_SOURCE_KINDS = {"", "appliance", "refrigeration", "other"}
-SURFACE_KINDS = {"", "opaque_wall", "roof", "glazing", "other"}
+SURFACE_KINDS = {"", "opaque_wall", "roof", "floor", "ceiling", "partition", "glazing", "other"}
 ORIENTATIONS = {"", "N", "NE", "E", "SE", "S", "SW", "W", "NW", "horizontal", "internal"}
 PROCESS_TYPES = {"none", "retail", "office", "toilet", "kitchen", "baking", "other"}
 OUTSIDE_AIR_METHODS = {"occupancy", "area", "fixed", "combined"}
@@ -296,6 +296,7 @@ def empty_zone_cooling_load():
         "safety_factor": None,
         "envelope_not_applicable": False,
         "envelope_surfaces": [],
+        "glazing_surfaces": [],
         "verification_status": "missing",
         "source": "",
     }
@@ -313,6 +314,10 @@ def empty_envelope_surface():
         "shading_factor": None,
         "boundary_method": "external",
         "boundary_temperature_c": None,
+        "ground_temperature_c": None,
+        "ground_temperature_source": "",
+        "ground_temperature_citations": [],
+        "boundary_temperature_profile": {"values": [], "status": "missing", "source": "", "citations": []},
         "construction_id": "",
         "construction_revision": None,
         "manual_solar_source": "",
@@ -450,6 +455,7 @@ def validate_zone_cooling_load(raw):
     if not isinstance(result["envelope_not_applicable"], bool):
         raise ValueError("Zone internal-envelope declaration must be true or false.")
     result["envelope_surfaces"] = validate_envelope_surfaces(result["envelope_surfaces"])
+    result["glazing_surfaces"] = validate_glazing_surfaces(result["glazing_surfaces"])
     result["verification_status"] = validate_choice(result["verification_status"], VERIFICATION_STATUSES, "Zone cooling-load verification status")
     result["source"] = text_value(result["source"], "Zone cooling-load source")
     return result
@@ -475,7 +481,7 @@ def validate_envelope_surfaces(surfaces):
         surface["solar_gain_factor"] = optional_factor(surface["solar_gain_factor"], f"Envelope surface {index} solar-gain factor")
         surface["shading_factor"] = optional_factor(surface["shading_factor"], f"Envelope surface {index} shading factor")
         surface["verification_status"] = validate_choice(surface["verification_status"], VERIFICATION_STATUSES, f"Envelope surface {index} verification status")
-        surface["boundary_method"] = validate_choice(surface["boundary_method"], {"external", "fixed_adjacent_temperature"}, f"Envelope surface {index} boundary method")
+        surface["boundary_method"] = validate_choice(surface["boundary_method"], {"external", "fixed_adjacent_temperature", "ground_contact"}, f"Envelope surface {index} boundary method")
         if surface["boundary_temperature_c"] in (None, ""):
             surface["boundary_temperature_c"] = None
         else:
@@ -487,6 +493,20 @@ def validate_envelope_surfaces(surfaces):
                 raise ValueError(f"Envelope surface {index} boundary temperature is outside the accepted range.")
         if surface["boundary_method"] == "fixed_adjacent_temperature" and surface["boundary_temperature_c"] is None:
             raise ValueError(f"Envelope surface {index} fixed adjacent boundary needs a boundary temperature.")
+        if surface["ground_temperature_c"] in (None, ""):
+            surface["ground_temperature_c"] = None
+        else:
+            surface["ground_temperature_c"] = numeric_value(surface["ground_temperature_c"], f"Envelope surface {index} ground temperature")
+        profile = surface.get("boundary_temperature_profile") or {}
+        if not isinstance(profile, dict):
+            raise ValueError(f"Envelope surface {index} boundary temperature profile must be an object.")
+        values = profile.get("values", [])
+        if not isinstance(values, list) or values and len(values) != 24:
+            raise ValueError(f"Envelope surface {index} boundary temperature profile needs 24 values.")
+        profile["values"] = [numeric_value(value, f"Envelope surface {index} boundary profile") for value in values]
+        surface["boundary_temperature_profile"] = profile
+        if surface["boundary_method"] == "ground_contact" and surface["ground_temperature_c"] is None and surface["boundary_temperature_c"] is None and not values:
+            raise ValueError(f"Envelope surface {index} ground-contact boundary needs a ground temperature.")
         surface["construction_id"] = text_value(surface["construction_id"], f"Envelope surface {index} construction ID")
         surface["manual_solar_source"] = text_value(surface["manual_solar_source"], f"Envelope surface {index} manual solar source")
         if surface["construction_revision"] not in (None, ""):
@@ -499,6 +519,25 @@ def validate_envelope_surfaces(surfaces):
         else:
             surface["construction_revision"] = None
         result.append(surface)
+    return result
+
+
+def validate_glazing_surfaces(surfaces):
+    """Keep only reviewed-envelope adapter rows; calculations revalidate them."""
+    if not isinstance(surfaces, list):
+        raise ValueError("Glazing surfaces must be a list.")
+    result, seen = [], set()
+    for index, row in enumerate(surfaces, start=1):
+        if not isinstance(row, dict):
+            raise ValueError(f"Glazing surface {index} must be an object.")
+        surface_id = text_value(str(row.get("surface_id", "")), f"Glazing surface {index} surface ID")
+        owner_room_id = text_value(str(row.get("owner_room_id", "")), f"Glazing surface {index} owner room ID")
+        if not surface_id or not owner_room_id:
+            raise ValueError(f"Glazing surface {index} needs a surface and owner room ID.")
+        if surface_id in seen:
+            raise ValueError(f"Glazing surface ID '{surface_id}' is duplicated.")
+        seen.add(surface_id)
+        result.append(deepcopy(row))
     return result
 
 

@@ -104,6 +104,20 @@ def normalise_page(page, known_groups):
     links = [item for item in links if item]
     obstacles = [normalise_fixed_obstacle(item) for item in page.get("fixed_obstacles", [])]
     obstacles = [item for item in obstacles if item]
+    room_geometry = [normalise_room_geometry(item, page_number, index + 1) for index, item in enumerate(
+        page.get("room_geometry_candidates", page.get("room_boundaries", page.get("rooms", []))) or []
+    )]
+    room_geometry = [item for item in room_geometry if item]
+    thermal_surfaces = [normalise_thermal_surface(item, page_number, index + 1) for index, item in enumerate(
+        page.get("thermal_surface_candidates", page.get("surface_candidates", [])) or []
+    )]
+    thermal_surfaces = [item for item in thermal_surfaces if item]
+    openings = [normalise_opening(item, page_number) for item in (page.get("opening_candidates", []) or [])]
+    openings = [item for item in openings if item]
+    room_labels = [normalise_room_label(item) for item in (
+        page.get("room_label_candidates", page.get("room_labels", [])) or []
+    )]
+    room_labels = [item for item in room_labels if item]
     coordinate = {
         "page": page_number,
         "image": page.get("image", ""),
@@ -113,8 +127,10 @@ def normalise_page(page, known_groups):
         "plan_viewport_uncertainties": page.get("plan_viewport_uncertainties", []),
         "wall_candidates": walls,
         "dimension_candidates": [dict(item, candidate_id=item["dimension_id"], source="vision_model") for item in dimensions],
-        "room_label_candidates": [],
-        "opening_candidates": [],
+        "room_label_candidates": room_labels,
+        "room_geometry_candidates": room_geometry,
+        "thermal_surface_candidates": thermal_surfaces,
+        "opening_candidates": openings,
         "fixed_obstacle_candidates": obstacles,
         "wall_dimensions": links,
     }
@@ -129,14 +145,116 @@ def normalise_page(page, known_groups):
         "fixture_or_joinery_geometry": fixtures,
         "fixed_obstacles": obstacles,
         "columns": [],
-        "openings": [],
+        "openings": openings,
         "dimension_candidates": dimensions,
         "dimension_wall_links": links,
+        "room_geometry_candidates": room_geometry,
+        "thermal_surface_candidates": thermal_surfaces,
+        "room_label_candidates": room_labels,
         "rejected_or_noise_candidates": rejected,
         "unassigned_dimensions": page.get("unassigned_dimensions", []),
         "conflicts": page.get("conflicts", []),
     }
     return coordinate, layered
+
+
+def normalise_room_label(item):
+    """Normalize a room-label witness without treating prose as geometry."""
+    if isinstance(item, str):
+        return {"text": item, "status": "room_label"}
+    if not isinstance(item, dict):
+        return {}
+    text = item.get("text") or item.get("label") or item.get("name")
+    if not text:
+        return {}
+    return {
+        "text": str(text),
+        "status": item.get("status", "room_label"),
+        "bbox": item.get("bbox") or item.get("bbox_px"),
+        "level_name": item.get("level_name") or item.get("level") or "",
+        "source": item.get("source", "vision_model"),
+    }
+
+
+def normalise_opening(item, page_number):
+    """Preserve AI opening links as evidence, never as an authored surface."""
+    if not isinstance(item, dict) or not item.get("tag"):
+        return {}
+    result = {key: deepcopy(item.get(key)) for key in (
+        "opening_id", "tag", "drawing_number", "level_name", "owner_room_id", "owner_zone_id", "host_wall_id",
+        "facade", "width_m", "height_m", "quantity", "opening_bbox_px", "source_crop",
+        "source_excerpt", "window_properties",
+        "elevation_refs", "section_refs", "schedule_refs", "competing_matches",
+        "confidence", "confidence_score", "source_pages", "citations", "assumptions", "unresolved_fields",
+    )}
+    result["page"] = page_number
+    result["status"] = "proposed"
+    return result
+
+
+def normalise_thermal_surface(item, page_number, ordinal):
+    """Normalize an AI thermal-surface candidate without activating it."""
+    if not isinstance(item, dict):
+        return {}
+    surface_id = item.get("surface_id") or item.get("thermal_surface_id") or f"P{page_number}-VSURFACE-{ordinal:03d}"
+    return {
+        "surface_id": str(surface_id),
+        "physical_type": item.get("physical_type") or item.get("classification") or "unresolved",
+        "thermal_role": item.get("thermal_role") or "unresolved",
+        "boundary_condition": item.get("boundary_condition") or item.get("boundary") or "unresolved",
+        "label": str(item.get("label") or item.get("surface_label") or ""),
+        "level_name": item.get("level_name") or item.get("level") or item.get("floor") or "",
+        "owner_room_id": item.get("owner_room_id") or item.get("room_id") or "",
+        "owner_zone_id": item.get("owner_zone_id") or item.get("zone_id") or "",
+        "adjacent_room_id": item.get("adjacent_room_id") or "",
+        "adjacent_space_id": item.get("adjacent_space_id") or item.get("adjacent_space") or "",
+        "boundary_points_px": item.get("boundary_points_px") or item.get("points_px") or [],
+        "wall_ids": [str(value) for value in item.get("wall_ids", []) if value],
+        "opening_ids": [str(value) for value in item.get("opening_ids", []) if value],
+        "evidence_refs": item.get("evidence_refs") or item.get("source_pages") or [],
+        "source_crop": item.get("source_crop") or item.get("crop") or "",
+        "confidence": item.get("confidence", "low"),
+        "confidence_score": item.get("confidence_score", item.get("confidence_numeric")),
+        "independent_witnesses": item.get("independent_witnesses") or [],
+        "assumptions": item.get("assumptions", []),
+        "conflicts": item.get("conflicts", []),
+        "construction_id": item.get("construction_id") or "",
+        "u_value_w_m2k": item.get("u_value_w_m2k"),
+        "boundary_temperature_c": item.get("boundary_temperature_c"),
+        "source": item.get("source", "vision_model"),
+    }
+
+
+def normalise_room_geometry(item, page_number, ordinal):
+    """Normalize the AI's room-boundary contract into the existing page schema."""
+    if not isinstance(item, dict):
+        return {}
+    label = item.get("label") or item.get("room_label") or item.get("name")
+    candidate_id = item.get("room_geometry_id") or item.get("room_id") or item.get("candidate_id")
+    if not candidate_id:
+        candidate_id = f"P{page_number}-VROOM-{ordinal:03d}"
+    points = item.get("boundary_points_px") or item.get("polygon_points_px") or item.get("points_px") or item.get("boundary_points") or []
+    return {
+        "room_geometry_id": candidate_id,
+        "label": str(label or ""),
+        "level_name": item.get("level_name") or item.get("level") or item.get("floor") or "",
+        "boundary_points_px": points,
+        "wall_ids": [str(value) for value in (item.get("wall_ids") or item.get("ordered_wall_ids") or []) if value],
+        "dimension_ids": [str(value) for value in (item.get("dimension_ids") or []) if value],
+        "dimension_wall_links": item.get("dimension_wall_links") or [],
+        "independent_witnesses": item.get("independent_witnesses") or item.get("witnesses") or [],
+        "independent_witness_page": item.get("independent_witness_page"),
+        "confidence": item.get("confidence", "low"),
+        "confidence_score": item.get("confidence_score", item.get("confidence_numeric")),
+        "source_pages": item.get("source_pages") or [page_number],
+        "source_crop": item.get("source_crop") or item.get("crop") or "",
+        "assumptions": item.get("assumptions", []),
+        "conflicts": item.get("conflicts", []),
+        "unresolved_fields": item.get("unresolved_fields", []),
+        "scale_mm_per_px": item.get("scale_mm_per_px") or item.get("mm_per_px"),
+        "area_m2": item.get("area_m2"),
+        "source": item.get("source", "vision_model"),
+    }
 
 
 def normalise_fixed_obstacle(item):
@@ -230,6 +348,8 @@ def normalise_link(item, walls, dimensions_by_id):
         "target_wall_start_px": wall["line_start_px"],
         "target_wall_end_px": wall["line_end_px"],
         "confidence": item.get("confidence", "low"),
+        "reason": item.get("reason") or item.get("match_basis") or item.get("basis", ""),
+        "source_reference": item.get("source_reference") or item.get("source_crop") or item.get("source", "vision_model"),
         "should_use_for_calculation": item.get("should_use_for_calculation", False),
         "site_confirm_required": item.get("site_confirm_required", False),
         "source": "vision_model",

@@ -60,7 +60,7 @@ The schedule semantic is a generic load fraction. Assign it explicitly to people
 
 ## Design-day scenarios
 
-`GET`/`POST /api/design-day-scenarios` manages `design_day_scenarios.json`. Each scenario has a stable ID, title, mode (`cooling` or `heating`), representative month, day type, evidence status, source, citations, and pressure field. Cooling scenarios have 24 distinct rows `0`–`23`; every row carries cited outdoor DB and WB fields, with `WB <= DB`. Heating scenarios can be stored now, but the v1 runner reports that hourly heating is not implemented.
+`GET`/`POST /api/design-day-scenarios` manages `design_day_scenarios.json`. Each scenario has a stable ID, title, mode (`cooling` or `heating`), representative month, day type, evidence status, source, citations, and pressure field. Cooling and heating scenarios have 24 distinct rows `0`–`23`; every row carries cited outdoor DB and WB fields, with `WB <= DB`. Heating scenarios are calculated through the separate `/api/hourly-heating-load-report` path and never alter cooling reports.
 
 ## Hourly room model
 
@@ -169,11 +169,19 @@ values back to editable room, schedule, requirements or envelope artifacts.
 
 `GET /api/infiltration-method-gate?project_id=...` retrieves the project-local method gate. `POST /api/infiltration-method-gate` saves the fixed V1 policy plus its approval record. A placeholder gate is visible but cannot contribute to cooling totals; an approved gate requires a named HVAC engineer, credential, date, citation and stated scope.
 
+`GET /api/ground-contact-method-gate?project_id=...` and `POST
+/api/ground-contact-method-gate` manage the separate ground-contact floor method
+gate. A ground-contact surface remains excluded unless the gate is approved and
+the surface has a cited scalar ground temperature or a cited 24-hour boundary
+temperature profile. The gate does not infer soil properties, groundwater
+response, or outdoor temperature, and it is included in calculator/report
+freshness fingerprints.
+
 For every hour, the engine schedules people, lights, heat sources, solar, outside air and eligible infiltration; calculates envelope conduction at hourly outdoor DB; calculates psychrometric outside-air and infiltration sensible/latent load at hourly DB/WB/pressure; then applies the existing explicit safety factor once. ACH infiltration uses reviewed room volume or a cited zone-height fallback. The report retains signed infiltration diagnostics while applying only positive sensible and latent cooling components. Floors aggregate zones and zones aggregate rooms at the **same hour**, never independent room peaks.
 
 The report exposes `known_exclusions` for stored uncalculated room inputs and `unresolved_room_inputs` for unassessed categories, separately from the calculated hourly components. A known excluded or unassessed room component makes the result `draft` and removes the project peak, while retaining an included-scope subtotal for engineering review.
 
-V1 still excludes partitions, dynamic thermal mass, detailed glazing physics, AHU coil and fan/duct effects, heat recovery, and plant loads. Infiltration remains excluded until its project gate and room input are eligible. The analysis response exposes each artifact URL/status for frontend discovery. A draft may show only an included-scope subtotal; a project peak is available only for review-ready complete scope. The parity adapter remains disabled until an authorised CAMEL+/DA09 reconciliation is completed.
+V1 supports reviewed fixed-temperature partitions, manually-sourced glazing inputs, and geometric-shading records only when their separate method gates and evidence requirements are complete. Dynamic thermal mass and cited surface-irradiance radiation are also available behind their separate Stage 6 gates and explicit surface/source records; they remain excluded while those gates or records are incomplete. Room-to-room dynamic coupling, AHU coil and fan/duct effects, heat recovery, and plant loads remain excluded. Infiltration remains excluded until its project gate and room input are eligible. The analysis response exposes each artifact URL/status for frontend discovery. A draft may show only an included-scope subtotal; a project peak is available only for review-ready complete scope. The parity adapter remains disabled until an authorised CAMEL+/DA09 reconciliation is completed.
 ## Calculation-input evidence
 
 Before assembling an immutable calculator snapshot, the frontend may build the

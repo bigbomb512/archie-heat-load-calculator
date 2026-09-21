@@ -24,4 +24,12 @@ Each run stores a request manifest, selected rendered-page hashes, raw provider 
 
 Extraction cannot calculate a cooling duty or activate an envelope. A geometry record may be marked `ai_verified` only when it has two independent cited architect witnesses and no validation conflict. Everything else remains a proposal or an explicit exception for the existing review/readiness workflow.
 
+The page register still retains every architect page, but the normal request is
+bounded by the ranked-context policy (`ranked-context-v1`): at most 24 main
+pages, with category quotas and no more than three 3D cross-check pages.
+Ambiguous identity/role pages are retained in a separate exception appendix;
+reference-only pages remain indexed but are not sent. The same ranked manifest
+drives the manual ChatGPT handoff and the optional provider job. A high page
+relevance score never activates a calculator fact.
+
 The old paste-JSON control remains under **Advanced recovery** and is not the primary path.

@@ -56,7 +56,8 @@ def timestamp():
 
 
 def build_drawing_coverage(ai_input, spatial_ocr=None, vector_geometry=None):
-    pages = enrich_page_levels(ai_input.get("drawing_set", {}).get("pages", []), ai_input)
+    spatial_ocr = spatial_ocr or {}
+    pages = enrich_page_levels(ai_input.get("drawing_set", {}).get("pages", []), ai_input, spatial_ocr)
     levels = build_levels(pages)
     exceptions = coverage_exceptions(levels, pages)
     page_roles = classify_page_roles(pages, ai_input, spatial_ocr or {}, vector_geometry or {})
@@ -69,6 +70,11 @@ def build_drawing_coverage(ai_input, spatial_ocr=None, vector_geometry=None):
         })
     for role in page_roles:
         role["related_pages"] = related_by_page.get(role.get("page"), [])
+    # Keep context selection in the authoritative page register.  The import
+    # is local to avoid coupling the low-level classifier to the provider
+    # orchestration module at import time.
+    from ai.vision_extraction import build_ranked_context
+    context_selection = build_ranked_context({"drawing_set": {"pages": pages}}, {"page_roles": page_roles})
     return {
         "version": 4,
         "source_pdf": ai_input.get("source_pdf", ""),
@@ -88,6 +94,7 @@ def build_drawing_coverage(ai_input, spatial_ocr=None, vector_geometry=None):
         "sheet_register": [sheet_entry(page) for page in pages],
         "page_roles": page_roles,
         "page_relationships": page_relationships,
+        "context_selection": context_selection,
         "levels": levels,
         "cross_sheet_links": cross_sheet_links(levels),
         "coverage_exceptions": exceptions,
@@ -95,18 +102,105 @@ def build_drawing_coverage(ai_input, spatial_ocr=None, vector_geometry=None):
     }
 
 
-def enrich_page_levels(pages, ai_input):
+def _level_candidates(page, ocr):
+    """Return level evidence with provenance; never invent a level."""
+    structured = str((page.get("structured_content") or {}).get("markdown", ""))
+    title_text = " ".join(str(item.get("text_excerpt", "")) for item in (ocr or {}).get("title_blocks", []))
+    page_title = str(page.get("title", ""))
+    candidates = []
+    patterns = (
+        (r"\b(?:FL|LEVEL|LVL)\s*0*(\d{1,2})\b", "numeric_level"),
+        (r"\b0*(\d{1,2})\s*(?:FL|LEVEL|LVL)\b", "numeric_level"),
+        (r"\b(GROUND|GROUND\s+FLOOR|BASEMENT|LOWER\s+GROUND)\b", "named_level"),
+    )
+    for text, source, confidence in ((title_text, "title_block_ocr", "high"),
+                                      (structured, "structured_pdf_text", "high"),
+                                      (page_title, "page_title", "medium")):
+        for pattern, kind in patterns:
+            for match in re.finditer(pattern, text, re.I):
+                raw = re.sub(r"\s+", " ", match.group(1)).strip().upper()
+                value = f"FL {int(raw):02d}" if kind == "numeric_level" else raw
+                excerpt = text[max(0, match.start() - 48):match.end() + 48]
+                item = {"value": value, "source": source, "confidence": confidence, "excerpt": excerpt[:160]}
+                if item not in candidates:
+                    candidates.append(item)
+    return candidates
+
+
+def _scale_candidates(page, ocr):
+    """Annotate printed scales and identify the main-sheet scale.
+
+    A detail scale is retained as evidence but cannot become the page scale.
+    The bottom title-block band is the preferred main-sheet region because it
+    is where the printed sheet scale is located on architect title blocks.
+    """
+    raw = list((ocr or {}).get("scale_candidates", []) or [])
+    text = " ".join([
+        str((page.get("structured_content") or {}).get("markdown", "")),
+        str(page.get("title", "")),
+    ])
+    if not raw:
+        values = re.findall(r"(?i)\b(?:scale\s*[:@]?\s*)?(1\s*:\s*\d+)\b", text)
+        raw = [{"text": re.sub(r"\s+", "", value), "source": "structured_pdf_text",
+                "source_bbox": [], "source_confidence": "higher"} for value in values]
+    title_scales = [] if any(item.get("source") == "bottom_band" for item in raw) else re.findall(
+        r"(?i)\bDRAWING[\s\S]{0,5000}?\bSCALE\s*(?:REV\s*NO)?\s*(1\s*:\s*\d+)", text)
+    existing_title_scales = {str(item.get("text", "")).replace(" ", "") for item in raw if item.get("source") == "structured_title_block"}
+    raw.extend({"text": re.sub(r"\s+", "", value), "source": "structured_title_block",
+                "source_bbox": [], "source_confidence": "highest"}
+               for value in title_scales if re.sub(r"\s+", "", value) not in existing_title_scales)
+    main_values = {str(item.get("text", "")).replace(" ", "") for item in raw if item.get("source") in {"bottom_band", "structured_title_block"}}
+    all_values = {str(item.get("text", "")).replace(" ", "") for item in raw if item.get("text")}
+    result = []
+    for item in raw:
+        value = str(item.get("text", "")).replace(" ", "")
+        if not value:
+            continue
+        is_main = item.get("source") in {"bottom_band", "structured_title_block"} or (not main_values and len(all_values) == 1)
+        context = "main_sheet" if is_main else "embedded_detail" if value not in main_values else "secondary_title_block"
+        result.append({**item, "text": value, "context": context,
+                       "primary": context == "main_sheet"})
+    main = sorted(main_values) if main_values else sorted(all_values)
+    return result, main
+
+
+def enrich_page_levels(pages, ai_input, spatial_ocr=None):
     triage = {}
     raw = ai_input.get("page_triage", {})
     for item in raw.get("pages", []) if isinstance(raw, dict) else []:
         if isinstance(item, dict) and item.get("page") is not None:
             triage[item["page"]] = item
+    ocr_by_page = {item.get("page"): item for item in (spatial_ocr or {}).get("pages", [])}
     enriched = []
     for page in pages:
         row = dict(page)
         triage_item = triage.get(page.get("page"), {})
-        if not row.get("level_name") and triage_item.get("floor_label"):
-            row["level_name"] = triage_item["floor_label"]
+        ocr = ocr_by_page.get(page.get("page"), {})
+        identity = page_identity_candidates(row, ocr)
+        row["identity"] = identity
+        row["drawing_number_candidates"] = identity.get("drawing_number_candidates", [])
+        row["title_candidates"] = identity.get("title_candidates", [])
+        row["identity_status"] = identity.get("status", "missing")
+        row["legacy_drawing_number"] = page.get("drawing_number", "")
+        if identity.get("selected_drawing_number") and identity.get("status") == "confirmed":
+            row["drawing_number"] = identity["selected_drawing_number"]
+        else:
+            # Never carry a rejected date-like legacy value into the
+            # authoritative register. A non-date legacy ID remains visible as
+            # a low-confidence candidate, while physical page number is the
+            # stable fallback for missing or conflicting identities.
+            row["drawing_number"] = _clean_drawing_candidate(page.get("drawing_number", ""))
+        levels = _level_candidates(row, ocr)
+        selected_level = str(row.get("level_name") or triage_item.get("floor_label") or "").strip()
+        if not selected_level and len({item["value"] for item in levels}) == 1:
+            selected_level = levels[0]["value"]
+        row["level_candidates"] = levels
+        row["level_name"] = selected_level
+        scales, main_scales = _scale_candidates(row, ocr)
+        row["scale_candidates"] = scales
+        row["main_scale_candidates"] = main_scales
+        row["main_scale"] = main_scales[0] if len(main_scales) == 1 else ""
+        row["scale_status"] = "confirmed" if len(main_scales) == 1 else "ambiguous" if len(main_scales) > 1 else "missing"
         enriched.append(row)
     return enriched
 
@@ -115,10 +209,19 @@ def sheet_entry(page):
     return {
         "page": page.get("page"),
         "title": page.get("title", ""),
-        "drawing_number": page.get("drawing_number", ""),
+        "drawing_number": (page.get("identity") or {}).get("selected_drawing_number") or page.get("drawing_number", ""),
+        "legacy_drawing_number": page.get("legacy_drawing_number", ""),
+        "drawing_number_candidates": page.get("drawing_number_candidates", []),
+        "title_candidates": page.get("title_candidates", []),
+        "identity_status": page.get("identity_status", (page.get("identity") or {}).get("status", "missing")),
+        "title_block_excerpts": (page.get("identity") or {}).get("title_block_excerpts", []),
         "sheet_classification": page.get("sheet_classification", page.get("detected_type", "other")),
         "thermal_role": page.get("thermal_role", "not_calculation_evidence"),
         "level_name": page.get("level_name", ""),
+        "level_candidates": page.get("level_candidates", []),
+        "scale_candidates": page.get("scale_candidates", []),
+        "main_scale": page.get("main_scale", ""),
+        "scale_status": page.get("scale_status", "missing"),
         "confidence": page.get("confidence", 0),
         "human_decision": page.get("confirmed_decision", ""),
         "classification_evidence": page.get("classification_evidence", ""),
@@ -146,7 +249,7 @@ def classify_page_roles(pages, ai_input, spatial_ocr=None, vector_geometry=None)
     for page in pages:
         ocr = ocr_by_page.get(page.get("page"), {})
         vector = vector_by_page.get(page.get("page"), {})
-        identity = page_identity_candidates(page, ocr)
+        identity = page.get("identity") or page_identity_candidates(page, ocr)
         structured_text = str(page.get("structured_content", {}).get("markdown", ""))
         title_block_text = " ".join(str(item.get("text_excerpt", "")) for item in ocr.get("title_blocks", []))
         ocr_text = " ".join(str(item.get("text", "")) for item in ocr.get("word_samples", []))
@@ -181,7 +284,7 @@ def classify_page_roles(pages, ai_input, spatial_ocr=None, vector_geometry=None)
         elif detected_type in {"render_or_photo", "perspective_or_3d"} or any(term in title for term in ("3d", "perspective", "render", "isometric")):
             role = "3d_render"
             evidence.append("render/perspective classification or title")
-        elif ((title == "dimension plan" or page.get("drawing_number") == "202" and "dimension" in title)
+        elif (title == "dimension plan"
               and detected_type not in {"cover_or_drawing_list", "render_or_photo"}
               and page.get("plan_role") != "reference_context"):
             role = "main_floor_plan"
@@ -257,7 +360,8 @@ def classify_page_roles(pages, ai_input, spatial_ocr=None, vector_geometry=None)
         else:
             authority = "proposed"
         result.append({
-            "page": page.get("page"), "drawing_number": page.get("drawing_number", ""),
+            "page": page.get("page"), "drawing_number": identity.get("selected_drawing_number") or page.get("drawing_number", ""),
+            "legacy_drawing_number": page.get("legacy_drawing_number", page.get("drawing_number", "")),
             "title": page.get("title", ""), "proposed_role": role,
             "level_name": level, "confidence": confidence,
             "classification_evidence": evidence,
@@ -274,9 +378,15 @@ def classify_page_roles(pages, ai_input, spatial_ocr=None, vector_geometry=None)
             "visual_available": bool(page.get("thumbnail_path") or page.get("image") or page.get("vision_triage") or page.get("rendered_image")),
             "text_available": bool(structured_text.strip() or page.get("written_dimensions") or page.get("ceiling_constraints") or page.get("hvac_terms")),
             "vector_available": role in {"main_floor_plan", "supporting_geometry_plan", "reflected_ceiling_plan", "services_or_lighting_plan", "opening_elevation", "elevation_or_section"},
-            "page_group": page_group_key(role, level, page.get("drawing_number", "")),
+            "page_group": page_group_key(role, level, identity.get("selected_drawing_number") or page.get("drawing_number", "")),
             "review_required": authority in {"ambiguous", "proposed"},
             "identity": identity,
+            "drawing_number_candidates": identity.get("drawing_number_candidates", []),
+            "title_candidates": identity.get("title_candidates", []),
+            "level_candidates": page.get("level_candidates", []),
+            "scale_candidates": page.get("scale_candidates", []),
+            "main_scale": page.get("main_scale", ""),
+            "scale_status": page.get("scale_status", "missing"),
             "resolved_drawing_number": identity.get("selected_drawing_number", ""),
             "drawing_number_status": identity.get("status", "missing"),
             "capability_map": capability_map(role, semantic_text, page, ocr, vector),
@@ -370,6 +480,9 @@ def page_identity_candidates(page, ocr=None):
         "status": status,
         "stable_page_identity": f"pdf-page-{page.get('page')}",
         "title_block_excerpts": [item.get("text_excerpt", "")[:240] for item in ocr.get("title_blocks", [])[:10]],
+        "source_fingerprint": hashlib.sha256(json.dumps({
+            "page": page, "ocr": ocr,
+        }, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest(),
     }
 
 
@@ -524,7 +637,19 @@ def relate_pages(page_roles, pages):
             if left_numbers & right_numbers:
                 basis.append("shared explicit drawing reference")
             compatible = {"main_floor_plan", "primary_geometry_plan", "supporting_geometry_plan", "reflected_ceiling_plan", "services_or_lighting_plan", "opening_elevation", "elevation_or_section", "3d_render"}
-            if left.get("proposed_role") in compatible and right.get("proposed_role") in compatible and (left.get("level_name") or right.get("level_name") or left.get("page") in {20, 21, 22, 26}):
+            # When labels or explicit sheet references are unavailable, link
+            # only genuinely calculation-relevant page roles.  Do not rely on
+            # a fixture's physical page numbers: different architect packets
+            # use different sheet ordering and numbering.
+            relevant_roles = {"main_floor_plan", "primary_geometry_plan", "supporting_geometry_plan",
+                              "reflected_ceiling_plan", "services_or_lighting_plan", "opening_elevation",
+                              "elevation_or_section", "3d_render"}
+            if (left.get("proposed_role") in compatible and right.get("proposed_role") in compatible
+                    and (left.get("level_name") or right.get("level_name")
+                         or left.get("proposed_role") in relevant_roles
+                         and right.get("proposed_role") in relevant_roles)
+                    and left.get("selection") != "reference_only"
+                    and right.get("selection") != "reference_only"):
                 if {left.get("proposed_role"), right.get("proposed_role")} != {"3d_render"}:
                     basis.append("compatible architect evidence roles")
             if not basis:
