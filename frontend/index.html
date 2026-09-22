@@ -3,23 +3,25 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Archie Heat Load Calculator</title>
-<link rel="icon" href="/frontend/assets/images/archie-mark.svg" type="image/svg+xml">
+<title>Toki — Heat load workspace</title>
+<link rel="icon" href="/frontend/assets/images/toki-icon-exact.png?v=3" type="image/png">
 <link rel="stylesheet" href="/frontend/css/styles.css">
 <link rel="stylesheet" href="/frontend/css/simple.css">
-<link rel="stylesheet" href="/frontend/css/workspace-theme.css">
 <link rel="stylesheet" href="/frontend/css/brand.css">
+<link rel="stylesheet" href="/frontend/css/workspace-theme.css">
+<link rel="stylesheet" href="/frontend/css/hvac-identity.css">
+<link rel="stylesheet" href="/frontend/css/design-system.css">
 </head>
-<body>
+<body class="hvac-app">
 <a class="skip-link" href="#main">Skip to calculator</a>
 <div class="shell">
 
   <!-- ============ sidebar ============ -->
   <aside class="side">
-    <div class="logo"><a class="logo-home" href="/frontend/landing.html" aria-label="Archie home"><img class="brand-icon" src="/frontend/assets/images/archie-mark.svg" alt=""><strong>Archie<br><small>Heat Load Calculator</small></strong></a><a class="home-link" href="/frontend/landing.html">Back to website ↗</a></div>
+    <div class="logo"><a class="logo-home" href="/frontend/landing.html" aria-label="Toki home"><img class="toki-exact-wordmark" src="/frontend/assets/images/toki-wordmark-exact.png" alt="Toki"></a></div>
 
-    <nav class="nav">
-      <button class="on" id="navCurrent">
+    <nav class="nav" aria-label="Project navigation">
+      <button class="on" id="navCurrent" aria-current="page">
         <svg class="ic" viewBox="0 0 24 24"><path d="M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/></svg>
         Current project
       </button>
@@ -29,22 +31,22 @@
       </button>
       <div class="micro sec">Projects</div>
     </nav>
-    <div class="projects" id="projects"><div class="empty-proj">No projects yet</div></div>
-
-    <nav class="nav" style="padding-bottom:12px">
-      <button id="navSettings">
-        <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 7 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 3 15H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 9 4.6h.1A1.7 1.7 0 0 0 10.3 3V3a2 2 0 1 1 4 0v.1A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.6 1.3H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    <div class="projects" id="projects"><div class="empty-proj">Your drawing sets will appear here after upload.</div></div>
+    <nav class="nav" aria-label="Workspace settings">
+      <button id="navSettings" type="button">
+        <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 7 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 3 15H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 9 4.6h.1A1.7 1.7 0 0 0 10.3 3V3a2 2 0 1 1 4 0v.1A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9v.1a1.7 1.7 0 0 0 1.6 1.3H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
         Settings
       </button>
     </nav>
-    <div class="foot">Heat load workspace</div>
+
+    <div class="foot"><span class="workspace-avatar">T</span><div><b>Your workspace</b><span>Drawings to decisions</span></div><a href="/frontend/landing.html" aria-label="Back to website">↗</a></div>
   </aside>
 
   <!-- ============ main ============ -->
   <main class="main" id="main" tabindex="-1">
     <header class="top">
       <h1 id="topTitle">New analysis</h1>
-      <div class="sub" id="topSub">Upload an architect's drawing set to begin</div>
+      <div class="sub" id="topSub">Drawing analysis &amp; cooling loads</div>
       <div class="right">
         <button class="iconbtn" id="theme" aria-label="Switch between light and dark">
           <svg class="moon" viewBox="0 0 24 24">
@@ -65,17 +67,19 @@
 
       <!-- upload -->
       <section id="vUpload">
-        <div class="intro"><h2>Heat load calculator</h2><p>Upload the architect’s PDF, let Archie prepare a draft whole-building estimate, then review only the decisions that materially affect the result.</p><ol><li>Upload the drawing set</li><li>Run Archie AI and review exceptions</li><li>Calculate, package and share the result</li></ol><p class="fine">The AI preliminary estimate is clearly marked draft-only. The reviewed cooling workflow remains available when you need a cited engineering record.</p></div>
-        <div class="drop" id="drop">
-          <div class="mark">
-            <svg viewBox="0 0 24 24"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5"/><path d="M3 15v3a3 3 0 0 0 3 3h12a3 3 0 0 0 3-3v-3"/></svg>
-          </div>
-          <h2>Upload a drawing set</h2>
-          <p>Upload a PDF to identify relevant drawings. Review the selected pages before continuing.</p>
-          <label class="lbl" for="pdf">Choose PDF</label>
-          <input id="pdf" type="file" accept="application/pdf">
-          <p class="fine">Floor plans, elevations, sections, specifications and notes — all in one file.</p>
+        <div class="intro">
+          <div class="welcome-mark toki-symbol" aria-hidden="true"></div>
+          <div class="welcome-label">TOKI / BUILDING SERVICES</div>
+          <h2>Engineering comfort.<br>With less groundwork.</h2>
+          <p>Bring your drawings. Turn project information into<br class="desktop-break"> reviewed inputs and separate cooling and heating reports.</p>
         </div>
+        <div class="drop" id="drop">
+          <div class="drawing-label"><span>PROJECT INTAKE</span><span>PDF / DRAWING SET</span></div>
+          <div class="upload-heading"><span class="document-symbol" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/></svg></span><div><h2>Start with your drawings</h2><p>Drop your architectural PDF here to begin.</p></div></div>
+          <div class="upload-bottom"><div class="upload-picker"><label class="lbl" for="pdf">Choose PDF</label><input id="pdf" type="file" accept="application/pdf"></div><span class="file-hint">Plans, sections &amp; specifications</span></div>
+        </div>
+        <ol class="workflow-preview" aria-label="Analysis workflow"><li><span>1</span>Upload drawings</li><li><span>2</span>Review inputs</li><li><span>3</span>Calculate loads</li></ol>
+        <p class="scope-note">You review the inputs before calculation.<br>Heating requires cited inputs and approval, and stays separate from cooling.</p>
       </section>
 
       <!-- uploaded -->
@@ -468,10 +472,28 @@
           <div class="requirements-form"><label>Selected heating scenario IDs<input id="heatingScenarioIds" placeholder="e.g. winter_design_day"></label></div>
           <div class="bar"><span class="conf" id="heatingReportStatus">Save reviewed hourly inputs before calculating heating.</span></div>
           <div id="heatingLoadResults"></div>
+          <section class="calculator-draft-panel" id="ahuAirsideSection" aria-labelledby="ahuAirsideHeading">
+            <div class="panel-head"><div><div class="micro">Cooling air-side</div><h3 id="ahuAirsideHeading">AHU and coil duty</h3></div><button class="btn key" id="btnCalculateAhuLoad" type="button">Calculate AHU report</button></div>
+            <p class="fine">AHUs consume coincident room loads using explicit reviewed topology, airflow, state points, fan/duct effects, and coil inputs. They do not infer airflow or system type from room names.</p>
+            <div class="bar"><span class="conf" id="ahuAirsideStatus" role="status" aria-live="polite">Configure AHU systems and air paths before calculating.</span></div>
+            <div id="ahuAirsideResults" class="review-list"></div>
+          </section>
+          <section class="calculator-draft-panel" id="plantSection" aria-labelledby="plantHeading">
+            <div class="panel-head"><div><div class="micro">Cooling plant</div><h3 id="plantHeading">Plant and hydraulic duty</h3></div><button class="btn key" id="btnCalculatePlantLoad" type="button">Calculate plant report</button></div>
+            <p class="fine">Plant duty uses explicit AHU → circuit → plant ownership, same-hour coincidence, reviewed diversity, pump power, and pipe effects. Boilers and package units remain visible but excluded from central cooling duty.</p>
+            <div class="bar"><span class="conf" id="plantStatus" role="status" aria-live="polite">Configure plant systems and circuits after the AHU report.</span></div>
+            <div id="plantResults" class="review-list"></div>
+          </section>
+          <section class="calculator-draft-panel" id="annualSection" aria-labelledby="annualHeading">
+            <div class="panel-head"><div><div class="micro">Annual analysis</div><h3 id="annualHeading">8,760-hour energy analysis</h3></div><button class="btn key" id="btnCalculateAnnual" type="button">Calculate annual report</button></div>
+            <p class="fine">Annual analysis uses cited EPW/TMY weather, an explicit 365-day calendar, room schedules, and the current immutable calculator-input snapshot. Missing or unapproved annual inputs remain blocked or draft-only.</p>
+            <div class="bar"><span class="conf" id="annualStatus" role="status" aria-live="polite">Configure annual weather and calendar before calculating.</span></div>
+            <div id="annualResults" class="review-list"></div>
+          </section>
           <section class="calculator-draft-panel" id="productizationSection" aria-labelledby="productizationHeading">
             <div class="panel-head"><div><div class="micro">Project record</div><h3 id="productizationHeading">Health, audit and report package</h3></div><button class="btn ghost mini" id="btnRefreshProjectHealth" type="button">Refresh health</button></div>
             <p class="fine">Packages preserve the exact report and input snapshot used. Exports contain authored artifacts and source references, not private PDFs or rendered page images.</p>
-            <div class="bar"><span class="conf" id="projectHealthStatus" tabindex="-1" role="status" aria-live="polite">Loading project health…</span><button class="btn ghost mini" id="btnBuildCoolingPackage" type="button">Package cooling</button><button class="btn ghost mini" id="btnBuildHeatingPackage" type="button">Package heating</button><button class="btn ghost mini" id="btnExportProject" type="button">Export project</button><button class="btn ghost mini" id="btnImportProject" type="button">Import archive</button><input id="projectArchiveInput" type="file" accept=".zip,application/zip" class="hide" aria-label="Select a project archive to import"></div>
+            <div class="bar"><span class="conf" id="projectHealthStatus" tabindex="-1" role="status" aria-live="polite">Loading project health…</span><button class="btn ghost mini" id="btnBuildCoolingPackage" type="button">Package cooling</button><button class="btn ghost mini" id="btnBuildHeatingPackage" type="button">Package heating</button><button class="btn ghost mini" id="btnBuildAnnualPackage" type="button">Package annual</button><button class="btn ghost mini" id="btnBuildAhuPackage" type="button">Package AHU</button><button class="btn ghost mini" id="btnBuildPlantPackage" type="button">Package plant</button><button class="btn ghost mini" id="btnExportProject" type="button">Export project</button><button class="btn ghost mini" id="btnImportProject" type="button">Import archive</button><input id="projectArchiveInput" type="file" accept=".zip,application/zip" class="hide" aria-label="Select a project archive to import"></div>
             <div id="projectHealthResults" class="review-list"></div>
             <div id="projectPackageResults" class="review-list" tabindex="-1" aria-live="polite"></div>
             <details><summary>Recent audit history</summary><div id="projectAuditResults" class="review-list"></div></details>

@@ -111,7 +111,8 @@ def _role(page, coverage):
 
 
 def _candidate(source_fp, page, target, category, value, unit, *, label="", excerpt="", method="structured_pdf", status="proposed", confidence="medium", witnesses=None, unresolved=None, room_id="", derivation=None, evidence_only=False, location=None):
-    drawing = page.get("drawing_number", "")
+    identity = page.get("identity") or {}
+    drawing = identity.get("selected_drawing_number") or page.get("resolved_drawing_number") or page.get("drawing_number", "")
     location = deepcopy(location or {"excerpt": excerpt})
     location["value_witness"] = {"value": value, "unit": unit}
     # Character offsets are textual coordinates, never drawing scale/geometry.
@@ -133,7 +134,8 @@ def _candidate(source_fp, page, target, category, value, unit, *, label="", exce
 
 
 def _room_label(page, excerpt):
-    labels = [str(item.get("text", "")).strip() for item in page.get("room_label_candidates", []) if isinstance(item, dict)]
+    labels = [str(item.get("text", "")).strip() for item in page.get("room_label_candidates", [])
+              if isinstance(item, dict) and str(item.get("status", "room_label")).casefold() in {"room_label", "room", "candidate", "confirmed"}]
     matches = [label for label in labels if label and re.search(r"(?<!\w)" + re.escape(label) + r"(?!\w)", excerpt, re.I)]
     if len(set(matches)) == 1:
         return matches[0]
@@ -145,6 +147,8 @@ def _room_label(page, excerpt):
 def _extract_plan(page, source_fp, candidates):
     text = _page_text(page)
     for item in page.get("room_label_candidates", []):
+        if isinstance(item, dict) and str(item.get("status", "room_label")).casefold() not in {"room_label", "room", "candidate", "confirmed"}:
+            continue
         label = str(item.get("text") or "").strip()
         if label:
             candidates.append(_candidate(source_fp, page, f"room.{label}.identity", "room", label, "",
@@ -736,9 +740,25 @@ def extract_calculation_input_evidence(ai_input, coverage=None, spatial_ocr=None
                                                       building, dimension_matches, geometry_confirmation)
     from ai.opening_resolution import resolve_openings
     pages = []
+    coverage_pages = {row.get("page"): row for row in coverage.get("pages", []) if isinstance(row, dict)}
+    coverage_roles = {row.get("page"): row for row in coverage.get("page_roles", []) if isinstance(row, dict)}
     for raw in ai_input.get("drawing_set", {}).get("pages", []):
         page = deepcopy(raw)
         ocr = next((item for item in spatial_ocr.get("pages", []) if item.get("page") == page.get("page")), {})
+        register = coverage_pages.get(page.get("page"), {})
+        role_row = coverage_roles.get(page.get("page"), {})
+        # The coverage register is authoritative for identity, scale, and
+        # level.  Extraction must not reconstruct these from stale packet
+        # metadata or flattened title text.
+        page["identity"] = deepcopy(role_row.get("identity") or register.get("identity") or page.get("identity") or {})
+        page["resolved_drawing_number"] = role_row.get("resolved_drawing_number") or register.get("drawing_number") or page.get("drawing_number", "")
+        page["legacy_drawing_number"] = register.get("legacy_drawing_number", page.get("drawing_number", ""))
+        page["drawing_number"] = page["resolved_drawing_number"] or page.get("drawing_number", "")
+        page["level_name"] = role_row.get("level_name") or register.get("level_name") or page.get("level_name", "")
+        page["level_candidates"] = role_row.get("level_candidates") or register.get("level_candidates") or []
+        page["scale_candidates"] = role_row.get("scale_candidates") or register.get("scale_candidates") or []
+        page["main_scale"] = role_row.get("main_scale") or register.get("main_scale") or ""
+        page["scale_status"] = role_row.get("scale_status") or register.get("scale_status") or "missing"
         page["room_label_candidates"] = ocr.get("room_label_candidates", page.get("room_label_candidates", []))
         page["extraction_text"] = _page_text(page) + "\n" + "\n".join(str(item.get("text", "")) for item in ocr.get("word_samples", []))
         page["normalized_table_cells"] = [cell for cell in ocr.get("table_cells", []) if isinstance(cell, dict) and cell.get("field")]
@@ -798,7 +818,12 @@ def extract_calculation_input_evidence(ai_input, coverage=None, spatial_ocr=None
         "candidates": candidates, "issues": issues, "categories": categories,
         "geometry_resolution": result_geometry,
         "opening_register": opening_register,
-        "pages": [{"page": page.get("page"), "drawing_number": page.get("drawing_number", ""), "role": page.get("role", "")} for page in pages],
+        "pages": [{"page": page.get("page"), "drawing_number": page.get("drawing_number", ""),
+                   "legacy_drawing_number": page.get("legacy_drawing_number", ""),
+                   "identity": deepcopy(page.get("identity", {})),
+                   "level_name": page.get("level_name", ""), "main_scale": page.get("main_scale", ""),
+                   "scale_candidates": deepcopy(page.get("scale_candidates", [])),
+                   "role": page.get("role", "")} for page in pages],
         "status": "blocked" if any(row.get("status") in {"blocked", "conflict"} for row in candidates) else "current",
         "fingerprint": _fingerprint({"extractor_version": EXTRACTOR_VERSION, "source_fingerprint": source_fp, "candidates": candidates, "issues": issues, "opening_register": opening_register}),
     }

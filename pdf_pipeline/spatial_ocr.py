@@ -149,7 +149,17 @@ def scale_candidates(words, title_blocks):
             candidates.append(candidate(source, re.sub(r"\s*:\s*", ":", match.group(1)), source_bbox))
         for match in re.finditer(r"\b(\d+/\d+\"\s*=\s*\d+'-?\d*\")", text):
             candidates.append(candidate(source, match.group(1), source_bbox))
-    return unique_candidates(candidates)[:20]
+    unique = unique_candidates(candidates)[:20]
+    main_values = {str(item.get("text", "")).replace(" ", "") for item in unique if item.get("source") == "bottom_band"}
+    all_values = {str(item.get("text", "")).replace(" ", "") for item in unique if item.get("text")}
+    for item in unique:
+        value = str(item.get("text", "")).replace(" ", "")
+        item["context"] = (
+            "main_sheet" if item.get("source") == "bottom_band" or (not main_values and len(all_values) == 1)
+            else "embedded_detail" if value not in main_values else "secondary_title_block"
+        )
+        item["primary"] = item["context"] == "main_sheet"
+    return unique
 
 
 def drawing_number_candidates(words, title_blocks):
@@ -159,6 +169,20 @@ def drawing_number_candidates(words, title_blocks):
         for pattern in patterns:
             for match in re.finditer(pattern, text):
                 candidates.append(candidate(source, match.group(0), source_bbox))
+        # Numeric-only sheet numbers are valid only in title-block context.
+        # Restricting this to an explicit label or sheet-title phrase avoids
+        # promoting dates, dimensions, job numbers, and addresses.
+        if source != "full_page":
+            numeric_patterns = (
+                r"\b(?:DWG\s*NO|DRAWING\s*(?:NO|NUMBER)?|SHEET\s*(?:NO|NUMBER)?)\s*[:#-]?\s*(\d{2,4})\b",
+                r"\b(?:DIMENSION|FLOOR\s+FINISH|REFLECT(?:ED|IVE)\s+CEILING|SERVICE|STOREFRONT|SHOPFRONT)\s+PLAN\s+(\d{2,4})\b",
+                r"\b(?:ELEVATION|SECTION)\s+(\d{2,4})\b",
+            )
+            for pattern in numeric_patterns:
+                for match in re.finditer(pattern, text, re.I):
+                    value = match.group(1)
+                    if not re.fullmatch(r"(?:19|20)\d{2}", value):
+                        candidates.append(candidate(source, value, source_bbox))
     return unique_candidates(candidates)[:30]
 
 

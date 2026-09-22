@@ -130,7 +130,11 @@ def build(project_dir):
             "role": meta["role"],
             "purpose": meta["purpose"],
             "capabilities": meta.get("capabilities", []),
-            "level_candidate": row.get("level_name", ""),
+            "level_candidate": role_row.get("level_name", row.get("level_name", "")),
+            "level_candidates": role_row.get("level_candidates", row.get("level_candidates", [])),
+            "scale_candidates": role_row.get("scale_candidates", row.get("scale_candidates", [])),
+            "main_scale": role_row.get("main_scale", row.get("main_scale", "")),
+            "scale_status": role_row.get("scale_status", row.get("scale_status", "missing")),
             "classification_evidence": role_row.get("classification_evidence", row.get("classification_evidence", [])),
             "authority_status": role_row.get("authority_status", "proposed"),
             "geometry_eligible": bool(role_row.get("geometry_eligible", False)),
@@ -202,6 +206,19 @@ or 3D roles are still useful context, but cannot provide primary dimensions.
 3D/render pages are cross-check-only. Reference-only pages remain indexed but
 are not part of the main context unless a later targeted review requests them.
 
+Identity and geometry guardrails:
+- Dates (for example 26.02.26) are never drawing numbers. Use the normalized
+  title-block drawing identity supplied in the page index, and cite the physical
+  PDF page as the stable fallback.
+- The main-sheet scale must be cited from the title block. An embedded detail
+  scale such as 1:2 is detail-only and must never calibrate the plan.
+- Do not create rooms from legends, title blocks, schedules, supplier tables,
+  general notes, or generic labels. Do not use 3D proportions for dimensions.
+- A geometry proposal must include the room label and bbox, level candidate,
+  ordered wall IDs or boundary points, linked dimension IDs, an independent
+  witness page, confidence, and conflicts. If any item is missing, report it
+  in unresolved_fields and leave the geometry proposed.
+
 Return this shape:
 
 ```json
@@ -216,6 +233,12 @@ Return this shape:
       "value": null,
       "unit": "",
       "coordinates": null,
+      "label_bbox": null,
+      "level_candidate": "",
+      "wall_ids": [],
+      "dimension_ids": [],
+      "boundary_points_px": [],
+      "independent_witness_page": null,
       "table_cell": null,
       "excerpt": "exact visible text or a concise visual witness",
       "extraction_method": "pdf_text|ocr|vector|vision",
@@ -237,7 +260,7 @@ cannot be uniquely matched to a plan element, create a conflict. If a ceiling
 height cannot be allocated to a room, keep it unresolved. Use stable IDs based
 on source page/drawing/entity/location, never array position. Do not output
 any cooling or heating result.
-"""
+    """
     (output / "prompt.md").write_text(prompt, encoding="utf-8")
     manifest = {
         "artifact": "manual_vision_handoff",

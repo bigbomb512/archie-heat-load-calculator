@@ -32,6 +32,8 @@ const analysis = {
 };
 
 async function mockApi(page) {
+  await page.route("**/api/project-health?project_id=demo-project", route => route.fulfill({ json: { status: "review_required", issues: [] } }));
+  await page.route("**/api/audit-log?project_id=demo-project&limit=20", route => route.fulfill({ json: { events: [] } }));
   await page.route("**/api/projects", route => route.fulfill({ json: [
     { id: "demo-project", name: analysis.name, pages: 2, relevant: 1, analysed: true },
   ] }));
@@ -490,4 +492,26 @@ test("frontend assets do not cache and accept query strings", async ({ request }
   expect(home.headers()["cache-control"]).toContain("no-store");
   expect(script.ok()).toBeTruthy();
   expect(script.headers()["cache-control"]).toContain("no-store");
+});
+
+test('project list failure offers a working inline retry', async ({ page }) => {
+  let attempts = 0;
+  await page.route('**/api/projects', route => {
+    attempts += 1;
+    return attempts === 1
+      ? route.fulfill({ status: 503, json: { error: 'Unavailable' } })
+      : route.fulfill({ json: [{ id: 'retry-project', name: 'Recovered project.pdf', pages: 4, analysed: false }] });
+  });
+  await page.goto('/');
+  await expect(page.getByText('Could not load your projects.', { exact: false })).toBeVisible();
+  await page.getByRole('button', { name: 'Retry', exact: true }).click();
+  await expect(page.getByRole('button', { name: /Recovered project.pdf/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Retry', exact: true })).toHaveCount(0);
+});
+
+test('current project navigation returns keyboard focus to the workspace', async ({ page }) => {
+  await page.route('**/api/projects', route => route.fulfill({ json: [] }));
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Current project', exact: true }).click();
+  await expect(page.locator('#main')).toBeFocused();
 });

@@ -26,7 +26,7 @@ def _paths(root):
     return {name: root / f"{name}.json" for name in (
         "ai_input", "drawing_coverage", "spatial_ocr", "vector_geometry",
         "vision_response", "building_evidence", "dimension_wall_matches",
-        "geometry_confirmation", "hourly_load_model", "calculation_input_evidence",
+        "geometry_confirmation", "geometry_resolution", "hourly_load_model", "calculation_input_evidence",
         "window_scan_register",
         "window_scan_reviews",
         "component_interpretations",
@@ -169,8 +169,10 @@ def get(web, project):
     status = "current" if evidence.get("source_fingerprint") == current and current and upstream_current is not False else ("stale" if paths["calculation_input_evidence"].exists() else "not_built")
     return {
         "id": project["id"], "calculation_input_evidence": _display_evidence(web, root, evidence),
+        "geometry_resolution": evidence.get("geometry_resolution", {}),
         "summary": _summary(evidence), "status": status,
         "artifact_url": web.safe_link(paths["calculation_input_evidence"]) if paths["calculation_input_evidence"].exists() else "",
+        "geometry_artifact_url": web.safe_link(paths["geometry_resolution"]) if paths["geometry_resolution"].exists() else "",
         **_interpretations_response(root, web),
     }
 
@@ -221,6 +223,10 @@ def post(web, project, data):
     stored = evidence if not reused else existing
     if not reused:
         _write(paths["calculation_input_evidence"], stored)
+    geometry = stored.get("geometry_resolution") or {}
+    existing_geometry = _read(paths["geometry_resolution"], {})
+    if existing_geometry.get("evidence_fingerprint") != geometry.get("evidence_fingerprint"):
+        _write(paths["geometry_resolution"], geometry)
     _attach_to_fusion(root, stored)
     draft_url = ""
     draft = None
@@ -241,8 +247,10 @@ def post(web, project, data):
     interpretations = _refresh_interpretations(root)
     return {
         "id": project["id"], "calculation_input_evidence": _display_evidence(web, root, stored),
+        "geometry_resolution": stored.get("geometry_resolution", {}),
         "summary": _summary(stored), "status": "current", "snapshot_reused": reused,
-        "artifact_url": web.safe_link(paths["calculation_input_evidence"]), "calculator_draft": draft or {},
+        "artifact_url": web.safe_link(paths["calculation_input_evidence"]),
+        "geometry_artifact_url": web.safe_link(paths["geometry_resolution"]), "calculator_draft": draft or {},
         "calculator_draft_url": draft_url, "component_interpretations": interpretations,
         "component_interpretations_status": "current",
         "component_interpretations_url": web.safe_link(paths["component_interpretations"]),

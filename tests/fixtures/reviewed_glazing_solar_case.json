@@ -1,0 +1,46 @@
+{
+  "environment": "development_only",
+  "warning": "Synthetic reviewed-record fixture; not project evidence or engineering approval.",
+  "library": {
+    "windows": [
+      {
+        "record_id": "fixture-window-w01",
+        "title": "Synthetic W01",
+        "revision": 1,
+        "review_status": "confirmed",
+        "source": "Synthetic test source",
+        "citations": [{"reference": "TEST-GLAZING", "page": 1, "excerpt": "Synthetic fixture"}],
+        "u_value_w_m2k": 2.0,
+        "u_value_basis": "overall_window",
+        "shgc": 0.5,
+        "frame_fraction": 0.1,
+        "glass_area_correction": 1.0,
+        "internal_shading_factor": 1.0
+      }
+    ]
+  },
+  "surface": {
+    "surface_id": "fixture-window-surface-w01",
+    "owner_room_id": "fixture-room",
+    "owner_zone_id": "fixture-zone",
+    "opening_mapping_status": "confirmed",
+    "boundary_method": "external",
+    "boundary_temperature_c": 35,
+    "review_status": "confirmed",
+    "source": "Synthetic test source",
+    "citations": [{"reference": "TEST-GLAZING", "page": 1, "excerpt": "Synthetic fixture"}],
+    "opening_width_m": 2,
+    "opening_height_m": 1.5,
+    "opening_quantity": 1
+  },
+  "manual_solar": {
+    "solar_design_w_m2": 500,
+    "shading_factor": 0.8,
+    "source": "Synthetic test source",
+    "citations": [{"reference": "TEST-SOLAR", "page": 1, "excerpt": "Synthetic fixture"}]
+  },
+  "method_gate": {
+    "approval_status": "placeholder",
+    "warning": "Development fixture only; no production gate approval."
+  }
+}

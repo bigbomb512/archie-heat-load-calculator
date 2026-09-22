@@ -61,6 +61,11 @@ const drop = requiredElement("drop");
 drop.addEventListener("drop", ev => { const f = ev.dataTransfer.files[0]; if (f) upload(f); });
 requiredElement("pdf").addEventListener("change", ev => { if (ev.target.files[0]) upload(ev.target.files[0]); });
 requiredElement("navNew").addEventListener("click", reset);
+requiredElement("navCurrent").addEventListener("click", () => {
+  requiredElement("main").focus({preventScroll: true});
+  document.querySelector(".work").scrollTop = 0;
+  requiredElement("main").scrollIntoView({block: "start"});
+});
 requiredElement("btnRestart").addEventListener("click", reset);
 
 function reset(){ location.reload(); }
@@ -516,9 +521,15 @@ requiredElement("btnAddHourlyRoom").addEventListener("click", () => addHourlyRoo
 requiredElement("btnSaveHourlyModel").addEventListener("click", () => saveHourlyModel("save"));
 requiredElement("btnCalculateHourlyLoad").addEventListener("click", calculateHourlyLoad);
 requiredElement("btnCalculateHeatingLoad").addEventListener("click", calculateHeatingLoad);
+requiredElement("btnCalculateAhuLoad").addEventListener("click", calculateAhuLoad);
+requiredElement("btnCalculatePlantLoad").addEventListener("click", calculatePlantLoad);
+requiredElement("btnCalculateAnnual").addEventListener("click", calculateAnnualEnergy);
 requiredElement("btnRefreshProjectHealth").addEventListener("click", loadProjectProductization);
 requiredElement("btnBuildCoolingPackage").addEventListener("click", () => buildReportPackage("cooling"));
 requiredElement("btnBuildHeatingPackage").addEventListener("click", () => buildReportPackage("heating"));
+requiredElement("btnBuildAnnualPackage").addEventListener("click", () => buildReportPackage("annual"));
+requiredElement("btnBuildAhuPackage").addEventListener("click", () => buildReportPackage("ahu"));
+requiredElement("btnBuildPlantPackage").addEventListener("click", () => buildReportPackage("plant"));
 requiredElement("btnExportProject").addEventListener("click", exportProjectArchive);
 requiredElement("btnImportProject").addEventListener("click", () => requiredElement("projectArchiveInput").click());
 requiredElement("projectArchiveInput").addEventListener("change", event => {
@@ -532,6 +543,10 @@ requiredElement("btnSaveCalculatorOverride").addEventListener("click", saveCalcu
 requiredElement("btnRefreshResearch").addEventListener("click", refreshResearch);
 requiredElement("calculatorInputIssues").addEventListener("click", event => {
   if (event.target.closest("[data-load-more-exceptions]")) loadMoreCalculatorExceptions();
+});
+requiredElement("calculatorInputIssues").addEventListener("change", event => {
+  const select = event.target.closest("[data-exception-decision]");
+  if (select) saveExceptionDecision(select.dataset.exceptionDecision, select.value);
 });
 requiredElement("btnAddConstruction").addEventListener("click", () => addEnvelopeConstruction());
 requiredElement("btnAddWindow").addEventListener("click", () => addEnvelopeWindow());
@@ -1353,6 +1368,9 @@ function showDesignRequirements(requirements = {}, readiness = {}, roomSuggestio
   loadHourlyLoadReport();
   loadHeatingMethodGate();
   loadHourlyHeatingLoadReport();
+  loadAhuAirside();
+  loadPlant();
+  loadAnnualEnergy();
   loadCalculatorInputs();
   loadProjectProductization();
 }
@@ -2750,12 +2768,25 @@ function renderCalculatorExceptions(){
     ? rows.map(issue => {
       const source = [issue.source_artifact, issue.source_drawing && `drawing ${issue.source_drawing}`, issue.source_page && `page ${issue.source_page}`].filter(Boolean).join(" · ");
       const conflicts = issue.competing_values?.length ? `<small>Competing values: ${esc(JSON.stringify(issue.competing_values))}</small>` : "";
-      return `<article class="review-item readiness-${esc(issue.severity === "blocking" ? "blocked" : "draft")}" data-exception-id="${esc(issue.exception_id || "")}"><div><b>${esc(issue.category || "Exception")} · ${esc(issue.affected_id || "project")}</b><span>${esc(issue.reason || "Resolve this input before calculating.")}</span><small>${esc(issue.severity || "warning")} · ${esc(issue.status || "pending")} · ${esc(source || issue.source_artifact || "source unavailable")}</small>${issue.excerpt ? `<small>Evidence: ${esc(issue.excerpt)}</small>` : ""}${conflicts}<small>Remediation: ${esc(issue.remediation || "Resolve the cited input before continuing.")}</small></div></article>`;
+      const links = Object.entries(issue.evidence_links || {}).filter(([, value]) => value).map(([key, value]) => `<a href="${esc(value)}" target="_blank" rel="noopener">${esc(key.replaceAll("_", " "))}</a>`).join(" · ");
+      const decision = issue.reviewer_decision || "pending";
+      const staleDecision = issue.decision_stale ? " · prior decision is stale" : "";
+      return `<article class="review-item readiness-${esc(issue.severity === "blocking" ? "blocked" : "draft")}" data-exception-id="${esc(issue.exception_id || "")}"><div><b>${esc(issue.category || "Exception")} · ${esc(issue.affected_id || "project")}</b><span>${esc(issue.reason || "Resolve this input before calculating.")}</span><small>${esc(issue.severity || "warning")} · ${esc(issue.status || "pending")}${esc(staleDecision)} · ${esc(source || issue.source_artifact || "source unavailable")}</small>${links ? `<small>Evidence: ${links}</small>` : ""}${issue.excerpt ? `<small>Excerpt: ${esc(issue.excerpt)}</small>` : ""}${conflicts}<small>Remediation: ${esc(issue.remediation || "Resolve the cited input before continuing.")}</small><label>Reviewer decision<select data-exception-decision="${esc(issue.exception_id || "")}"><option value="pending" ${decision === "pending" ? "selected" : ""}>Pending</option><option value="accepted" ${decision === "accepted" ? "selected" : ""}>Accepted</option><option value="rejected" ${decision === "rejected" ? "selected" : ""}>Rejected</option><option value="needs_evidence" ${decision === "needs_evidence" ? "selected" : ""}>Needs evidence</option></select></label>${issue.decision_history?.length ? `<small>Decision history: ${esc(String(issue.decision_history.length))} prior decision(s)</small>` : ""}</div></article>`;
     }).join("")
     : `<article class="review-empty"><span>No material exceptions are currently recorded.</span></article>`;
   const more = CALCULATOR_EXCEPTION_ROWS.length < CALCULATOR_EXCEPTION_TOTAL
     ? `<button class="btn ghost mini" type="button" data-load-more-exceptions aria-label="Load more calculator exceptions">Load more exceptions</button>` : "";
   requiredElement("calculatorInputIssues").innerHTML = `<div class="draft-group-title">Ranked calculation exceptions <small>Showing ${rows.length} of ${CALCULATOR_EXCEPTION_TOTAL}</small></div>${issueMarkup}${more}`;
+}
+
+async function saveExceptionDecision(exceptionId, decision){
+  if (!DATA?.id || !exceptionId) return;
+  try {
+    const response = await fetch("/api/calculator-inputs", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({project_id: DATA.id, action: "save_exception_decision", exception_id: exceptionId, decision, reviewer: PROJECT_CONTEXT?.reviewer || "local_user", source_fingerprint: CALCULATOR_INPUT_SET?.current_assembled_fingerprint || CALCULATOR_INPUT_SET?.input_fingerprint || ""})});
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.message || data.error || "Could not save exception decision.");
+    await loadCalculatorInputs();
+  } catch (error) { toast("Exception decision failed", error.message); }
 }
 
 async function loadMoreCalculatorExceptions(){
@@ -3011,9 +3042,16 @@ function drawHeatingLoadReport(report = {}, artifactStatus = "not_calculated", s
 
 function drawProjectHealth(health = {}, audit = {}){
   const issues = health.normalized_exceptions || health.issues || [];
+  const recoveryLink = issue => {
+    const code = issue.code || "";
+    if (code.includes("snapshot") || code.includes("calculator_input")) return `<a class="btn ghost mini" href="#calculatorInputSection">Open calculator inputs</a>`;
+    if (code.includes("report") || code.includes("package")) return `<a class="btn ghost mini" href="#productizationSection">Open report package controls</a>`;
+    if (code.includes("envelope")) return `<a class="btn ghost mini" href="#envelopeSection">Open envelope editor</a>`;
+    return "";
+  };
   requiredElement("projectHealthStatus").textContent = `${health.status || "unknown"} · ${issues.length} issue${issues.length === 1 ? "" : "s"}`;
   requiredElement("projectHealthResults").innerHTML = issues.length
-    ? issues.map(issue => `<article class="review-item readiness-${esc(issue.severity === "blocking" ? "blocked" : "draft")}"><div><b>${esc(issue.code || issue.category || "project issue")} · ${esc(issue.affected_id || "project")}</b><span>${esc(issue.message || issue.reason || "Review this project issue.")}</span><small>${esc(issue.artifact || issue.source_artifact || "")} · ${esc(issue.remediation || "Resolve the issue before continuing.")}</small></div></article>`).join("")
+    ? issues.map(issue => `<article class="review-item readiness-${esc(issue.severity === "blocking" ? "blocked" : "draft")}"><div><b>${esc(issue.code || issue.category || "project issue")} · ${esc(issue.affected_id || "project")}</b><span>${esc(issue.message || issue.reason || "Review this project issue.")}</span><small>${esc(issue.artifact || issue.source_artifact || "")} · ${esc(issue.remediation || "Resolve the issue before continuing.")}</small>${recoveryLink(issue)}</div></article>`).join("")
     : `<article class="review-item readiness-review_ready"><div><b>Project health is clear</b><span>Required artifacts are present and no stale report was detected.</span></div></article>`;
   const events = audit.events || [];
   requiredElement("projectAuditResults").innerHTML = events.length
@@ -3096,6 +3134,134 @@ async function loadHourlyHeatingLoadReport(){
   } catch (_) { /* Heating report is optional until winter inputs exist. */ }
 }
 
+function drawAhuAirside(report = {}, status = "not_calculated", gate = {}, systems = {}, model = {}){
+  const statusText = status === "stale" ? "AHU report is stale. Recalculate after reviewing changed air-side inputs." : `${report.status || status} · ${systems.count || 0} AHU system(s) · ${model.airflow_count || 0} airflow path(s)`;
+  requiredElement("ahuAirsideStatus").textContent = gate.message ? `${statusText} · ${gate.message}` : statusText;
+  const blocked = (report.blocked_ahus || []).map(item => `<li><b>${esc(item.ahu_id || "AHU")}</b> · ${esc((item.reasons || []).join("; "))}</li>`).join("");
+  const scenarios = (report.scenario_results || []).map(scenario => {
+    const peak = scenario.included_scope_peak || {};
+    const ahus = (scenario.ahus || []).map(ahu => `<li><b>${esc(ahu.name || ahu.ahu_id)}</b> · ${esc(ahu.status)} · coil ${Number(ahu.peak?.design_total_kw || 0).toFixed(2)} kW · ${esc(ahu.system_type)} · number-off ${ahu.number_off}</li>`).join("");
+    return `<article class="heat-load-result"><b>${esc(scenario.scenario_id)} · ${esc(scenario.status)}</b><span>Included AHU subtotal ${Number(peak.design_total_kw || 0).toFixed(2)} kW${report.project_peak?.design_total_kw ? ` · project ${Number(report.project_peak.design_total_kw).toFixed(2)} kW` : " · project peak suppressed"}</span>${ahus ? `<ul class="audit-list">${ahus}</ul>` : ""}</article>`;
+  }).join("");
+  requiredElement("ahuAirsideResults").innerHTML = blocked ? `${scenarios}<article class="heat-load-result"><b>Blocked AHUs</b><ul class="audit-list">${blocked}</ul></article>` : scenarios;
+}
+
+async function loadAhuAirside(){
+  if (!DATA?.id) return;
+  try {
+    const query = `?project_id=${encodeURIComponent(DATA.id)}`;
+    const [gateRes, systemsRes, modelRes, reportRes] = await Promise.all([
+      fetch(`/api/air-side-method-gate${query}`), fetch(`/api/ahu-systems${query}`), fetch(`/api/air-side-model${query}`), fetch(`/api/hourly-ahu-load-report${query}`),
+    ]);
+    const gate = await gateRes.json(); const systems = await systemsRes.json(); const model = await modelRes.json(); const report = await reportRes.json();
+    if (reportRes.ok) drawAhuAirside(report.hourly_ahu_load_report || {}, report.status || "not_calculated", gate.readiness || {}, systems.readiness || {}, model.readiness || {});
+  } catch (_) { /* AHU setup is optional until the explicit air-side model exists. */ }
+}
+
+async function calculateAhuLoad(){
+  if (!DATA?.id) return;
+  const status = requiredElement("ahuAirsideStatus");
+  const button = requiredElement("btnCalculateAhuLoad");
+  button.disabled = true; status.textContent = "Calculating the AHU and coil report…";
+  try {
+    const ids = requiredElement("hourlyScenarioIds").value.split(",").map(value => value.trim()).filter(Boolean);
+    const res = await fetch("/api/hourly-ahu-load-report", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({project_id: DATA.id, scenario_ids: ids, snapshot_fingerprint: CALCULATOR_INPUT_SET?.input_fingerprint || ""})});
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.message || data.error || "Could not calculate the AHU report.");
+    await loadAhuAirside();
+    toast("AHU report calculated", `Status: ${data.hourly_ahu_load_report?.status || data.status}.`);
+  } catch (error) { status.textContent = "Could not calculate the AHU report."; toast("AHU report failed", error.message); }
+  button.disabled = false;
+}
+
+function drawPlantReport(report = {}, status = "not_calculated", gate = {}, plantSummary = {}, circuitSummary = {}){
+  const statusText = status === "stale" ? "Plant report is stale. Recalculate after reviewing changed plant inputs." : `${report.status || status} · ${plantSummary.count || 0} plant record(s) · ${circuitSummary.count || 0} circuit(s)`;
+  requiredElement("plantStatus").textContent = gate.message ? `${statusText} · ${gate.message}` : statusText;
+  const blocked = (report.blocked_plants || []).map(item => `<li><b>${esc(item.plant_id || "plant")}</b> · ${esc((item.reasons || []).join("; "))}</li>`).join("");
+  const scenarios = (report.scenario_results || []).map(scenario => {
+    const peak = scenario.included_scope_peak || {};
+    const plants = (scenario.plants || []).map(plant => {
+      if (plant.status === "excluded") return `<li><b>${esc(plant.plant_id)}</b> · excluded · ${esc(plant.reason)}</li>`;
+      return `<li><b>${esc(plant.name || plant.plant_id)}</b> · ${esc(plant.status)} · ${Number(plant.peak?.plant_duty_kw || 0).toFixed(2)} kW · ${esc(plant.duty_basis || "")}</li>`;
+    }).join("");
+    return `<article class="heat-load-result"><b>${esc(scenario.scenario_id)} · ${esc(scenario.status)}</b><span>Included plant subtotal ${Number(peak.plant_duty_kw || 0).toFixed(2)} kW${report.project_peak?.plant_duty_kw ? ` · project ${Number(report.project_peak.plant_duty_kw).toFixed(2)} kW` : " · project peak suppressed"}</span>${plants ? `<ul class="audit-list">${plants}</ul>` : ""}</article>`;
+  }).join("");
+  requiredElement("plantResults").innerHTML = blocked ? `${scenarios}<article class="heat-load-result"><b>Blocked plant systems</b><ul class="audit-list">${blocked}</ul></article>` : scenarios;
+}
+
+async function loadPlant(){
+  if (!DATA?.id) return;
+  try {
+    const query = `?project_id=${encodeURIComponent(DATA.id)}`;
+    const [gateRes, plantRes, circuitRes, reportRes] = await Promise.all([
+      fetch(`/api/plant-method-gate${query}`), fetch(`/api/plant-systems${query}`), fetch(`/api/hydraulic-circuits${query}`), fetch(`/api/hourly-plant-load-report${query}`),
+    ]);
+    const gate = await gateRes.json(); const plants = await plantRes.json(); const circuits = await circuitRes.json(); const report = await reportRes.json();
+    if (reportRes.ok) drawPlantReport(report.hourly_plant_load_report || {}, report.status || "not_calculated", gate.readiness || {}, plants.readiness || {}, circuits.readiness || {});
+  } catch (_) { /* Plant setup is optional until an AHU report and mappings exist. */ }
+}
+
+async function calculatePlantLoad(){
+  if (!DATA?.id) return;
+  const status = requiredElement("plantStatus");
+  const button = requiredElement("btnCalculatePlantLoad");
+  button.disabled = true; status.textContent = "Calculating the plant report…";
+  try {
+    const ids = requiredElement("hourlyScenarioIds").value.split(",").map(value => value.trim()).filter(Boolean);
+    const res = await fetch("/api/hourly-plant-load-report", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({project_id: DATA.id, scenario_ids: ids, snapshot_fingerprint: CALCULATOR_INPUT_SET?.input_fingerprint || ""})});
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.message || data.error || "Could not calculate the plant report.");
+    await loadPlant();
+    toast("Plant report calculated", `Status: ${data.hourly_plant_load_report?.status || data.status}.`);
+  } catch (error) { status.textContent = "Could not calculate the plant report."; toast("Plant report failed", error.message); }
+  button.disabled = false;
+}
+
+function drawAnnualEnergy(report = {}, status = "not_calculated", exports = {}){
+  const statusText = status === "stale" ? "Annual report is stale. Reassemble inputs and recalculate." : `${report.status || status} · ${report.scope_summary?.included_room_ids?.length || 0} room(s) included`;
+  requiredElement("annualStatus").textContent = statusText;
+  const section = (name, label) => {
+    const item = report[name] || {};
+    const issues = item.blocked_reasons?.length ? ` · ${esc(item.blocked_reasons.join("; "))}` : "";
+    return `<li><b>${label}</b> · ${esc(item.status || "not selected")} · ${Number(item.annual_energy_kwh || 0).toFixed(1)} kWh · peak ${Number(item.peak_kw || 0).toFixed(2)} kW${issues}</li>`;
+  };
+  const issues = (report.readiness?.issues || []).map(item => `<li><b>${esc(item.scope || "project")}</b> · ${esc(item.reason || "")}</li>`).join("");
+  const months = Array.from({length: 12}, (_, index) => index + 1);
+  const cooling = report.cooling?.monthly_kwh || {};
+  const heating = report.heating?.monthly_kwh || {};
+  const monthlyRows = months.map(month => `<tr><th scope="row">${month}</th><td>${Number(cooling[String(month)] || 0).toFixed(1)}</td><td>${Number(heating[String(month)] || 0).toFixed(1)}</td></tr>`).join("");
+  const exportLinks = [exports.hourly_csv_url && `<a class="btn ghost mini" href="${esc(exports.hourly_csv_url)}" download>Hourly CSV</a>`, exports.monthly_csv_url && `<a class="btn ghost mini" href="${esc(exports.monthly_csv_url)}" download>Monthly CSV</a>`].filter(Boolean).join(" ");
+  requiredElement("annualResults").innerHTML = `<article class="heat-load-result"><b>Annual energy summary</b><ul class="audit-list">${section("cooling", "Cooling")}${section("heating", "Heating")}${section("ahu", "AHU")}${section("plant", "Plant")}</ul>${report.scope_summary?.complete_scope ? "<span>Complete active scope</span>" : "<span>Included-scope subtotal only; complete project totals are suppressed.</span>"}${exportLinks ? `<div class="bar">${exportLinks}</div>` : ""}</article><article class="heat-load-result"><b>Monthly energy (kWh)</b><table><thead><tr><th scope="col">Month</th><th scope="col">Cooling</th><th scope="col">Heating</th></tr></thead><tbody>${monthlyRows}</tbody></table></article>${issues ? `<article class="heat-load-result"><b>Annual readiness issues</b><ul class="audit-list">${issues}</ul></article>` : ""}`;
+}
+
+async function loadAnnualEnergy(){
+  if (!DATA?.id) return;
+  try {
+    const response = await fetch(`/api/annual-energy-report?project_id=${encodeURIComponent(DATA.id)}`);
+    const data = await response.json();
+    if (response.ok) drawAnnualEnergy(data.annual_energy_report || {}, data.status || "not_calculated", data);
+  } catch (_) { /* Annual analysis is optional until annual inputs exist. */ }
+}
+
+async function calculateAnnualEnergy(){
+  if (!DATA?.id) return;
+  const status = requiredElement("annualStatus");
+  const button = requiredElement("btnCalculateAnnual");
+  button.disabled = true;
+  status.textContent = "Calculating the 8,760-hour annual report…";
+  try {
+    const response = await fetch("/api/annual-energy-report", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({project_id: DATA.id, snapshot_fingerprint: CALCULATOR_INPUT_SET?.input_fingerprint || "", selected_sections: ["cooling", "heating", "ahu", "plant"]})});
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.message || data.error || "Could not calculate annual energy.");
+    drawAnnualEnergy(data.annual_energy_report || {}, data.status || "not_calculated", data);
+    toast("Annual report calculated", `Status: ${data.annual_energy_report?.status || data.status}.`);
+  } catch (error) {
+    status.textContent = "Could not calculate the annual report.";
+    toast("Annual report failed", error.message);
+  }
+  button.disabled = false;
+}
+
 async function calculateHeatingLoad(){
   if (!DATA?.id) return;
   if (CALCULATOR_INPUTS_AVAILABLE && (!CALCULATOR_INPUT_SET?.input_fingerprint || CALCULATOR_INPUT_SET.snapshot_stale)) {
@@ -3159,8 +3325,13 @@ function drawVentilationReport(report = {}, reportStatus = "not_calculated"){
 async function loadProjects(){
   try {
     const res = await fetch("/api/projects");
+    if (!res.ok) throw new Error("Project list unavailable");
     const list = await res.json();
-    if (!Array.isArray(list) || !list.length) return;
+    if (!Array.isArray(list)) throw new Error("Project list unavailable");
+    if (!list.length) {
+      requiredElement("projects").innerHTML = '<div class="empty-proj">Your drawing sets will appear here after upload.</div>';
+      return;
+    }
     requiredElement("projects").innerHTML = list.map(p => `
       <button class="proj ${DATA && p.id === DATA.id ? "on" : ""}" data-open="${esc(p.id)}">
         <b>${esc(p.name)}</b>
@@ -3168,7 +3339,10 @@ async function loadProjects(){
       </button>`).join("");
     requiredElement("projects").querySelectorAll("[data-open]").forEach(b =>
       b.addEventListener("click", () => openProject(b.dataset.open)));
-  } catch {}
+  } catch {
+    requiredElement("projects").innerHTML = '<div class="empty-proj" role="status">Could not load your projects. Check the connection, then try again.<button class="project-retry" type="button">Retry</button></div>';
+    requiredElement("projects").querySelector(".project-retry").addEventListener("click", loadProjects);
+  }
 }
 
 async function openProject(id){
@@ -3207,6 +3381,8 @@ function toast(title, body){
   document.querySelector(".toast")?.remove();
   const el = document.createElement("div");
   el.className = "toast";
+  el.setAttribute("role", "status");
+  el.setAttribute("aria-live", "polite");
   const heading = document.createElement("h4");
   heading.textContent = String(title ?? "");
   const message = document.createElement("p");
