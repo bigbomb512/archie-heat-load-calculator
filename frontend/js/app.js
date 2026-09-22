@@ -52,6 +52,11 @@ const drop = requiredElement("drop");
 drop.addEventListener("drop", ev => { const f = ev.dataTransfer.files[0]; if (f) upload(f); });
 requiredElement("pdf").addEventListener("change", ev => { if (ev.target.files[0]) upload(ev.target.files[0]); });
 requiredElement("navNew").addEventListener("click", reset);
+requiredElement("navCurrent").addEventListener("click", () => {
+  requiredElement("main").focus({preventScroll: true});
+  document.querySelector(".work").scrollTop = 0;
+  requiredElement("main").scrollIntoView({block: "start"});
+});
 requiredElement("btnRestart").addEventListener("click", reset);
 
 function reset(){ location.reload(); }
@@ -3186,8 +3191,13 @@ function drawVentilationReport(report = {}, reportStatus = "not_calculated"){
 async function loadProjects(){
   try {
     const res = await fetch("/api/projects");
+    if (!res.ok) throw new Error("Project list unavailable");
     const list = await res.json();
-    if (!Array.isArray(list) || !list.length) return;
+    if (!Array.isArray(list)) throw new Error("Project list unavailable");
+    if (!list.length) {
+      requiredElement("projects").innerHTML = '<div class="empty-proj">Your drawing sets will appear here after upload.</div>';
+      return;
+    }
     requiredElement("projects").innerHTML = list.map(p => `
       <button class="proj ${DATA && p.id === DATA.id ? "on" : ""}" data-open="${esc(p.id)}">
         <b>${esc(p.name)}</b>
@@ -3195,7 +3205,10 @@ async function loadProjects(){
       </button>`).join("");
     requiredElement("projects").querySelectorAll("[data-open]").forEach(b =>
       b.addEventListener("click", () => openProject(b.dataset.open)));
-  } catch {}
+  } catch {
+    requiredElement("projects").innerHTML = '<div class="empty-proj" role="status">Could not load your projects. Check the connection, then try again.<button class="project-retry" type="button">Retry</button></div>';
+    requiredElement("projects").querySelector(".project-retry").addEventListener("click", loadProjects);
+  }
 }
 
 async function openProject(id){
@@ -3234,6 +3247,8 @@ function toast(title, body){
   document.querySelector(".toast")?.remove();
   const el = document.createElement("div");
   el.className = "toast";
+  el.setAttribute("role", "status");
+  el.setAttribute("aria-live", "polite");
   el.innerHTML = `<h4>${esc(title)}</h4><p>${body}</p>`;
   el.addEventListener("click", () => el.remove());
   document.body.appendChild(el);

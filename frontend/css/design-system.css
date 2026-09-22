@@ -1,0 +1,92 @@
+/* Shared foundations and controls. Keep page composition in its own stylesheet. */
+:root {
+  --ui-ink: #163b50;
+  --ui-primary: #246b91;
+  --ui-muted: #526873;
+  --ui-canvas: #f7f8f6;
+  --ui-white: #fff;
+  --ui-border: #d5dfe5;
+  --ui-wash: #e8f1f7;
+  --ui-danger: #a33432;
+  --ui-warning: #805a17;
+  --ui-success: #27654d;
+  --ui-radius-control: 6px;
+  --ui-radius-panel: 10px;
+  --ui-space-1: 4px;
+  --ui-space-2: 8px;
+  --ui-space-3: 12px;
+  --ui-space-4: 16px;
+  --ui-space-5: 24px;
+  --ui-space-6: 32px;
+  --ui-space-7: 48px;
+  --ui-space-8: 64px;
+  --ui-text-small: 12px;
+  --ui-text-body: 14px;
+  --ui-text-lead: 16px;
+  --ui-heading-small: 20px;
+  --ui-heading-medium: 24px;
+  --ui-heading-large: 32px;
+  --ui-shadow: 0 8px 24px #163b5014;
+}
+/* Equal control dimensions across the public site and engineering workspace. */
+body:is(.hvac-site,.hvac-app) .btn,
+body.hvac-app .drop .lbl {
+  min-height: 44px;
+  padding: var(--ui-space-3) var(--ui-space-4);
+  border-radius: var(--ui-radius-control);
+  font-size: var(--ui-text-body);
+  font-weight: 700;
+  line-height: 1.3;
+  box-shadow: none;
+  transition: background-color .15s, border-color .15s;
+}
+body.hvac-app .btn.mini { min-height: 36px; font-size: var(--ui-text-small); padding: var(--ui-space-2) var(--ui-space-3); }
+body.hvac-app .btn.ghost { background: var(--ui-white); border: 1px solid var(--ui-border); color: var(--ui-ink); }
+body.hvac-app .btn.ghost:hover:not(:disabled) { background: var(--ui-wash); border-color: var(--ui-primary); }
+body.hvac-app .btn:disabled { cursor: not-allowed; }
+body.hvac-app :is(.requirements-form,.zone-fields,.zone-load-fields,.zone-ventilation-fields) :is(input,select,textarea) {
+  border: 1px solid var(--ui-border); border-radius: var(--ui-radius-control);
+  background: var(--ui-white); color: var(--ui-ink); box-shadow: none;
+  font-size: var(--ui-text-body); padding: var(--ui-space-2) var(--ui-space-3);
+}
+body.hvac-app :is(input,select):not([type=checkbox]):not([type=file]) { min-height: 40px; }
+body.hvac-app input[type=checkbox] { accent-color: var(--ui-primary); }
+body.hvac-app :is(input[type=number],.num,.heat-load-result,.hourly-load-table) { font-variant-numeric: tabular-nums; }
+body.hvac-app :is(.requirements-form,.zone-fields) { gap: var(--ui-space-4); }
+body.hvac-app :is(.panel-head,.requirements-form,.review-item) { padding: var(--ui-space-5); }
+body.hvac-app :is(.panel-head,.bar) { gap: var(--ui-space-3); }
+body.hvac-app .panel-head h3 { font-size: var(--ui-text-lead); line-height: 1.5; }
+body.hvac-app :is(.fine,.conf,.scope-note,.file-hint,.workflow-preview li,.drop p) { font-size: var(--ui-text-small); line-height: 1.6; }
+body.hvac-app :is(.summary-card,.review-panel,.next-panel,.filecard,.run,.drop) { box-shadow: none; border-radius: var(--ui-radius-panel); }
+body.hvac-app .summary-card .label { font-size: var(--ui-text-small); color: var(--ui-muted); }
+body.hvac-app .summary-card b { font-variant-numeric: tabular-nums; }
+body.hvac-app .readiness-blocked { border-left: 3px solid var(--ui-danger); }
+body.hvac-app .readiness-draft { border-left: 3px solid var(--ui-warning); }
+body.hvac-app .readiness-review_ready { border-left: 3px solid var(--ui-success); }
+body.hvac-app .toast { box-shadow: var(--ui-shadow); border: 1px solid var(--ui-border); }
+.project-retry { display:block; margin-top:var(--ui-space-3); padding:var(--ui-space-2) var(--ui-space-3); min-height:40px; border:1px solid #b0c8d5; border-radius:var(--ui-radius-control); background:transparent; color:#fff; cursor:pointer; }
+.project-retry:hover { background:#294e63; }
+body.hvac-app .nav .ic { width:16px; height:16px; stroke-width:1.5; }
+body.hvac-app .empty-proj { font-size:var(--ui-text-small); line-height:1.6; }
+/* Let sequential information read as a sequence, without four separate cards. */
+body.hvac-site #method .steps { gap:var(--ui-space-5); background:transparent; }
+body.hvac-site #method .steps li { background:transparent; border:0!important; border-top:1px solid var(--ui-border)!important; border-radius:0; padding:var(--ui-space-5) 0 0; }
+body.hvac-site #method .steps h3 { font-size:var(--ui-heading-small); }
+body.hvac-site #method .steps p { font-size:var(--ui-text-body); line-height:1.7; }
+body.hvac-site :is(.hero-ledger p,.ticks li,.desk-detail p,.workflow-note) { font-size:var(--ui-text-body); }
+body.hvac-site :is(.kicker,.ledger-label,.city-hero__note,.endnote,.footnote) { font-size:var(--ui-text-small); }
+body.hvac-site .band { padding-block:var(--ui-space-8); }
+body.hvac-site .hero-ledger>div { padding:var(--ui-space-5); }
+body.hvac-site :is(.workflow-diagram,.workflow-context,.drawing-desk) { border-radius:var(--ui-radius-control); box-shadow:none; }
+body.hvac-site #method .offsetpair__b { box-shadow:var(--ui-shadow); }
+body.hvac-site :is(section[id],main[id]) { scroll-margin-top:88px; }
+body:is(.hvac-site,.hvac-app) :focus-visible { outline:3px solid var(--ui-primary); outline-offset:4px; }
+body.hvac-app .side :focus-visible,body.hvac-site .city-hero :focus-visible { outline-color:var(--ui-white); }
+@media(max-width:720px) {
+  body.hvac-site .band { padding-block:var(--ui-space-7); }
+  body.hvac-app :is(.panel-head,.requirements-form,.review-item) { padding:var(--ui-space-4); }
+  body.hvac-app .workflow-preview { gap:var(--ui-space-3); }
+  body.hvac-app .top .right { gap:var(--ui-space-2); }
+  body.hvac-app .file-hint { max-width:120px; }
+}
+@media(prefers-reduced-motion:reduce) { body:is(.hvac-site,.hvac-app) .btn { transition:none; } }
