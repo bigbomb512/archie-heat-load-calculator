@@ -39,6 +39,11 @@ async function mockApi(page) {
     id: "demo-project", name: analysis.name, pages: 2, size_bytes: 1024,
   } }));
   await page.route("**/api/analyse", route => route.fulfill({ json: analysis }));
+  await page.route("**/api/decisions", route => route.fulfill({ json: {
+    id: "demo-project",
+    ai_input_url: "/api/artifact?project_id=demo-project&artifact=ai_input.json",
+    chatgpt_packet: {},
+  } }));
   await page.route("**/api/analysis?id=demo-project", route => route.fulfill({ json: analysis }));
   await page.route("**/api/hourly-load-model?project_id=demo-project", route => route.fulfill({ json: { hourly_load_model: {floors: [], zones: [], rooms: []}, readiness: {status: "review_required", issues: []} } }));
   await page.route("**/api/hourly-load-report?project_id=demo-project", route => route.fulfill({ json: { hourly_load_report: {}, status: "not_calculated" } }));
@@ -110,6 +115,27 @@ const ventilationRequirements = {
     },
   }],
 };
+
+test("confirmation unlocks only after analysis has selected pages", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/");
+
+  await page.locator("#pdf").setInputFiles({
+    name: "test-drawing-set.pdf",
+    mimeType: "application/pdf",
+    buffer: Buffer.from("%PDF-1.4 test fixture"),
+  });
+  await expect(page.locator("#fState")).toHaveText("Ready");
+  await expect(page.locator("#btnConfirm")).toBeDisabled();
+
+  await page.locator("#btnAnalyse").click();
+  await expect(page.locator("#topTitle")).toHaveText("Analysis complete");
+  await expect(page.locator("#btnConfirm")).toBeEnabled();
+
+  await page.locator("#btnConfirm").click();
+  await expect(page.locator("#visionPanel")).toBeVisible();
+  await expect(page.locator("#btnConfirm")).toBeEnabled();
+});
 
 test("design-input verification controls save with the reasoning packet", async ({ page }) => {
   const errors = [];

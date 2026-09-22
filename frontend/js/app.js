@@ -8,6 +8,7 @@ function optionalElement(id){
   return document.getElementById(id);
 }
 let DATA = null, FILTER = "rel", PICK = new Set(), CUR = null, DEBUG = false, PACKET = null, ROOM_SUGGESTIONS = [];
+let ANALYSIS_IN_PROGRESS = false, CONFIRMATION_IN_PROGRESS = false;
 let CALCULATOR_DRAFT = null, DRAFT_PREVIEW_TOKEN = "", DRAFT_DIRTY = false;
 let ENVELOPE_LIBRARY = {constructions: [], windows: [], shading_records: []}, ENVELOPE_MODEL = {surfaces: []};
 let GLAZING_GATE = {}, SHADING_GATE = {}, GROUND_CONTACT_GATE = {};
@@ -104,6 +105,9 @@ requiredElement("btnAnalyse").addEventListener("click", analyse);
 
 async function analyse(){
   if (!DATA) return;
+  if (ANALYSIS_IN_PROGRESS) return;
+  ANALYSIS_IN_PROGRESS = true;
+  requiredElement("btnConfirm").disabled = true;
   show("vRun");
   requiredElement("btnAnalyse").disabled = true;
   requiredElement("runSub").textContent = `Reviewing ${DATA.pages} pages`;
@@ -127,7 +131,10 @@ async function analyse(){
     }
   } catch (err) {
     stop(); show("vFile"); requiredElement("btnAnalyse").disabled = false;
+    requiredElement("btnConfirm").disabled = true;
     toast("Analysis failed", err.message);
+  } finally {
+    ANALYSIS_IN_PROGRESS = false;
   }
 }
 
@@ -169,6 +176,8 @@ function showResults(data){
   requiredElement("fRel").classList.add("on"); requiredElement("fAll").classList.remove("on");
   requiredElement("btnConfirm").disabled = false;
   requiredElement("btnConfirmTop").classList.remove("hide");
+  requiredElement("btnConfirmTop").disabled = false;
+  requiredElement("btnContinue").disabled = false;
   drawSummary(); drawReviewList(); drawGrid(); drawAside(); loadProjects();
   if (PACKET?.zip || PACKET?.prompt) showVisionPanel();
   if (data.has_reasoning_packet) showDesignRequirements(data.design_requirements);
@@ -540,8 +549,16 @@ document.querySelectorAll("[data-contractor-stage]").forEach(button => button.ad
 }));
 
 async function confirmSelection(){
-  if (!DATA || !PICK.size) return toast("Nothing selected", "Include at least one page before confirming.");
+  if (!DATA || !Array.isArray(DATA.sheets)) return toast("Analyse PDF first", "Archie needs to identify the drawing pages before there is a selection to confirm.");
+  if (ANALYSIS_IN_PROGRESS) return toast("Analysis in progress", "Archie is finding the drawing pages before it can confirm them.");
+  if (CONFIRMATION_IN_PROGRESS) return;
+  if (!PICK.size) return toast("Nothing selected", "Include at least one page before confirming.");
+  CONFIRMATION_IN_PROGRESS = true;
   requiredElement("btnConfirm").disabled = true;
+  requiredElement("btnConfirmTop").disabled = true;
+  requiredElement("btnContinue").disabled = true;
+  requiredElement("statusText").textContent = "Preparing AI packet";
+  requiredElement("statusSub").textContent = "Creating selected-page geometry and evidence files. This can take a moment.";
   const pages = DATA.sheets.filter(s => PICK.has(s.page)).map(s => ({
     page: s.page, detected_type: s.type,
     decision: s.plan_role === "main_floor_plan" ? "Confirm as floor plan"
@@ -567,8 +584,14 @@ async function confirmSelection(){
       `${pages.length} page${pages.length===1?"":"s"} packaged for one ChatGPT vision review. ` +
       links.join(" · "));
     showVisionPanel();
-  } catch (err) { toast("Could not confirm", err.message); }
-  requiredElement("btnConfirm").disabled = false;
+  } catch (err) {
+    toast("Could not confirm", err.message);
+  } finally {
+    CONFIRMATION_IN_PROGRESS = false;
+    requiredElement("btnConfirm").disabled = false;
+    requiredElement("btnConfirmTop").disabled = false;
+    requiredElement("btnContinue").disabled = false;
+  }
 }
 
 function showVisionPanel(){

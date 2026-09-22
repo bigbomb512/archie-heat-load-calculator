@@ -28,6 +28,7 @@ def project(pdf_path, root, **overrides):
         "packet": str(root / "packet.json"),
         "review_dir": str(root),
         "ai_input": str(root / "ai_input.json"),
+        "spatial_ocr": str(root / "spatial_ocr.json"),
     }
     data.update(overrides)
     return data
@@ -42,11 +43,13 @@ def main():
             pdf_path.write_bytes(b"pdf")
             (root / "packet.json").write_text("{}", encoding="utf-8")
             (root / "ai_input.json").write_text("{}", encoding="utf-8")
+            (root / "spatial_ocr.json").write_text("{}", encoding="utf-8")
 
             current = project(pdf_path, root)
             check("current project stays current", web_app.needs_analysis_rebuild(current), False)
             check("unanalysed project rebuilds", web_app.needs_analysis_rebuild(project(pdf_path, root, analysed=False)), True)
             check("legacy project without ai input rebuilds", web_app.needs_analysis_rebuild(project(pdf_path, root, ai_input="")), True)
+            check("incomplete analysis without spatial OCR rebuilds", web_app.needs_analysis_rebuild(project(pdf_path, root, spatial_ocr="")), True)
 
             rebuilt = []
             legacy = project(pdf_path, root, ai_input="")

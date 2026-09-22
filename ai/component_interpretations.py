@@ -52,9 +52,32 @@ def _text(value, field, *, required=False, limit=240):
     return value
 
 
-def _normalise_refs(rows, *, require=False):
+def _source_label(value, field, *, limit=240):
+    """Bound untrusted PDF labels for display without weakening AI-input validation.
+
+    A drawing's OCR or structured text can contain a whole note paragraph in
+    a field that nominally represents a component label.  That is evidence to
+    retain elsewhere, not a reason to abort the full drawing analysis.  The
+    interpretation register only needs a concise display label; its immutable
+    ID and citations remain sourced from the original component.
+    """
+    value = str(value or "").strip()
+    if len(value) <= limit:
+        return value
+    return value[:limit - 1].rstrip() + "…"
+
+
+def _normalise_refs(rows, *, require=False, source_derived=False):
+    """Normalise citations without allowing raw PDF text to abort analysis.
+
+    Source-derived citations originate in OCR and drawing extraction. They are
+    retained in their authoritative evidence artifacts, while this display
+    register keeps a bounded summary. AI and reviewer payloads stay strict:
+    overlong submitted values are rejected rather than silently changed.
+    """
     if not isinstance(rows, list):
         raise ValueError("Evidence references must be a list.")
+    text = _source_label if source_derived else _text
     result = []
     for row in rows:
         if not isinstance(row, dict):
@@ -62,13 +85,13 @@ def _normalise_refs(rows, *, require=False):
         page = row.get("page")
         if page is not None and (isinstance(page, bool) or not isinstance(page, int) or page <= 0):
             raise ValueError("Evidence-reference page numbers must be positive integers.")
-        reference = _text(row.get("reference") or row.get("artifact") or row.get("drawing_number"), "Evidence reference")
-        excerpt = _text(row.get("excerpt"), "Evidence excerpt", limit=1000)
+        reference = text(row.get("reference") or row.get("artifact") or row.get("drawing_number"), "Evidence reference")
+        excerpt = text(row.get("excerpt"), "Evidence excerpt", limit=1000)
         if not page and not reference:
             raise ValueError("Each evidence reference needs a page or a source reference.")
         result.append({
-            "page": page, "drawing_number": _text(row.get("drawing_number"), "Drawing number"),
-            "reference": reference, "excerpt": excerpt, "crop": _text(row.get("crop"), "Evidence crop", limit=500),
+            "page": page, "drawing_number": text(row.get("drawing_number"), "Drawing number"),
+            "reference": reference, "excerpt": excerpt, "crop": text(row.get("crop"), "Evidence crop", limit=500),
         })
     if require and not result:
         raise ValueError("AI interpretations require at least one cited evidence reference.")
@@ -97,7 +120,7 @@ def _refs_from_entity(entity):
     refs = list(entity.get("citations") or [])
     if entity.get("source"):
         refs.append(entity["source"])
-    return _normalise_refs(refs)
+    return _normalise_refs(refs, source_derived=True)
 
 
 def _seed_from_entity(entity, source_fingerprint):
@@ -114,7 +137,7 @@ def _seed_from_entity(entity, source_fingerprint):
         "canonical_type": canonical_type,
         "source_component_ids": [str(entity.get("entity_id", ""))],
         "legacy_aliases": [str(item) for item in [entity.get("entity_id"), *(entity.get("evidence_ids") or [])] if item],
-        "original_label": _text(entity.get("label") or value.get("name") or value.get("tag") or value.get("reference"), "Original label", limit=240),
+        "original_label": _source_label(entity.get("label") or value.get("name") or value.get("tag") or value.get("reference"), "Original label"),
         "evidence_refs": _refs_from_entity(entity),
     }
 
@@ -129,8 +152,8 @@ def _seed_from_candidate(candidate, source_fingerprint):
         "canonical_type": canonical_type,
         "source_component_ids": [str(candidate.get("candidate_id", ""))],
         "legacy_aliases": [str(item) for item in [candidate.get("candidate_id"), candidate.get("target")] if item],
-        "original_label": _text(candidate.get("label") or candidate.get("target") or candidate.get("field"), "Original label", limit=240),
-        "evidence_refs": _normalise_refs([source] if source else []),
+        "original_label": _source_label(candidate.get("label") or candidate.get("target") or candidate.get("field"), "Original label"),
+        "evidence_refs": _normalise_refs([source] if source else [], source_derived=True),
     }
 
 
@@ -160,8 +183,8 @@ def component_seeds(fusion=None, calculation_evidence=None, calculator_draft=Non
                 "canonical_type": canonical_type,
                 "source_component_ids": [str(candidate["candidate_id"])],
                 "legacy_aliases": [str(candidate["candidate_id"])],
-                "original_label": _text(value.get("name") or value.get("title") or candidate.get("kind") or group, "Original label", limit=240),
-                "evidence_refs": _normalise_refs(candidate.get("citations") or []),
+                "original_label": _source_label(value.get("name") or value.get("title") or candidate.get("kind") or group, "Original label"),
+                "evidence_refs": _normalise_refs(candidate.get("citations") or [], source_derived=True),
             })
     unique = {}
     for seed in seeds:

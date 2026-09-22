@@ -90,6 +90,7 @@ from ai.geometry_review import normalise_vision
 from ai.reasoning_packet import create_reasoning_packet_from_vision
 from pdf_pipeline.extractors import count_pdf_pages
 from pdf_pipeline.review import create_review_packet, safe_folder_name
+from pdf_pipeline.spatial_ocr import create_spatial_ocr
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -935,11 +936,19 @@ def _rebuild_evidence_chain(project):
     ai_input = load_json(review_dir / "ai_input.json")
     if not ai_input:
         raise ValueError("The reviewed packet does not contain ai_input.json.")
-    spatial_ocr = load_json(review_dir / "spatial_ocr.json")
-    vector_geometry = load_json(review_dir / "vector_geometry.json")
-    vision_response = load_json(review_dir / "vision_response.json")
-    dimension_matches = load_json(review_dir / "dimension_wall_matches.json")
-    geometry_confirmation = load_json(review_dir / "geometry_confirmation.json")
+    # Initial analysis and page confirmation deliberately precede the optional
+    # vision-response and geometry-review stages.  Those downstream artifacts
+    # must therefore be represented as absent evidence, not treated as files
+    # that must already exist before a user can confirm their page selection.
+    def optional_artifact(name):
+        path = review_dir / name
+        return load_json(path) if path.exists() else {}
+
+    spatial_ocr = optional_artifact("spatial_ocr.json")
+    vector_geometry = optional_artifact("vector_geometry.json")
+    vision_response = optional_artifact("vision_response.json")
+    dimension_matches = optional_artifact("dimension_wall_matches.json")
+    geometry_confirmation = optional_artifact("geometry_confirmation.json")
 
     coverage = build_drawing_coverage(ai_input, spatial_ocr, vector_geometry)
     coverage_path = review_dir / "drawing_coverage.json"
@@ -1013,7 +1022,12 @@ def analyse_project(project):
 
     packet = load_json(result["packet"])
     ai_output = Path(result["review_dir"]) / "ai_input.json"
-    ai_input = build_ai_packet(packet)
+    # The derived evidence chain consumes spatial OCR immediately.  Create it
+    # before rebuilding the chain, rather than waiting for a later page-review
+    # action to produce it.
+    spatial_path = create_spatial_ocr(result["packet"], review_dir / "spatial_ocr.json")
+    spatial_ocr = dict(load_json(spatial_path), source=str(spatial_path))
+    ai_input = build_ai_packet(packet, spatial_ocr=spatial_ocr)
     ai_output.write_text(json.dumps(ai_input, indent=2), encoding="utf-8")
 
     project.update(
@@ -1023,6 +1037,7 @@ def analyse_project(project):
             "packet": result["packet"],
             "html": result["html"],
             "ai_input": str(ai_output),
+            "spatial_ocr": str(spatial_path),
             "pages": result["kept_count"],
             "relevant": result["primary_count"],
             "analysis_version": ANALYSIS_VERSION,
@@ -3105,7 +3120,9 @@ def process_upload(request):
 
     packet = load_json(result["packet"])
     ai_output = Path(result["review_dir"]) / "ai_input.json"
-    ai_input = build_ai_packet(packet)
+    spatial_path = create_spatial_ocr(result["packet"], Path(result["review_dir"]) / "spatial_ocr.json")
+    spatial_ocr = dict(load_json(spatial_path), source=str(spatial_path))
+    ai_input = build_ai_packet(packet, spatial_ocr=spatial_ocr)
     ai_output.write_text(json.dumps(ai_input, indent=2), encoding="utf-8")
     coverage_output = Path(result["review_dir"]) / "drawing_coverage.json"
     coverage_output.write_text(json.dumps(build_drawing_coverage(ai_input), indent=2), encoding="utf-8")
@@ -3113,6 +3130,7 @@ def process_upload(request):
     building_output.write_text(json.dumps(build_building_evidence(ai_input, load_json(coverage_output)), indent=2), encoding="utf-8")
 
     result["ai_input"] = str(ai_output)
+    result["spatial_ocr"] = str(spatial_path)
     result["drawing_coverage"] = str(coverage_output)
     result["building_evidence"] = str(building_output)
     result["uploaded_pdf"] = str(pdf_path)
@@ -3162,7 +3180,7 @@ def analysis_response(project):
 
 
 def needs_analysis_rebuild(project):
-    required_paths = ("packet", "review_dir", "ai_input")
+    required_paths = ("packet", "review_dir", "ai_input", "spatial_ocr")
     return (
         not project.get("analysed")
         or project.get("analysis_version") != ANALYSIS_VERSION

@@ -74,6 +74,35 @@ class ComponentInterpretationTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 interpretations.validate_confidence(value)
 
+    def test_long_pdf_label_is_bounded_without_blocking_evidence_refresh(self):
+        long_label = "Long source label " * 30
+        fusion, evidence, draft = inputs(label=long_label)
+        artifact = interpretations.build_artifact(
+            fusion=fusion, calculation_evidence=evidence, calculator_draft=draft,
+        )
+        room = next(row for row in artifact["interpretations"] if row["canonical_type"] == "room")
+        self.assertLessEqual(len(room["original_label"]), 240)
+        self.assertTrue(room["original_label"].endswith("…"))
+        self.assertEqual(room["source_component_ids"], ["evidence_room_01"])
+
+        with self.assertRaisesRegex(ValueError, "too long"):
+            interpretations._text(long_label, "AI display name")
+
+    def test_long_pdf_excerpt_is_bounded_but_ai_evidence_remains_strict(self):
+        fusion, evidence, draft = inputs()
+        long_excerpt = "E" * 1_001
+        fusion["entities"][0]["source"]["excerpt"] = long_excerpt
+
+        artifact = interpretations.build_artifact(
+            fusion=fusion, calculation_evidence=evidence, calculator_draft=draft,
+        )
+        room = next(row for row in artifact["interpretations"] if row["canonical_type"] == "room")
+        self.assertEqual(len(room["evidence_refs"][0]["excerpt"]), 1_000)
+        self.assertTrue(room["evidence_refs"][0]["excerpt"].endswith("…"))
+
+        with self.assertRaisesRegex(ValueError, "Evidence excerpt is too long"):
+            interpretations._normalise_refs([{"page": 1, "reference": "A-101", "excerpt": long_excerpt}])
+
     def test_locked_fields_keep_values_and_record_competing_ai_update(self):
         locked, _ = interpretations.save_reviewer_change(
             self.artifact, {"component_id": self.room_id, "display_name": "Reviewer room", "confidence_score": 0.2,
