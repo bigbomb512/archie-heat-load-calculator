@@ -3,5 +3,5 @@ Pillow==12.3.0
 pvlib==0.15.2
 # Required only by the production Cognito verifier. Imported lazily so local
 # development and deterministic test fixtures remain dependency-light.
-PyJWT[crypto]==2.10.1
+PyJWT[crypto]==2.14.0
 cryptography==50.0.0
