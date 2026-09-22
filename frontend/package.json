@@ -13,7 +13,7 @@
     "test": "cd .. && for test in tests/test_*.py; do [ \"$test\" = \"tests/test_frontend_contract.py\" ] || PYTHONPATH=. python3 \"$test\" || exit 1; done && PYTHONPATH=. python3 tests/test_frontend_contract.py && cd frontend && playwright test"
   },
   "devDependencies": {
-    "@playwright/test": "^1.62.1"
+    "@playwright/test": "^1.63.0"
   },
   "engines": {
     "python": ">=3.9"
