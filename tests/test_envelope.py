@@ -118,7 +118,7 @@ def main():
             saved_library = web_app.api_save_envelope_library(Request(json.dumps({"project_id": "p1", "envelope_library": library()}), "/api/envelope-library"))
             saved_model = web_app.api_save_envelope_model(Request(json.dumps({"project_id": "p1", "envelope_model": model()}), "/api/envelope-model"))
             read_model = web_app.api_envelope_model(Request("", "/api/envelope-model?project_id=p1"))
-            check("envelope API persists versioned project artifacts", saved_library["url"].endswith("envelope_library.json") and saved_model["url"].endswith("envelope_model.json") and read_model["envelope_model"]["active_for_calculation"])
+            check("envelope API withholds paths outside a registered project root", saved_library["url"] == "" and saved_model["url"] == "" and read_model["envelope_model"]["active_for_calculation"])
             gate = empty_shading_method_gate()
             gate.update({"approval_status": "approved", "engineer_name": "A. Engineer", "engineer_credential": "CPEng", "approved_at": "2026-09-16", "method_citation": "SM-01", "citations": [{"reference": "SM-01", "page": None, "excerpt": "Approved method"}]})
             saved_gate = web_app.api_save_shading_method_gate(Request(json.dumps({"project_id": "p1", "shading_method_gate": gate}), "/api/shading-method-gate"))

@@ -110,7 +110,7 @@ def main():
             body = json.dumps({"project_id": "project-1", "site_design_conditions": complete_packet()})
             saved = web_app.api_save_site_design_conditions(Request(body))
             packet_path = root / "site_design_conditions.json"
-            check("API persists dedicated artifact", packet_path.exists() and saved["url"].endswith("site_design_conditions.json"))
+            check("API withholds path outside a registered project root", packet_path.exists() and saved["url"] == "")
             check("API returns confirmed readiness", saved["readiness"]["status"] == "confirmed")
             check("save does not change design requirements", requirements_path.read_text(encoding="utf-8") == '{"sentinel": "unchanged"}')
             check("project stores dedicated artifact", updates[-1]["site_design_conditions"] == str(packet_path))
@@ -125,7 +125,7 @@ def main():
                 "packet": str(packet_path), "review_dir": str(root),
                 "site_design_conditions": str(root / "site_design_conditions.json"),
             })
-            check("analysis exposes site-condition discovery", analysis["site_design_conditions_url"].endswith("site_design_conditions.json") and analysis["site_design_conditions_status"] == "confirmed")
+            check("analysis retains site-condition discovery without leaking a local path", analysis["site_design_conditions_url"] == "" and analysis["site_design_conditions_status"] == "confirmed")
     finally:
         web_app.project_by_id, web_app.update_project = originals
 

@@ -24,6 +24,10 @@ ARCHIVE_VERSION = "stage12-archive-v1"
 AUDIT_VERSION = "stage12-audit-v1"
 _SAFE_MEMBER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 _SUMMARY_CACHE = {}
+MAX_ARCHIVE_BYTES = 100 * 1024 * 1024
+MAX_ARCHIVE_MEMBERS = 10_000
+MAX_ARCHIVE_UNCOMPRESSED_BYTES = 500 * 1024 * 1024
+MAX_COMPRESSION_RATIO = 100
 
 
 def fingerprint(value):
@@ -380,8 +384,23 @@ def export_project(project):
 def import_project(archive_bytes, destination_root, new_project_id):
     destination_root = Path(destination_root)
     destination_root.mkdir(parents=True, exist_ok=True)
+    if not isinstance(archive_bytes, (bytes, bytearray)) or len(archive_bytes) > MAX_ARCHIVE_BYTES:
+        raise ValueError("Project archive exceeds the permitted compressed size.")
+    if not isinstance(new_project_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", new_project_id):
+        raise ValueError("Destination project identifier is invalid.")
     with ZipFile(io.BytesIO(archive_bytes)) as archive:
         names = archive.namelist()
+        infos = archive.infolist()
+        if len(infos) > MAX_ARCHIVE_MEMBERS:
+            raise ValueError("Project archive contains too many files.")
+        expanded = sum(info.file_size for info in infos)
+        if expanded > MAX_ARCHIVE_UNCOMPRESSED_BYTES:
+            raise ValueError("Project archive exceeds the permitted expanded size.")
+        for info in infos:
+            is_symlink = (info.external_attr >> 16) & 0o170000 == 0o120000
+            ratio = info.file_size / max(1, info.compress_size)
+            if is_symlink or ratio > MAX_COMPRESSION_RATIO:
+                raise ValueError("Project archive contains an unsafe compressed member.")
         if any(not name or name.startswith("/") or ".." in PurePosixPath(name).parts or not _SAFE_MEMBER.fullmatch(name) for name in names):
             raise ValueError("Project archive contains an unsafe path.")
         if "project_manifest.json" not in names:
@@ -408,7 +427,11 @@ def import_project(archive_bytes, destination_root, new_project_id):
                 raise ValueError(f"Project archive is missing declared artifact {name}.")
             if hashlib.sha256(archive.read(name)).hexdigest() != row.get("sha256"):
                 raise ValueError(f"Project archive hash mismatch for {name}.")
-        root = destination_root / new_project_id
+        root = (destination_root / new_project_id).resolve()
+        try:
+            root.relative_to(destination_root.resolve())
+        except ValueError as error:
+            raise ValueError("Destination project is outside the permitted storage root.") from error
         if root.exists():
             raise ValueError("The destination project already exists.")
         root.mkdir(parents=True)

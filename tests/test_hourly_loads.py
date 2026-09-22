@@ -255,7 +255,7 @@ def main():
             web_app.api_save_hourly_load_model(Request(json.dumps({"project_id": "p1", "action": "save", "hourly_load_model": saved_model}), "/api/hourly-load-model"))
             saved_gate = web_app.api_save_infiltration_method_gate(Request(json.dumps({"project_id": "p1", "infiltration_method_gate": approved_infiltration_gate()}), "/api/infiltration-method-gate"))
             calculated = web_app.api_save_hourly_load_report(Request(json.dumps({"project_id": "p1", "selected_scenario_ids": ["jan_weekday"]}), "/api/hourly-load-report"))
-            check("API persists isolated artifacts", saved_library["url"].endswith("schedule_library.json") and saved_scenarios["url"].endswith("design_day_scenarios.json") and built["url"].endswith("hourly_load_model.json") and (root / "hourly_load_report.json").exists())
+            check("API withholds paths outside a registered project root", saved_library["url"] == "" and saved_scenarios["url"] == "" and built["url"] == "" and (root / "hourly_load_report.json").exists())
             check("API stores an engineer-approved infiltration gate separately", saved_gate["readiness"]["calculation_enabled"] and (root / "infiltration_method_gate.json").exists())
             check("API marks report current", calculated["status"] == "current" and web_app.api_hourly_load_report(Request("", "/api/hourly-load-report?project_id=p1"))["status"] == "current")
             context = {

@@ -3184,7 +3184,11 @@ function toast(title, body){
   document.querySelector(".toast")?.remove();
   const el = document.createElement("div");
   el.className = "toast";
-  el.innerHTML = `<h4>${esc(title)}</h4><p>${body}</p>`;
+  const heading = document.createElement("h4");
+  heading.textContent = String(title ?? "");
+  const message = document.createElement("p");
+  message.textContent = String(body ?? "");
+  el.replaceChildren(heading, message);
   el.addEventListener("click", () => el.remove());
   document.body.appendChild(el);
   setTimeout(() => el.remove(), 12000);

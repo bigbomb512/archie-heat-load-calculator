@@ -4,14 +4,16 @@ import argparse
 import base64
 from copy import deepcopy
 import hashlib
+import mimetypes
 import sys
 import html
 import json
 import re
 import time
+import uuid
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, unquote, urlencode, urlparse
 
 from ai.ai_packet import build_ai_packet, load_json
 from ai.design_pipeline import create_confirmed_ai_packet
@@ -82,6 +84,7 @@ from backend import evidence_fusion_service
 from backend import calculation_extraction_service
 from backend import vision_extraction_service, window_scan_service, site_orientation_service, ai_preliminary_service
 from backend import productization
+from backend import security
 from ai.ventilation import calculate_ventilation_report
 from ai.geometry_review import normalise_vision
 from ai.reasoning_packet import create_reasoning_packet_from_vision
@@ -95,6 +98,10 @@ UPLOADS = ROOT / "output" / "uploads"
 WEB_REVIEW = ROOT / "output" / "web_review"
 PROJECTS_FILE = ROOT / "output" / "web_projects.json"
 ANALYSIS_VERSION = "drawing_set_coverage_v7"
+MAX_JSON_BYTES = 2 * 1024 * 1024
+MAX_PDF_BYTES = 250 * 1024 * 1024
+MAX_ARCHIVE_BYTES = 100 * 1024 * 1024
+PUBLIC_ASSET_SUFFIXES = {".css", ".js", ".svg", ".png", ".jpg", ".jpeg", ".webp", ".mp4", ".woff", ".woff2", ".ttf", ".ico", ".html"}
 
 
 class CalculatorInputConflict(Exception):
@@ -106,10 +113,90 @@ class CalculatorInputConflict(Exception):
 
 
 class Handler(SimpleHTTPRequestHandler):
+    """Explicit Archie routes only; never expose the repository as a web root."""
+
     def end_headers(self):
         if self.path == "/" or self.path.startswith("/frontend/"):
             self.send_header("Cache-Control", "no-store, max-age=0")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "same-origin")
+        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        self.send_header("Content-Security-Policy", "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self'; connect-src 'self'")
         super().end_headers()
+
+    def _public_asset_path(self, path):
+        requested = unquote(urlparse(path).path)
+        if requested == "/":
+            candidate = FRONTEND / "index.html"
+        elif requested.startswith("/frontend/"):
+            relative_path = requested.removeprefix("/frontend/")
+            if not relative_path or "\x00" in relative_path:
+                return None
+            candidate = FRONTEND / relative_path
+        else:
+            return None
+        try:
+            resolved = candidate.resolve(strict=True)
+            resolved.relative_to(FRONTEND.resolve())
+        except (OSError, ValueError):
+            return None
+        if not resolved.is_file() or resolved.suffix.lower() not in PUBLIC_ASSET_SUFFIXES:
+            return None
+        return resolved
+
+    def _identity(self):
+        identity = getattr(self, "_archie_identity", None)
+        if identity is None:
+            identity = security.identity_from_headers(
+                self.headers, client_host=self.client_address[0], configuration=security.config(),
+            )
+            self._archie_identity = identity
+        return identity
+
+    def _request_payload_for_auth(self):
+        if not self.headers.get("Content-Type", "").lower().startswith("application/json"):
+            return {}
+        try:
+            return read_json_body(self)
+        except Exception:
+            return {}
+
+    def _project_id_for_request(self):
+        member_route = re.fullmatch(r"/api/projects/([^/]+)/members", urlparse(self.path).path)
+        if member_route:
+            return unquote(member_route.group(1))
+        query = parse_qs(urlparse(self.path).query)
+        project_id = query.get("project_id", query.get("id", [""]))[0]
+        if project_id:
+            return project_id
+        payload = self._request_payload_for_auth()
+        return str(payload.get("project_id") or payload.get("id") or "")
+
+    def _require_api_access(self, *, write=False):
+        identity = self._identity()
+        if write:
+            security.require_allowed_origin(self.headers, host=self.headers.get("Host", ""), configuration=security.config())
+        project_id = self._project_id_for_request()
+        if not project_id:
+            return identity
+        try:
+            project = project_by_id(project_id)
+        except ValueError as error:
+            raise security.SecurityError("Project access denied.") from error
+        required_role = "editor" if write else "viewer"
+        if self.path.startswith("/api/project-export") or re.fullmatch(r"/api/projects/[^/]+/members", urlparse(self.path).path):
+            required_role = "owner"
+        security.require_project_role(project, identity, required_role)
+        return identity
+
+    def _send_security_error(self, error, status=403):
+        self.send_json({"error": "Request denied.", "code": "access_denied"}, status)
+
+    def do_HEAD(self):
+        if not self._public_asset_path(self.path):
+            return self.send_error(404, "Not found")
+        return super().do_HEAD()
 
     def send_head(self):
         # WebKit requires byte ranges to seek through a scroll-driven video.
@@ -167,8 +254,37 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/":
             return self.send_file(FRONTEND / "index.html", "text/html")
+        if self.path == "/api/me":
+            try:
+                identity = self._require_api_access()
+            except security.SecurityError as error:
+                return self._send_security_error(error, 401)
+            return self.send_json({"subject": identity.subject, "email": identity.email, "development": identity.development})
         if self.path == "/api/projects":
-            return self.send_json(project_list())
+            try:
+                identity = self._require_api_access()
+            except security.SecurityError as error:
+                return self._send_security_error(error, 401)
+            return self.send_json(project_list(identity=identity))
+        if re.fullmatch(r"/api/projects/[^/]+/members", urlparse(self.path).path):
+            try:
+                self._require_api_access()
+                return self.send_json(api_project_members(self))
+            except security.SecurityError as error:
+                return self._send_security_error(error, 403)
+        if self.path.startswith("/api/artifact"):
+            try:
+                self._require_api_access()
+                return self.send_artifact()
+            except security.SecurityError as error:
+                return self._send_security_error(error, 403)
+            except Exception:
+                return self.send_json({"error": "Artifact is unavailable.", "code": "artifact_unavailable"}, 404)
+        if self.path.startswith("/api/"):
+            try:
+                self._require_api_access()
+            except security.SecurityError as error:
+                return self._send_security_error(error, 401)
         if self.path.startswith("/api/project-health"):
             try:
                 return self.send_json(api_project_health(self))
@@ -317,9 +433,21 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json({"error": str(error)}, 404)
         if self.path.startswith("/api/analysis"):
             return self.send_analysis()
-        return super().do_GET()
+        if self._public_asset_path(self.path):
+            return super().do_GET()
+        return self.send_error(404, "Not found")
 
     def do_POST(self):
+        if self.path.startswith("/api/"):
+            try:
+                self._require_api_access(write=True)
+            except security.SecurityError as error:
+                return self._send_security_error(error, 403)
+        if re.fullmatch(r"/api/projects/[^/]+/members", urlparse(self.path).path):
+            try:
+                return self.send_json(api_save_project_members(self))
+            except Exception:
+                return self.send_json({"error": "Project members could not be updated.", "code": "membership_update_failed"}, 400)
         if self.path == "/api/upload":
             return self.upload_pdf()
         if self.path == "/api/analyse":
@@ -396,13 +524,18 @@ class Handler(SimpleHTTPRequestHandler):
             return self.save_site_orientation()
         if self.path == "/api/parity-report":
             return self.save_parity_report()
-        if self.path == "/process":
+        if self.path == "/process" and not security.config().production:
             return self.process_pdf()
         return self.send_error(404, "Not found")
 
     def do_OPTIONS(self):
+        if not self.path.startswith("/api/"):
+            return self.send_error(404, "Not found")
+        try:
+            security.require_allowed_origin(self.headers, host=self.headers.get("Host", ""), configuration=security.config())
+        except security.SecurityError as error:
+            return self._send_security_error(error, 403)
         self.send_response(204)
-        self.send_common_headers()
         self.end_headers()
 
     def upload_pdf(self):
@@ -698,7 +831,8 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_html(result_page(result))
 
     def translate_path(self, path):
-        return str(ROOT / urlparse(path).path.lstrip("/"))
+        asset = self._public_asset_path(path)
+        return str(asset) if asset else str(FRONTEND / "__not_found__")
 
     def send_file(self, path, content_type):
         self.send_response(200)
@@ -706,6 +840,31 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_common_headers()
         self.end_headers()
         self.wfile.write(path.read_bytes())
+
+    def send_artifact(self):
+        query = parse_qs(urlparse(self.path).query)
+        project_id = query.get("project_id", [""])[0]
+        artifact = query.get("artifact", [""])[0]
+        if not project_id or not artifact:
+            raise ValueError("Artifact reference is incomplete.")
+        project = project_by_id(project_id)
+        identity = self._identity()
+        root = Path(project.get("review_dir", "")).resolve()
+        if not root.is_dir() or not artifact or "\x00" in artifact:
+            raise ValueError("Artifact is unavailable.")
+        candidate = (root / artifact).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError as error:
+            raise security.SecurityError("Artifact path rejected.") from error
+        if not candidate.is_file():
+            raise ValueError("Artifact is unavailable.")
+        # Viewers may use immutable report packages only. Raw evidence and PDFs
+        # remain editor-only even when their artifact identifier is known.
+        is_package = "report_packages" in candidate.relative_to(root).parts
+        security.require_project_role(project, identity, "viewer" if is_package else "editor")
+        content_type = mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
+        self.send_file(candidate, content_type)
 
     def send_html(self, body, status=200):
         self.send_response(status)
@@ -715,6 +874,8 @@ class Handler(SimpleHTTPRequestHandler):
         self.wfile.write(body.encode("utf-8"))
 
     def send_json(self, data, status=200):
+        if security.config().production and isinstance(data, dict) and data.get("error"):
+            data = {"error": "Request could not be completed.", "code": data.get("code", "request_failed")}
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_common_headers()
@@ -722,9 +883,8 @@ class Handler(SimpleHTTPRequestHandler):
         self.wfile.write(json.dumps(data, indent=2).encode("utf-8"))
 
     def send_common_headers(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        # Archie is same-origin.  Deliberately do not grant cross-origin access.
+        return None
 
 
 def api_upload(request):
@@ -750,6 +910,10 @@ def api_upload(request):
         "created_at": now,
         "updated_at": now,
     }
+    identity = getattr(request, "_archie_identity", None)
+    if identity is not None:
+        project["owner_id"] = identity.subject
+        project["memberships"] = []
     update_project(project)
     return upload_response(project)
 
@@ -929,8 +1093,8 @@ def api_save_decisions(request):
     update_project(project)
     return {
         "id": project["id"],
-        "decisions_url": link(decisions_path),
-        "ai_input_url": link(pipeline["ai_input"]),
+        "decisions_url": safe_link(decisions_path),
+        "ai_input_url": safe_link(pipeline["ai_input"]),
         "chatgpt_packet": link_pipeline_files(pipeline["chatgpt_packet"]),
     }
 
@@ -1155,16 +1319,22 @@ def api_save_project_import(request):
     data = read_json_body(request)
     encoded = data.get("archive_base64", "")
     if encoded:
+        if len(encoded) > MAX_ARCHIVE_BYTES * 4 // 3 + 16_384:
+            raise ValueError("Project archive exceeds the permitted size.")
         archive_bytes = base64.b64decode(encoded, validate=True)
-    elif data.get("archive_path"):
-        archive_bytes = Path(data["archive_path"]).read_bytes()
     else:
-        raise ValueError("Provide archive_base64 or a local archive_path.")
+        raise ValueError("Provide a project archive upload.")
+    if len(archive_bytes) > MAX_ARCHIVE_BYTES:
+        raise ValueError("Project archive exceeds the permitted size.")
     archive_hint = hashlib.sha256(archive_bytes).hexdigest()[:12]
-    project_id = data.get("new_project_id") or f"imported-{archive_hint}"
+    project_id = "imported-" + uuid.uuid4().hex
     destination = WEB_REVIEW
     imported = productization.import_project(archive_bytes, destination, project_id)
     project = {"id": project_id, "name": imported["project_name"], "review_dir": imported["review_dir"], "pdf": imported.get("source_pdf", ""), "analysed": True, "pages": 0, "relevant": 0, "created_at": timestamp(), "updated_at": timestamp(), "source_available": imported["source_available"]}
+    identity = getattr(request, "_archie_identity", None)
+    if identity is not None:
+        project["owner_id"] = identity.subject
+        project["memberships"] = []
     update_project(project)
     productization.append_audit_event(imported["review_dir"], action="project_imported", target="project_archive", new_fingerprint=archive_hint, result="success")
     return {"id": project_id, "project": project, "status": "imported", "source_available": imported["source_available"], "imported_artifacts": imported.get("imported_artifacts", []), "skipped_artifacts": imported.get("skipped_artifacts", []), "invalid_artifacts": imported.get("invalid_artifacts", []), "unavailable_sources": imported.get("unavailable_sources", []), "manifest": imported["archive_manifest"]}
@@ -3083,7 +3253,7 @@ def page_reason(page):
 
 def thumbnail_url(page, review_dir):
     path = page.get("thumbnail_path")
-    return link(review_dir / path) if path else ""
+    return safe_link(review_dir / path) if path else ""
 
 
 def analysis_warnings(packet):
@@ -3116,8 +3286,10 @@ def upload_response(project):
     }
 
 
-def project_list():
+def project_list(identity=None):
     projects = sorted(load_projects().values(), key=lambda item: item.get("updated_at", ""), reverse=True)
+    if identity is not None and not identity.development:
+        projects = [project for project in projects if security.role_for_project(project, identity)]
     return [
         {
             "id": project["id"],
@@ -3128,6 +3300,43 @@ def project_list():
         }
         for project in projects
     ]
+
+
+def api_project_members(request):
+    project_id = unquote(re.fullmatch(r"/api/projects/([^/]+)/members", urlparse(request.path).path).group(1))
+    project = project_by_id(project_id)
+    return {
+        "project_id": project_id,
+        "owner_id": project.get("owner_id", ""),
+        "memberships": project.get("memberships", []),
+    }
+
+
+def api_save_project_members(request):
+    match = re.fullmatch(r"/api/projects/([^/]+)/members", urlparse(request.path).path)
+    if not match:
+        raise ValueError("Project member route is invalid.")
+    project_id = unquote(match.group(1))
+    project = project_by_id(project_id)
+    data = read_json_body(request)
+    action = data.get("action", "upsert")
+    user_id = str(data.get("user_id", "")).strip()
+    if not user_id:
+        raise ValueError("A Cognito user subject is required.")
+    if user_id == project.get("owner_id"):
+        raise ValueError("The project owner cannot be changed through member editing.")
+    members = [member for member in project.get("memberships", []) if isinstance(member, dict) and member.get("user_id") != user_id]
+    if action == "upsert":
+        role = str(data.get("role", ""))
+        if role not in {"editor", "viewer"}:
+            raise ValueError("Members may be assigned editor or viewer access.")
+        members.append({"user_id": user_id, "role": role})
+    elif action != "remove":
+        raise ValueError("Member action must be upsert or remove.")
+    project["memberships"] = sorted(members, key=lambda member: (member["role"], member["user_id"]))
+    project["updated_at"] = timestamp()
+    update_project(project)
+    return api_project_members(request)
 
 
 def project_by_id(project_id):
@@ -3178,16 +3387,38 @@ def pdf_page_count(pdf_path):
     return count_pdf_pages(pdf_path)
 
 
+def read_request_body(request, maximum_bytes):
+    cached = getattr(request, "_archie_raw_body", None)
+    if cached is not None:
+        if len(cached) > maximum_bytes:
+            raise ValueError("Request body exceeds the permitted size.")
+        return cached
+    try:
+        length = int(request.headers.get("Content-Length", "0"))
+    except (TypeError, ValueError) as error:
+        raise ValueError("Request Content-Length is invalid.") from error
+    if length < 0 or length > maximum_bytes:
+        raise ValueError("Request body exceeds the permitted size.")
+    body = request.rfile.read(length)
+    if len(body) != length:
+        raise ValueError("Request body was incomplete.")
+    request._archie_raw_body = body
+    return body
+
+
 def read_json_body(request):
-    length = int(request.headers.get("Content-Length", "0"))
-    if not length:
+    maximum = MAX_ARCHIVE_BYTES * 2 if getattr(request, "path", "") == "/api/project-import" else MAX_JSON_BYTES
+    body = read_request_body(request, maximum)
+    if not body:
         return {}
-    return json.loads(request.rfile.read(length).decode("utf-8"))
+    try:
+        return json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("Request JSON is invalid.") from error
 
 
 def read_form_fields(request):
-    length = int(request.headers.get("Content-Length", "0"))
-    body = request.rfile.read(length).decode("utf-8")
+    body = read_request_body(request, MAX_JSON_BYTES).decode("utf-8")
     fields = {}
     for pair in body.split("&"):
         if "=" not in pair:
@@ -3209,8 +3440,7 @@ def read_pdf_upload(request):
     if not boundary_match:
         raise ValueError("Upload form is missing a multipart boundary.")
 
-    length = int(request.headers.get("Content-Length", "0"))
-    body = request.rfile.read(length)
+    body = read_request_body(request, MAX_PDF_BYTES)
     boundary = ("--" + boundary_match.group("boundary").strip('"')).encode()
 
     for part in body.split(boundary):
@@ -3240,9 +3470,9 @@ def result_page(result):
   <h1>Processing Complete</h1>
   <p>Uploaded PDF: {escape(result["uploaded_pdf"])}</p>
   <ul>
-    <li><a href="{link(result["html"])}">Open review page</a></li>
-    <li><a href="{link(result["packet"])}">Open packet.json</a></li>
-    <li><a href="{link(result["ai_input"])}">Open ai_input.json</a></li>
+    <li><a href="{safe_link(result["html"])}">Open review page</a></li>
+    <li><a href="{safe_link(result["packet"])}">Open packet.json</a></li>
+    <li><a href="{safe_link(result["ai_input"])}">Open ai_input.json</a></li>
   </ul>
   <h2>Summary</h2>
   <ul>
@@ -3275,15 +3505,19 @@ def error_page(error):
 """
 
 
-def link(path):
-    return "/" + quote(Path(path).resolve().relative_to(ROOT).as_posix(), safe="/")
-
-
 def safe_link(path):
+    """Return an authorised artifact route, never a host filesystem path."""
     try:
-        return link(path)
+        resolved = Path(path).resolve()
+        relative = resolved.relative_to(WEB_REVIEW.resolve())
+        parts = relative.parts
+        if len(parts) < 2 or not resolved.is_file():
+            return ""
+        project_id = parts[0]
+        artifact = Path(*parts[1:]).as_posix()
+        return "/api/artifact?" + urlencode({"project_id": project_id, "artifact": artifact})
     except ValueError:
-        return str(path)
+        return ""
 
 
 def optional_link(path):
@@ -3301,10 +3535,15 @@ def escape(value):
 def main():
     parser = argparse.ArgumentParser(description="Run the Mech Page Finder web app.")
     parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--host", default="127.0.0.1")
     args = parser.parse_args()
+    configuration = security.config()
+    configuration.validate_startup(args.host)
+    if configuration.production:
+        raise RuntimeError("Production hosting is blocked until the private S3/PostgreSQL storage adapter is enabled. See infra/aws/README.md.")
 
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
-    print(f"Open http://127.0.0.1:{args.port}")
+    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    print(f"Open http://{args.host}:{args.port}")
     server.serve_forever()
 
 

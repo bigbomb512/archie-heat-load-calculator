@@ -479,7 +479,7 @@ def main():
         check_value("backend creates vision validation", Path(saved["vision_validation_path"]).exists(), True)
         check_value("backend creates coordinate review", Path(saved["coordinate_review_path"]).exists(), True)
         check_value("backend creates geometry confirmation", Path(saved["geometry_confirmation_path"]).exists(), True)
-        check_value("backend returns geometry confirmation url", bool(saved["response"]["geometry_confirmation_url"]), True)
+        check_value("backend withholds geometry artifact urls outside a registered project root", saved["response"]["geometry_confirmation_url"], "")
         check_value("backend returns layered status", saved["response"]["geometry_verification_status"], "geometry_vision_layered")
         check_value("backend creates reasoning manifest", Path(saved["reasoning_packet_raw"]["manifest"]).exists(), True)
 

@@ -16,11 +16,15 @@ class VideoServingTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.temp = tempfile.TemporaryDirectory()
+        cls.frontend = Path(cls.temp.name, "frontend")
+        cls.frontend.mkdir()
         cls.content = bytes(range(256)) * 8
-        Path(cls.temp.name, "tour.mp4").write_bytes(cls.content)
-        Path(cls.temp.name, "page.html").write_text("hello")
+        Path(cls.frontend, "tour.mp4").write_bytes(cls.content)
+        Path(cls.frontend, "page.html").write_text("hello")
         cls.root_patch = patch("backend.web_app.ROOT", Path(cls.temp.name))
+        cls.frontend_patch = patch("backend.web_app.FRONTEND", cls.frontend)
         cls.root_patch.start()
+        cls.frontend_patch.start()
         cls.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
@@ -30,10 +34,11 @@ class VideoServingTests(unittest.TestCase):
         cls.server.shutdown()
         cls.server.server_close()
         cls.thread.join()
+        cls.frontend_patch.stop()
         cls.root_patch.stop()
         cls.temp.cleanup()
 
-    def request(self, range_value=None, method="GET", path="/tour.mp4"):
+    def request(self, range_value=None, method="GET", path="/frontend/tour.mp4"):
         connection = http.client.HTTPConnection(*self.server.server_address)
         connection.request(method, path, headers={"Range": range_value} if range_value else {})
         response = connection.getresponse()
@@ -70,8 +75,8 @@ class VideoServingTests(unittest.TestCase):
         self.assertEqual(status, 206)
         self.assertEqual(headers["Content-Length"], "2")
         self.assertEqual(body, b"")
-        self.assertEqual(self.request(path="/page.html")[2], b"hello")
-        self.assertEqual(self.request(path="/missing.mp4")[0], 404)
+        self.assertEqual(self.request(path="/frontend/page.html")[2], b"hello")
+        self.assertEqual(self.request(path="/frontend/missing.mp4")[0], 404)
 
     def test_unsupported_range_falls_back_to_full_video(self):
         self.assertEqual(self.request("bytes=0-1,4-5")[::2], (200, self.content))
