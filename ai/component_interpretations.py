@@ -52,7 +52,17 @@ def _text(value, field, *, required=False, limit=240):
     return value
 
 
-def _normalise_refs(rows, *, require=False):
+def _source_label(value):
+    """Keep extracted source text intact; display limits apply only to UI names."""
+    return str(value or "").strip()
+
+
+def _source_display_name(label):
+    return label if len(label) <= 240 else label[:239].rstrip() + "…"
+
+
+def _normalise_refs(rows, *, require=False, extracted=False):
+    text = (lambda value, field, **kwargs: _source_label(value)) if extracted else _text
     if not isinstance(rows, list):
         raise ValueError("Evidence references must be a list.")
     result = []
@@ -62,13 +72,13 @@ def _normalise_refs(rows, *, require=False):
         page = row.get("page")
         if page is not None and (isinstance(page, bool) or not isinstance(page, int) or page <= 0):
             raise ValueError("Evidence-reference page numbers must be positive integers.")
-        reference = _text(row.get("reference") or row.get("artifact") or row.get("drawing_number"), "Evidence reference")
-        excerpt = _text(row.get("excerpt"), "Evidence excerpt", limit=1000)
+        reference = text(row.get("reference") or row.get("artifact") or row.get("drawing_number"), "Evidence reference")
+        excerpt = text(row.get("excerpt"), "Evidence excerpt", limit=1000)
         if not page and not reference:
             raise ValueError("Each evidence reference needs a page or a source reference.")
         result.append({
-            "page": page, "drawing_number": _text(row.get("drawing_number"), "Drawing number"),
-            "reference": reference, "excerpt": excerpt, "crop": _text(row.get("crop"), "Evidence crop", limit=500),
+            "page": page, "drawing_number": text(row.get("drawing_number"), "Drawing number"),
+            "reference": reference, "excerpt": excerpt, "crop": text(row.get("crop"), "Evidence crop", limit=500),
         })
     if require and not result:
         raise ValueError("AI interpretations require at least one cited evidence reference.")
@@ -97,7 +107,7 @@ def _refs_from_entity(entity):
     refs = list(entity.get("citations") or [])
     if entity.get("source"):
         refs.append(entity["source"])
-    return _normalise_refs(refs)
+    return _normalise_refs(refs, extracted=True)
 
 
 def _seed_from_entity(entity, source_fingerprint):
@@ -114,7 +124,7 @@ def _seed_from_entity(entity, source_fingerprint):
         "canonical_type": canonical_type,
         "source_component_ids": [str(entity.get("entity_id", ""))],
         "legacy_aliases": [str(item) for item in [entity.get("entity_id"), *(entity.get("evidence_ids") or [])] if item],
-        "original_label": _text(entity.get("label") or value.get("name") or value.get("tag") or value.get("reference"), "Original label", limit=240),
+        "original_label": _source_label(entity.get("label") or value.get("name") or value.get("tag") or value.get("reference")),
         "evidence_refs": _refs_from_entity(entity),
     }
 
@@ -129,8 +139,8 @@ def _seed_from_candidate(candidate, source_fingerprint):
         "canonical_type": canonical_type,
         "source_component_ids": [str(candidate.get("candidate_id", ""))],
         "legacy_aliases": [str(item) for item in [candidate.get("candidate_id"), candidate.get("target")] if item],
-        "original_label": _text(candidate.get("label") or candidate.get("target") or candidate.get("field"), "Original label", limit=240),
-        "evidence_refs": _normalise_refs([source] if source else []),
+        "original_label": _source_label(candidate.get("label") or candidate.get("target") or candidate.get("field")),
+        "evidence_refs": _normalise_refs([source] if source else [], extracted=True),
     }
 
 
@@ -160,8 +170,8 @@ def component_seeds(fusion=None, calculation_evidence=None, calculator_draft=Non
                 "canonical_type": canonical_type,
                 "source_component_ids": [str(candidate["candidate_id"])],
                 "legacy_aliases": [str(candidate["candidate_id"])],
-                "original_label": _text(value.get("name") or value.get("title") or candidate.get("kind") or group, "Original label", limit=240),
-                "evidence_refs": _normalise_refs(candidate.get("citations") or []),
+                "original_label": _source_label(value.get("name") or value.get("title") or candidate.get("kind") or group),
+                "evidence_refs": _normalise_refs(candidate.get("citations") or [], extracted=True),
             })
     unique = {}
     for seed in seeds:
@@ -171,7 +181,7 @@ def component_seeds(fusion=None, calculation_evidence=None, calculator_draft=Non
             continue
         current["source_component_ids"] = sorted(set(current["source_component_ids"] + seed["source_component_ids"]))
         current["legacy_aliases"] = sorted(set(current["legacy_aliases"] + seed["legacy_aliases"]))
-        current["evidence_refs"] = _normalise_refs(current["evidence_refs"] + seed["evidence_refs"])
+        current["evidence_refs"] = _normalise_refs(current["evidence_refs"] + seed["evidence_refs"], extracted=True)
     return sorted(unique.values(), key=lambda item: item["component_id"])
 
 
@@ -185,7 +195,7 @@ def source_artifact_fingerprints(fusion=None, calculation_evidence=None, calcula
 
 def _empty_interpretation(seed):
     return {
-        **deepcopy(seed), "display_name": seed["original_label"], "display_name_origin": "source",
+        **deepcopy(seed), "display_name": _source_display_name(seed["original_label"]), "display_name_origin": "source",
         "confidence_score": 0.0, "confidence_band": "low", "confidence_origin": "unassigned",
         "rationale": "", "provider": {"provider": "", "model": "", "prompt_policy_fingerprint": ""},
         "latest_ai_proposal": None,
@@ -204,6 +214,8 @@ def build_artifact(existing=None, *, fusion=None, calculation_evidence=None, cal
         if prior:
             row = deepcopy(prior)
             row.update({key: deepcopy(value) for key, value in seed.items()})
+            if row.get("display_name_origin") == "source" and not row.get("reviewer_locks", {}).get("display_name"):
+                row["display_name"] = _source_display_name(seed["original_label"])
         else:
             row = _empty_interpretation(seed)
         rows.append(row)

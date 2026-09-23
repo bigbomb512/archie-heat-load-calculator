@@ -47,6 +47,26 @@ def proposal(component_id, *, name="External studio", score=0.86, provider_style
 
 
 class ComponentInterpretationTests(unittest.TestCase):
+    def test_long_extracted_labels_preserve_evidence_and_shorten_display(self):
+        label = "Long drawing note " * 100
+        fusion, evidence, draft = inputs(label=label)
+        evidence["candidates"][0]["label"] = label
+        draft["candidates"]["zones"][0]["value"]["name"] = label
+        fusion["entities"][0]["source"]["excerpt"] = label
+        original = deepcopy((fusion, evidence, draft))
+        artifact = interpretations.build_artifact(fusion=fusion, calculation_evidence=evidence, calculator_draft=draft)
+        self.assertEqual(len(artifact["interpretations"]), 3)
+        for row in artifact["interpretations"]:
+            self.assertEqual(row["original_label"], label.strip())
+            self.assertLessEqual(len(row["display_name"]), 240)
+            self.assertTrue(row["display_name"].endswith("…"))
+            self.assertEqual(row["display_name_origin"], "source")
+        self.assertEqual((fusion, evidence, draft), original)
+        room = next(row for row in artifact["interpretations"] if row["canonical_type"] == "room")
+        self.assertIn(label.strip(), [ref["excerpt"] for ref in room["evidence_refs"]])
+        with self.assertRaises(ValueError):
+            interpretations._normalise_refs([dict(source(), excerpt=label)], require=True)
+
     def setUp(self):
         self.fusion, self.evidence, self.draft = inputs()
         self.artifact = interpretations.build_artifact(

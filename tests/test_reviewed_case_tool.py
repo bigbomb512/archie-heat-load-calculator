@@ -82,13 +82,17 @@ class ReviewedCaseToolTests(unittest.TestCase):
                     "structured_content": {"markdown": "Cool Room AREA: 18.4 m²"},
                 }]},
             }), encoding="utf-8")
-            for name in ("spatial_ocr", "vector_geometry", "vision_response", "dimension_wall_matches", "geometry_confirmation"):
-                (root / f"{name}.json").write_text("{}", encoding="utf-8")
+            # A fresh upload has no confirmation/OCR/vision artifacts yet.
             result = _rebuild_evidence_chain({"review_dir": str(root)})
             self.assertTrue(result["calculation_input_evidence"]["candidates"])
             self.assertTrue((root / "calculation_input_evidence.json").exists())
             self.assertTrue((root / "architect_evidence_fusion.json").exists())
             self.assertTrue((root / "calculator_draft.json").exists())
+            self.assertFalse((root / "spatial_ocr.json").exists())
+            # Missing optional evidence is allowed, but corrupt evidence is not.
+            (root / "spatial_ocr.json").write_text("invalid json", encoding="utf-8")
+            with self.assertRaises(json.JSONDecodeError):
+                _rebuild_evidence_chain({"review_dir": str(root)})
 
 
 if __name__ == "__main__":

@@ -989,11 +989,13 @@ def _rebuild_evidence_chain(project):
     ai_input = load_json(review_dir / "ai_input.json")
     if not ai_input:
         raise ValueError("The reviewed packet does not contain ai_input.json.")
-    spatial_ocr = load_json(review_dir / "spatial_ocr.json")
-    vector_geometry = load_json(review_dir / "vector_geometry.json")
-    vision_response = load_json(review_dir / "vision_response.json")
-    dimension_matches = load_json(review_dir / "dimension_wall_matches.json")
-    geometry_confirmation = load_json(review_dir / "geometry_confirmation.json")
+    # Initial page analysis precedes confirmation and optional vision review.
+    # Absent later-stage evidence stays empty; malformed existing evidence still fails.
+    spatial_ocr = _load_json_or(review_dir / "spatial_ocr.json")
+    vector_geometry = _load_json_or(review_dir / "vector_geometry.json")
+    vision_response = _load_json_or(review_dir / "vision_response.json")
+    dimension_matches = _load_json_or(review_dir / "dimension_wall_matches.json")
+    geometry_confirmation = _load_json_or(review_dir / "geometry_confirmation.json")
 
     coverage = build_drawing_coverage(ai_input, spatial_ocr, vector_geometry)
     coverage_path = review_dir / "drawing_coverage.json"
