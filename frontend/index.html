@@ -11,6 +11,7 @@
 <link rel="stylesheet" href="/frontend/css/workspace-theme.css">
 <link rel="stylesheet" href="/frontend/css/hvac-identity.css">
 <link rel="stylesheet" href="/frontend/css/design-system.css">
+<link rel="stylesheet" href="/frontend/css/analysis-workspace.css">
 </head>
 <body class="hvac-app">
 <a class="skip-link" href="#main">Skip to calculator</a>
@@ -115,11 +116,11 @@
       <section id="vRes" class="hide">
         <div class="result-head">
           <div>
-            <div class="eyebrow">Analysis complete</div>
+            <div class="eyebrow"><span class="analysis-complete-dot" aria-hidden="true"></span> Analysis complete</div>
             <h2 id="summaryTitle">Ready for review</h2>
-            <p id="summaryLead">Archie prepared the key drawing information for the next AI stage.</p>
+            <p id="summaryLead">Toki prepared the key drawing information for the next AI stage.</p>
           </div>
-          <button class="btn ghost" id="btnDebug">Open debug view</button>
+          <button class="btn ghost" id="btnDebug" aria-controls="debugPanel" aria-expanded="false">Review drawing pages</button>
         </div>
 
         <div class="summary-grid">
@@ -145,6 +146,16 @@
           </article>
         </div>
 
+        <div class="review-panel analysis-notes">
+          <div class="panel-head">
+            <div>
+              <div class="micro">Before you continue</div>
+              <h3>Review notes</h3>
+            </div>
+          </div>
+          <div id="reviewList" class="review-list"></div>
+        </div>
+
         <div class="next-panel">
           <div>
             <div class="micro">Next action</div>
@@ -155,13 +166,20 @@
         </div>
 
         <div class="review-panel hide" id="visionPanel">
-          <div class="panel-head">
+          <section class="contractor-ai-route" aria-labelledby="contractorAiRouteHeading">
             <div>
-              <div class="micro">AI drawing extraction</div>
-              <h3>Extract topology and geometry from selected evidence</h3>
+              <div class="micro">Recommended path</div>
+              <h4 id="contractorAiRouteHeading">Start with a whole-building estimate</h4>
+              <p>Set your consent and budget, then create a draft cooling model. Review the key assumptions before using the results.</p>
             </div>
-          </div>
-          <p class="fine">Opt in before selected architect-page images and related local evidence are sent to the server-side OpenAI job. Archie estimates the run first, records every request locally, and never exposes an API key in this browser.</p>
+            <div class="contractor-ai-route-actions">
+              <button class="btn key" id="btnOpenPreliminaryJourney" type="button">Set up Toki AI</button>
+              <button class="btn ghost" id="btnOpenReviewedJourney" type="button">Open reviewed workflow</button>
+            </div>
+          </section>
+          <div class="analysis-tools-heading"><div class="eyebrow">Your AI workspace</div><h3>Choose what to explore</h3><p>Open a tool to review its scope, permissions and budget.</p></div>
+          <details class="analysis-tool"><summary><span class="analysis-tool-icon" aria-hidden="true">⌘</span><span><strong>Extract drawing geometry</strong><small>Find spaces, dimensions and connections in selected pages.</small></span><span class="analysis-tool-tag">Selected pages</span></summary><div class="analysis-tool-body">
+          <p class="fine">Send selected drawing images and evidence to OpenAI. Estimate the cost before starting. Extracted geometry remains evidence for review; it does not approve calculation inputs.</p>
           <div class="requirements-form">
             <label><input id="visionOptIn" type="checkbox"> I approve AI processing of the selected architect evidence for this project.</label>
             <label>Maximum project-run budget (AUD)<input id="visionBudget" type="number" min="0.01" step="0.01" placeholder="Required before start"></label>
@@ -174,21 +192,10 @@
             <button class="btn ghost mini hide" id="btnVisionCancel" type="button">Cancel</button>
             <button class="btn ghost mini hide" id="btnVisionRetry" type="button">Retry</button>
           </div>
-          <div class="review-list" id="visionLinks"></div>
-          <section class="contractor-ai-route" aria-labelledby="contractorAiRouteHeading">
-            <div>
-              <div class="micro">Recommended path</div>
-              <h4 id="contractorAiRouteHeading">Get a draft whole-building estimate first</h4>
-              <p>Set the project consent and budget once, then run Archie AI. It assembles a draft-only cooling model from the drawing set and presents high-impact assumptions for review.</p>
-            </div>
-            <div class="contractor-ai-route-actions">
-              <button class="btn key" id="btnOpenPreliminaryJourney" type="button">Set up Archie AI estimate</button>
-              <button class="btn ghost" id="btnOpenReviewedJourney" type="button">Open reviewed workflow</button>
-            </div>
-          </section>
-          <section class="calculator-draft-panel" aria-labelledby="aiPreliminaryHeading">
-            <h4 id="aiPreliminaryHeading">AI preliminary whole-building estimate</h4>
-            <p class="fine">Uses controlled Australia-first preliminary profiles with the existing hourly cooling engine. It is always a draft estimate, never engineering reviewed or validated. The reviewed calculator inputs below are not changed.</p>
+          <details class="analysis-files"><summary>Evidence files &amp; processing details</summary><div class="review-list" id="visionLinks"></div></details>
+          </div></details>
+          <details class="analysis-tool" id="preliminaryTool"><summary><span class="analysis-tool-icon" aria-hidden="true">◷</span><span><strong id="aiPreliminaryHeading">Preliminary load estimate</strong><small>Build an early cooling estimate and review its assumptions.</small></span><span class="analysis-tool-tag">Draft only</span></summary><div class="analysis-tool-body">
+            <p class="fine">An early estimate using Australian preliminary profiles. Results are draft only and require engineering review. Your reviewed calculator inputs remain separate.</p>
             <div class="requirements-form">
               <label><input id="aiPreliminaryAuto" type="checkbox"> Automatically run the provider after PDF analysis when consent, budget and server configuration are available.</label>
               <label><input id="aiPreliminaryConsent" type="checkbox"> I approve this project’s bounded architect evidence being sent to the configured AI provider.</label>
@@ -207,9 +214,8 @@
               <label for="aiPreliminaryProposal">Proposal JSON<textarea id="aiPreliminaryProposal" rows="10" spellcheck="false" placeholder='{"rooms": [], "surfaces": [], "openings": []}'></textarea></label>
             </details>
             <div class="review-list" id="aiPreliminaryResults"></div>
-          </section>
-          <section class="calculator-draft-panel" aria-labelledby="windowScanHeading">
-            <h4 id="windowScanHeading">All-page window discovery</h4>
+          </div></details>
+          <details class="analysis-tool"><summary><span class="analysis-tool-icon" aria-hidden="true">⊞</span><span><strong id="windowScanHeading">Find windows &amp; glazing</strong><small>Search every page for openings and shopfront glazing.</small></span><span class="analysis-tool-tag">All pages</span></summary><div class="analysis-tool-body">
             <p class="fine">Separate opt-in scan: every physical page, including renders, photos and reference pages, in batches of at most eight. It does not approve openings or glazing properties.</p>
             <label><input id="windowScanConfirm" type="checkbox"> I approve sending every architect page for window analysis.</label>
             <div class="bar"><span id="windowScanStatus" role="status">Estimate before starting.</span>
@@ -245,8 +251,8 @@
               <button class="btn ghost mini" id="btnWindowOpeningReview" type="button">Save glazing-system review</button>
               <details><summary>Advanced JSON fallback</summary><label for="windowOpeningReview">Opening review JSON</label><textarea id="windowOpeningReview" rows="5" spellcheck="false" placeholder='{"review_type":"glazing_system", ...}'></textarea></details>
             </details>
-          </section>
-          <details class="advanced-import"><summary>Advanced recovery: import pre-generated vision JSON</summary>
+          </div></details>
+          <details class="advanced-import"><summary>Advanced · Import existing AI results</summary>
             <p class="fine">This fallback uses the same local validation rules. It is not the primary workflow.</p>
             <textarea id="visionJson" rows="10" spellcheck="false" placeholder='{"provider":"chatgpt_manual","result":{"layered_geometry":{"pages":[]}}}'></textarea>
             <button class="btn ghost mini" id="btnVisionSubmit" type="button">Validate imported JSON</button>
@@ -503,20 +509,10 @@
           <div id="ventilationResults"></div>
         </div>
 
-        <div class="review-panel">
-          <div class="panel-head">
-            <div>
-              <div class="micro">Needs checking</div>
-              <h3>Only review uncertain items</h3>
-            </div>
-          </div>
-          <div id="reviewList" class="review-list"></div>
-        </div>
-
         <div class="debug-panel hide" id="debugPanel">
           <div class="debug-head">
             <div>
-              <div class="micro">Debug view</div>
+              <div class="micro">Drawing review</div>
               <h3>Page evidence</h3>
             </div>
             <div class="switch">
@@ -524,6 +520,17 @@
               <button data-f="all" id="fAll">All pages</button>
             </div>
           </div>
+  <details class="drawing-selection-summary"><summary>Selection summary &amp; document map</summary>
+    <div class="hd"><div class="micro">Analysis summary</div></div>
+    <div class="bd" id="asideBody">
+      <p style="color:var(--grey);font-size:12.5px;margin:0">
+        No analysis yet. Upload a drawing set and run the analysis to see results here.
+      </p>
+    </div>
+    <div class="ft">
+      <button class="btn key" id="btnConfirm" disabled>Confirm selection</button>
+    </div>
+  </details>
           <div class="scored">
             <div>
               <div class="big num" id="rTotal">0</div>
@@ -542,17 +549,7 @@
   </main>
 
   <!-- ============ right panel ============ -->
-  <aside class="aside">
-    <div class="hd"><div class="micro">Analysis summary</div></div>
-    <div class="bd" id="asideBody">
-      <p style="color:var(--grey);font-size:12.5px;margin:0">
-        No analysis yet. Upload a drawing set and run the analysis to see results here.
-      </p>
-    </div>
-    <div class="ft">
-      <button class="btn key" id="btnConfirm" disabled>Confirm selection</button>
-    </div>
-  </aside>
+
 </div>
 
 <script src="/frontend/js/app.js"></script>

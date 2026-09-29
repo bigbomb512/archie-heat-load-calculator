@@ -166,6 +166,7 @@ function showResults(data){
   PICK = new Set(data.sheets.filter(s => s.selected_by_default || s.relevant).map(s => s.page));
   FILTER = "rel";
   DEBUG = false;
+  requiredElement("btnDebug").setAttribute("aria-expanded", "false");
   show("vRes");
   requiredElement("btnAnalyse").classList.add("hide");
   requiredElement("topTitle").textContent = "Analysis complete";
@@ -177,7 +178,7 @@ function showResults(data){
   requiredElement("designRequirementsPanel").classList.add("hide");
   requiredElement("visionLinks").innerHTML = "";
   requiredElement("visionStatus").textContent = "Waiting for vision JSON";
-  requiredElement("btnDebug").textContent = "Open debug view";
+  requiredElement("btnDebug").textContent = "Review drawing pages";
   requiredElement("fRel").classList.add("on"); requiredElement("fAll").classList.remove("on");
   requiredElement("btnConfirm").disabled = false;
   requiredElement("btnConfirmTop").classList.remove("hide");
@@ -196,8 +197,9 @@ requiredElement("btnContinue").addEventListener("click", confirmSelection);
 function toggleDebug(){
   DEBUG = !DEBUG;
   requiredElement("debugPanel").classList.toggle("hide", !DEBUG);
-  requiredElement("btnDebug").textContent = DEBUG ? "Hide debug view" : "Open debug view";
-  if (DEBUG) drawGrid();
+  requiredElement("btnDebug").textContent = DEBUG ? "Hide drawing pages" : "Review drawing pages";
+  requiredElement("btnDebug").setAttribute("aria-expanded", String(DEBUG));
+  if (DEBUG) { drawGrid(); requiredElement("debugPanel").scrollIntoView({block:"start"}); }
 }
 
 function drawSummary(){
@@ -218,7 +220,7 @@ function drawSummary(){
     requiredElement("statusText").textContent = "Needs page selection";
     requiredElement("statusSub").textContent = "No drawings were selected automatically.";
     requiredElement("summaryTitle").textContent = "Needs page selection";
-    requiredElement("summaryLead").textContent = "Open debug view and include the drawings required for HVAC design.";
+    requiredElement("summaryLead").textContent = "Review drawing pages and include the drawings required for HVAC design.";
     requiredElement("nextActionTitle").textContent = "Select at least one useful drawing";
     requiredElement("nextActionText").textContent = "The AI stage needs confirmed floor plans or RCPs before it can continue.";
     return;
@@ -229,7 +231,7 @@ function drawSummary(){
     requiredElement("summaryTitle").textContent = "Needs top-down drawings";
     requiredElement("summaryLead").textContent = "A legend or schedule can help ChatGPT decode symbols, but it cannot replace the floor plan, RCP, or HVAC drawing.";
     requiredElement("nextActionTitle").textContent = "Select a design drawing";
-    requiredElement("nextActionText").textContent = "Open debug view and include the useful top-down plan pages before creating the ChatGPT packet.";
+    requiredElement("nextActionText").textContent = "Review drawing pages and include the useful top-down plan pages before creating the ChatGPT packet.";
     return;
   }
 
@@ -237,12 +239,12 @@ function drawSummary(){
   requiredElement("statusSub").textContent = reviewItems.length
     ? `${reviewItems.length} item${reviewItems.length === 1 ? "" : "s"} should be checked before AI use.`
     : "The selected drawings are ready for a ChatGPT upload packet.";
-  requiredElement("summaryTitle").textContent = reviewItems.length ? "Review required before AI" : "Ready for ChatGPT packet";
+  requiredElement("summaryTitle").textContent = reviewItems.length ? "Your drawings, ready to review." : "Ready for the next step.";
   requiredElement("summaryLead").textContent = supportPages
-    ? `Archie found the core drawing context plus ${supportPages} supporting legend/schedule page${supportPages === 1 ? "" : "s"}.`
-    : "Archie found the core drawing context and hid the page-by-page evidence in debug view.";
+    ? `Toki found the core drawing context plus ${supportPages} supporting legend/schedule page${supportPages === 1 ? "" : "s"}.`
+    : "Review the findings below, then choose how to continue with your drawing set.";
   requiredElement("nextActionTitle").textContent = "Create ChatGPT packet";
-  requiredElement("nextActionText").textContent = "This creates spatial OCR, rebuilds the AI packet, copies selected screenshots, and prepares a prompt you can upload to ChatGPT.";
+  requiredElement("nextActionText").textContent = "Package your selected pages, drawing evidence and a ready-to-use prompt for ChatGPT.";
 }
 
 function scaleSummary(selected, dimensions){
@@ -258,10 +260,10 @@ function reviewIssues(){
   const issues = [];
   const selected = DATA.sheets.filter(s => PICK.has(s.page));
   if (!selected.length){
-    issues.push({title:"No selected drawings", detail:"Open debug view and include the useful floor plan or RCP pages.", page:null, action:"Open debug view"});
+    issues.push({title:"No selected drawings", detail:"Review drawing pages and include the useful floor plan or RCP pages.", page:null, action:"Review drawing pages"});
   }
   if (selected.length && !selected.some(s => s.relevant)){
-    issues.push({title:"No selected design drawings", detail:"Supporting legends and schedules need at least one floor plan, RCP, or HVAC plan.", page:null, action:"Open debug view"});
+    issues.push({title:"No selected design drawings", detail:"Supporting legends and schedules need at least one floor plan, RCP, or HVAC plan.", page:null, action:"Review drawing pages"});
   }
 
   selected.forEach(s => {
@@ -296,7 +298,7 @@ function drawReviewList(){
     </article>`).join("") : `
     <div class="review-empty">
       <b>No urgent checks found</b>
-      <span>You can create the ChatGPT packet, or open debug view to inspect the page evidence.</span>
+      <span>You can create the ChatGPT packet, or review drawing pages to inspect the page evidence.</span>
     </div>`;
 
   requiredElement("reviewList").querySelectorAll("[data-review-page]").forEach(button =>
@@ -621,7 +623,10 @@ function focusWorkflowTarget(id){
   if (target.classList.contains("hide")) {
     return toast("Complete the previous step first", "Confirm the selected drawings before opening the reviewed workspace.");
   }
-  target.scrollIntoView({behavior: "smooth", block: "start"});
+  for (let ancestor = target.parentElement; ancestor; ancestor = ancestor.parentElement) {
+    if (ancestor.tagName === "DETAILS") ancestor.open = true;
+  }
+  target.scrollIntoView({behavior: "auto", block: "start"});
   target.setAttribute("tabindex", "-1");
   target.focus({preventScroll: true});
 }
