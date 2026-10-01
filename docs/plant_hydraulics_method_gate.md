@@ -28,3 +28,11 @@ allows draft calculations only. Missing mappings, stale AHU reports, invalid
 circuits, incomplete pump/pipe inputs, and unapproved methods fail closed or
 produce an included-scope subtotal. Passing synthetic tests is not engineering
 approval or benchmark validation.
+
+An explicit empty plant or scenario selection, or any requested scenario
+missing from the current AHU report, blocks plant calculation. The report does
+not replace an empty selection with all plants or silently omit unavailable
+scenarios. Report status remains `draft` when any selected scenario is blocked
+or when any AHU selected in the source report is not mapped to the selected
+central-plant scope; an included-scope subtotal may still be shown while the
+complete project peak is suppressed.

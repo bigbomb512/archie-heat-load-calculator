@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "suite": "AHU psychrometric analytical benchmarks",
+  "source": {
+    "title": "ASHRAE Handbook\u2014Fundamentals, 2025, Chapter 1, Adiabatic Mixing of Two Moist Airstreams, Example 4",
+    "url": "https://handbook.ashrae.org/Handbooks/F25/SI/F25_Ch01/F25_Ch01_si.aspx",
+    "reference_values": "Outdoor stream 2 m3/s at 4\u00b0C DB and 2\u00b0C thermodynamic WB; return stream 6.25 m3/s at 25\u00b0C DB and 50% RH. ASHRAE chart gives specific volumes 0.789 and 0.858 m3/kg dry air, and mixed dry-bulb 19.5\u00b0C / thermodynamic wet-bulb 14.6\u00b0C.",
+    "method": "Convert each volumetric flow at its own state to dry-air mass flow using v = 0.287055 (T + 273.15) (1 + 1.607 W) / p; mass-weight humidity ratio and enthalpy; recover dry-bulb from h = 1.006 t + W (2501 + 1.86 t).",
+    "assumptions": [
+      "Constant pressure 101.325 kPa and adiabatic mixing.",
+      "The fixed humidity ratios and enthalpies below are chart-consistent independent inputs rounded to the precision shown; the dry-bulb result is compared to a separate hand-calculation from those constants.",
+      "The source chart reports mixed-state values graphically, so its 19.5\u00b0C result is a plausibility check rather than an implementation tolerance."
+    ],
+    "exclusions": [
+      "Duct heat gain, fan heat, leakage beyond the represented outdoor stream, and condensate are excluded.",
+      "The coil test uses a stated inlet volume-flow basis and does not resolve the AHU artifact model's missing airflow-reference field."
+    ]
+  },
+  "cases": [
+    {
+      "id": "ashrae_f25_ch1_example4_mass_weighted_mixing",
+      "pressure_kpa": 101.325,
+      "streams": [
+        {
+          "label": "outdoor",
+          "flow_m3_s": 2.0,
+          "dry_bulb_c": 4.0,
+          "humidity_ratio_kg_kg": 0.00355,
+          "enthalpy_kj_kg": 12.93
+        },
+        {
+          "label": "return",
+          "flow_m3_s": 6.25,
+          "dry_bulb_c": 25.0,
+          "humidity_ratio_kg_kg": 0.00988,
+          "enthalpy_kj_kg": 50.3
+        }
+      ],
+      "expected": {
+        "outdoor_dry_air_mass_flow_kg_s": 2.532771815,
+        "return_dry_air_mass_flow_kg_s": 7.283757931,
+        "mixed_humidity_ratio_kg_kg": 0.008246791,
+        "mixed_enthalpy_kj_kg": 40.658132,
+        "mixed_dry_bulb_c": 19.614357,
+        "source_chart_mixed_dry_bulb_c": 19.5
+      },
+      "tolerances": {
+        "mass_flow_kg_s": 1e-06,
+        "humidity_ratio_kg_kg": 2e-09,
+        "enthalpy_kj_kg": 2e-06,
+        "dry_bulb_c": 2e-06,
+        "source_chart_dry_bulb_c": 0.2
+      }
+    },
+    {
+      "id": "ashrae_f25_ch1_example3_cooling_dehumidification",
+      "pressure_kpa": 101.325,
+      "inlet": {
+        "dry_bulb_c": 30.0,
+        "humidity_ratio_kg_kg": 0.0133,
+        "enthalpy_kj_kg": 64.3,
+        "specific_volume_m3_kg": 0.877
+      },
+      "leaving": {
+        "dry_bulb_c": 10.0,
+        "humidity_ratio_kg_kg": 0.00766,
+        "enthalpy_kj_kg": 29.5,
+        "condensate_enthalpy_kj_kg": 42.021
+      },
+      "volume_flow_m3_s_at_inlet": 5.0,
+      "expected": {
+        "dry_air_mass_flow_kg_s": 5.700061122,
+        "condensate_kg_s": 0.032148345,
+        "total_kw": 197.011221,
+        "sensible_kw": 114.68523,
+        "latent_kw": 82.325992
+      },
+      "tolerances": {
+        "dry_air_mass_flow_kg_s": 1e-06,
+        "condensate_kg_s": 1e-08,
+        "total_kw": 1e-05,
+        "sensible_kw": 1e-05,
+        "latent_kw": 1e-05
+      },
+      "reference_reported_values": {
+        "inlet_enthalpy_kj_kg": 64.3,
+        "inlet_humidity_ratio_kg_kg": 0.0133,
+        "inlet_specific_volume_m3_kg": 0.877,
+        "leaving_enthalpy_kj_kg": 29.5,
+        "leaving_humidity_ratio_kg_kg": 0.00766,
+        "leaving_temperature_c": 10,
+        "drained_water_enthalpy_kj_kg": 42.02,
+        "source": "ASHRAE Fundamentals F25 Chapter 1 Example 3; chart values rounded as published; h_water from Table 3"
+      },
+      "source_citation": {
+        "title": "ASHRAE Handbook\u2014Fundamentals, 2025, Chapter 1, Moist Air Cooling and Dehumidification, Example 3 and Table 3",
+        "url": "https://handbook.ashrae.org/Handbooks/F25/SI/F25_Ch01/F25_Ch01_si.aspx",
+        "reported_values": "30\u00b0C DB / 50% RH inlet; 5 m3/s; saturated 10\u00b0C leaving state; chart enthalpy, humidity ratio, and specific-volume values; liquid-water enthalpy at 10\u00b0C is 42.021 kJ/kg (Table 3)."
+      },
+      "equation": "m_da = volume_flow / v_inlet; m_cond = m_da \u00d7 (W_inlet \u2212 W_leaving); Q_total = m_da \u00d7 (h_inlet \u2212 h_leaving) \u2212 m_cond \u00d7 h_liquid; Q_sensible = m_da \u00d7 1.006 \u00d7 (T_inlet \u2212 T_leaving); Q_latent = Q_total \u2212 Q_sensible.",
+      "assumptions": [
+        "Steady state; no fan/duct heat or condensate subcooling; outlet liquid condensate is at the leaving-air temperature.",
+        "The example inlet flow is explicitly referenced to the entering-air state.",
+        "ASHRAE chart inputs are rounded as published; expected outputs are fixed calculations from those inputs.",
+        "ASHRAE Example 3 publishes the total refrigeration requirement, not a sensible/latent split; the fixture's split uses the project's explicit dry-air-only cp convention and is not independently validated."
+      ],
+      "exclusions": [
+        "Does not resolve the AHU model airflow-reference condition for project supply-air L/s.",
+        "Does not validate coil bypass factor, wet-surface behavior, frost, or condensate subcooling."
+      ]
+    }
+  ]
+}

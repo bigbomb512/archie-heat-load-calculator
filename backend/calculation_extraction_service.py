@@ -5,7 +5,7 @@ import json
 import hashlib
 from pathlib import Path
 
-from ai.calculation_extraction import EXTRACTOR_VERSION, evidence_input_fingerprints, extract_calculation_input_evidence
+from ai.calculation_extraction import EXTRACTOR_VERSION, evidence_input_fingerprints, extract_calculation_input_evidence, _canonical_evidence, _fingerprint
 from ai.calculator_draft import build_calculator_draft
 from ai import component_interpretations
 from ai.drawing_coverage import source_fingerprint
@@ -29,8 +29,78 @@ def _paths(root):
         "geometry_confirmation", "geometry_resolution", "hourly_load_model", "calculation_input_evidence",
         "window_scan_register",
         "window_scan_reviews",
+        "site_orientation", "solar_radiation_source",
+        "reviewer_room_geometry",
         "component_interpretations",
     )}
+
+
+def _room_geometry_skill_proposals(root):
+    """Return current skill boundary proposals in the geometry resolver's input shape.
+
+    Skill workers only create proposal files.  This adapter is deliberately
+    the sole bridge into the authoritative geometry resolver; it never writes
+    geometry or calculation artifacts itself.
+    """
+    root = Path(root)
+    manifest_path = root / "skill_workflow_run.json"
+    if not manifest_path.exists():
+        return []
+    manifest = _read(manifest_path)
+    run_id = manifest.get("run_id")
+    state = manifest.get("subskills", {}).get("room_boundaries_areas", {})
+    if not run_id or state.get("status") not in {"running", "provisional", "needs_review", "resolved", "completed"}:
+        return []
+    proposal_path = root / "skill_workflow_runs" / str(run_id) / "proposals" / "room_boundaries_areas.json"
+    proposal = _read(proposal_path)
+    fields = proposal.get("proposal_fields", {}) if isinstance(proposal, dict) else {}
+    rows = fields.get("geometry_candidates", []) if isinstance(fields, dict) else []
+    result = []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        page = row.get("page")
+        geometry = {
+            "boundary_points_px": row.get("boundary_points_px") or [],
+            "boundary_points_mm": row.get("boundary_points_mm") or [],
+            "coordinate_units": row.get("coordinate_units", "mm" if row.get("boundary_points_mm") else "px"),
+            "wall_ids": row.get("wall_ids") or [],
+            "dimension_ids": row.get("dimension_ids") or [],
+            "dimension_wall_links": row.get("dimension_links") or [],
+            "walls": row.get("walls") or [],
+            "dimensions": row.get("dimensions") or [],
+            "scale_mm_per_px": row.get("scale_mm_per_px"),
+            "scale_source": (row.get("calibration") or {}).get("source", "skill_linked_dimensions"),
+            # Preserve the complete calibration record. The geometry resolver
+            # uses this to distinguish a confirmed main-plan viewport scale
+            # from an unverified visual scale before admitting a draft area.
+            "calibration": deepcopy(row.get("calibration", {})) if isinstance(row.get("calibration"), dict) else {},
+            "independent_witnesses": row.get("independent_witnesses") or [],
+            "source_crop": row.get("source_crop") or "",
+            "area_m2": row.get("area_m2"),
+        }
+        source_pages = row.get("source_pages") or ([page] if isinstance(page, int) and page > 0 else [])
+        source_pages = list(dict.fromkeys(value for value in source_pages if isinstance(value, int) and value > 0))
+        result.append({
+            "room_id": row.get("room_id", ""),
+            "label": row.get("label", ""),
+            "level_name": row.get("level", ""),
+            "page": page,
+            # Room identity/layout and dimensions may be on separate sheets.
+            # Preserve all cited source pages through the resolver handoff;
+            # `page` remains the primary geometry page.
+            "source_pages": source_pages,
+            "geometry": geometry,
+            "confidence_score": row.get("confidence"),
+            "confidence": row.get("confidence"),
+            "evidence": [citation for citation in proposal.get("citations", [])
+                         if isinstance(citation, dict)
+                         and citation.get("page", citation.get("physical_page", citation.get("physical_pdf_page"))) in set(source_pages)],
+            "unresolved_fields": row.get("unresolved_fields", []),
+            "conflicts": row.get("conflicts", []),
+            "alternatives": row.get("alternatives", []),
+        })
+    return result
 
 
 def _build(root):
@@ -38,6 +108,8 @@ def _build(root):
     if not paths["ai_input"].exists():
         raise ValueError("Analyse the architect PDF before extracting calculation inputs.")
     ai_input = _read(paths["ai_input"])
+    from backend import reviewer_room_geometry_service
+    reviewer_geometry_input = reviewer_room_geometry_service.current_artifact_input(root)
     return extract_calculation_input_evidence(
         ai_input,
         _read(paths["drawing_coverage"]),
@@ -47,9 +119,19 @@ def _build(root):
         _read(paths["building_evidence"]),
         _read(paths["dimension_wall_matches"]),
         _read(paths["geometry_confirmation"]),
+        geometry_room_proposals=_room_geometry_skill_proposals(root),
         window_scan=_read(paths["window_scan_register"]),
         window_reviews=_read(paths["window_scan_reviews"]),
+        site_orientation=_read(paths["site_orientation"]),
+        solar_radiation_source=_read(paths["solar_radiation_source"]),
+        solar_scenario_id=_read(paths["solar_radiation_source"]).get("scenario_id", ""),
+        reviewer_room_geometry=reviewer_geometry_input,
     )
+
+
+def _reviewer_geometry_input(root):
+    from backend import reviewer_room_geometry_service
+    return reviewer_room_geometry_service.current_artifact_input(root)
 
 
 def input_artifacts_current(root, evidence):
@@ -61,12 +143,16 @@ def input_artifacts_current(root, evidence):
     current = evidence_input_fingerprints(*(_read(paths[name]) for name in (
         "ai_input", "drawing_coverage", "spatial_ocr", "vector_geometry", "vision_response",
         "building_evidence", "dimension_wall_matches", "geometry_confirmation",
-    )))
+    )), reviewer_room_geometry=_reviewer_geometry_input(paths["reviewer_room_geometry"].parent))
     scan_current = evidence.get("opening_register", {}).get("window_scan_fingerprint", "")
     scan_now = _read(paths["window_scan_register"], {}).get("fingerprint", "")
     reviews_current = evidence.get("opening_register", {}).get("window_reviews_fingerprint", "")
     reviews_now = _read(paths["window_scan_reviews"], {}).get("fingerprint", "")
-    return current == expected and scan_current == scan_now and reviews_current == reviews_now
+    orientation_current = evidence.get("input_artifact_fingerprints", {}).get("site_orientation", "")
+    orientation_now = _fingerprint(_canonical_evidence(_read(paths["site_orientation"], {}))) if paths["site_orientation"].exists() else ""
+    solar_current = evidence.get("input_artifact_fingerprints", {}).get("solar_radiation_source", "")
+    solar_now = _fingerprint(_canonical_evidence(_read(paths["solar_radiation_source"], {}))) if paths["solar_radiation_source"].exists() else ""
+    return current == expected and scan_current == scan_now and reviews_current == reviews_now and orientation_current == orientation_now and solar_current == solar_now
 
 
 def _summary(evidence):
@@ -235,11 +321,15 @@ def post(web, project, data):
     thermal = _read(root / "thermal_model.json")
     if coverage and building and thermal:
         fusion = _read(root / "architect_evidence_fusion.json")
+        from backend import reviewer_room_geometry_service
+        room_registry = reviewer_room_geometry_service.current_artifact_input(root)
         draft = build_calculator_draft(
             thermal, building, coverage,
             source_artifacts={name: str(root / f"{name}.json") for name in ("thermal_model", "building_evidence", "drawing_coverage", "thermal_evidence")},
             thermal_evidence=_read(root / "thermal_evidence.json"),
             evidence_fusion=fusion,
+            calculation_input_evidence=stored,
+            room_registry=room_registry,
         )
         draft_path = root / "calculator_draft.json"
         _write(draft_path, draft)

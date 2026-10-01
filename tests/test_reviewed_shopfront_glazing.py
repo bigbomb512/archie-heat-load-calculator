@@ -7,7 +7,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ai.envelope import normalize_glazing_surfaces, validate_envelope_library, validate_envelope_model
+from ai.envelope import normalize_glazing_surfaces, normalize_surfaces, validate_envelope_library, validate_envelope_model
 from ai.glazing_gate import WEATHER_FACADE_GLAZING_POLICY, validate_glazing_method_gate
 from ai.opening_resolution import resolve_openings
 from ai.site_orientation import validate_site_orientation
@@ -94,7 +94,7 @@ def main():
          "construction_id": "wall-construction", "boundary_method": "external", "review_status": "confirmed", "source": "Plan", "citations": citations("01.01"), "manual_solar": {"enabled": False}},
         {"surface_id": "shopfront-surface", "owner_zone_id": "zone-1", "owner_room_id": "room-1", "kind": "glazing", "orientation": "N",
          "opening_mapping_status": "confirmed", "geometry_mode": "engineering_reviewed", "opening_evidence_id": row["opening_id"], "host_surface_id": "wall-1", "host_wall_evidence_id": "wall-1",
-         "window_id": "shopfront-window", "opening_width_m": 6.0, "opening_height_m": 2.94, "opening_quantity": 1,
+         "window_id": "shopfront-window", "opening_width_m": 6.0, "opening_height_m": 2.94, "opening_quantity": 1, "explicit_opening_area_m2": 17.64,
          "boundary_method": "external", "review_status": "confirmed", "source": "Plan/elevation", "citations": citations("01.01/02.01"),
          "solar_basis": "weather_facade", "solar_radiation_source_id": "weather", "solar_shading_mode": "manual", "direct_shading_factor": 1.0,
          "diffuse_shading_factor": 1.0, "diffuse_shading_source": "No obstruction confirmed", "diffuse_shading_citations": citations("02.01"),
@@ -108,6 +108,15 @@ def main():
     model["surfaces"][1]["orientation_source_fingerprint"] = orientation["fingerprint"]
     included, blocked, _stored = normalize_glazing_surfaces(library, model, approved_gate(), opening_register=resolved, site_orientation=orientation)
     check("reviewed external shopfront system becomes glazing-eligible once orientation is confirmed", len(included) == 1 and not blocked)
+    opaque, opaque_blocked, _stored = normalize_surfaces(library, model)
+    check("host-wall netting uses the same matched opening area as glazing", len(opaque) == 1 and not opaque_blocked and opaque[0]["area_m2"] == 6.36)
+    conflicting_model = deepcopy(model)
+    conflicting_model["surfaces"][1]["explicit_opening_area_m2"] = 18.0
+    _included, conflicting_glazing, _stored = normalize_glazing_surfaces(library, conflicting_model, approved_gate(), opening_register=resolved, site_orientation=orientation)
+    _opaque, conflicting_wall, _stored = normalize_surfaces(library, conflicting_model)
+    check("conflicting opening area blocks both glazing and host-wall netting",
+          bool(conflicting_glazing) and "conflicts with dimension-derived" in conflicting_glazing[0]["reason"]
+          and bool(conflicting_wall) and "conflicting linked opening geometry" in conflicting_wall[0]["reason"])
     incomplete = deepcopy(resolved)
     incomplete["openings"][0]["opening_coverage"]["status"] = "incomplete"
     _included, blocked, _stored = normalize_glazing_surfaces(library, model, approved_gate(), opening_register=incomplete, site_orientation=orientation)

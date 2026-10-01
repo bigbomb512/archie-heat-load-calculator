@@ -2,9 +2,23 @@
 
 import json
 import os
+import re
+import tempfile
+from copy import deepcopy
 from pathlib import Path
 
 from ai import ai_preliminary
+from ai import value_resolution as value_resolver
+from ai import room_use_resolution
+from ai import ceiling_volume_resolution
+from ai import internal_gains_resolution
+from ai import airflow_resolution
+from ai import ahu_resolution
+from ai import plant_resolution
+from ai import safety_factor_resolution
+from ai.geometry_resolution import build_geometry_resolution
+from ai.research_cache import empty_research_cache, validate_cache
+from backend import productization
 
 
 def _read(path, default):
@@ -13,9 +27,28 @@ def _read(path, default):
 
 def _write(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
-    staged = path.with_name(path.name + ".stage")
-    staged.write_text(json.dumps(value, indent=2, allow_nan=False), encoding="utf-8")
-    os.replace(staged, path)
+    # Keep the automatic local room proposal when provider-status updates are
+    # written later in the same run. The proposal is an input artifact, not a
+    # provider response, and must not disappear just because no provider is
+    # configured.
+    if path.name == "ai_preliminary_run.json" and path.exists() and isinstance(value, dict):
+        previous = _read(path, {})
+        if isinstance(previous, dict):
+            value = {**previous, **value}
+    staged = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent,
+            prefix=f".{path.name}.", suffix=".stage", delete=False
+        ) as handle:
+            staged = Path(handle.name)
+            json.dump(value, handle, indent=2, allow_nan=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(staged, path)
+    finally:
+        if staged is not None and staged.exists():
+            staged.unlink(missing_ok=True)
 
 
 def _paths(project):
@@ -28,6 +61,20 @@ def _paths(project):
         "sets": root / "ai_preliminary_input_sets",
         "current_set": root / "ai_preliminary_input_set.json",
         "report": root / "hourly_ai_preliminary_load_report.json",
+        "codex_handoff": root / "codex_preliminary_handoff.json",
+        "codex_response": root / "codex_preliminary_response.json",
+        "value_resolution": root / "value_resolution.json",
+        "site_location": root / "site_location_resolution.json",
+        "site_design_weather": root / "site_design_weather_resolution.json",
+        "room_use": root / "room_use_resolution.json",
+        "ceiling_volume": root / "ceiling_volume_resolution.json",
+        "internal_gains": root / "internal_gains_resolution.json",
+        "airflow": root / "airflow_resolution.json",
+        "ahu_resolution": root / "ahu_resolution.json",
+        "plant_resolution": root / "plant_resolution.json",
+        "safety_factor_resolution": root / "safety_factor_resolution.json",
+        "thermal_surface_resolution": root / "thermal_surface_resolution.json",
+        "research_cache": root / "research_cache.json",
         "building": root / "building_evidence.json",
         "vision": root / "vision_response.json",
         "fusion": root / "architect_evidence_fusion.json",
@@ -36,14 +83,473 @@ def _paths(project):
 
 def _sources(paths):
     run = _read(paths["run"], {})
-    proposal = run.get("manual_placeholder_proposal", run.get("manual_placeholder_entities", []))
+    proposal = _proposal_for_resolution(paths)
+    resolution = _read(paths["value_resolution"], value_resolver.empty_value_resolution())
+    state = {
+        key: resolution.get(key) for key in ("research_consent", "source_pack_version", "research_jobs", "project_sources", "overrides")
+    }
+    def artifact_fingerprint(path, default):
+        artifact = _read(path, default)
+        return artifact.get("fingerprint") or ai_preliminary.fingerprint(artifact)
+
     return {
         "building_evidence": ai_preliminary.fingerprint(_read(paths["building"], {})),
         "vision_response": ai_preliminary.fingerprint(_read(paths["vision"], {})),
         "evidence_fusion": ai_preliminary.fingerprint(_read(paths["fusion"], {})),
         "manual_placeholder_entities": ai_preliminary.fingerprint(run.get("manual_placeholder_entities", [])),
         "ai_preliminary_proposal": ai_preliminary.fingerprint(proposal),
+        "research_cache": ai_preliminary.fingerprint(_read(paths["research_cache"], empty_research_cache())),
+        "value_resolution_state": value_resolver.fingerprint(state),
+        "site_location_resolution": ai_preliminary.fingerprint(_read(paths["site_location"], {})),
+        "site_design_weather_resolution": ai_preliminary.fingerprint(_read(paths["site_design_weather"], {})),
+        "room_use_resolution": artifact_fingerprint(paths["room_use"], {}),
+        "ceiling_volume_resolution": artifact_fingerprint(paths["ceiling_volume"], {}),
+        "internal_gains_resolution": artifact_fingerprint(paths["internal_gains"], {}),
+        "thermal_surface_resolution": artifact_fingerprint(paths["thermal_surface_resolution"], {}),
+        "airflow_resolution": artifact_fingerprint(paths["airflow"], {}),
+        "ahu_resolution": artifact_fingerprint(paths["ahu_resolution"], ahu_resolution.empty_ahu_resolution()),
+        "plant_resolution": artifact_fingerprint(paths["plant_resolution"], plant_resolution.empty_plant_resolution()),
+        "safety_factor_resolution": artifact_fingerprint(paths["safety_factor_resolution"], safety_factor_resolution.empty_safety_factor_resolution()),
+        "preliminary_geometry_resolution": ai_preliminary.fingerprint(_preliminary_geometry(paths)),
     }
+
+
+def _preliminary_geometry(paths):
+    """Rebuild current draft geometry in memory without mutating reviewed artifacts."""
+    run = _read(paths["run"], {})
+    proposal = run.get("local_room_inference_proposal") or run.get("manual_placeholder_proposal", {"rooms": run.get("manual_placeholder_entities", [])})
+    if isinstance(proposal, list):
+        proposal = {"rooms": proposal}
+    from backend.calculation_extraction_service import _room_geometry_skill_proposals
+    from backend import reviewer_room_geometry_service
+    return build_geometry_resolution(
+        _read(paths["root"] / "ai_input.json", {}),
+        _read(paths["root"] / "drawing_coverage.json", {}),
+        _read(paths["building"], {}),
+        _read(paths["root"] / "spatial_ocr.json", {}),
+        _read(paths["root"] / "vector_geometry.json", {}),
+        dimension_matches=_read(paths["root"] / "dimension_wall_matches.json", {}),
+        geometry_confirmation=_read(paths["root"] / "geometry_confirmation.json", {}),
+        vision_response=_read(paths["vision"], {}),
+        resolution_mode="preliminary_ai_estimate",
+        room_proposals=((proposal or {}).get("rooms", []) if isinstance(proposal, dict) else []) +
+            _room_geometry_skill_proposals(paths["root"]),
+        reviewer_room_geometry=reviewer_room_geometry_service.current_artifact_input(paths["root"]),
+    )
+
+
+def _rebuild_geometry_evidence(web, project):
+    """Persist the shared proof artifact after an AI/local-AI handoff."""
+    paths = _paths(project)
+    # Development/recovery handoffs can be prepared from a deliberately
+    # minimal fixture. They have no architect packet to normalize, so retain
+    # the local response instead of turning the optional rebuild into a
+    # failure.
+    if not (paths["root"] / "ai_input.json").exists():
+        return {}
+    from backend import calculation_extraction_service
+    calculation_extraction_service.post(web, project, {"action": "build"})
+    return _read(paths["root"] / "geometry_resolution.json", {})
+
+
+def _resolution(paths):
+    raw = _read(paths["value_resolution"], value_resolver.empty_value_resolution())
+    if not raw.get("source_pack_version"):
+        raw["source_pack_version"] = "au-cooling-v1"
+    return value_resolver.validate_value_resolution(raw)
+
+
+def _room_use_sources(paths):
+    proposal = _proposal_for_resolution(paths)
+    return {
+        "building_evidence": ai_preliminary.fingerprint(_read(paths["building"], {})),
+        "vision_response": ai_preliminary.fingerprint(_read(paths["vision"], {})),
+        "ai_preliminary_proposal": ai_preliminary.fingerprint(proposal),
+    }
+
+
+def _resolve_room_uses(paths, persist=False):
+    existing = _read(paths["room_use"], room_use_resolution.empty_room_use_resolution())
+    proposal = _proposal_for_resolution(paths)
+    artifact = room_use_resolution.resolve(
+        _read(paths["building"], {}), _read(paths["vision"], {}),
+        proposal,
+        _room_use_sources(paths), existing,
+    )
+    if persist:
+        _write(paths["room_use"], artifact)
+        productization.record_change_if_fingerprint_changed(
+            paths["root"], action="room_use_resolution_automatically_resolved", target=paths["room_use"].name,
+            previous_fingerprint=room_use_resolution.fingerprint(existing), new_fingerprint=artifact["fingerprint"],
+            affected_ids=[row["room_id"] for row in artifact.get("records", [])],
+        )
+    return artifact
+
+
+def _ceiling_sources(paths):
+    proposal = _proposal_for_resolution(paths)
+    return {
+        "building_evidence": ai_preliminary.fingerprint(_read(paths["building"], {})),
+        "vision_response": ai_preliminary.fingerprint(_read(paths["vision"], {})),
+        "ai_preliminary_proposal": ai_preliminary.fingerprint(proposal),
+        "preliminary_geometry_resolution": ai_preliminary.fingerprint(_preliminary_geometry(paths)),
+    }
+
+
+def _internal_gains_sources(paths):
+    proposal = _proposal_for_resolution(paths)
+    pack = ai_preliminary.load_pack()
+    return {
+        "building_evidence": ai_preliminary.fingerprint(_read(paths["building"], {})),
+        "vision_response": ai_preliminary.fingerprint(_read(paths["vision"], {})),
+        "ai_preliminary_proposal": ai_preliminary.fingerprint(proposal),
+        "room_use_resolution": ai_preliminary.fingerprint(_read(paths["room_use"], {})),
+        "preliminary_pack": internal_gains_resolution.fingerprint(pack),
+    }
+
+
+def _airflow_sources(paths):
+    proposal = _proposal_for_resolution(paths)
+    site_weather_path = paths.get("site_design_weather") or paths.get("site_weather")
+    pack = ai_preliminary.load_pack()
+    return {
+        "building_evidence": ai_preliminary.fingerprint(_read(paths["building"], {})),
+        "vision_response": ai_preliminary.fingerprint(_read(paths["vision"], {})),
+        "ai_preliminary_proposal": ai_preliminary.fingerprint(proposal),
+        "room_use_resolution": ai_preliminary.fingerprint(_read(paths["room_use"], {})),
+        "ceiling_volume_resolution": ai_preliminary.fingerprint(_read(paths["ceiling_volume"], {})),
+        "site_design_weather_resolution": ai_preliminary.fingerprint(_read(site_weather_path, {}) if site_weather_path else {}),
+        "value_resolution": ai_preliminary.fingerprint(_read(paths["value_resolution"], {})),
+        "preliminary_pack": airflow_resolution.fingerprint(pack),
+    }
+
+
+def _resolve_ceiling_volumes(paths, persist=False):
+    existing = _read(paths["ceiling_volume"], ceiling_volume_resolution.empty_ceiling_volume_resolution())
+    proposal = _proposal_for_resolution(paths)
+    artifact = ceiling_volume_resolution.resolve(
+        _read(paths["building"], {}), _read(paths["vision"], {}), proposal if isinstance(proposal, dict) else {"rooms": []},
+        _preliminary_geometry(paths), ai_preliminary.load_pack(), _ceiling_sources(paths), existing,
+    )
+    if persist:
+        _write(paths["ceiling_volume"], artifact)
+        productization.record_change_if_fingerprint_changed(
+            paths["root"], action="ceiling_volume_resolution_automatically_resolved", target=paths["ceiling_volume"].name,
+            previous_fingerprint=ceiling_volume_resolution.fingerprint(existing), new_fingerprint=artifact["fingerprint"],
+            affected_ids=[row["room_id"] for row in artifact.get("records", [])],
+        )
+    return artifact
+
+
+def _resolve_internal_gains(paths, persist=False):
+    existing = _read(paths["internal_gains"], internal_gains_resolution.empty_internal_gains_resolution())
+    room_use = room_use_resolution.validate(_read(paths["room_use"], room_use_resolution.empty_room_use_resolution()))
+    artifact = internal_gains_resolution.resolve(
+        _read(paths["building"], {}), _read(paths["vision"], {}), _proposal_for_resolution(paths),
+        room_use, ai_preliminary.load_pack(), _internal_gains_sources(paths), existing,
+    )
+    if persist:
+        _write(paths["internal_gains"], artifact)
+        productization.record_change_if_fingerprint_changed(
+            paths["root"], action="internal_gains_resolution_automatically_resolved",
+            target=paths["internal_gains"].name,
+            previous_fingerprint=internal_gains_resolution.fingerprint(existing),
+            new_fingerprint=artifact["fingerprint"],
+            affected_ids=[row.get("room_id") for row in artifact.get("records", [])],
+        )
+    return artifact
+
+
+def _resolve_airflow(paths, persist=False):
+    existing = _read(paths["airflow"], airflow_resolution.empty_airflow_resolution())
+    room_use = room_use_resolution.validate(_read(paths["room_use"], room_use_resolution.empty_room_use_resolution()))
+    ceiling = ceiling_volume_resolution.validate(_read(paths["ceiling_volume"], ceiling_volume_resolution.empty_ceiling_volume_resolution()))
+    artifact = airflow_resolution.resolve(
+        _read(paths["building"], {}), _read(paths["vision"], {}), _proposal_for_resolution(paths), room_use,
+        ceiling, ai_preliminary.load_pack(), _airflow_sources(paths), existing,
+    )
+    if persist:
+        _write(paths["airflow"], artifact)
+        productization.record_change_if_fingerprint_changed(
+            paths["root"], action="airflow_resolution_automatically_resolved", target=paths["airflow"].name,
+            previous_fingerprint=airflow_resolution.fingerprint(existing), new_fingerprint=artifact["fingerprint"],
+            affected_ids=[row.get("airflow_id") for row in artifact.get("records", [])],
+        )
+    return artifact
+
+
+def _proposal_for_resolution(paths):
+    run = _read(paths["run"], {})
+    proposal = run.get("local_room_inference_proposal") or run.get("manual_placeholder_proposal", run.get("manual_placeholder_entities", {"rooms": []}))
+    if isinstance(proposal, list):
+        proposal = {"rooms": proposal}
+    proposal = deepcopy(proposal) if isinstance(proposal, dict) else {"rooms": []}
+    proposal.setdefault("rooms", [])
+
+    # Runtime skills produce bounded proposals, not calculation artifacts.
+    # Join their room-use findings into the existing preliminary proposal so
+    # the established deterministic room-use/internal-gains resolvers actually
+    # consume them. Previously the skill run could finish successfully while
+    # the resolver still classified legacy labels on its own.
+    manifest = _read(paths["root"] / "skill_workflow_run.json", {})
+    run_id = manifest.get("run_id")
+    skill_dir = paths["root"] / "skill_workflow_runs" / str(run_id) / "proposals" if run_id else None
+    if not skill_dir:
+        return proposal
+    identity_proposal = _read(skill_dir / "room_identity_use.json", {})
+    identity_state = manifest.get("subskills", {}).get("room_identity_use", {})
+    if identity_state.get("status") not in {"needs_review", "provisional", "resolved", "completed"}:
+        return proposal
+    fields = identity_proposal.get("proposal_fields", {}) if isinstance(identity_proposal, dict) else {}
+    identity_rows = fields.get("rooms", []) if isinstance(fields, dict) else []
+    citations = {
+        row.get("citation_id"): row for row in identity_proposal.get("citations", [])
+        if isinstance(row, dict) and row.get("citation_id")
+    } if isinstance(identity_proposal, dict) else {}
+    rooms_by_id = {
+        str(row.get("room_id")): row for row in proposal["rooms"]
+        if isinstance(row, dict) and row.get("room_id")
+    }
+    rooms_by_label = {
+        str(row.get("label", "")).strip().casefold(): row for row in proposal["rooms"]
+        if isinstance(row, dict) and row.get("label")
+    }
+    inference_by_id = {}
+    for inference in identity_proposal.get("inferences", []) if isinstance(identity_proposal, dict) else []:
+        if not isinstance(inference, dict):
+            continue
+        match = re.search(r"rooms\[([^\]]+)\]", str(inference.get("field", "")))
+        if match:
+            inference_by_id.setdefault(match.group(1), []).append(inference)
+    unresolved_fields = identity_proposal.get("unresolved_fields", []) if isinstance(identity_proposal, dict) else []
+    for finding in identity_rows if isinstance(identity_rows, list) else []:
+        if not isinstance(finding, dict):
+            continue
+        room_id = str(finding.get("room_id", ""))
+        row = rooms_by_id.get(room_id) or rooms_by_label.get(str(finding.get("original_label", "")).strip().casefold())
+        if not row:
+            continue
+        row.setdefault("room_id", room_id)
+        row.setdefault("level_name", finding.get("level") or "Unassigned level")
+        category = finding.get("taxonomy_id")
+        supporting_inferences = inference_by_id.get(room_id, [])
+        taxonomy_inference = next((item for item in supporting_inferences if item.get("field", "").endswith(".taxonomy_id")), None)
+        inferred_value = taxonomy_inference.get("value") if isinstance(taxonomy_inference, dict) else None
+        if isinstance(inferred_value, dict):
+            category = inferred_value.get("taxonomy_id") or category
+        elif isinstance(inferred_value, str):
+            category = inferred_value or category
+        if category:
+            row["room_use_category"] = category
+            row["room_use_rationale"] = str(taxonomy_inference.get("method", "Skill interpretation of cited room evidence.")) if taxonomy_inference else "Skill-selected controlled room-use category."
+            row["confidence"] = taxonomy_inference.get("confidence", row.get("confidence", 0.65)) if taxonomy_inference else row.get("confidence", 0.65)
+        evidence = row.get("evidence") if isinstance(row.get("evidence"), list) else []
+        for citation_id in finding.get("evidence_page_ids", []):
+            citation = citations.get(f"c{citation_id}")
+            if citation:
+                ref = {"page": citation.get("physical_pdf_page"), "drawing_number": citation.get("drawing_identity", ""),
+                       "title": citation.get("title", ""), "excerpt": citation.get("excerpt_or_crop", "")}
+                if ref.get("page") and ref not in evidence:
+                    evidence.append(ref)
+        row["evidence"] = evidence
+        # A source-system label explicitly reported absent from the plan is not
+        # direct-label evidence and cannot overrule the AI's cited category.
+        if any(isinstance(item, dict) and room_id in str(item.get("field", "")) and "original_label" in str(item.get("field", ""))
+               for item in unresolved_fields):
+            row["direct_label_verified"] = False
+        matching_inference = next((item for item in supporting_inferences if isinstance(item.get("value"), dict)
+                                   and item["value"].get("boundary_status") == "Functional zone; independent room separation unresolved"), None)
+        geometry_proposal = _read(skill_dir / "room_boundaries_areas.json", {})
+        candidates = (geometry_proposal.get("proposal_fields", {}) or {}).get("geometry_candidates", [])
+        candidate = next((item for item in candidates if isinstance(item, dict) and item.get("room_id") == room_id), None)
+        if matching_inference or (candidate and "parent_connected_zone_boundary" in candidate.get("unresolved_fields", [])):
+            # A bar/service subarea without its own boundary must not receive a
+            # second room load on top of the connected customer zone.
+            row["non_counting_functional_subarea"] = True
+            row["calculation_scope_override"] = "unresolved_scope"
+            row["room_use_rationale"] = (row.get("room_use_rationale", "") +
+                " Independent area is not counted because the drawing shows a functional subarea without a separate closed boundary.").strip()
+    # Capture an explicitly described counted seating schedule as occupancy
+    # evidence. The citation is retained; no schedule/profile number is
+    # manufactured when the skill did not report a count.
+    for observation in identity_proposal.get("observations", []) if isinstance(identity_proposal, dict) else []:
+        if not isinstance(observation, dict):
+            continue
+        seat_match = re.search(r"\b(\d{1,4})\s+seats?\b", str(observation.get("detail", "")), re.IGNORECASE)
+        if not seat_match or "schedule" not in str(observation.get("detail", "")).casefold():
+            continue
+        citation = next((citations.get(key) for key in observation.get("citation_ids", []) if citations.get(key)), None)
+        page = citation.get("physical_pdf_page") if citation else None
+        if page:
+            for row in proposal["rooms"]:
+                if isinstance(row, dict) and str(row.get("room_id", "")).endswith(":shop"):
+                    row["seat_count"] = int(seat_match.group(1))
+                    row["evidence"] = row.get("evidence", []) + [{"page": page, "drawing_number": citation.get("drawing_identity", ""),
+                        "title": citation.get("title", ""), "excerpt": f"Seating schedule: {seat_match.group(1)} seats."}]
+                    break
+            break
+    return proposal
+
+
+def _save_resolution(paths, resolution, action, affected_ids=None):
+    before = _read(paths["value_resolution"], value_resolver.empty_value_resolution())
+    _write(paths["value_resolution"], resolution)
+    productization.record_change_if_fingerprint_changed(
+        paths["root"], action=action, target=paths["value_resolution"].name,
+        previous_fingerprint=value_resolver.fingerprint(before), new_fingerprint=value_resolver.fingerprint(resolution),
+        affected_ids=affected_ids or [],
+    )
+
+
+def _resolve_from_packs(paths, project):
+    building, vision = _read(paths["building"], {}), _read(paths["vision"], {})
+    run = _read(paths["run"], {})
+    proposal = run.get("local_room_inference_proposal") or run.get("manual_placeholder_proposal", run.get("manual_placeholder_entities", []))
+    # Older projects stored the placeholder as a room list.  Retain that
+    # compatibility rather than assuming every existing project has the new
+    # proposal envelope.
+    if isinstance(proposal, list):
+        proposal = {"rooms": proposal}
+    if not isinstance(proposal, dict):
+        proposal = {"rooms": []}
+    room_use = _resolve_room_uses(paths, persist=True)
+    ceiling_artifact = _resolve_ceiling_volumes(paths, persist=True)
+    internal_gains_artifact = _resolve_internal_gains(paths, persist=True)
+    airflow_artifact = _resolve_airflow(paths, persist=True)
+    geometry = _preliminary_geometry(paths)
+    rows = ai_preliminary._apply_room_use_resolution(
+        ai_preliminary._space_rows(building, vision, proposal.get("rooms", []), geometry), room_use
+    )
+    effective_proposal = ai_preliminary._proposal_with_room_use(proposal, rows)
+    artifact, _values = value_resolver.build_value_resolution(
+        ai_preliminary.load_pack(), building, effective_proposal,
+        validate_cache(_read(paths["research_cache"], empty_research_cache())), _resolution(paths),
+        source_fingerprints=_sources(paths), site_location=_read(paths["site_location"], {}),
+        site_design_weather=_read(paths["site_design_weather"], {}),
+        ceiling_volume_resolution=ceiling_artifact,
+        internal_gains_resolution=internal_gains_artifact,
+        airflow_resolution=airflow_artifact,
+    )
+    _save_resolution(paths, artifact, "value_resolution_resolved")
+    return artifact
+
+
+def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
+    """Join controlled room-use decisions and skill geometry proposals before validation.
+
+    The local room detector intentionally returns identity/evidence first.  The
+    room-use resolver owns profile/scope selection, while the geometry skill
+    owns boundary proposals.  Previously the preliminary assembler validated
+    the raw identity-only rows before either resolver's data could be joined,
+    so it failed on missing profile/area even when those records existed in
+    their authoritative artifacts.
+    """
+    from backend.calculation_extraction_service import _room_geometry_skill_proposals
+
+    if isinstance(raw_proposal, list):
+        proposal = {"rooms": deepcopy(raw_proposal)}
+    elif isinstance(raw_proposal, dict):
+        proposal = deepcopy(raw_proposal)
+    else:
+        proposal = {"rooms": []}
+    proposal.setdefault("rooms", [])
+    use_by_id = {
+        row.get("room_id"): row for row in (room_use or {}).get("records", [])
+        if isinstance(row, dict) and row.get("room_id")
+    }
+    geometry_by_id = {}
+    for row in _room_geometry_skill_proposals(paths["root"]):
+        if isinstance(row, dict) and row.get("room_id"):
+            geometry_by_id[row["room_id"]] = row
+    for room in proposal["rooms"]:
+        if not isinstance(room, dict):
+            continue
+        room_id = room.get("room_id")
+        use = use_by_id.get(room_id)
+        if not use:
+            identity = room_use_resolution.room_identity(room.get("label", ""), room.get("level_name", ""))
+            use = use_by_id.get(identity)
+        if use:
+            room["preliminary_profile_id"] = use.get("preliminary_profile_id") or "generic_conditioned_room"
+            room["space_scope"] = use.get("space_scope", "unresolved_scope")
+            room["room_use_category"] = use.get("taxonomy_id", "")
+            room["room_use_status"] = use.get("status", "needs_review")
+            room["evidence"] = ai_preliminary._combined_evidence(room, use)
+        else:
+            # Keep an explicit low-confidence controlled profile so excluded
+            # or unresolved rooms can remain visible without being mistaken
+            # for an evidence-backed room-use decision.
+            room.setdefault("preliminary_profile_id", "generic_conditioned_room")
+        geometry_row = geometry_by_id.get(room_id)
+        if geometry_row:
+            room["geometry"] = deepcopy(geometry_row.get("geometry", {}))
+            room["page"] = geometry_row.get("page") or room.get("page")
+            room["evidence"] = ai_preliminary._combined_evidence(room, geometry_row)
+            room["geometry_candidate_status"] = "proposed"
+    # Make sure all stable identities have evidence pages even when their
+    # detector supplied only source_pages. The normal validator still checks
+    # that a physical page is present.
+    for room in proposal["rooms"]:
+        if not isinstance(room, dict):
+            continue
+        if not room.get("page"):
+            pages = room.get("source_pages", [])
+            if isinstance(pages, list) and pages:
+                room["page"] = pages[0]
+        if not room.get("evidence") and room.get("page"):
+            room["evidence"] = [{"page": room["page"], "excerpt": room.get("label", "Room candidate")}]
+    # Room identity is useful evidence, but the strict placeholder proposal
+    # contract is calculation-facing. Keep identity-only rows in the domain
+    # resolvers and geometry review queue; do not pass them to the load model
+    # until an explicit area or structured boundary exists.
+    calculation_rooms, area_issues = [], []
+    for room in proposal["rooms"]:
+        if not isinstance(room, dict):
+            continue
+        has_area = ai_preliminary._number(room.get("area_m2")) is not None and ai_preliminary._number(room.get("area_m2")) > 0
+        has_geometry = ai_preliminary._has_geometry_area_candidate(room)
+        if has_area or has_geometry:
+            calculation_rooms.append(room)
+            continue
+        area_issues.append({
+            "component": "room area", "room_id": str(room.get("room_id", "")),
+            "label": str(room.get("label", "")), "level": str(room.get("level_name", "")),
+            "scope": str(room.get("space_scope", "unresolved_scope")),
+            "reason": "Room identity was detected, but no validated area or structured boundary is available; it is excluded from this draft subtotal.",
+            "evidence": deepcopy(room.get("evidence", [])),
+            "remediation": "Complete and cite the room's inside-face dimension chain, or enter an explicit project area override.",
+        })
+    proposal["rooms"] = calculation_rooms
+    proposal.setdefault("issues", []).extend(area_issues)
+    return proposal
+
+
+def _queue_missing_research(paths, project, approved):
+    """Create bounded lookup manifests; this never fetches external content."""
+    current = _resolution(paths)
+    if approved:
+        current["research_consent"] = True
+        _save_resolution(paths, value_resolver.validate_value_resolution(current), "value_resolution_research_consent")
+    if not current["research_consent"]:
+        raise ValueError("Approve external source research before queueing missing-value lookups.")
+    artifact = _resolve_from_packs(paths, project)
+    current = _resolution(paths)
+    research_fallbacks = {
+        "scenario.weather_profile", "room.outside_air_lps_per_person", "room.outside_air_lps_per_m2",
+        "room.wall_u_value_w_m2k", "room.roof_u_value_w_m2k", "room.glazing_u_value_w_m2k",
+        "room.glazing_shgc", "room.equipment_w_m2",
+    }
+    candidates = [record for record in artifact.get("records", [])
+                  if record.get("status") == "excluded" or
+                  (record.get("origin") == "preliminary_fallback" and record.get("target") in research_fallbacks)]
+    for record in candidates[:40]:
+        if record.get("target") not in value_resolver.ALLOWED_TARGETS:
+            continue
+        current = value_resolver.queue_research_job(
+            current, record["target"], record["target_id"], record.get("context", {}), record.get("rationale", "")
+        )
+    _save_resolution(paths, current, "value_resolution_research_queued")
+    return current
 
 
 def _settings(paths):
@@ -83,13 +589,68 @@ def _response(web, project):
         "status": "stale" if stale_reasons else ("current" if input_set else "not_calculated"),
         "stale_reasons": stale_reasons,
         "provider_configured": bool(os.environ.get("OPENAI_API_KEY")),
+        "value_resolution": _resolution(paths),
+        "room_use_resolution": room_use_resolution.validate(_read(paths["room_use"], room_use_resolution.empty_room_use_resolution())),
+        "ceiling_volume_resolution": ceiling_volume_resolution.validate(_read(paths["ceiling_volume"], ceiling_volume_resolution.empty_ceiling_volume_resolution())),
+        "internal_gains_resolution": internal_gains_resolution.validate(_read(paths["internal_gains"], internal_gains_resolution.empty_internal_gains_resolution())),
+        "airflow_resolution": airflow_resolution.validate(_read(paths["airflow"], airflow_resolution.empty_airflow_resolution())),
+        "ahu_resolution": ahu_resolution.validate(_read(paths["ahu_resolution"], ahu_resolution.empty_ahu_resolution())),
+        "plant_resolution": plant_resolution.validate(_read(paths["plant_resolution"], plant_resolution.empty_plant_resolution())),
+        "safety_factor_resolution": safety_factor_resolution.validate(_read(paths["safety_factor_resolution"], safety_factor_resolution.empty_safety_factor_resolution())),
         "artifact_links": {name: web.safe_link(path) for name, path in paths.items()
-                           if name in {"settings", "run", "model", "current_set", "report"} and path.exists()},
+                           if name in {"settings", "run", "model", "current_set", "report", "codex_handoff", "codex_response", "value_resolution", "room_use", "ceiling_volume", "internal_gains", "airflow", "ahu_resolution", "plant_resolution", "safety_factor_resolution"} and path.exists()},
     }
 
 
 def get(web, project):
     return _response(web, project)
+
+
+def _prepare_codex_handoff(web, project):
+    """Write a local, source-linked request for the Codex development workflow."""
+    paths = _paths(project)
+    building = _read(paths["building"], {})
+    if not building:
+        raise ValueError("Analyse the PDF before preparing a local Codex handoff.")
+    handoff = ai_preliminary.build_local_codex_handoff(
+        project,
+        building,
+        _read(paths["vision"], {}),
+        _read(paths["fusion"], {}),
+        _sources(paths),
+    )
+    _write(paths["codex_handoff"], handoff)
+    _write(paths["codex_response"], ai_preliminary.empty_local_codex_response(handoff))
+    prior = _read(paths["run"], {})
+    _write(paths["run"], {**prior, "schema_version": 1, "codex_handoff_fingerprint": handoff["handoff_fingerprint"],
+                           "codex_handoff_prepared_at": ai_preliminary.now(), "codex_handoff_status": "awaiting_local_response"})
+    return handoff
+
+
+def _apply_codex_response(web, project):
+    """Apply a Codex-written response only if it still matches the source handoff."""
+    paths = _paths(project)
+    handoff = _read(paths["codex_handoff"], {})
+    response = _read(paths["codex_response"], {})
+    if not handoff or not response:
+        raise ValueError("Prepare a local Codex handoff before applying a response.")
+    if handoff.get("source_fingerprints") != _sources(paths):
+        raise ValueError("The local Codex handoff is stale because its source evidence changed. Prepare it again.")
+    if response.get("handoff_fingerprint") != handoff.get("handoff_fingerprint"):
+        raise ValueError("The local Codex response belongs to a different handoff. Prepare a new handoff and response template.")
+    proposal = ai_preliminary.validate_placeholder_proposal(response.get("proposal"))
+    prior = _read(paths["run"], {})
+    _write(paths["run"], {**prior, "schema_version": 1, "status": "local_codex_response_ready", "source": "local_codex_placeholder",
+                           "updated_at": ai_preliminary.now(), "manual_placeholder_entities": proposal["rooms"],
+                           "manual_placeholder_proposal": proposal,
+                           "local_room_inference_proposal": None,
+                           "manual_placeholder_fingerprint": ai_preliminary.fingerprint(proposal),
+                           "codex_handoff_status": "response_applied",
+                           "previous_input_fingerprint": prior.get("input_fingerprint", "")})
+    _rebuild_geometry_evidence(web, project)
+    _resolve_room_uses(paths, persist=True)
+    _resolve_ceiling_volumes(paths, persist=True)
+    return proposal
 
 
 def _assemble(web, project, source="manual_placeholder"):
@@ -98,10 +659,49 @@ def _assemble(web, project, source="manual_placeholder"):
     if not building:
         raise ValueError("Analyse the PDF before assembling an AI preliminary model.")
     existing_run = _read(paths["run"], {})
-    proposal = existing_run.get("manual_placeholder_proposal", existing_run.get("manual_placeholder_entities", []))
+    proposal = existing_run.get("local_room_inference_proposal") or existing_run.get("manual_placeholder_proposal", existing_run.get("manual_placeholder_entities", []))
+    room_use = _resolve_room_uses(paths, persist=True)
+    geometry = _preliminary_geometry(paths)
+    ceiling_artifact = _resolve_ceiling_volumes(paths, persist=True)
+    internal_gains_artifact = _resolve_internal_gains(paths, persist=True)
+    airflow_artifact = _resolve_airflow(paths, persist=True)
+    ahu_artifact = ahu_resolution.validate(_read(paths["ahu_resolution"], ahu_resolution.empty_ahu_resolution()))
+    plant_artifact = plant_resolution.validate(_read(paths["plant_resolution"], plant_resolution.empty_plant_resolution()))
+    safety_path = paths["safety_factor_resolution"]
+    if safety_path.exists():
+        safety_artifact = safety_factor_resolution.validate(_read(safety_path, safety_factor_resolution.empty_safety_factor_resolution()))
+    else:
+        safety_artifact = safety_factor_resolution.resolve({}, pack_fingerprint=ai_preliminary.fingerprint(ai_preliminary.load_pack()))
+        _write(safety_path, safety_artifact)
+        productization.record_change_if_fingerprint_changed(paths["root"], action="safety_factor_resolution_automatically_resolved", target=safety_path.name, previous_fingerprint="", new_fingerprint=safety_artifact["fingerprint"], affected_ids=["cooling", "heating"])
+    resolution = _resolve_from_packs(paths, project)
+    # _resolve_from_packs rebuilds these artifacts. Use their persisted latest
+    # versions when materializing the input set so the dependency fingerprints
+    # recorded in that set match the current project state exactly.
+    room_use = _read(paths["room_use"], room_use)
+    ceiling_artifact = _read(paths["ceiling_volume"], ceiling_artifact)
+    internal_gains_artifact = _read(paths["internal_gains"], internal_gains_artifact)
+    airflow_artifact = _read(paths["airflow"], airflow_artifact)
+    geometry = _preliminary_geometry(paths)
+    proposal = _prepare_preliminary_proposal(paths, proposal, room_use, geometry)
     input_set = ai_preliminary.assemble(
-        building, vision, source_fingerprints=_sources(paths), preliminary_proposal=proposal
+        building, vision, source_fingerprints=_sources(paths), preliminary_proposal=proposal,
+        value_resolution=resolution, research_cache=validate_cache(_read(paths["research_cache"], empty_research_cache())),
+        site_location=_read(paths["site_location"], {}),
+        site_design_weather=_read(paths["site_design_weather"], {}),
+        room_use_resolution=room_use,
+        geometry_resolution=geometry,
+        ceiling_volume_resolution=ceiling_artifact,
+        internal_gains_resolution=internal_gains_artifact,
+        airflow_resolution=airflow_artifact,
+        ahu_resolution=ahu_artifact,
+        plant_resolution=plant_artifact,
+        # The consolidated real-PDF workflow must not turn a missing measured
+        # room area into an 80/100 m2 profile assumption.  Older direct
+        # preview callers retain their explicit legacy fallback behavior.
+        allow_area_fallbacks=False,
     )
+    input_set["safety_factor_resolution"] = safety_artifact
     input_set["run_source"] = source
     _write(paths["sets"] / f"{input_set['input_fingerprint']}.json", input_set)
     _write(paths["current_set"], input_set)
@@ -111,14 +711,24 @@ def _assemble(web, project, source="manual_placeholder"):
         "materialized_fields": input_set["materialized_fields"], "exclusions": input_set["exclusions"],
         "review_queue": input_set["review_queue"], "pack": input_set["pack"],
         "surface_summary": input_set.get("surface_summary", {}), "excluded_spaces": input_set.get("excluded_spaces", []),
+        "value_resolution": input_set.get("value_resolution", {}),
+        "geometry_resolution": input_set.get("geometry_resolution", {}),
+        "ceiling_volume_resolution": input_set.get("ceiling_volume_resolution", {}),
+        "internal_gains_resolution": input_set.get("internal_gains_resolution", {}),
+        "airflow_resolution": input_set.get("airflow_resolution", {}),
+        "ahu_resolution": input_set.get("ahu_resolution", {}),
+        "plant_resolution": input_set.get("plant_resolution", {}),
+        "safety_factor_resolution": input_set.get("safety_factor_resolution", {}),
         "dependency_fingerprints": input_set["dependency_fingerprints"],
     }
     _write(paths["model"], model)
     _write(paths["run"], {"schema_version": 1, "status": "assembled", "source": source, "finished_at": ai_preliminary.now(),
                            "input_fingerprint": input_set["input_fingerprint"], "provider_payload_stored": False,
-                           "manual_placeholder_entities": input_set.get("proposal", {}).get("rooms", []),
-                           "manual_placeholder_proposal": input_set.get("proposal", {}),
-                           "manual_placeholder_fingerprint": ai_preliminary.fingerprint(input_set.get("proposal", {})),
+                           # _write merges this status update into the existing run
+                           # record. Keep the original AI/manual proposal fields
+                           # intact so recalculating dependencies does not make
+                           # the just-assembled input set immediately stale.
+                           "assembled_proposal_fingerprint": ai_preliminary.fingerprint(input_set.get("proposal", {})),
                            "assumptions": input_set["materialized_fields"], "unresolved_components": input_set["exclusions"]})
     return input_set
 
@@ -131,7 +741,27 @@ def _calculate(web, project):
     stale = _stale_reasons(paths, input_set)
     if stale:
         raise ValueError("AI preliminary inputs are stale because " + ", ".join(stale) + " changed. Assemble again before calculating.")
-    report = ai_preliminary.calculate(input_set)
+    required = {
+        "project inputs": paths["root"] / "design_requirements.json",
+        "schedule library": paths["root"] / "schedule_library.json",
+        "design-day weather": paths["root"] / "design_day_scenarios.json",
+        "hourly load model": paths["root"] / "hourly_load_model.json",
+    }
+    missing = [label for label, path in required.items() if not path.exists()]
+    if missing:
+        raise ValueError("Cannot calculate the preliminary load yet. Missing required artifacts: " + ", ".join(missing) + ".")
+    policy_artifact = _read(paths["safety_factor_resolution"], safety_factor_resolution.empty_safety_factor_resolution())
+    policy = safety_factor_resolution.policy_for(policy_artifact, "cooling", preliminary=True)
+    report = ai_preliminary.calculate(input_set, safety_factor_policy=policy)
+    # Provenance is attached at render time; it does not change any hourly
+    # load value or reviewed artifact.
+    try:
+        from ai import model_input_resolution as shared_resolution
+        register_path = paths["root"] / "model_input_resolution.json"
+        register = _read(register_path, _read(paths["value_resolution"], {"records": []}))
+        report["provenance"] = shared_resolution.build_report_provenance(report, register)
+    except (OSError, TypeError, ValueError):
+        report["provenance"] = {"schema_version": 1, "register_fingerprint": "", "by_component_id": {}, "governing_components": []}
     _write(paths["report"], report)
     return report
 
@@ -158,7 +788,7 @@ def _auto_start_provider(web, project):
         return "awaiting_provider"
     try:
         vision_extraction_service.post(web, project, {"action": "start", "settings": {
-            "owner_opt_in": True, "max_budget_aud": settings["maximum_provider_budget_aud"], "selected_group_ids": group_ids,
+            "owner_opt_in": True, "selected_group_ids": group_ids,
         }})
     except Exception as error:
         _write(paths["run"], {"schema_version": 1, "status": "provider_pending", "updated_at": ai_preliminary.now(), "message": str(error)[:500]})
@@ -169,9 +799,22 @@ def _auto_start_provider(web, project):
 
 
 def after_pdf_analysis(web, project):
-    """Called after local PDF analysis. It is deliberately a no-op by default."""
+    """Queue local room detection before any downstream resolver runs.
+
+    Room inference is local and does not require AI-provider consent.  The
+    persisted job invokes the shared model-input resolver after its normalized
+    room-use and geometry artifacts are written.  Provider-backed work remains
+    a separate, explicitly opted-in path.
+    """
     if not project.get("review_dir"):
         return "not_available"
+    try:
+        from backend import room_inference_service
+        room_inference_service.post(web, project, {"action": "start"})
+    except (ValueError, KeyError, OSError, TypeError, AttributeError):
+        # The UI exposes a retry/remediation path; analysis itself remains
+        # successful even when local room extraction cannot start.
+        pass
     return _auto_start_provider(web, project)
 
 
@@ -181,6 +824,12 @@ def provider_completed(web, project):
     settings = _settings(paths)
     if not settings["automatic_analysis_enabled"]:
         return "disabled"
+    try:
+        from backend import model_input_resolution_service
+        model_input_resolution_service.post(web, project, {"action": "resolve"})
+    except (ValueError, KeyError, OSError, TypeError, AttributeError):
+        pass
+    _resolve_room_uses(_paths(project), persist=True)
     _assemble(web, project, source="provider")
     _calculate(web, project)
     return "completed"
@@ -196,12 +845,40 @@ def post(web, project, data):
         _save_settings(paths, data["settings"])
     if action == "save_settings":
         pass
+    elif action == "resolve_from_packs":
+        current = _resolution(paths)
+        if "research_consent" in data:
+            current["research_consent"] = bool(data["research_consent"])
+            _save_resolution(paths, value_resolver.validate_value_resolution(current), "value_resolution_research_consent")
+        _resolve_from_packs(paths, project)
+    elif action == "queue_source_research":
+        current = _resolution(paths)
+        if "research_consent" in data:
+            current["research_consent"] = bool(data["research_consent"])
+        updated = value_resolver.queue_research_job(current, data.get("target", ""), data.get("target_id", ""), data.get("context", {}), data.get("reason", ""))
+        _save_resolution(paths, updated, "value_resolution_research_queued", [data.get("target_id", "")])
+    elif action == "queue_missing_source_research":
+        _queue_missing_research(paths, project, bool(data.get("research_consent", False)))
+    elif action == "accept_project_source":
+        current = _resolution(paths)
+        updated = value_resolver.add_project_source(current, data.get("project_source", {}))
+        _save_resolution(paths, updated, "value_resolution_project_source_accepted", [data.get("project_source", {}).get("target_id", "")])
+    elif action == "apply_override":
+        current = _resolution(paths)
+        updated = value_resolver.add_override(current, data.get("override", {}))
+        _save_resolution(paths, updated, "value_resolution_override_applied", [data.get("override", {}).get("target_id", "")])
+    elif action == "rebuild_preliminary_model":
+        _assemble(web, project, source="value_resolution")
     elif action == "assemble":
         _assemble(web, project)
     elif action == "calculate":
         _calculate(web, project)
     elif action == "run":
         _auto_start_provider(web, project)
+    elif action == "prepare_codex_handoff":
+        _prepare_codex_handoff(web, project)
+    elif action == "apply_codex_response":
+        _apply_codex_response(web, project)
     elif action in {"save_manual_placeholder", "save_placeholder_proposal"}:
         raw_proposal = data.get("placeholder_proposal") if action == "save_placeholder_proposal" else data.get("manual_placeholder_entities")
         proposal = ai_preliminary.validate_placeholder_proposal(raw_proposal)
@@ -209,10 +886,12 @@ def post(web, project, data):
         _write(paths["run"], {"schema_version": 1, "status": "manual_placeholder_ready", "source": "manual_placeholder",
                                "updated_at": ai_preliminary.now(), "manual_placeholder_entities": proposal["rooms"],
                                "manual_placeholder_proposal": proposal,
+                               "local_room_inference_proposal": None,
                                "manual_placeholder_fingerprint": ai_preliminary.fingerprint(proposal),
                                "previous_input_fingerprint": prior.get("input_fingerprint", "")})
+        _resolve_room_uses(paths, persist=True)
     else:
-        raise ValueError("AI preliminary action must be save_settings, save_manual_placeholder, save_placeholder_proposal, run, assemble, or calculate.")
+        raise ValueError("AI preliminary action must be save_settings, save_manual_placeholder, save_placeholder_proposal, prepare_codex_handoff, apply_codex_response, resolve_from_packs, queue_source_research, queue_missing_source_research, accept_project_source, apply_override, rebuild_preliminary_model, run, assemble, or calculate.")
     project["updated_at"] = ai_preliminary.now()
     web.update_project(project)
     return _response(web, project)

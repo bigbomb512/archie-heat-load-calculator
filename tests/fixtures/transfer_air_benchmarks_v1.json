@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "suite_id": "room_transfer_air_analytical_v1",
+  "purpose": "Analytical check of the documented draft transfer-air arithmetic; not engineering approval or flow-network validation.",
+  "source": {
+    "title": "ASHRAE Handbook—Fundamentals (2025), Chapter 1: Psychrometrics",
+    "url": "https://handbook.ashrae.org/Handbooks/F25/SI/F25_Ch01/F25_Ch01_si.aspx",
+    "supports": "Thermodynamic wet-bulb humidity ratio, moist-air enthalpy, specific volume, and psychrometric energy relationships. It does not establish the project's transfer-flow reference assumption."
+  },
+  "case": {
+    "case_id": "sending_room_to_warmer_drier_receiver",
+    "inputs": {
+      "flow_value": 50.0,
+      "flow_unit": "L/s",
+      "source_db_c": 25.0,
+      "source_wb_c": 18.0,
+      "source_wet_bulb_basis": "thermodynamic",
+      "target_db_c": 20.0,
+      "target_wb_c": 15.0,
+      "target_wet_bulb_basis": "thermodynamic",
+      "pressure_kpa": 101.325,
+      "flow_reference": "sending_room_air_state"
+    },
+    "expected": {
+      "mass_flow_kg_s": 0.05826005,
+      "sensible_kw": 0.2930,
+      "latent_kw": 0.2176,
+      "total_kw": 0.5106
+    },
+    "equation": "W from ASHRAE thermodynamic wet-bulb equation; h=1.006T+W(2501+1.86T); v=0.287055(T+273.15)(1+1.607W)/P; mdot=Vdot_source/v_source; Qs=mdot*1.006*(Tsource-Ttarget); Qt=mdot*(hsource-htarget); Ql=Qt-Qs.",
+    "assumptions": [
+      "50 L/s is explicitly referenced to sending-room air state.",
+      "Both wet-bulb values are thermodynamic and above freezing.",
+      "Expected values were independently calculated from the stated equations and rounded to the production output precision."
+    ],
+    "exclusions": [
+      "Pressure/flow network balance",
+      "Door and opening dynamics",
+      "Replacement air and exhaust effects",
+      "Project-specific confirmation of the sending-room flow reference",
+      "HVAC engineer approval"
+    ]
+  },
+  "rounding_tolerance_kw": 0.00005
+}

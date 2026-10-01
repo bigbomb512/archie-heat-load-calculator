@@ -1,9 +1,47 @@
 # Archie Heat-Load Calculator TODO
 
-This file tracks the practical next actions for the heat-load calculator. The
-full milestone roadmap is in [`docs/cool_heat_load_roadmap.md`](docs/cool_heat_load_roadmap.md).
+This file tracks actionable gaps for the heat-load capability across Archie.
+The product end goal is documented in [`docs/PLAN.md`](docs/PLAN.md), and the
+full calculation roadmap is in [`docs/cool_heat_load_roadmap.md`](docs/cool_heat_load_roadmap.md).
 
-## Current priority — Drawing 6 geometry review workspace
+## How to choose and track work
+
+Prioritize the most consequential supported gap in calculation correctness,
+evidence traceability, scope completeness or user workflow. Prefer improvements
+that apply across projects. A task on one project or drawing set is a means to
+exercise a capability, not the product's completion criterion. Preserve
+project-specific evidence and mark gaps unresolved where the documents do not
+support a conclusion.
+
+Maintain a varied project evaluation set, including different building uses,
+drawing conventions, scales, layouts, document quality and HVAC systems. Record
+which capabilities each case exercises, what evidence is permitted, and what
+remains unsupported. Drawing 6 is one such case; its results must not be
+generalized to untested projects.
+
+Use the read-only portfolio scorecard in evaluations/README.md and
+tools/evaluate_portfolio.py to track stage coverage, blockers and change across
+permitted project cases. Coverage is not an accuracy or engineering-validation
+claim.
+
+## Open implementation and validation work
+
+The existing Drawing 6 evidence-fusion and review work is a project-specific
+test of the reusable evidence-to-model workflow:
+
+- [x] Align room-use, ceiling-volume, internal-gains and airflow editors with
+  the preliminary pipeline's shared room proposal and resolver-specific source
+  fingerprints. Old artifacts may show stale once; users refresh them through
+  the corresponding editor. Overrides on disappeared ceiling, internal-gains,
+  and airflow room/paths remain explicitly stale for review; airflow overrides
+  are per path, queued source research survives a re-resolve, and stale source
+  inputs block airflow edits. Individual stale airflow rows cannot be edited
+  even when artifact fingerprints are current; clearing one removes the value
+  without clearing stale status. Stale retained values stay out of calculation
+  mappings.
+- [ ] Audit truthful staleness checks for safety-factor, site-location and
+  site-design-weather editors; those services have separate inputs and remain
+  outside the room-input resolver change.
 
 - [x] Extract cited calculation inputs from architect PDF plans, service/RCP
   pages, openings, equipment schedules, notes and sections into a normalized
@@ -11,12 +49,22 @@ full milestone roadmap is in [`docs/cool_heat_load_roadmap.md`](docs/cool_heat_l
 - [x] Bind image, OCR, table, vector and manual-vision observations to stable
   room/opening identities; keep ambiguous matches as conflicts and 3D as
   cross-check-only evidence.
+- [x] Classify building-level, finish/tag, detail-label and body-text level
+  evidence separately; only a reviewed page-triage label or agreeing
+  title-block/address/page-title building-level evidence may select a floor.
+  Version the classifier and mark dependent artifacts stale after the upgrade.
 - [x] Use the existing evidence-fusion output in the frontend to review page
   groups, room witnesses, floor identity, geometry status and area evidence.
-- [ ] Apply only reviewed floor → zone → room topology without overwriting
-  authored records, then complete the supported room cooling inputs.
-- [ ] Reach one traceable `review_ready` Drawing 6 cooling case before adding
-  another calculation method.
+- [x] Apply reviewed floor → zone → room topology and current calibrated traced
+  areas through the calculator draft bridge without overwriting authored
+  records. The room registry supplies otherwise missing room candidates;
+  engineer acceptance records the trace proof and calibration in provenance.
+  Remaining room cooling inputs still require their own evidence and review.
+- [ ] Resolve floor identity for single-storey tenancies when drawings provide
+  no explicit title-block/page-title building level; do not infer a floor from
+  finish codes or create a floor until the contractor/reviewer maps it.
+- [ ] Record the case's traceable result and unresolved evidence when available;
+  treat it as one project test, not a prerequisite for all other product work.
 
 The temporary calculation harness below is internal development support. It is
 not a contractor workflow and does not block the geometry-review product work.
@@ -30,10 +78,18 @@ not a contractor workflow and does not block the geometry-review product work.
   safety factors, and coincident room/zone/floor peaks.
 - [ ] Resolve and document the sign policy for negative conduction and negative
   sensible/latent air loads.
-- [ ] Confirm safety-factor placement and ensure it is applied exactly once.
+- [ ] Confirm safety-factor placement and ensure it is applied exactly once. Legacy and approved project-policy invariants now have calculation-path checks; strict behavior after a preliminary fallback artifact remains unresolved, and annual/project-policy scope still needs owner review.
 - [ ] Confirm that outside air and infiltration cannot represent the same air
-  path twice.
-- [ ] Run the validated equations through the private Drawing 6 workflow.
+  path twice. Cooling, hourly heating, and annual room calculations now share
+  the room-level checks for duplicate infiltration paths, assessment state,
+  dedicated schedules, and ACH volume inputs; room-versus-central-AHU outside-
+  air ownership remains open and has not been settled by these checks.
+- [ ] Decide whether heating infiltration needs an approval scope separate from
+  the cooling-scoped `infiltration_method_gate.json`; current heating behavior
+  checks that gate but does not establish that its approval covers heating.
+- [ ] Run the supported equations through the private Drawing 6 workflow when
+  its inputs are ready, and retain it as a regression case alongside other
+  permitted projects.
 - [ ] Record the remaining limitations; do not claim CAMEL+ validation.
 
 ## Deferred — annual and monthly energy analysis
@@ -62,14 +118,27 @@ merely because an annual sum can be calculated.
 - [ ] Compare annual/monthly outputs against an authorised reference case
   before exposing annual results as validated.
 
-## Roadmap after current validation
+## Capability areas to advance
 
-1. Complete the supported Drawing 6 cooling case.
-2. Finish the approved infiltration slice.
-3. Implement detailed glazing and controlled solar/shading.
-4. Expand partitions and adjacent-boundary methods.
-5. Run the authorised cooling benchmark gate.
-6. Build heating separately.
-7. Build AHU and air-side calculations.
-8. Build plant and circuit aggregation.
-9. Implement annual/monthly analysis last.
+- [ ] Complete and validate automatic room-boundary detection and vision-based
+  room proposals. Engineer acceptance of a current traced area is a workflow
+  control, not independent evidence of area accuracy; compare real areas against
+  a separately recorded source before making accuracy claims.
+
+Select order from current impact, evidence availability, dependencies and
+verification readiness; this is a capability map, not a sequence gated on one
+project reaching completion.
+
+- Close method-specific validation gaps for supported cooling, heating,
+  infiltration, glazing/solar, psychrometrics and safety-factor behavior.
+- Complete evidence-backed room and air-path modeling while keeping comfort
+  ventilation, process exhaust, make-up air and infiltration distinct.
+- Expand validated heating, AHU/air-side and plant/circuit scopes when their
+  methods, sources and reference cases are ready.
+- Improve the review and reporting workflow so users can resolve missing or
+  conflicting evidence without silently accepting assumptions.
+- Build a permissioned and diverse project evaluation set; report coverage,
+  component deviations and unsupported cases rather than a single aggregate
+  accuracy claim.
+- Defer annual/monthly analysis until its weather, calendar, building/system
+  methods and reference validation are adequate for the intended output.

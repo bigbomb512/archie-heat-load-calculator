@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ai.envelope import apply_reviewed_envelope_to_hourly_model, normalize_glazing_surfaces, validate_envelope_model
 from ai.calculation_extraction import evidence_input_fingerprints
+from ai import reviewer_room_geometry
 from ai.envelope_method_gates import WEATHER_FACADE_POLICY, empty_solar_radiation_method_gate
 from ai.hourly_loads import calculate_hourly_load_report
 from ai.opening_resolution import resolve_openings
@@ -19,6 +20,7 @@ from ai.site_orientation import validate_site_orientation
 from ai.glazing_gate import WEATHER_FACADE_GLAZING_POLICY, validate_glazing_method_gate
 from ai.solar_radiation import facade_irradiance, validate_solar_radiation_source
 from backend.calculation_extraction_service import _display_evidence, input_artifacts_current
+from backend import reviewer_room_geometry_service
 from test_glazing_hourly_integration import approved_gate, citation, envelope, hourly_model, requirements, schedules, scenarios
 
 
@@ -96,7 +98,10 @@ def main():
                                     {"opening_register": {"openings": [{"page": 1, "source_crop": "../../private/source.png"}]}})
         check("opening preview is project-local and rejects escaping crop paths", display["opening_register"]["openings"][0]["page_preview_url"] == "/safe/page_001.png" and "crop_preview_url" not in display["opening_register"]["openings"][0] and display["opening_register"]["openings"][0]["source_crop"] == "source.png")
         (root / "vision_response.json").write_text(json.dumps(vision), encoding="utf-8")
-        stored = {"input_artifact_fingerprints": evidence_input_fingerprints({}, {}, {}, {}, vision, {}, {}, {})}
+        stored = {"input_artifact_fingerprints": evidence_input_fingerprints(
+            {}, {}, {}, {}, vision, {}, {}, {},
+            reviewer_room_geometry=reviewer_room_geometry_service.current_artifact_input(root),
+        )}
         check("unchanged AI opening response keeps derived register current", input_artifacts_current(root, stored) is True)
         (root / "vision_response.json").write_text(json.dumps(repeated), encoding="utf-8")
         check("changed AI opening response stales derived register", input_artifacts_current(root, stored) is False)
@@ -136,6 +141,22 @@ def main():
                                           glazing_gate=weather_glazing_gate(), radiation_gate=radiation_gate, radiation_source=source)
     noon = report["scenario_results"][0]["rooms"][0]["hours"][14]["components"]
     check("hourly report separates glazing conduction and weather-facade solar", "glazing_conduction" in noon and noon["glazing_solar"]["total_kw"] > 0)
+    opaque_model = deepcopy(model)
+    opaque_model["surfaces"][0].update({
+        "solar_radiation_source_id": "selected-surface-source", "solar_absorptance": 0.7,
+        "manual_solar": {"enabled": True, "solar_design_w_m2": 500, "solar_gain_factor": 1.0,
+                         "shading_factor": 1.0, "review_status": "confirmed", "source": "Manual fallback", "citations": citation("manual")},
+    })
+    opaque_model = validate_envelope_model(opaque_model, library)
+    opaque_selected = apply_reviewed_envelope_to_hourly_model(hourly_model(), library, opaque_model,
+        weather_glazing_gate(), opening_register=resolved)
+    opaque_room = opaque_selected["rooms"][0]
+    opaque_room["schedule_assignments"]["solar"]["wall-1"] = "solar"
+    mismatched_source = calculate_hourly_load_report(requirements(), schedules(), scenarios(), opaque_selected, ["summer"],
+        glazing_gate=weather_glazing_gate(), radiation_gate=radiation_gate, radiation_source=source)
+    mismatch_room = mismatched_source["scenario_results"][0]["rooms"][0]
+    check("approved selected opaque solar source mismatch blocks instead of falling back to manual solar",
+          mismatch_room["status"] == "blocked" and any("selected-surface-source" in reason for reason in mismatch_room["blocked_reasons"]))
     inputs = noon["glazing_solar"]["input_rows"][0]
     check("hourly solar retains source, sun position and irradiance components", inputs["facade_irradiance"]["source_fingerprint"] == source["fingerprint"] and "solar_azimuth_deg" in inputs["facade_irradiance"])
     full_solar = noon["glazing_solar"]["total_kw"]

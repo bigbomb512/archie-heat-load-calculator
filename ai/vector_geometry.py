@@ -129,8 +129,11 @@ def page_is_geometry_capable(page):
     drawing/detail as a room plan.  Raster/3D evidence is handled elsewhere.
     """
     title = str(page.get("title", "")).casefold()
+    structured = str((page.get("structured_content") or {}).get("markdown", "")).casefold()
     detected = str(page.get("detected_type", "")).casefold()
     role = str(page.get("plan_role", "")).casefold()
+    if any(term in structured for term in ("proposed floor layout", "proposed shop floor layout", "existing shop floor layout")):
+        return True
     if any(term in title for term in ("storefront elevation", "shopfront elevation", "window elevation", "door elevation")):
         return True
     if detected in {"elevation", "section"} or any(term in title for term in (" elevation", " section")):

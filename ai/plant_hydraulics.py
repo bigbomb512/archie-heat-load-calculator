@@ -166,7 +166,7 @@ def validate_hydraulic_circuits(raw, plant_ids=None, known_ahu_ids=None):
     return {"schema_version": 1, "updated_at": str(raw.get("updated_at", "") or ""), "circuits": circuits}
 
 
-def calculate_plant_report(ahu_report, plants_raw, circuits_raw, gate_raw, *, selected_plant_ids=None, scenario_ids=None, snapshot_fingerprint=""):
+def calculate_plant_report(ahu_report, plants_raw, circuits_raw, gate_raw, *, selected_plant_ids=None, scenario_ids=None, snapshot_fingerprint="", preliminary_policy=None):
     gate = validate_plant_method_gate(gate_raw or empty_plant_method_gate())
     raw_circuits = circuits_raw or empty_hydraulic_circuits()
     circuit_ids = {str(row.get("circuit_id", "")) for row in raw_circuits.get("circuits", []) if isinstance(row, dict)}
@@ -174,7 +174,7 @@ def calculate_plant_report(ahu_report, plants_raw, circuits_raw, gate_raw, *, se
     circuits = validate_hydraulic_circuits(raw_circuits, {row["plant_id"] for row in plants["systems"]})
     circuit_lookup = {row["circuit_id"]: row for row in circuits["circuits"]}
     plant_lookup = {row["plant_id"]: row for row in plants["systems"]}
-    selected = set(selected_plant_ids or plant_lookup)
+    selected = set(plant_lookup if selected_plant_ids is None else selected_plant_ids)
     unknown = selected - set(plant_lookup)
     if unknown:
         raise ValueError("Unknown plant IDs: " + ", ".join(sorted(unknown)))
@@ -188,15 +188,24 @@ def calculate_plant_report(ahu_report, plants_raw, circuits_raw, gate_raw, *, se
         "method_gate_fingerprint": gate["fingerprint"], "validated": False,
         "source_citation_register": _source_register(plants, circuits, gate),
     }
+    if not selected:
+        report["blocked_plants"] = [{"plant_id": "project", "reasons": ["At least one plant must be selected for calculation."]}]
+        return report
     if not ahu_report or not ahu_report.get("scenario_results"):
         report["blocked_plants"] = [{"plant_id": plant_id, "reasons": ["Current hourly AHU report is unavailable."]} for plant_id in sorted(selected)]
         return report
     ahu_scenarios = {row.get("scenario_id"): row for row in ahu_report.get("scenario_results", [])}
-    wanted = scenario_ids or list(ahu_scenarios)
+    wanted = list(ahu_scenarios) if scenario_ids is None else list(scenario_ids)
+    missing_scenarios = [scenario_id for scenario_id in wanted if scenario_id not in ahu_scenarios]
+    if not wanted or missing_scenarios:
+        reason = ("At least one cooling scenario must be selected for calculation." if not wanted
+                  else "Selected cooling scenario(s) are missing from the current AHU report: " + ", ".join(missing_scenarios) + ".")
+        report["blocked_plants"] = [{"plant_id": plant_id, "reasons": [reason]} for plant_id in sorted(selected)]
+        return report
     for scenario_id in wanted:
         scenario = ahu_scenarios.get(scenario_id)
         if scenario:
-            report["scenario_results"].append(_calculate_scenario(scenario, [plant_lookup[plant_id] for plant_id in selected], circuit_lookup, gate, ahu_report))
+            report["scenario_results"].append(_calculate_scenario(scenario, [plant_lookup[plant_id] for plant_id in selected], circuit_lookup, gate, ahu_report, preliminary_policy=preliminary_policy))
     if not report["scenario_results"]:
         report["blocked_plants"] = [{"plant_id": plant_id, "reasons": ["No selected cooling scenario is available in the AHU report."]} for plant_id in sorted(selected)]
         return report
@@ -204,11 +213,16 @@ def calculate_plant_report(ahu_report, plants_raw, circuits_raw, gate_raw, *, se
     if not usable:
         report["blocked_plants"] = [item for row in report["scenario_results"] for item in row.get("blocked_plants", [])]
         return report
-    report["status"] = "review_ready" if plant_gate_is_approved(gate) and all(row.get("status") == "review_ready" for row in usable) else "draft"
+    all_scenarios_usable = len(usable) == len(report["scenario_results"])
+    report["status"] = "draft" if preliminary_policy else "review_ready" if all_scenarios_usable and plant_gate_is_approved(gate) and all(row.get("status") == "review_ready" for row in usable) else "draft"
+    if preliminary_policy:
+        report["label"] = "AI preliminary estimate — not engineering reviewed or validated"
+        report["calculation_mode"] = "ai_preliminary"
     report["included_scope_peak"] = _governing(usable, "included_scope_peak")
     required_ahus = set(ahu_report.get("selected_ahu_ids", []))
     mapped_ahus = set().union(*(set(plant_lookup[plant_id].get("served_ahu_ids", [])) for plant_id in selected)) if selected else set()
     if required_ahus - mapped_ahus:
+        report["status"] = "draft"
         report["warnings"].append("Complete project plant peak is suppressed because some selected AHUs are not mapped to a central plant.")
     elif report["status"] == "review_ready" and len(usable) == len(report["scenario_results"]):
         report["project_peak"] = deepcopy(report["included_scope_peak"])
@@ -217,16 +231,17 @@ def calculate_plant_report(ahu_report, plants_raw, circuits_raw, gate_raw, *, se
     return report
 
 
-def _calculate_scenario(ahu_scenario, plants, circuits, gate, ahu_report):
+def _calculate_scenario(ahu_scenario, plants, circuits, gate, ahu_report, preliminary_policy=None):
     result = {"scenario_id": ahu_scenario.get("scenario_id", ""), "status": "blocked", "plants": [], "included_scope_hours": [], "included_scope_peak": {}, "blocked_plants": []}
+    allowed_statuses = set((preliminary_policy or {}).get("allowed_review_statuses", {"confirmed"}))
     ahu_lookup = {row.get("ahu_id"): row for row in ahu_scenario.get("ahus", [])}
     for plant in plants:
         if plant["plant_type"] != "chiller":
             result["plants"].append({"plant_id": plant["plant_id"], "status": "excluded", "reason": f"{plant['plant_type']} plant calculation is deferred from cooling V1.", "hours": [], "peak": {}})
             continue
         reasons = []
-        if plant["review_status"] != "confirmed":
-            reasons.append("Plant system review is not confirmed.")
+        if plant["review_status"] not in allowed_statuses:
+            reasons.append("Plant system is not eligible for this calculation mode.")
         if not plant["served_ahu_ids"]:
             reasons.append("Chiller has no explicitly mapped AHUs.")
         if not plant["circuit_ids"]:
@@ -239,9 +254,9 @@ def _calculate_scenario(ahu_scenario, plants, circuits, gate, ahu_report):
             reasons.append("Plant and circuit ownership do not match.")
         active_circuits = [circuit for circuit in plant_circuits if circuit["circuit_type"] == "chilled_water"]
         if not active_circuits:
-            reasons.append("Cooling plant requires at least one reviewed chilled-water circuit.")
-        if any(circuit["review_status"] != "confirmed" for circuit in active_circuits):
-            reasons.append("Every active chilled-water circuit must be confirmed and cited.")
+            reasons.append("Cooling plant requires at least one eligible chilled-water circuit.")
+        if any(circuit["review_status"] not in allowed_statuses for circuit in active_circuits):
+            reasons.append("Every active chilled-water circuit must be eligible for this calculation mode.")
         circuit_ahus = set().union(*(set(circuit.get("served_ahu_ids", [])) for circuit in active_circuits)) if active_circuits else set()
         if circuit_ahus != set(plant["served_ahu_ids"]):
             reasons.append("Chiller AHU ownership must match its chilled-water circuit ownership.")
@@ -260,8 +275,8 @@ def _calculate_scenario(ahu_scenario, plants, circuits, gate, ahu_report):
                 continue
             diversity = plant["diversity_factor"]
             diversified = coincident * diversity
-            pump_kw = sum(_scheduled_value(pump.get("power_kw", 0.0), pump.get("schedule", []), hour) * pump.get("number_off", 1) for circuit in active_circuits for pump in circuit["pumps"] if pump["review_status"] == "confirmed")
-            pipe_kw = sum(_scheduled_value(pipe.get("effect_kw", 0.0), pipe.get("schedule", []), hour) for circuit in active_circuits for pipe in circuit["pipe_effects"] if pipe["review_status"] == "confirmed")
+            pump_kw = sum(_scheduled_value(pump.get("power_kw", 0.0), pump.get("schedule", []), hour) * pump.get("number_off", 1) for circuit in active_circuits for pump in circuit["pumps"] if pump["review_status"] in allowed_statuses)
+            pipe_kw = sum(_scheduled_value(pipe.get("effect_kw", 0.0), pipe.get("schedule", []), hour) for circuit in active_circuits for pipe in circuit["pipe_effects"] if pipe["review_status"] in allowed_statuses)
             multiplier = plant["number_off"] if plant["duty_basis"] == "representative_per_unit" else 1
             total = diversified * multiplier + pump_kw + pipe_kw
             hours.append({

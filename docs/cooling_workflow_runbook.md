@@ -89,14 +89,22 @@ In the browser:
    the linked plan, finish, ceiling/service, elevation and 3D cross-check
    evidence. 3D pages are visual witnesses only and cannot supply dimensions.
 3. Resolve only the displayed exceptions: floor identity, room boundary,
-   geometry status, area evidence and conflicting witnesses.
-4. Choose `accept`, `edit`, `reject`, or `needs_evidence` on the linked
-   proposal below the room card.
+   area evidence and conflicting witnesses. A current calibrated reviewer
+   trace is linked to the room and shown with its proof ID and area.
+4. Review the floor, then the zone's floor mapping, then the room. For a room
+   with a current calibrated trace, choose **Accept traced geometry**; do not
+   type a geometry status or reference. Accept the linked area candidate only
+   after checking its page citation, reviewer and calibration details.
 5. Save the review.
 6. Preview changes and resolve conflicts or missing dependencies.
 7. Apply reviewed changes. Topology is applied in floor → zone → room order;
    authored records are never overwritten.
 8. Complete supported room cooling inputs in the hourly editor.
+
+Room and trace source fingerprints are part of draft freshness. If the source
+PDF, vector page, room registry or trace changes after review, rebuild and
+review the draft again. The accepted trace adds only its room area; it does not
+complete the room's occupancy, schedules, gains, ventilation or envelope data.
 
 Accepted evidence is not automatically a complete cooling input. Occupancy,
 schedules, setpoints, internal gains, envelope properties, and source status
@@ -119,6 +127,48 @@ Use `POST /api/hourly-load-report` with selected scenario IDs. Results mean:
 
 Only `review_ready` results expose a complete project peak. Draft results use
 included-scope subtotals and list omitted rooms/components.
+
+### Safety-factor placement
+
+- **Legacy room calculation:** each cited room factor is applied once to that
+  room's hourly subtotal before same-hour zone/floor/project aggregation.
+- **Approved project policy:** room factors are neutralized; one cited,
+  engineer-approved policy is applied to the selected coincident project peak.
+  Cited room factors above 1.0 remain in the report as evidence and do not
+  block this mode. The calculation blocks only if a factor above 1.0 actually
+  survives into calculated room hours, which would compound with the project
+  policy.
+- **AI preliminary:** the named provisional 1.10 fallback is applied once and
+  the result remains draft-only. It is not an approved project policy.
+- **AHU and plant:** AHU room reconciliation uses unfactored room subtotals;
+  coil duty comes from the air-state calculation. Plant aggregates AHU coil
+  duties and does not apply another safety factor.
+- **Annual:** annual room-hour cooling and heating currently use legacy room
+  factors. The result reports the factor and its room-hour basis; a missing
+  annual heating factor blocks that heating hour.
+
+The preliminary workflow persists its fallback artifact. Whether a later
+strict report should ignore that fallback and use legacy room factors or
+remain blocked is unresolved; do not treat the preliminary factor as approved.
+
+### Trace a room boundary for evidence
+
+In Geometry & Evidence Review, select a known room and a rendered plan page.
+Choose **Trace boundary**, click the room's corners in order, and close the
+polygon. Snapping to vector endpoints/intersections is optional. Choose **Set
+printed dimension**, click both ends of a printed dimension on that sheet, and
+enter the printed value in millimetres. Archie compares that measured scale
+with the plan's declared scale; a mismatch or missing declared scale leaves the
+area unresolved. A second printed dimension can replace a rejected declared
+scale only when both reviewer measurements agree within 2%.
+
+Save with reviewer initials/name. The result records its source page and
+fingerprints and remains `geometry_proposed`; it is visible as a proposed area
+candidate but is not an active calculation input. Re-trace or delete a saved
+record from the same workspace. A changed source PDF or vector page makes the
+trace stale, so reload and review it before use. The traced number is not an
+independent answer key: verify real-drawing accuracy against an architect's
+schedule or an independent CAD measurement.
 
 ## 5. Staleness and recovery
 

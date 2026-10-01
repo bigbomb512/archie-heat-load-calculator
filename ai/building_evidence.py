@@ -2,7 +2,7 @@
 
 import re
 
-from ai.drawing_coverage import source_fingerprint, timestamp
+from ai.drawing_coverage import has_current_level_classification, source_fingerprint, timestamp
 
 
 EQUIPMENT_WORDS = {
@@ -61,7 +61,7 @@ def empty_evidence(ai_input):
         "source_fingerprint": source_fingerprint(ai_input),
         "generated_from": "ai_input.json",
         "generated_at": timestamp(),
-        "spaces": [], "levels": [], "surfaces": [], "openings": [], "constructions": [],
+        "spaces": [], "levels": [], "level_candidates": [], "surfaces": [], "openings": [], "constructions": [],
         "lighting": [], "equipment": [], "cross_sheet_links": [], "exceptions": [], "sources": {},
     }
 
@@ -73,14 +73,22 @@ def source_pages(ai_input, spatial_ocr, drawing_coverage=None):
         excerpts.extend(item.get("text", "") for item in page.get("word_samples", []) if item.get("text"))
         ocr_text[page.get("page")] = "\n".join(excerpts)
     pages = []
+    level_method_current = has_current_level_classification(drawing_coverage or {})
+    coverage_pages = {row.get("page"): row for row in (drawing_coverage or {}).get("pages", [])
+                      if isinstance(row, dict)}
+    coverage_roles = {row.get("page"): row for row in (drawing_coverage or {}).get("page_roles", [])
+                      if isinstance(row, dict)}
     drawing_pages = ai_input.get("drawing_set", {}).get("pages", [])
     if not drawing_pages:
         drawing_pages = ai_input.get("confirmed_pages", {}).get("floor_plans", []) + ai_input.get("confirmed_pages", {}).get("reference_pages", [])
     for page in drawing_pages:
-        coverage_role = next((item for item in (drawing_coverage or {}).get("page_roles", [])
-                              if item.get("page") == page.get("page")), {})
+        coverage_page = coverage_pages.get(page.get("page"), {})
+        coverage_role = coverage_roles.get(page.get("page"), {})
         pages.append({
-            "page": page.get("page"), "drawing_number": page.get("drawing_number", ""), "level_name": page.get("level_name", ""),
+            "page": page.get("page"), "drawing_number": page.get("drawing_number", ""),
+            "level_name": coverage_page.get("level_name", "") if level_method_current else "",
+            "level_candidates": coverage_page.get("level_candidates", []),
+            "level_status": coverage_page.get("level_status", "missing"),
             "classification": page.get("sheet_classification", page.get("detected_type", "other")),
             "thermal_role": page.get("thermal_role", "not_calculation_evidence"),
             "title": page.get("title", ""), "rooms": page.get("rooms", []),
@@ -166,10 +174,15 @@ def add_spaces(result, page):
 
 
 def add_levels(result, coverage):
+    if not has_current_level_classification(coverage):
+        return
     for level in coverage.get("levels", []):
+        name = str(level.get("level_name", "")).strip()
+        if not name or name.casefold().startswith("unassigned"):
+            continue
         status = level.get("purpose_status", "missing")
         result["levels"].append({
-            "id": "level-" + slug(level.get("level_name", "unassigned")), "name": level.get("level_name", ""),
+            "id": "level-" + slug(name), "name": name,
             "proposed_purpose": level.get("proposed_purpose", ""), "status": status,
             "conditioned_status": level.get("conditioned_status", "unknown"),
             "evidence": level.get("purpose_evidence", []),
@@ -203,12 +216,11 @@ def add_vision_entities(result, vision_response, pages):
         }
         kind = row.get("kind")
         if kind == "floor":
-            result["levels"].append({
-                "id": "vision-level-" + row.get("candidate_fingerprint", "")[:16],
+            # Vision may preserve a floor proposal for review, but only the
+            # text classifier's selected building_level can create a floor.
+            result["level_candidates"].append({
                 "name": row.get("level_name") or row.get("label"), "status": status,
-                "conditioned_status": "unknown", "ai_verified": active,
-                "activation_basis": common["activation_basis"], "vision_witnesses": common["vision_witnesses"],
-                "candidate_fingerprint": common["candidate_fingerprint"], "source_type": "vision_extraction",
+                "source_type": "vision_extraction", "candidate_fingerprint": common["candidate_fingerprint"],
                 "evidence": [source(page, row.get("excerpt", ""))],
             })
         elif kind == "room":

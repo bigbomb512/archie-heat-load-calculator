@@ -27,7 +27,8 @@ class EvidenceGateTests(unittest.TestCase):
         coverage = build_drawing_coverage(ai_input)
         self.assertEqual(coverage["source_fingerprint"], source_fingerprint(ai_input))
         self.assertEqual(coverage["page_roles"][0]["proposed_role"], "supporting_geometry_plan")
-        self.assertEqual(coverage["page_roles"][0]["authority_status"], "proposed")
+        self.assertEqual(coverage["page_roles"][0]["authority_status"], "ambiguous")
+        self.assertEqual(coverage["page_roles"][0]["level_name"], "")
         self.assertTrue(coverage_is_current(coverage, ai_input))
 
     def test_empty_or_stale_coverage_is_not_current(self):

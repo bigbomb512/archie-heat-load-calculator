@@ -10,6 +10,7 @@
     "test:python": "cd .. && for test in tests/test_*.py; do [ \"$test\" = \"tests/test_frontend_contract.py\" ] || PYTHONPATH=. python3 \"$test\" || exit 1; done",
     "test:contract": "cd .. && PYTHONPATH=. python3 tests/test_frontend_contract.py",
     "test:frontend": "playwright test",
+    "test:journey": "playwright test --grep \"analysis gives one clear next action\"",
     "test": "cd .. && for test in tests/test_*.py; do [ \"$test\" = \"tests/test_frontend_contract.py\" ] || PYTHONPATH=. python3 \"$test\" || exit 1; done && PYTHONPATH=. python3 tests/test_frontend_contract.py && cd frontend && playwright test"
   },
   "devDependencies": {

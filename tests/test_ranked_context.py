@@ -1,6 +1,6 @@
 import unittest
 
-from ai.vision_extraction import MAX_MAIN_CONTEXT_PAGES, build_ranked_context, estimate, select_page_groups, validate_settings
+from ai.vision_extraction import MAX_MAIN_CONTEXT_PAGES, build_ranked_context, selection_summary, select_page_groups, validate_settings
 
 
 def role(page, kind, score, selection="primary_context", identity="confirmed"):
@@ -60,11 +60,11 @@ class RankedContextTests(unittest.TestCase):
         self.assertIn(1, selected)
         self.assertNotIn(2, selected)
 
-    def test_estimate_reports_only_main_context_pages(self):
+    def test_selection_summary_reports_only_main_context_pages(self):
         pages = self.pages[:2]
         coverage = {"page_roles": [role(1, "room_geometry", 0.9), role(2, "openings_windows", 0.9, identity="ambiguous")]}
         groups = select_page_groups({"drawing_set": {"pages": pages}}, coverage)
-        summary = estimate(validate_settings({"owner_opt_in": True, "max_budget_aud": 10}), groups, 1.0)
+        summary = selection_summary(validate_settings({"owner_opt_in": True}), groups)
         self.assertEqual(summary["page_count"], 1)
 
 

@@ -5,6 +5,8 @@ import hashlib
 import json
 from math import isfinite
 
+from ai.opening_solar_resolution import resolve_opening_solar_register
+
 
 FACADES = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"}
 
@@ -13,7 +15,9 @@ def _hash(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
 
 
-def resolve_openings(vision_response, source_fingerprint, known_pages, window_scan=None, window_reviews=None):
+def resolve_openings(vision_response, source_fingerprint, known_pages, window_scan=None, window_reviews=None,
+                     site_orientation=None, radiation_source=None, scenario_id="", resolution_mode="preliminary_ai_estimate",
+                     value_resolution=None, source_pack=None):
     """AI supplies relationships; this validator never creates window properties."""
     review = (vision_response or {}).get("result", {}).get("geometry_review", {})
     if not review and isinstance((vision_response or {}).get("geometry_review"), dict):
@@ -137,5 +141,19 @@ def resolve_openings(vision_response, source_fingerprint, known_pages, window_sc
     result = {"schema_version": 1, "source_fingerprint": source_fingerprint,
               "window_scan_fingerprint": scan.get("fingerprint", ""),
               "window_reviews_fingerprint": (window_reviews or {}).get("fingerprint", ""), "openings": records}
+    # Keep the existing opening register authoritative while adding the
+    # normalized geometry/property/orientation/solar bridge.  This does not
+    # approve a reviewed envelope record; it only records draft eligibility
+    # and the exact unresolved requirements for each opening.
+    result = resolve_opening_solar_register(
+        result,
+        known_pages=pages,
+        site_orientation=site_orientation,
+        radiation_source=radiation_source,
+        scenario_id=scenario_id,
+        mode=resolution_mode,
+        value_resolution=value_resolution,
+        source_pack=source_pack,
+    )
     result["fingerprint"] = _hash(result)
     return result

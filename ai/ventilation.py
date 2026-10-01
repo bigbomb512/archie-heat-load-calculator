@@ -29,7 +29,12 @@ def calculate_zone_ventilation(zone):
         "zone_id": zone["zone_id"],
         "zone_name": zone.get("name", zone["zone_id"]),
         "status": "calculated_provisional" if warnings else "calculated",
-        "basis": {"name": requirements["basis_name"], "source": requirements["basis_source"]},
+        "basis": {
+            "name": requirements["basis_name"], "source": requirements["basis_source"],
+            "rule_id": requirements.get("rule_id", ""),
+            "rule_pack_version": requirements.get("rule_pack_version", ""),
+            "rule_citation": requirements.get("rule_citation", ""),
+        },
         "outside_air": {
             "required_lps": round(outside_air_lps, 3),
             "governing_component": governing["name"],
@@ -142,7 +147,7 @@ def calculate_ventilation_report(requirements):
         "report_type": "preliminary_zone_ventilation",
         "requirements_updated_at": requirements.get("updated_at", ""),
         "status": "blocked" if not calculated else ("calculated_provisional" if blocked or provisional else "calculated"),
-        "calculation_basis": "Designer-entered metric ventilation inputs. No code rates are embedded.",
+        "calculation_basis": "Reviewed Australian ruleset values where uniquely matched; otherwise designer-entered metric ventilation inputs. No unreviewed code rates are embedded.",
         "zone_results": results,
         "total_outside_air_lps": round(sum(item.get("outside_air", {}).get("required_lps", 0) for item in calculated), 3),
         "total_process_exhaust_lps": round(sum(item.get("process_exhaust_lps", 0) for item in calculated), 3),

@@ -10,21 +10,33 @@ from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 
 from ai.design_requirements import validate_design_requirements
 from ai.hourly_loads import build_hourly_load_model, calculate_hourly_load_report
+from ai import value_resolution as value_resolver
+from ai import model_input_resolution as shared_resolution
+from ai import room_use_resolution as room_use_resolver
+from ai import ceiling_volume_resolution as ceiling_volume_resolver
+from ai import thermal_surface_resolution as thermal_surface_resolver
 
 
 ROOT = Path(__file__).resolve().parents[1]
 PACK_PATH = ROOT / "config" / "ai_preliminary_assumption_pack.json"
-PACK_VERSION = "au-preliminary-v2"
+PACK_VERSION = "au-preliminary-v3"
+LEGACY_PACK_VERSIONS = {"au-preliminary-v2"}
 PROFILE_IDS = {"retail", "office", "hospitality", "storage", "residential", "generic_conditioned_room"}
 SPACE_SCOPES = {"comfort_hvac", "comfort_hvac_with_process_exception", "refrigeration_process", "unresolved_scope"}
-OPAQUE_TYPES = {"wall", "roof", "ceiling"}
+# The proposal/ledger contract retains the complete opaque inventory.  The
+# preliminary hourly adapter currently materializes only externally exposed
+# wall/roof/ceiling surfaces; floors, partitions, and other boundaries remain
+# visible ledger records until their approved boundary method is available.
+OPAQUE_TYPES = {"wall", "roof", "floor", "ceiling", "partition"}
 CARDINALS = {"N", "E", "S", "W"}
 SHADING_CATEGORIES = {"unshaded", "partial", "deep"}
+CODEX_HANDOFF_SCHEMA_VERSION = 1
 
 
 def now():
@@ -66,6 +78,16 @@ def load_pack():
         raise ValueError("The AI preliminary assumption pack needs four 24-hour cardinal solar profiles.")
     if not SHADING_CATEGORIES <= set(envelope.get("shading_categories", {})):
         raise ValueError("The AI preliminary assumption pack needs controlled shading categories.")
+    height = pack.get("preliminary_defaults", {}).get("ceiling_height_mm")
+    if not isinstance(height, (int, float)) or isinstance(height, bool) or height <= 0:
+        raise ValueError("The AI preliminary assumption pack needs a positive named ceiling-height fallback.")
+    opaque = envelope.get("opaque_constructions", {})
+    if not isinstance(opaque, dict) or not {"wall", "roof", "floor", "ceiling", "partition"} <= set(opaque):
+        raise ValueError("The AI preliminary assumption pack needs controlled opaque construction records.")
+    for kind in ("wall", "roof", "floor", "ceiling", "partition"):
+        row = opaque[kind]
+        if not isinstance(row, dict) or not row.get("construction_id") or not isinstance(row.get("u_value_w_m2k"), (int, float)) or row["u_value_w_m2k"] <= 0:
+            raise ValueError(f"The AI preliminary assumption pack has an invalid {kind} construction record.")
     return pack
 
 
@@ -73,7 +95,6 @@ def empty_settings():
     return {
         "schema_version": 1,
         "saved_project_consent": False,
-        "maximum_provider_budget_aud": None,
         "automatic_analysis_enabled": False,
         "preliminary_pack_version": PACK_VERSION,
         "updated_at": "",
@@ -85,22 +106,12 @@ def validate_settings(raw):
     result.update({key: raw[key] for key in result if isinstance(raw, dict) and key in raw})
     if not isinstance(result["saved_project_consent"], bool) or not isinstance(result["automatic_analysis_enabled"], bool):
         raise ValueError("AI preliminary consent and automatic-analysis settings must be true or false.")
-    budget = result["maximum_provider_budget_aud"]
-    if budget in (None, ""):
-        result["maximum_provider_budget_aud"] = None
-    else:
-        try:
-            result["maximum_provider_budget_aud"] = float(budget)
-        except (TypeError, ValueError) as error:
-            raise ValueError("AI preliminary provider budget must be a positive number or blank.") from error
-        if result["maximum_provider_budget_aud"] <= 0:
-            raise ValueError("AI preliminary provider budget must be positive.")
-    if result["preliminary_pack_version"] != PACK_VERSION:
+    if result["preliminary_pack_version"] not in {PACK_VERSION, *LEGACY_PACK_VERSIONS}:
         raise ValueError("The selected AI preliminary pack version is unavailable.")
     return result
 
 
-def provider_eligibility(settings, provider_configured, estimated_cost=None):
+def provider_eligibility(settings, provider_configured):
     settings = validate_settings(settings)
     if not settings["automatic_analysis_enabled"]:
         return "disabled"
@@ -108,11 +119,92 @@ def provider_eligibility(settings, provider_configured, estimated_cost=None):
         return "awaiting_consent"
     if not provider_configured:
         return "awaiting_provider"
-    if settings["maximum_provider_budget_aud"] is None:
-        return "awaiting_budget"
-    if estimated_cost is not None and estimated_cost > settings["maximum_provider_budget_aud"]:
-        return "budget_exceeded"
     return "eligible"
+
+
+def _handoff_evidence(value):
+    """Return local evidence without paths, credentials, or opaque provider data."""
+    blocked_keys = {"api_key", "authorization", "password", "secret", "source_pdf", "token"}
+    if isinstance(value, dict):
+        return {str(key): _handoff_evidence(item) for key, item in value.items()
+                if str(key).casefold() not in blocked_keys}
+    if isinstance(value, list):
+        return [_handoff_evidence(item) for item in value]
+    return deepcopy(value)
+
+
+def build_local_codex_handoff(project, building, vision=None, fusion=None, source_fingerprints=None):
+    """Build a local, provider-free request for a Codex-operated draft model.
+
+    The handoff is deliberately an evidence package, not a calculator input.
+    A later response must still satisfy ``validate_placeholder_proposal`` and
+    can affect only the isolated draft preliminary model.
+    """
+    pack = load_pack()
+    building = building if isinstance(building, dict) else {}
+    vision = vision if isinstance(vision, dict) else {}
+    fusion = fusion if isinstance(fusion, dict) else {}
+    evidence_keys = (
+        "levels", "spaces", "surfaces", "openings", "lighting", "equipment",
+        "constructions", "cross_sheet_links", "exceptions", "vision_conflicts",
+        "vision_missing_evidence",
+    )
+    payload = {
+        "schema_version": CODEX_HANDOFF_SCHEMA_VERSION,
+        "kind": "archie_local_codex_preliminary_handoff",
+        "project": {
+            "id": str(project.get("id", "")),
+            "name": str(project.get("name", "")),
+        },
+        "mode": "local_codex_placeholder",
+        "instructions": [
+            "Act as the local preliminary visual interpreter for this project.",
+            "Return only a proposal matching response_contract.proposal.",
+            "Use only supplied source pages and evidence; do not invent a room, area, ceiling height, wall, opening, U-value, weather value, or equipment heat value.",
+            "For ceiling heights, identify floor-to-finished-ceiling evidence only. Distinguish RCP, section, elevation and ceiling-note evidence from door/joinery dimensions, ceiling voids, title blocks, legends and unrelated details.",
+            "Classify each room only with an allowed room-use taxonomy ID, then select its compatible preliminary profile.",
+            "Keep unresolved or conflicting components out of the proposal and list them in issues.",
+            "The resulting model is draft-only and must never be described as engineering reviewed or validated.",
+        ],
+        "allowed_preliminary_profiles": sorted(PROFILE_IDS),
+        "allowed_room_use_categories": sorted(room_use_resolver.load_taxonomy()["categories"]),
+        "allowed_space_scopes": sorted(SPACE_SCOPES),
+        "allowed_surface_types": sorted(OPAQUE_TYPES),
+        "allowed_orientations": sorted(CARDINALS),
+        "allowed_shading_categories": sorted(SHADING_CATEGORIES),
+        "response_contract": {
+            "proposal": {
+                "rooms": "source-linked room candidates: kind, label, level_name, geometry {boundary_points_px or ordered wall_ids, walls, dimensions, dimension_wall_links, scale_mm_per_px, source_crop}, area_m2 only when explicitly cited, ceiling_height_mm, ceiling_scope, ceiling_applies_to, ceiling_evidence, ceiling_datum_operands, room_use_category, preliminary_profile_id, confidence, page, rationale, alternatives",
+                "surfaces": "source-linked external wall, roof, or ceiling candidates",
+                "openings": "source-linked opening candidates linked to a proposed host surface",
+                "issues": "unresolved, conflicting, or intentionally excluded components",
+            },
+            "required_response_fields": ["schema_version", "handoff_fingerprint", "proposal"],
+        },
+        "source_fingerprints": deepcopy(source_fingerprints or {}),
+        "evidence": {
+            "building": {key: _handoff_evidence(building.get(key, [])) for key in evidence_keys},
+            "vision": _handoff_evidence(vision.get("result", vision)),
+            "evidence_fusion": _handoff_evidence(fusion),
+        },
+        "assumption_pack": {
+            "version": pack["version"],
+            "profile_names": {profile_id: pack["profiles"][profile_id].get("label", profile_id)
+                              for profile_id in sorted(PROFILE_IDS)},
+        },
+    }
+    payload["handoff_fingerprint"] = fingerprint(payload)
+    return payload
+
+
+def empty_local_codex_response(handoff):
+    """Return the writeable response template paired with a local handoff."""
+    return {
+        "schema_version": CODEX_HANDOFF_SCHEMA_VERSION,
+        "kind": "archie_local_codex_preliminary_response",
+        "handoff_fingerprint": str(handoff.get("handoff_fingerprint", "")),
+        "proposal": {"rooms": [], "surfaces": [], "openings": [], "issues": []},
+    }
 
 
 def _number(value):
@@ -190,7 +282,7 @@ def _vision_rooms(vision, manual_entities=None):
     return [row for row in rows if isinstance(row, dict) and row.get("kind") == "room"]
 
 
-def _space_rows(building, vision, manual_entities=None):
+def _space_rows(building, vision, manual_entities=None, geometry_resolution=None):
     rows, seen, identities = [], set(), set()
     vision_rooms = _vision_rooms(vision, manual_entities)
     for space in building.get("spaces", []) if isinstance(building, dict) else []:
@@ -213,7 +305,9 @@ def _space_rows(building, vision, manual_entities=None):
             continue
         seen.add(key)
         identities.add(_room_identity(name, level))
-        rows.append({"key": key, "name": name, "level": level, "area_m2": _number(space.get("area")) or _number(ai.get("area_m2")),
+        rows.append({"key": key, "name": name, "level": level, "source_room_id": str(space.get("id", "")),
+                     "area_m2": _number(space.get("area")) or _number(ai.get("area_m2")),
+                     "area_origin": "pdf_evidence" if _number(space.get("area")) else ("ai_geometry" if _number(ai.get("area_m2")) else ""),
                      "profile_id": ai.get("preliminary_profile_id", ""), "confidence": _confidence(ai.get("confidence", space.get("confidence"))),
                      "scope": ai.get("space_scope", _scope_from_label(name)), "evidence": evidence, "ai": ai})
     for ai in vision_rooms:
@@ -225,13 +319,118 @@ def _space_rows(building, vision, manual_entities=None):
             continue
         seen.add(key)
         identities.add(_room_identity(name, level))
-        rows.append({"key": key, "name": name, "level": level, "area_m2": _number(ai.get("area_m2")),
+        rows.append({"key": key, "name": name, "level": level, "source_room_id": "", "area_m2": _number(ai.get("area_m2")),
+                     "area_origin": "ai_geometry" if _number(ai.get("area_m2")) else "",
                      "profile_id": ai.get("preliminary_profile_id", ""), "confidence": _confidence(ai.get("confidence")),
                      "scope": ai.get("space_scope", _scope_from_label(name)), "evidence": _evidence_refs(ai) or [{"page": ai.get("page"), "drawing_number": ai.get("drawing_number", ""), "excerpt": ai.get("excerpt", name)}], "ai": ai})
     if not rows:
         rows.append({"key": "whole-building-generic", "name": "Whole building conditioned area — AI review required", "level": "Unassigned level",
-                     "area_m2": None, "profile_id": "generic_conditioned_room", "confidence": 0.2, "scope": "unresolved_scope", "evidence": [], "ai": {}})
+                     "source_room_id": "", "area_m2": None, "area_origin": "", "profile_id": "generic_conditioned_room", "confidence": 0.2, "scope": "unresolved_scope", "evidence": [], "ai": {}})
+    return _apply_geometry_area_resolution(rows, geometry_resolution)
+
+
+def _apply_geometry_area_resolution(rows, geometry_resolution):
+    """Use only active normalized geometry areas in the draft-only path."""
+    candidates = {}
+    for entity in (geometry_resolution or {}).get("entities", []):
+        if not isinstance(entity, dict) or entity.get("kind") != "area" or entity.get("geometry_status") not in {"ai_estimated", "geometry_confirmed"}:
+            continue
+        value = entity.get("value") if isinstance(entity.get("value"), dict) else {}
+        area = _number(value.get("area_m2"))
+        label, level = str(entity.get("label", "")).strip(), str(entity.get("level_candidate", "")).strip()
+        if not area or not label or not level:
+            continue
+        key = _room_identity(label, level)
+        candidates.setdefault(key, []).append((area, entity, value))
+    for row in rows:
+        matches = candidates.get(_room_identity(row["name"], row["level"]), [])
+        # Multiple proofs are a geometry conflict even if they happen to
+        # calculate to the same rounded area.  Choosing one would hide a
+        # competing boundary or source and make the draft look more certain
+        # than its evidence supports.
+        if len(matches) != 1:
+            continue
+        area, entity, value = matches[0]
+        row["area_m2"] = area
+        row["area_origin"] = "ai_geometry" if entity.get("geometry_status") == "ai_estimated" else "geometry_proof"
+        row["geometry_proof_id"] = value.get("geometry_proof_id") or entity.get("entity_id", "")
+        row["geometry_mode"] = "preliminary_ai_estimate" if entity.get("geometry_status") == "ai_estimated" else "engineering_reviewed"
+        row["geometry_evidence"] = {"page": entity.get("source", {}).get("page"), "drawing_number": entity.get("source", {}).get("drawing_number", ""),
+                                    "derivation": deepcopy(value.get("derivation", {}))}
     return rows
+
+
+def _apply_room_use_resolution(rows, artifact):
+    """Apply controlled room-use decisions without changing room identity or geometry."""
+    records = {row.get("room_id"): row for row in (artifact or {}).get("records", []) if isinstance(row, dict)}
+    for row in rows:
+        record = records.get(room_use_resolver.room_identity(row["name"], row["level"]))
+        if not record:
+            continue
+        row["profile_id"] = record.get("preliminary_profile_id") or "generic_conditioned_room"
+        row["scope"] = record.get("space_scope", "unresolved_scope")
+        row["confidence"] = min(row["confidence"], float(record.get("confidence_score", row["confidence"])))
+        row["room_use_resolution"] = record
+    return rows
+
+
+def _proposal_with_room_use(proposal, rows):
+    """Provide the value resolver the same controlled room profile used by assembly."""
+    result = deepcopy(proposal)
+    result.setdefault("rooms", [])
+    known = {_room_identity(row.get("label", ""), row.get("level_name", "")) for row in result["rooms"] if isinstance(row, dict)}
+    for row in result["rooms"]:
+        if not isinstance(row, dict):
+            continue
+        match = next((candidate for candidate in rows if _room_identity(candidate["name"], candidate["level"]) == _room_identity(row.get("label", ""), row.get("level_name", ""))), None)
+        if match:
+            row["preliminary_profile_id"] = match["profile_id"]
+            row["space_scope"] = match["scope"]
+            row["room_use_category"] = (match.get("room_use_resolution") or {}).get("taxonomy_id", "")
+            # Keep the normalized proposal aligned with the authoritative
+            # geometry proof.  The value is copied only after
+            # _apply_geometry_area_resolution found exactly one active proof;
+            # no visual or profile area is introduced here.
+            if not _number(row.get("area_m2")) and _number(match.get("area_m2")):
+                row["area_m2"] = match["area_m2"]
+                row["area_origin"] = match.get("area_origin", "ai_geometry")
+                row["geometry_proof_id"] = match.get("geometry_proof_id", "")
+                row["geometry_mode"] = match.get("geometry_mode", "preliminary_ai_estimate")
+                row["geometry_evidence"] = deepcopy(match.get("geometry_evidence", {}))
+    for row in rows:
+        identity = _room_identity(row["name"], row["level"])
+        if identity not in known:
+            result["rooms"].append({"kind": "room", "label": row["name"], "level_name": row["level"], "area_m2": row["area_m2"],
+                                    "preliminary_profile_id": row["profile_id"], "space_scope": row["scope"],
+                                    "confidence": row["confidence"], "page": (row["evidence"] or [{}])[0].get("page", 1),
+                                    "evidence": row["evidence"], "room_use_category": (row.get("room_use_resolution") or {}).get("taxonomy_id", "")})
+    return result
+
+
+def _has_geometry_area_candidate(item):
+    """Return whether a room carries enough geometry for the shared resolver.
+
+    The geometry resolver remains authoritative for area activation.  This
+    narrow admission check only prevents the preliminary proposal validator
+    from rejecting a room before that resolver can calculate its area.
+    """
+    geometry = item.get("geometry") if isinstance(item, dict) else None
+    if not isinstance(geometry, dict):
+        return False
+    coordinate_units = str(geometry.get("coordinate_units", "px")).casefold()
+    points = (geometry.get("boundary_points_mm") if coordinate_units == "mm" else None) or geometry.get("boundary_points_px") or geometry.get("polygon_points_px") or geometry.get("points_px") or []
+    if isinstance(points, list) and len(points) >= 4 and points[0] == points[-1]:
+        try:
+            return all(
+                isinstance(point, (list, tuple)) and len(point) == 2
+                and all(isinstance(value, (int, float)) and math.isfinite(value) for value in point)
+                for point in points
+            ) and ((coordinate_units == "mm" and geometry.get("dimension_wall_links"))
+                   or geometry.get("scale_mm_per_px") is not None or geometry.get("dimension_wall_links"))
+        except (TypeError, ValueError):
+            return False
+    # Ordered wall candidates are validated structurally by geometry_resolution.
+    return bool(geometry.get("wall_ids") and (geometry.get("scale_mm_per_px") is not None or geometry.get("dimension_wall_links")))
 
 
 def validate_manual_placeholder_entities(raw):
@@ -250,15 +449,23 @@ def validate_manual_placeholder_entities(raw):
         label = str(item.get("label", "")).strip()
         level = str(item.get("level_name", "")).strip()
         area = _number(item.get("area_m2"))
+        geometry_area_candidate = _has_geometry_area_candidate(item)
         profile = str(item.get("preliminary_profile_id", "")).strip()
         page = item.get("page")
+        if page in (None, ""):
+            source_pages = item.get("source_pages")
+            if isinstance(source_pages, list) and source_pages:
+                page = source_pages[0]
+            elif isinstance(item.get("evidence"), list):
+                first_evidence = next((row for row in item["evidence"] if isinstance(row, dict) and row.get("page") is not None), None)
+                page = first_evidence.get("page") if first_evidence else None
         try:
             page = int(page)
         except (TypeError, ValueError) as error:
             raise ValueError(f"Manual placeholder room '{label or index + 1}' needs a physical source page.") from error
-        if not label or not level or not area or profile not in PROFILE_IDS or page <= 0:
+        if not label or not level or (not area and not geometry_area_candidate) or profile not in PROFILE_IDS or page <= 0:
             raise ValueError(
-                "Each manual placeholder room needs a label, level, positive area, supported preliminary profile, and source page."
+                "Each manual placeholder room needs a label, validated area or structured geometry candidate, supported preliminary profile, and source page."
             )
         scope = str(item.get("space_scope", _scope_from_label(label))).strip()
         if scope not in SPACE_SCOPES:
@@ -269,6 +476,29 @@ def validate_manual_placeholder_entities(raw):
         if not evidence:
             evidence = [{"page": page, "drawing_number": str(item.get("drawing_number", "")).strip(),
                          "excerpt": str(item.get("excerpt", label)).strip() or label}]
+        category = str(item.get("room_use_category", "")).strip()
+        taxonomy = room_use_resolver.load_taxonomy()
+        if category and category not in taxonomy["categories"]:
+            raise ValueError(f"Manual placeholder room '{label}' has an unsupported room-use category.")
+        alternatives = item.get("room_use_alternatives", [])
+        if not isinstance(alternatives, list) or any(value not in taxonomy["categories"] for value in alternatives):
+            raise ValueError(f"Manual placeholder room '{label}' has unsupported room-use alternatives.")
+        ceiling_height = _number(item.get("ceiling_height_mm"))
+        if item.get("ceiling_height_mm") not in (None, "") and ceiling_height is None:
+            raise ValueError(f"Manual placeholder room '{label}' has an invalid ceiling height.")
+        ceiling_scope = str(item.get("ceiling_scope", "room")).strip().casefold() or "room"
+        if ceiling_scope not in {"room", "zone", "level"}:
+            raise ValueError(f"Manual placeholder room '{label}' has an unsupported ceiling scope.")
+        ceiling_applies_to = item.get("ceiling_applies_to", [])
+        if not isinstance(ceiling_applies_to, list):
+            raise ValueError(f"Manual placeholder room '{label}' has an invalid ceiling applicability list.")
+        if ceiling_scope != "room" and ceiling_height is not None and not ceiling_applies_to:
+            raise ValueError(f"Manual placeholder room '{label}' needs explicit affected rooms for a shared ceiling height.")
+        ceiling_evidence = item.get("ceiling_evidence") if isinstance(item.get("ceiling_evidence"), list) else evidence
+        ceiling_evidence = [row for row in ceiling_evidence if isinstance(row, dict) and row.get("page")]
+        ceiling_conflicts = item.get("ceiling_conflicts", [])
+        if not isinstance(ceiling_conflicts, list):
+            raise ValueError(f"Manual placeholder room '{label}' has an invalid ceiling conflict list.")
         result.append({
             "kind": "room", "label": label, "level_name": level, "area_m2": area,
             "preliminary_profile_id": profile, "confidence": score, "page": page,
@@ -277,7 +507,30 @@ def validate_manual_placeholder_entities(raw):
             "excerpt": str(item.get("excerpt", label)).strip() or label,
             "evidence": evidence,
             "rationale": str(item.get("rationale", "")).strip(),
+            "room_use_category": category, "room_use_rationale": str(item.get("room_use_rationale", "")).strip(),
+            "room_use_alternatives": sorted(set(alternatives)),
             "assumptions": list(item.get("assumptions", [])) if isinstance(item.get("assumptions"), list) else [],
+            "ceiling_height_mm": ceiling_height, "ceiling_scope": ceiling_scope,
+            "ceiling_applies_to": deepcopy(ceiling_applies_to), "ceiling_evidence": ceiling_evidence,
+            "ceiling_rationale": str(item.get("ceiling_rationale", "")).strip(),
+            "ceiling_datum_operands": deepcopy(item.get("ceiling_datum_operands", {})) if isinstance(item.get("ceiling_datum_operands", {}), dict) else {},
+            "ceiling_conflicts": list(ceiling_conflicts),
+            "geometry": deepcopy(item.get("geometry", {})) if isinstance(item.get("geometry", {}), dict) else {},
+            "source_pages": sorted({int(row.get("page")) for row in evidence if str(row.get("page", "")).isdigit()}),
+            # Internal-gains evidence is preserved as proposed evidence.  The
+            # resolver below applies citation and controlled-value checks; this
+            # validator must not discard the AI's counted seats, fixtures,
+            # equipment, or explicit schedule candidates.
+            "occupancy_count": _number(item.get("occupancy_count")),
+            "seat_count": _number(item.get("seat_count")),
+            "workstation_count": _number(item.get("workstation_count")),
+            "desk_count": _number(item.get("desk_count")),
+            "bed_count": _number(item.get("bed_count")),
+            "people_sensible_w_per_person": _number(item.get("people_sensible_w_per_person")),
+            "people_latent_w_per_person": _number(item.get("people_latent_w_per_person")),
+            "lighting_fixtures": deepcopy(item.get("lighting_fixtures", [])) if isinstance(item.get("lighting_fixtures", []), list) else [],
+            "equipment": deepcopy(item.get("equipment", [])) if isinstance(item.get("equipment", []), list) else [],
+            "schedules": deepcopy(item.get("schedules", {})) if isinstance(item.get("schedules", {}), dict) else {},
         })
     identities = [_room_identity(row["label"], row["level_name"]) for row in result]
     if len(set(identities)) != len(identities):
@@ -302,15 +555,23 @@ def _schedule(schedule_id, profile_id):
             "status": "provisional", "source": _source(profile_id), "citations": [], "day_profiles": day_profiles}
 
 
-def _scenario(pack):
-    scenario = pack["scenario"]
+def _scenario(pack, resolved=None):
+    scenario = deepcopy(pack["scenario"])
+    resolved = resolved or {}
+    for key in ("indoor_dry_bulb_c", "indoor_wet_bulb_c"):
+        if resolved.get(key) is not None:
+            scenario[key] = resolved[key]
+    weather = resolved.get("weather_profile")
+    if isinstance(weather, dict) and isinstance(weather.get("hours"), list) and len(weather["hours"]) == 24:
+        scenario = {**scenario, **weather}
     return {"scenarios": [{
         "scenario_id": "ai_preliminary_cooling_day", "title": "AI preliminary Australian cooling day", "mode": "cooling",
         "representative_month": "January", "day_type": "weekday", "status": "provisional",
         "source": f"AI preliminary assumption pack {pack['version']}", "citations": [],
         "atmospheric_pressure_kpa": {"value": scenario["pressure_kpa"], "status": "provisional", "source": _source("scenario"), "citations": []},
         "hours": [{"hour": hour, "outdoor_dry_bulb_c": {"value": point["db"], "status": "provisional", "source": _source("scenario"), "citations": []},
-                   "outdoor_wet_bulb_c": {"value": point["wb"], "status": "provisional", "source": _source("scenario"), "citations": []}}
+                   "outdoor_wet_bulb_c": {"value": point["wb"], "status": "provisional", "source": _source("scenario"), "citations": []},
+                   "outdoor_wet_bulb_basis": point.get("wet_bulb_basis", "legacy_unverified")}
                   for hour, point in enumerate(scenario["hours"])],
     }]}
 
@@ -349,7 +610,9 @@ def validate_placeholder_proposal(raw):
     if room_rows and not isinstance(room_rows, list):
         raise ValueError("AI preliminary proposal rooms must be a list.")
     rooms = validate_manual_placeholder_entities(room_rows) if room_rows else []
-    result = {"rooms": rooms, "surfaces": [], "openings": [], "issues": []}
+    raw_issues = raw.get("issues", [])
+    result = {"rooms": rooms, "surfaces": [], "openings": [],
+              "issues": [deepcopy(item) for item in raw_issues if isinstance(item, dict)] if isinstance(raw_issues, list) else []}
     for group, prefix in (("surfaces", "ai-preliminary-surface"), ("openings", "ai-preliminary-opening")):
         rows = raw.get(group, [])
         if not isinstance(rows, list):
@@ -383,8 +646,10 @@ def validate_placeholder_proposal(raw):
                 item["net_opaque_area_m2"] = _number(item.get("net_opaque_area_m2"))
                 item["opening_coverage"] = str(item.get("opening_coverage", "not_applicable")).casefold()
                 if item["physical_type"] not in OPAQUE_TYPES:
-                    errors.append("a supported opaque physical type (wall, roof, or ceiling)")
-                if item["thermal_role"] not in {"external", "outside", "outdoors"} or item["external_exposure"] != "external":
+                    errors.append("a supported opaque physical type (wall, roof, floor, ceiling, or partition)")
+                if item["thermal_role"] not in {"external", "outside", "outdoors", "ground_contact", "fixed_adjacent", "room_to_room", "roof_void", "ceiling_below_roof", "internal_floor", "unresolved"}:
+                    errors.append("a supported thermal role")
+                if item["physical_type"] in {"wall", "roof", "ceiling"} and item["thermal_role"] in {"external", "outside", "outdoors"} and item["external_exposure"] != "external":
                     errors.append("confirmed external thermal exposure")
                 if not item["gross_area_m2"]:
                     errors.append("positive gross surface area")
@@ -453,7 +718,11 @@ def _legacy_surface_candidates(vision, rows):
     return output
 
 
-def assemble(building, vision=None, contractor_overrides=None, source_fingerprints=None, manual_placeholder_entities=None, preliminary_proposal=None):
+def assemble(building, vision=None, contractor_overrides=None, source_fingerprints=None, manual_placeholder_entities=None,
+             preliminary_proposal=None, value_resolution=None, research_cache=None, source_pack_releases=None,
+             site_location=None, site_design_weather=None, room_use_resolution=None, geometry_resolution=None,
+             ceiling_volume_resolution=None, internal_gains_resolution=None, airflow_resolution=None, ahu_resolution=None,
+             plant_resolution=None, allow_area_fallbacks=True):
     """Return a materialized preliminary payload plus its transparent ledger."""
     pack = load_pack()
     overrides = contractor_overrides or {}
@@ -461,9 +730,67 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
     floor_ids, zone_ids = {}, set()
     requirements_zones = []
     proposal = validate_placeholder_proposal(preliminary_proposal if preliminary_proposal is not None else (manual_placeholder_entities or {}))
+    for issue in proposal.get("issues", []):
+        if not isinstance(issue, dict):
+            continue
+        exclusions.append({"room_id": issue.get("room_id", ""), "component": "room area",
+                           "reason": issue.get("reason", "No validated room area is available."),
+                           "evidence": deepcopy(issue.get("evidence", [])),
+                           "remediation": issue.get("remediation", "Resolve the room boundary and area from cited dimensions.")})
     manual_entities = proposal["rooms"]
-    space_rows = _space_rows(building, vision, manual_entities)
+    space_rows = _space_rows(building, vision, manual_entities, geometry_resolution)
+    room_use_artifact = room_use_resolver.validate(room_use_resolution) if room_use_resolution else room_use_resolver.resolve(
+        building, vision or {}, proposal, source_fingerprints or {},
+    )
+    space_rows = _apply_room_use_resolution(space_rows, room_use_artifact)
+    effective_proposal = _proposal_with_room_use(proposal, space_rows)
+    ceiling_artifact = ceiling_volume_resolver.validate(ceiling_volume_resolution) if ceiling_volume_resolution else ceiling_volume_resolver.resolve(
+        building, vision or {}, effective_proposal, geometry_resolution, pack, source_fingerprints or {},
+    )
+    # Internal-gains resolution is a separate, auditable input layer.  Keep a
+    # deterministic fallback for callers that predate the artifact, but never
+    # silently replace a supplied record with profile values.
+    try:
+        from ai import internal_gains_resolution as internal_gains_resolver
+        internal_artifact = internal_gains_resolver.validate(internal_gains_resolution) if internal_gains_resolution else internal_gains_resolver.resolve(
+            building, vision or {}, effective_proposal, room_use_artifact, pack, source_fingerprints or {},
+        )
+    except ImportError:  # pragma: no cover - retained for old isolated imports
+        internal_artifact = {"records": [], "schedules": [], "fingerprint": ""}
+    internal_records = {row.get("room_id"): row for row in internal_artifact.get("records", [])
+                        if isinstance(row, dict) and row.get("status") != "stale"}
+    airflow_artifact = airflow_resolution if isinstance(airflow_resolution, dict) else {"records": [], "fingerprint": ""}
+    ahu_artifact = ahu_resolution if isinstance(ahu_resolution, dict) else {"systems": [], "airflow_records": [], "fingerprint": ""}
+    plant_artifact = plant_resolution if isinstance(plant_resolution, dict) else {"systems": [], "circuits": [], "mappings": [], "fingerprint": ""}
+    airflow_by_room = {}
+    airflow_precedence = {"unresolved": 0, "controlled_fallback": 1, "research_candidate": 2,
+                          "released_source_pack": 3, "project_evidence": 4, "contractor_override": 5}
+    for airflow_row in airflow_artifact.get("records", []):
+        if (not isinstance(airflow_row, dict) or airflow_row.get("status") == "stale"
+                or airflow_row.get("air_path_type") not in {"outside_air", "infiltration"}):
+            continue
+        room_paths = airflow_by_room.setdefault(airflow_row.get("owner_room_id"), {})
+        path = airflow_row.get("air_path_type")
+        current = room_paths.get(path)
+        if current is None or (airflow_row.get("status") == "blocked" and current.get("status") != "blocked") or (
+            airflow_row.get("status") != "blocked" and current.get("status") != "blocked"
+            and airflow_precedence.get(airflow_row.get("origin"), 0) > airflow_precedence.get(current.get("origin"), 0)
+        ):
+            room_paths[path] = airflow_row
+    resolution_artifact, resolved_values = value_resolver.build_value_resolution(
+        pack, building, effective_proposal, research_cache or {"schema_version": 1, "revision": 0, "source_pack_version": "", "records": []},
+        value_resolution, source_pack_releases, source_fingerprints, site_location, site_design_weather, ceiling_artifact,
+        internal_artifact,
+        ((geometry_resolution or {}).get("thermal_surface_ledger", {}) if isinstance(geometry_resolution, dict) else {}),
+        airflow_resolution=airflow_artifact,
+    )
+    scenario_values = resolved_values["scenario"]
     active_rows, excluded_spaces = [], []
+    excluded_spaces.extend({"room_name": issue.get("label", ""), "level": issue.get("level", ""),
+                            "scope": issue.get("scope", "unresolved_scope"),
+                            "reason": issue.get("reason", "No validated room area is available."),
+                            "evidence": deepcopy(issue.get("evidence", []))}
+                           for issue in proposal.get("issues", []) if isinstance(issue, dict) and issue.get("component") == "room area")
     for row in space_rows:
         row["scope"] = row["scope"] if row["scope"] in SPACE_SCOPES else "unresolved_scope"
         if row["scope"] in {"refrigeration_process", "unresolved_scope"}:
@@ -474,12 +801,25 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                                     "evidence": row["evidence"]})
             exclusions.append({"room_id": f"room-{row['key']}", "component": "room scope", "reason": reason})
             continue
+        override_area = _number((overrides.get(row["key"], {}) if isinstance(overrides, dict) else {}).get("area_m2"))
+        if not allow_area_fallbacks and not (override_area or row.get("area_m2")):
+            reason = "No explicit or geometry-resolved room area is available; a generic area fallback was not applied."
+            excluded_spaces.append({"room_name": row["name"], "level": row["level"], "scope": row["scope"],
+                                    "reason": reason, "evidence": row["evidence"]})
+            exclusions.append({"room_id": f"room-{row['key']}", "component": "room area", "reason": reason,
+                               "evidence": row["evidence"],
+                               "remediation": "Complete the cited room boundary and dimension chain, or provide an explicit project area override."})
+            continue
         active_rows.append(row)
         profile_id = row["profile_id"] if row["profile_id"] in PROFILE_IDS else _profile_from_label(row["name"])
-        profile = pack["profiles"][profile_id]
+        profile = deepcopy(pack["profiles"][profile_id])
+        room_resolution = resolved_values["rooms"].get(value_resolver.room_target_id(row["name"], row["level"]), {})
+        profile.update({key: value for key, value in room_resolution.items() if key in profile and value is not None})
+        internal_record = internal_records.get(room_use_resolver.room_identity(row["name"], row["level"]), {})
+        internal_fields = internal_record.get("fields", {}) if isinstance(internal_record, dict) else {}
         override = overrides.get(row["key"], {}) if isinstance(overrides, dict) else {}
-        area = _number(override.get("area_m2")) or row["area_m2"] or profile["fallback_area_m2"]
-        area_origin = "contractor_override" if _number(override.get("area_m2")) else "pdf_evidence" if row["area_m2"] else "ai_assumption"
+        area = _number(override.get("area_m2")) or row["area_m2"] or (profile["fallback_area_m2"] if allow_area_fallbacks else None)
+        area_origin = "contractor_override" if _number(override.get("area_m2")) else (row.get("area_origin") or "ai_assumption")
         score = row["confidence"] if row["area_m2"] else min(row["confidence"], 0.4)
         level_key = _slug(row["level"])
         floor_id = floor_ids.setdefault(level_key, f"floor-{level_key}")
@@ -488,24 +828,56 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
         room_id = f"room-{row['key']}"
         zone_id = f"zone-{row['key']}"
         zone_ids.add(zone_id)
-        occupancy = max(1, round(area * profile["occupancy_density_people_m2"]))
-        schedule_id = f"prelim-{profile_id}"
-        if not any(item["schedule_id"] == schedule_id for item in schedules):
+        def _resolved_internal_value(field_name, record_key):
+            field = internal_fields.get(field_name, {}) if isinstance(internal_fields, dict) else {}
+            origin = field.get("origin") if isinstance(field, dict) else ""
+            # A controlled profile is already represented by the value
+            # resolver/profile below.  Only evidence/override/AI-specific
+            # fields replace a newer released value.
+            return internal_record.get(record_key) if origin in {"direct_project_evidence", "contractor_override", "project_evidence", "ai_interpretation", "ai_estimated"} else None
+        occupancy = _resolved_internal_value("occupancy_count", "occupancy_count") if internal_record else None
+        occupancy = int(occupancy) if isinstance(occupancy, (int, float)) and occupancy >= 0 else max(1, round(area * profile["occupancy_density_people_m2"]))
+        schedule_id = internal_record.get("schedule_id") if internal_record else f"prelim-{profile_id}"
+        internal_schedule = next((item for item in internal_artifact.get("schedules", []) if item.get("schedule_id") == schedule_id), None)
+        if internal_schedule and not any(item["schedule_id"] == schedule_id for item in schedules):
+            day_profiles = internal_schedule.get("day_profiles", {})
+            schedules.append({"schedule_id": schedule_id, "title": "Resolved internal-gains schedule", "description": "Draft schedule from internal-gains resolver.", "status": internal_schedule.get("status", "provisional"), "source": internal_schedule.get("source", "internal-gains resolution"), "citations": [], "day_profiles": {
+                "weekday": {"values": day_profiles.get("weekday", _profile_schedule(profile_id)), "status": "provisional", "source": internal_schedule.get("source", "internal-gains resolution"), "citations": []},
+                "saturday": {"values": day_profiles.get("saturday", _profile_schedule(profile_id)), "status": "provisional", "source": internal_schedule.get("source", "internal-gains resolution"), "citations": []},
+                "sunday_holiday": {"values": day_profiles.get("sunday", day_profiles.get("holiday", _profile_schedule(profile_id))), "status": "provisional", "source": internal_schedule.get("source", "internal-gains resolution"), "citations": []},
+            }})
+        elif not any(item["schedule_id"] == schedule_id for item in schedules):
             schedules.append(_schedule(schedule_id, profile_id))
-        cooling = {"people_sensible_w_per_person": profile["people_sensible_w"], "people_latent_w_per_person": profile["people_latent_w"],
-                   "people_diversity_factor": profile["people_diversity"], "lighting_w_m2": profile["lighting_w_m2"],
-                   "lighting_diversity_factor": profile["lighting_diversity"],
-                   "outside_air_lps": round(occupancy * profile["outside_air_lps_person"] + area * profile["outside_air_lps_m2"], 3),
-                   "safety_factor": pack["scenario"]["safety_factor"], "envelope_not_applicable": True,
+        people_sensible = _resolved_internal_value("people_sensible_w_per_person", "people_sensible_w_per_person") if internal_record else None
+        people_latent = _resolved_internal_value("people_latent_w_per_person", "people_latent_w_per_person") if internal_record else None
+        people_diversity = (internal_fields.get("people_diversity", {}).get("value") if isinstance(internal_fields.get("people_diversity"), dict) else None) or profile["people_diversity"]
+        lighting_load_w = _resolved_internal_value("lighting_load_w", "lighting_load_w") if internal_record else None
+        lighting_w_m2 = lighting_load_w / area if lighting_load_w is not None and area else profile["lighting_w_m2"]
+        lighting_diversity = (internal_fields.get("lighting_diversity", {}).get("value") if isinstance(internal_fields.get("lighting_diversity"), dict) else None) or profile["lighting_diversity"]
+        room_airflows = airflow_by_room.get(ceiling_volume_resolver.room_identity(row["name"], row["level"]), {})
+        outside_record = room_airflows.get("outside_air", {})
+        outside_air = round(occupancy * profile["outside_air_lps_person"] + area * profile["outside_air_lps_m2"], 3)
+        if outside_record.get("air_path_type") == "outside_air" and outside_record.get("status") not in {"blocked", "excluded"} and outside_record.get("value") is not None:
+            outside_air = round(float(outside_record["value"]), 3)
+        cooling = {"people_sensible_w_per_person": people_sensible or profile["people_sensible_w"], "people_latent_w_per_person": people_latent or profile["people_latent_w"],
+                   "people_diversity_factor": people_diversity, "lighting_w_m2": lighting_w_m2,
+                   "lighting_diversity_factor": lighting_diversity,
+                   "outside_air_lps": outside_air,
+                   "safety_factor": scenario_values["safety_factor"], "envelope_not_applicable": True,
                    "verification_status": "provisional", "source": _source(profile_id), "envelope_surfaces": [], "glazing_surfaces": []}
+        equipment_rows = internal_record.get("equipment", []) if internal_record and internal_record.get("fields", {}).get("equipment", {}).get("origin") in {"direct_project_evidence", "contractor_override", "project_evidence", "ai_interpretation", "ai_estimated"} else []
+        if not equipment_rows:
+            equipment_rows = [{"name": "Preliminary profile equipment", "quantity": 1, "rated_input_w": area * profile["equipment_w_m2"], "heat_to_space_factor": profile["equipment_space_gain"], "diversity": profile["equipment_diversity"], "origin": "controlled_preliminary_profile"}]
+        heat_sources = [{"name": item.get("name", "Equipment"), "quantity": item.get("quantity", 1), "watts": round(item.get("rated_input_w", 0), 3), "kind": "other", "diversity_factor": item.get("diversity", profile["equipment_diversity"]), "space_gain_factor": item.get("heat_to_space_factor", profile["equipment_space_gain"]), "verification_status": "provisional", "source": item.get("origin", _source(profile_id))} for item in equipment_rows]
         requirements_zones.append({"zone_id": zone_id, "name": row["name"], "usage": profile["label"], "source_room_labels": [row["name"]],
-                                   "area_m2": area, "occupancy": occupancy, "ceiling_height_mm": 2700,
-                                   "heat_sources": [{"name": "Preliminary profile equipment", "quantity": 1, "watts": round(area * profile["equipment_w_m2"], 3), "kind": "other", "diversity_factor": profile["equipment_diversity"], "space_gain_factor": profile["equipment_space_gain"], "verification_status": "provisional", "source": _source(profile_id)}],
+                                   "area_m2": area, "occupancy": occupancy, "ceiling_height_mm": room_resolution.get("ceiling_height_mm"),
+                                   "heat_sources": heat_sources,
                                    "cooling_load": cooling})
-        zones.append({"zone_id": zone_id, "name": row["name"], "floor_id": floor_id, "ceiling_height_mm": 2700,
+        zones.append({"zone_id": zone_id, "name": row["name"], "floor_id": floor_id, "ceiling_height_mm": room_resolution.get("ceiling_height_mm"),
                       "verification_status": "provisional", "source": _source("topology"), "citations": []})
         ledger.extend([
-            {"room_id": room_id, "field": "area_m2", "value": area, "origin": area_origin, "profile_id": profile_id, "confidence": score, "confidence_band": confidence_band(score), "rationale": "PDF/AI geometry when available; controlled profile fallback otherwise.", "evidence": row["evidence"]},
+            {"room_id": room_id, "field": "area_m2", "value": area, "origin": area_origin, "profile_id": profile_id, "confidence": score, "confidence_band": confidence_band(score), "rationale": "Normalized geometry proof when available; otherwise a direct PDF value or controlled profile fallback.", "evidence": row["evidence"], "geometry_proof_id": row.get("geometry_proof_id", ""), "geometry_mode": row.get("geometry_mode", ""), "derivation": row.get("geometry_evidence", {}).get("derivation", {})},
+            {"room_id": room_id, "field": "ceiling_height_mm", "value": room_resolution.get("ceiling_height_mm"), "origin": room_resolution.get("ceiling_height_origin", "unresolved"), "profile_id": profile_id, "confidence": room_resolution.get("ceiling_height_confidence", 0.0), "confidence_band": confidence_band(room_resolution.get("ceiling_height_confidence", 0.0)), "rationale": room_resolution.get("ceiling_height_rationale", "Ceiling-height resolver."), "evidence": room_resolution.get("ceiling_height_evidence", []), "derivation": room_resolution.get("volume_derivation", {})},
             {"room_id": room_id, "field": "room_profile", "value": profile_id, "origin": "ai_profile", "profile_id": profile_id, "confidence": row["confidence"], "confidence_band": confidence_band(row["confidence"]), "rationale": "AI proposal when valid; otherwise label-based controlled profile selection.", "evidence": row["evidence"]},
             {"room_id": room_id, "field": "space_scope", "value": row["scope"], "origin": "ai_profile", "profile_id": profile_id, "confidence": row["confidence"], "confidence_band": confidence_band(row["confidence"]), "rationale": "AI preliminary scope classification.", "evidence": row["evidence"]},
         ])
@@ -519,41 +891,179 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                 ("process exhaust", "Kitchen process exhaust remains a project-specific preliminary exclusion."),
                 ("steam and named equipment", "Steam and named equipment heat remain explicit project-specific exclusions."),
             ))
-    requirements_raw = {"space_usage": "AI preliminary multi-room project", "occupancy": None, "operating_hours": "Controlled preliminary profiles", "indoor_cooling_setpoint_c": pack["scenario"]["indoor_dry_bulb_c"], "outdoor_summer_db_c": max(point["db"] for point in pack["scenario"]["hours"]),
-                        "cooling_load_conditions": {"indoor_cooling_wet_bulb_c": pack["scenario"]["indoor_wet_bulb_c"], "outdoor_summer_wet_bulb_c": max(point["wb"] for point in pack["scenario"]["hours"]), "atmospheric_pressure_kpa": pack["scenario"]["pressure_kpa"], "verification_status": "provisional", "source": _source("scenario")},
+    weather_values = scenario_values["weather_profile"]
+    requirements_raw = {"space_usage": "AI preliminary multi-room project", "occupancy": None, "operating_hours": "Controlled preliminary profiles", "indoor_cooling_setpoint_c": scenario_values["indoor_dry_bulb_c"], "outdoor_summer_db_c": max(point["db"] for point in weather_values["hours"]),
+                        "cooling_load_conditions": {"indoor_cooling_wet_bulb_c": scenario_values["indoor_wet_bulb_c"], "indoor_wet_bulb_basis": "legacy_unverified", "outdoor_summer_wet_bulb_c": max(point["wb"] for point in weather_values["hours"]), "outdoor_wet_bulb_basis": max(weather_values["hours"], key=lambda point: point["wb"]).get("wet_bulb_basis", "legacy_unverified"), "atmospheric_pressure_kpa": weather_values["pressure_kpa"], "verification_status": "provisional", "source": _source("scenario")},
                         "zones": requirements_zones,
                         "verification": {key: {"status": "provisional", "source": _source("scenario")} for key in ("occupancy", "design_conditions", "outside_air", "exhaust", "heat_sources", "ceiling", "existing_services")}}
     requirements = validate_design_requirements(requirements_raw)
     model = build_hourly_load_model(requirements)
     model["floors"], model["zones"] = floors, zones
     room_rows = {}
+    def airflow_citations(record):
+        """Keep cited project evidence; cite the released pack for its fallback."""
+        raw = record.get("evidence", record.get("citations", [])) if isinstance(record, dict) else []
+        if isinstance(raw, dict):
+            raw = [raw]
+        valid = [deepcopy(item) for item in raw if isinstance(item, dict) and (str(item.get("reference", "")).strip() or str(item.get("excerpt", "")).strip())]
+        if valid:
+            return valid
+        if isinstance(record, dict) and record.get("origin") == "controlled_fallback":
+            return [{"reference": f"product-owned:{pack['pack_id']}:{pack['version']}", "excerpt": "Controlled preliminary infiltration profile from the released assumption pack."}]
+        return []
+
     for room, row in zip(model["rooms"], active_rows):
         profile_id = next(item["profile_id"] for item in ledger if item["room_id"] == f"room-{row['key']}" and item["field"] == "room_profile")
-        profile = pack["profiles"][profile_id]
+        profile = deepcopy(pack["profiles"][profile_id])
+        profile.update({key: value for key, value in resolved_values["rooms"].get(value_resolver.room_target_id(row["name"], row["level"]), {}).items() if key in profile and value is not None})
         room.update({"room_id": f"room-{row['key']}", "name": row["name"], "zone_id": f"zone-{row['key']}", "source_zone_id": f"zone-{row['key']}",
-                     "mapping_status": "confirmed", "verification_status": "provisional", "source": _source("topology"), "citations": [], "source_room_labels": [row["name"]], "ceiling_height_mm": 2700})
-        room["schedule_assignments"] = {"people": f"prelim-{profile_id}", "lighting": f"prelim-{profile_id}", "outside_air": f"prelim-{profile_id}", "infiltration": "", "equipment": {source["source_id"]: f"prelim-{profile_id}" for source in room["heat_sources"]}, "solar": {}}
+                     "mapping_status": "confirmed", "verification_status": "provisional", "source": _source("topology"), "citations": [], "source_room_labels": [row["name"]], "ceiling_height_mm": resolved_values["rooms"].get(value_resolver.room_target_id(row["name"], row["level"]), {}).get("ceiling_height_mm")})
+        resolved_internal = internal_records.get(room_use_resolver.room_identity(row["name"], row["level"]), {})
+        internal_schedule_id = resolved_internal.get("schedule_id") or f"prelim-{profile_id}"
+        room["schedule_assignments"] = {"people": internal_schedule_id, "lighting": internal_schedule_id, "outside_air": internal_schedule_id, "infiltration": "", "equipment": {source["source_id"]: internal_schedule_id for source in room["heat_sources"]}, "solar": {}}
+        infiltration_record = room_airflows.get("infiltration", {})
+        if infiltration_record.get("air_path_type") == "infiltration" and infiltration_record.get("status") not in {"blocked", "excluded"} and infiltration_record.get("value") is not None:
+            infiltration_schedule_id = f"airflow-infiltration-{room['room_id']}"
+            day_profiles = infiltration_record.get("schedule", {})
+            citations = airflow_citations(infiltration_record)
+            schedules.append({"schedule_id": infiltration_schedule_id, "title": "Resolved preliminary infiltration schedule", "description": "Dedicated schedule from airflow resolver; review required.", "status": "provisional", "source": infiltration_record.get("source", "airflow resolution"), "citations": citations, "day_profiles": {"weekday": {"values": day_profiles.get("weekday", [1.0] * 24), "status": "provisional", "source": infiltration_record.get("source", "airflow resolution"), "citations": citations}, "saturday": {"values": day_profiles.get("saturday", [1.0] * 24), "status": "provisional", "source": infiltration_record.get("source", "airflow resolution"), "citations": citations}, "sunday_holiday": {"values": day_profiles.get("sunday", day_profiles.get("holiday", [1.0] * 24)), "status": "provisional", "source": infiltration_record.get("source", "airflow resolution"), "citations": citations}}})
+            room["schedule_assignments"]["infiltration"] = infiltration_schedule_id
         for component in room["unapproved_components"]:
             component.update({"value": None, "unit": "", "source_room_id": "", "source": "Excluded from AI preliminary model pending a project-specific method.", "citations": [], "verification_status": "confirmed", "calculation_status": "not_present_confirmed"})
+            if component.get("component_type") == "infiltration" and infiltration_record.get("value") is not None and infiltration_record.get("status") not in {"blocked", "excluded"}:
+                component.update({"value": infiltration_record.get("value"), "unit": infiltration_record.get("unit", "ACH"), "source": infiltration_record.get("source", "airflow resolution"), "citations": airflow_citations(infiltration_record), "verification_status": "provisional", "calculation_status": "calculated", "method_id": "infiltration_psychrometric_v1", "air_path": "uncontrolled_infiltration", "flow_reference": "outdoor_design_condition", "preliminary_assumption": infiltration_record.get("origin") == "controlled_fallback"})
         room_rows[_room_identity(row["name"], row["level"])] = {"room": room, "row": row, "profile": profile, "profile_id": profile_id}
 
     # A legacy vision surface remains useful as a backwards-compatible
     # proposal, but new integrations pass the richer surface/opening proposal.
-    surface_candidates = list(proposal["surfaces"]) or _legacy_surface_candidates(vision or {}, active_rows)
-    opening_candidates = proposal["openings"]
+    surface_candidates = list(effective_proposal["surfaces"]) or _legacy_surface_candidates(vision or {}, active_rows)
+    # Normalise opaque properties through the authoritative thermal-surface
+    # ledger before materialising hourly inputs.  The legacy proposal shape is
+    # bridged here so existing callers keep working while new geometry
+    # responses can provide a full ledger directly.
+    ledger_rows = []
+    geometry_ledger = (geometry_resolution or {}).get("thermal_surface_ledger", {}) if isinstance(geometry_resolution, dict) else {}
+    geometry_rows = geometry_ledger.get("surfaces", []) if isinstance(geometry_ledger, dict) else []
+    if geometry_rows:
+        ledger_rows = deepcopy(geometry_rows)
+        # A normalized geometry ledger is authoritative even when the AI
+        # response did not repeat the richer preliminary ``surfaces`` shape.
+        # Bridge those records into the existing materialization loop so a
+        # valid ledger surface is not silently lost between resolution and
+        # the hourly model.  The bridge only copies identifiers, ownership,
+        # geometry, and provenance; construction/U-values remain resolved by
+        # ``resolve_opaque_envelope`` below.
+        surface_candidates = []
+        for surface in geometry_rows:
+            if not isinstance(surface, dict):
+                continue
+            owner_id = str(surface.get("owner_room_id") or "")
+            owner = next((value for value in active_rows
+                          if owner_id in {str(value.get("id", "")), str(value.get("source_room_id", "")), f"room-{value.get('key', '')}", value.get("key", "")}
+                          or (surface.get("owner_room_label") and value["name"].casefold() == str(surface["owner_room_label"]).casefold())), None)
+            level_name = str(surface.get("level_name") or (owner or {}).get("level", ""))
+            owner_label = str(surface.get("owner_room_label") or (owner or {}).get("name", ""))
+            score = surface.get("confidence_score")
+            if score is None:
+                score = _confidence(surface.get("confidence"))
+            candidate_id = str(surface.get("surface_id") or surface.get("ai_surface_id") or "")
+            if not candidate_id:
+                continue
+            surface_candidates.append({
+                "candidate_id": candidate_id,
+                "surface_key": candidate_id,
+                "label": surface.get("label", candidate_id),
+                "owner_room_label": owner_label,
+                "owner_level_name": level_name,
+                "physical_type": surface.get("physical_type", "wall"),
+                "thermal_role": surface.get("thermal_role", "unresolved"),
+                "external_exposure": "external" if surface.get("boundary_condition") == "outside" or surface.get("thermal_role") == "external" else surface.get("external_exposure", ""),
+                "boundary_condition": surface.get("boundary_condition", "unresolved"),
+                "orientation": str(surface.get("orientation", "")).upper(),
+                "gross_area_m2": surface.get("gross_area_m2", surface.get("area_m2")),
+                "net_opaque_area_m2": surface.get("net_opaque_area_m2"),
+                "opening_coverage": surface.get("opening_coverage_status", surface.get("opening_coverage", "not_applicable")),
+                "opening_ids": list(surface.get("linked_opening_ids", surface.get("opening_ids", []))),
+                "construction_id": surface.get("construction_id", ""),
+                "u_value_w_m2k": surface.get("u_value_w_m2k"),
+                "boundary_temperature_c": surface.get("boundary_temperature_c"),
+                "evidence": deepcopy(surface.get("evidence_refs", surface.get("citations", []))),
+                "confidence": score,
+                "confidence_band": confidence_band(score),
+                "assumptions": deepcopy(surface.get("assumptions", [])),
+                "conflicts": deepcopy(surface.get("conflicts", [])),
+                "validation_errors": deepcopy(surface.get("unresolved_fields", [])),
+            })
+    else:
+        for candidate in surface_candidates:
+            owner = _find_owner(active_rows, candidate.get("owner_room_label", ""), candidate.get("owner_level_name", ""))
+            owner_id = ""
+            if owner:
+                owner_id = room_rows.get(_room_identity(owner["name"], owner["level"]), {}).get("room", {}).get("room_id", "")
+            ledger_rows.append({
+                "surface_id": candidate.get("candidate_id", candidate.get("surface_key", "")),
+                "physical_type": candidate.get("physical_type", "wall"),
+                "thermal_role": candidate.get("thermal_role", "external"),
+                "boundary_condition": "outside" if candidate.get("external_exposure") == "external" else candidate.get("boundary_condition", "unresolved"),
+                "owner_room_id": owner_id,
+                "owner_zone_id": room_rows.get(_room_identity(owner["name"], owner["level"]), {}).get("room", {}).get("zone_id", "") if owner else "",
+                "gross_area_m2": candidate.get("gross_area_m2"),
+                "net_opaque_area_m2": candidate.get("net_opaque_area_m2"),
+                "opening_coverage": candidate.get("opening_coverage", "not_applicable"),
+                "opening_ids": [item.get("candidate_id") for item in effective_proposal.get("openings", []) if isinstance(item, dict) and item.get("host_surface_key") in {candidate.get("surface_key"), candidate.get("candidate_id")}],
+                "construction_id": candidate.get("construction_id", ""),
+                "u_value_w_m2k": candidate.get("u_value_w_m2k"),
+                "boundary_temperature_c": candidate.get("boundary_temperature_c"),
+                "evidence_refs": candidate.get("evidence", []),
+                "confidence": candidate.get("confidence", "low"),
+                "status": "ai_estimated" if candidate.get("confidence", 0) >= 0.8 else "proposed",
+            })
+    opening_rows = []
+    for opening in effective_proposal.get("openings", []):
+        if isinstance(opening, dict):
+            opening_rows.append({"opening_id": opening.get("candidate_id"), "opening_area_m2": opening.get("opening_area_m2"), "width_m": opening.get("width_m"), "height_m": opening.get("height_m"), "quantity": opening.get("quantity", 1)})
+    opaque_resolution = thermal_surface_resolver.resolve_opaque_envelope(
+        {"source_fingerprint": fingerprint(effective_proposal), "surfaces": ledger_rows},
+        {"openings": opening_rows}, value_resolution=resolution_artifact,
+        source_pack=pack, resolution_mode="preliminary_ai_estimate",
+        weather_available=bool(scenario_values.get("weather_profile")),
+    )
+    opaque_by_id = {row.get("surface_id"): row for row in opaque_resolution.get("surfaces", [])}
+    for candidate in surface_candidates:
+        resolved = opaque_by_id.get(candidate.get("candidate_id"))
+        if resolved:
+            candidate["gross_area_m2"] = resolved.get("gross_area_m2", candidate.get("gross_area_m2"))
+            candidate["net_opaque_area_m2"] = resolved.get("net_opaque_area_m2", candidate.get("net_opaque_area_m2"))
+            candidate["resolved_u_value_w_m2k"] = resolved.get("u_value_w_m2k")
+            candidate["resolved_construction_id"] = resolved.get("construction_id")
+            candidate["opaque_resolution_status"] = resolved.get("status")
+            candidate["opaque_resolution_issues"] = resolved.get("unresolved_fields", [])
+    opening_candidates = effective_proposal["openings"]
     surface_index, accepted_surface_ids, accepted_opening_ids = {}, set(), set()
     surface_summary = {"discovered": len(surface_candidates), "included": 0, "blocked": 0, "excluded": 0,
                        "openings_discovered": len(opening_candidates), "openings_included": 0, "openings_excluded": 0}
-    for issue in proposal["issues"]:
+    for issue in effective_proposal["issues"]:
         exclusions.append({"room_id": "", **issue})
     for candidate in surface_candidates:
         owner = _find_owner(active_rows, candidate.get("owner_room_label", ""), candidate.get("owner_level_name", ""))
         errors = list(candidate.get("validation_errors", []))
+        errors.extend(candidate.get("opaque_resolution_issues", []))
         if owner is None:
             errors.append("owner is not an included comfort-HVAC room")
         if errors:
             surface_summary["blocked"] += 1
             exclusions.append({"room_id": f"room-{owner['key']}" if owner else "", "component": "opaque envelope", "reason": "; ".join(errors), "candidate_id": candidate.get("candidate_id", "")})
+            continue
+        # Preserve the complete ledger, but keep the existing preliminary
+        # hourly adapter conservative: floors, partitions, ground-contact,
+        # room-to-room, and unresolved boundaries need their reviewed coupling
+        # or boundary method before they can contribute to draft conduction.
+        if (candidate.get("physical_type") not in {"wall", "roof", "ceiling"}
+                or candidate.get("thermal_role") not in {"external", "outside", "outdoors"}
+                or candidate.get("external_exposure") != "external"):
+            surface_summary["excluded"] += 1
+            exclusions.append({"room_id": f"room-{owner['key']}", "component": "opaque envelope", "candidate_id": candidate.get("candidate_id", ""),
+                               "reason": "Surface is retained in the thermal ledger but its non-external boundary is outside the preliminary hourly envelope policy."})
             continue
         target = room_rows[_room_identity(owner["name"], owner["level"])]
         candidate = deepcopy(candidate)
@@ -612,6 +1122,12 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                   "shading_factor": 1, "boundary_method": "external", "boundary_temperature_c": None, "construction_id": "",
                   "verification_status": "provisional", "source": _source(profile_id) + "; AI preliminary surface classification",
                   "preliminary_assumption": True, "source_pages": candidate["evidence"], "orientation": orientation}
+        if candidate.get("resolved_u_value_w_m2k") is not None:
+            opaque["u_value_w_m2k"] = candidate["resolved_u_value_w_m2k"]
+        if candidate.get("resolved_construction_id"):
+            opaque["construction_id"] = candidate["resolved_construction_id"]
+        opaque["area_derivation"] = deepcopy(opaque_by_id.get(candidate["candidate_id"], {}).get("area_derivation", {}))
+        opaque["opaque_resolution_fingerprint"] = opaque_by_id.get(candidate["candidate_id"], {}).get("resolution_fingerprint", "")
         room["cooling_load"]["envelope_not_applicable"] = False
         room["cooling_load"]["envelope_surfaces"].append(opaque)
         accepted_surface_ids.add(candidate["candidate_id"])
@@ -653,21 +1169,44 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
     surface_summary["excluded"] = surface_summary["discovered"] - surface_summary["included"] - surface_summary["blocked"]
     model["updated_at"] = now()
     model["source_requirements_updated_at"] = requirements["updated_at"]
-    material = {"requirements": requirements, "schedule_library": {"schema_version": 1, "updated_at": now(), "schedules": schedules}, "design_day_scenarios": _scenario(pack), "hourly_load_model": model,
+    material = {"requirements": requirements, "schedule_library": {"schema_version": 1, "updated_at": now(), "schedules": schedules}, "design_day_scenarios": _scenario(pack, scenario_values), "hourly_load_model": model,
                 "preliminary_policy": {"pack_version": pack["version"], "mode": "ai_preliminary", "surface_ids": sorted(accepted_surface_ids), "opening_ids": sorted(accepted_opening_ids)}}
     dependency_fingerprints = dict(source_fingerprints or {})
-    dependency_fingerprints.update({"preliminary_pack": fingerprint(pack), "vision_response": fingerprint(vision or {}), "building_evidence": fingerprint(building or {}), "contractor_overrides": fingerprint(overrides), "manual_placeholder_entities": fingerprint(manual_entities), "ai_preliminary_proposal": fingerprint(proposal)})
+    dependency_fingerprints.update({"preliminary_pack": fingerprint(pack), "room_use_taxonomy": room_use_artifact["taxonomy_fingerprint"], "room_use_resolution": room_use_artifact["fingerprint"], "ceiling_volume_resolution": ceiling_artifact["fingerprint"], "internal_gains_resolution": internal_artifact.get("fingerprint", ""), "airflow_resolution": airflow_artifact.get("fingerprint", ""), "ahu_resolution": ahu_artifact.get("fingerprint", ""), "plant_resolution": plant_artifact.get("fingerprint", ""), "geometry_resolution": fingerprint(geometry_resolution or {}), "thermal_surface_ledger": opaque_resolution.get("fingerprint", ""), "vision_response": fingerprint(vision or {}), "building_evidence": fingerprint(building or {}), "contractor_overrides": fingerprint(overrides),
+                                     # Prefer fingerprints of the source records used by
+                                     # stale-state checks; the normalized/effective proposal
+                                     # below is materialized data, not the source artifact.
+                                     "manual_placeholder_entities": dependency_fingerprints.get("manual_placeholder_entities", fingerprint(manual_entities)),
+                                     "ai_preliminary_proposal": dependency_fingerprints.get("ai_preliminary_proposal", fingerprint(preliminary_proposal if preliminary_proposal is not None else manual_entities)),
+                                     "value_resolution": resolution_artifact["fingerprint"]})
     input_fingerprint = content_fingerprint({"material": material, "ledger": ledger, "exclusions": exclusions, "dependencies": dependency_fingerprints})
+    review_queue = [item for item in ledger if item["confidence"] < 0.8]
+    # High-confidence draft geometry may be usable after deterministic shape
+    # and scale validation, while its level/vector/dimension caveats still need
+    # to remain visible to the contractor. Keep these warnings out of the
+    # blocking list but never hide them from the review queue.
+    for entity in (geometry_resolution or {}).get("entities", []):
+        if not isinstance(entity, dict) or entity.get("kind") != "ai_room_geometry":
+            continue
+        warnings = entity.get("review_warnings", [])
+        if warnings:
+            review_queue.append({
+                "room_id": entity.get("entity_id", ""), "field": "area_m2",
+                "value": (entity.get("value") or {}).get("area_m2"),
+                "origin": "ai_geometry", "profile_id": "", "confidence": (entity.get("value") or {}).get("confidence_score", 0),
+                "confidence_band": "medium", "rationale": "Draft area is scale-calibrated, but geometry review warnings remain.",
+                "review_warnings": warnings, "evidence": [entity.get("source", {})],
+            })
     return {"schema_version": 1, "status": "draft", "label": "AI preliminary estimate — not engineering reviewed or validated", "created_at": now(), "input_fingerprint": input_fingerprint,
             "pack": {"pack_id": pack["pack_id"], "version": pack["version"], "fingerprint": fingerprint(pack)}, "dependency_fingerprints": dependency_fingerprints,
-            "material": material, "materialized_fields": ledger, "exclusions": exclusions, "excluded_spaces": excluded_spaces,
-            "surface_summary": surface_summary, "proposal": proposal,
-            "review_queue": sorted([item for item in ledger if item["confidence"] < 0.8], key=lambda item: (item["confidence"], item["room_id"], item["field"]))}
+            "material": material, "materialized_fields": ledger, "resolved_value_records": resolution_artifact["records"], "exclusions": exclusions, "excluded_spaces": excluded_spaces,
+            "surface_summary": surface_summary, "proposal": effective_proposal, "opaque_envelope_resolution": opaque_resolution, "room_use_resolution": room_use_artifact, "ceiling_volume_resolution": ceiling_artifact, "internal_gains_resolution": internal_artifact, "airflow_resolution": airflow_artifact, "ahu_resolution": ahu_artifact, "plant_resolution": plant_artifact, "geometry_resolution": deepcopy(geometry_resolution or {}), "value_resolution": resolution_artifact,
+            "review_queue": sorted(review_queue, key=lambda item: (item["confidence"], item["room_id"], item["field"]))}
 
 
-def calculate(input_set):
+def calculate(input_set, safety_factor_policy=None):
     material = input_set["material"]
-    report = calculate_hourly_load_report(material["requirements"], material["schedule_library"], material["design_day_scenarios"], material["hourly_load_model"], ["ai_preliminary_cooling_day"], preliminary_policy=material.get("preliminary_policy"))
+    report = calculate_hourly_load_report(material["requirements"], material["schedule_library"], material["design_day_scenarios"], material["hourly_load_model"], ["ai_preliminary_cooling_day"], preliminary_policy=material.get("preliminary_policy"), safety_factor_policy=safety_factor_policy)
     report["report_type"] = "hourly_ai_preliminary_cooling_load"
     report["status"] = "draft"
     report["project_peak"] = {}
@@ -675,8 +1214,12 @@ def calculate(input_set):
     report["preliminary_input_set_fingerprint"] = input_set["input_fingerprint"]
     report["assumption_coverage"] = {"field_count": len(input_set["materialized_fields"]), "low_confidence_count": len(input_set["review_queue"]), "excluded_component_count": len(input_set["exclusions"])}
     report["preliminary_surface_summary"] = deepcopy(input_set.get("surface_summary", {}))
+    report["value_resolution"] = deepcopy(input_set.get("value_resolution", {}))
+    report["safety_factor_resolution"] = deepcopy(input_set.get("safety_factor_resolution", {}))
+    report["value_resolution_coverage"] = deepcopy(input_set.get("value_resolution", {}).get("coverage_summary", {}))
     report["refrigeration_process_exclusions"] = deepcopy(input_set.get("excluded_spaces", []))
     report["review_queue"] = deepcopy(input_set["review_queue"])
+    report["provenance"] = shared_resolution.build_report_provenance(report, input_set.get("value_resolution", {}))
     report["excluded_components"] = sorted(set(report.get("excluded_components", []) + [item["component"] for item in input_set["exclusions"]]))
     report["input_fingerprints"].update(input_set["dependency_fingerprints"])
     report["input_fingerprints"]["ai_preliminary_input_set"] = input_set["input_fingerprint"]

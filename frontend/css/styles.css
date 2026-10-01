@@ -356,6 +356,26 @@ button,input{ font:inherit; color:inherit }
 .input-register-group summary{ cursor:pointer; padding:8px 0; display:flex; justify-content:space-between; gap:10px }
 .input-register-group summary span{ color:var(--text-2); font-size:11px }
 .input-register-row{ border-top:1px solid var(--line-soft); padding:8px 0 }
+.reviewer-room-geometry{margin:14px 0;border:1px solid var(--line);border-radius:var(--r);background:var(--surface);overflow:hidden}
+.reviewer-geometry-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:14px;border-bottom:1px solid var(--line-soft)}
+.reviewer-geometry-head b,.reviewer-geometry-head span{display:block}.reviewer-geometry-head span,.reviewer-geometry-help,.reviewer-geometry-disclaimer{color:var(--text-2);font-size:12px}
+.reviewer-geometry-controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:12px 14px}
+.reviewer-geometry-controls label{display:grid;gap:4px;font-size:12px;color:var(--text-2)}
+.reviewer-geometry-controls input,.reviewer-geometry-controls select{width:100%;min-width:0}
+.reviewer-geometry-tools,.reviewer-geometry-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:0 14px 10px}
+.reviewer-geometry-help{padding:0 14px;margin:0 0 9px}
+.reviewer-geometry-canvas{margin:0 14px 12px;border:1px solid var(--line);background:#eef2f5;overflow:auto;max-height:70vh;touch-action:manipulation}
+.reviewer-geometry-canvas svg{display:block;width:100%;height:auto;cursor:crosshair;touch-action:manipulation}
+.trace-polygon{fill:rgba(36,117,153,.18);stroke:#1675a0;stroke-width:12;stroke-linejoin:round;vector-effect:non-scaling-stroke}
+.trace-vertex{fill:#fff;stroke:#1675a0;stroke-width:5;vector-effect:non-scaling-stroke}
+.trace-snap-line{stroke:rgba(224,121,25,.2);stroke-width:2;vector-effect:non-scaling-stroke}
+.trace-dimension-point{fill:#e47717;stroke:#fff;stroke-width:4;vector-effect:non-scaling-stroke}
+.trace-keyboard-cursor{fill:rgba(26,102,141,.12);stroke:#125d80;stroke-width:3;stroke-dasharray:8 6;vector-effect:non-scaling-stroke;pointer-events:none}
+.reviewer-geometry-canvas svg:focus{outline:3px solid var(--accent);outline-offset:-3px}
+.reviewer-geometry-actions .reviewer-geometry-result{flex:1 1 240px;color:var(--text-2);font-size:12px}
+.reviewer-geometry-disclaimer{display:block;padding:0 14px 12px}
+.reviewer-geometry-error{color:#a03c25;font-size:12px;padding:0 14px 10px;min-height:1em}
+@media(max-width:650px){.reviewer-geometry-controls{grid-template-columns:1fr}.reviewer-geometry-head{align-items:stretch;flex-direction:column}.reviewer-geometry-canvas{margin-inline:8px;max-height:58vh}.reviewer-geometry-tools .btn{flex:1 1 auto}}
 .input-register-row b,.input-register-row span,.input-register-row small{ display:block }
 .input-register-row b{ font:11px var(--mono); overflow-wrap:anywhere }
 .input-register-row span{ font-size:12px }
@@ -525,8 +545,6 @@ button,input{ font:inherit; color:inherit }
 }
 .aside .hd{ padding:16px 18px 12px; border-bottom:1px solid var(--line) }
 .aside .bd{ flex:1 1 auto; overflow-y:auto; padding:16px 18px; min-height:0 }
-.aside .ft{ padding:14px 18px; border-top:1px solid var(--line) }
-.aside .ft .btn{ width:100% }
 .blk{ margin-bottom:22px }
 .blk .micro{ margin-bottom:9px }
 .kv{ display:flex; justify-content:space-between; gap:10px; padding:5px 0; font-size:13.5px }

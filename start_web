@@ -3,6 +3,12 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+if [[ "${1:-}" == "--test" ]]; then
+  export ARCHIE_ENV=test
+  export ARCHIE_TEST_MODE=1
+  shift
+fi
+
 if [[ -x ".venv/bin/python" ]]; then
   exec ".venv/bin/python" -m backend.web_app "$@"
 fi

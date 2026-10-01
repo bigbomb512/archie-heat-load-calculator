@@ -20,6 +20,8 @@ from ai.hourly_loads import (
     validate_schedule_library,
 )
 from ai.infiltration_gate import empty_infiltration_method_gate, validate_infiltration_method_gate
+from ai.moisture_loads import empty_moisture_method_gate, validate_moisture_method_gate
+from ai import safety_factor_resolution
 
 
 def check(name, condition):
@@ -51,7 +53,8 @@ def library(status="confirmed"):
 
 
 def scenarios(mode="cooling", status="confirmed"):
-    hours = [{"hour": hour, "outdoor_dry_bulb_c": {"value": 35, "status": status, "source": "Weather sequence", "citations": []}, "outdoor_wet_bulb_c": {"value": 24, "status": status, "source": "Weather sequence", "citations": []}} for hour in range(24)]
+    citation = [{"reference": "Weather source W-1", "page": 1, "excerpt": "Hourly dry- and wet-bulb values."}]
+    hours = [{"hour": hour, "outdoor_dry_bulb_c": {"value": 35, "status": status, "source": "Weather sequence", "citations": citation}, "outdoor_wet_bulb_c": {"value": 24, "status": status, "source": "Weather sequence", "citations": citation}} for hour in range(24)]
     return {"scenarios": [{"scenario_id": "jan_weekday", "title": "January weekday", "mode": mode, "representative_month": "January", "day_type": "weekday", "status": status, "source": "Weather sequence", "citations": [], "atmospheric_pressure_kpa": {"value": 101.325, "status": status, "source": "Weather sequence", "citations": []}, "hours": hours}]}
 
 
@@ -130,6 +133,117 @@ def main():
     check("safety is applied after hourly subtotal", room["hours"][14]["design_total_kw"] == round(room["hours"][14]["subtotal_kw"] + room["hours"][14]["safety_allowance_kw"], 4) and room["hours"][14]["safety_allowance_kw"] == round(room["hours"][14]["subtotal_kw"] * 0.1, 4))
     check("model calculation does not mutate requirements", requirements == source_before)
 
+    missing_room_factor_model = reviewed_model(requirements)
+    missing_room_factor_model["rooms"][0]["cooling_load"]["safety_factor"] = None
+    missing_room_factor_report = calculate_hourly_load_report(
+        requirements, library(), scenarios(), missing_room_factor_model, ["jan_weekday"],
+    )
+    check(
+        "missing room safety factor blocks cleanly instead of crashing report generation",
+        missing_room_factor_report["status"] == "blocked"
+        and "safety factor" in " ".join(
+            missing_room_factor_report["scenario_results"][0]["rooms"][0]["blocked_reasons"]
+        ).lower(),
+    )
+
+    policy_artifact = safety_factor_resolution.resolve({"cooling_safety_factor": {
+        "factor": 1.10, "source": "Engineer design brief",
+        "citations": [{"reference": "Brief C-1", "page": 2, "excerpt": "Cooling design margin"}],
+    }})
+    policy_artifact = safety_factor_resolution.approve(policy_artifact, "cooling", "A. Engineer", "2026-09-30", "Final coincident cooling total")
+    policy = safety_factor_resolution.policy_for(policy_artifact, "cooling")
+    policy_model = reviewed_model(requirements)
+    policy_model["rooms"][0]["cooling_load"]["safety_factor"] = 1.1
+    policy_report = calculate_hourly_load_report(
+        requirements, library(), scenarios(), policy_model, ["jan_weekday"],
+        safety_factor_policy=policy,
+    )
+    policy_room = policy_report["scenario_results"][0]["rooms"][0]
+    check("policy mode neutralizes every room-hour factor", all(hour["safety_factor"] == 1.0 and hour["safety_allowance_kw"] == 0 for hour in policy_room["hours"]))
+    policy_scenario = policy_report["scenario_results"][0]
+    check("policy mode carries no room allowance into zone or floor hours", all(hour.get("safety_allowance_kw", 0) == 0 for area in [*policy_scenario["zones"], *policy_scenario["floors"]] for hour in area["hours"]))
+    policy_peak = policy_report["included_scope_peak"]
+    check("policy mode applies the approved factor once to coincident project peak", policy_report["status"] == "review_ready" and policy_peak["final_design_total_kw"] == round(policy_peak["raw_coincident_total_kw"] * 1.10, 4))
+    check("approved policy retains cited room factor as evidence", policy_report["legacy_room_safety_factors"] == [{"room_id": "zone_001-room-1", "factor": 1.1}])
+    check("approved policy applies despite cited room factor above one", policy_report["safety_policy_applied"] and policy_report["status"] == "review_ready")
+
+    basis_requirements = deepcopy(requirements)
+    basis_requirements["cooling_load_conditions"].update({"indoor_wet_bulb_basis": "thermodynamic", "outdoor_wet_bulb_basis": "thermodynamic"})
+    basis_report = calculate_hourly_load_report(basis_requirements, library(), scenarios(), reviewed_model(basis_requirements), ["jan_weekday"])
+    basis_component = basis_report["scenario_results"][0]["rooms"][0]["hours"][14]["components"]["outside_air"]
+    check("hourly outside-air calculation applies and reports declared thermodynamic basis", basis_component["inputs"]["indoor_wet_bulb_method"] == "thermodynamic_ashrae_eq33_iapws_water_ice_v3" and basis_component["inputs"]["outdoor_wet_bulb_basis"] == "thermodynamic")
+    weather_provenance = basis_component["inputs"]["outdoor_weather_provenance"]
+    check("hourly outside-air result carries its weather state sources, citations, status, and basis", weather_provenance["dry_bulb"]["source"] == "Weather sequence" and weather_provenance["dry_bulb"]["status"] == "confirmed" and weather_provenance["dry_bulb"]["citations"][0]["reference"] == "Weather source W-1" and weather_provenance["wet_bulb_basis"] == "thermodynamic")
+
+    moisture_model = reviewed_model(requirements)
+    moisture_component = next(item for item in moisture_model["rooms"][0]["unapproved_components"] if item["component_type"] == "vapour_gain")
+    moisture_component.update({
+        "value": 1.0, "unit": "kg/h", "source": "Process moisture schedule",
+        "citations": [{"reference": "Process schedule PS-1", "page": 2, "excerpt": "Water vapor generation rate"}],
+        "verification_status": "confirmed", "calculation_status": "calculated", "method_id": "room_internal_moisture_v1", "air_path": "direct_to_room",
+    })
+    moisture_model["rooms"][0]["schedule_assignments"].setdefault("moisture", {})[moisture_component["component_id"]] = "vapour"
+    moisture_library = library()
+    moisture_values = [0.0] * 24
+    moisture_values[14] = 1.0
+    moisture_library["schedules"].append({
+        "schedule_id": "vapour", "title": "Process vapour", "status": "confirmed", "source": "Process schedule PS-1",
+        "citations": [], "day_profiles": {"weekday": profile(moisture_values), "saturday": profile([], "missing"), "sunday_holiday": profile([], "missing")},
+    })
+    draft_moisture = calculate_hourly_load_report(
+        requirements, moisture_library, scenarios(), moisture_model, ["jan_weekday"],
+        moisture_gate=empty_moisture_method_gate(),
+    )
+    moisture_hour = draft_moisture["scenario_results"][0]["rooms"][0]["hours"][14]
+    check("water-vapor rate contributes psychrometric latent gain", moisture_hour["components"]["internal_moisture"]["latent_kw"] == 0.7071)
+    check("unapproved moisture method keeps calculated result draft and suppresses project peak", draft_moisture["status"] == "draft" and not draft_moisture["project_peak"])
+    missing_moisture_schedule = deepcopy(moisture_model)
+    missing_moisture_schedule["rooms"][0]["schedule_assignments"]["moisture"] = {}
+    blocked_moisture = calculate_hourly_load_report(requirements, moisture_library, scenarios(), missing_moisture_schedule, ["jan_weekday"])
+    check("calculated moisture gain requires a dedicated schedule", blocked_moisture["scenario_results"][0]["rooms"][0]["status"] == "blocked")
+    approved_moisture = empty_moisture_method_gate()
+    approved_moisture.update({
+        "approval_status": "approved", "engineer_name": "A. Engineer", "engineer_credential": "CPEng",
+        "approved_at": "2026-09-29", "method_citation": "ASHRAE Standard 140-2014 Addendum a",
+        "scope": "Room water-vapor latent load using the documented reference convention.",
+    })
+    approved_moisture = validate_moisture_method_gate(approved_moisture)
+    reviewed_moisture = calculate_hourly_load_report(requirements, moisture_library, scenarios(), moisture_model, ["jan_weekday"], moisture_gate=approved_moisture)
+    check("approved method can produce a review-ready, traceable moisture calculation", reviewed_moisture["status"] == "review_ready" and reviewed_moisture["project_peak"])
+
+    transfer_model = reviewed_model(requirements)
+    source_room = deepcopy(transfer_model["rooms"][0])
+    source_room.update({"room_id": "room_002", "name": "Source room", "indoor_cooling_setpoint_c": 20})
+    source_room["cooling_load_conditions"]["indoor_cooling_wet_bulb_c"] = 15
+    target_room = transfer_model["rooms"][0]
+    target_room["name"] = "Receiving room"
+    transfer_component = next(item for item in target_room["unapproved_components"] if item["component_type"] == "transfer_air")
+    transfer_component.update({
+        "value": 50, "unit": "L/s", "source_room_id": "room_002", "source": "Reviewed room air balance",
+        "citations": [{"reference": "Air balance AB-1", "page": 1, "excerpt": "Transfer air rate"}],
+        "verification_status": "confirmed", "calculation_status": "calculated",
+        "method_id": "room_air_transfer_psychrometric_v1", "air_path": "room_to_room",
+        "flow_reference": "sending_room_air_state",
+    })
+    target_room["schedule_assignments"].setdefault("airflow", {})[transfer_component["component_id"]] = "transfer"
+    transfer_model["rooms"].append(source_room)
+    transfer_library = library()
+    transfer_library["schedules"].append({
+        "schedule_id": "transfer", "title": "Transfer air", "status": "confirmed", "source": "Air balance AB-1",
+        "citations": [], "day_profiles": {"weekday": profile([1.0] * 24), "saturday": profile([], "missing"), "sunday_holiday": profile([], "missing")},
+    })
+    transfer_report = calculate_hourly_load_report(requirements, transfer_library, scenarios(), transfer_model, ["jan_weekday"])
+    transfer_result = transfer_report["scenario_results"][0]["rooms"][0]
+    transfer_row = transfer_result["hours"][14]["components"]["transfer_air"]
+    check("room-to-room transfer includes sending and receiving psychrometric states", transfer_row["sensible_kw"] < 0 and transfer_row["latent_kw"] < 0 and transfer_row["input_rows"][0]["source_room_id"] == "room_002")
+    transfer_input = transfer_row["input_rows"][0]
+    check("transfer-air result retains flow citation and both room-state sources and wet-bulb bases", transfer_input["flow_source"] == "Reviewed room air balance" and transfer_input["flow_citations"][0]["reference"] == "Air balance AB-1" and transfer_input["source_room_conditions"]["source"] == "Engineer conditions" and transfer_input["target_room_conditions"]["wet_bulb_basis"] == "legacy_unverified")
+    check("transfer-air calculation remains draft pending HVAC engineer review", transfer_result["status"] == "draft" and transfer_report["status"] == "draft")
+    missing_transfer_schedule = deepcopy(transfer_model)
+    missing_transfer_schedule["rooms"][0]["schedule_assignments"]["airflow"] = {}
+    blocked_transfer = calculate_hourly_load_report(requirements, transfer_library, scenarios(), missing_transfer_schedule, ["jan_weekday"])
+    check("calculated transfer air requires its dedicated schedule", blocked_transfer["scenario_results"][0]["rooms"][0]["status"] == "blocked")
+
     tied_library = library()
     for schedule in tied_library["schedules"]:
         schedule["day_profiles"]["weekday"]["values"][13] = 1.0
@@ -156,6 +270,8 @@ def main():
     infiltration_hour = infiltration_report["scenario_results"][0]["rooms"][0]["hours"][14]
     infiltration_component = infiltration_hour["components"]["infiltration"]
     check("approved ACH infiltration contributes separately before the room safety factor", infiltration_report["status"] == "review_ready" and infiltration_component["inputs"]["resolved_flow_lps"] == 6 and infiltration_component["total_kw"] > 0)
+    infiltration_weather = infiltration_component["inputs"]["outdoor_weather_provenance"]
+    check("infiltration result carries outdoor weather source and wet-bulb basis", infiltration_weather["dry_bulb"]["source"] == "Weather sequence" and infiltration_weather["wet_bulb"]["citations"][0]["reference"] == "Weather source W-1" and infiltration_weather["wet_bulb_basis"] == "legacy_unverified")
     check("infiltration schedule turns contribution off outside the assigned hour", infiltration_report["scenario_results"][0]["rooms"][0]["hours"][13]["components"]["infiltration"]["total_kw"] == 0)
 
     direct_flow_model = calculated_infiltration(reviewed_model(requirements), 6, "L/s")
@@ -254,10 +370,19 @@ def main():
             saved_model = reviewed_model(requirements)
             web_app.api_save_hourly_load_model(Request(json.dumps({"project_id": "p1", "action": "save", "hourly_load_model": saved_model}), "/api/hourly-load-model"))
             saved_gate = web_app.api_save_infiltration_method_gate(Request(json.dumps({"project_id": "p1", "infiltration_method_gate": approved_infiltration_gate()}), "/api/infiltration-method-gate"))
+            moisture_gate = web_app.api_internal_moisture_method_gate(Request("", "/api/internal-moisture-method-gate?project_id=p1"))
+            saved_moisture_gate = web_app.api_save_internal_moisture_method_gate(Request(json.dumps({"project_id": "p1", "internal_moisture_method_gate": empty_moisture_method_gate()}), "/api/internal-moisture-method-gate"))
             calculated = web_app.api_save_hourly_load_report(Request(json.dumps({"project_id": "p1", "selected_scenario_ids": ["jan_weekday"]}), "/api/hourly-load-report"))
             check("API withholds paths outside a registered project root", saved_library["url"] == "" and saved_scenarios["url"] == "" and built["url"] == "" and (root / "hourly_load_report.json").exists())
             check("API stores an engineer-approved infiltration gate separately", saved_gate["readiness"]["calculation_enabled"] and (root / "infiltration_method_gate.json").exists())
-            check("API marks report current", calculated["status"] == "current" and web_app.api_hourly_load_report(Request("", "/api/hourly-load-report?project_id=p1"))["status"] == "current")
+            check("internal moisture method defaults to a draft gate and can be saved per project", moisture_gate["readiness"]["review_ready_enabled"] is False and saved_moisture_gate["readiness"]["status"] == "placeholder" and (root / "internal_moisture_method_gate.json").exists())
+            check("API marks legacy report current before a policy artifact exists", calculated["status"] == "current" and calculated["hourly_load_report"]["status"] == "review_ready" and web_app.api_hourly_load_report(Request("", "/api/hourly-load-report?project_id=p1"))["status"] == "current")
+            fallback_path = root / "safety_factor_resolution.json"
+            fallback_path.write_text(json.dumps(safety_factor_resolution.resolve({})), encoding="utf-8")
+            fallback_report = web_app.api_save_hourly_load_report(Request(json.dumps({"project_id": "p1", "selected_scenario_ids": ["jan_weekday"]}), "/api/hourly-load-report"))["hourly_load_report"]
+            check("strict cooling report blocks and withholds the peak for an unapproved fallback policy", fallback_report["status"] == "blocked" and fallback_report["readiness"]["status"] == "blocked" and not fallback_report["project_peak"] and not fallback_report["safety_policy_applied"] and fallback_report["safety_policy"]["origin"] == "controlled_preliminary_fallback")
+            fallback_path.unlink()
+            calculated = web_app.api_save_hourly_load_report(Request(json.dumps({"project_id": "p1", "selected_scenario_ids": ["jan_weekday"]}), "/api/hourly-load-report"))
             context = {
                 "schema_version": 1,
                 "site": {"country": "AU", "locality": "Sydney", "state": "NSW", "climate_zone": "5", "source": "Project brief", "citations": []},

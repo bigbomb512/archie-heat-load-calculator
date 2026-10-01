@@ -49,6 +49,21 @@ class CalculatorDraftTests(unittest.TestCase):
         self.assertTrue(any("schedule" in item["reason"].lower() for item in draft["review_items"]))
         self.assertFalse(draft["candidates"]["schedules"])
 
+    def test_unassigned_coverage_creates_floor_issue_but_no_floor_candidate(self):
+        data = source_data()
+        data["coverage"]["levels"] = [{"level_name": "Unassigned level", "page_numbers": [21]}]
+        data["building"]["levels"] = []
+        draft = build_calculator_draft(data["thermal"], data["building"], data["coverage"])
+        self.assertEqual(draft["candidates"]["floors"], [])
+        self.assertTrue(any("confirm the drawing level" in item.get("reason", "").lower()
+                            for item in draft["review_items"]))
+
+    def test_pre_classifier_coverage_cannot_build_a_draft(self):
+        data = source_data()
+        data["coverage"].update(version=4, levels=[{"level_name": "FL 02", "page_numbers": [21]}])
+        with self.assertRaisesRegex(ValueError, "Rebuild drawing coverage"):
+            build_calculator_draft(data["thermal"], data["building"], data["coverage"])
+
     def test_approval_requires_fingerprint_and_application_is_idempotent(self):
         draft = self.build()
         ids = [item["candidate_id"] for key in ("floors", "zones", "rooms") for item in draft["candidates"][key]]
@@ -86,6 +101,140 @@ class CalculatorDraftTests(unittest.TestCase):
         outcome = apply_calculator_draft(self.reviewed(draft, ids))
         self.assertEqual(outcome["hourly_load_model"]["rooms"], [])
         self.assertTrue(any("geometry" in item["reason"].lower() for item in outcome["summary"]["unresolved"]))
+
+    def test_room_registry_and_current_trace_flow_through_reviewed_draft(self):
+        data = source_data()
+        data["building"]["spaces"] = []
+        registry = {"rooms": [
+            {"room_id": "room-use:ground:shop", "label": "Shop", "level_name": "Ground", "source": "room_use_resolution",
+             "evidence": [{"reference": "A-01 page 1", "page": 1, "excerpt": "SHOP"}]},
+            {"room_id": "room-use:ground:store", "label": "Store", "level_name": "Ground", "source": "room_use_resolution",
+             "evidence": [{"reference": "A-01 page 1", "page": 1, "excerpt": "STORE"}]},
+        ], "records": [{"room_id": "room-use:ground:shop", "trace_id": "trace-shop", "reviewer": "QA-1",
+                        "source_fingerprints": {"source_pdf": "pdf-current", "vector_page": "vector-current"}}]}
+        calibration = {"status": "agreed", "mm_per_px": 10.0, "dimension_value_mm": 4000,
+                       "difference_percent": 0.4}
+        proof = {"entity_id": "proof-shop", "kind": "room_geometry_proof", "room_source_id": "room-use:ground:shop",
+                 "geometry_status": "geometry_proposed", "extraction_method": "reviewer_traced_boundary",
+                 "source": {"page": 1, "drawing_number": "A-01"},
+                 "value": {"area_m2": 20.0, "reviewer_trace_id": "trace-shop", "calibration": calibration,
+                           "source_fingerprints": registry["records"][0]["source_fingerprints"]}}
+        data["coverage"]["pages"] = [{"page": 1, "drawing_number": "A-01"}]
+        draft = build_calculator_draft(data["thermal"], data["building"], data["coverage"],
+            calculation_input_evidence={"geometry_resolution": {"entities": [proof]}}, room_registry=registry)
+        self.assertEqual(len(draft["candidates"]["rooms"]), 2)
+        self.assertEqual(len(draft["candidates"]["zones"]), 2)
+        self.assertEqual(len([row for row in draft["candidates"]["room_inputs"] if row["kind"] == "area"]), 1)
+        shop = next(row for row in draft["candidates"]["rooms"] if row["room_source"] == "room_use_resolution" and row["value"]["name"] == "Shop")
+        self.assertEqual(shop["value"]["geometry_status"], "geometry_proposed")
+        self.assertEqual(shop["value"]["geometry_reference"], "proof-shop")
+        area = next(row for row in draft["candidates"]["room_inputs"] if row["kind"] == "area")
+        self.assertEqual(area["value"], {"room_id": shop["value"]["room_id"], "area_m2": 20.0})
+        self.assertIn("QA-1", area["citations"][0]["excerpt"])
+        self.assertIn("A-01", area["citations"][0]["reference"])
+        decisions = {}
+        floor = draft["candidates"]["floors"][0]
+        decisions[floor["candidate_id"]] = {"decision": "accept", "reviewer": "ENG-1"}
+        for zone in draft["candidates"]["zones"]:
+            decisions[zone["candidate_id"]] = {"decision": "edit", "reviewer": "ENG-1",
+                "source": "Reviewed floor mapping", "citations": zone["citations"], "value": deepcopy(zone["value"])}
+        decisions[shop["candidate_id"]] = {"decision": "accept", "reviewer": "ENG-1"}
+        store = next(row for row in draft["candidates"]["rooms"] if row["value"]["name"] == "Store")
+        decisions[store["candidate_id"]] = {"decision": "reject", "reviewer": "ENG-1"}
+        decisions[area["candidate_id"]] = {"decision": "accept", "reviewer": "ENG-1"}
+        reviewed = save_review(draft, decisions, draft["revision"])
+        outcome = apply_calculator_draft(reviewed)
+        model = outcome["hourly_load_model"]
+        applied_shop = next(row for row in model["rooms"] if row["room_id"] == shop["value"]["room_id"])
+        self.assertEqual(applied_shop["area_m2"], 20.0)
+        self.assertEqual(applied_shop["bridge_provenance"][shop["candidate_id"]]["geometry_status"], "geometry_confirmed")
+        self.assertEqual(applied_shop["bridge_provenance"][shop["candidate_id"]]["geometry_acceptance"]["proof_id"], "proof-shop")
+        self.assertEqual(applied_shop["bridge_provenance"][shop["candidate_id"]]["geometry_acceptance"]["reviewer"], "ENG-1")
+        conflicting_model = deepcopy(model)
+        next(row for row in conflicting_model["rooms"] if row["room_id"] == shop["value"]["room_id"])["area_m2"] = 25.0
+        conflict_outcome = apply_calculator_draft(reviewed, hourly_model=conflicting_model)
+        self.assertEqual(next(row for row in conflict_outcome["hourly_load_model"]["rooms"] if row["room_id"] == shop["value"]["room_id"])["area_m2"], 25.0)
+        self.assertTrue(any(row["candidate_id"] == area["candidate_id"] for row in conflict_outcome["summary"]["skipped_conflicts"]))
+
+    def test_geometry_status_and_reference_are_not_editable(self):
+        draft = self.build()
+        room = draft["candidates"]["rooms"][0]
+        value = deepcopy(room["value"])
+        value["geometry_status"] = "geometry_confirmed"
+        with self.assertRaisesRegex(ValueError, "cannot be edited by hand"):
+            save_review(draft, {room["candidate_id"]: {"decision": "edit", "reviewer": "ENG-1",
+                "source": "Manual status edit", "citations": room["citations"], "value": value}}, draft["revision"])
+
+    def test_uncalibrated_registry_trace_does_not_create_an_area_candidate(self):
+        data = source_data()
+        data["building"]["spaces"] = []
+        registry = {"rooms": [{"room_id": "room-use:ground:shop", "label": "Shop", "level_name": "Ground",
+                               "source": "room_use_resolution", "evidence": EVIDENCE}],
+                    "records": [{"room_id": "room-use:ground:shop", "trace_id": "trace-shop",
+                                 "source_fingerprints": {"source_pdf": "pdf", "vector_page": "vector"}}]}
+        proof = {"entity_id": "proof-shop", "kind": "room_geometry_proof", "room_source_id": "room-use:ground:shop",
+                 "geometry_status": "geometry_proposed", "extraction_method": "reviewer_traced_boundary",
+                 "value": {"area_m2": None, "reviewer_trace_id": "trace-shop",
+                           "calibration": {"status": "unresolved", "mm_per_px": None},
+                           "source_fingerprints": registry["records"][0]["source_fingerprints"]}}
+        draft = build_calculator_draft(data["thermal"], data["building"], data["coverage"],
+            calculation_input_evidence={"geometry_resolution": {"entities": [proof]}}, room_registry=registry)
+        self.assertFalse(any(row["kind"] == "area" for row in draft["candidates"]["room_inputs"]))
+        self.assertFalse(draft["candidates"]["rooms"][0].get("reviewer_geometry_proof"))
+
+    def test_multiple_current_traces_are_combined_or_blocked_on_disagreement(self):
+        def fixture(areas, printed_area=None):
+            data = source_data()
+            data["building"]["spaces"] = []
+            room_id = "room-use:ground:shop"
+            records, proofs = [], []
+            for index, area in enumerate(areas, start=1):
+                trace_id, proof_id = f"trace-{index}", f"proof-{index}"
+                source_fingerprints = {"source_pdf": "pdf-current", "vector_page": f"vector-{index}"}
+                records.append({"room_id": room_id, "trace_id": trace_id, "reviewer": f"QA-{index}",
+                                "source_fingerprints": source_fingerprints})
+                proofs.append({"entity_id": proof_id, "kind": "room_geometry_proof", "room_source_id": room_id,
+                    "geometry_status": "geometry_proposed", "extraction_method": "reviewer_traced_boundary",
+                    "source": {"page": index, "drawing_number": f"A-0{index}"},
+                    "value": {"area_m2": area, "reviewer_trace_id": trace_id,
+                              "calibration": {"status": "agreed", "mm_per_px": 10.0,
+                                              "dimension_value_mm": 4000, "difference_percent": 0.1},
+                              "source_fingerprints": source_fingerprints}})
+            registry = {"rooms": [{"room_id": room_id, "label": "Shop", "level_name": "Ground",
+                                   "source": "room_use_resolution", "evidence": EVIDENCE}], "records": records}
+            if printed_area is not None:
+                space = {"id": "building-shop", "name": "Shop", "area": f"{printed_area} m²",
+                         "level_name": "Ground", "evidence": [{"page": 1, "excerpt": f"Shop area {printed_area} m²"}]}
+                data["building"]["spaces"] = [space]
+            data["coverage"]["pages"] = [{"page": i, "drawing_number": f"A-0{i}"} for i in range(1, len(areas) + 1)]
+            draft = build_calculator_draft(data["thermal"], data["building"], data["coverage"],
+                calculation_input_evidence={"geometry_resolution": {"entities": proofs}}, room_registry=registry)
+            return draft
+
+        conflicting = fixture([20.0, 21.0])
+        self.assertFalse(any(row.get("reviewer_geometry_proof") for row in conflicting["candidates"]["rooms"]))
+        self.assertFalse(any(row.get("reviewer_geometry_proof") for row in conflicting["candidates"]["room_inputs"]))
+        self.assertTrue(any("above the 2% comparison tolerance" in row["reason"] for row in conflicting["review_items"]))
+
+        agreeing = fixture([20.0, 20.1])
+        area_candidates = [row for row in agreeing["candidates"]["room_inputs"] if row["kind"] == "area"]
+        self.assertEqual(len(area_candidates), 1)
+        self.assertAlmostEqual(area_candidates[0]["value"]["area_m2"], 20.05)
+        proof = next(row for row in agreeing["candidates"]["rooms"] if row.get("reviewer_geometry_proof"))["reviewer_geometry_proof"]
+        self.assertEqual(len(proof["supporting_proofs"]), 2)
+        self.assertEqual({row["page"] for row in proof["citations"]}, {1, 2})
+        self.assertEqual(proof["comparison_tolerance"]["relative_tolerance_percent"], 2.0)
+
+        same_as_printed = fixture([24.47], printed_area=24.5)
+        area_candidates = [row for row in same_as_printed["candidates"]["room_inputs"] if row["kind"] == "area"]
+        self.assertEqual(len(area_candidates), 1)
+        self.assertEqual(len(area_candidates[0]["reviewer_geometry_proof"]["supporting_proofs"]), 1)
+        self.assertAlmostEqual(area_candidates[0]["reviewer_geometry_proof"]["comparison_tolerance"]["printed_rounding_tolerance_m2"], 0.05)
+        self.assertAlmostEqual(area_candidates[0]["reviewer_geometry_proof"]["comparison_tolerance"]["combined_tolerance_m2"], 0.5394)
+
+        disagrees_with_printed = fixture([20.0], printed_area=22)
+        self.assertFalse(any(row.get("reviewer_geometry_proof") for row in disagrees_with_printed["candidates"]["rooms"]))
+        self.assertTrue(any("above the combined printed-rounding" in row["reason"] for row in disagrees_with_printed["review_items"]))
 
     def test_incomplete_construction_stays_outside_envelope_library(self):
         draft = self.build(); construction = next(item for item in draft["candidates"]["envelope"] if item["kind"] == "construction")

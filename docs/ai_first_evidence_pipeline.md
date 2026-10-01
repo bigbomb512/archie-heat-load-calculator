@@ -183,6 +183,20 @@ ceiling, elevation, schedule, detail, and 3D evidence cannot disappear merely
 because an older role name differed. A 3D page can strengthen or challenge a
 relationship, but never supplies primary dimensions or thermal properties.
 
+Floor identity uses a separate source-aware classifier (drawing-coverage
+version 5, level-classification method 2). It preserves each match's raw text,
+normalized label/key, source, nearby context, kind and reason. Finish/material
+codes and “Level n Detail/Section/Elevation” labels remain evidence, while body
+text levels are non-authoritative. A page receives a level automatically only
+when title-block/page-title `building_level` matches agree; a reviewed page
+triage label takes precedence. Conflicting title sources are ambiguous, and
+missing evidence stays unassigned. Building evidence and calculator floor
+candidates use only those selected levels. The source fingerprint includes the
+classifier version, so saved coverage and dependent artifacts from the previous
+method must be rebuilt once after upgrade; a stale coverage artifact cannot be
+used to rebuild the calculator draft. This fail-closed rule can require a
+reviewer to map a single-storey tenancy when its drawings do not state a level.
+
 ### Reusable geometry binding
 
 `geometry_resolution` is a derived, project-independent evidence graph. It
@@ -198,6 +212,77 @@ not calculator fields. Plan/elevation, ceiling/service, opening/schedule, and
 3D relationships retain their matching basis and citations. 3D observations
 are cross-check-only. Geometry resolution writes derived evidence and draft
 candidates; it does not modify the hourly model, envelope model, or reports.
+
+### Shared room-input resolver sources
+
+Room-use, ceiling-volume, internal-gains and airflow resolvers consume the same
+`_proposal_for_resolution` output used by the preliminary pipeline. It selects
+local room inference before the manual-proposal fallback and applies eligible
+room-identity skill findings. Each resolver records only its own relevant
+inputs and assumption-pack fingerprint; the broad preliminary source set is
+reserved for model-input dependencies and is not reused as a resolver's
+fingerprint set. Editor status and the portfolio scorecard use those same
+fingerprint builders.
+
+Existing room-input artifacts made with the previous broad/self-referential
+fingerprint sets may show stale after this update. Resolve the affected editor
+once to refresh its derived artifact. Archie does not rewrite project folders
+automatically. A re-resolve drops rooms only when the current proposal no
+longer includes them; ceiling-height, internal-gains, and airflow records with
+engineer overrides are retained as stale and flagged for review. Airflow
+overrides are keyed by room and path type, and queued research jobs survive a
+re-resolve. Airflow edits are blocked while their source fingerprints are
+stale, and an individual stale airflow room/path cannot be edited even when
+the artifact-level fingerprints are current. Clearing an override on a stale
+row removes its value but preserves its stale status. Retained stale airflow
+or ceiling records remain visible in the model input review queue but are
+excluded from preliminary calculation mappings.
+This source alignment makes editor and pipeline state consistent; it does not
+validate the underlying room data or calculation assumptions.
+
+### Reviewer-traced room boundaries
+
+The Geometry & Evidence Review workspace can save a room boundary traced on a
+rendered plan. The editor uses the full-resolution page screenshot and enables
+tracing only when its dimensions match the vector coordinate system. Zoom and
+pan preserve that image-pixel coordinate system; a missing or mismatched
+render disables tracing rather than stretching a thumbnail. Each vertex
+optionally snaps to the current page's vector-line endpoints/intersections,
+and the server rechecks referenced line IDs and the fixed pixel tolerance.
+The reviewer marks a printed dimension on the same rendered page and enters
+its stated millimetres. The resulting mm/px is
+compared with the drawing's declared scale using the page pixel-to-point ratio;
+the values must agree within 2%. If they do not, a second independently read
+printed dimension may replace the declared scale only when the two reviewer
+measurements agree within 2%. Missing or inconsistent calibration keeps the
+trace stored but leaves area unresolved.
+
+Traces are versioned in `reviewer_room_geometry.json` and bind the ordered,
+closed polygon, per-vertex snap references, calibration, reviewer, note, page,
+source-PDF fingerprint, and vector-page fingerprint. A changed PDF or vector
+page makes the trace stale and excludes it from derived geometry. A valid trace
+creates a `room_geometry_proof` with method `reviewer_traced_boundary`; its
+area is emitted as a proposed calculation-input candidate only. The calculator
+draft now links current calibrated proofs to room-use/inference room candidates
+and their area candidates. A named engineer can accept the room candidate in
+the draft bridge; that records the proof ID, calibration and source fingerprints
+in the applied room provenance. The area enters the hourly model only through
+the separate preview-and-apply step. Missing or stale proofs cannot be accepted,
+and other missing room inputs still keep readiness blocked or draft. Automatic
+boundary detection and vision-generated room proposals remain open work; this
+editor does not change their filters.
+
+Geometry review also includes per-page diagnostics for vector-line inclusion
+reasons, loop and rejected-component counts, label filtering, dimension links,
+and per-room reasons that an automatic proof was not produced. These
+diagnostics explain pipeline behavior; they are not evidence that the source
+geometry or traced area is correct.
+
+Snap-to-vector tolerance is 8 image pixels and is only a placement aid; it does
+not classify a vector line as a wall or verify that a snapped corner is the
+correct room boundary. PDF fingerprinting, page-size lookup, and candidate
+intersection geometry are cached against source-file and vector-page
+fingerprints to avoid repeating expensive work while those inputs are unchanged.
 
 ### Ground-contact envelope method
 

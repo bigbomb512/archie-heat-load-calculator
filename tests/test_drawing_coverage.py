@@ -33,7 +33,11 @@ def main():
         page(5, "perspective_or_3d", "visual_context", title="3D Perspective"),
         page(6, "cover_or_drawing_list", "not_calculation_evidence", level="Unassigned level", title="Drawing List"),
     ]
-    coverage = build_drawing_coverage({"source_pdf": "/tmp/set.pdf", "drawing_set": {"pages": pages}})
+    reviewed_levels = {"pages": [{"page": row["page"], "floor_label": row["level_name"]}
+                                 for row in pages if row["level_name"] != "Unassigned level"]}
+    coverage = build_drawing_coverage({"source_pdf": "/tmp/set.pdf", "drawing_set": {"pages": pages},
+                                       "page_triage": reviewed_levels})
+    check("coverage carries level-classification method version", coverage["method_versions"]["level_classification"], 2)
     check("every page indexed once", [item["page"] for item in coverage["sheet_register"]], [1, 2, 3, 4, 5, 6])
     check("elevation retains surface role", coverage["sheet_register"][1]["thermal_role"], "surface_confirmation")
     check("3d view retains visual context", coverage["sheet_register"][4]["thermal_role"], "visual_context")
@@ -68,6 +72,63 @@ def main():
     service_roles = {row["page"]: row for row in service["page_roles"]}
     check("service page gets lighting capability", "lighting" in service_roles[23]["capability_map"], True)
     check("3D page gets cross-check capability", "3d_cross_check" in service_roles[16]["capability_map"], True)
+
+    # Finish legends and detail labels are not building floors. Preserve their
+    # exact source text and classification, while title-block/page-title levels
+    # can be selected only when they agree.
+    synthetic = {"source_pdf": "fixture.pdf", "drawing_set": {"pages": [{"page": 1,
+        "title": "Finish Plan", "structured_content": {"markdown":
+            "FLOOR TILING AT FL 02 BUFFET AREA EDGE\nTILE FL 02 2MM EPOXY\nDoor Battens - Level 3 Detail"}}]},
+        "spatial_ocr": {}}
+    finish_ocr = {"pages": [{"page": 1, "title_blocks": [{"text_excerpt": "International Kiosk, Level 2, Sydney"}]}]}
+    classified = build_drawing_coverage(synthetic, finish_ocr)["pages"][0]
+    finish_only = build_drawing_coverage(synthetic)["pages"][0]
+    check("finish-only text proposes no building level",
+          [row["kind"] for row in finish_only["level_candidates"] if row["kind"] == "building_level"], [])
+    schedule = build_drawing_coverage({"drawing_set": {"pages": [{"page": 1,
+        "detected_type": "material_or_finish_schedule",
+        "structured_content": {"markdown": "PT02"}}]}})["pages"][0]
+    check("finish schedule classification keeps isolated finish tags out of floors",
+          schedule["level_candidates"][0]["kind"], "finish_or_tag_code")
+    check("body-text finish codes do not become building levels",
+          [row["raw_text"] for row in classified["level_candidates"]
+           if row["source"] == "body_text" and row["kind"] == "building_level"], [])
+    check("finish legend wording is retained",
+          [row["raw_text"] for row in classified["level_candidates"] if row["kind"] == "finish_or_tag_code"],
+          ["FL 02", "FL 02"])
+    check("door-batten detail label is classified separately",
+          next(row["kind"] for row in classified["level_candidates"] if row["raw_text"] == "Level 3"), "detail_label")
+    check("title-block address level is selected despite other text", classified["level_name"], "Level 2")
+    check("selected title-block level status", classified["level_status"], "confirmed_by_text")
+    check("title-block source text remains verbatim",
+          next(row["raw_text"] for row in classified["level_candidates"] if row["kind"] == "building_level"), "Level 2")
+    address = build_drawing_coverage({"drawing_set": {"pages": [{"page": 1,
+        "structured_content": {"markdown": "Project title\nInternational Kiosk, Level 2, Western Sydney Airport"}}]}})["pages"][0]
+    check("address-shaped body text identifies a building level", address["level_name"], "Level 2")
+    check("address source is explicit", next(row["source"] for row in address["level_candidates"] if row["kind"] == "building_level"), "address")
+    room_mention = build_drawing_coverage({"drawing_set": {"pages": [{"page": 1,
+        "structured_content": {"markdown": "Dining Room, Level 2"}}]}})["pages"][0]
+    check("room-label phrase in body text does not become a floor", room_mention["level_name"] == ""
+          and room_mention["level_candidates"][0]["kind"] == "body_text_level", True)
+
+    ground = build_drawing_coverage({"drawing_set": {"pages": [{"page": 1, "title": "Retail Plan"}]},
+        "page_triage": {"pages": [{"page": 1, "floor_label": "Ground Floor"}]}})["pages"][0]
+    check("reviewed triage label takes precedence", ground["level_name"], "Ground Floor")
+    triage_over_conflict = build_drawing_coverage({"drawing_set": {"pages": [{"page": 1, "title": "Level 2 Plan"}]},
+        "page_triage": {"pages": [{"page": 1, "floor_label": "Ground Floor"}]}},
+        {"pages": [{"page": 1, "title_blocks": [{"text_excerpt": "Project Address, Level 1"}]}]})["pages"][0]
+    check("reviewed triage overrides conflicting detected levels", triage_over_conflict["level_name"], "Ground Floor")
+    check("reviewed triage selection has explicit status", triage_over_conflict["level_status"], "confirmed_by_review")
+    title_ground = build_drawing_coverage({"drawing_set": {"pages": [{"page": 1, "title": "GROUND FLOOR"}]}})["pages"][0]
+    check("title-block named ground floor is detected", title_ground["level_name"], "Ground Floor")
+    conflict = build_drawing_coverage({"drawing_set": {"pages": [{"page": 1, "title": "Level 2 Plan"}]},
+        "spatial_ocr": {}, "page_triage": {"pages": []}},
+        {"pages": [{"page": 1, "title_blocks": [{"text_excerpt": "Job Address, Level 1"}]}]})["pages"][0]
+    check("conflicting title and body text does not select a floor", conflict["level_name"], "")
+    check("conflicting building-level text marks page ambiguous", conflict["level_status"], "ambiguous")
+    body_level = build_drawing_coverage({"drawing_set": {"pages": [{"page": 1,
+        "structured_content": {"markdown": "Level 1 notes"}}]}})["pages"][0]
+    check("body text level remains non-authoritative", body_level["level_candidates"][0]["kind"], "body_text_level")
 
 
 if __name__ == "__main__":

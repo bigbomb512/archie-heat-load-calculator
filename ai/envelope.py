@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 import re
 
 from ai.site_design_conditions import validate_citations
-from ai.glazing_calculation import assess_glazing_eligibility, opening_area
+from ai.glazing_calculation import assess_glazing_eligibility, resolve_opening_area
 from ai.glazing_gate import empty_glazing_method_gate, gate_is_approved, validate_glazing_method_gate, weather_facade_gate_is_approved
 from ai.shading_gate import empty_shading_method_gate, gate_is_approved as shading_gate_is_approved, validate_shading_method_gate
 from ai.shading_geometry import assess_geometric_shading
@@ -498,7 +498,7 @@ def resolve_opaque_area(surface, surfaces):
         else:
             openings.append({"surface_id": opening_id, "opening_area_m2": area})
     if missing:
-        return None, "gross opaque surface has incomplete linked opening geometry: " + ", ".join(sorted(missing)), {}
+        return None, "gross opaque surface has incomplete or conflicting linked opening geometry: " + ", ".join(sorted(missing)), {}
     net = round(surface["area_m2"] - sum(row["opening_area_m2"] for row in openings), 6)
     if net <= 0:
         return None, "linked opening area must be less than gross opaque surface area", {}
@@ -506,14 +506,13 @@ def resolve_opaque_area(surface, surfaces):
 
 
 def opening_area_for_surface(surface):
-    if surface.get("explicit_opening_area_m2") is not None:
-        return surface["explicit_opening_area_m2"]
-    if all(surface.get(key) is not None for key in ("opening_width_m", "opening_height_m", "opening_quantity")):
-        try:
-            return opening_area(surface["opening_width_m"], surface["opening_height_m"], surface["opening_quantity"])
-        except ValueError:
-            return None
-    return None
+    try:
+        return resolve_opening_area(width_m=surface.get("opening_width_m"),
+                                    height_m=surface.get("opening_height_m"),
+                                    quantity=surface.get("opening_quantity"),
+                                    explicit_opening_area_m2=surface.get("explicit_opening_area_m2"))
+    except ValueError:
+        return None
 
 
 def normalize_glazing_surfaces(library, model, glazing_gate=None, shading_gate=None, opening_register=None, site_orientation=None):

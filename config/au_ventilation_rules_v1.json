@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "pack_id": "au-ventilation-rules-v1",
+  "pack_version": "1.0.0",
+  "country": "AU",
+  "status": "candidate",
+  "release_note": "No numerical rules are released. Populate only from authorized Australian source material and after HVAC engineer review.",
+  "jurisdictions": {
+    "ACT": {"status": "awaiting_review", "ncc_adoptions": []},
+    "NSW": {"status": "awaiting_review", "ncc_adoptions": []},
+    "NT": {"status": "awaiting_review", "ncc_adoptions": []},
+    "QLD": {"status": "awaiting_review", "ncc_adoptions": []},
+    "SA": {"status": "awaiting_review", "ncc_adoptions": []},
+    "TAS": {"status": "awaiting_review", "ncc_adoptions": []},
+    "VIC": {"status": "awaiting_review", "ncc_adoptions": []},
+    "WA": {"status": "awaiting_review", "ncc_adoptions": []}
+  },
+  "rules": []
+}

@@ -14,9 +14,14 @@ from ai.calculator_draft import (
 )
 from ai.evidence_fusion import build_evidence_fusion
 from ai.hourly_loads import hourly_model_summary, room_static_missing
+from ai.drawing_coverage import has_current_level_classification
 
 LOCK = threading.RLock()
-SOURCE_FILES = {name: name + ".json" for name in ("thermal_model", "thermal_evidence", "building_evidence", "drawing_coverage", "calculation_input_evidence")}
+SOURCE_FILES = {name: name + ".json" for name in (
+    "thermal_model", "thermal_evidence", "building_evidence", "drawing_coverage",
+    "calculation_input_evidence", "ai_input", "vector_geometry", "room_use_resolution",
+    "reviewer_room_geometry",
+)}
 TARGET_FILES = {name: name + ".json" for name in ("hourly_load_model", "schedule_library", "envelope_library", "envelope_model")}
 ALLOWED_FILES = set(TARGET_FILES.values()) | {"calculator_draft.json"}
 
@@ -79,9 +84,19 @@ def snapshots(root):
     return {name: fingerprint(read(root / filename)) for name, filename in {**SOURCE_FILES, **TARGET_FILES, "design_requirements": "design_requirements.json"}.items()}
 
 
+def current_room_registry_fingerprint(root):
+    from backend import reviewer_room_geometry_service
+    registry = reviewer_room_geometry_service.current_artifact_input(root)
+    registry.pop("source_artifact_fingerprints", None)
+    return fingerprint(registry)
+
+
 def freshness(root, draft):
     expected = draft.get("source_fingerprints", {})
     if draft.get("schema_version") != 2:
+        return False
+    coverage = read(Path(root) / "drawing_coverage.json", {})
+    if not has_current_level_classification(coverage):
         return False
     for name, filename in SOURCE_FILES.items():
         path = root / filename
@@ -92,7 +107,26 @@ def freshness(root, draft):
             continue
         if expected.get(name) != fingerprint(read(path)):
             return False
-    return True
+    return expected.get("room_registry") == current_room_registry_fingerprint(root)
+
+
+def freshness_reasons(root, draft):
+    expected = draft.get("source_fingerprints", {})
+    if draft.get("schema_version") != 2:
+        return ["This legacy draft must be rebuilt before it can be reviewed or applied."]
+    coverage = read(Path(root) / "drawing_coverage.json", {})
+    if not has_current_level_classification(coverage):
+        return ["Drawing-level classification changed. Rebuild drawing coverage, building evidence and the calculator draft before review."]
+    newly_tracked = {"ai_input", "vector_geometry", "room_use_resolution", "reviewer_room_geometry", "room_registry"}
+    missing = sorted(newly_tracked.intersection(SOURCE_FILES) - expected.keys())
+    if missing:
+        return ["This saved draft predates room and trace freshness tracking. Rebuild after upgrade. Decisions on unchanged candidates are retained; changed or new candidates return to review."]
+    changed = [name for name, filename in SOURCE_FILES.items()
+               if not (name == "calculation_input_evidence" and not (root / filename).exists() and name not in expected)
+               and expected.get(name) != fingerprint(read(root / filename))]
+    if expected.get("room_registry") != current_room_registry_fingerprint(root):
+        changed.append("room_registry")
+    return ["Source evidence changed: " + ", ".join(changed) + ". Rebuild the draft and review changed or new candidates."] if changed else []
 
 
 def response(web, project, draft):
@@ -103,9 +137,10 @@ def response(web, project, draft):
         status = "not_built"
     else:
         status = "current" if freshness(root, draft) else "stale"
+    stale_reasons = freshness_reasons(root, draft) if status in {"stale", "legacy_review_required"} else []
     return {"id": project["id"], "calculator_draft": draft,
             "artifact_url": web.safe_link(root / "calculator_draft.json") if (root / "calculator_draft.json").exists() else "",
-            "status": status,
+            "status": status, "stale_reasons": stale_reasons,
             "artifact_links": {name: web.safe_link(root / file) for name, file in {**SOURCE_FILES, **TARGET_FILES, "architect_evidence_fusion": "architect_evidence_fusion.json"}.items() if (root / file).exists()}}
 
 
@@ -127,6 +162,9 @@ def post(web, project, data):
         if not all((root / SOURCE_FILES[name]).exists() for name in ("thermal_model", "building_evidence")):
             raise ValueError("Build thermal-model and building evidence first.")
         sources = {name: read(root / file) for name, file in SOURCE_FILES.items()}
+        coverage = sources.get("drawing_coverage", {}) or {}
+        if not has_current_level_classification(coverage):
+            raise ValueError("Drawing-level classification changed. Rebuild drawing coverage and building evidence before building the calculator draft.")
         fusion_path = root / "architect_evidence_fusion.json"
         fusion = read(fusion_path, {})
         if not fusion or fusion.get("source_fingerprint") != sources["drawing_coverage"].get("source_fingerprint"):
@@ -134,9 +172,12 @@ def post(web, project, data):
                                            read(root / "spatial_ocr.json", {}), read(root / "vector_geometry.json", {}), read(root / "vision_response.json", {}),
                                            read(root / "dimension_wall_matches.json", {}), read(root / "geometry_confirmation.json", {}))
             atomic_bytes(fusion_path, json.dumps(fusion, indent=2, allow_nan=False).encode())
+        from backend import reviewer_room_geometry_service
+        room_registry = reviewer_room_geometry_service.current_artifact_input(root)
         draft = build_calculator_draft(sources["thermal_model"], sources["building_evidence"], sources["drawing_coverage"], draft,
             {name: web.safe_link(root / file) for name, file in SOURCE_FILES.items() if (root / file).exists()}, sources["thermal_evidence"], fusion,
-            sources["calculation_input_evidence"] if (root / SOURCE_FILES["calculation_input_evidence"]).exists() else None)
+            sources["calculation_input_evidence"] if (root / SOURCE_FILES["calculation_input_evidence"]).exists() else None,
+            room_registry=room_registry)
         commit(root, {path.name: draft})
         return response(web, project, draft)
     check_revision(draft, data.get("expected_revision"))

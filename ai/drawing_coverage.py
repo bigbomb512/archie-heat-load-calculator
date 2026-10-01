@@ -7,6 +7,15 @@ import re
 
 
 DATE_LIKE_RE = re.compile(r"^\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?$")
+LEVEL_CLASSIFICATION_VERSION = 2
+
+
+def has_current_level_classification(coverage):
+    """Hand-built test fixtures may omit version; persisted legacy output may not."""
+    if not isinstance(coverage, dict) or "version" not in coverage:
+        return True
+    return (coverage.get("version") == 5
+            and (coverage.get("method_versions") or {}).get("level_classification") == LEVEL_CLASSIFICATION_VERSION)
 DRAWING_LABEL_RE = re.compile(
     r"(?:dwg\s*(?:no|number)?|drawing\s*(?:no|number)?|sheet\s*(?:no|number)?)"
     r"\s*[:#-]?\s*([A-Z]{0,4}[- ]?\d{1,4}[A-Z]?)\b",
@@ -29,11 +38,17 @@ SERVICE_SCALE_NUMBER_RE = re.compile(
     r"\b([A-Z]{0,4}[- ]?\d{2,4}[A-Z]?)\s+SCALE(?:\s*\d)?\b",
     re.I,
 )
+LAYOUT_TITLE_NUMBER_RE = re.compile(
+    r"\b((?:proposed|existing)\s+(?:shop\s+)?floor\s+(?:layout|plan))"
+    r"[\s\S]{0,900}?\b(\d{3,4})\s+SCALE(?:\s*\d)?\b",
+    re.I,
+)
 
 
 def source_fingerprint(ai_input):
     """Fingerprint the source packet, excluding derived coverage fields."""
     source = {
+        "level_classification_version": LEVEL_CLASSIFICATION_VERSION,
         "source_pdf": ai_input.get("source_pdf", ""),
         "drawing_set": ai_input.get("drawing_set", {}),
         "confirmed_pages": ai_input.get("confirmed_pages", {}),
@@ -76,7 +91,8 @@ def build_drawing_coverage(ai_input, spatial_ocr=None, vector_geometry=None):
     from ai.vision_extraction import build_ranked_context
     context_selection = build_ranked_context({"drawing_set": {"pages": pages}}, {"page_roles": page_roles})
     return {
-        "version": 4,
+        "version": 5,
+        "method_versions": {"level_classification": LEVEL_CLASSIFICATION_VERSION},
         "source_pdf": ai_input.get("source_pdf", ""),
         "source_fingerprint": source_fingerprint(ai_input),
         "evidence_fingerprint": evidence_fingerprint(ai_input, spatial_ocr, vector_geometry),
@@ -103,27 +119,79 @@ def build_drawing_coverage(ai_input, spatial_ocr=None, vector_geometry=None):
 
 
 def _level_candidates(page, ocr):
-    """Return level evidence with provenance; never invent a level."""
+    """Classify level-like text without treating finish codes as floors."""
     structured = str((page.get("structured_content") or {}).get("markdown", ""))
-    title_text = " ".join(str(item.get("text_excerpt", "")) for item in (ocr or {}).get("title_blocks", []))
+    title_blocks = [str(item.get("text_excerpt", "")) for item in (ocr or {}).get("title_blocks", [])]
     page_title = str(page.get("title", ""))
+    sources = [(text, "title_block") for text in title_blocks]
+    sources.extend([(page_title, "page_title"), (structured, "body_text")])
+    pattern = re.compile(
+        r"\b(?:FL|CL|WL|PT|LEVEL|LVL|L)\s*0*(\d{1,2})\b"
+        r"|\b(\d{1,2})\s*(FL|LEVEL|LVL)\b"
+        r"|\b(GROUND\s+FLOOR|LOWER\s+GROUND|GROUND|BASEMENT)\b", re.I)
+    finish_code = re.compile(r"\b(?:FL|CL|WL|PT)\s*0*\d{1,2}\b|\b\d{1,2}\s*FL\b", re.I)
+    finish_words = re.compile(r"\b(?:tile|tiling|epoxy|grout|vinyl|carpet|paint|laminate|melamine|veneer|powder\s*coat(?:ed)?|concrete|timber|stainless|finish(?:es)?|\d+\s*[x×]\s*\d+\s*mm)\b", re.I)
+    title_context = " ".join(str(page.get(key, "")) for key in ("title", "detected_type", "sheet_classification"))
+    finish_section = (str(page.get("detected_type", "")).casefold() in {"material_or_finish_schedule", "finish_schedule"}
+                      or bool(re.search(r"finish(?:es)?[\s_-]+(?:schedule|legend)|material[\s_-]+finish[\s_-]+(?:schedule|legend)", title_context, re.I)))
     candidates = []
-    patterns = (
-        (r"\b(?:FL|LEVEL|LVL)\s*0*(\d{1,2})\b", "numeric_level"),
-        (r"\b0*(\d{1,2})\s*(?:FL|LEVEL|LVL)\b", "numeric_level"),
-        (r"\b(GROUND|GROUND\s+FLOOR|BASEMENT|LOWER\s+GROUND)\b", "named_level"),
-    )
-    for text, source, confidence in ((title_text, "title_block_ocr", "high"),
-                                      (structured, "structured_pdf_text", "high"),
-                                      (page_title, "page_title", "medium")):
-        for pattern, kind in patterns:
-            for match in re.finditer(pattern, text, re.I):
-                raw = re.sub(r"\s+", " ", match.group(1)).strip().upper()
-                value = f"FL {int(raw):02d}" if kind == "numeric_level" else raw
-                excerpt = text[max(0, match.start() - 48):match.end() + 48]
-                item = {"value": value, "source": source, "confidence": confidence, "excerpt": excerpt[:160]}
-                if item not in candidates:
-                    candidates.append(item)
+    for text, source in sources:
+        for match in pattern.finditer(text):
+            candidate_source = source
+            raw = re.sub(r"\s+", " ", match.group(0)).strip()
+            excerpt = re.sub(r"\s+", " ", text[max(0, match.start() - 64):match.end() + 64]).strip()
+            numeric = match.group(1) or match.group(2)
+            named = match.group(4)
+            near = text[max(0, match.start() - 40):min(len(text), match.end() + 40)]
+            prior = text[:match.start()]
+            finish_heading = re.search(r"finish(?:es)?[\s_-]+(?:schedule|legend)|material[\s_-]+finish[\s_-]+(?:schedule|legend)", prior, re.I)
+            in_finish_section = finish_section
+            if finish_heading:
+                section_tail = prior[finish_heading.end():]
+                in_finish_section = in_finish_section or (len(section_tail) <= 1200 and "\n\n" not in section_tail)
+            prefix = text[max(0, match.start() - 96):match.start()]
+            address_shape = bool(re.search(
+                r"(?:^|[\n\r])?\s*(?:[A-Z][A-Za-z0-9&'./-]*\s+){1,5}[A-Z][A-Za-z0-9&'./-]*,\s*$",
+                prefix))
+            address_cue = bool(re.search(
+                r"\b(?:address|kiosk|airport|street|road|avenue|highway|suburb|building|unit|suite|apartment)\b",
+                prefix + " " + text[match.end():match.end() + 64], re.I))
+            address_context = address_shape and address_cue
+            is_finish_code = bool(finish_code.fullmatch(raw))
+            detail = bool(re.match(r"^(?:\s|[-,:])*(?:[\w-]+\s+){0,3}(?:detail|section|elevation)\b",
+                                   text[match.end():match.end() + 48], re.I))
+            if is_finish_code and (finish_words.search(near) or in_finish_section):
+                kind, reason = "finish_or_tag_code", "FL/CL/WL/PT code is near finish/material wording or in a finish schedule/legend."
+                normalized = re.sub(r"\s+", " ", raw.upper())
+                key = normalized.replace(" ", "")
+            elif detail and not named:
+                kind, reason = "detail_label", "Level-like text is followed by Detail, Section, or Elevation."
+                normalized = f"Level {int(numeric)}" if numeric else raw
+                key = f"L{int(numeric):02d}" if numeric else normalized.upper().replace(" ", "")
+            elif source == "body_text" and address_context and numeric:
+                kind, reason = "building_level", "Level is stated as part of a project address in the page text."
+                candidate_source = "address"
+                normalized, key = f"Level {int(numeric)}", f"L{int(numeric):02d}"
+            elif source in {"title_block", "page_title"}:
+                kind, reason = "building_level", "Level identity is stated in a title block or page title."
+                if numeric:
+                    normalized, key = f"Level {int(numeric)}", f"L{int(numeric):02d}"
+                else:
+                    normalized = re.sub(r"\s+", " ", named.title())
+                    normalized = "Ground Floor" if normalized == "Ground" else normalized
+                    key = re.sub(r"[^A-Z0-9]", "", normalized.upper())
+            else:
+                kind, reason = "body_text_level", "Level-like text occurs in page body text and is not selected automatically."
+                if numeric:
+                    normalized, key = f"Level {int(numeric)}", f"L{int(numeric):02d}"
+                else:
+                    normalized = re.sub(r"\s+", " ", named.title())
+                    normalized = "Ground Floor" if normalized == "Ground" else normalized
+                    key = re.sub(r"[^A-Z0-9]", "", normalized.upper())
+            item = {"kind": kind, "raw_text": raw, "normalized": normalized, "key": key,
+                    "source": candidate_source, "context_excerpt": excerpt[:200], "reason": reason}
+            if item not in candidates:
+                candidates.append(item)
     return candidates
 
 
@@ -191,11 +259,20 @@ def enrich_page_levels(pages, ai_input, spatial_ocr=None):
             # stable fallback for missing or conflicting identities.
             row["drawing_number"] = _clean_drawing_candidate(page.get("drawing_number", ""))
         levels = _level_candidates(row, ocr)
-        selected_level = str(row.get("level_name") or triage_item.get("floor_label") or "").strip()
-        if not selected_level and len({item["value"] for item in levels}) == 1:
-            selected_level = levels[0]["value"]
+        reviewed_level = str(triage_item.get("floor_label") or "").strip()
+        building_levels = [item for item in levels if item["kind"] == "building_level"]
+        normalized_levels = {item["normalized"] for item in building_levels}
+        if reviewed_level:
+            selected_level, level_status = reviewed_level, "confirmed_by_review"
+        elif len(normalized_levels) == 1:
+            selected_level, level_status = next(iter(normalized_levels)), "confirmed_by_text"
+        elif len(normalized_levels) > 1:
+            selected_level, level_status = "", "ambiguous"
+        else:
+            selected_level, level_status = "", "missing"
         row["level_candidates"] = levels
         row["level_name"] = selected_level
+        row["level_status"] = level_status
         scales, main_scales = _scale_candidates(row, ocr)
         row["scale_candidates"] = scales
         row["main_scale_candidates"] = main_scales
@@ -219,6 +296,7 @@ def sheet_entry(page):
         "thermal_role": page.get("thermal_role", "not_calculation_evidence"),
         "level_name": page.get("level_name", ""),
         "level_candidates": page.get("level_candidates", []),
+        "level_status": page.get("level_status", "missing"),
         "scale_candidates": page.get("scale_candidates", []),
         "main_scale": page.get("main_scale", ""),
         "scale_status": page.get("scale_status", "missing"),
@@ -273,7 +351,11 @@ def classify_page_roles(pages, ai_input, spatial_ocr=None, vector_geometry=None)
         # Explicit sheet titles outrank stale visual-triage labels. A plan,
         # for example, can be initially kept as reference context when a
         # title block is flattened by PDF extraction.
-        title = str(page.get("title", "")).strip().casefold()
+        title_candidates = (identity or {}).get("title_candidates", [])
+        title = " ".join([
+            str(page.get("title", "")),
+            *(str(item.get("value", "")) for item in title_candidates if isinstance(item, dict)),
+        ]).strip().casefold()
         detected_type = str(page.get("detected_type", "")).casefold()
         # Explicit sheet titles and detected sheet types outrank inherited
         # reference_context labels.  The source packet's old triage often
@@ -284,11 +366,14 @@ def classify_page_roles(pages, ai_input, spatial_ocr=None, vector_geometry=None)
         elif detected_type in {"render_or_photo", "perspective_or_3d"} or any(term in title for term in ("3d", "perspective", "render", "isometric")):
             role = "3d_render"
             evidence.append("render/perspective classification or title")
-        elif (title == "dimension plan"
+        elif ("dimension plan" in title
               and detected_type not in {"cover_or_drawing_list", "render_or_photo"}
               and page.get("plan_role") != "reference_context"):
             role = "main_floor_plan"
             evidence.append("explicit dimension-plan title")
+        elif any(term in title for term in ("proposed floor layout", "proposed shop floor layout", "existing shop floor layout")):
+            role = "main_floor_plan"
+            evidence.append("explicit floor-layout title and drawing-scale identity")
         elif any(term in title for term in ("reflective ceiling", "reflected ceiling", "rcp")):
             role = "reflected_ceiling_plan"
             evidence.append("explicit reflected-ceiling title")
@@ -351,7 +436,7 @@ def classify_page_roles(pages, ai_input, spatial_ocr=None, vector_geometry=None)
         else:
             if not evidence:
                 evidence = ["existing page-triage or plan-role proposal"]
-        level = page.get("level_name") or triage_item.get("floor_label", "")
+        level = page.get("level_name", "")
         ambiguous = not level and role in {"main_floor_plan", "supporting_geometry_plan", "reflected_ceiling_plan", "services_or_lighting_plan", "opening_elevation", "elevation_or_section"}
         if triage_item.get("disposition") == "exclude" or role == "exclude":
             authority = "excluded"
@@ -384,6 +469,7 @@ def classify_page_roles(pages, ai_input, spatial_ocr=None, vector_geometry=None)
             "drawing_number_candidates": identity.get("drawing_number_candidates", []),
             "title_candidates": identity.get("title_candidates", []),
             "level_candidates": page.get("level_candidates", []),
+            "level_status": page.get("level_status", "missing"),
             "scale_candidates": page.get("scale_candidates", []),
             "main_scale": page.get("main_scale", ""),
             "scale_status": page.get("scale_status", "missing"),
@@ -450,6 +536,9 @@ def page_identity_candidates(page, ocr=None):
             add_number(match.group(1), source, confidence, text)
         for match in SERVICE_SCALE_NUMBER_RE.finditer(text):
             add_number(match.group(1), source, confidence, text)
+        for match in LAYOUT_TITLE_NUMBER_RE.finditer(text):
+            add_number(match.group(2), source, confidence, match.group(0))
+            add_title(match.group(1), source, confidence)
     if legacy:
         add_number(legacy, "legacy_page_metadata", "low", legacy)
 

@@ -9,6 +9,8 @@ and shading inputs must be explicit and cited.
 
 from math import isfinite
 
+OPENING_AREA_DECIMALS = 6
+
 
 def opening_area(width_m, height_m, quantity):
     width = _positive(width_m, "opening width")
@@ -16,7 +18,30 @@ def opening_area(width_m, height_m, quantity):
     count = _positive(quantity, "opening quantity")
     if not float(count).is_integer():
         raise ValueError("Opening quantity must be a whole number.")
-    return round(width * height * int(count), 6)
+    return round(width * height * int(count), OPENING_AREA_DECIMALS)
+
+
+def resolve_opening_area(*, width_m=None, height_m=None, quantity=None, explicit_opening_area_m2=None):
+    """Resolve opening area consistently for glazing load and host-wall netting.
+
+    When both a complete dimension set and an explicit area are supplied, they
+    must agree to the calculator's stored area precision; otherwise neither
+    calculation may silently choose a different area.
+    """
+    dimensions = (width_m, height_m, quantity)
+    has_any_dimension = any(value not in (None, "") for value in dimensions)
+    has_all_dimensions = all(value not in (None, "") for value in dimensions)
+    if has_any_dimension and not has_all_dimensions:
+        raise ValueError("Opening dimensions must include width, height, and quantity together.")
+    dimension_area = opening_area(*dimensions) if has_all_dimensions else None
+    explicit_area = _positive(explicit_opening_area_m2, "explicit opening area") if explicit_opening_area_m2 not in (None, "") else None
+    if dimension_area is not None and explicit_area is not None and round(explicit_area, OPENING_AREA_DECIMALS) != dimension_area:
+        raise ValueError("Explicit opening area conflicts with dimension-derived opening area.")
+    if dimension_area is not None:
+        return dimension_area
+    if explicit_area is not None:
+        return round(explicit_area, OPENING_AREA_DECIMALS)
+    raise ValueError("Positive opening dimensions or explicit opening area are required.")
 
 
 def glass_area(*, opening_area_m2=None, explicit_glass_area_m2=None, frame_fraction=None):
@@ -81,24 +106,16 @@ def assess_glazing_eligibility(surface, window, manual_solar, *, boundary_temper
         issues.append("surface source and citations are required")
     if not window.get("source") or not window.get("citations"):
         issues.append("window source and citations are required")
-    has_dimensions = all(surface.get(key) not in (None, "") for key in ("opening_width_m", "opening_height_m", "opening_quantity"))
-    has_opening_area = surface.get("explicit_opening_area_m2") not in (None, "")
     has_glass_area = surface.get("explicit_glass_area_m2") not in (None, "")
-    if not has_dimensions and not has_opening_area:
-        issues.append("positive opening dimensions or explicit opening area are required")
-    if has_dimensions:
-        try:
-            opening_area(surface["opening_width_m"], surface["opening_height_m"], surface["opening_quantity"])
-        except ValueError as error:
-            issues.append(str(error))
+    try:
+        resolve_opening_area(width_m=surface.get("opening_width_m"), height_m=surface.get("opening_height_m"),
+                             quantity=surface.get("opening_quantity"),
+                             explicit_opening_area_m2=surface.get("explicit_opening_area_m2"))
+    except ValueError as error:
+        issues.append(str(error))
     if has_glass_area:
         try:
             _positive(surface["explicit_glass_area_m2"], "explicit glass area")
-        except ValueError as error:
-            issues.append(str(error))
-    if has_opening_area:
-        try:
-            _positive(surface["explicit_opening_area_m2"], "explicit opening area")
         except ValueError as error:
             issues.append(str(error))
     if window.get("u_value_w_m2k") in (None, ""):
@@ -138,10 +155,10 @@ def calculate_glazing(surface, window, manual_solar, *, boundary_temperature_c=N
         return {"status": "blocked", "review_status": "stored_not_calculated", "unresolved_requirements": issues}
     if boundary_temperature_c is None:
         boundary_temperature_c = surface.get("boundary_temperature_c", surface.get("adjacent_temperature_c"))
-    if surface.get("opening_width_m") not in (None, ""):
-        opening = opening_area(surface["opening_width_m"], surface["opening_height_m"], surface["opening_quantity"])
-    else:
-        opening = _positive(surface["explicit_opening_area_m2"], "explicit opening area")
+    opening = resolve_opening_area(width_m=surface.get("opening_width_m"),
+                                   height_m=surface.get("opening_height_m"),
+                                   quantity=surface.get("opening_quantity"),
+                                   explicit_opening_area_m2=surface.get("explicit_opening_area_m2"))
     resolved_glass = glass_area(opening_area_m2=opening,
                                 explicit_glass_area_m2=surface.get("explicit_glass_area_m2"),
                                 frame_fraction=window.get("frame_fraction"))

@@ -11,7 +11,7 @@ The authoritative project record is `infiltration_method_gate.json`. This docume
 - Direct-flow conversions are `m3/s × 1000` and `m3/h ÷ 3.6` to produce L/s.
 - ACH conversion is `ACH × room volume (m³) ÷ 3.6`. Room volume is reviewed room area times room ceiling height; a cited zone height is the only fallback. No project-wide height or ACH default is permitted.
 - A non-zero calculated infiltration input requires its own complete 24-hour schedule for the selected scenario day type. It must not reuse occupancy or outside-air schedules implicitly.
-- The existing room safety factor applies once after all hourly components, including infiltration. No separate infiltration allowance is applied.
+- In legacy mode, the cited room safety factor applies once after all hourly components, including infiltration. No separate infiltration allowance is applied. With a cited engineer-approved project policy, room factors are retained as evidence, neutralized in room-hour calculations, and the policy is applied once to the coincident project peak. A factor above 1.0 blocks only if it survives into calculated room hours and would actually compound with the project policy.
 - The input must declare `uncontrolled_infiltration`; it cannot duplicate outside-air ventilation, transfer air, extract, spill, make-up air, or a future AHU path.
 - The engine uses the selected scenario outdoor DB/WB/pressure and room DB/WB in the existing moist-air enthalpy method. It records signed sensible and latent diagnostics, but only each positive cooling component contributes to the cooling duty. Negative air effects never reduce peak cooling duty.
 
@@ -37,7 +37,7 @@ An approved project gate needs: engineer name, credential, approval date, method
 6. Missing gate, source, citation, schedule, volume, invalid unit, and duplicate air-path declaration block the affected room.
 7. Provisional input produces only `draft`; confirmed complete scope may be `review_ready`.
 
-This is cooling infiltration only. It does not approve heating, AHU, transfer air, extract/make-up air, glazing, shading, annual analysis, or benchmark validation.
+This gate's documented scope is cooling infiltration only; it does not approve heating, AHU, transfer air, extract/make-up air, glazing, shading, annual analysis, or benchmark validation. The current hourly heating implementation nevertheless checks this cooling-scoped gate as an eligibility condition before calculating room infiltration. Whether heating infiltration needs a separate approval scope remains undecided. This implementation note records behavior only and does not extend or grant the gate's approval scope.
 
 ## Isolated preparation review (14 September 2026)
 

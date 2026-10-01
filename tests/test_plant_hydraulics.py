@@ -73,6 +73,51 @@ class PlantHydraulicsTests(unittest.TestCase):
         self.assertEqual(report["status"], "review_ready")
         self.assertEqual(report["project_peak"], report["included_scope_peak"])
 
+    def test_empty_plant_selection_is_not_expanded_to_all(self):
+        report = calculate_plant_report(
+            ahu_report(), plant_systems(), circuits(), empty_plant_method_gate(), selected_plant_ids=[],
+        )
+        self.assertEqual(report["status"], "blocked")
+        self.assertEqual(report["project_peak"], {})
+        self.assertTrue(report["blocked_plants"])
+
+    def test_missing_or_empty_requested_scenarios_block_without_partial_peak(self):
+        for requested in (["summer", "missing"], []):
+            with self.subTest(requested=requested):
+                report = calculate_plant_report(
+                    ahu_report(), plant_systems(), circuits(), empty_plant_method_gate(), scenario_ids=requested,
+                )
+                self.assertEqual(report["status"], "blocked")
+                self.assertEqual(report["project_peak"], {})
+                self.assertTrue(report["blocked_plants"])
+
+    def test_blocked_selected_scenario_suppresses_review_ready_project_peak(self):
+        gate = empty_plant_method_gate()
+        gate.update({"approval_status": "approved", "engineer_name": "A. Engineer", "engineer_credential": "CPEng",
+                     "approved_at": "2026-09-18", "method_citation": "PLANT-01", "citations": citation("PLANT-01")})
+        report_input = ahu_report()
+        blocked = copy.deepcopy(report_input["scenario_results"][0])
+        blocked["scenario_id"] = "winter"
+        blocked["ahus"] = blocked["ahus"][:1]
+        report_input["scenario_results"].append(blocked)
+        report = calculate_plant_report(report_input, plant_systems(), circuits(), gate)
+        self.assertEqual(report["scenario_results"][0]["status"], "review_ready")
+        self.assertEqual(report["scenario_results"][1]["status"], "blocked")
+        self.assertEqual(report["status"], "draft")
+        self.assertEqual(report["project_peak"], {})
+        self.assertTrue(report["included_scope_peak"])
+
+    def test_unmapped_source_ahu_keeps_plant_report_draft(self):
+        gate = empty_plant_method_gate()
+        gate.update({"approval_status": "approved", "engineer_name": "A. Engineer", "engineer_credential": "CPEng",
+                     "approved_at": "2026-09-18", "method_citation": "PLANT-01", "citations": citation("PLANT-01")})
+        source = ahu_report()
+        source["selected_ahu_ids"].append("ahu_03")
+        report = calculate_plant_report(source, plant_systems(), circuits(), gate)
+        self.assertEqual(report["status"], "draft")
+        self.assertEqual(report["project_peak"], {})
+        self.assertTrue(any("not mapped" in warning for warning in report["warnings"]))
+
     def test_representative_number_off_multiplies_only_equipment_duty(self):
         report = calculate_plant_report(ahu_report(), plant_systems("representative_per_unit", 2), circuits(), empty_plant_method_gate())
         hour = report["scenario_results"][0]["plants"][0]["hours"][0]
@@ -108,6 +153,23 @@ class PlantHydraulicsTests(unittest.TestCase):
         raw["circuits"][0]["pumps"][0]["power_kw"] = -1
         with self.assertRaises(ValueError):
             validate_hydraulic_circuits(raw, {"plant_01"})
+
+    def test_preliminary_policy_accepts_provisional_records_without_changing_reviewed_default(self):
+        plants = plant_systems()
+        plants["systems"][0]["review_status"] = "provisional"
+        circuits_raw = circuits()
+        circuits_raw["circuits"][0]["review_status"] = "provisional"
+        for child in circuits_raw["circuits"][0]["pumps"] + circuits_raw["circuits"][0]["pipe_effects"]:
+            child["review_status"] = "provisional"
+        reviewed = calculate_plant_report(ahu_report(), plants, circuits_raw, empty_plant_method_gate())
+        self.assertEqual(reviewed["status"], "blocked")
+        preliminary = calculate_plant_report(
+            ahu_report(), plants, circuits_raw, empty_plant_method_gate(),
+            preliminary_policy={"mode": "ai_preliminary", "allowed_review_statuses": {"confirmed", "provisional"}},
+        )
+        self.assertEqual(preliminary["status"], "draft")
+        self.assertEqual(preliminary["label"], "AI preliminary estimate — not engineering reviewed or validated")
+        self.assertGreater(preliminary["included_scope_peak"]["plant_duty_kw"], 0)
 
 
 if __name__ == "__main__":

@@ -2,7 +2,8 @@
 
 from copy import deepcopy
 
-from ai.heat_loads import contribution, humidity_ratio_from_db_wb, infiltration_flow_lps, specific_volume_m3_kg
+from ai.heat_loads import (AIRFLOW_REFERENCE_BASES, STANDARD_DRY_AIR_DENSITY_KG_M3, contribution,
+                           humidity_ratio_from_db_wb, infiltration_flow_lps, specific_volume_m3_kg, wet_bulb_method_id)
 from ai.heating_gate import empty_heating_method_gate, heating_gate_is_approved, validate_heating_method_gate
 from ai.heating_readiness import assess_heating_readiness
 from ai.glazing_gate import gate_is_approved as glazing_gate_is_approved
@@ -11,6 +12,7 @@ from ai.hourly_loads import (
     aggregate_project,
     aggregate_zones,
     artifact_snapshot,
+    infiltration_path_missing,
     peak,
     room_volume_m3,
     validate_design_day_scenarios,
@@ -18,7 +20,7 @@ from ai.hourly_loads import (
     validate_schedule_library,
 )
 from ai.glazing_calculation import opening_area
-from ai.infiltration_gate import empty_infiltration_method_gate, gate_is_approved as infiltration_gate_is_approved, validate_infiltration_method_gate
+from ai.infiltration_gate import empty_infiltration_method_gate, validate_infiltration_method_gate
 
 
 def heating_conduction(surfaces, outdoor_db_c, indoor_db_c):
@@ -93,25 +95,33 @@ def heating_glazing_conduction(room, outdoor_db_c, indoor_db_c, glazing_gate):
     return contribution("heating_glazing_conduction", total, inputs={"openings": rows, "blocked": blocked}, formula="overall-window U × opening area × (indoor temperature − boundary temperature) ÷ 1000"), blocked
 
 
-def heating_air_load(flow_lps, indoor_db_c, indoor_wb_c, outdoor_db_c, outdoor_wb_c, pressure_kpa, name="heating_outside_air"):
-    outdoor_ratio = humidity_ratio_from_db_wb(outdoor_db_c, outdoor_wb_c, pressure_kpa)
-    mass_flow = flow_lps / 1000.0 / specific_volume_m3_kg(outdoor_db_c, outdoor_ratio, pressure_kpa)
+def heating_air_load(flow_lps, indoor_db_c, indoor_wb_c, outdoor_db_c, outdoor_wb_c, pressure_kpa, name="heating_outside_air", *, indoor_wet_bulb_basis="legacy_unverified", outdoor_wet_bulb_basis="legacy_unverified", airflow_reference_basis="legacy_unverified"):
+    if airflow_reference_basis not in AIRFLOW_REFERENCE_BASES:
+        raise ValueError("Outside-air airflow reference basis is unsupported.")
+    outdoor_ratio = humidity_ratio_from_db_wb(outdoor_db_c, outdoor_wb_c, pressure_kpa, outdoor_wet_bulb_basis)
+    if airflow_reference_basis == "standard_air_1_2kg_da_m3":
+        mass_flow = flow_lps / 1000.0 * STANDARD_DRY_AIR_DENSITY_KG_M3
+        reference_state = {"dry_air_density_kg_m3": STANDARD_DRY_AIR_DENSITY_KG_M3}
+    else:
+        mass_flow = flow_lps / 1000.0 / specific_volume_m3_kg(outdoor_db_c, outdoor_ratio, pressure_kpa)
+        reference_state = {"dry_bulb_c": outdoor_db_c, "humidity_ratio": round(outdoor_ratio, 9), "pressure_kpa": pressure_kpa}
     signed = mass_flow * 1.006 * (outdoor_db_c - indoor_db_c)
     return contribution(
-        name, max(-signed, 0.0), inputs={"flow_lps": flow_lps, "indoor_db_c": indoor_db_c, "outdoor_db_c": outdoor_db_c, "outdoor_wb_c": outdoor_wb_c, "atmospheric_pressure_kpa": pressure_kpa, "mass_flow_kg_s": round(mass_flow, 6), "raw_signed_sensible_kw": signed, "applied_heating_kw": max(-signed, 0.0)},
+        name, max(-signed, 0.0), inputs={"flow_lps": flow_lps, "flow_reference_basis": airflow_reference_basis, "flow_reference_status": "calculation_assumption_unverified" if airflow_reference_basis == "legacy_unverified" else "declared_basis_unverified", "flow_reference_state": reference_state, "indoor_db_c": indoor_db_c, "outdoor_db_c": outdoor_db_c, "outdoor_wb_c": outdoor_wb_c, "outdoor_wet_bulb_basis": outdoor_wet_bulb_basis, "outdoor_wet_bulb_method": wet_bulb_method_id(outdoor_wet_bulb_basis), "indoor_wet_bulb_basis": indoor_wet_bulb_basis, "atmospheric_pressure_kpa": pressure_kpa, "mass_flow_kg_s": round(mass_flow, 6), "raw_signed_sensible_kw": signed, "applied_heating_kw": max(-signed, 0.0)},
         formula="outside-air mass flow × air heat capacity × (indoor DB − outdoor DB)",
     )
 
 
-def heating_infiltration_load(value, unit, indoor_db_c, indoor_wb_c, outdoor_db_c, outdoor_wb_c, pressure_kpa, *, room_volume_m3=None, schedule_factor=1.0, method_id="", gate_version=""):
+def heating_infiltration_load(value, unit, indoor_db_c, indoor_wb_c, outdoor_db_c, outdoor_wb_c, pressure_kpa, *, room_volume_m3=None, schedule_factor=1.0, method_id="", gate_version="", indoor_wet_bulb_basis="legacy_unverified", outdoor_wet_bulb_basis="legacy_unverified"):
     base_flow = infiltration_flow_lps(value, unit, room_volume_m3)
     applied_flow = base_flow * schedule_factor
-    outdoor_ratio = humidity_ratio_from_db_wb(outdoor_db_c, outdoor_wb_c, pressure_kpa)
+    outdoor_ratio = humidity_ratio_from_db_wb(outdoor_db_c, outdoor_wb_c, pressure_kpa, outdoor_wet_bulb_basis)
     mass_flow = applied_flow / 1000.0 / specific_volume_m3_kg(outdoor_db_c, outdoor_ratio, pressure_kpa)
     signed = mass_flow * 1.006 * (outdoor_db_c - indoor_db_c)
     return contribution(
         "heating_infiltration", max(-signed, 0.0), inputs={
-            "flow_lps": applied_flow, "outdoor_db_c": outdoor_db_c, "outdoor_wb_c": outdoor_wb_c, "atmospheric_pressure_kpa": pressure_kpa,
+            "flow_lps": applied_flow, "outdoor_db_c": outdoor_db_c, "outdoor_wb_c": outdoor_wb_c, "outdoor_wet_bulb_basis": outdoor_wet_bulb_basis, "outdoor_wet_bulb_method": wet_bulb_method_id(outdoor_wet_bulb_basis), "indoor_wet_bulb_basis": indoor_wet_bulb_basis, "atmospheric_pressure_kpa": pressure_kpa,
+            "flow_reference_basis": "outdoor_design_condition", "flow_reference_status": "calculation_assumption_unverified", "flow_reference_state": {"dry_bulb_c": outdoor_db_c, "humidity_ratio": round(outdoor_ratio, 9), "pressure_kpa": pressure_kpa},
             "input_value": value, "input_unit": unit,
             "resolved_flow_lps": round(base_flow, 6), "applied_flow_lps": round(applied_flow, 6),
             "room_volume_m3": room_volume_m3, "schedule_factor": schedule_factor,
@@ -129,8 +139,13 @@ def _heating_room_blockers(room, zone, heating_gate, infiltration_gate):
         blockers.append("cited indoor heating setpoint is missing")
     if room.get("verification_status") not in {"confirmed", "provisional"} or room.get("mapping_status") != "confirmed":
         blockers.append("room topology is not confirmed")
-    if room.get("cooling_load", {}).get("outside_air_lps") is None:
+    cooling_load = room.get("cooling_load", {})
+    if cooling_load.get("outside_air_lps") is None:
         blockers.append("cited outside-air airflow is missing")
+    if not cooling_load.get("outside_air_source"):
+        blockers.append("outside-air flow source")
+    if cooling_load.get("outside_air_verification_status") == "missing":
+        blockers.append("outside-air flow review status")
     if room.get("heating_internal_gain_policy") != "explicit_sensible_only":
         blockers.append("heating internal-gain policy is invalid")
     if room.get("heating_internal_gain_status") not in {"confirmed", "not_applicable"}:
@@ -140,10 +155,22 @@ def _heating_room_blockers(room, zone, heating_gate, infiltration_gate):
     for source in room.get("heat_sources", []):
         if source.get("heating_credit_status", "not_assessed") not in {"confirmed", "not_applicable"}:
             blockers.append(f"equipment {source.get('source_id', '')} heating credit is unresolved")
-    infiltration = next((item for item in room.get("unapproved_components", []) if item.get("component_type") == "infiltration"), None)
-    if infiltration and infiltration.get("calculation_status") == "calculated" and not infiltration_gate_is_approved(infiltration_gate):
-        blockers.append("approved infiltration method gate is missing")
+    blockers.extend(infiltration_path_missing(room, zone, infiltration_gate))
     return blockers
+
+
+def _heating_air_inputs_are_provisional(room):
+    load = room.get("cooling_load", {})
+    if room.get("verification_status") != "confirmed":
+        return True
+    if load.get("outside_air_verification_status") != "confirmed":
+        return True
+    return any(
+        component.get("calculation_status") == "calculated"
+        and component.get("component_type") == "infiltration"
+        and component.get("verification_status") != "confirmed"
+        for component in room.get("unapproved_components", [])
+    )
 
 
 def heating_internal_gain_credit(room, profiles, hour, gross_heating_sensible_kw):
@@ -193,7 +220,7 @@ def heating_internal_gain_credit(room, profiles, hour, gross_heating_sensible_kw
     ), []
 
 
-def calculate_heating_report(requirements, schedule_library, scenarios, model, selected_scenario_ids, *, glazing_gate=None, infiltration_gate=None, heating_gate=None, coverage=None):
+def calculate_heating_report(requirements, schedule_library, scenarios, model, selected_scenario_ids, *, glazing_gate=None, infiltration_gate=None, heating_gate=None, coverage=None, safety_factor_policy=None):
     requirements = deepcopy(requirements or {})
     schedule_library = artifact_snapshot(schedule_library, validate_schedule_library)
     scenarios = artifact_snapshot(scenarios, validate_design_day_scenarios)
@@ -207,6 +234,12 @@ def calculate_heating_report(requirements, schedule_library, scenarios, model, s
         "scenario_results": [], "included_scope_peak": {}, "project_peak": {}, "blocked_reasons": [], "coverage": deepcopy(coverage or {}),
         "excluded_components": ["heating latent/humidification credits", "heating solar credits", "unreviewed equipment credits", "AHU and plant effects"],
         "readiness": {"status": "blocked", "issues": []}, "stale_reasons": [],
+        "safety_policy_mode": bool(safety_factor_policy), "legacy_room_safety_factors_neutralized": bool(safety_factor_policy), "safety_policy_applied": False,
+        "legacy_room_safety_factors": [
+            {"room_id": room.get("room_id", ""), "factor": float(room.get("heating_safety_factor") or 1.0)}
+            for room in model.get("rooms", [])
+            if float(room.get("heating_safety_factor") or 1.0) > 1.0
+        ],
     }
     if not selected:
         report["blocked_reasons"].append("Select at least one heating design-day scenario.")
@@ -216,7 +249,7 @@ def calculate_heating_report(requirements, schedule_library, scenarios, model, s
     zones = {item["zone_id"]: item for item in model["zones"]}
     for scenario in selected:
         scenario_issues = _heating_scenario_issues(scenario)
-        result = _calculate_heating_scenario(requirements, schedule_library, scenario, model["rooms"], zones, floors, glazing_gate, infiltration_gate, heating_gate, scenario_issues)
+        result = _calculate_heating_scenario(requirements, schedule_library, scenario, model["rooms"], zones, floors, glazing_gate, infiltration_gate, heating_gate, scenario_issues, safety_factor_policy)
         report["scenario_results"].append(result)
     report["included_scope_peak"] = _governing_heating_peak(report["scenario_results"])
     complete_results = [item for item in report["scenario_results"] if item.get("status") == "review_ready" and item.get("scope_summary", {}).get("complete_scope")]
@@ -229,6 +262,9 @@ def calculate_heating_report(requirements, schedule_library, scenarios, model, s
     else:
         report["blocked_reasons"].extend(reason for item in report["scenario_results"] for reason in item.get("blocked_reasons", []))
     report["readiness"] = assess_heating_readiness(report, heating_gate)
+    if safety_factor_policy:
+        from ai.safety_factor_resolution import apply_final_policy
+        report = apply_final_policy(report, safety_factor_policy, mode="heating", preliminary=False)
     return report
 
 
@@ -251,7 +287,7 @@ def _heating_scenario_issues(scenario):
     return sorted(set(issues))
 
 
-def _calculate_heating_scenario(requirements, library, scenario, rooms, zones, floors, glazing_gate, infiltration_gate, heating_gate, scenario_issues=None):
+def _calculate_heating_scenario(requirements, library, scenario, rooms, zones, floors, glazing_gate, infiltration_gate, heating_gate, scenario_issues=None, safety_factor_policy=None):
     scenario_issues = scenario_issues or []
     if scenario_issues:
         return {"scenario_id": scenario["scenario_id"], "title": scenario["title"], "mode": "heating", "status": "blocked", "rooms": [], "zones": [], "floors": [], "included_scope_hours": [], "included_scope_peak": {}, "scope_summary": {"active_room_ids": [], "included_room_ids": [], "blocked_rooms": [], "complete_scope": False}, "blocked_reasons": scenario_issues}
@@ -262,35 +298,24 @@ def _calculate_heating_scenario(requirements, library, scenario, rooms, zones, f
         blockers = _heating_room_blockers(room, zone, heating_gate, infiltration_gate)
         profiles, profile_missing, provisional = _heating_profiles(library, scenario["day_type"], room)
         blockers.extend(profile_missing)
+        provisional = provisional or _heating_air_inputs_are_provisional(room)
         result = {"room_id": room["room_id"], "name": room["name"], "zone_id": room["zone_id"], "status": "blocked", "hours": [], "peak": {}, "blocked_reasons": sorted(set(blockers))}
         if blockers:
             room_results.append(result)
             continue
-        setpoint = room["indoor_heating_setpoint_c"]
         for weather in weather_rows:
-            hour = weather["hour"]
-            outdoor_db = weather["outdoor_dry_bulb_c"]["value"]
-            outdoor_wb = weather["outdoor_wet_bulb_c"]["value"]
-            pressure = scenario["atmospheric_pressure_kpa"]["value"]
-            envelope, envelope_blocked = heating_conduction(room["cooling_load"].get("envelope_surfaces", []), outdoor_db, setpoint)
-            glazing, glazing_blocked = heating_glazing_conduction(room, outdoor_db, setpoint, glazing_gate)
-            contributions = [envelope, glazing]
-            flow = room["cooling_load"].get("outside_air_lps")
-            if flow:
-                contributions.append(heating_air_load(flow * _profile_factor(profiles, "outside_air", hour), setpoint, room["cooling_load_conditions"].get("indoor_cooling_wet_bulb_c", setpoint), outdoor_db, outdoor_wb, pressure))
-            infiltration = next((item for item in room.get("unapproved_components", []) if item.get("component_type") == "infiltration" and item.get("calculation_status") == "calculated"), None)
-            if infiltration:
-                factor = _profile_factor(profiles, "infiltration", hour)
-                contributions.append(heating_infiltration_load(infiltration["value"], infiltration["unit"], setpoint, room["cooling_load_conditions"].get("indoor_cooling_wet_bulb_c", setpoint), outdoor_db, outdoor_wb, pressure, room_volume_m3=room_volume_m3(room, zone), schedule_factor=factor, method_id=infiltration.get("method_id", ""), gate_version=infiltration_gate.get("updated_at", "")))
-            gross = round(sum(max(item["sensible_kw"], 0.0) for item in contributions), 4)
-            credit, _credit_blocked = heating_internal_gain_credit(room, profiles, hour, gross)
-            net = round(max(0.0, gross + credit["sensible_kw"]), 4)
-            safety_factor = float(room["heating_safety_factor"])
-            safety_allowance = round(net * (safety_factor - 1.0), 4)
-            design_total = round(net + safety_allowance, 4)
-            contributions.append(credit)
-            inputs = {"blocked_surfaces": envelope_blocked + glazing_blocked, "setpoint_c": setpoint, "outdoor_db_c": outdoor_db, "gross_heating_sensible_kw": gross, "requested_internal_gain_credit_kw": credit["inputs"]["requested_credit_kw"], "applied_internal_gain_credit_kw": credit["inputs"]["applied_credit_kw"], "net_heating_sensible_kw": net, "heating_safety_factor": safety_factor, "heating_safety_factor_source": room.get("heating_safety_factor_source", ""), "heating_safety_factor_citations": deepcopy(room.get("heating_safety_factor_citations", []))}
-            result["hours"].append({"hour": hour, "components": {item["name"]: {"sensible_kw": item["sensible_kw"], "latent_kw": 0.0, "total_kw": item["total_kw"], "inputs": item.get("inputs", {}), "input_rows": [item.get("inputs", {})], "formula": item.get("formula", "")} for item in contributions}, "subtotal_sensible_kw": net, "subtotal_latent_kw": 0.0, "subtotal_kw": net, "design_total_kw": design_total, "safety_allowance_kw": safety_allowance, "inputs": inputs})
+            try:
+                result["hours"].append(_calculate_heating_hour(
+                    room, zone, profiles, weather, scenario, glazing_gate,
+                    infiltration_gate, safety_factor_policy,
+                ))
+            except ValueError as error:
+                result["blocked_reasons"] = [f"heating hour {weather.get('hour', '?')} calculation failed: {error}"]
+                result["hours"] = []
+                break
+        if result["blocked_reasons"]:
+            room_results.append(result)
+            continue
         result["peak"] = _heating_peak(result["hours"])
         result["status"] = "draft" if provisional or not heating_gate_is_approved(heating_gate) else "review_ready"
         room_results.append(result)
@@ -303,6 +328,100 @@ def _calculate_heating_scenario(requirements, library, scenario, rooms, zones, f
     blocked = [{"room_id": item["room_id"], "reasons": item["blocked_reasons"]} for item in room_results if item["status"] == "blocked"]
     complete = bool(room_results) and not blocked and all(item["status"] == "review_ready" for item in room_results)
     return {"scenario_id": scenario["scenario_id"], "title": scenario["title"], "mode": "heating", "status": "review_ready" if complete else ("draft" if calculated else "blocked"), "rooms": room_results, "zones": zone_results, "floors": floor_results, "included_scope_hours": project_hours, "included_scope_peak": _heating_peak(project_hours), "scope_summary": {"active_room_ids": [item["room_id"] for item in room_results], "included_room_ids": [item["room_id"] for item in calculated], "blocked_rooms": blocked, "complete_scope": complete}, "blocked_reasons": []}
+
+
+def _calculate_heating_hour(room, zone, profiles, weather, scenario, glazing_gate, infiltration_gate, safety_factor_policy):
+    hour = weather["hour"]
+    outdoor_db = weather["outdoor_dry_bulb_c"]["value"]
+    outdoor_wb = weather["outdoor_wet_bulb_c"]["value"]
+    pressure = scenario["atmospheric_pressure_kpa"]["value"]
+    setpoint = room["indoor_heating_setpoint_c"]
+    conditions = room["cooling_load_conditions"]
+    outdoor_wet_bulb_basis = weather.get("outdoor_wet_bulb_basis") or conditions.get("outdoor_wet_bulb_basis", "legacy_unverified")
+    indoor_wet_bulb_basis = conditions.get("indoor_wet_bulb_basis", "legacy_unverified")
+    weather_provenance = {
+        "scenario_id": scenario["scenario_id"],
+        "dry_bulb": deepcopy(weather.get("outdoor_dry_bulb_c", {})),
+        "wet_bulb": deepcopy(weather.get("outdoor_wet_bulb_c", {})),
+        "wet_bulb_basis": outdoor_wet_bulb_basis,
+        "pressure": deepcopy(scenario.get("atmospheric_pressure_kpa", {})),
+    }
+    envelope, envelope_blocked = heating_conduction(room["cooling_load"].get("envelope_surfaces", []), outdoor_db, setpoint)
+    glazing, glazing_blocked = heating_glazing_conduction(room, outdoor_db, setpoint, glazing_gate)
+    contributions = [envelope, glazing]
+    flow = room["cooling_load"].get("outside_air_lps")
+    if flow:
+        heating_outside_air = heating_air_load(
+            flow * _profile_factor(profiles, "outside_air", hour), setpoint,
+            conditions.get("indoor_cooling_wet_bulb_c", setpoint), outdoor_db,
+            outdoor_wb, pressure, indoor_wet_bulb_basis=indoor_wet_bulb_basis,
+            outdoor_wet_bulb_basis=outdoor_wet_bulb_basis,
+            airflow_reference_basis=room["cooling_load"].get("outside_air_flow_reference_basis", "legacy_unverified"),
+        )
+        heating_outside_air["inputs"].update({
+            "flow_source": room["cooling_load"].get("outside_air_source", ""),
+            "flow_verification_status": room["cooling_load"].get("outside_air_verification_status", "missing"),
+            "weather_provenance": deepcopy(weather_provenance),
+            "indoor_heating_setpoint_source": room.get("heating_setpoint_source", ""),
+            "indoor_heating_setpoint_citations": deepcopy(room.get("heating_citations", [])),
+        })
+        contributions.append(heating_outside_air)
+    infiltration = next((
+        item for item in room.get("unapproved_components", [])
+        if item.get("component_type") == "infiltration" and item.get("calculation_status") == "calculated"
+    ), None)
+    if infiltration:
+        factor = _profile_factor(profiles, "infiltration", hour)
+        heating_infiltration = heating_infiltration_load(
+            infiltration["value"], infiltration["unit"], setpoint,
+            conditions.get("indoor_cooling_wet_bulb_c", setpoint), outdoor_db,
+            outdoor_wb, pressure, room_volume_m3=room_volume_m3(room, zone),
+            schedule_factor=factor, method_id=infiltration.get("method_id", ""),
+            gate_version=infiltration_gate.get("updated_at", ""),
+            indoor_wet_bulb_basis=indoor_wet_bulb_basis,
+            outdoor_wet_bulb_basis=outdoor_wet_bulb_basis,
+        )
+        heating_infiltration["inputs"].update({
+            "flow_source": infiltration.get("source", ""),
+            "flow_citations": deepcopy(infiltration.get("citations", [])),
+            "flow_verification_status": infiltration.get("verification_status", "missing"),
+            "weather_provenance": deepcopy(weather_provenance),
+            "indoor_heating_setpoint_source": room.get("heating_setpoint_source", ""),
+            "indoor_heating_setpoint_citations": deepcopy(room.get("heating_citations", [])),
+        })
+        contributions.append(heating_infiltration)
+    gross = round(sum(max(item["sensible_kw"], 0.0) for item in contributions), 4)
+    credit, _credit_blocked = heating_internal_gain_credit(room, profiles, hour, gross)
+    net = round(max(0.0, gross + credit["sensible_kw"]), 4)
+    safety_factor = 1.0 if safety_factor_policy else float(room["heating_safety_factor"])
+    safety_allowance = round(net * (safety_factor - 1.0), 4)
+    design_total = round(net + safety_allowance, 4)
+    contributions.append(credit)
+    inputs = {
+        "blocked_surfaces": envelope_blocked + glazing_blocked,
+        "setpoint_c": setpoint, "outdoor_db_c": outdoor_db,
+        "gross_heating_sensible_kw": gross,
+        "requested_internal_gain_credit_kw": credit["inputs"]["requested_credit_kw"],
+        "applied_internal_gain_credit_kw": credit["inputs"]["applied_credit_kw"],
+        "net_heating_sensible_kw": net, "heating_safety_factor": safety_factor,
+        "heating_safety_factor_source": room.get("heating_safety_factor_source", ""),
+        "heating_safety_factor_citations": deepcopy(room.get("heating_safety_factor_citations", [])),
+    }
+    return {
+        "hour": hour,
+        "components": {
+            item["name"]: {
+                "sensible_kw": item["sensible_kw"], "latent_kw": 0.0,
+                "total_kw": item["total_kw"], "inputs": item.get("inputs", {}),
+                "input_rows": [item.get("inputs", {})], "formula": item.get("formula", ""),
+            }
+            for item in contributions
+        },
+        "subtotal_sensible_kw": net, "subtotal_latent_kw": 0.0,
+        "subtotal_kw": net, "safety_factor": safety_factor,
+        "design_total_kw": design_total, "safety_allowance_kw": safety_allowance,
+        "inputs": inputs,
+    }
 
 
 def _profile_factor(profiles, name, hour):

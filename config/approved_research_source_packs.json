@@ -1,6 +1,20 @@
 {
   "schema_version": 1,
   "packs": {
+    "au-airah-da09-v1": {
+      "country": "AU",
+      "policy_version": "au-airah-da09-v1",
+      "release_status": "candidate",
+      "release_note": "Licensed AIRAH DA09 design-weather records are imported only by a server administrator into a protected path. No proprietary dataset is bundled with Archie.",
+      "allowed_domains": [
+        "airah.org.au"
+      ],
+      "notes": "Project artifacts retain selected numerical conditions, citations, release identifiers, and hashes; they do not retain raw licensed spreadsheets or documents.",
+      "permitted_default_categories": [
+        "weather"
+      ],
+      "candidate_records": []
+    },
     "au-cooling-v1": {
       "country": "AU",
       "policy_version": "au-cooling-v1",

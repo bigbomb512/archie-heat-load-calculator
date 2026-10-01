@@ -16,9 +16,12 @@ from ai.envelope import (
     empty_envelope_library, empty_envelope_model, validate_envelope_library,
     validate_envelope_model, CONSTRUCTION_KINDS,
 )
+from ai.drawing_coverage import has_current_level_classification
 
 DECISIONS = {"accept", "edit", "reject", "needs_evidence", "pending"}
 GROUPS = ("floors", "zones", "rooms", "room_inputs", "schedules", "envelope")
+AREA_ROUNDING_TOLERANCE_M2 = 0.000001
+AREA_AGREEMENT_RELATIVE_TOLERANCE = 0.02
 
 
 def timestamp():
@@ -116,10 +119,38 @@ def quantity(raw, unit):
     return value
 
 
+def displayed_area_rounding_tolerance(raw, area_m2, evidence=()):
+    """Half of the last displayed area digit, with numeric precision fallback."""
+    raw_value = raw.get("value") if isinstance(raw, dict) else raw
+    candidates = [str(raw_value)] if raw_value is not None else []
+    candidates.extend(str(row.get("excerpt", "")) for row in evidence if isinstance(row, dict))
+    for text in candidates:
+        for match in re.finditer(r"(?<![\w.])(\d+(?:\.\d+)?)(?:\s*m(?:2|²))?", text, re.I):
+            try:
+                value = float(match.group(1))
+            except ValueError:
+                continue
+            if abs(value - area_m2) > AREA_ROUNDING_TOLERANCE_M2:
+                continue
+            decimals = len(match.group(1).partition(".")[2])
+            return 0.5 * (10 ** -decimals)
+    return 0.5
+
+
+def trace_areas_agree(areas):
+    if len(areas) < 2:
+        return True
+    low, high = min(areas), max(areas)
+    relative_difference = (high - low) / ((high + low) / 2.0)
+    return relative_difference <= AREA_AGREEMENT_RELATIVE_TOLERANCE
+
+
 def build_calculator_draft(thermal_model, building_evidence, drawing_coverage, previous=None,
                            source_artifacts=None, thermal_evidence=None, evidence_fusion=None,
-                           calculation_input_evidence=None):
+                           calculation_input_evidence=None, room_registry=None):
     previous = previous or {}
+    if not has_current_level_classification(drawing_coverage):
+        raise ValueError("Drawing-level classification changed. Rebuild drawing coverage and building evidence before building the calculator draft.")
     thermal_evidence = thermal_evidence or {}
     draft = empty_calculator_draft()
     source_fingerprints = {
@@ -129,6 +160,9 @@ def build_calculator_draft(thermal_model, building_evidence, drawing_coverage, p
     }
     if calculation_input_evidence is not None:
         source_fingerprints["calculation_input_evidence"] = calculation_input_evidence
+    if room_registry is not None:
+        source_fingerprints["room_registry"] = {key: value for key, value in room_registry.items()
+                                                  if key != "source_artifact_fingerprints"}
     draft.update(revision=previous.get("revision", 0) + 1, status="review_required", updated_at=timestamp(),
                  source_artifacts=source_artifacts or {},
                  source_fingerprints={name: fingerprint(value) for name, value in source_fingerprints.items()},
@@ -143,6 +177,7 @@ def build_calculator_draft(thermal_model, building_evidence, drawing_coverage, p
                                   "fact_registry": deepcopy((evidence_fusion or {}).get("fact_registry", {}))},
                  evidence_summary={key: len(building_evidence.get(key, [])) for key in
                                    ("spaces", "levels", "surfaces", "openings", "constructions", "lighting", "equipment")})
+    draft["source_fingerprints"].update((room_registry or {}).get("source_artifact_fingerprints", {}))
     document = building_evidence.get("source_pdf") or thermal_model.get("source_pdf") or "building_evidence.json"
 
     def add(group, kind, identity, value, evidence, reason, evidence_ids=(), dependencies=(), confidence="unknown"):
@@ -242,6 +277,89 @@ def build_calculator_draft(thermal_model, building_evidence, drawing_coverage, p
         if space.get("name"):
             key = (space.get("level_name", "").casefold(), space["name"].casefold())
             spaces.setdefault(key, []).append(space)
+    room_id_aliases = {}
+    registry_rooms = [row for row in (room_registry or {}).get("rooms", [])
+                      if isinstance(row, dict) and row.get("room_id") and row.get("label")]
+    drawing_pages = {row.get("page"): row for row in drawing_coverage.get("pages", []) if isinstance(row, dict)}
+    registry_by_label = {}
+    for row in registry_rooms:
+        key = (str(row.get("level_name", "")).strip().casefold(), str(row.get("label", "")).strip().casefold())
+        registry_by_label.setdefault(key, []).append(row)
+    for key, registry_matches in registry_by_label.items():
+        if len(registry_matches) > 1 and len({row.get("room_id") for row in registry_matches}) > 1:
+            issue([key, "room_registry_duplicate"],
+                  "Room sources contain distinct IDs for the same exact label and level. Resolve the identity conflict before drafting either room.",
+                  [e for row in registry_matches for e in row.get("evidence", [])])
+            continue
+        registry_room = registry_matches[0]
+        label, level_name = str(registry_room.get("label", "")).strip(), str(registry_room.get("level_name", "")).strip()
+        exact_id_matches = [(space_key, space) for space_key, rows in spaces.items() for space in rows
+                            if str(space.get("id", "")) == str(registry_room["room_id"])]
+        label_matches = [(space_key, space) for space_key, rows in spaces.items() for space in rows
+                         if space_key == key]
+        matches = exact_id_matches or label_matches
+        if len(matches) > 1:
+            issue([registry_room["room_id"], "room_registry_ambiguous"],
+                  "A room-registry entry matches multiple building-evidence spaces. Resolve the duplicate identity before drafting.",
+                  registry_room.get("evidence", []))
+            continue
+        if matches:
+            room_id_aliases[str(registry_room["room_id"])] = str(matches[0][1].get("id", ""))
+            continue
+        if key[0].startswith("unassigned") or not key[0]:
+            level_name = "Unassigned level"
+        cited_evidence = []
+        for citation in registry_room.get("evidence", []):
+            if not isinstance(citation, dict):
+                continue
+            page_number = citation.get("page")
+            page_record = drawing_pages.get(page_number, {})
+            excerpt = citation.get("excerpt", "")
+            reference = citation.get("reference") or " ".join(part for part in (
+                page_record.get("drawing_number", ""), f"page {page_number}" if page_number else "") if part)
+            cited_evidence.append({**citation, "reference": reference or citation.get("reference", ""),
+                                   "excerpt": excerpt})
+        pseudo_space = {"id": registry_room["room_id"], "name": label, "level_name": level_name,
+                        "geometry_status": "label_detected", "evidence": cited_evidence,
+                        "room_source": registry_room.get("source", "room_registry"),
+                        "confidence": registry_room.get("confidence", "unknown"),
+                        "unresolved_fields": ["area", "geometry"]}
+        spaces.setdefault((level_name.casefold(), label.casefold()), []).append(pseudo_space)
+        room_id_aliases[str(registry_room["room_id"])] = str(registry_room["room_id"])
+
+    proof_by_source_room = {}
+    registry_records = {(str(row.get("room_id")), str(row.get("trace_id"))): row
+                        for row in (room_registry or {}).get("records", []) if isinstance(row, dict)}
+    geometry_entities = ((calculation_input_evidence or {}).get("geometry_resolution") or {}).get("entities", [])
+    for proof in geometry_entities:
+        if not isinstance(proof, dict) or proof.get("kind") != "room_geometry_proof" or proof.get("extraction_method") != "reviewer_traced_boundary":
+            continue
+        value = proof.get("value") or {}
+        trace_id, source_room_id = str(value.get("reviewer_trace_id", "")), str(proof.get("room_source_id", ""))
+        trace = registry_records.get((source_room_id, trace_id))
+        calibration = value.get("calibration") if isinstance(value.get("calibration"), dict) else {}
+        area = value.get("area_m2")
+        if (not trace or not proof.get("entity_id") or proof.get("geometry_status") != "geometry_proposed"
+                or calibration.get("status") not in {"agreed", "declared_scale_rejected"}
+                or not isinstance(area, (int, float)) or not math.isfinite(area) or area <= 0
+                or value.get("source_fingerprints") != trace.get("source_fingerprints")):
+            continue
+        page = drawing_pages.get(proof.get("source", {}).get("page"), {})
+        dimension = calibration.get("dimension_value_mm")
+        difference = calibration.get("difference_percent")
+        difference_text = f"; difference {difference:.2f}%" if isinstance(difference, (int, float)) else ""
+        reason = "Declared-scale calibration agrees" if calibration.get("status") == "agreed" else "Two reviewer dimensions agree; declared scale rejected"
+        citation = {"reference": page.get("drawing_number") or f"Page {proof.get('source', {}).get('page')}",
+                    "page": proof.get("source", {}).get("page"),
+                    "excerpt": f"Reviewer {trace.get('reviewer')}; trace {trace_id}; calibration dimension {dimension:g} mm; {reason}{difference_text}."}
+        proof_row = {
+            "proof_id": proof["entity_id"], "area_m2": area, "calibration": deepcopy(calibration),
+            "source_fingerprints": deepcopy(value.get("source_fingerprints", {})),
+            "trace_id": trace_id, "reviewer": trace.get("reviewer", ""), "page": proof.get("source", {}).get("page"),
+            "drawing_number": page.get("drawing_number", ""), "citations": [citation],
+        }
+        draft_room_id = room_id_aliases.get(source_room_id, source_room_id)
+        proof_by_source_room.setdefault(draft_room_id, []).append(proof_row)
     room_lookup = {}
     for key, matches in sorted(spaces.items()):
         space = matches[0]
@@ -256,20 +374,61 @@ def build_calculator_draft(thermal_model, building_evidence, drawing_coverage, p
         # not the extracted value. A corrected area/excerpt must revisit the
         # same proposal rather than silently creating a new room.
         location = sorted((space.get("id", ""), e.get("page")) for e in evidence)
-        identity = [key, location]
+        source_room_id = str(space.get("id", ""))
+        identity = ["room_id", source_room_id] if source_room_id in room_id_aliases.values() else [key, location]
         suffix = fingerprint([document, identity])[:12]
         zone_id, room_id = "zone_" + suffix, "room_" + suffix
         zone = add("zones", "zone", identity, {"zone_id": zone_id, "name": space["name"],
             "floor_id": floor["value"]["floor_id"] if floor else "",
             "floor_status": "proposed" if floor else "unresolved"}, evidence,
             "Review the proposed one-room zone and floor mapping.", [space.get("id")], [floor["candidate_id"]] if floor else [], space.get("confidence", "unknown"))
+        area = quantity(space.get("area"), "m2")
+        reviewer_proofs = sorted(proof_by_source_room.get(source_room_id, []), key=lambda row: row["proof_id"])
+        reviewer_proof = None
+        if reviewer_proofs:
+            trace_areas = [row["area_m2"] for row in reviewer_proofs]
+            if not trace_areas_agree(trace_areas):
+                relative_difference = (max(trace_areas) - min(trace_areas)) / ((max(trace_areas) + min(trace_areas)) / 2.0) * 100.0
+                issue([source_room_id, "room_trace_conflict"],
+                      f"Current calibrated traces differ by {relative_difference:.2f}%, above the {AREA_AGREEMENT_RELATIVE_TOLERANCE:.0%} comparison tolerance. No traced area or geometry confirmation was proposed.",
+                      [citation for row in reviewer_proofs for citation in row["citations"]], source_room_id)
+            else:
+                reviewer_proof = deepcopy(reviewer_proofs[0])
+                reviewer_proof["area_m2"] = sum(trace_areas) / len(trace_areas)
+                reviewer_proof["supporting_proofs"] = [deepcopy(row) for row in reviewer_proofs]
+                reviewer_proof["citations"] = [citation for row in reviewer_proofs for citation in row["citations"]]
+                reviewer_proof["comparison_tolerance"] = {
+                    "relative_tolerance_percent": AREA_AGREEMENT_RELATIVE_TOLERANCE * 100,
+                    "method": "maximum pairwise trace-area spread divided by the mean of the extremes",
+                    "engineering_accuracy_claim": False,
+                }
+        if reviewer_proof and area is not None:
+            rounding_tolerance = displayed_area_rounding_tolerance(space.get("area"), area, evidence)
+            comparison_tolerance = rounding_tolerance + reviewer_proof["area_m2"] * AREA_AGREEMENT_RELATIVE_TOLERANCE
+            difference = abs(area - reviewer_proof["area_m2"])
+            reviewer_proof["comparison_tolerance"].update({
+                "printed_rounding_tolerance_m2": rounding_tolerance,
+                "combined_tolerance_m2": comparison_tolerance,
+                "method": "printed half-last-digit rounding plus 2% of traced area; comparison only, not measurement uncertainty",
+            })
+            if difference > comparison_tolerance:
+                issue([source_room_id, "room_trace_area_conflict"],
+                      f"The cited room area differs from the current trace by {difference:.3f} m², above the combined printed-rounding and {AREA_AGREEMENT_RELATIVE_TOLERANCE:.0%} comparison allowance ({comparison_tolerance:.3f} m²). No traced area or geometry confirmation was proposed.",
+                      evidence + reviewer_proof["citations"], source_room_id)
+                reviewer_proof = None
+        existing_geometry_status = space.get("geometry_status", "label_detected")
+        geometry_status = "geometry_proposed" if reviewer_proof else existing_geometry_status
+        geometry_reference = reviewer_proof["proof_id"] if reviewer_proof else space.get("geometry_reference")
         room = add("rooms", "room", identity, {"room_id": room_id, "name": space["name"], "zone_id": zone_id,
-            "floor_id": floor["value"]["floor_id"] if floor else "", "geometry_status": space.get("geometry_status", "label_detected"),
-            "geometry_reference": space.get("geometry_reference"), "unresolved_fields": list(space.get("unresolved_fields", []))},
+            "floor_id": floor["value"]["floor_id"] if floor else "", "geometry_status": geometry_status,
+            "geometry_reference": geometry_reference, "unresolved_fields": list(space.get("unresolved_fields", []))},
             evidence, "Confirm room identity and mapping; missing load inputs remain missing.",
             [space.get("id")], [zone["candidate_id"]], space.get("confidence", "unknown"))
+        room["room_source"] = space.get("room_source", "building_evidence")
+        if reviewer_proof:
+            room["reviewer_geometry_proof"] = deepcopy(reviewer_proof)
+        room["fingerprint"] = fingerprint({key: value for key, value in room.items() if key != "fingerprint"})
         room_lookup[space.get("id")] = room
-        area = quantity(space.get("area"), "m2")
         if area is not None:
             # A room label alone does not evidence an area.
             area_evidence = [e for e in evidence if re.search(r"\b" + re.escape(str(area).removesuffix(".0")) + r"(?:\.0)?\s*m[2²]", e.get("excerpt", ""), re.I)]
@@ -277,6 +436,26 @@ def build_calculator_draft(thermal_model, building_evidence, drawing_coverage, p
                 "Confirm the cited room area.", [space.get("id")], [room["candidate_id"]], space.get("confidence", "unknown"))
         else:
             issue([identity, "area"], "Supply a cited positive room area with explicit m² units.", evidence, room_id)
+        if reviewer_proof and area is not None:
+            matching_area = next((candidate for candidate in draft["candidates"]["room_inputs"]
+                                  if candidate["kind"] == "area" and candidate["value"].get("room_id") == room_id), None)
+            if matching_area:
+                citations_by_fingerprint = {fingerprint(row): row for row in
+                                            matching_area["citations"] + reviewer_proof["citations"]}
+                matching_area["citations"] = list(citations_by_fingerprint.values())
+                trace_evidence_ids = [value for proof_row in reviewer_proof["supporting_proofs"]
+                                      for value in (proof_row["trace_id"], proof_row["proof_id"])]
+                matching_area["evidence_ids"] = sorted(set(matching_area["evidence_ids"] + trace_evidence_ids))
+                matching_area["reviewer_geometry_proof"] = deepcopy(reviewer_proof)
+                matching_area["fingerprint"] = fingerprint({key: value for key, value in matching_area.items() if key != "fingerprint"})
+        elif reviewer_proof:
+            add("room_inputs", "area", ["reviewer_trace", source_room_id, reviewer_proof["trace_id"]],
+                {"room_id": room_id, "area_m2": reviewer_proof["area_m2"]}, reviewer_proof["citations"],
+                "Review and accept the current calibrated reviewer trace; the area remains a proposal until applied.",
+                [reviewer_proof["trace_id"], reviewer_proof["proof_id"]], [room["candidate_id"]], "reviewed")
+            area_candidate = draft["candidates"]["room_inputs"][-1]
+            area_candidate["reviewer_geometry_proof"] = deepcopy(reviewer_proof)
+            area_candidate["fingerprint"] = fingerprint({key: value for key, value in area_candidate.items() if key != "fingerprint"})
         for field in space.get("unresolved_fields", []):
             if field not in {"area", "geometry", "floor"}:
                 continue
@@ -388,6 +567,8 @@ def save_review(draft, changes, expected_revision):
         if decision["decision"] == "edit":
             if not isinstance(decision.get("value"), dict) or not str(decision.get("source", "")).strip():
                 raise ValueError("Edited values need a field object and engineering review source: " + cid)
+            if row.get("kind") == "room" and {"geometry_status", "geometry_reference"}.intersection(decision["value"]):
+                raise ValueError("Room geometry status and reference cannot be edited by hand: " + cid)
             if not supported_citations(validate_citations(decision.get("citations", []), cid)):
                 raise ValueError("Edited values need a citation and supporting excerpt: " + cid)
         decision.update(candidate_fingerprint=row.get("fingerprint", fingerprint(row)), reviewed_at=timestamp())
@@ -440,6 +621,8 @@ def apply_calculator_draft(draft, decisions=None, hourly_model=None, schedule_li
         supplied = decision.get("value", {}) if action == "edit" else {}
         if set(supplied) - set(value):
             raise ValueError("Unknown editable fields for " + cid)
+        if item["kind"] == "room" and {"geometry_status", "geometry_reference"}.intersection(supplied):
+            raise ValueError("Room geometry status and reference cannot be edited by hand: " + cid)
         # Stable target IDs are immutable; relationships are explicitly editable.
         id_key = {"floor": "floor_id", "zone": "zone_id", "room": "room_id", "schedule": "schedule_id",
                   "construction": "record_id", "window": "record_id", "surface": "surface_id"}.get(item["kind"])
@@ -456,9 +639,21 @@ def apply_calculator_draft(draft, decisions=None, hourly_model=None, schedule_li
             if not value.get("floor_id"):
                 summary["unresolved"].append({"candidate_id": cid, "reason": "A room cannot be applied without a reviewed floor assignment."})
                 continue
-            if value.get("geometry_status") != "geometry_confirmed":
+            proof = item.get("reviewer_geometry_proof")
+            calibration = (proof or {}).get("calibration", {})
+            proof_current = bool(
+                proof and proof.get("proof_id") == value.get("geometry_reference")
+                and isinstance(proof.get("area_m2"), (int, float)) and math.isfinite(proof["area_m2"]) and proof["area_m2"] > 0
+                and calibration.get("status") in {"agreed", "declared_scale_rejected"}
+                and isinstance(calibration.get("mm_per_px"), (int, float)) and calibration["mm_per_px"] > 0
+                and proof.get("source_fingerprints", {}).get("source_pdf")
+                and proof.get("source_fingerprints", {}).get("vector_page")
+            )
+            if value.get("geometry_status") != "geometry_confirmed" and not proof_current:
                 summary["unresolved"].append({"candidate_id": cid, "reason": "Room geometry must be explicitly reviewed and confirmed before activation."})
                 continue
+            if proof_current:
+                value["geometry_status"] = "geometry_confirmed"
         evidence = validate_citations(item["citations"] + decision.get("citations", []), cid)
         if not supported_citations(evidence):
             summary["unresolved"].append({"candidate_id": cid, "reason": "Supply supporting citations and excerpts."})
@@ -476,6 +671,17 @@ def apply_calculator_draft(draft, decisions=None, hourly_model=None, schedule_li
         provenance = {"candidate_id": cid, "candidate_fingerprint": item["fingerprint"], "evidence_ids": item["evidence_ids"],
                       "original_citations": item["citations"], "reviewer": decision.get("reviewer"), "reviewed_at": decision.get("reviewed_at"),
                       "source": decision.get("source") or item["source"], "citations": evidence}
+        if item["kind"] == "room" and item.get("reviewer_geometry_proof") and proof_current and value.get("geometry_status") == "geometry_confirmed":
+            proof = item["reviewer_geometry_proof"]
+            if proof.get("proof_id") == item.get("value", {}).get("geometry_reference"):
+                provenance["geometry_status"] = "geometry_confirmed"
+                provenance["geometry_acceptance"] = {"proof_id": proof["proof_id"],
+                    "reviewer": str(decision.get("reviewer", "")).strip(),
+                    "decided_at": decision.get("reviewed_at") or timestamp(),
+                    "trace_id": proof.get("trace_id"), "calibration": deepcopy(proof.get("calibration")),
+                    "comparison_tolerance": deepcopy(proof.get("comparison_tolerance", {})),
+                    "source_fingerprints": deepcopy(proof.get("source_fingerprints", {})),
+                    "supporting_proofs": deepcopy(proof.get("supporting_proofs", [proof]))}
         try:
             target, bucket, key, record, fill = prepare_record(item["kind"], value, trial, provenance)
             rows = trial[target][bucket]

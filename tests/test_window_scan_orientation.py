@@ -101,12 +101,11 @@ def main():
         root = Path(temporary)
         ai_input = {"source_pdf": "synthetic-test-only", "drawing_set": {"pages": pages[:9]}}
         (root / "ai_input.json").write_text(json.dumps(ai_input))
-        (root / "vision_extraction_settings.json").write_text(json.dumps({"owner_opt_in": True, "max_budget_aud": 10}))
+        (root / "vision_extraction_settings.json").write_text(json.dumps({"owner_opt_in": True}))
         project = {"id": "test", "review_dir": str(root)}
         web = type("Web", (), {"project_by_id": staticmethod(lambda _: project), "safe_link": staticmethod(lambda path: "/safe/" + Path(path).name)})()
         old_render = window_scan_service._page_image
         old_factory = window_scan_service.PROVIDER_FACTORY
-        old_rate = os.environ.get("ARCHIE_WINDOW_SCAN_COST_PER_BATCH_AUD")
         calls = []
         class FakeProvider:
             def scan(self, batch):
@@ -122,7 +121,6 @@ def main():
         try:
             window_scan_service._page_image = render
             window_scan_service.PROVIDER_FACTORY = lambda model: FakeProvider()
-            os.environ["ARCHIE_WINDOW_SCAN_COST_PER_BATCH_AUD"] = "1"
             first_job = window_scan_service.post(web, project, {"action": "start", "confirm_all_pages": True})
             for _ in range(100):
                 if window_scan_service.get(web, project)["job"]["status"] == "failed": break
@@ -143,8 +141,6 @@ def main():
         finally:
             window_scan_service._page_image = old_render
             window_scan_service.PROVIDER_FACTORY = old_factory
-            if old_rate is None: os.environ.pop("ARCHIE_WINDOW_SCAN_COST_PER_BATCH_AUD", None)
-            else: os.environ["ARCHIE_WINDOW_SCAN_COST_PER_BATCH_AUD"] = old_rate
 
 
 if __name__ == "__main__": main()

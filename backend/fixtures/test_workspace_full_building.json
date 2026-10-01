@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "fixture_id": "archie-full-building-workflow-v1",
+  "label": "Deterministic test-only full-building workflow",
+  "warning": "Synthetic areas and boundaries exist only to exercise the local test workflow. They are not extracted from the PDF and must never be used as project or engineering evidence.",
+  "plan_page": 21,
+  "level_name": "Unassigned level",
+  "scale_mm_per_px": 10,
+  "rooms": [
+    {"label": "Bar", "area_m2": 18, "preliminary_profile_id": "hospitality", "space_scope": "comfort_hvac", "origin": "test_fixture_assumption", "confidence": 0.9, "rectangle_px": [0, 0, 300, 600]},
+    {"label": "Cool Room", "area_m2": 8, "preliminary_profile_id": "generic_conditioned_room", "space_scope": "refrigeration_process", "origin": "test_fixture_assumption", "confidence": 0.9, "rectangle_px": [320, 0, 520, 400]},
+    {"label": "Freezer", "area_m2": 6, "preliminary_profile_id": "generic_conditioned_room", "space_scope": "refrigeration_process", "origin": "test_fixture_assumption", "confidence": 0.9, "rectangle_px": [540, 0, 740, 300]},
+    {"label": "Kitchen", "area_m2": 52, "preliminary_profile_id": "hospitality", "space_scope": "comfort_hvac_with_process_exception", "origin": "test_fixture_assumption", "confidence": 0.9, "rectangle_px": [760, 0, 1280, 1000]},
+    {"label": "Shop", "area_m2": 116, "preliminary_profile_id": "retail", "space_scope": "comfort_hvac", "origin": "test_fixture_assumption", "confidence": 0.9, "rectangle_px": [1300, 0, 1880, 2000]}
+  ],
+  "envelope": {
+    "surfaces": [
+      {"surface_key": "fixture-bar-east-wall", "label": "Synthetic east external wall — Bar", "owner_room_label": "Bar", "owner_level_name": "Unassigned level", "physical_type": "wall", "thermal_role": "external", "external_exposure": "external", "orientation": "E", "gross_area_m2": 20.0, "opening_coverage": "complete", "confidence": 0.9, "page": 21, "excerpt": "Test fixture only: synthetic external wall area."}
+    ],
+    "openings": [
+      {"opening_key": "fixture-bar-opening-01", "label": "Synthetic east opening — Bar", "owner_room_label": "Bar", "owner_level_name": "Unassigned level", "host_surface_key": "fixture-bar-east-wall", "external_exposure": "external", "orientation": "E", "width_m": 2.0, "height_m": 1.5, "quantity": 1, "opening_area_m2": 3.0, "explicit_glass_area_m2": 2.7, "shading_category": "unshaded", "confidence": 0.9, "page": 23, "excerpt": "Test fixture only: synthetic opening geometry."}
+    ]
+  },
+  "ahu_candidate": {
+    "ahu_id": "ahu-test-01", "name": "Fixture AHU — draft only", "system_type": "single_zone_constant_volume", "number_off": 1,
+    "source": "Test-only deterministic fixture — not project or engineering evidence.", "confidence": 0.9,
+    "rationale": "Exercises preliminary Stage 9 assembly; not a claim about the PDF.",
+    "airflow_records": [
+      {"path_id": "fixture-supply", "path_type": "supply", "flow_lps": 1000},
+      {"path_id": "fixture-return", "path_type": "return", "flow_lps": 850, "state": {"dry_bulb_c": 24, "wet_bulb_c": 18, "pressure_kpa": 101.325}},
+      {"path_id": "fixture-outside-air", "path_type": "outside_air", "flow_lps": 150}
+    ],
+    "fans": [{"tag": "fixture-fan", "location": "supply", "heat_kw": 2.5}],
+    "duct_effects": [{"tag": "fixture-duct", "sensible_kw": 0.5}],
+    "coils": [{"tag": "fixture-coil", "leaving_db_c": 13, "leaving_wb_c": 12}]
+  },
+  "plant_candidate": {
+    "plant_id": "plant-test-chiller-01", "name": "Fixture chiller — draft only", "plant_type": "chiller", "number_off": 1,
+    "duty_basis": "combined_equipment", "served_ahu_ids": ["ahu-test-01"],
+    "source": "Test-only deterministic fixture — not project or engineering evidence.", "confidence": 0.9,
+    "circuits": [
+      {"circuit_id": "fixture-chw-01", "name": "Fixture chilled-water circuit", "circuit_type": "chilled_water", "served_ahu_ids": ["ahu-test-01"],
+       "flow_lps": 100, "supply_temperature_c": 7, "return_temperature_c": 12,
+       "pumps": [{"pump_id": "fixture-pump-01", "power_kw": 0.2, "number_off": 1}],
+       "pipe_effects": [{"pipe_id": "fixture-pipe-01", "effect_kw": 0.1}]}
+    ]
+  },
+  "expected": {"rooms": {"total": 5, "resolved": 5, "comfort_included": 3, "refrigeration_excluded": 2}, "surface_candidates": 1, "opening_candidates": 1, "ahu_candidates": 1, "plant_candidates": 1, "report_status": "draft", "review_ready": false}
+}

@@ -1,6 +1,7 @@
 """Readiness and scope rules for the authoritative hourly cooling workflow."""
 
 from copy import deepcopy
+from ai.moisture_loads import empty_moisture_method_gate, moisture_method_gate_is_approved, validate_moisture_method_gate
 
 
 COMPONENT_LABELS = {
@@ -53,9 +54,13 @@ def room_component_issues(model):
             if state == "stored_not_calculated":
                 value = component.get("value")
                 unit = component.get("unit", "")
+                if component.get("component_type") in {"vapour_gain", "process_latent_load"}:
+                    reason = f"{label} ({value:g} {unit}) is stored but excluded until it is marked calculated with a cited method and dedicated schedule."
+                else:
+                    reason = f"{label} ({value:g} {unit}) is stored but excluded until an approved calculation method exists."
                 issues.append(issue(
                     "draft", "room", room_id,
-                    f"{label} ({value:g} {unit}) is stored but excluded until an approved calculation method exists.",
+                    reason,
                     "hourly_load_model", component.get("citations", []), component.get("source", ""),
                 ))
             elif state == "not_assessed":
@@ -67,14 +72,26 @@ def room_component_issues(model):
     return issues
 
 
-def assess_cooling_readiness(report, model, requirements_updated_at="", coverage=None, envelope_input=None):
+def assess_cooling_readiness(report, model, requirements_updated_at="", coverage=None, envelope_input=None, moisture_gate=None):
     """Classify a calculated report as blocked, draft, or review-ready.
 
     `validated` is deliberately never emitted here; it belongs to the later
     authorised benchmark gate rather than normal input completion.
     """
     coverage = coverage or {}
+    moisture_gate = validate_moisture_method_gate(moisture_gate or empty_moisture_method_gate())
     issues = topology_issues(model, requirements_updated_at) + room_component_issues(model)
+    calculated_moisture = [
+        (room, component) for room in model.get("rooms", []) for component in room.get("unapproved_components", [])
+        if component.get("component_type") in {"vapour_gain", "steam_gain", "process_latent_load"}
+        and component.get("calculation_status") == "calculated"
+    ]
+    if calculated_moisture and not moisture_method_gate_is_approved(moisture_gate):
+        issues.extend(issue(
+            "draft", "room", room.get("room_id", ""),
+            f"{component.get('component_type')} is calculated with the provisional moisture method; engineer approval is required before review-ready use.",
+            "moisture_method_gate", component.get("citations", []), component.get("source", ""),
+        ) for room, component in calculated_moisture)
     for reason in report.get("blocked_reasons", []):
         issues.append(issue("blocked", "project", "project", reason, "hourly_cooling_report"))
     active_room_ids = [room.get("room_id", "") for room in model.get("rooms", [])]
@@ -152,6 +169,7 @@ def assess_cooling_readiness(report, model, requirements_updated_at="", coverage
     incomplete_component_rooms = [row["room_id"] for row in room_input_coverage if row["status"] != "complete"]
     complete_scope = (bool(active_room_ids) and set(active_room_ids) == included_room_ids
                       and not blocked_rooms and not incomplete_component_rooms
+                      and (not calculated_moisture or moisture_method_gate_is_approved(moisture_gate))
                       and not (envelope_input or {}).get("draft_only", []))
     if not included_room_ids:
         status = "blocked"

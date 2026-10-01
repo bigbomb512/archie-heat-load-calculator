@@ -15,13 +15,19 @@ from ai.heat_loads import (
     humidity_ratio_from_db_wb,
     moist_air_enthalpy_kj_kg,
     specific_volume_m3_kg,
+    wet_bulb_method_id,
 )
 from ai.site_design_conditions import validate_citations
 
 
 SYSTEM_TYPES = {"single_zone_constant_volume", "vav"}
 NODE_TYPES = {"outside_air", "return_air", "mixed_air", "supply_air", "room_return", "exhaust_air", "relief_air", "make_up_air"}
-PATH_TYPES = {"supply", "return", "outside_air", "exhaust", "relief", "make_up", "leakage"}
+PATH_TYPES = {"supply", "return", "outside_air", "exhaust", "relief", "make_up", "transfer", "leakage"}
+CALCULATED_PATH_ENDPOINTS = {
+    "outside_air": ("outside_air", "mixed_air"),
+    "return": ("room_return", "return_air"),
+    "supply": ("mixed_air", "supply_air"),
+}
 STATUSES = {"missing", "provisional", "confirmed"}
 METHOD_ID = "ahu_airside_cooling_v1"
 
@@ -155,6 +161,7 @@ def validate_air_side_model(raw, ahu_ids=None, zone_ids=None):
         if not isinstance(result[key], list):
             raise ValueError(f"Air-side {key} must be a list.")
     seen_paths = set()
+    return_state_ahus = set()
     paths = []
     for index, item in enumerate(result["airflow_records"], start=1):
         if not isinstance(item, dict):
@@ -171,9 +178,19 @@ def validate_air_side_model(raw, ahu_ids=None, zone_ids=None):
         row["destination_node"] = str(item.get("destination_node", "")).strip()
         if row["source_node"] not in NODE_TYPES or row["destination_node"] not in NODE_TYPES:
             raise ValueError(f"Airflow record {index} needs supported source and destination nodes.")
+        expected_endpoints = CALCULATED_PATH_ENDPOINTS.get(row["path_type"])
+        if expected_endpoints and (row["source_node"], row["destination_node"]) != expected_endpoints:
+            raise ValueError(
+                f"Airflow record {index} {row['path_type']} path must connect "
+                f"{expected_endpoints[0]} to {expected_endpoints[1]} in V1."
+            )
         row["flow_lps"], row["airflow_basis"] = _airflow_lps(item, f"airflow record {index}", required=row["review_status"] == "confirmed")
         row["schedule"] = _profile(item.get("schedule", []), f"airflow record {index} schedule")
         row["state"] = deepcopy(item.get("state") or {})
+        if row["path_type"] == "return" and row["state"]:
+            if row["ahu_id"] in return_state_ahus:
+                raise ValueError(f"AHU '{row['ahu_id']}' has multiple return-air state records; V1 requires one unambiguous return-air state.")
+            return_state_ahus.add(row["ahu_id"])
         path_key = (row["ahu_id"], row["zone_id"], row["path_type"], row["source_node"], row["destination_node"])
         if path_key in seen_paths:
             raise ValueError(f"Duplicate air path for {path_key}.")
@@ -182,16 +199,28 @@ def validate_air_side_model(raw, ahu_ids=None, zone_ids=None):
     result["airflow_records"] = paths
     for key in ("fans", "duct_effects", "leakage", "heat_recovery", "preconditioning", "coils"):
         result[key] = [_validate_component(row, key, ahu_ids, zone_ids, index) for index, row in enumerate(result[key], start=1)]
+    # The V1 calculator consumes one effectiveness/coil record per AHU. It
+    # previously selected the first record, making results depend on list
+    # order when duplicate records were supplied.
+    for key in ("heat_recovery", "preconditioning", "coils"):
+        seen_ahu_ids = set()
+        for row in result[key]:
+            if row["ahu_id"] in seen_ahu_ids:
+                label = key.replace("_", " ")
+                raise ValueError(f"AHU '{row['ahu_id']}' has multiple {label} records; V1 accepts at most one.")
+            seen_ahu_ids.add(row["ahu_id"])
     result["updated_at"] = str(raw.get("updated_at", "") or "")
     return result
 
 
-def calculate_ahu_report(room_report, systems_raw, model_raw, gate_raw, *, selected_ahu_ids=None, scenario_ids=None, snapshot_fingerprint=""):
+def calculate_ahu_report(room_report, systems_raw, model_raw, gate_raw, *, selected_ahu_ids=None, scenario_ids=None, snapshot_fingerprint="", preliminary_policy=None):
     gate = validate_air_side_method_gate(gate_raw or empty_air_side_method_gate())
     systems = validate_ahu_systems(systems_raw or empty_ahu_systems())
     ahu_ids = {row["ahu_id"] for row in systems["systems"]}
     model = validate_air_side_model(model_raw or empty_air_side_model(), ahu_ids)
-    selected = set(selected_ahu_ids or ahu_ids)
+    selected = set(ahu_ids if selected_ahu_ids is None else selected_ahu_ids)
+    if not selected:
+        return _blocked_report(systems, "At least one AHU must be selected for calculation.", snapshot_fingerprint, gate)
     unknown = selected - ahu_ids
     if unknown:
         raise ValueError("Unknown AHU IDs: " + ", ".join(sorted(unknown)))
@@ -210,12 +239,18 @@ def calculate_ahu_report(room_report, systems_raw, model_raw, gate_raw, *, selec
         report["blocked_ahus"] = [{"ahu_id": ahu, "reasons": ["Current hourly room-load report is unavailable."]} for ahu in sorted(selected)]
         return report
     room_lookup_by_scenario = {row.get("scenario_id"): row for row in room_report.get("scenario_results", [])}
-    wanted_scenarios = scenario_ids or list(room_lookup_by_scenario)
+    wanted_scenarios = list(room_lookup_by_scenario) if scenario_ids is None else list(scenario_ids)
+    missing_scenarios = [scenario_id for scenario_id in wanted_scenarios if scenario_id not in room_lookup_by_scenario]
+    if not wanted_scenarios or missing_scenarios:
+        reason = ("At least one cooling scenario must be selected for calculation." if not wanted_scenarios
+                  else "Selected cooling scenario(s) are missing from the current room-load report: " + ", ".join(missing_scenarios) + ".")
+        report["blocked_ahus"] = [{"ahu_id": ahu, "reasons": [reason]} for ahu in sorted(selected)]
+        return report
     for scenario_id in wanted_scenarios:
         scenario = room_lookup_by_scenario.get(scenario_id)
         if not scenario:
             continue
-        result = _calculate_scenario(scenario, [row for row in systems["systems"] if row["ahu_id"] in selected], model, gate)
+        result = _calculate_scenario(scenario, [row for row in systems["systems"] if row["ahu_id"] in selected], model, gate, preliminary_policy=preliminary_policy)
         report["scenario_results"].append(result)
     if not report["scenario_results"]:
         report["blocked_ahus"] = [{"ahu_id": ahu, "reasons": ["No selected cooling scenario is available in the current room-load report."]} for ahu in sorted(selected)]
@@ -224,33 +259,38 @@ def calculate_ahu_report(room_report, systems_raw, model_raw, gate_raw, *, selec
     if not usable:
         report["blocked_ahus"] = [item for row in report["scenario_results"] for item in row.get("blocked_ahus", [])]
         return report
-    report["status"] = "review_ready" if air_side_gate_is_approved(gate) and all(row["status"] == "review_ready" for row in usable) else "draft"
+    all_scenarios_usable = len(usable) == len(report["scenario_results"])
+    report["status"] = "draft" if preliminary_policy else "review_ready" if all_scenarios_usable and air_side_gate_is_approved(gate) and all(row["status"] == "review_ready" for row in usable) else "draft"
+    if preliminary_policy:
+        report["label"] = "AI preliminary estimate — not engineering reviewed or validated"
+        report["calculation_mode"] = "ai_preliminary"
     report["included_scope_peak"] = _governing(usable, "included_scope_peak")
-    if report["status"] == "review_ready" and len(usable) == len(report["scenario_results"]):
+    if report["status"] == "review_ready":
         report["project_peak"] = deepcopy(report["included_scope_peak"])
     elif report["included_scope_peak"]:
         report["warnings"].append("Project AHU peak is suppressed until every selected AHU and scenario is review-ready.")
     return report
 
 
-def _calculate_scenario(scenario, systems, model, gate):
+def _calculate_scenario(scenario, systems, model, gate, preliminary_policy=None):
     result = {"scenario_id": scenario.get("scenario_id", ""), "status": "blocked", "ahus": [], "included_scope_hours": [], "included_scope_peak": {}, "blocked_ahus": []}
     room_rows = {row.get("room_id"): row for row in scenario.get("rooms", [])}
     zone_rows = {row.get("zone_id"): row for row in scenario.get("zones", [])}
     for system in systems:
         rooms = [row for row in scenario.get("rooms", []) if row.get("zone_id") in system["served_zone_ids"]]
         reasons = []
-        if system["review_status"] != "confirmed":
+        allowed_statuses = set((preliminary_policy or {}).get("allowed_review_statuses", {"confirmed"}))
+        if system["review_status"] not in allowed_statuses:
             reasons.append("AHU system review is not confirmed.")
         if not rooms:
             reasons.append("AHU has no calculated served rooms in this scenario.")
         path_rows = [row for row in model["airflow_records"] if row["ahu_id"] == system["ahu_id"]]
         if not path_rows:
             reasons.append("AHU has no reviewed air paths.")
-        if any(row.get("review_status") != "confirmed" for row in path_rows):
+        if any(row.get("review_status") not in allowed_statuses for row in path_rows):
             reasons.append("Every active AHU air path must be confirmed and cited.")
         for kind in ("fans", "duct_effects", "leakage", "heat_recovery", "preconditioning", "coils"):
-            if any(row.get("ahu_id") == system["ahu_id"] and row.get("review_status") != "confirmed" for row in model.get(kind, [])):
+            if any(row.get("ahu_id") == system["ahu_id"] and row.get("review_status") not in allowed_statuses for row in model.get(kind, [])):
                 reasons.append(f"Every configured {kind.replace('_', ' ')} input must be confirmed and cited.")
         if system["system_type"] == "vav":
             missing_terminals = [zone_id for zone_id in system["served_zone_ids"] if not any(row.get("path_type") == "supply" and row.get("zone_id") == zone_id and row.get("flow_lps", 0) > 0 for row in path_rows)]
@@ -269,7 +309,7 @@ def _calculate_scenario(scenario, systems, model, gate):
                 result["blocked_ahus"].append({"ahu_id": system["ahu_id"], "hour": hour, "reasons": flow_issues})
                 continue
             try:
-                airside = _airside_hour(system, model, scenario, paths, room_load, hour)
+                airside = _airside_hour(system, model, scenario, paths, room_load, hour, preliminary_policy=preliminary_policy)
             except ValueError as error:
                 result["blocked_ahus"].append({"ahu_id": system["ahu_id"], "hour": hour, "reasons": [str(error)]})
                 continue
@@ -279,7 +319,7 @@ def _calculate_scenario(scenario, systems, model, gate):
         if len(hours) != 24:
             continue
         peak = _peak(hours)
-        result["ahus"].append({"ahu_id": system["ahu_id"], "name": system["name"], "system_type": system["system_type"], "number_off": system["number_off"], "served_zone_ids": system["served_zone_ids"], "room_ids": [row.get("room_id") for row in rooms], "hours": hours, "peak": peak, "status": "review_ready" if air_side_gate_is_approved(gate) else "draft"})
+        result["ahus"].append({"ahu_id": system["ahu_id"], "name": system["name"], "system_type": system["system_type"], "number_off": system["number_off"], "served_zone_ids": system["served_zone_ids"], "room_ids": [row.get("room_id") for row in rooms], "hours": hours, "peak": peak, "status": "draft" if preliminary_policy else "review_ready" if air_side_gate_is_approved(gate) else "draft"})
     complete = len(result["ahus"]) == len(systems) and not result["blocked_ahus"]
     result["status"] = "review_ready" if complete and all(row["status"] == "review_ready" for row in result["ahus"]) else "draft" if result["ahus"] else "blocked"
     if result["ahus"]:
@@ -288,55 +328,114 @@ def _calculate_scenario(scenario, systems, model, gate):
     return result
 
 
-def _airside_hour(system, model, scenario, paths, room_load, hour):
+def _airside_hour(system, model, scenario, paths, room_load, hour, preliminary_policy=None):
+    if room_load.get("weather_provenance_conflict"):
+        raise ValueError("Served rooms disagree on outdoor psychrometric weather provenance or wet-bulb basis.")
     weather = next((row for row in scenario.get("hours", []) if row.get("hour") == hour), None)
+    room_weather = room_load.get("weather_provenance") or {}
+    if not weather and room_weather:
+        weather = {
+            "outdoor_dry_bulb_c": room_weather.get("dry_bulb", {}).get("value"),
+            "outdoor_wet_bulb_c": room_weather.get("wet_bulb", {}).get("value"),
+            "outdoor_wet_bulb_basis": room_weather.get("wet_bulb_basis"),
+        }
     if not weather:
         raise ValueError("Scenario weather hour is missing.")
-    outdoor = _state(weather["outdoor_dry_bulb_c"], weather["outdoor_wet_bulb_c"], scenario.get("atmospheric_pressure_kpa"), "outdoor")
-    flows = {kind: sum(row["flow_lps"] * _schedule_factor(row.get("schedule", []), hour) for row in paths if row["path_type"] == kind) for kind in PATH_TYPES}
-    flows["leakage"] += sum(row["airflow_lps"] * _schedule_factor(row.get("schedule", []), hour) for row in model["leakage"] if row.get("ahu_id") == system["ahu_id"] and row.get("review_status") == "confirmed")
+    room_basis = room_load.get("components", {}).get("outside_air", {}).get("outdoor_wet_bulb_basis")
+    outdoor_basis = weather.get("outdoor_wet_bulb_basis") or room_basis or "legacy_unverified"
+    pressure = scenario.get("atmospheric_pressure_kpa") or room_weather.get("pressure") or room_weather.get("pressure_kpa")
+    outdoor = _state(weather["outdoor_dry_bulb_c"], weather["outdoor_wet_bulb_c"], pressure, "outdoor", outdoor_basis)
+    flow_types = set(PATH_TYPES)
+    if not any(row.get("path_type") == "transfer" for row in paths):
+        flow_types.discard("transfer")
+    flows = {kind: sum(row["flow_lps"] * _schedule_factor(row.get("schedule", []), hour) for row in paths if row["path_type"] == kind) for kind in flow_types}
+    allowed_statuses = set((preliminary_policy or {}).get("allowed_review_statuses", {"confirmed"}))
+    flows["leakage"] += sum(row["airflow_lps"] * _schedule_factor(row.get("schedule", []), hour) for row in model["leakage"] if row.get("ahu_id") == system["ahu_id"] and row.get("review_status") in allowed_statuses)
+    unsupported_airflows = {
+        "make_up": "make-up",
+        "transfer": "transfer-air",
+        "leakage": "leakage",
+        "exhaust": "exhaust",
+        "relief": "relief",
+    }
+    for flow_type, label in unsupported_airflows.items():
+        if flows.get(flow_type, 0.0) > 0:
+            raise ValueError(f"Positive {label} airflow is not included in V1 mixed-air psychrometrics; its state and coil ownership must be resolved before AHU loads can be calculated.")
     return_flow = flows["return"]
     if return_flow <= 0:
         raise ValueError("A positive return-air flow is required for mixed-air calculation.")
-    fixed = next((row for row in model["airflow_records"] if row["ahu_id"] == system["ahu_id"] and row["path_type"] == "return" and row.get("state")), None)
+    fixed = next((row for row in model["airflow_records"] if row["ahu_id"] == system["ahu_id"] and row["path_type"] == "return" and row.get("state") and row.get("review_status") in allowed_statuses), None)
     if not fixed:
         raise ValueError("Reviewed return-air state is required.")
-    return_state = _state(fixed["state"].get("dry_bulb_c"), fixed["state"].get("wet_bulb_c"), scenario.get("atmospheric_pressure_kpa"), "return")
-    mixed = _mix_states([(outdoor, flows["outside_air"] + flows["leakage"]), (return_state, return_flow)], scenario.get("atmospheric_pressure_kpa"))
-    recovery = _component_for(model["heat_recovery"], system["ahu_id"])
+    return_basis = fixed["state"].get("wet_bulb_basis", "legacy_unverified")
+    return_state = _state(fixed["state"].get("dry_bulb_c"), fixed["state"].get("wet_bulb_c"), pressure, "return", return_basis)
+    mixed = _mix_states([(outdoor, flows["outside_air"] + flows["leakage"]), (return_state, return_flow)], pressure)
+    recovery = _component_for(model["heat_recovery"], system["ahu_id"], allowed_statuses)
     if recovery:
-        exhaust_record = next((row for row in model["airflow_records"] if row["ahu_id"] == system["ahu_id"] and row["path_type"] == "exhaust" and row.get("state")), None)
+        exhaust_record = next((row for row in model["airflow_records"] if row["ahu_id"] == system["ahu_id"] and row["path_type"] == "exhaust" and row.get("state") and row.get("review_status") in allowed_statuses), None)
         exhaust_data = recovery.get("exhaust_state") or (exhaust_record or {}).get("state")
         if not exhaust_data:
             raise ValueError("Heat recovery requires an explicit return/exhaust state.")
-        exhaust_state = _state(exhaust_data.get("dry_bulb_c"), exhaust_data.get("wet_bulb_c"), scenario.get("atmospheric_pressure_kpa"), "heat-recovery exhaust")
-        mixed = _effectiveness_state(mixed, exhaust_state, recovery, scenario.get("atmospheric_pressure_kpa"), "heat recovery")
-    precondition = _component_for(model["preconditioning"], system["ahu_id"])
+        exhaust_state = _state(exhaust_data.get("dry_bulb_c"), exhaust_data.get("wet_bulb_c"), pressure, "heat-recovery exhaust", exhaust_data.get("wet_bulb_basis", "legacy_unverified"))
+        mixed = _effectiveness_state(mixed, exhaust_state, recovery, pressure, "heat recovery")
+    precondition = _component_for(model["preconditioning"], system["ahu_id"], allowed_statuses)
     if precondition:
-        mixed = _effectiveness_state(mixed, _state(precondition.get("reference_db_c", return_state["dry_bulb_c"]), precondition.get("reference_wb_c", return_state["wet_bulb_c"]), scenario.get("atmospheric_pressure_kpa"), "preconditioning reference"), precondition, scenario.get("atmospheric_pressure_kpa"), "preconditioning")
-    coil = _component_for(model["coils"], system["ahu_id"])
+        mixed = _effectiveness_state(mixed, _state(precondition.get("reference_db_c", return_state["dry_bulb_c"]), precondition.get("reference_wb_c", return_state["wet_bulb_c"]), pressure, "preconditioning reference", precondition.get("wet_bulb_basis", "legacy_unverified")), precondition, pressure, "preconditioning")
+    upstream_fan_heat = [
+        row for row in model["fans"]
+        if row.get("ahu_id") == system["ahu_id"]
+        and row.get("review_status") in allowed_statuses
+        and row.get("location") in {"return", "mixed_air"}
+        and row.get("heat_kw", 0.0) > 0
+    ]
+    if upstream_fan_heat:
+        raise ValueError("Positive return- or mixed-air fan heat is not applied to the coil-inlet state in V1; resolve the fan heat transfer before calculating AHU loads.")
+    coil = _component_for(model["coils"], system["ahu_id"], allowed_statuses)
     if not coil:
         raise ValueError("Reviewed coil leaving state is required.")
-    leaving = _state(coil.get("leaving_db_c"), coil.get("leaving_wb_c"), scenario.get("atmospheric_pressure_kpa"), "coil leaving")
+    leaving = _state(coil.get("leaving_db_c"), coil.get("leaving_wb_c"), pressure, "coil leaving", coil.get("wet_bulb_basis", "legacy_unverified"))
     total_flow = flows["supply"]
     if total_flow <= 0:
         raise ValueError("Positive supply airflow is required.")
-    volume = specific_volume_m3_kg(mixed["dry_bulb_c"], mixed["humidity_ratio"], scenario.get("atmospheric_pressure_kpa"))
-    mass_flow = total_flow / 1000 / volume
-    total = mass_flow * (mixed["enthalpy_kj_kg"] - leaving["enthalpy_kj_kg"])
-    sensible = mass_flow * 1.006 * (mixed["dry_bulb_c"] - leaving["dry_bulb_c"])
-    if not math.isfinite(total) or total <= 0:
-        raise ValueError("Coil leaving state must produce a positive cooling enthalpy reduction.")
-    fan = _sum_component(model["fans"], system["ahu_id"], "heat_kw")
-    duct = _sum_component(model["duct_effects"], system["ahu_id"], "sensible_kw")
+    pressure_value = pressure.get("value") if isinstance(pressure, dict) else pressure
+    coil_duty = _coil_cooling_duty(mixed, leaving, total_flow, pressure_value)
+    total = coil_duty["total_kw"]
+    sensible = coil_duty["sensible_kw"]
+    outdoor_volume = specific_volume_m3_kg(outdoor["dry_bulb_c"], outdoor["humidity_ratio"], pressure_value)
+    outdoor_air_mass_flow = flows["outside_air"] / 1000 / outdoor_volume
+    outside_air_fraction = min(1.0, outdoor_air_mass_flow / coil_duty["dry_air_mass_flow_kg_s"])
+    fan = _sum_component(model["fans"], system["ahu_id"], "heat_kw", allowed_statuses)
+    duct = _sum_component(model["duct_effects"], system["ahu_id"], "sensible_kw", allowed_statuses)
     leakage = flows["leakage"]
+    pressure_record = deepcopy(pressure) if isinstance(pressure, dict) else {"value": pressure, "status": "not_recorded", "source": "", "citations": []}
+    weather_record = room_weather or {}
+    psychrometric_provenance = {
+        "scenario_id": scenario.get("scenario_id", ""),
+        "outdoor": {"dry_bulb": deepcopy(weather_record.get("dry_bulb", {})), "wet_bulb": deepcopy(weather_record.get("wet_bulb", {})), "wet_bulb_basis": outdoor_basis},
+        "pressure": pressure_record,
+        "return_air": {"state": return_state, "wet_bulb_basis": return_basis, "source": fixed.get("source", ""), "review_status": fixed.get("review_status", "missing"), "citations": deepcopy(fixed.get("citations", []))},
+        "coil_leaving": {"state": leaving, "wet_bulb_basis": leaving["wet_bulb_basis"], "source": coil.get("source", ""), "review_status": coil.get("review_status", "missing"), "citations": deepcopy(coil.get("citations", []))},
+        "coil_sensible_split": {
+            "basis": coil_duty["sensible_split_basis"],
+            "specific_heat_kj_kg_da_k": coil_duty["sensible_specific_heat_kj_kg_da_k"],
+            "latent_definition": "total coil duty minus reported sensible duty",
+            "review_status": "unvalidated_component_convention",
+        },
+        "supply_airflow_reference": {
+            "basis": coil_duty["airflow_reference_basis"],
+            "state": deepcopy(coil_duty["airflow_reference_state"]),
+            "source": "Assumed at mixed-air coil inlet because the airflow record has no explicit volumetric reference condition.",
+            "verified": False,
+        },
+    }
     return {
-        "flows_lps": flows, "flow_balance_lps": round(flows["outside_air"] + flows["return"] + flows["make_up"] - flows["supply"] - flows["exhaust"] - flows["relief"], 6),
+        "flows_lps": flows, "flow_balance_lps": round(flows["outside_air"] + flows["return"] + flows["make_up"] + flows.get("transfer", 0) - flows["supply"] - flows["exhaust"] - flows["relief"], 6),
         "room_load_excluding_central_outside_air": room_load["room_load_excluding_outside_air"],
-        "outside_air_conditioning": round(max(0.0, total * (flows["outside_air"] / total_flow)), 6),
+        "outside_air_conditioning": round(max(0.0, total * outside_air_fraction), 6),
         "fan_heat_kw": round(fan, 6), "duct_effect_kw": round(duct, 6), "duct_leakage_lps": round(leakage, 6),
-        "mixed_air_state": mixed, "coil_leaving_state": leaving,
-        "coil_sensible_kw": round(sensible, 6), "coil_latent_kw": round(total - sensible, 6), "coil_total_kw": round(total, 6),
+        "mixed_air_state": mixed, "coil_leaving_state": leaving, "psychrometric_provenance": psychrometric_provenance,
+        "coil_sensible_kw": round(sensible, 6), "coil_latent_kw": round(coil_duty["latent_kw"], 6), "coil_total_kw": round(total, 6),
+        "coil_condensate_kg_s": round(coil_duty["condensate_kg_s"], 9),
         "heat_recovery": deepcopy(recovery or {}), "preconditioning": deepcopy(precondition or {}),
         "design_total_kw": round((total + fan + duct) * system["number_off"], 6),
     }
@@ -348,39 +447,114 @@ def _room_load_at_hour(rooms, hour):
     latent = 0.0
     outside = 0.0
     components = {}
+    weather_provenance = {}
     for room in rooms:
         row = next((item for item in room.get("hours", []) if item.get("hour") == hour), None)
         if not row:
             continue
         sensible += row.get("subtotal_sensible_kw", 0.0)
         latent += row.get("subtotal_latent_kw", 0.0)
-        subtotal += row.get("design_total_kw", row.get("subtotal_kw", 0.0))
+        # AHU room-load reconciliation is on an unfactored component basis;
+        # the central coil calculation is derived from air states and must not
+        # mix a room-level safety allowance with un-factored outside air.
+        subtotal += row.get("subtotal_kw", row.get("subtotal_sensible_kw", 0.0) + row.get("subtotal_latent_kw", 0.0))
         for name, component in row.get("components", {}).items():
+            if name == "outside_air":
+                provenance = component.get("inputs", {}).get("outdoor_weather_provenance")
+                if provenance:
+                    weather_provenance[room.get("room_id", "")] = deepcopy(provenance)
             current = components.setdefault(name, {"sensible_kw": 0.0, "latent_kw": 0.0, "total_kw": 0.0})
+            if name == "outside_air":
+                inputs = component.get("inputs", {})
+                for basis_key in ("indoor_wet_bulb_basis", "outdoor_wet_bulb_basis", "indoor_wet_bulb_method", "outdoor_wet_bulb_method"):
+                    if basis_key in inputs:
+                        current[basis_key] = inputs[basis_key]
             for key in ("sensible_kw", "latent_kw", "total_kw"):
                 current[key] = round(current[key] + component.get(key, 0.0), 6)
         outside += row.get("components", {}).get("outside_air", {}).get("total_kw", 0.0)
-    return {"sensible_kw": round(sensible, 6), "latent_kw": round(latent, 6), "design_total_kw": round(subtotal, 6), "components": components, "outside_air_kw": round(outside, 6), "room_load_excluding_outside_air": {"sensible_kw": round(sensible - components.get("outside_air", {}).get("sensible_kw", 0.0), 6), "latent_kw": round(latent - components.get("outside_air", {}).get("latent_kw", 0.0), 6), "design_total_kw": round(subtotal - outside, 6)}}
+    selected_weather = next(iter(weather_provenance.values()), {})
+    conflict = any(record != selected_weather for record in weather_provenance.values())
+    if conflict:
+        selected_weather = {}
+    return {"sensible_kw": round(sensible, 6), "latent_kw": round(latent, 6), "subtotal_kw": round(subtotal, 6), "design_total_kw": round(subtotal, 6), "safety_basis": "excludes_room_safety_allowance", "components": components, "weather_provenance": selected_weather, "weather_provenance_by_room": weather_provenance, "weather_provenance_conflict": conflict, "outside_air_kw": round(outside, 6), "room_load_excluding_outside_air": {"sensible_kw": round(sensible - components.get("outside_air", {}).get("sensible_kw", 0.0), 6), "latent_kw": round(latent - components.get("outside_air", {}).get("latent_kw", 0.0), 6), "subtotal_kw": round(subtotal - outside, 6), "design_total_kw": round(subtotal - outside, 6), "safety_basis": "excludes_room_safety_allowance"}}
 
 
-def _state(db, wb, pressure, label):
+def _state(db, wb, pressure, label, wet_bulb_basis="legacy_unverified"):
     if isinstance(db, dict): db = db.get("value")
     if isinstance(wb, dict): wb = wb.get("value")
     if isinstance(pressure, dict): pressure = pressure.get("value")
     if db is None or wb is None or pressure is None:
         raise ValueError(f"Complete {label} dry-bulb, wet-bulb, and pressure are required.")
-    ratio = humidity_ratio_from_db_wb(float(db), float(wb), float(pressure))
-    return {"dry_bulb_c": round(float(db), 6), "wet_bulb_c": round(float(wb), 6), "humidity_ratio": round(ratio, 9), "enthalpy_kj_kg": round(moist_air_enthalpy_kj_kg(float(db), ratio), 6), "pressure_kpa": float(pressure)}
+    ratio = humidity_ratio_from_db_wb(float(db), float(wb), float(pressure), wet_bulb_basis)
+    return {"dry_bulb_c": round(float(db), 6), "wet_bulb_c": round(float(wb), 6), "wet_bulb_basis": wet_bulb_basis, "wet_bulb_method": wet_bulb_method_id(wet_bulb_basis), "humidity_ratio": round(ratio, 9), "enthalpy_kj_kg": round(moist_air_enthalpy_kj_kg(float(db), ratio), 6), "pressure_kpa": float(pressure)}
 
 
 def _mix_states(rows, pressure):
-    total_flow = sum(flow for _state_row, flow in rows)
-    if total_flow <= 0:
+    pressure_value = pressure.get("value") if isinstance(pressure, dict) else pressure
+    mass_flows = [
+        flow_lps / 1000.0 / specific_volume_m3_kg(state["dry_bulb_c"], state["humidity_ratio"], pressure_value)
+        for state, flow_lps in rows
+    ]
+    total_mass_flow = sum(mass_flows)
+    if total_mass_flow <= 0:
         raise ValueError("Mixed-air calculation requires positive total airflow.")
-    humidity = sum(state["humidity_ratio"] * flow for state, flow in rows) / total_flow
-    enthalpy = sum(state["enthalpy_kj_kg"] * flow for state, flow in rows) / total_flow
+    humidity = sum(state["humidity_ratio"] * mass_flow for (state, _flow_lps), mass_flow in zip(rows, mass_flows)) / total_mass_flow
+    enthalpy = sum(state["enthalpy_kj_kg"] * mass_flow for (state, _flow_lps), mass_flow in zip(rows, mass_flows)) / total_mass_flow
     db = (enthalpy - 2501 * humidity) / (1.006 + 1.86 * humidity)
-    return {"dry_bulb_c": round(db, 6), "wet_bulb_c": None, "humidity_ratio": round(humidity, 9), "enthalpy_kj_kg": round(enthalpy, 6), "pressure_kpa": pressure.get("value") if isinstance(pressure, dict) else pressure}
+    return {"dry_bulb_c": round(db, 6), "wet_bulb_c": None, "humidity_ratio": round(humidity, 9), "enthalpy_kj_kg": round(enthalpy, 6), "dry_air_mass_flow_kg_s": round(total_mass_flow, 9), "dry_air_stream_mass_flows_kg_s": [round(value, 9) for value in mass_flows], "pressure_kpa": pressure_value}
+
+
+def _coil_cooling_duty(inlet, leaving, volume_flow_lps, pressure_kpa):
+    """Cooling-coil duty with drained-liquid enthalpy in the steady-flow balance.
+
+    The input volume flow is interpreted at the mixed-air (coil inlet) state.
+    That interpretation remains a disclosed limitation because the source
+    airflow records do not yet carry a volumetric reference condition.
+    """
+    specific_volume = specific_volume_m3_kg(inlet["dry_bulb_c"], inlet["humidity_ratio"], pressure_kpa)
+    mass_flow = volume_flow_lps / 1000 / specific_volume
+    humidity_reduction = inlet["humidity_ratio"] - leaving["humidity_ratio"]
+    if humidity_reduction < -1e-9:
+        raise ValueError("Cooling-coil leaving humidity ratio cannot exceed mixed-air inlet humidity ratio.")
+    condensate = max(0.0, humidity_reduction) * mass_flow
+    liquid_enthalpy = _liquid_water_enthalpy_kj_kg(leaving["dry_bulb_c"]) if condensate else 0.0
+    total = mass_flow * (inlet["enthalpy_kj_kg"] - leaving["enthalpy_kj_kg"]) - condensate * liquid_enthalpy
+    sensible = mass_flow * 1.006 * (inlet["dry_bulb_c"] - leaving["dry_bulb_c"])
+    if not math.isfinite(total) or total <= 0:
+        raise ValueError("Coil leaving state must produce a positive cooling enthalpy reduction.")
+    return {
+        "dry_air_mass_flow_kg_s": mass_flow,
+        "airflow_reference_basis": "assumed_at_mixed_air_coil_inlet",
+        "airflow_reference_state": {
+            "dry_bulb_c": inlet["dry_bulb_c"],
+            "humidity_ratio": inlet["humidity_ratio"],
+            "pressure_kpa": pressure_kpa,
+        },
+        "condensate_kg_s": condensate,
+        "condensate_enthalpy_kj_kg": liquid_enthalpy,
+        "total_kw": total,
+        "sensible_kw": sensible,
+        "sensible_split_basis": "dry_air_specific_heat_only",
+        "sensible_specific_heat_kj_kg_da_k": 1.006,
+        "latent_kw": total - sensible,
+    }
+
+
+def _liquid_water_enthalpy_kj_kg(temperature_c):
+    """Linearly interpolate the ASHRAE F25 saturated-liquid enthalpy table.
+
+    The supported interpolation range is 0–30°C. Colder condensate may freeze;
+    temperatures outside the tabulated range are rejected instead of
+    extrapolated.
+    """
+    points = ((0.0, 0.0), (5.0, 21.019), (10.0, 42.021), (15.0, 62.984), (20.0, 83.920), (25.0, 104.84), (30.0, 125.75))
+    temperature = float(temperature_c)
+    if temperature < points[0][0] or temperature > points[-1][0]:
+        raise ValueError("Condensate temperature is outside the supported 0–30°C liquid-water enthalpy table.")
+    for (low_t, low_h), (high_t, high_h) in zip(points, points[1:]):
+        if low_t <= temperature <= high_t:
+            return low_h + (temperature - low_t) * (high_h - low_h) / (high_t - low_t)
+    return points[-1][1]
 
 
 def _effectiveness_state(current, reference, component, pressure, label):
@@ -393,23 +567,28 @@ def _effectiveness_state(current, reference, component, pressure, label):
 
 
 def _path_flows(rows, hour):
-    return {kind: round(sum(row["flow_lps"] * _schedule_factor(row.get("schedule", []), hour) for row in rows if row["path_type"] == kind), 6) for kind in PATH_TYPES}
+    flow_types = set(PATH_TYPES)
+    if not any(row.get("path_type") == "transfer" for row in rows):
+        flow_types.discard("transfer")
+    return {kind: round(sum(row["flow_lps"] * _schedule_factor(row.get("schedule", []), hour) for row in rows if row["path_type"] == kind), 6) for kind in flow_types}
 
 
 def _flow_issues(flows):
     if flows["supply"] <= 0: return ["Positive supply airflow is required."]
     if flows["outside_air"] < 0 or flows["return"] < 0: return ["Airflow cannot be negative."]
-    if abs(flows["outside_air"] + flows["return"] + flows["make_up"] - flows["supply"] - flows["exhaust"] - flows["relief"]) > 1e-3:
+    if abs(flows["outside_air"] + flows["return"] + flows["make_up"] + flows.get("transfer", 0) - flows["supply"] - flows["exhaust"] - flows["relief"]) > 1e-3:
         return ["Outside, return, supply, exhaust, relief, and make-up air paths do not balance."]
     return []
 
 
-def _component_for(rows, ahu_id):
-    return next((row for row in rows if row.get("ahu_id") == ahu_id and row.get("review_status") == "confirmed"), None)
+def _component_for(rows, ahu_id, allowed_statuses=None):
+    allowed_statuses = set(allowed_statuses or {"confirmed"})
+    return next((row for row in rows if row.get("ahu_id") == ahu_id and row.get("review_status") in allowed_statuses), None)
 
 
-def _sum_component(rows, ahu_id, key):
-    return sum(float(row.get(key, 0) or 0) for row in rows if row.get("ahu_id") == ahu_id and row.get("review_status") == "confirmed")
+def _sum_component(rows, ahu_id, key, allowed_statuses=None):
+    allowed_statuses = set(allowed_statuses or {"confirmed"})
+    return sum(float(row.get(key, 0) or 0) for row in rows if row.get("ahu_id") == ahu_id and row.get("review_status") in allowed_statuses)
 
 
 def _sum_hours(rows, hour):
@@ -427,7 +606,8 @@ def _peak(rows):
     if not rows: return {}
     maximum = max(row.get("design_total_kw", 0.0) for row in rows)
     tied = [row.get("hour") for row in rows if row.get("design_total_kw", 0.0) == maximum]
-    return {"design_total_kw": maximum, "tied_hours": tied, "display_hour": min(tied), "hour": min(tied)}
+    display = next(row for row in rows if row.get("hour") == min(tied))
+    return {"design_total_kw": maximum, "tied_hours": tied, "display_hour": min(tied), "hour": min(tied), "coil_sensible_kw": display.get("coil_sensible_kw"), "coil_latent_kw": display.get("coil_latent_kw"), "coil_total_kw": display.get("coil_total_kw"), "coil_condensate_kg_s": display.get("coil_condensate_kg_s"), "psychrometric_provenance": deepcopy(display.get("psychrometric_provenance", {}))}
 
 
 def _governing(scenario_results, key):

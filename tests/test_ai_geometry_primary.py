@@ -75,6 +75,54 @@ class AiPrimaryGeometryTests(unittest.TestCase):
         self.assertEqual(proposal["geometry_status"], "geometry_review_required")
         self.assertIn("independent_geometry_witness", proposal["unresolved_fields"])
 
+    def test_skill_boundary_proposal_enters_same_geometry_validator(self):
+        ai, coverage, building, _vision = fixture()
+        wall_ids = [f"skill-wall-{index}" for index in range(4)]
+        walls = [
+            {"wall_id": wall_ids[0], "line_start_px": [0, 0], "line_end_px": [100, 0]},
+            {"wall_id": wall_ids[1], "line_start_px": [100, 0], "line_end_px": [100, 50]},
+            {"wall_id": wall_ids[2], "line_start_px": [100, 50], "line_end_px": [0, 50]},
+            {"wall_id": wall_ids[3], "line_start_px": [0, 50], "line_end_px": [0, 0]},
+        ]
+        skill_candidate = {
+            "room_id": "room-shop", "label": "Shop", "level_name": "Level 1", "page": 1,
+            "source_pages": [1], "confidence_score": 0.95,
+            "geometry": {"boundary_points_px": [[0, 0], [100, 0], [100, 50], [0, 50], [0, 0]],
+                "wall_ids": wall_ids, "walls": walls, "dimension_ids": ["dim-shop-width"],
+                "dimensions": [{"dimension_id": "dim-shop-width", "value_mm": 10000}],
+                "dimension_wall_links": [{"dimension_id": "dim-shop-width", "target_wall_id": wall_ids[0],
+                    "value_mm": 10000, "reason": "dimension extension lines terminate at the cited wall endpoints",
+                    "measured_span_start_px": [0, 0], "measured_span_end_px": [100, 0]}],
+                "scale_mm_per_px": 100},
+        }
+        evidence = extract_calculation_input_evidence(
+            ai, coverage, building=building, geometry_room_proposals=[skill_candidate],
+        )
+        candidate = next(row for row in evidence["candidates"] if row["category"] == "area" and row["status"] == "active")
+        self.assertEqual(candidate["value"], 50.0)
+        self.assertEqual(candidate["room_id"], "room-shop")
+        proof = next(row for row in evidence["geometry_resolution"]["room_geometry_proofs"] if row["room_label"] == "Shop")
+        self.assertEqual(proof["status"], "ai_estimated")
+        self.assertIn("dimension_bindings", proof)
+
+    def test_skill_reported_area_cannot_activate_without_valid_boundary(self):
+        ai, coverage, building, _vision = fixture()
+        candidate = {
+            "room_id": "room-shop", "label": "Shop", "level_name": "Level 1", "page": 1,
+            "source_pages": [1], "confidence_score": 0.95,
+            "geometry": {"boundary_points_px": [[0, 0], [100, 50], [0, 50], [100, 0], [0, 0]],
+                "wall_ids": [], "dimension_ids": [], "dimension_wall_links": [], "walls": [],
+                "dimensions": [], "scale_mm_per_px": 100, "area_m2": 50.0},
+        }
+        evidence = extract_calculation_input_evidence(
+            ai, coverage, building=building, geometry_room_proposals=[candidate],
+        )
+        areas = [row for row in evidence["candidates"] if row["category"] == "area" and row["label"] == "Shop"]
+        self.assertFalse(any(row["status"] == "active" for row in areas))
+        proof = next(row for row in evidence["geometry_resolution"]["entities"]
+                     if row["kind"] == "ai_room_geometry" and row["label"] == "Shop")
+        self.assertIn("validated_boundary_shape", proof["unresolved_fields"])
+
     def test_unknown_wall_reference_is_blocked_at_room_scope(self):
         ai, coverage, building, vision = fixture()
         vision["result"]["geometry_review"]["pages"][0]["room_geometry_candidates"][0]["wall_ids"] = ["P1-VWALL-NOT-FOUND"]
@@ -129,6 +177,26 @@ class AiPrimaryGeometryTests(unittest.TestCase):
         result = build_geometry_resolution(ai, coverage, building, vision_response=vision)
         proposal = next(row for row in result["entities"] if row["kind"] == "ai_room_geometry")
         self.assertIn("dimension_wall_link_reason", proposal["unresolved_fields"])
+
+    def test_reported_ai_area_cannot_override_or_conflict_with_derived_area(self):
+        ai, coverage, building, vision = fixture()
+        candidate = vision["result"]["geometry_review"]["pages"][0]["room_geometry_candidates"][0]
+        candidate["area_m2"] = 90.0
+        result = build_geometry_resolution(ai, coverage, building, vision_response=vision)
+        proposal = next(row for row in result["entities"] if row["kind"] == "ai_room_geometry")
+        self.assertEqual(proposal["value"]["area_m2"], 50.0)
+        self.assertIn("reported_area_conflict", proposal["unresolved_fields"])
+        self.assertEqual(proposal["geometry_status"], "geometry_review_required")
+        self.assertFalse(any(row["kind"] == "area" and row["geometry_status"] == "ai_estimated" for row in result["entities"]))
+
+    def test_polygon_and_ordered_wall_links_must_describe_the_same_loop(self):
+        ai, coverage, building, vision = fixture()
+        candidate = vision["result"]["geometry_review"]["pages"][0]["room_geometry_candidates"][0]
+        candidate["wall_ids"] = ["P1-VWALL-002", "P1-VWALL-001", "P1-VWALL-003", "P1-VWALL-004"]
+        result = build_geometry_resolution(ai, coverage, building, vision_response=vision)
+        proposal = next(row for row in result["entities"] if row["kind"] == "ai_room_geometry")
+        self.assertIn("boundary_wall_alignment", proposal["unresolved_fields"])
+        self.assertFalse(any(row["kind"] == "area" and row["geometry_status"] == "ai_estimated" for row in result["entities"]))
 
 
 if __name__ == "__main__":

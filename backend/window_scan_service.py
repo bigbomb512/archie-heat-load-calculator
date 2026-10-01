@@ -14,6 +14,8 @@ import uuid
 from ai.drawing_coverage import source_fingerprint
 from ai.vision_extraction import file_hash, timestamp
 from ai.window_scan import POLICY_VERSION, fingerprint, normalize_sightings, page_batches, resolve_clusters
+from ai.opening_solar_resolution import resolve_opening_solar_register
+from ai import ai_preliminary
 from backend.vision_extraction_service import _atomic_json, _page_image
 
 LOCK = threading.RLock()
@@ -31,21 +33,15 @@ def _paths(project):
     root = Path(project["review_dir"])
     return {"root": root, "ai_input": root / "ai_input.json", "settings": root / "vision_extraction_settings.json",
             "job": root / "window_scan_job.json", "runs": root / "window_scan_runs",
-            "register": root / "window_scan_register.json", "reviews": root / "window_scan_reviews.json"}
+            "register": root / "window_scan_register.json", "reviews": root / "window_scan_reviews.json",
+            "orientation": root / "site_orientation.json", "solar_source": root / "solar_radiation_source.json",
+            "value_resolution": root / "value_resolution.json"}
 
 
-def _estimate(ai_input):
+def _scan_scope(ai_input):
     batches = page_batches(ai_input) if ai_input else []
-    raw = os.environ.get("ARCHIE_WINDOW_SCAN_COST_PER_BATCH_AUD", "").strip()
-    try:
-        rate = float(raw)
-        if rate <= 0: rate = None
-    except ValueError:
-        rate = None
     return {"page_count": sum(len(batch["pages"]) for batch in batches), "batch_count": len(batches),
-            "request_count": len(batches) + (1 if batches else 0),
-            "estimated_cost_aud": round((len(batches) + 1) * rate, 2) if rate else None,
-            "estimate_available": rate is not None}
+            "request_count": len(batches) + (1 if batches else 0)}
 
 
 def get(web, project):
@@ -75,14 +71,14 @@ def get(web, project):
             if thumbnail.is_file():
                 sighting["page_preview_url"] = web.safe_link(thumbnail)
     current_source = source_fingerprint(ai_input) if ai_input else ""
-    return {"id": project["id"], "estimate": _estimate(ai_input), "job": job,
+    return {"id": project["id"], "scope": _scan_scope(ai_input), "job": job,
             "source_fingerprint": current_source, "register_status": "stale" if register and register.get("source_fingerprint") != current_source else "current" if register else "not_scanned",
             "register": display_register, "reviews": reviews,
             "register_url": web.safe_link(paths["register"]) if paths["register"].exists() else "",
             "provider_configured": bool(os.environ.get("OPENAI_API_KEY") or PROVIDER_FACTORY)}
 
 
-def _manifest(paths, ai_input, model, estimate):
+def _manifest(paths, ai_input, model, scope):
     run_id = "windows-" + uuid.uuid4().hex
     run_dir = paths["runs"] / run_id
     batches = []
@@ -97,7 +93,7 @@ def _manifest(paths, ai_input, model, estimate):
         batches.append({"batch_id": batch["batch_id"], "pages": pages})
     manifest = {"schema_version": 1, "policy_version": POLICY_VERSION, "run_id": run_id,
                 "created_at": timestamp(), "source_fingerprint": source_fingerprint(ai_input),
-                "model": model, "estimate": estimate, "batches": batches,
+                "model": model, "scope": scope, "batches": batches,
                 "scan_prompt": SCAN_PROMPT, "match_prompt": MATCH_PROMPT,
                 "prompt_fingerprint": fingerprint([POLICY_VERSION, SCAN_PROMPT, MATCH_PROMPT])}
     manifest["fingerprint"] = fingerprint(manifest)
@@ -111,29 +107,58 @@ SCAN_PROMPT = ("Inspect every supplied PDF page for apparent windows and glazed 
                "(plan/elevation/section/schedule/render/photo/detail/other), appearance_status "
                "(proposed_design/existing_condition/unknown), tag, level_name, landmarks array, geometry_clues, "
                "facade_clue, room_clue, host_wall_clue, revision, source_excerpt, confidence 0..1. "
-               "Return no sightings for pages without windows. Do not invent U-values, SHGC, dimensions, north, or ownership.")
+               "When visibly and explicitly supported, also return width_m, height_m, quantity, glass_area_m2, "
+               "frame_fraction, facade_azimuth_deg, external_exposure, and shading_category. "
+               "Return no sightings for pages without windows. Do not invent U-values, SHGC, dimensions, north, or ownership; "
+               "leave unsupported optional fields null.")
 MATCH_PROMPT = ("Compare window sightings across view types. Return JSON object with clusters array. "
                 "Each cluster has member_sighting_ids, match_reason, mirrored_view boolean, competing_matches array. "
                 "Use tag AND spatial context: opening order, doors, columns, mullions, proportions, level, revision. "
                 "Do not merge a repeated tag, mirrored view, obsolete render, or different-level sighting unless independently supported. "
-                "Leave unmatched sightings out of clusters; they will remain visible. No inferred room, host wall, azimuth, U-value or SHGC.")
+                "Leave unmatched sightings out of clusters; they will remain visible. No inferred room, host wall, azimuth, U-value or SHGC. "
+                "A cluster may include shared width_m, height_m, quantity, glass_area_m2, frame_fraction, facade_azimuth_deg, "
+                "external_exposure, or shading_category only when the same value is supported by its members.")
 
-SIGHTING_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["sightings"],
-    "properties": {"sightings": {"type": "array", "items": {"type": "object", "additionalProperties": False,
+_SIGHTING_PROPERTIES = {
+    "page": {"type": "integer"},
+    "bbox": {"type": "array", "items": {"type": "number"}},
+    "view_type": {"type": "string", "enum": ["plan", "elevation", "section", "schedule", "render", "photo", "detail", "other"]},
+    "appearance_status": {"type": "string", "enum": ["proposed_design", "existing_condition", "unknown"]},
+    "tag": {"type": "string"}, "level_name": {"type": "string"},
+    "landmarks": {"type": "array", "items": {"type": "string"}},
+    **{key: {"type": "string"} for key in ("geometry_clues", "facade_clue", "room_clue", "host_wall_clue", "revision", "source_excerpt")},
+    "confidence": {"type": "number"}, "width_m": {"type": ["number", "null"]},
+    "height_m": {"type": ["number", "null"]}, "quantity": {"type": ["integer", "null"]},
+    "glass_area_m2": {"type": ["number", "null"]}, "frame_fraction": {"type": ["number", "null"]},
+    "facade_azimuth_deg": {"type": ["number", "null"]}, "external_exposure": {"type": "string"},
+    "shading_category": {"type": "string"},
+}
+SIGHTING_SCHEMA = {
+    "type": "object", "additionalProperties": False, "required": ["sightings"],
+    "properties": {"sightings": {"type": "array", "items": {
+        "type": "object", "additionalProperties": False,
         "required": ["page", "bbox", "view_type", "appearance_status", "tag", "level_name", "landmarks",
-                     "geometry_clues", "facade_clue", "room_clue", "host_wall_clue", "revision", "source_excerpt", "confidence"],
-        "properties": {"page": {"type": "integer"}, "bbox": {"type": "array", "items": {"type": "number"}},
-            "view_type": {"type": "string", "enum": ["plan", "elevation", "section", "schedule", "render", "photo", "detail", "other"]},
-            "appearance_status": {"type": "string", "enum": ["proposed_design", "existing_condition", "unknown"]},
-            "tag": {"type": "string"}, "level_name": {"type": "string"}, "landmarks": {"type": "array", "items": {"type": "string"}},
-            **{key: {"type": "string"} for key in ("geometry_clues", "facade_clue", "room_clue", "host_wall_clue", "revision", "source_excerpt")},
-            "confidence": {"type": "number"}}}}}}
-MATCH_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["clusters"],
-    "properties": {"clusters": {"type": "array", "items": {"type": "object", "additionalProperties": False,
+                      "geometry_clues", "facade_clue", "room_clue", "host_wall_clue", "revision", "source_excerpt", "confidence"],
+        "properties": _SIGHTING_PROPERTIES,
+    }}},
+}
+_MATCH_PROPERTIES = {
+    "member_sighting_ids": {"type": "array", "items": {"type": "string"}},
+    "match_reason": {"type": "string"}, "mirrored_view": {"type": "boolean"},
+    "competing_matches": {"type": "array", "items": {"type": "string"}},
+    "width_m": {"type": ["number", "null"]}, "height_m": {"type": ["number", "null"]},
+    "quantity": {"type": ["integer", "null"]}, "glass_area_m2": {"type": ["number", "null"]},
+    "frame_fraction": {"type": ["number", "null"]}, "facade_azimuth_deg": {"type": ["number", "null"]},
+    "external_exposure": {"type": "string"}, "shading_category": {"type": "string"},
+}
+MATCH_SCHEMA = {
+    "type": "object", "additionalProperties": False, "required": ["clusters"],
+    "properties": {"clusters": {"type": "array", "items": {
+        "type": "object", "additionalProperties": False,
         "required": ["member_sighting_ids", "match_reason", "mirrored_view", "competing_matches"],
-        "properties": {"member_sighting_ids": {"type": "array", "items": {"type": "string"}},
-                       "match_reason": {"type": "string"}, "mirrored_view": {"type": "boolean"},
-                       "competing_matches": {"type": "array", "items": {"type": "string"}}}}}}}
+        "properties": _MATCH_PROPERTIES,
+    }}},
+}
 
 
 class OpenAIWindowProvider:
@@ -305,8 +330,40 @@ def _run(web, project_id, manifest):
 def post(web, project, data):
     with LOCK:
         paths = _paths(project)
-        action = data.get("action", "estimate")
-        if action == "estimate": return get(web, project)
+        action = data.get("action", "start")
+        if action == "resolve_opening_solar":
+            register = _read(paths["register"], {})
+            ai_input = _read(paths["ai_input"], {})
+            current_source = source_fingerprint(ai_input)
+            if not register or register.get("source_fingerprint") != current_source:
+                raise ValueError("Window scan is stale or has not completed; scan the current PDF before resolving openings.")
+            orientation = _read(paths["orientation"], {})
+            radiation = _read(paths["solar_source"], {})
+            scenario_id = str(data.get("scenario_id", "") or "")
+            resolved = resolve_opening_solar_register(
+                register,
+                known_pages=register.get("pages_scanned", []),
+                site_orientation=orientation if orientation else None,
+                radiation_source=radiation if radiation else None,
+                scenario_id=scenario_id,
+                mode=str(data.get("resolution_mode", "preliminary_ai_estimate")),
+                value_resolution=_read(paths["value_resolution"], {}),
+                source_pack=ai_preliminary.load_pack(),
+            )
+            before = register.get("fingerprint", "")
+            _atomic_json(paths["register"], resolved)
+            try:
+                from backend import productization
+                productization.record_change_if_fingerprint_changed(
+                    paths["root"], action="opening_solar_resolution_rebuilt", target=paths["register"].name,
+                    previous_fingerprint=before, new_fingerprint=resolved.get("fingerprint", ""),
+                    affected_ids=[row.get("opening_id", "") for row in resolved.get("openings", [])],
+                )
+            except Exception:
+                # Audit support is additive; a local development register must
+                # still be rebuildable when productization is unavailable.
+                pass
+            return get(web, project)
         if action == "review_opening":
             register = _read(paths["register"], {})
             ai_input = _read(paths["ai_input"], {})
@@ -364,15 +421,12 @@ def post(web, project, data):
             _atomic_json(paths["job"], {**job, "status": "cancel_requested"})
             return get(web, project)
         if action not in {"start", "retry"}:
-            raise ValueError("Window scan action must be estimate, start, retry or cancel.")
+            raise ValueError("Window scan action must be start, retry or cancel.")
         ai_input = _read(paths["ai_input"], {})
-        estimate = _estimate(ai_input)
+        scope = _scan_scope(ai_input)
         settings = _read(paths["settings"], {})
         if not settings.get("owner_opt_in") or not data.get("confirm_all_pages"):
             raise ValueError("Explicit project-owner consent for all-page AI window analysis is required.")
-        budget = settings.get("max_budget_aud")
-        if not estimate["estimate_available"] or type(budget) not in (int, float) or estimate["estimated_cost_aud"] > budget:
-            raise ValueError("A configured per-batch cost estimate and sufficient approved AUD budget are required.")
         if not (os.environ.get("OPENAI_API_KEY") or PROVIDER_FACTORY):
             raise ValueError("Window scan provider is not configured.")
         previous = _job(paths)
@@ -385,7 +439,7 @@ def post(web, project, data):
             if path.exists(): manifest = _read(path, None)
             if manifest and (manifest["source_fingerprint"] != source_fingerprint(ai_input) or manifest["model"] != model):
                 raise ValueError("PDF or model changed; start a new all-page scan rather than retrying old batches.")
-        if manifest is None: manifest = _manifest(paths, ai_input, model, estimate)
+        if manifest is None: manifest = _manifest(paths, ai_input, model, scope)
         job = {"schema_version": 1, "run_id": manifest["run_id"], "status": "queued", "started_at": timestamp(),
                "finished_at": "", "completed_batches": 0, "total_batches": len(manifest["batches"]),
                "manifest_fingerprint": manifest["fingerprint"], "error": ""}

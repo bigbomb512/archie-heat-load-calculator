@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "pack_id": "au-room-use-v1",
+  "country": "AU",
+  "status": "released",
+  "categories": {
+    "dining": {"label": "Dining / café / bar", "profile_id": "hospitality", "space_scope": "comfort_hvac", "aliases": ["dining", "cafe", "café", "bar", "restaurant", "bistro"]},
+    "kitchen": {"label": "Kitchen", "profile_id": "hospitality", "space_scope": "comfort_hvac_with_process_exception", "aliases": ["kitchen", "cook", "cooking", "food preparation", "prep"]},
+    "retail": {"label": "Retail / showroom", "profile_id": "retail", "space_scope": "comfort_hvac", "aliases": ["retail", "shop", "showroom", "tenancy"]},
+    "office": {"label": "Office / meeting", "profile_id": "office", "space_scope": "comfort_hvac", "aliases": ["office", "meeting", "admin", "reception", "boardroom"]},
+    "storage": {"label": "Store / stockroom", "profile_id": "storage", "space_scope": "comfort_hvac", "aliases": ["store", "storage", "stock", "warehouse"]},
+    "ancillary_conditioned": {"label": "Amenity / corridor / foyer", "profile_id": "generic_conditioned_room", "space_scope": "comfort_hvac", "aliases": ["amenity", "toilet", "wc", "bathroom", "corridor", "hall", "foyer", "lobby"]},
+    "plant_or_unconditioned": {"label": "Plant / service / unconditioned", "profile_id": "", "space_scope": "unresolved_scope", "aliases": ["plant", "electrical", "switchboard", "service", "unconditioned", "external"]},
+    "refrigeration_process": {"label": "Cool room / freezer", "profile_id": "", "space_scope": "refrigeration_process", "aliases": ["cool room", "coolroom", "freezer", "refrigerated"]},
+    "residential": {"label": "Residential", "profile_id": "residential", "space_scope": "comfort_hvac", "aliases": ["bedroom", "apartment", "residential", "living", "lounge", "dwelling"]},
+    "generic_conditioned": {"label": "Generic conditioned room", "profile_id": "generic_conditioned_room", "space_scope": "comfort_hvac", "aliases": []}
+  }
+}

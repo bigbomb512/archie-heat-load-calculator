@@ -5,6 +5,7 @@ from http.server import ThreadingHTTPServer
 from io import BytesIO
 from pathlib import Path
 import http.client
+import json
 import os
 import sys
 import tempfile
@@ -63,6 +64,9 @@ def main():
                 for path in ("/.env", "/.git/HEAD", "/output/private.pdf", "/backend/web_app.py", "/../../../../../etc/hosts"):
                     status, _headers, body = request(server, path)
                     check(f"static exposure blocked for {path}", status == 404 and b"private" not in body)
+                with patch("backend.test_mode_service.status", side_effect=PermissionError("Local test mode is not enabled.")):
+                    status, _headers, body = request(server, "/api/test-mode/status")
+                check("disabled local test workspace reports normal status", status == 200 and json.loads(body) == {"enabled": False})
             finally:
                 server.shutdown()
                 server.server_close()

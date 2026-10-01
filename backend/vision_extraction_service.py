@@ -6,10 +6,12 @@ an explicit interruption, and leaves a local audit trail for every request.
 """
 
 import base64
+import hashlib
 import json
 import os
 from pathlib import Path
 import threading
+import tempfile
 import urllib.error
 import urllib.request
 import uuid
@@ -20,11 +22,11 @@ from ai.evidence_fusion import build_evidence_fusion
 from ai.geometry_review import normalise_vision
 from ai.thermal_model import build_thermal_evidence, build_thermal_model
 from ai.vision_extraction import (
-    build_ranked_context, empty_settings, estimate, extraction_schema, file_hash, select_page_groups,
+    build_ranked_context, empty_settings, extraction_schema, file_hash, select_page_groups, selection_summary,
     timestamp, validate_provider_output, validate_settings,
     vision_response_from_extraction,
 )
-from backend import draft_service
+from ai.skill_registry import catalog_fingerprint, vision_guidance
 from ai.chatgpt_packet import render_high_res_page
 
 
@@ -40,9 +42,28 @@ def _read(path, default):
 
 def _atomic_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
-    stage = path.with_name(path.name + ".stage")
-    stage.write_text(json.dumps(value, indent=2, allow_nan=False), encoding="utf-8")
-    os.replace(stage, path)
+    # A shared ``<file>.stage`` name is unsafe when two local jobs update
+    # related artifacts at the same time: one writer can replace the stage
+    # file while the other is still preparing it.  Give every write its own
+    # sibling temporary file and atomically replace the destination only after
+    # the complete JSON payload has been flushed.
+    stage = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent,
+            prefix=f".{path.name}.", suffix=".stage", delete=False,
+        ) as handle:
+            stage = Path(handle.name)
+            json.dump(value, handle, indent=2, allow_nan=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(stage, path)
+    finally:
+        if stage is not None:
+            try:
+                stage.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def _paths(project):
@@ -55,15 +76,6 @@ def _paths(project):
         "ai_input": root / "ai_input.json",
         "coverage": root / "drawing_coverage.json",
     }
-
-
-def _cost_per_group():
-    raw = os.environ.get("ARCHIE_VISION_ESTIMATED_COST_PER_GROUP_AUD", "").strip()
-    try:
-        value = float(raw)
-        return value if value > 0 else None
-    except ValueError:
-        return None
 
 
 def _settings(paths):
@@ -103,7 +115,7 @@ def _response(web, project):
     return {
         "id": project["id"], "settings": settings, "available_groups": groups,
         "context_selection": context_selection,
-        "estimate": estimate(settings, groups, _cost_per_group()), "job": job,
+        "selection": selection_summary(settings, groups), "job": job,
         "provider_configured": bool(os.environ.get("OPENAI_API_KEY")),
         "model": settings.get("model") or os.environ.get("ARCHIE_VISION_MODEL", "gpt-5"),
         "artifact_links": _artifact_links(web, paths["root"]),
@@ -134,14 +146,8 @@ def _save_settings(paths, raw):
 def _assert_startable(settings, groups, summary):
     if not settings.get("owner_opt_in"):
         raise ValueError("Project-owner opt-in is required before sending selected drawing pages to OpenAI.")
-    if settings.get("max_budget_aud") is None:
-        raise ValueError("Enter a maximum project-run budget before starting AI extraction.")
     if not summary["group_count"]:
         raise ValueError("Select at least one available evidence group.")
-    if not summary["estimate_available"]:
-        raise ValueError("Set ARCHIE_VISION_ESTIMATED_COST_PER_GROUP_AUD on the server before starting; Archie will not guess spend.")
-    if not summary["within_budget"]:
-        raise ValueError("The estimated extraction cost exceeds the approved project-run budget.")
     if not os.environ.get("OPENAI_API_KEY") and PROVIDER_FACTORY is None:
         raise ValueError("OPENAI_API_KEY is not configured on this server. No request was started.")
 
@@ -161,6 +167,10 @@ def _manifest(paths, ai_input, groups, settings, summary):
     run_id = "vision-" + uuid.uuid4().hex
     run_dir = paths["runs"] / run_id
     pages_dir = run_dir / "pages"
+    # Rendering helpers write directly to the target path. Ensure the nested
+    # page directory exists first; otherwise pdftoppm fails before a refreshed
+    # drawing packet (including newly recognized plan pages) can be built.
+    pages_dir.mkdir(parents=True, exist_ok=True)
     selected_ids = set(summary["selected_group_ids"])
     selected = [group for group in groups if group["group_id"] in selected_ids]
     manifest_groups = []
@@ -171,10 +181,13 @@ def _manifest(paths, ai_input, groups, settings, summary):
             members.append({**page, "image_path": str(image_path), "image_sha256": file_hash(image_path)})
         manifest_groups.append({**group, "pages": members})
     context_selection = _context_selection(ai_input, _read(paths["coverage"], {}))
+    base_source_fingerprint = source_fingerprint(ai_input)
+    skill_fingerprint = catalog_fingerprint()
     manifest = {
         "schema_version": 1, "run_id": run_id, "created_at": timestamp(),
-        "source_fingerprint": source_fingerprint(ai_input), "settings": settings,
-        "estimate": summary, "groups": manifest_groups,
+        "source_fingerprint": hashlib.sha256((base_source_fingerprint + skill_fingerprint).encode("utf-8")).hexdigest(),
+        "source_pdf_fingerprint": base_source_fingerprint, "skills_fingerprint": skill_fingerprint, "settings": settings,
+        "selection": summary, "groups": manifest_groups,
         "context_selection": context_selection,
         "main_context_pages": context_selection.get("main_context_pages", []),
         "exception_pages": context_selection.get("exception_pages", []),
@@ -196,7 +209,7 @@ class OpenAIResponsesProvider:
             content.append({"type": "input_image", "image_url": f"data:image/png;base64,{encoded}", "detail": "high"})
         payload = {
             "model": self.model, "store": False,
-            "instructions": "Extract architect-drawing topology and geometry. Never infer loads, U-values, weather, occupancy, schedules, or thermal performance. For a room only, you may select one controlled preliminary profile ID from the supplied schema when the room use is visually explicit; otherwise use the generic profile or leave it blank. Cite only supplied pages and return the strict JSON schema.",
+            "instructions": "Extract architect-drawing topology and geometry plus proposed AHU/air-side and plant/hydraulic evidence from the selected ranked packet. For every plan_geometry page, return a geometry_pages record and inspect every visible room boundary; emit room_geometry_candidates whenever a closed boundary, ordered wall loop, or linked dimension can be read. Never invent loads, U-values, weather, occupancy, schedules, airflow, state points, fan heat, duct effects, leakage, recovery, preconditioning, coil, plant, pump, pipe, capacity, flow, temperature, or diversity values. Return air_side_candidates and plant_candidates only when a system or path is visible; every numeric value must be visibly cited and otherwise remain null with an unresolved field. Distinguish AHUs, plant equipment, circuits, pumps, and pipes from legends, room names, notes, symbols, and unrelated equipment. Cite only supplied pages and return the strict JSON schema.",
             "input": [{"role": "user", "content": content}],
             "text": {"format": {"type": "json_schema", "name": "architect_geometry_extraction", "strict": True, "schema": extraction_schema()}},
         }
@@ -224,14 +237,22 @@ def _prompt(group):
         "page", "drawing_number", "drawing_number_candidates", "title", "role", "level_name",
         "structured_text", "capability_map", "relevance", "selection", "selection_reasons", "related_pages",
     }} for page in group["pages"]]
+    guidance = vision_guidance()
     return ("Selected ranked evidence group:\n" + json.dumps({"group_id": group["group_id"], "pages": pages}, indent=2)
             + "\nReturn exactly one group object inside the required groups array. Cite supplied page and drawing identity candidates."
             + " Dates are never drawing numbers; embedded detail scales never calibrate the main plan; 3D pages are cross-check only."
             + " Legends, title blocks, schedules, and generic notes do not create rooms. Do not guess."
-            + " For room geometry, provide boundary_points_px or an ordered wall_ids sequence, dimension_ids, level_name,"
-            + " and an independent_witness_page when visibly supported; otherwise leave geometry proposed or unresolved."
-            + " For room entities, preliminary_profile_id may only be retail, office, hospitality, storage, residential,"
-            + " generic_conditioned_room, or empty. It is a controlled category selection, not a licence to invent numerical inputs.")
+            + " For every room geometry candidate, identify actual wall segments, return their finite endpoints, and provide an ordered closed wall sequence and/or a closed boundary polygon."
+            + " Link every used dimension to its wall with an explicit reason and source reference. Supply a scale only when it is visibly printed on the main plan or is supported by those linked dimensions."
+            + " Include the room label bounding evidence, level, source crop/pages, confidence, conflicts, unresolved fields, and a distinct witness page only when visibly supported; otherwise leave the geometry proposed or unresolved."
+            + " Never provide a room area based on visual proportion: Archie derives the area from the accepted boundary and calibration."
+            + " Inspect mechanical plans, ductwork plans, schematics, schedules, sections, RCPs, and linked architectural context for AHU tags, system type, served zones/rooms, supply/return/outside/exhaust/relief/make-up/transfer/leakage paths, schedules, state points, fan heat, duct effects, heat recovery, preconditioning, and coil leaving states. Return unresolved fields and competing owners rather than guessing."
+            + " AHU system_type must be single_zone_constant_volume or vav. Use air_side_candidates for proposed systems and plant_candidates for chillers, boilers, package units, circuits, pumps, and pipe effects. Cite the source page/crop for every proposal and leave unsupported numeric values null."
+            + " For room entities, room_use_category may only be dining, kitchen, retail, office, storage, ancillary_conditioned,"
+            + " plant_or_unconditioned, refrigeration_process, residential, generic_conditioned, or empty. preliminary_profile_id may only be retail, office, hospitality, storage, residential, generic_conditioned_room, or empty. These are controlled selections, not a licence to invent numerical inputs."
+            + " Apply the active versioned Archie skills below. Skills propose cited evidence only; existing deterministic resolvers validate it."
+            + " For room records, return counted occupancy evidence, fixture identity/quantity/wattage where directly legible, equipment identity/quantity and ratings only when printed, and operating-hour text only when explicitly shown. Leave absent fields empty/null."
+            + " Runtime skill guidance:\n" + json.dumps(guidance, ensure_ascii=False))
 
 
 def _provider(settings):
@@ -277,9 +298,12 @@ def _materialize(web, project, paths, manifest, validated):
                     "thermal_evidence": str(root / "thermal_evidence.json"), "thermal_model": str(root / "thermal_model.json"),
                     "updated_at": timestamp()})
     web.update_project(project)
-    # This consumes the newly written artifacts and creates calculator_draft.json;
-    # no editable hourly/envelope artifact is changed by extraction.
-    draft_service.post(web, project, {"action": "build"})
+    # This consumes the newly written AI geometry and rebuilds the normalized
+    # room-area proof before any draft model can use it.  The extractor also
+    # refreshes calculator_draft.json without changing editable hourly or
+    # envelope artifacts.
+    from backend import calculation_extraction_service
+    calculation_extraction_service.post(web, project, {"action": "build"})
     return _artifact_links(web, root)
 
 
@@ -334,7 +358,7 @@ def _start(web, project, data, retry=False):
         raise ValueError("Analyse and confirm the architect packet before starting AI extraction.")
     settings = _save_settings(paths, data.get("settings", {}))
     groups = _available(ai_input, coverage)
-    summary = estimate(settings, groups, _cost_per_group())
+    summary = selection_summary(settings, groups)
     _assert_startable(settings, groups, summary)
     previous = _recover_interrupted(paths)
     if previous.get("status") in {"queued", "running", "cancel_requested"}:
@@ -342,7 +366,7 @@ def _start(web, project, data, retry=False):
     manifest, run_dir = _manifest(paths, ai_input, groups, settings, summary)
     job = {"schema_version": 1, "run_id": manifest["run_id"], "status": "queued", "started_at": timestamp(),
            "finished_at": "", "source_fingerprint": manifest["source_fingerprint"],
-           "selection_fingerprint": manifest.get("selection_fingerprint", ""), "estimate": summary,
+           "selection_fingerprint": manifest.get("selection_fingerprint", ""), "selection": summary,
            "total_groups": len(manifest["groups"]), "completed_groups": 0, "current_group": "", "error": "",
            "manifest_path": str(run_dir / "request_manifest.json"), "retry_of": previous.get("run_id", "") if retry else ""}
     _atomic_json(paths["job"], job)
@@ -355,10 +379,7 @@ def _start(web, project, data, retry=False):
 def post(web, project, data):
     with LOCK:
         paths = _paths(project)
-        action = data.get("action", "estimate")
-        if action == "estimate":
-            _save_settings(paths, data.get("settings", {}))
-            return _response(web, project)
+        action = data.get("action", "start")
         if action == "start":
             return _start(web, project, data)
         if action == "retry":
@@ -369,4 +390,4 @@ def post(web, project, data):
                 raise ValueError("There is no active vision extraction job to cancel.")
             _update_job(paths, job["run_id"], status="cancel_requested")
             return _response(web, project)
-        raise ValueError("Action must be estimate, start, cancel, or retry.")
+        raise ValueError("Action must be start, cancel, or retry.")

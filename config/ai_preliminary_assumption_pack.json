@@ -1,9 +1,15 @@
 {
   "schema_version": 1,
   "pack_id": "australia-first-ai-preliminary",
-  "version": "au-preliminary-v2",
+  "version": "au-preliminary-v3",
   "title": "Australia-first AI preliminary cooling profiles",
   "status": "product_owned_preliminary_only",
+  "preliminary_defaults": {
+    "ceiling_height_mm": 2700,
+    "ceiling_height_label": "Controlled draft-only ceiling-height fallback",
+    "infiltration_ach": 0.36,
+    "infiltration_ach_label": "Controlled draft-only infiltration fallback; review required"
+  },
   "profiles": {
     "retail": {"label": "Retail", "occupancy_density_people_m2": 0.15, "people_sensible_w": 75, "people_latent_w": 55, "people_diversity": 0.85, "lighting_w_m2": 12, "lighting_diversity": 0.9, "equipment_w_m2": 8, "equipment_diversity": 0.75, "equipment_space_gain": 0.8, "outside_air_lps_person": 7.5, "outside_air_lps_m2": 0.3, "fallback_area_m2": 80, "weekday_profile": "retail", "wall_u_w_m2k": 0.6, "roof_u_w_m2k": 0.5, "glazing_u_w_m2k": 5.8, "shgc": 0.45},
     "office": {"label": "Office", "occupancy_density_people_m2": 0.1, "people_sensible_w": 75, "people_latent_w": 55, "people_diversity": 0.85, "lighting_w_m2": 10, "lighting_diversity": 0.9, "equipment_w_m2": 15, "equipment_diversity": 0.8, "equipment_space_gain": 0.9, "outside_air_lps_person": 7.5, "outside_air_lps_m2": 0.3, "fallback_area_m2": 60, "weekday_profile": "office", "wall_u_w_m2k": 0.6, "roof_u_w_m2k": 0.5, "glazing_u_w_m2k": 5.8, "shgc": 0.45},
@@ -14,6 +20,13 @@
   },
   "preliminary_envelope": {
     "status": "product_owned_preliminary_only",
+    "opaque_constructions": {
+      "wall": {"construction_id": "au-preliminary-v3-wall-standard", "category": "opaque_wall", "u_value_w_m2k": 0.6, "source": "Product-owned Australia-first preliminary assumption pack", "citations": [], "layers": []},
+      "roof": {"construction_id": "au-preliminary-v3-roof-standard", "category": "roof", "u_value_w_m2k": 0.5, "source": "Product-owned Australia-first preliminary assumption pack", "citations": [], "layers": []},
+      "floor": {"construction_id": "au-preliminary-v3-floor-standard", "category": "floor", "u_value_w_m2k": 0.8, "source": "Product-owned Australia-first preliminary assumption pack", "citations": [], "layers": []},
+      "ceiling": {"construction_id": "au-preliminary-v3-ceiling-standard", "category": "ceiling", "u_value_w_m2k": 0.5, "source": "Product-owned Australia-first preliminary assumption pack", "citations": [], "layers": []},
+      "partition": {"construction_id": "au-preliminary-v3-partition-standard", "category": "partition", "u_value_w_m2k": 1.2, "source": "Product-owned Australia-first preliminary assumption pack", "citations": [], "layers": []}
+    },
     "opaque_solar_gain_factor": 0.25,
     "glazing_frame_fraction": 0.15,
     "glazing_glass_area_correction": 1.0,
@@ -25,6 +38,41 @@
       "S": [0, 0, 0, 0, 0, 0, 0, 5, 20, 45, 70, 90, 105, 110, 100, 75, 45, 20, 5, 0, 0, 0, 0, 0],
       "W": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 20, 80, 210, 360, 470, 500, 430, 260, 80, 0, 0, 0, 0, 0]
     }
+  },
+  "ahu_profile_pack_version": "au-preliminary-v4",
+  "plant_profile_pack_version": "au-preliminary-v5",
+  "plant_profiles": {
+    "default": {
+      "label": "Generic cooling plant — draft assumption",
+      "diversity_factor": 1.0,
+      "pump": {"power_kw": 0.2, "number_off": 1},
+      "pipe": {"effect_kw": 0.1},
+      "flow_lps": 100.0,
+      "temperatures": {"supply_c": 7.0, "return_c": 12.0},
+      "schedule": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+    },
+    "chiller": {
+      "label": "Chiller and chilled-water circuit — draft assumption",
+      "diversity_factor": 1.0,
+      "pump": {"power_kw": 0.2, "number_off": 1},
+      "pipe": {"effect_kw": 0.1},
+      "flow_lps": 100.0,
+      "temperatures": {"supply_c": 7.0, "return_c": 12.0},
+      "schedule": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+    },
+    "chilled_water": {
+      "label": "Chilled-water circuit — draft assumption",
+      "flow_lps": 100.0,
+      "temperatures": {"supply_c": 7.0, "return_c": 12.0},
+      "pump": {"power_kw": 0.2, "number_off": 1},
+      "pipe": {"effect_kw": 0.1},
+      "schedule": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+    }
+  },
+  "ahu_profiles": {
+    "default": {"label": "Generic AHU — draft assumption", "airflow_lps": {"supply": 1000, "return": 850, "outside_air": 150, "make_up": 0, "exhaust": 0, "relief": 0, "transfer": 0, "leakage": 0}, "fan_heat_kw": 2.5, "duct_sensible_kw": 0.5, "leakage_lps": 25, "heat_recovery": {"sensible_effectiveness": 0.0, "latent_effectiveness": 0.0}, "preconditioning": {"sensible_effectiveness": 0.0, "latent_effectiveness": 0.0, "reference_db_c": 24, "reference_wb_c": 18}, "coil": {"leaving_db_c": 13, "leaving_wb_c": 12}},
+    "single_zone_constant_volume": {"label": "Single-zone constant-volume AHU — draft assumption", "airflow_lps": {"supply": 1000, "return": 850, "outside_air": 150, "make_up": 0, "exhaust": 0, "relief": 0, "transfer": 0, "leakage": 0}, "fan_heat_kw": 2.5, "duct_sensible_kw": 0.5, "leakage_lps": 25, "heat_recovery": {"sensible_effectiveness": 0.0, "latent_effectiveness": 0.0}, "preconditioning": {"sensible_effectiveness": 0.0, "latent_effectiveness": 0.0, "reference_db_c": 24, "reference_wb_c": 18}, "coil": {"leaving_db_c": 13, "leaving_wb_c": 12}},
+    "vav": {"label": "Multi-zone VAV AHU — draft assumption", "airflow_lps": {"supply": 1500, "return": 1500, "outside_air": 225, "make_up": 0, "exhaust": 0, "relief": 0, "transfer": 0, "leakage": 0}, "fan_heat_kw": 4.0, "duct_sensible_kw": 0.8, "leakage_lps": 40, "heat_recovery": {"sensible_effectiveness": 0.0, "latent_effectiveness": 0.0}, "preconditioning": {"sensible_effectiveness": 0.0, "latent_effectiveness": 0.0, "reference_db_c": 24, "reference_wb_c": 18}, "coil": {"leaving_db_c": 13, "leaving_wb_c": 12}}
   },
   "scenario": {"indoor_dry_bulb_c": 24, "indoor_wet_bulb_c": 18, "pressure_kpa": 101.325, "safety_factor": 1.1, "hours": [{"db": 27, "wb": 20}, {"db": 27, "wb": 20}, {"db": 26, "wb": 20}, {"db": 26, "wb": 20}, {"db": 26, "wb": 20}, {"db": 26, "wb": 20}, {"db": 27, "wb": 20}, {"db": 28, "wb": 20}, {"db": 29, "wb": 21}, {"db": 30, "wb": 21}, {"db": 31, "wb": 22}, {"db": 32, "wb": 22}, {"db": 33, "wb": 23}, {"db": 34, "wb": 23}, {"db": 35, "wb": 24}, {"db": 36, "wb": 24}, {"db": 36, "wb": 24}, {"db": 35, "wb": 24}, {"db": 34, "wb": 23}, {"db": 32, "wb": 22}, {"db": 30, "wb": 21}, {"db": 29, "wb": 21}, {"db": 28, "wb": 20}, {"db": 27, "wb": 20}]}
 }

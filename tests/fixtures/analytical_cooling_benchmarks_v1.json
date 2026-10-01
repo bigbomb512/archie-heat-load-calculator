@@ -1,0 +1,149 @@
+{
+  "schema_version": 1,
+  "suite_id": "core_room_cooling_analytical_v1",
+  "purpose": "Public-method analytical regression checks; not engineering acceptance or DA09/CAMEL parity.",
+  "sources": {
+    "airah_da09": {
+      "title": "AIRAH DA09 Air Conditioning Load Estimation and Psychrometrics, 4th edition",
+      "url": "https://www.airah.org.au/site/site/resources/da-manuals/da-09/Default.aspx",
+      "supports": "Scope and method-family selection: envelope, solar, internal gains, ventilation/infiltration, system effects, psychrometrics. Detailed numerical references require authorized manual access."
+    },
+    "ashrae_psychrometrics": {
+      "title": "ASHRAE Handbook—Fundamentals, Chapter 1: Psychrometrics",
+      "url": "https://handbook.ashrae.org/Handbooks/F17/SI/f17_ch01/f17_ch01_si.aspx",
+      "supports": "Moist-air humidity ratio, enthalpy, specific volume, and energy-balance relationships used for the analytical air-load cases."
+    },
+    "ashrae_140": {
+      "title": "ASHRAE Standard 140 resource files",
+      "url": "https://data.ashrae.org/standard140/",
+      "supports": "Verification-test approach and analytical/comparative testing context; this suite is not a Standard 140 certification."
+    }
+  },
+  "rounding_policy": {
+    "load_function_output_decimals": 4,
+    "glazing_function_output_decimals": 6,
+    "load_absolute_tolerance_kw": 0.00005,
+    "glazing_absolute_tolerance_kw": 0.0000005,
+    "meaning": "Rounding allowance only; not engineering acceptance tolerance."
+  },
+  "psychrometric_equations": {
+    "humidity_ratio_method": "Approximate psychrometer relation used by the current calculator: pws = 0.61094 exp(17.625 Twb / (Twb + 243.04)); gamma = 0.00066 (1 + 0.00115 Twb); pw = pws − gamma P (Tdb − Twb); W = 0.621945 pw / (P − pw).",
+    "air_load_method": "Use outdoor-state specific volume for dry-air mass flow, h = 1.006 Tdb + W (2501 + 1.86 Tdb), Qs = ṁ × 1.006 × (Tout − Tin), and Ql = ṁ (hout − hin) − Qs.",
+    "humidity_ratio_absolute_tolerance": 0.00000005,
+    "limitation": "The wet-bulb input basis (measured psychrometer versus thermodynamic wet-bulb) must be confirmed for a real project. These fixed cases validate the stated approximate relation and arithmetic; they do not constitute method approval."
+  },
+  "cases": [
+    {
+      "case_id": "opaque_conduction_single_surface",
+      "calculation": "envelope_load",
+      "source_ids": ["airah_da09"],
+      "inputs": {"surfaces": [{"surface_id": "wall_north", "orientation": "N", "area_m2": 10.0, "u_value_w_m2k": 0.5}], "outdoor_db_c": 35.0, "indoor_db_c": 24.0},
+      "expected": {"sensible_kw": 0.055, "latent_kw": 0.0, "total_kw": 0.055},
+      "equation": "A × U × (Tboundary − Troom) / 1000",
+      "assumptions": ["Steady-state one-dimensional conduction", "Boundary temperature equals outdoor dry-bulb"],
+      "exclusions": ["Thermal storage", "Thermal bridges", "Surface films beyond the supplied U-value"]
+    },
+    {
+      "case_id": "people_sensible_latent_and_diversity",
+      "calculation": "people_load",
+      "source_ids": ["airah_da09"],
+      "inputs": {"occupancy": 10, "sensible_w_per_person": 75.0, "latent_w_per_person": 55.0, "diversity_factor": 0.8},
+      "expected": {"sensible_kw": 0.6, "latent_kw": 0.44, "total_kw": 1.04},
+      "equation": "people × per-person gain × diversity / 1000, separately for sensible and latent",
+      "assumptions": ["Per-person rates are supplied values", "One diversity factor applies to both components"],
+      "exclusions": ["Occupancy inference", "Metabolic variation by activity"]
+    },
+    {
+      "case_id": "lighting_sensible_gain",
+      "calculation": "lighting_load",
+      "source_ids": ["airah_da09"],
+      "inputs": {"area_m2": 20.0, "lighting_w_m2": 10.0, "diversity_factor": 0.9},
+      "expected": {"sensible_kw": 0.18, "latent_kw": 0.0, "total_kw": 0.18},
+      "equation": "area × lighting power density × diversity / 1000",
+      "assumptions": ["All scheduled lighting input is treated as room sensible gain"],
+      "exclusions": ["Radiant/convective split", "Power not released to the room"]
+    },
+    {
+      "case_id": "equipment_heat_to_space_and_diversity",
+      "calculation": "equipment_load",
+      "source_ids": ["airah_da09"],
+      "inputs": {"sources": [{"name": "Display case", "kind": "refrigeration", "quantity": 2, "watts": 500.0, "diversity_factor": 0.8, "space_gain_factor": 0.75}]},
+      "expected": {"sensible_kw": 0.6, "latent_kw": 0.0, "total_kw": 0.6},
+      "equation": "quantity × heat-to-space watts × diversity × space-gain factor / 1000",
+      "assumptions": ["Watts are heat rejected to this room per unit"],
+      "exclusions": ["Electrical input not rejected to the room", "Unprovided latent fraction"]
+    },
+    {
+      "case_id": "outside_air_psychrometric_load",
+      "calculation": "outside_air_load",
+      "source_ids": ["airah_da09", "ashrae_psychrometrics"],
+      "inputs": {"flow_lps": 100.0, "indoor_db_c": 24.0, "indoor_wb_c": 18.0, "outdoor_db_c": 35.0, "outdoor_wb_c": 24.0, "pressure_kpa": 101.325},
+      "expected": {"indoor_humidity_ratio": 0.0102966711, "outdoor_humidity_ratio": 0.0139456551, "sensible_kw": 1.2398, "latent_kw": 1.0727, "total_kw": 2.3125},
+      "equation": "ṁ = V̇ / vout; Qs = ṁ × 1.006 × ΔT; Qt = ṁ × (hout − hin); Ql = Qt − Qs",
+      "assumptions": ["Wet-bulb-derived humidity ratios at stated pressure", "Volume flow is referenced to outdoor-air state", "Expected values rounded to 4 decimal places"],
+      "exclusions": ["Heat recovery", "Fan/duct heat", "Coil apparatus-dew-point effects"]
+    },
+    {
+      "case_id": "outside_air_standard_air_reference",
+      "calculation": "outside_air_load",
+      "source_ids": ["ashrae_2025_fundamentals_ch18_standard_air", "ashrae_psychrometrics"],
+      "inputs": {"flow_lps": 100.0, "indoor_db_c": 24.0, "indoor_wb_c": 18.0, "outdoor_db_c": 35.0, "outdoor_wb_c": 24.0, "pressure_kpa": 101.325, "airflow_reference_basis": "standard_air_1_2kg_da_m3"},
+      "expected": {"mass_flow_kg_s": 0.12, "sensible_kw": 1.32792, "latent_kw": 1.14891932797, "total_kw": 2.47683932797},
+      "equation": "ṁda = V̇ × 1.2 kgda/m³; Qs = ṁda × 1.006 × ΔT; Qt = ṁda × (hout − hin); Ql = Qt − Qs",
+      "assumptions": ["Standard-air density is explicitly selected as 1.2 kg dry air/m³", "Humidity ratios use the separately stated psychrometric conditions", "Expected loads were hand-calculated from stored humidity ratios and the stated equations"],
+      "exclusions": ["Does not establish that a project airflow schedule uses standard-air volume", "Does not validate Australian ventilation requirements"]
+    },
+    {
+      "case_id": "infiltration_ach_flow_and_load",
+      "calculation": "infiltration_load",
+      "source_ids": ["airah_da09", "ashrae_psychrometrics"],
+      "inputs": {"value": 0.5, "unit": "ACH", "room_volume_m3": 100.0, "schedule_factor": 1.0, "indoor_db_c": 24.0, "indoor_wb_c": 18.0, "outdoor_db_c": 35.0, "outdoor_wb_c": 24.0, "pressure_kpa": 101.325, "equivalent_flow_lps": 13.8888888889},
+      "expected": {"flow_lps": 13.8888888889, "indoor_humidity_ratio": 0.0102966711, "outdoor_humidity_ratio": 0.0139456551, "sensible_kw": 0.1722, "latent_kw": 0.149, "total_kw": 0.3212},
+      "equation": "V̇ (L/s) = ACH × room volume / 3.6; psychrometric sensible and latent loads as in outside_air_psychrometric_load",
+      "assumptions": ["ACH is referenced to the reviewed room volume", "Outdoor-condition volume reference", "Positive cooling gains retained"],
+      "exclusions": ["Wind/stack pressure prediction", "Leakage distribution between rooms", "Heating load"]
+    },
+    {
+      "case_id": "glazing_conduction_and_solar_transmission",
+      "calculation": "glazing_conduction_and_manual_solar_transmission",
+      "source_ids": ["airah_da09"],
+      "inputs": {"u_value_w_m2k": 2.0, "opening_area_m2": 3.0, "boundary_temperature_c": 35.0, "indoor_temperature_c": 24.0, "incident_solar_w_m2": 600.0, "corrected_glass_area_m2": 2.4, "solar_transmission_factor": 0.5, "external_shading_factor": 0.8, "internal_shading_factor": 0.75},
+      "expected": {"conduction_kw": 0.066, "solar_kw": 0.432, "total_kw": 0.498},
+      "equation": "Qc = U × opening area × ΔT / 1000; Qsolar = incident solar × corrected glass area × transmission × external shade × internal shade / 1000",
+      "assumptions": ["All areas and factors are supplied", "Conduction uses opening area while transmitted solar uses corrected glass area"],
+      "exclusions": ["Solar-position calculation", "Diffuse/reflected solar", "Dynamic shading and thermal storage"]
+    },
+    {
+      "case_id": "scheduled_hourly_room_peak",
+      "calculation": "hourly_room_report",
+      "source_ids": ["airah_da09", "ashrae_psychrometrics"],
+      "inputs": {
+        "scenario_id": "jan_weekday", "month": "January", "day_type": "weekday", "pressure_kpa": 101.325,
+        "room": {"id": "room_001", "zone_id": "zone_001", "area_m2": 20.0, "occupancy": 10, "indoor_db_c": 24.0, "indoor_wb_c": 18.0, "safety_factor": 1.1},
+        "weather_for_all_24_hours": {"outdoor_db_c": 35.0, "outdoor_wb_c": 24.0},
+        "people_gain": {"sensible_w_per_person": 75.0, "latent_w_per_person": 55.0, "diversity_factor": 1.0},
+        "lighting_gain": {"w_per_m2": 10.0, "diversity_factor": 1.0},
+        "equipment": [{"source_id": "equipment_001", "name": "Display refrigerator", "quantity": 1, "heat_to_space_w_each": 1000.0, "diversity_factor": 1.0, "space_gain_factor": 1.0}],
+        "outside_air_lps": 100.0,
+        "envelope": [{"surface_id": "north", "area_m2": 10.0, "u_value_w_m2k": 0.5, "solar_design_w_m2": 500.0, "solar_gain_factor": 0.6, "shading_factor": 0.5}],
+        "schedule_profiles": {
+          "people": {"default": 0.0, "on_hours": [14]},
+          "lighting": {"default": 0.0, "on_hours": [15]},
+          "outside_air": {"default": 0.0, "on_hours": [14]},
+          "equipment": {"default": 0.0, "on_hours": [15]},
+          "solar": {"default": 0.0, "on_hours": [14]}
+        },
+        "schedule_ids": {"people": "people", "lighting": "lights", "outside_air": "air", "equipment": "fridge", "solar": "solar"},
+        "people_schedule_hour": 14, "outside_air_schedule_hour": 14, "solar_schedule_hour": 14, "lighting_schedule_hour": 15, "equipment_schedule_hour": 15
+      },
+      "expected": {"peak_hour": 14, "hour_14_sensible_kw": 3.5448, "hour_14_latent_kw": 1.6227, "hour_14_subtotal_kw": 5.1675, "hour_14_design_total_kw": 5.6843, "hour_15_subtotal_kw": 1.255},
+      "equation": "Per-hour component gains are summed at coincident schedule hours; room safety allowance is then applied once",
+      "assumptions": ["The same outdoor and indoor design states apply at all 24 hours", "Envelope 0.055 kW is constant; supplied schedules are binary and peak at the stated distinct hours"],
+      "exclusions": ["Multi-room diversity", "AHU/plant coincidence", "Annual peak selection"]
+    }
+  ],
+  "invalid_inputs": [
+    {"case_id": "wet_bulb_above_dry_bulb", "dry_bulb_c": 24.0, "wet_bulb_c": 25.0, "pressure_kpa": 101.325, "expected_error_contains": "cannot exceed"},
+    {"case_id": "non_positive_pressure", "dry_bulb_c": 24.0, "wet_bulb_c": 18.0, "pressure_kpa": 0.0, "expected_error_contains": "positive"}
+  ]
+}

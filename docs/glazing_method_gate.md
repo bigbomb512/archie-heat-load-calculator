@@ -45,6 +45,12 @@ weather-façade solar_kW = corrected glass area × solar property ×
 
 Conduction is retained as a signed diagnostic. Solar transmission is a positive gain. The result includes the resolved areas, operands, formulas, source citations, and unresolved requirements.
 
+When both explicit opening area and a complete width/height/quantity set are
+provided, they must agree to the calculator's stored area precision (6 decimal
+places). Partial dimension sets are not accepted as a substitute. A mismatch
+blocks both the glazing calculation and any linked gross-wall net-area
+calculation, so the wall and opening cannot use different areas.
+
 ## Deliberate exclusions
 
 The weather-façade path uses pinned `pvlib==0.15.2` for solar position and

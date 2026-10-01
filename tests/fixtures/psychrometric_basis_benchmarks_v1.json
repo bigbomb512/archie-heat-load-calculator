@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "suite_id": "psychrometric_basis_v1",
+  "purpose": "Basis-aware property checks. The ASHRAE psychrometric chart values are approximate readings; these checks are not method approval.",
+  "sources": {
+    "ashrae_fundamentals_f17_ch1": {
+      "title": "ASHRAE Handbook—Fundamentals (2017), Chapter 1: Psychrometrics, Example 1 and Equations 31–35",
+      "url": "https://handbook.ashrae.org/Handbooks/F17/SI/f17_ch01/f17_ch01_si.aspx",
+      "supports": "Distinction between thermodynamic wet-bulb temperature and psychrometer reading; thermodynamic humidity-ratio equation; chart example values."
+    },
+    "airah_psychrometric_chart_2019": {
+      "title": "AIRAH Psychrometric Chart (2019), 101.325 kPa",
+      "url": "https://www.airah.org.au/Common/Uploaded%20files/Archive/Resources/2020_AIRAH_Psychrometric_Chart.pdf",
+      "supports": "Australian Institute's psychrometric chart and its stated standard-atmospheric chart pressure; no exact chart coordinate has been treated as a high-precision numerical oracle."
+    }
+  },
+  "cases": [
+    {
+      "case_id": "ashrae_example_1_thermodynamic_above_freezing",
+      "basis": "thermodynamic",
+      "inputs": {"dry_bulb_c": 40.0, "wet_bulb_c": 20.0, "pressure_kpa": 101.325},
+      "expected_chart": {"humidity_ratio_kg_kg": 0.0065, "enthalpy_kj_kg": 56.7},
+      "tolerances": {"humidity_ratio_kg_kg": 0.0005, "enthalpy_kj_kg": 0.1},
+      "equation": "ASHRAE Eq. 33 above freezing: W = ((2501 - 2.326 Tw) Ws - 1.006 (T - Tw)) / (2501 + 1.86 T - 4.186 Tw); h = 1.006 T + W (2501 + 1.86 T).",
+      "assumptions": ["ASHRAE Example 1 values are chart-read estimates, not tabulated high-precision values."],
+      "exclusions": ["Sub-zero thermodynamic wet-bulb states", "Psychrometer thermometer correction", "Engineering approval"]
+    },
+    {
+      "case_id": "legacy_relation_psychrometer_basis_characterization",
+      "basis": "psychrometer",
+      "inputs": {"dry_bulb_c": 40.0, "wet_bulb_c": 20.0, "pressure_kpa": 101.325},
+      "expected_characterization": {"humidity_ratio_kg_kg": 0.005981418860972112},
+      "tolerances": {"humidity_ratio_kg_kg": 0.0000000000001},
+      "equation": "Existing approximate psychrometer relation: pws = 0.61094 exp(17.625 Tw/(Tw+243.04)); gamma = 0.00066 (1 + 0.00115 Tw); pv = pws - gamma P (T-Tw); W = 0.621945 pv/(P-pv).",
+      "assumptions": ["This freezes current equation behavior for backward compatibility; it is not a published psychrometer reference benchmark."],
+      "exclusions": ["Specific psychrometer type, ventilation velocity, wick and radiation corrections", "Engineering approval"]
+    },
+    {
+      "case_id": "outside_air_load_basis_sensitivity",
+      "source_ids": ["ashrae_fundamentals_f17_ch1", "airah_psychrometric_chart_2019"],
+      "inputs": {"flow_lps": 100.0, "indoor_db_c": 24.0, "indoor_wb_c": 18.0, "outdoor_db_c": 35.0, "outdoor_wb_c": 24.0, "pressure_kpa": 101.325},
+      "expected": {
+        "thermodynamic": {"sensible_kw": 1.2393, "latent_kw": 1.1117, "total_kw": 2.3510},
+        "psychrometer_approximation": {"sensible_kw": 1.2398, "latent_kw": 1.0727, "total_kw": 2.3125},
+        "difference_thermodynamic_minus_approximation": {"sensible_kw": -0.0005, "latent_kw": 0.0390, "total_kw": 0.0385}
+      },
+      "tolerance_kw": 0.0001,
+      "equation": "For each basis, derive indoor/outdoor humidity ratio; use outdoor specific volume for dry-air mass flow; calculate sensible from dry-bulb difference and latent as enthalpy difference less sensible.",
+      "assumptions": ["The thermodynamic figures are from the implemented ASHRAE Eq. 33 branch; the comparison relation is the project's existing empirical psychrometer approximation.", "Reported components use the implementation's 4-decimal kW rounding."],
+      "exclusions": ["No evidence establishes which basis applies to a real project weather source", "No psychrometer instrument correction", "No engineering acceptance tolerance"]
+    }
+  ]
+}

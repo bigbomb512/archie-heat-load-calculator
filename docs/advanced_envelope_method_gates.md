@@ -32,6 +32,13 @@ and report freshness checks. It remains separate from the existing manual
 solar basis until a reviewed surface explicitly selects it and the method gate
 is approved.
 
+When an approved surface selects a source, the selected source ID and solar
+absorptance are retained by the hourly room-model schema. If the supplied
+artifact is missing, has a different ID, or is not surface-plane incident
+irradiance, the affected room is blocked; the calculation does not silently
+fall back to that surface's manual solar value. This preserves the source
+selection across the envelope-to-hourly adapter and report path.
+
 Both gates require a named engineer, credential, approval date, method
 citation, scope and supporting citations. Placeholder records are safe to
 create during project bootstrap; they cannot contribute to a calculation.

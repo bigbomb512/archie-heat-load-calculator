@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from pathlib import Path
+from copy import deepcopy
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -60,6 +61,8 @@ def complete_cooling_requirements():
                 "lighting_w_m2": 10,
                 "lighting_diversity_factor": 0.9,
                 "outside_air_lps": 100,
+                "outside_air_source": "Contractor mechanical schedule M-201",
+                "outside_air_verification_status": "confirmed",
                 "safety_factor": 1.1,
                 "envelope_not_applicable": False,
                 "verification_status": "confirmed",
@@ -82,6 +85,15 @@ def complete_cooling_requirements():
 
 
 def main():
+    ashrae_ratio = humidity_ratio_from_db_wb(40, 20, 101.325, "thermodynamic")
+    check("ASHRAE thermodynamic wet-bulb humidity ratio chart range", abs(ashrae_ratio - 0.0065) <= 0.0005)
+    check("ASHRAE thermodynamic wet-bulb enthalpy chart range", abs((1.006 * 40 + ashrae_ratio * (2501 + 1.86 * 40)) - 56.7) <= 0.1)
+    psychrometer_ratio = humidity_ratio_from_db_wb(40, 20, 101.325, "psychrometer")
+    psychrometer_load = outside_air_load(1, 24, 18, 35, 24, 101.325, indoor_wet_bulb_basis="psychrometer", outdoor_wet_bulb_basis="psychrometer")
+    check("psychrometer reading method is retained in output provenance", psychrometer_ratio > 0 and psychrometer_load["inputs"]["outdoor_wet_bulb_basis"] == "psychrometer")
+    ice_branch_ratio = humidity_ratio_from_db_wb(2, -1, 101.325, "thermodynamic")
+    check("thermodynamic wet-bulb supports the below-freezing ice branch", ice_branch_ratio > 0)
+
     people = people_load(10, 75, 55, 0.8)
     check("people sensible load", close(people["sensible_kw"], 0.6))
     check("people latent load", close(people["latent_kw"], 0.44))
@@ -99,6 +111,7 @@ def main():
     contributions = {item["name"]: item for item in zone["contributions"]}
     check("report calculates one zone", report["status"] == "calculated" and report["calculated_zone_count"] == 1)
     check("equipment refrigeration load", close(contributions["equipment_refrigeration"]["total_kw"], 0.8))
+    check("outside-air contribution retains contractor source and review status", contributions["outside_air"]["inputs"]["flow_source"] == "Contractor mechanical schedule M-201" and contributions["outside_air"]["inputs"]["flow_verification_status"] == "confirmed")
     check("envelope load", close(contributions["envelope"]["total_kw"], 0.055))
     check("solar load", close(contributions["solar"]["total_kw"], 1.5))
     check("safety allowance applies after subtotal", close(zone["design_total_kw"], zone["subtotal_kw"] * 1.1))
@@ -117,6 +130,11 @@ def main():
     provisional = complete_cooling_requirements()
     provisional["zones"][0]["cooling_load"]["verification_status"] = "provisional"
     check("provisional basis remains visible", calculate_heat_load_report(validate_design_requirements(provisional))["status"] == "calculated_provisional")
+
+    provisional_air = deepcopy(complete_cooling_requirements())
+    provisional_air["zones"][0]["cooling_load"]["outside_air_verification_status"] = "provisional"
+    provisional_air_report = calculate_heat_load_report(validate_design_requirements(provisional_air))
+    check("unverified outside-air flow keeps the load provisional", provisional_air_report["status"] == "calculated_provisional")
 
     try:
         humidity_ratio_from_db_wb(24, 25, 101.325)

@@ -52,13 +52,15 @@ def _canonical_source_fingerprint(ai_input):
 
 
 def evidence_input_fingerprints(ai_input, coverage=None, spatial_ocr=None, vector_geometry=None, vision_response=None,
-                                building=None, dimension_matches=None, geometry_confirmation=None):
+                                building=None, dimension_matches=None, geometry_confirmation=None,
+                                reviewer_room_geometry=None):
     """Fingerprint every upstream artifact without depending on array order."""
     inputs = {
         "ai_input": ai_input, "drawing_coverage": coverage, "spatial_ocr": spatial_ocr,
         "vector_geometry": vector_geometry, "vision_response": vision_response,
         "building_evidence": building, "dimension_wall_matches": dimension_matches,
         "geometry_confirmation": geometry_confirmation,
+        "reviewer_room_geometry": reviewer_room_geometry,
     }
     return {name: _fingerprint(_canonical_evidence(value or {})) for name, value in inputs.items()}
 
@@ -608,6 +610,11 @@ def _geometry_candidates(geometry, source_fp, pages_by_number):
                 status, area = "blocked", None
                 unresolved.append("area_m2")
             target, category, unit, value = f"room.{label}.area_m2", "area", "m²", area
+        elif kind == "room_geometry_proof" and entity.get("extraction_method") == "reviewer_traced_boundary":
+            area = entity_value.get("area_m2")
+            status = "proposed" if isinstance(area, (int, float)) and math.isfinite(area) and area > 0 else "blocked"
+            unresolved = sorted(set(unresolved + ["independent_review_acceptance"]))
+            target, category, unit, value = f"room.{label}.area_m2", "area", "m²", area
         elif kind == "room":
             target, category, unit, value = f"room.{label}.identity", "room", "", label
             unresolved.extend(["geometry", "zone_id"] if not unresolved else [])
@@ -618,7 +625,8 @@ def _geometry_candidates(geometry, source_fp, pages_by_number):
             target, category, unit = f"{kind}.{label or 'unresolved'}", kind, "mm" if kind == "dimension" else ""
         else:
             continue
-        resolved_room_id = (entity.get("room_source_id") or entity_value.get("room_source_id") or label) if kind in {"room", "area"} else ""
+        resolved_room_id = ((entity.get("room_source_id") or entity_value.get("room_source_id") or label)
+                            if kind in {"room", "area"} or (kind == "room_geometry_proof" and entity.get("extraction_method") == "reviewer_traced_boundary") else "")
         row = _candidate(
             source_fp, page, target, category, deepcopy(value), unit,
             label=label, excerpt=str(source.get("excerpt", "")),
@@ -630,6 +638,10 @@ def _geometry_candidates(geometry, source_fp, pages_by_number):
         if kind == "area" and entity_value.get("geometry_proof_id"):
             row["geometry_proof_id"] = entity_value["geometry_proof_id"]
             row["room_geometry_entity_id"] = entity_value.get("room_entity_id", "")
+            row["calibration"] = deepcopy(entity_value.get("calibration", {}))
+        if kind == "room_geometry_proof" and entity.get("extraction_method") == "reviewer_traced_boundary":
+            row["geometry_proof_id"] = entity.get("entity_id", "")
+            row["room_geometry_entity_id"] = entity.get("entity_id", "")
             row["calibration"] = deepcopy(entity_value.get("calibration", {}))
         if kind == "area" and entity.get("geometry_status") == "ai_estimated":
             row["geometry_mode"] = "preliminary_ai_estimate"
@@ -726,7 +738,9 @@ def _validate_candidates(candidates, pages):
 
 def extract_calculation_input_evidence(ai_input, coverage=None, spatial_ocr=None, vector_geometry=None, vision_response=None,
                                        building=None, dimension_matches=None, geometry_confirmation=None,
-                                       resolution_mode=None, window_scan=None, window_reviews=None):
+                                       resolution_mode=None, window_scan=None, window_reviews=None,
+                                       site_orientation=None, solar_radiation_source=None, solar_scenario_id="",
+                                       geometry_room_proposals=None, reviewer_room_geometry=None):
     ai_input = _canonical_evidence(ai_input)
     coverage = _canonical_evidence(coverage or {})
     spatial_ocr = _canonical_evidence(spatial_ocr or {})
@@ -737,7 +751,8 @@ def extract_calculation_input_evidence(ai_input, coverage=None, spatial_ocr=None
     geometry_confirmation = _canonical_evidence(geometry_confirmation or {})
     source_fp = _canonical_source_fingerprint(ai_input)
     input_fingerprints = evidence_input_fingerprints(ai_input, coverage, spatial_ocr, vector_geometry, vision_response,
-                                                      building, dimension_matches, geometry_confirmation)
+                                                      building, dimension_matches, geometry_confirmation,
+                                                      reviewer_room_geometry)
     from ai.opening_resolution import resolve_openings
     pages = []
     coverage_pages = {row.get("page"): row for row in coverage.get("pages", []) if isinstance(row, dict)}
@@ -786,7 +801,15 @@ def extract_calculation_input_evidence(ai_input, coverage=None, spatial_ocr=None
         _extract_unresolved_text(page, source_fp, candidates)
     pages_by_number = {page.get("page"): page for page in pages}
     current_scan = window_scan if (window_scan or {}).get("source_fingerprint") == packet_source_fingerprint(ai_input) else {}
-    opening_register = resolve_openings(vision_response, source_fp, pages_by_number, current_scan, window_reviews)
+    opening_register = resolve_openings(
+        vision_response, source_fp, pages_by_number, current_scan, window_reviews,
+        site_orientation=site_orientation, radiation_source=solar_radiation_source,
+        scenario_id=solar_scenario_id, resolution_mode=resolution_mode or "preliminary_ai_estimate",
+    )
+    if site_orientation is not None:
+        input_fingerprints["site_orientation"] = _fingerprint(_canonical_evidence(site_orientation))
+    if solar_radiation_source is not None:
+        input_fingerprints["solar_radiation_source"] = _fingerprint(_canonical_evidence(solar_radiation_source))
     candidates.extend(_vision_candidates(vision_response, source_fp, pages_by_number))
     geometry = build_geometry_resolution(
         ai_input, coverage, building, spatial_ocr, vector_geometry,
@@ -794,6 +817,8 @@ def extract_calculation_input_evidence(ai_input, coverage=None, spatial_ocr=None
         geometry_confirmation=geometry_confirmation,
         vision_response=vision_response,
         resolution_mode=resolution_mode,
+        room_proposals=geometry_room_proposals,
+        reviewer_room_geometry=reviewer_room_geometry,
     )
     # Keep the proof graph beside the candidate list so the current evidence
     # view can show why a derived area is active or blocked.
@@ -825,7 +850,9 @@ def extract_calculation_input_evidence(ai_input, coverage=None, spatial_ocr=None
                    "scale_candidates": deepcopy(page.get("scale_candidates", [])),
                    "role": page.get("role", "")} for page in pages],
         "status": "blocked" if any(row.get("status") in {"blocked", "conflict"} for row in candidates) else "current",
-        "fingerprint": _fingerprint({"extractor_version": EXTRACTOR_VERSION, "source_fingerprint": source_fp, "candidates": candidates, "issues": issues, "opening_register": opening_register}),
+        "fingerprint": _fingerprint({"extractor_version": EXTRACTOR_VERSION, "source_fingerprint": source_fp,
+            "candidates": candidates, "issues": issues, "opening_register": opening_register,
+            "geometry_skill_proposals": geometry_room_proposals or []}),
     }
     # Bind the extracted values to room/opening/table/vision witnesses only
     # after the page-specific extractors have produced deterministic

@@ -7,7 +7,11 @@ or safety defaults. Every load value is supplied by the designer and retained
 with the output so a preliminary result can be reviewed later.
 """
 
-from math import exp
+from math import exp, isfinite, sqrt
+
+WET_BULB_BASES = {"thermodynamic", "psychrometer", "legacy_unverified"}
+AIRFLOW_REFERENCE_BASES = {"legacy_unverified", "outdoor_design_condition", "standard_air_1_2kg_da_m3"}
+STANDARD_DRY_AIR_DENSITY_KG_M3 = 1.2
 
 
 def contribution(name, sensible_kw=0.0, latent_kw=0.0, inputs=None, formula=""):
@@ -119,16 +123,77 @@ def saturation_pressure_kpa(dry_bulb_c):
     return 0.61094 * exp(17.625 * dry_bulb_c / (dry_bulb_c + 243.04))
 
 
-def humidity_ratio_from_db_wb(dry_bulb_c, wet_bulb_c, pressure_kpa):
+def ashrae_saturation_pressure_kpa(temperature_c):
+    """Pure-water saturation pressure using ASHRAE F25 Eq. 5 (IAPWS-IF97).
+
+    This equation covers liquid water from 0°C to its critical temperature.
+    The existing approximation remains available for legacy and psychrometer
+    paths so their established results are not silently reinterpreted.
+    """
+    if not isfinite(float(temperature_c)) or temperature_c < 0 or temperature_c >= 373.946:
+        raise ValueError("ASHRAE/IAPWS liquid-water saturation pressure requires 0°C <= temperature < 373.946°C.")
+    temperature_k = float(temperature_c) + 273.15
+    theta = temperature_k - 0.23855557567849 / (temperature_k - 650.17534844798)
+    a = theta * theta + 1167.0521452767 * theta - 724213.16703206
+    b = -17.073846940092 * theta * theta + 12020.82470247 * theta - 3232555.0322333
+    c = 14.91510861353 * theta * theta - 4823.2657361591 * theta + 405113.40542057
+    discriminant = b * b - 4 * a * c
+    pressure_mpa = (2 * c / (-b + sqrt(discriminant))) ** 4
+    return pressure_mpa * 1000
+
+
+def ashrae_ice_saturation_pressure_kpa(temperature_c):
+    """Sublimation pressure over ice using ASHRAE F25 Eq. 6 (IAPWS 2008)."""
+    if not isfinite(float(temperature_c)) or temperature_c < -223.15 or temperature_c >= 0:
+        raise ValueError("ASHRAE/IAPWS ice saturation pressure requires -223.15°C <= temperature < 0°C.")
+    theta = (float(temperature_c) + 273.15) / 273.16
+    a = (-21.2144006, 27.3203819, -6.10598130)
+    b = (0.00333333333, 1.20666667, 1.70333333)
+    return 0.611657 * exp(sum(ai * theta ** bi for ai, bi in zip(a, b)) / theta)
+
+
+def humidity_ratio_from_db_wb(dry_bulb_c, wet_bulb_c, pressure_kpa, wet_bulb_basis="legacy_unverified"):
+    if wet_bulb_basis not in WET_BULB_BASES:
+        raise ValueError("Wet-bulb basis must be thermodynamic, psychrometer, or legacy_unverified.")
+    if not all(isfinite(float(value)) for value in (dry_bulb_c, wet_bulb_c, pressure_kpa)):
+        raise ValueError("Dry-bulb, wet-bulb, and pressure must be finite numbers.")
     if wet_bulb_c > dry_bulb_c:
         raise ValueError("Wet-bulb temperature cannot exceed dry-bulb temperature.")
     if pressure_kpa <= 0:
         raise ValueError("Atmospheric pressure must be positive.")
+    if wet_bulb_basis == "thermodynamic":
+        if wet_bulb_c < 0:
+            saturation_pressure = ashrae_ice_saturation_pressure_kpa(wet_bulb_c)
+            saturated_ratio = humidity_ratio_from_vapour_pressure(saturation_pressure, pressure_kpa)
+            numerator = (2830 - 0.24 * wet_bulb_c) * saturated_ratio - 1.006 * (dry_bulb_c - wet_bulb_c)
+            denominator = 2830 + 1.86 * dry_bulb_c - 2.1 * wet_bulb_c
+        else:
+            saturated_ratio = humidity_ratio_from_vapour_pressure(ashrae_saturation_pressure_kpa(wet_bulb_c), pressure_kpa)
+            numerator = (2501 - 2.326 * wet_bulb_c) * saturated_ratio - 1.006 * (dry_bulb_c - wet_bulb_c)
+            denominator = 2501 + 1.86 * dry_bulb_c - 4.186 * wet_bulb_c
+        ratio = numerator / denominator
+        if ratio < 0:
+            raise ValueError("Dry-bulb, thermodynamic wet-bulb, and pressure are not physically compatible.")
+        return ratio
     psychrometric_constant = 0.00066 * (1 + 0.00115 * wet_bulb_c)
     vapour_pressure = saturation_pressure_kpa(wet_bulb_c) - psychrometric_constant * pressure_kpa * (dry_bulb_c - wet_bulb_c)
     if vapour_pressure <= 0 or vapour_pressure >= pressure_kpa:
         raise ValueError("Dry-bulb, wet-bulb, and atmospheric pressure are not physically compatible.")
-    return 0.621945 * vapour_pressure / (pressure_kpa - vapour_pressure)
+    return humidity_ratio_from_vapour_pressure(vapour_pressure, pressure_kpa)
+
+
+def humidity_ratio_from_vapour_pressure(vapour_pressure_kpa, pressure_kpa):
+    if vapour_pressure_kpa <= 0 or vapour_pressure_kpa >= pressure_kpa:
+        raise ValueError("Water-vapour pressure must be between zero and total pressure.")
+    return 0.621945 * vapour_pressure_kpa / (pressure_kpa - vapour_pressure_kpa)
+
+
+def wet_bulb_method_id(basis):
+    return {
+        "thermodynamic": "thermodynamic_ashrae_eq33_iapws_water_ice_v3",
+        "psychrometer": "empirical_psychrometer_reading_approximation_v1",
+        "legacy_unverified": "legacy_unverified_psychrometer_relation_v1",
+    }[basis]
 
 
 def moist_air_enthalpy_kj_kg(dry_bulb_c, humidity_ratio):
@@ -139,10 +204,19 @@ def specific_volume_m3_kg(dry_bulb_c, humidity_ratio, pressure_kpa):
     return 0.287055 * (dry_bulb_c + 273.15) * (1 + 1.607 * humidity_ratio) / pressure_kpa
 
 
-def outside_air_load(flow_lps, indoor_db_c, indoor_wb_c, outdoor_db_c, outdoor_wb_c, pressure_kpa):
-    indoor_ratio = humidity_ratio_from_db_wb(indoor_db_c, indoor_wb_c, pressure_kpa)
-    outdoor_ratio = humidity_ratio_from_db_wb(outdoor_db_c, outdoor_wb_c, pressure_kpa)
-    mass_flow_kg_s = flow_lps / 1000 / specific_volume_m3_kg(outdoor_db_c, outdoor_ratio, pressure_kpa)
+def outside_air_load(flow_lps, indoor_db_c, indoor_wb_c, outdoor_db_c, outdoor_wb_c, pressure_kpa,
+                     *, indoor_wet_bulb_basis="legacy_unverified", outdoor_wet_bulb_basis="legacy_unverified",
+                     airflow_reference_basis="legacy_unverified", flow_source="", flow_verification_status=""):
+    if airflow_reference_basis not in AIRFLOW_REFERENCE_BASES:
+        raise ValueError("Outside-air airflow reference basis must be legacy_unverified, outdoor_design_condition, or standard_air_1_2kg_da_m3.")
+    indoor_ratio = humidity_ratio_from_db_wb(indoor_db_c, indoor_wb_c, pressure_kpa, indoor_wet_bulb_basis)
+    outdoor_ratio = humidity_ratio_from_db_wb(outdoor_db_c, outdoor_wb_c, pressure_kpa, outdoor_wet_bulb_basis)
+    if airflow_reference_basis == "standard_air_1_2kg_da_m3":
+        mass_flow_kg_s = flow_lps / 1000 * STANDARD_DRY_AIR_DENSITY_KG_M3
+        flow_reference_state = {"dry_air_density_kg_m3": STANDARD_DRY_AIR_DENSITY_KG_M3}
+    else:
+        mass_flow_kg_s = flow_lps / 1000 / specific_volume_m3_kg(outdoor_db_c, outdoor_ratio, pressure_kpa)
+        flow_reference_state = {"dry_bulb_c": outdoor_db_c, "humidity_ratio": round(outdoor_ratio, 9), "pressure_kpa": pressure_kpa}
     sensible_kw = mass_flow_kg_s * 1.006 * (outdoor_db_c - indoor_db_c)
     total_kw = mass_flow_kg_s * (
         moist_air_enthalpy_kj_kg(outdoor_db_c, outdoor_ratio)
@@ -154,10 +228,19 @@ def outside_air_load(flow_lps, indoor_db_c, indoor_wb_c, outdoor_db_c, outdoor_w
         total_kw - sensible_kw,
         {
             "flow_lps": flow_lps,
+            "flow_reference_basis": airflow_reference_basis,
+            "flow_reference_status": "calculation_assumption_unverified" if airflow_reference_basis == "legacy_unverified" else "declared_basis_unverified",
+            "flow_reference_state": flow_reference_state,
+            **({"flow_source": flow_source} if flow_source else {}),
+            **({"flow_verification_status": flow_verification_status} if flow_verification_status else {}),
             "indoor_db_c": indoor_db_c,
             "indoor_wb_c": indoor_wb_c,
+            "indoor_wet_bulb_basis": indoor_wet_bulb_basis,
+            "indoor_wet_bulb_method": wet_bulb_method_id(indoor_wet_bulb_basis),
             "outdoor_db_c": outdoor_db_c,
             "outdoor_wb_c": outdoor_wb_c,
+            "outdoor_wet_bulb_basis": outdoor_wet_bulb_basis,
+            "outdoor_wet_bulb_method": wet_bulb_method_id(outdoor_wet_bulb_basis),
             "atmospheric_pressure_kpa": pressure_kpa,
             "mass_flow_kg_s": round(mass_flow_kg_s, 6),
         },
@@ -165,6 +248,40 @@ def outside_air_load(flow_lps, indoor_db_c, indoor_wb_c, outdoor_db_c, outdoor_w
     )
 
 
+def transfer_air_load(flow_value, flow_unit, source_db_c, source_wb_c, target_db_c, target_wb_c, pressure_kpa,
+                     *, source_room_id="", method_id="", source_wet_bulb_basis="legacy_unverified", target_wet_bulb_basis="legacy_unverified"):
+    """Room-to-room air transfer using source-state volume and moist-air enthalpy.
+
+    Signed sensible and latent terms are retained because a cooler/drier source
+    room can reduce the receiving room's cooling load. The flow volume is
+    referenced to the sending-room state.
+    """
+    flow_lps = infiltration_flow_lps(flow_value, flow_unit)
+    source_ratio = humidity_ratio_from_db_wb(source_db_c, source_wb_c, pressure_kpa, source_wet_bulb_basis)
+    target_ratio = humidity_ratio_from_db_wb(target_db_c, target_wb_c, pressure_kpa, target_wet_bulb_basis)
+    source_volume = specific_volume_m3_kg(source_db_c, source_ratio, pressure_kpa)
+    mass_flow_kg_s = flow_lps / 1000.0 / source_volume
+    sensible_kw = mass_flow_kg_s * 1.006 * (source_db_c - target_db_c)
+    total_kw = mass_flow_kg_s * (
+        moist_air_enthalpy_kj_kg(source_db_c, source_ratio)
+        - moist_air_enthalpy_kj_kg(target_db_c, target_ratio)
+    )
+    return contribution(
+        "transfer_air", sensible_kw, total_kw - sensible_kw,
+        {
+            "flow_value": flow_value, "flow_unit": flow_unit, "flow_lps": round(flow_lps, 6),
+            "flow_reference": "sending_room_air_state", "source_room_id": source_room_id,
+            "source_db_c": source_db_c, "source_wb_c": source_wb_c,
+            "source_wet_bulb_basis": source_wet_bulb_basis,
+            "source_wet_bulb_method": wet_bulb_method_id(source_wet_bulb_basis),
+            "target_db_c": target_db_c, "target_wb_c": target_wb_c,
+            "target_wet_bulb_basis": target_wet_bulb_basis,
+            "target_wet_bulb_method": wet_bulb_method_id(target_wet_bulb_basis),
+            "pressure_kpa": pressure_kpa, "mass_flow_kg_s": round(mass_flow_kg_s, 8),
+            "method_id": method_id,
+        },
+        "transfer mass flow × sending-room to receiving-room moist-air enthalpy difference; sensible = mass flow × 1.006 × dry-bulb difference",
+    )
 def infiltration_flow_lps(value, unit, room_volume_m3=None):
     """Resolve an approved infiltration input to outdoor-condition L/s."""
     if value is None or value <= 0:
@@ -183,7 +300,8 @@ def infiltration_flow_lps(value, unit, room_volume_m3=None):
 
 
 def infiltration_load(value, unit, indoor_db_c, indoor_wb_c, outdoor_db_c, outdoor_wb_c, pressure_kpa,
-                      *, room_volume_m3=None, schedule_factor=1.0, method_id="", gate_version=""):
+                      *, room_volume_m3=None, schedule_factor=1.0, method_id="", gate_version="",
+                      indoor_wet_bulb_basis="legacy_unverified", outdoor_wet_bulb_basis="legacy_unverified"):
     """Cooling infiltration using the approved outdoor-condition psychrometric method.
 
     The raw signed terms stay visible for audit. Only positive sensible and
@@ -191,7 +309,9 @@ def infiltration_load(value, unit, indoor_db_c, indoor_wb_c, outdoor_db_c, outdo
     """
     base_flow_lps = infiltration_flow_lps(value, unit, room_volume_m3)
     applied_flow_lps = base_flow_lps * schedule_factor
-    raw = outside_air_load(applied_flow_lps, indoor_db_c, indoor_wb_c, outdoor_db_c, outdoor_wb_c, pressure_kpa)
+    raw = outside_air_load(applied_flow_lps, indoor_db_c, indoor_wb_c, outdoor_db_c, outdoor_wb_c, pressure_kpa,
+                           indoor_wet_bulb_basis=indoor_wet_bulb_basis, outdoor_wet_bulb_basis=outdoor_wet_bulb_basis,
+                           airflow_reference_basis="outdoor_design_condition")
     raw_sensible = raw["sensible_kw"]
     raw_latent = raw["latent_kw"]
     return contribution(
@@ -211,6 +331,8 @@ def infiltration_load(value, unit, indoor_db_c, indoor_wb_c, outdoor_db_c, outdo
             "method_id": method_id,
             "gate_version": gate_version,
             "flow_reference": "outdoor_design_condition",
+            "flow_reference_basis": "outdoor_design_condition",
+            "flow_reference_status": "calculation_assumption_unverified",
         },
         "approved infiltration flow × moist-air enthalpy difference; signed diagnostics retained, positive sensible and latent cooling gains applied",
     )
@@ -235,6 +357,11 @@ def calculate_zone_cooling(requirements, zone):
                 requirements["outdoor_summer_db_c"],
                 conditions["outdoor_summer_wet_bulb_c"],
                 conditions["atmospheric_pressure_kpa"],
+                indoor_wet_bulb_basis=conditions.get("indoor_wet_bulb_basis", "legacy_unverified"),
+                outdoor_wet_bulb_basis=conditions.get("outdoor_wet_bulb_basis", "legacy_unverified"),
+                flow_source=load.get("outside_air_source", ""),
+                flow_verification_status=load.get("outside_air_verification_status", "missing"),
+                airflow_reference_basis=load.get("outside_air_flow_reference_basis", "legacy_unverified"),
             ),
         ]
     except ValueError as error:
@@ -278,10 +405,13 @@ def zone_missing_inputs(requirements, zone):
         "lighting density": load.get("lighting_w_m2"),
         "lighting diversity": load.get("lighting_diversity_factor"),
         "outside-air flow": load.get("outside_air_lps"),
+        "outside-air flow source": load.get("outside_air_source"),
         "safety factor": load.get("safety_factor"),
         "cooling-load source": load.get("source"),
     }
     missing = [name for name, value in required.items() if value in (None, "")]
+    if load.get("outside_air_verification_status") == "missing":
+        missing.append("outside-air flow review status")
     sources = zone.get("heat_sources", [])
     if not sources:
         missing.append("zone heat sources")
@@ -312,7 +442,9 @@ def effective_value(zone, requirements, key):
 def zone_is_provisional(requirements, zone):
     load = zone.get("cooling_load", {})
     conditions = requirements.get("cooling_load_conditions", {})
-    if load.get("verification_status") != "confirmed" or conditions.get("verification_status") != "confirmed":
+    if (load.get("verification_status") != "confirmed"
+            or load.get("outside_air_verification_status") != "confirmed"
+            or conditions.get("verification_status") != "confirmed"):
         return True
     if any(source.get("verification_status") != "confirmed" for source in zone.get("heat_sources", [])):
         return True

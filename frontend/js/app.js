@@ -17,9 +17,23 @@ let CALCULATOR_INPUT_SET = null, CALCULATOR_INPUT_OVERRIDES = {revision: 0, reco
 // expose /api/calculator-inputs at all. Once that endpoint responds, the
 // explicit Assemble → Calculate gate is enforced.
 let CALCULATOR_INPUTS_AVAILABLE = false, CALCULATOR_EXCEPTION_ROWS = [], CALCULATOR_EXCEPTION_TOTAL = 0;
-let VISION_EXTRACTION = null, VISION_POLL = null;
+let VISION_EXTRACTION = null, VISION_POLL = null, ROOM_INFERENCE_POLL = null;
 let WINDOW_SCAN_POLL = null, SITE_ORIENTATION = {};
+let ROOM_GEOMETRY_CONTEXT = null, ROOM_TRACE_STATE = null;
 const CONTRACTOR_WORKFLOW_STORAGE_KEY = "archie-contractor-workflow-stage";
+const WORKFLOW_SKELETON_STORAGE_KEY = "archie-workflow-skeleton-state";
+const WORKFLOW_STAGE_DEFS = [
+  {id: "evidence", number: 1, label: "Evidence", description: "Analyse pages, confirm drawing scope, and prepare AI evidence.", action: "Analyse PDF", target: "vRes"},
+  {id: "context", number: 2, label: "Project context", description: "Resolve location, design weather, north, and conditioned scope.", action: "Resolve project context", target: "siteLocationSection"},
+  {id: "rooms", number: 3, label: "Rooms and geometry", description: "Resolve room use, areas, levels, ceilings, and volumes.", action: "Resolve rooms and geometry", target: "calculationEvidenceSection"},
+  {id: "internalGains", number: 4, label: "Internal gains and schedules", description: "Resolve occupancy, people, lighting, equipment, and schedules.", action: "Resolve room inputs", target: "calculatorInputSection"},
+  {id: "envelope", number: 5, label: "Envelope", description: "Resolve walls, roofs, floors, boundaries, construction, and coverage.", action: "Resolve envelope", target: "envelopeSection"},
+  {id: "glazing", number: 6, label: "Glazing and solar", description: "Match openings, properties, orientation, radiation, and shading.", action: "Resolve glazing and solar", target: "glazingGateSection"},
+  {id: "airside", number: 7, label: "Air-side", description: "Resolve outside air, infiltration, exhaust, AHU ownership, and airflow.", action: "Resolve air-side inputs", target: "ahuAirsideSection"},
+  {id: "plant", number: 8, label: "Plant", description: "Resolve equipment, circuits, pumps, pipes, diversity, and reconciliation.", action: "Resolve plant inputs", target: "plantSection"},
+  {id: "calculate", number: 9, label: "Calculate and deliver", description: "Review coverage, calculate loads, and prepare reports and packages.", action: "Review coverage and calculate", target: "reportSection"},
+];
+let WORKFLOW_STATE = null;
 const CONTRACTOR_STAGES = {
   evidence: "Review the drawing evidence and resolve only the exceptions that Archie found.",
   project: "Confirm the project brief and operating conditions that are not present in the architect’s PDF.",
@@ -112,7 +126,7 @@ async function analyse(){
   if (!DATA) return;
   if (ANALYSIS_IN_PROGRESS) return;
   ANALYSIS_IN_PROGRESS = true;
-  requiredElement("btnConfirm").disabled = true;
+  requiredElement("btnContinue").disabled = true;
   show("vRun");
   requiredElement("btnAnalyse").disabled = true;
   requiredElement("runSub").textContent = `Reviewing ${DATA.pages} pages`;
@@ -136,7 +150,7 @@ async function analyse(){
     }
   } catch (err) {
     stop(); show("vFile"); requiredElement("btnAnalyse").disabled = false;
-    requiredElement("btnConfirm").disabled = true;
+    requiredElement("btnContinue").disabled = true;
     toast("Analysis failed", err.message);
   } finally {
     ANALYSIS_IN_PROGRESS = false;
@@ -156,6 +170,385 @@ function runSteps(){
     requiredElement(ids[i]).className = "step now";
   }, 1600);
   return () => { clearInterval(t); ids.forEach(id => requiredElement(id).className = "step done"); };
+}
+
+/* ---------------- workflow skeleton ---------------- */
+function workflowStorageKey(projectId){
+  return `${WORKFLOW_SKELETON_STORAGE_KEY}:${projectId || "unassigned"}`;
+}
+
+function emptyWorkflowSkeleton(projectId = ""){
+  return {
+    projectId,
+    currentStage: "evidence",
+    stages: Object.fromEntries(WORKFLOW_STAGE_DEFS.map(stage => [stage.id, {
+      status: "not_started", resolved: 0, total: 0, issues: [], remediations: [], included: 0,
+    }])),
+    includedScope: {rooms: [], excludedRooms: [], excludedComponents: []},
+    requiredArtifacts: [],
+  };
+}
+
+function loadWorkflowSkeleton(projectId){
+  try {
+    const saved = JSON.parse(localStorage.getItem(workflowStorageKey(projectId)) || "null");
+    if (!saved || saved.projectId !== projectId || !saved.stages) return emptyWorkflowSkeleton(projectId);
+    const state = emptyWorkflowSkeleton(projectId);
+    state.currentStage = WORKFLOW_STAGE_DEFS.some(stage => stage.id === saved.currentStage) ? saved.currentStage : "evidence";
+    for (const stage of WORKFLOW_STAGE_DEFS){
+      const value = saved.stages[stage.id] || {};
+      state.stages[stage.id] = {
+        status: ["not_started", "in_progress", "provisional", "needs_review", "blocked", "complete"].includes(value.status) ? value.status : "not_started",
+        resolved: Number.isFinite(Number(value.resolved)) ? Math.max(0, Number(value.resolved)) : 0,
+        total: Number.isFinite(Number(value.total)) ? Math.max(0, Number(value.total)) : 0,
+        issues: Array.isArray(value.issues) ? value.issues.map(String).slice(0, 8) : [],
+        remediations: Array.isArray(value.remediations) ? value.remediations.filter(item => item && typeof item === "object").slice(0, 8) : [],
+        included: Number.isFinite(Number(value.included)) ? Math.max(0, Number(value.included)) : 0,
+      };
+    }
+    state.includedScope = saved.includedScope && typeof saved.includedScope === "object"
+      ? {rooms: Array.isArray(saved.includedScope.rooms) ? saved.includedScope.rooms : [],
+         excludedRooms: Array.isArray(saved.includedScope.excludedRooms) ? saved.includedScope.excludedRooms : [],
+         excludedComponents: Array.isArray(saved.includedScope.excludedComponents) ? saved.includedScope.excludedComponents : []}
+      : state.includedScope;
+    state.requiredArtifacts = Array.isArray(saved.requiredArtifacts)
+      ? saved.requiredArtifacts.filter(item => item && typeof item === "object").slice(0, 12)
+      : [];
+    return state;
+  } catch {
+    return emptyWorkflowSkeleton(projectId);
+  }
+}
+
+function saveWorkflowSkeleton(){
+  if (!WORKFLOW_STATE?.projectId) return;
+  localStorage.setItem(workflowStorageKey(WORKFLOW_STATE.projectId), JSON.stringify(WORKFLOW_STATE));
+}
+
+function workflowStatusText(status){
+  return {
+    not_started: "Not started", in_progress: "In progress", provisional: "Provisional",
+    needs_review: "Needs review", blocked: "Blocked", complete: "Complete",
+  }[status] || "Not started";
+}
+
+function workflowCount(stage){
+  const total = Number(stage.total) || 0;
+  if (!total) return "Not detected";
+  const resolved = Math.min(total, Math.max(0, Number(stage.resolved) || 0));
+  return `${resolved}/${total}`;
+}
+
+function workflowOverallStatus(){
+  if (!DATA) return "Draft setup";
+  const statuses = WORKFLOW_STAGE_DEFS.map(stage => WORKFLOW_STATE.stages[stage.id].status);
+  if (statuses.includes("blocked")) return "Blocked";
+  if (statuses.includes("needs_review")) return "Needs review";
+  if (statuses.includes("in_progress") || statuses.includes("provisional")) return "Draft in progress";
+  if (statuses.every(status => status === "complete")) return "Ready for calculation";
+  return "Draft setup";
+}
+
+function workflowActionLabel(stage){
+  if (stage.id === "evidence" && DATA?.sheets?.length) return "Review evidence";
+  return stage.action;
+}
+
+function initWorkflowSkeleton(data){
+  const projectId = data?.id || DATA?.id || "unassigned";
+  WORKFLOW_STATE = loadWorkflowSkeleton(projectId);
+  const pages = Number(data?.pages_analysed || data?.pages || data?.sheets?.length || 0);
+  const roomTotal = (data?.sheets || []).reduce((sum, sheet) => sum + (Number(sheet.room_count) || 0), 0);
+  const evidence = WORKFLOW_STATE.stages.evidence;
+  evidence.status = pages ? "complete" : "needs_review";
+  evidence.resolved = pages;
+  evidence.total = pages;
+  evidence.included = pages;
+  evidence.issues = Array.isArray(data?.warnings) ? data.warnings.map(String).slice(0, 8) : [];
+  WORKFLOW_STATE.requiredArtifacts = Array.isArray(data?.required_artifacts)
+    ? data.required_artifacts.filter(item => item && typeof item === "object").slice(0, 12)
+    : WORKFLOW_STATE.requiredArtifacts || [];
+  const discovered = data?.workflow_coverage || {};
+  const coverageDefaults = {
+    rooms: {...(discovered.rooms || {}), total: Number(discovered.rooms?.total) || roomTotal},
+    envelope: {...(discovered.surfaces || {}), total: Number(discovered.surfaces?.total) || 0},
+    glazing: {...(discovered.openings || {}), total: Number(discovered.openings?.total) || 0},
+    airside: {...(discovered.air_systems || {}), total: Number(discovered.air_systems?.total) || 0},
+    plant: {...(discovered.plant_systems || {}), total: Number(discovered.plant_systems?.total) || 0},
+  };
+  for (const [stageId, values] of Object.entries(coverageDefaults)){
+    const stage = WORKFLOW_STATE.stages[stageId];
+    if (!stage || !values) continue;
+    const incomingTotal = Number(values.total) || 0;
+    const incomingResolved = Math.min(incomingTotal, Number(values.resolved) || 0);
+    // Fresh analysis data must hydrate the shell immediately, even when an
+    // older localStorage entry still contains the initial 0/0 placeholders.
+    if (incomingTotal && (!stage.total || stage.total !== incomingTotal || (values.status === "provisional" && stage.resolved === 0))){
+      stage.total = incomingTotal;
+      stage.resolved = incomingResolved;
+      stage.included = Math.min(incomingTotal, Number(values.included) || incomingResolved);
+      if (values.status) stage.status = values.status;
+      if (Array.isArray(values.issues)) stage.issues = values.issues.map(String).slice(0, 8);
+    }
+  }
+  if (WORKFLOW_STATE.stages.rooms.total && WORKFLOW_STATE.stages.internalGains.total === 0){
+    WORKFLOW_STATE.stages.internalGains.total = WORKFLOW_STATE.stages.rooms.total;
+  }
+  applyRequiredArtifactState(WORKFLOW_STATE.requiredArtifacts);
+  renderWorkflowSkeleton();
+  saveWorkflowSkeleton();
+}
+
+function workflowAdvancedTarget(stageId){
+  return WORKFLOW_STAGE_DEFS.find(stage => stage.id === stageId)?.target || "";
+}
+
+function openWorkflowAdvancedTarget(stageId){
+  const id = workflowAdvancedTarget(stageId);
+  const target = optionalElement(id);
+  if (!target) return toast("Advanced editor unavailable", "This workflow editor is not present in the current project view.");
+  const parent = target.closest("#designRequirementsPanel");
+  if (parent?.classList.contains("hide")) return toast("Review stage not open", "Confirm the drawing selection and open the reviewed workspace first.");
+  const details = target.closest("details");
+  if (details) details.open = true;
+  target.scrollIntoView({behavior: "smooth", block: "start"});
+  target.setAttribute("tabindex", "-1");
+  target.focus({preventScroll: true});
+}
+
+function openWorkflowRemediation(targetId){
+  if (!targetId) return toast("Remediation unavailable", "The missing artifact does not have a linked editor yet.");
+  const target = optionalElement(targetId);
+  if (!target) return toast("Remediation unavailable", "The linked editor is not present in the current project view.");
+  const parent = target.closest("#designRequirementsPanel");
+  if (parent?.classList.contains("hide")){
+    parent.classList.remove("hide");
+    configureContractorWorkflow();
+  }
+  const details = target.closest("details");
+  if (details) details.open = true;
+  target.scrollIntoView({behavior: "smooth", block: "start"});
+  target.setAttribute("tabindex", "-1");
+  target.focus({preventScroll: true});
+}
+
+async function workflowPreviewAction(stageId){
+  if (!WORKFLOW_STATE) return;
+  WORKFLOW_STATE.currentStage = stageId;
+  const stage = WORKFLOW_STATE.stages[stageId];
+  if (stage && stageId !== "evidence") stage.status = "in_progress";
+  saveWorkflowSkeleton();
+  renderWorkflowSkeleton();
+  if (stageId === "evidence"){
+    if (!DATA?.sheets?.length) return toast("Analyse PDF first", "The evidence stage starts after the drawing set has been analysed.");
+    if (stage){ stage.status = "complete"; stage.resolved = stage.total; stage.included = stage.total; }
+    saveWorkflowSkeleton(); renderWorkflowSkeleton();
+    return openWorkflowAdvancedTarget(stageId);
+  }
+  if (!DATA?.id) return toast("Analyse PDF first", "Upload and analyse the drawing set before resolving model inputs.");
+  if (stageId === "calculate"){
+    const missing = (WORKFLOW_STATE.requiredArtifacts || []).filter(item => !item.exists || ["stale", "missing", "blocked"].includes(item.status));
+    if (missing.length){
+      const message = `Calculation blocked: ${missing.map(item => item.label || item.key).join(", ")} ${missing.length === 1 ? "is" : "are"} missing.`;
+      const calc = WORKFLOW_STATE.stages.calculate;
+      calc.status = "needs_review";
+      calc.issues = [message, ...missing.map(item => item.remediation || `Create ${item.label || item.key}.`)].slice(0, 8);
+      calc.remediations = missing.map(item => ({label: item.action_label || `Open ${item.label || item.key}`, target: item.target_id}));
+      saveWorkflowSkeleton(); renderWorkflowSkeleton();
+      return toast("Calculation blocked", `${message} Use the remediation links on the Calculate and deliver card.`);
+    }
+  }
+  try {
+    const action = stageId === "calculate" ? "rebuild_preliminary_model" : "resolve";
+    const response = await fetch("/api/model-input-resolution", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({project_id: DATA.id, action})});
+    const data = await response.json();
+    if (!response.ok || data.error) {
+      const error = new Error(data.message || data.error || "The model-input resolver could not complete.");
+      error.resolver = data;
+      throw error;
+    }
+    applyWorkflowResolution(data);
+    if (stageId === "calculate"){
+      const calculation = await fetch("/api/ai-preliminary-model", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({project_id: DATA.id, action:"calculate"})});
+      const calculated = await calculation.json();
+      if (!calculation.ok || calculated.error) throw new Error(calculated.error || "The preliminary calculation could not complete.");
+      if (!["calculated", "current", "calculated_provisional"].includes(calculated.status)){
+        throw new Error(calculated.message || "The preliminary calculation did not produce a current report.");
+      }
+      await loadAiPreliminary();
+    }
+    toast(stageId === "calculate" ? "Preliminary calculation updated" : "Model inputs resolved", "Review the coverage and ranked exceptions below.");
+  } catch (error) {
+    const detail = error?.resolver || {};
+    if (stage){ stage.status = detail.code === "room_inference_pending" ? "in_progress" : "needs_review"; stage.issues = [detail.remediation || error.message, ...stage.issues].slice(0, 8); if (detail.missing_artifacts?.length) stage.remediations = detail.missing_artifacts.map(key => { const item = (WORKFLOW_STATE.requiredArtifacts || []).find(row => row.key === key); return {label: item?.action_label || `Open ${key}`, target: item?.target_id}; }); saveWorkflowSkeleton(); renderWorkflowSkeleton(); }
+    renderModelInputError(detail, error.message);
+    toast("Workflow action failed", detail.remediation || error.message);
+  }
+}
+
+function applyWorkflowResolution(data){
+  if (Array.isArray(data?.required_artifacts)){
+    WORKFLOW_STATE.requiredArtifacts = data.required_artifacts.filter(item => item && typeof item === "object").slice(0, 12);
+  }
+  const records = data?.model_input_resolution?.records || [];
+  const categories = {
+    context: "project context", rooms: "rooms and geometry", internalGains: "internal gains and schedules",
+    envelope: "opaque envelope", glazing: "openings, glazing, and solar", airside: "ventilation, infiltration, and process air",
+    plant: "plant and hydraulics",
+  };
+  for (const [stageId, category] of Object.entries(categories)){
+    const stage = WORKFLOW_STATE.stages[stageId];
+    const rows = records.filter(row => row.target_category === category);
+    if (!stage || !rows.length) continue;
+    const included = rows.filter(row => !["excluded", "blocked"].includes(row.status)).length;
+    const resolved = rows.filter(row => ["resolved", "provisional"].includes(row.status)).length;
+    const blocked = rows.some(row => ["blocked", "excluded"].includes(row.status));
+    stage.total = rows.length;
+    stage.resolved = resolved;
+    stage.included = included;
+    const provisional = rows.some(row => row.status === "provisional" || ["preliminary_fallback", "controlled_fallback", "fallback"].includes(row.origin));
+    stage.status = blocked || resolved < rows.length ? "needs_review" : provisional ? "provisional" : "complete";
+    stage.issues = rows.filter(row => ["blocked", "excluded", "needs_review"].includes(row.status)).slice(0, 8).map(row => row.remediation || row.rationale || "Review this input.");
+    stage.remediations = rows.filter(row => ["blocked", "excluded", "needs_review"].includes(row.status) && row.remediation).slice(0, 8).map(row => ({label: "Open remediation", target: workflowAdvancedTarget(stageId), text: row.remediation}));
+  }
+  applyRequiredArtifactState(WORKFLOW_STATE.requiredArtifacts);
+  const summary = data.coverage_summary || {};
+  const hasFallback = records.some(row => row.status === "provisional" || ["preliminary_fallback", "controlled_fallback", "fallback"].includes(row.origin));
+  if (summary.complete) WORKFLOW_STATE.stages.calculate.status = hasFallback ? "provisional" : "complete";
+  else if (records.length) WORKFLOW_STATE.stages.calculate.status = "needs_review";
+  saveWorkflowSkeleton();
+  renderWorkflowSkeleton();
+}
+
+function applyRequiredArtifactState(artifacts){
+  if (!WORKFLOW_STATE) return;
+  const required = Array.isArray(artifacts) ? artifacts : [];
+  WORKFLOW_STATE.requiredArtifacts = required;
+  const stage = WORKFLOW_STATE.stages.calculate;
+  if (!stage || !required.length) return;
+  const available = required.filter(item => item.exists && !["stale", "missing", "blocked"].includes(item.status)).length;
+  const missing = required.filter(item => !item.exists || ["stale", "missing", "blocked"].includes(item.status));
+  const provisional = required.filter(item => item.exists && !["stale", "missing", "blocked"].includes(item.status) && (item.provisional || item.hydrated));
+  stage.total = required.length;
+  stage.resolved = available;
+  stage.included = available;
+  if (missing.length){
+    stage.status = "needs_review";
+    stage.issues = [`${missing.length} required calculation artifact${missing.length === 1 ? " is" : "s are"} missing.`, ...missing.map(item => item.remediation || `Create ${item.label || item.key}.`)].slice(0, 8);
+    stage.remediations = missing.map(item => ({label: item.action_label || `Open ${item.label || item.key}`, target: item.target_id}));
+  } else if (provisional.length) {
+    stage.status = "provisional";
+    stage.issues = ["All required artifacts are available, but one or more were hydrated as provisional draft inputs."];
+    stage.remediations = [];
+  } else if (stage.status === "not_started" || stage.status === "needs_review") {
+    stage.status = "complete";
+    stage.issues = [];
+    stage.remediations = [];
+  }
+}
+
+function workflowDevAction(action){
+  if (!WORKFLOW_STATE) return;
+  const stage = WORKFLOW_STATE.stages[WORKFLOW_STATE.currentStage];
+  if (!stage) return;
+  if (action === "reset"){
+    WORKFLOW_STATE = emptyWorkflowSkeleton(WORKFLOW_STATE.projectId);
+  } else if (action === "resolve"){
+    stage.status = "complete";
+    stage.total = Math.max(1, stage.total);
+    stage.resolved = stage.total;
+    stage.issues = [];
+  } else if (action === "warn"){
+    stage.status = "needs_review";
+    stage.issues = [...stage.issues, "Preview warning added for testing."].slice(-8);
+  } else if (action === "block"){
+    stage.status = "blocked";
+    stage.issues = [...stage.issues, "Preview blocker added for testing."].slice(-8);
+  }
+  saveWorkflowSkeleton();
+  renderWorkflowSkeleton();
+}
+
+function renderWorkflowSkeleton(){
+  const list = optionalElement("workflowStageList");
+  if (!list || !WORKFLOW_STATE) return;
+  list.replaceChildren();
+  for (const definition of WORKFLOW_STAGE_DEFS){
+    const state = WORKFLOW_STATE.stages[definition.id];
+    const card = document.createElement("article");
+    card.className = `workflow-stage-card status-${state.status}${WORKFLOW_STATE.currentStage === definition.id ? " is-current" : ""}`;
+    card.dataset.workflowStage = definition.id;
+
+    const head = document.createElement("div");
+    head.className = "workflow-stage-card-head";
+    const title = document.createElement("div");
+    title.className = "workflow-stage-title";
+    const number = document.createElement("span");
+    number.className = "workflow-stage-number";
+    number.textContent = definition.number;
+    const heading = document.createElement("h4");
+    heading.textContent = definition.label;
+    title.append(number, heading);
+    const badge = document.createElement("span");
+    badge.className = "workflow-status-badge";
+    badge.textContent = workflowStatusText(state.status);
+    head.append(title, badge);
+
+    const body = document.createElement("div");
+    body.className = "workflow-stage-body";
+    const description = document.createElement("p");
+    description.textContent = definition.description;
+    const meta = document.createElement("div");
+    meta.className = "workflow-stage-meta";
+    meta.textContent = `Coverage ${workflowCount(state)}${state.included ? ` · ${state.included} included` : ""}`;
+    body.append(description, meta);
+    if (state.issues.length){
+      const issue = document.createElement("p");
+      issue.className = "workflow-stage-issue";
+      issue.textContent = state.issues[0] + (state.issues.length > 1 ? ` (+${state.issues.length - 1} more)` : "");
+      body.append(issue);
+    }
+    if (Array.isArray(state.remediations) && state.remediations.length){
+      const remediationRow = document.createElement("div");
+      remediationRow.className = "workflow-remediation-links";
+      for (const remediation of state.remediations.slice(0, 4)){
+        const link = document.createElement("button");
+        link.type = "button";
+        link.className = "btn ghost mini workflow-remediation-link";
+        link.dataset.workflowRemediation = remediation.target || "";
+        link.textContent = remediation.label || "Open remediation";
+        remediationRow.append(link);
+      }
+      body.append(remediationRow);
+    }
+
+    const actions = document.createElement("div");
+    actions.className = "workflow-stage-actions";
+    const primary = document.createElement("button");
+    primary.className = "btn key mini";
+    primary.type = "button";
+    primary.dataset.workflowAction = definition.id;
+    primary.textContent = workflowActionLabel(definition);
+    const advanced = document.createElement("button");
+    advanced.className = "btn ghost mini";
+    advanced.type = "button";
+    advanced.dataset.workflowAdvanced = definition.id;
+    advanced.textContent = "Open advanced editor";
+    actions.append(primary, advanced);
+    card.append(head, body, actions);
+    list.append(card);
+  }
+
+  requiredElement("workflowCoverageRooms").textContent = workflowCount(WORKFLOW_STATE.stages.rooms);
+  requiredElement("workflowCoverageSurfaces").textContent = workflowCount(WORKFLOW_STATE.stages.envelope);
+  requiredElement("workflowCoverageOpenings").textContent = workflowCount(WORKFLOW_STATE.stages.glazing);
+  requiredElement("workflowCoverageAirSystems").textContent = workflowCount(WORKFLOW_STATE.stages.airside);
+  requiredElement("workflowCoveragePlantSystems").textContent = workflowCount(WORKFLOW_STATE.stages.plant);
+  requiredElement("workflowOverallStatus").textContent = workflowOverallStatus();
+  requiredElement("workflowSkeletonNotice").textContent = DATA
+    ? "Stage actions run the consolidated resolver. Results remain draft/provisional until the required evidence and review gates are complete."
+    : "Analyse the PDF to populate evidence coverage.";
+  optionalElement("workflowDevControls")?.classList.toggle("hide", !DEBUG);
 }
 
 /* ---------------- results ---------------- */
@@ -179,10 +572,11 @@ function showResults(data){
   requiredElement("visionStatus").textContent = "Waiting for vision JSON";
   requiredElement("btnDebug").textContent = "Open debug view";
   requiredElement("fRel").classList.add("on"); requiredElement("fAll").classList.remove("on");
-  requiredElement("btnConfirm").disabled = false;
-  requiredElement("btnConfirmTop").classList.remove("hide");
-  requiredElement("btnConfirmTop").disabled = false;
+  requiredElement("btnContinue").textContent = "Confirm selected drawings";
   requiredElement("btnContinue").disabled = false;
+  initWorkflowSkeleton(data);
+  requiredElement("workflowSkeleton").classList.toggle("hide", !data.has_reasoning_packet);
+  loadRoomInference(true);
   drawSummary(); drawReviewList(); drawGrid(); drawAside(); loadProjects();
   if (PACKET?.zip || PACKET?.prompt) showVisionPanel();
   if (data.has_reasoning_packet) showDesignRequirements(data.design_requirements);
@@ -197,6 +591,7 @@ function toggleDebug(){
   DEBUG = !DEBUG;
   requiredElement("debugPanel").classList.toggle("hide", !DEBUG);
   requiredElement("btnDebug").textContent = DEBUG ? "Hide debug view" : "Open debug view";
+  renderWorkflowSkeleton();
   if (DEBUG) drawGrid();
 }
 
@@ -464,25 +859,62 @@ function zoom(page){
 }
 
 /* ---------------- confirm ---------------- */
-requiredElement("btnConfirm").addEventListener("click", confirmSelection);
-requiredElement("btnConfirmTop").addEventListener("click", confirmSelection);
+requiredElement("workflowStageList").addEventListener("click", event => {
+  const action = event.target.closest("[data-workflow-action]");
+  const advanced = event.target.closest("[data-workflow-advanced]");
+  const remediation = event.target.closest("[data-workflow-remediation]");
+  if (action) workflowPreviewAction(action.dataset.workflowAction);
+  if (advanced) openWorkflowAdvancedTarget(advanced.dataset.workflowAdvanced);
+  if (remediation) openWorkflowRemediation(remediation.dataset.workflowRemediation);
+});
+optionalElement("modelInputResolutionResults")?.addEventListener("click", event => {
+  const action = event.target.closest("[data-model-remediation]");
+  if (!action) return;
+  const artifact = (WORKFLOW_STATE?.requiredArtifacts || []).find(item => item.key === action.dataset.modelRemediation);
+  openWorkflowRemediation(artifact?.target_id || "");
+});
+requiredElement("workflowDevControls").addEventListener("click", event => {
+  const control = event.target.closest("[data-workflow-dev]");
+  if (control) workflowDevAction(control.dataset.workflowDev);
+});
 requiredElement("btnVisionSubmit").addEventListener("click", submitVisionResponse);
-requiredElement("btnVisionEstimate").addEventListener("click", () => visionExtractionAction("estimate"));
 requiredElement("btnVisionStart").addEventListener("click", () => visionExtractionAction("start"));
 requiredElement("btnVisionCancel").addEventListener("click", () => visionExtractionAction("cancel"));
 requiredElement("btnVisionRetry").addEventListener("click", () => visionExtractionAction("retry"));
 requiredElement("btnOpenPreliminaryJourney").addEventListener("click", () => focusWorkflowTarget("aiPreliminaryHeading"));
 requiredElement("btnOpenReviewedJourney").addEventListener("click", () => focusWorkflowTarget("designRequirementsPanel"));
+requiredElement("btnGuidedResolveModelInputs").addEventListener("click", guidedResolveModelInputs);
+requiredElement("btnRetryRoomInference").addEventListener("click", () => startRoomInference(true));
+requiredElement("btnReviewRoomEvidence").addEventListener("click", () => openWorkflowAdvancedTarget("evidence"));
+requiredElement("btnOpenRoomGeometry").addEventListener("click", () => openWorkflowAdvancedTarget("rooms"));
 requiredElement("btnSaveAiPreliminarySettings").addEventListener("click", () => aiPreliminaryAction("save_settings"));
 requiredElement("btnRunAiPreliminary").addEventListener("click", () => aiPreliminaryAction("run"));
 requiredElement("btnSaveAiPreliminaryProposal").addEventListener("click", () => aiPreliminaryAction("save_placeholder_proposal"));
 requiredElement("btnAssembleAiPreliminary").addEventListener("click", () => aiPreliminaryAction("assemble"));
 requiredElement("btnCalculateAiPreliminary").addEventListener("click", () => aiPreliminaryAction("calculate"));
-requiredElement("btnWindowScanEstimate").addEventListener("click", loadWindowScan);
+requiredElement("btnPrepareCodexHandoff").addEventListener("click", () => aiPreliminaryAction("prepare_codex_handoff"));
+requiredElement("btnApplyCodexResponse").addEventListener("click", () => aiPreliminaryAction("apply_codex_response"));
+requiredElement("btnResolveModelInputs").addEventListener("click", () => modelInputResolutionAction("resolve"));
+requiredElement("btnQueueSourceResearch").addEventListener("click", () => modelInputResolutionAction("queue_research"));
+requiredElement("btnRebuildResolvedPreliminary").addEventListener("click", () => modelInputResolutionAction("rebuild_preliminary_model"));
+requiredElement("btnAcceptResearchCandidate").addEventListener("click", () => modelInputResolutionAction("accept_research_candidate"));
+requiredElement("btnResolveRoomUses").addEventListener("click", () => roomUseResolutionAction("resolve"));
+requiredElement("btnResolveCeilingVolumes").addEventListener("click", () => ceilingVolumeResolutionAction("resolve"));
+requiredElement("btnResolveInternalGains").addEventListener("click", () => internalGainsResolutionAction("resolve"));
 requiredElement("btnWindowScanStart").addEventListener("click", () => windowScanAction("start"));
 requiredElement("btnWindowScanRetry").addEventListener("click", () => windowScanAction("retry"));
 requiredElement("btnWindowScanCancel").addEventListener("click", () => windowScanAction("cancel"));
+requiredElement("btnResolveOpeningSolar").addEventListener("click", resolveOpeningSolar);
 requiredElement("btnWindowOpeningReview").addEventListener("click", saveWindowOpeningReview);
+requiredElement("btnInferSiteLocation").addEventListener("click", inferSiteLocation);
+requiredElement("btnConfirmSiteLocation").addEventListener("click", confirmSiteLocation);
+requiredElement("btnResolveSiteLocation").addEventListener("click", resolveSiteLocation);
+requiredElement("btnSaveVentilationRulesContext").addEventListener("click", saveVentilationRulesContext);
+requiredElement("btnAcceptSiteMapSurvey").addEventListener("click", acceptSiteMapSurvey);
+requiredElement("btnSetSiteDesignWeatherBasis").addEventListener("click", setSiteDesignWeatherBasis);
+requiredElement("btnResolveSiteDesignWeather").addEventListener("click", resolveSiteDesignWeather);
+requiredElement("btnSelectSiteDesignWeatherCooling").addEventListener("click", () => selectSiteDesignWeather("cooling"));
+requiredElement("btnSelectSiteDesignWeatherHeating").addEventListener("click", () => selectSiteDesignWeather("heating"));
 requiredElement("btnSiteOrientationLookup").addEventListener("click", lookupSiteOrientation);
 requiredElement("btnSiteOrientationImagery").addEventListener("click", lookupSiteOrientationImagery);
 requiredElement("btnSaveSiteOrientation").addEventListener("click", saveSiteOrientation);
@@ -505,6 +937,8 @@ requiredElement("btnSaveCalculatorReview").addEventListener("click", () => saveC
 requiredElement("btnPreviewCalculatorDraft").addEventListener("click", () => saveCalculatorDraft("preview_apply"));
 requiredElement("btnApplyCalculatorDraft").addEventListener("click", () => saveCalculatorDraft("apply"));
 requiredElement("btnCalculateVentilation").addEventListener("click", calculateVentilation);
+const airflowResolverButton = document.getElementById("btnResolveAirflow");
+if (airflowResolverButton) airflowResolverButton.addEventListener("click", resolveAirflow);
 requiredElement("btnSaveInfiltrationGate").addEventListener("click", saveInfiltrationGate);
 requiredElement("btnSaveGlazingGate").addEventListener("click", saveGlazingGate);
 requiredElement("btnSaveShadingGate").addEventListener("click", saveShadingGate);
@@ -521,8 +955,13 @@ requiredElement("btnAddHourlyRoom").addEventListener("click", () => addHourlyRoo
 requiredElement("btnSaveHourlyModel").addEventListener("click", () => saveHourlyModel("save"));
 requiredElement("btnCalculateHourlyLoad").addEventListener("click", calculateHourlyLoad);
 requiredElement("btnCalculateHeatingLoad").addEventListener("click", calculateHeatingLoad);
+optionalElement("btnResolveSafetyFactor")?.addEventListener("click", resolveSafetyFactor);
 requiredElement("btnCalculateAhuLoad").addEventListener("click", calculateAhuLoad);
+optionalElement("btnResolveAhuResolution")?.addEventListener("click", () => resolveAhuResolution("resolve"));
+optionalElement("btnMaterializeAhuPreliminary")?.addEventListener("click", () => resolveAhuResolution("materialize_preliminary"));
 requiredElement("btnCalculatePlantLoad").addEventListener("click", calculatePlantLoad);
+optionalElement("btnResolvePlantResolution")?.addEventListener("click", () => resolvePlantResolution("resolve"));
+optionalElement("btnMaterializePlantPreliminary")?.addEventListener("click", () => resolvePlantResolution("materialize_preliminary"));
 requiredElement("btnCalculateAnnual").addEventListener("click", calculateAnnualEnergy);
 requiredElement("btnRefreshProjectHealth").addEventListener("click", loadProjectProductization);
 requiredElement("btnBuildCoolingPackage").addEventListener("click", () => buildReportPackage("cooling"));
@@ -553,6 +992,7 @@ requiredElement("btnAddWindow").addEventListener("click", () => addEnvelopeWindo
 requiredElement("btnAddBoundary").addEventListener("click", () => addEnvelopeBoundary());
 requiredElement("btnSaveEnvelope").addEventListener("click", saveEnvelope);
 requiredElement("btnMigrateEnvelope").addEventListener("click", migrateEnvelope);
+optionalElement("btnResolveThermalSurfaces")?.addEventListener("click", () => thermalSurfaceResolutionAction("resolve"));
 requiredElement("btnShowAllWorkflowTools").addEventListener("click", () => {
   const current = requiredElement("designRequirementsPanel").dataset.contractorStage;
   setContractorWorkflowStage(current === "all" ? "evidence" : "all");
@@ -563,15 +1003,151 @@ document.querySelectorAll("[data-contractor-stage]").forEach(button => button.ad
   setContractorWorkflowStage(button.dataset.contractorStage);
 }));
 
+async function guidedResolveModelInputs(){
+  const button = requiredElement("btnGuidedResolveModelInputs");
+  const status = requiredElement("guidedModelInputsStatus");
+  if (!DATA?.id) return toast("Analyse PDF first", "Confirm the drawing evidence before resolving model inputs.");
+  button.disabled = true;
+  status.textContent = "Running drawing, location, room, envelope, airflow, and system evidence checks…";
+  try {
+    const started = await fetch("/api/skill-workflow", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({project_id: DATA.id, action:"start"})});
+    const skillRun = await started.json();
+    if (!started.ok || skillRun.error) throw new Error(skillRun.error || "The evidence workflow could not start.");
+    let run = skillRun;
+    const deadline = Date.now() + 600000;
+    while (["queued", "running"].includes(run.status) && Date.now() < deadline){
+      await new Promise(resolve => setTimeout(resolve, 750));
+      const polled = await fetch(`/api/skill-workflow?project_id=${encodeURIComponent(DATA.id)}`);
+      run = await polled.json();
+      if (!polled.ok || run.error) throw new Error(run.error || "The evidence workflow status could not be loaded.");
+      const activeStage = (run.stages || []).find(stage => ["queued", "running"].includes(stage.status));
+      const reviewStage = (run.stages || []).find(stage => ["needs_review", "failed", "blocked", "provisional"].includes(stage.status));
+      status.textContent = activeStage
+        ? `${activeStage.label}…`
+        : reviewStage
+          ? `${reviewStage.label} has evidence exceptions; continuing with the available evidence…`
+          : "Preparing the evidence workflow…";
+    }
+    if (["queued", "running"].includes(run.status)) throw new Error("Evidence processing is still running. Check status again before retrying.");
+    if (["failed", "blocked", "stale"].includes(run.status)) throw new Error(run.remediation || "The evidence workflow needs attention before resolution can continue.");
+    status.textContent = "Evidence checks finished. Updating model-input coverage and remediation…";
+    const ok = await modelInputResolutionAction("resolve");
+    if (!ok) throw new Error("The consolidated resolver returned an error. Review the model-input status and remediation queue.");
+    status.textContent = "Coverage hydrated. Review provisional values and any remediation items before calculation.";
+  } catch (error) {
+    const detail = error?.resolver || {};
+    status.textContent = detail.code === "room_inference_pending"
+      ? "Room detection is still running. This action will be available again when it finishes."
+      : "Resolver could not complete; review the visible exception and remediation links.";
+    renderModelInputError(detail, error?.message || "The consolidated resolver could not complete.");
+    toast("Model input resolution", detail.remediation || error.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function renderModelInputError(detail, fallback){
+  const statusNode = optionalElement("modelInputResolutionStatus");
+  const results = optionalElement("modelInputResolutionResults");
+  const safe = detail || {};
+  if (statusNode) statusNode.textContent = `${safe.code || "resolver_error"} · ${safe.domain || "model inputs"} · ${safe.artifact || "model_input_resolution.json"}`;
+  if (!results) return;
+  const links = Array.isArray(safe.missing_artifacts) ? safe.missing_artifacts : [];
+  const actions = links.map(key => `<button type="button" class="secondary-button" data-model-remediation="${esc(key)}">Open ${esc(String(key).replaceAll("_", " "))}</button>`).join("");
+  results.innerHTML = `<article class="review-item readiness-blocked" role="alert"><div><b>${esc(safe.message || fallback)}</b><span>${esc(safe.domain || "Model inputs")} · ${esc(safe.artifact || "model_input_resolution.json")}</span><small>${esc(safe.remediation || "Retry the resolver and review the affected advanced editor.")}</small>${actions}</div></article>`;
+}
+
+function roomInferenceStatusText(status, count){
+  if (status === "queued" || status === "running") return "Finding rooms… downstream coverage will update automatically when this finishes.";
+  if (status === "completed") return count ? `Found ${count} room candidate${count === 1 ? "" : "s"}. Only uncertain or conflicting rooms need review.` : "No room candidates were found in the ranked plan/RCP pages.";
+  if (status === "failed") return "Room detection could not complete. The rest of the workspace remains available while you retry or review the selected pages.";
+  if (status === "stale") return "Room detection is stale because the drawing evidence or selected pages changed. Retry to refresh coverage.";
+  return "Room detection starts automatically after analysis and does not add another required step.";
+}
+
+function hydrateRoomInference(payload){
+  const info = payload?.room_inference || payload || {};
+  const status = info.status || "not_started";
+  const count = Number(info.candidate_count || 0);
+  const notice = optionalElement("roomInferenceNotice");
+  const statusNode = optionalElement("roomInferenceStatus");
+  if (notice) notice.dataset.status = status;
+  if (statusNode) statusNode.textContent = roomInferenceStatusText(status, count);
+  const retry = optionalElement("btnRetryRoomInference");
+  const review = optionalElement("btnReviewRoomEvidence");
+  const geometry = optionalElement("btnOpenRoomGeometry");
+  retry?.classList.toggle("hide", !["failed", "stale"].includes(status));
+  review?.classList.toggle("hide", !["failed", "stale"].includes(status) || count > 0);
+  geometry?.classList.toggle("hide", !["failed", "stale", "completed"].includes(status));
+  if (!WORKFLOW_STATE) return;
+  const stage = WORKFLOW_STATE.stages.rooms;
+  if (status === "queued" || status === "running") {
+    stage.status = "in_progress";
+    stage.total = Math.max(stage.total || 0, count);
+    stage.issues = [];
+  } else if (status === "completed") {
+    stage.total = count;
+    stage.resolved = count;
+    stage.included = count;
+    stage.status = count ? "provisional" : "needs_review";
+    stage.issues = count ? ["Review only low-confidence or conflicting rooms; closed geometry proof is still required for reviewed activation."] : ["No room candidates were detected from the ranked plan/RCP evidence."];
+    stage.remediations = count ? [{label: "Open geometry editor", target: "calculationEvidenceSection"}] : [{label: "Review selected pages", target: "vRes"}];
+    if (WORKFLOW_STATE.stages.internalGains.total === 0) WORKFLOW_STATE.stages.internalGains.total = count;
+  } else if (["failed", "stale"].includes(status)) {
+    stage.status = "needs_review";
+    stage.issues = [roomInferenceStatusText(status, count)];
+    stage.remediations = [{label: "Retry room detection", target: "workflowSkeleton"}, {label: "Open geometry editor", target: "calculationEvidenceSection"}];
+  }
+  saveWorkflowSkeleton();
+  renderWorkflowSkeleton();
+}
+
+async function startRoomInference(retry = false){
+  if (!DATA?.id) return toast("Analyse PDF first", "Room detection starts after the drawing set has been analysed.");
+  try {
+    const response = await fetch("/api/room-inference", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({project_id: DATA.id, action: retry ? "retry" : "start"})});
+    const payload = await response.json();
+    if (!response.ok || payload.error) throw new Error(payload.error || "Room detection could not start.");
+    hydrateRoomInference(payload);
+    loadRoomInference(false);
+  } catch (error) {
+    hydrateRoomInference({status: "failed"});
+    toast("Room detection failed", error.message);
+  }
+}
+
+async function loadRoomInference(startIfMissing = false){
+  if (!DATA?.id) return;
+  try {
+    let response = await fetch(`/api/room-inference?project_id=${encodeURIComponent(DATA.id)}`);
+    let payload = await response.json();
+    if (!response.ok || payload.error) throw new Error(payload.error || "Room detection status could not be loaded.");
+    let status = payload.status || payload.room_inference?.status || "not_started";
+    if (startIfMissing && ["not_started", "stale"].includes(status)) {
+      response = await fetch("/api/room-inference", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({project_id: DATA.id, action: status === "stale" ? "retry" : "start"})});
+      payload = await response.json();
+      if (!response.ok || payload.error) throw new Error(payload.error || "Room detection could not start.");
+      status = payload.status || payload.room_inference?.status || "queued";
+    }
+    hydrateRoomInference(payload);
+    if (["queued", "running"].includes(status)) {
+      if (ROOM_INFERENCE_POLL) clearTimeout(ROOM_INFERENCE_POLL);
+      ROOM_INFERENCE_POLL = setTimeout(() => loadRoomInference(false), 900);
+    }
+  } catch (error) {
+    hydrateRoomInference({status: "failed"});
+    console.warn("Room inference status failed", error);
+  }
+}
+
 async function confirmSelection(){
   if (!DATA || !Array.isArray(DATA.sheets)) return toast("Analyse PDF first", "Archie needs to identify the drawing pages before there is a selection to confirm.");
   if (ANALYSIS_IN_PROGRESS) return toast("Analysis in progress", "Archie is finding the drawing pages before it can confirm them.");
   if (CONFIRMATION_IN_PROGRESS) return;
   if (!PICK.size) return toast("Nothing selected", "Include at least one page before confirming.");
   CONFIRMATION_IN_PROGRESS = true;
-  requiredElement("btnConfirm").disabled = true;
-  requiredElement("btnConfirmTop").disabled = true;
   requiredElement("btnContinue").disabled = true;
+  let selectionConfirmed = false;
   requiredElement("statusText").textContent = "Preparing AI packet";
   requiredElement("statusSub").textContent = "Creating selected-page geometry and evidence files. This can take a moment.";
   const pages = DATA.sheets.filter(s => PICK.has(s.page)).map(s => ({
@@ -589,6 +1165,7 @@ async function confirmSelection(){
     });
     const data = await res.json();
     if (!res.ok || data.error) throw new Error(data.error || "Could not save the selection.");
+    selectionConfirmed = true;
     PACKET = data.chatgpt_packet || null;
     DATA.chatgpt_packet = PACKET;
     const links = [`<a href="${data.ai_input_url}" target="_blank" rel="noopener">ai_input.json</a>`];
@@ -598,19 +1175,30 @@ async function confirmSelection(){
     toast("Selection confirmed",
       `${pages.length} page${pages.length===1?"":"s"} packaged for one ChatGPT vision review. ` +
       links.join(" · "));
+    requiredElement("statusText").textContent = "AI packet ready";
+    requiredElement("statusSub").textContent = `${pages.length} selected evidence page${pages.length === 1 ? "" : "s"} are ready for the guided resolver.`;
+    requiredElement("summaryTitle").textContent = "AI packet ready";
+    requiredElement("summaryLead").textContent = "The selected evidence has been packaged. Run Resolve model inputs to hydrate the draft coverage and review queue.";
+    requiredElement("nextActionTitle").textContent = "Resolve model inputs";
+    requiredElement("nextActionText").textContent = "Use the single guided resolver first; advanced AI and window controls remain available below for recovery and testing.";
+    requiredElement("workflowSkeleton").classList.remove("hide");
+    requiredElement("btnContinue").textContent = "Drawings confirmed";
     showVisionPanel();
   } catch (err) {
     toast("Could not confirm", err.message);
   } finally {
     CONFIRMATION_IN_PROGRESS = false;
-    requiredElement("btnConfirm").disabled = false;
-    requiredElement("btnConfirmTop").disabled = false;
-    requiredElement("btnContinue").disabled = false;
+    requiredElement("btnContinue").textContent = selectionConfirmed ? "Drawings confirmed" : "Confirm selected drawings";
+    requiredElement("btnContinue").disabled = selectionConfirmed;
   }
 }
 
 function showVisionPanel(){
   requiredElement("visionPanel").classList.remove("hide");
+  // Confirmation can change the selected-page context. Reuse the same
+  // persisted job (or retry it when its source fingerprint is stale) without
+  // adding another mandatory contractor step.
+  loadRoomInference(true);
   loadVisionExtraction();
   loadAiPreliminary();
   loadWindowScan();
@@ -621,6 +1209,8 @@ function focusWorkflowTarget(id){
   if (target.classList.contains("hide")) {
     return toast("Complete the previous step first", "Confirm the selected drawings before opening the reviewed workspace.");
   }
+  const details = target.closest("details");
+  if (details) details.open = true;
   target.scrollIntoView({behavior: "smooth", block: "start"});
   target.setAttribute("tabindex", "-1");
   target.focus({preventScroll: true});
@@ -717,14 +1307,22 @@ async function loadWindowScan(){
 }
 
 function drawWindowScan(data){
-  const estimate = data.estimate || {}, job = data.job || {}, register = data.register || {};
-  const cost = estimate.estimate_available ? `$${Number(estimate.estimated_cost_aud).toFixed(2)} AUD` : "cost rate not configured";
-  requiredElement("windowScanStatus").textContent = `${estimate.page_count || 0} pages · ${estimate.batch_count || 0} batches + matching · ${cost} · ${job.status || data.register_status || "not scanned"}${job.total_batches ? ` · ${job.completed_batches || 0}/${job.total_batches} done` : ""}${job.error ? ` · ${job.error}` : ""}`;
+  const scope = data.scope || {}, job = data.job || {}, register = data.register || {};
+  requiredElement("windowScanStatus").textContent = `${scope.page_count || 0} pages · ${scope.batch_count || 0} batches + matching · ${job.status || data.register_status || "not scanned"}${job.total_batches ? ` · ${job.completed_batches || 0}/${job.total_batches} done` : ""}${job.error ? ` · ${job.error}` : ""}`;
   const active = ["queued", "running", "cancel_requested"].includes(job.status);
-  requiredElement("btnWindowScanStart").disabled = active || !estimate.estimate_available;
+  requiredElement("btnWindowScanStart").disabled = active;
   requiredElement("btnWindowScanRetry").classList.toggle("hide", !["failed", "cancelled", "interrupted"].includes(job.status));
   requiredElement("btnWindowScanCancel").classList.toggle("hide", !active);
   const openings = register.openings || [];
+  const openingStatuses = openings.reduce((counts, row) => {
+    const status = row.opening_solar_status === "eligible" ? "eligible" : row.status || "proposed";
+    counts[status] = (counts[status] || 0) + 1;
+    return counts;
+  }, {});
+  requiredElement("openingSolarStatus").textContent = register.opening_solar_policy
+    ? `${openingStatuses.eligible || 0} opening(s) solar-eligible · ${openingStatuses.provisional || 0} provisional · ${openingStatuses.blocked || 0} blocked · rebuild when orientation, properties, and cited solar are current.`
+    : "Opening-to-solar resolution has not been rebuilt.";
+  requiredElement("btnResolveOpeningSolar").disabled = !register.fingerprint || ["queued", "running", "cancel_requested"].includes(job.status);
   requiredElement("windowOpeningChoices").innerHTML = openings.map(row => `<option value="${esc(row.opening_id)}">${esc(row.system_name || row.tag || "Untitled opening")} · page ${esc(row.page || "?")}</option>`).join("");
   requiredElement("windowScanResults").innerHTML = openings.length
     ? `<p class="fine">${esc(register.pages_inspected?.length || 0)} pages inspected · ${esc(register.sightings?.length || 0)} sightings · ${esc(openings.length)} proposed clusters. Rebuild calculation-input evidence to view these in the envelope workflow.</p>` + openingEvidenceMarkup(openings, false, true)
@@ -750,7 +1348,6 @@ function drawWindowScan(data){
 async function windowScanAction(action){
   if (!DATA?.id) return;
   try {
-    if (["start", "retry"].includes(action)) await visionExtractionAction("estimate");
     const response = await fetch("/api/window-scan", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({
       project_id: DATA.id, action, confirm_all_pages: requiredElement("windowScanConfirm").checked,
     })});
@@ -758,6 +1355,19 @@ async function windowScanAction(action){
     if (!response.ok || data.error) throw new Error(data.error || "Window scan failed.");
     drawWindowScan(data);
   } catch (error) { toast("Window scan", error.message); }
+}
+
+async function resolveOpeningSolar(){
+  if (!DATA?.id) return;
+  try {
+    const response = await fetch("/api/window-scan", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({
+      project_id: DATA.id, action:"resolve_opening_solar", resolution_mode:"preliminary_ai_estimate",
+    })});
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || "Opening-to-solar resolution failed.");
+    drawWindowScan(data);
+    toast("Opening-to-solar resolution", "Opening geometry, exposure, properties, orientation, and solar coverage were rebuilt. Review blocked items before calculation.");
+  } catch (error) { toast("Opening-to-solar resolution", error.message); }
 }
 
 async function saveWindowOpeningReview(){
@@ -795,6 +1405,194 @@ async function loadSiteOrientation(){
     if (!response.ok || data.error) throw new Error(data.error || "Could not load site orientation.");
     drawSiteOrientation(data);
   } catch (error) { requiredElement("siteOrientationStatus").textContent = error.message; }
+}
+
+async function loadSiteLocation(){
+  if (!DATA?.id) return;
+  try {
+    const response = await fetch(`/api/site-location-resolution?project_id=${encodeURIComponent(DATA.id)}`);
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || "Could not load project location.");
+    drawSiteLocation(data);
+    await loadAustralianVentilationRules();
+  } catch (error) { requiredElement("siteLocationStatus").textContent = error.message; }
+}
+
+async function loadAustralianVentilationRules(){
+  if (!DATA?.id) return;
+  try {
+    const response = await fetch(`/api/au-ventilation-rules?project_id=${encodeURIComponent(DATA.id)}`);
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || "Could not load Australian ventilation rules.");
+    drawAustralianVentilationRules(data);
+  } catch (error) { requiredElement("ventilationRulesStatus").textContent = error.message; }
+}
+
+function drawAustralianVentilationRules(data){
+  const context = data.project_regulatory_context || {};
+  const resolution = data.ventilation_rules_resolution || {};
+  if (document.activeElement !== requiredElement("buildingApprovalDate")) requiredElement("buildingApprovalDate").value = context.building_approval_application_date || "";
+  if (document.activeElement !== requiredElement("nccBuildingClass")) requiredElement("nccBuildingClass").value = context.building_class || "unknown";
+  if (document.activeElement !== requiredElement("projectBuildingUse")) requiredElement("projectBuildingUse").value = context.building_use || "";
+  if (document.activeElement !== requiredElement("projectVentilationBasis")) requiredElement("projectVentilationBasis").value = context.project_specific_ventilation_basis || "";
+  const jurisdiction = resolution.jurisdiction || "location not resolved";
+  const edition = resolution.ncc_edition || "NCC edition unresolved";
+  const rows = (resolution.zone_results || []).map(row => `<article class="review-item"><div><b>${esc(row.zone_id || "Zone")} · ${esc(row.status.replaceAll("_", " "))}</b><span>${esc(row.message || "")}</span>${row.rule_id ? `<small>Rule ${esc(row.rule_id)}</small>` : ""}</div></article>`).join("");
+  const releaseMessage = data.ruleset_status === "released" ? "Reviewed Australian ruleset" : "Australian ruleset has no reviewed ventilation rates yet; no rates are being inferred or auto-filled.";
+  requiredElement("ventilationRulesStatus").textContent = `${jurisdiction} · ${edition} · ${releaseMessage}`;
+  requiredElement("ventilationRulesResults").innerHTML = rows || `<p class="fine">Save zones with a clear room use to check for a matching reviewed rule.</p>`;
+}
+
+async function saveVentilationRulesContext(){
+  try {
+    const response = await fetch("/api/au-ventilation-rules", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({
+      project_id:DATA.id,
+      project_regulatory_context:{
+        building_approval_application_date:requiredElement("buildingApprovalDate").value,
+        building_class:requiredElement("nccBuildingClass").value,
+        building_use:requiredElement("projectBuildingUse").value.trim(),
+        project_specific_ventilation_basis:requiredElement("projectVentilationBasis").value.trim(),
+      },
+    })});
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.message || data.error || "Could not save project rules context.");
+    drawAustralianVentilationRules(data);
+    toast("Rules context saved", "Matching updates automatically when design inputs are saved.");
+  } catch (error) { toast("Australian ventilation rules", error.message); }
+}
+
+function drawSiteLocation(data){
+  const location = data.site_location_resolution || {};
+  const geocode = location.geocode || {};
+  const context = location.pdf_context || {};
+  if (document.activeElement !== requiredElement("siteLocationAddress")) requiredElement("siteLocationAddress").value = location.confirmed_address || "";
+  requiredElement("siteLocationConsent").checked = Boolean(location.external_lookup_consent);
+  requiredElement("siteLocationStatus").textContent = `${data.status || "inferred"} · ${(context.address_candidates || []).length} PDF address clue${(context.address_candidates || []).length === 1 ? "" : "s"} · ${(geocode.candidates || []).length} geocode candidate${(geocode.candidates || []).length === 1 ? "" : "s"}. Address coordinates do not prove façade direction.`;
+  requiredElement("siteLocationCandidate").innerHTML = `<option value="">${(geocode.candidates || []).length ? "Choose the exact returned address" : "Resolve location to retrieve candidates"}</option>${(geocode.candidates || []).map(row => `<option value="${esc(row.candidate_id)}">${esc(row.formatted_address)} · ${esc(row.locality || row.state || "Australian location")}</option>`).join("")}`;
+  requiredElement("siteLocationCandidate").value = geocode.selected_candidate_id || "";
+  const addressRows = (context.address_candidates || []).map(row => `<article class="review-item"><div><b>PDF address clue · ${esc(row.confidence)}</b><span>${esc(row.address)}</span><small>${esc(row.source?.drawing_number || "PDF page")} · page ${esc(row.source?.page || "?")} · ${esc(row.source?.excerpt || "")}</small></div></article>`).join("");
+  const resolved = location.location || {};
+  const locationRow = resolved.latitude_deg == null ? "" : `<article class="review-item"><div><b>Resolved location</b><span>${esc(resolved.locality || "Locality unavailable")} · ${esc(resolved.state || "state unavailable")} · ${esc(resolved.timezone || "timezone unavailable")}</span><small>${esc(resolved.latitude_deg)}, ${esc(resolved.longitude_deg)}${resolved.elevation?.elevation_m == null ? " · elevation pending" : ` · ${esc(resolved.elevation.elevation_m)} m cited elevation`}</small></div></article>`;
+  requiredElement("siteLocationResults").innerHTML = addressRows + locationRow || `<p class="fine">No address clue was found. Enter the confirmed project address directly.</p>`;
+}
+
+async function siteLocationAction(payload){
+  const response = await fetch("/api/site-location-resolution", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({project_id:DATA.id, ...payload})});
+  const data = await response.json();
+  if (!response.ok || data.error) throw new Error(data.message || data.error || "Location request failed.");
+  drawSiteLocation(data);
+  await loadAustralianVentilationRules();
+  return data;
+}
+
+async function inferSiteLocation(){
+  try {
+    await siteLocationAction({action:"infer_from_pdf"});
+    toast("Site clues found", "Confirm the correct project address before any external location lookup.");
+  } catch (error) { toast("Project location", error.message); }
+}
+
+async function confirmSiteLocation(){
+  try {
+    await siteLocationAction({action:"confirm_address", confirmed_address:requiredElement("siteLocationAddress").value.trim(), confirm_address:requiredElement("siteLocationConsent").checked});
+    toast("Address confirmed", "Resolve the location to retrieve G-NAF candidates.");
+  } catch (error) { toast("Project location", error.message); }
+}
+
+async function resolveSiteLocation(){
+  try {
+    await siteLocationAction({action:"resolve_location", geocode_candidate_id:requiredElement("siteLocationCandidate").value});
+    toast("Location resolution", "Choose a returned address if more than one candidate is available. Weather candidates remain draft-only.");
+  } catch (error) { toast("Project location", error.message); }
+}
+
+async function selectSiteWeather(){
+  // Kept only for external integrations that still call this legacy helper.
+  return resolveSiteDesignWeather();
+}
+
+async function acceptSiteMapSurvey(){
+  try {
+    await siteLocationAction({action:"accept_map_or_survey", evidence:{source:requiredElement("siteLocationMapSource").value.trim(), citation:requiredElement("siteLocationMapCitation").value.trim(), true_north_basis:requiredElement("siteLocationNorthBasis").value.trim()}});
+    toast("Map or survey reference saved", "Use the existing site-and-façade orientation review to confirm host walls and outward azimuths.");
+  } catch (error) { toast("Map or survey", error.message); }
+}
+
+async function loadSiteDesignWeather(){
+  if (!DATA?.id) return;
+  try {
+    const response = await fetch(`/api/site-design-weather-resolution?project_id=${encodeURIComponent(DATA.id)}`);
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || "Could not load design weather.");
+    drawSiteDesignWeather(data);
+  } catch (error) { requiredElement("siteDesignWeatherStatus").textContent = error.message; }
+}
+
+function weatherOption(row){
+  const profile = row.profile || {};
+  const coverage = Array.isArray(profile.hours) ? `${profile.hours.length} hourly values` : "point-only";
+  return `<option value="${esc(row.record_id)}">${esc(row.station_reference || row.record_id)} · ${coverage} · ${esc(row.expiry || "expiry unavailable")}</option>`;
+}
+
+function weatherReviewRows(mode, data){
+  const selected = data.selected || {};
+  const candidates = data.candidates || [];
+  const conflicts = data.conflicts || [];
+  const selectedHours = selected.profile?.hours || [];
+  const wetBulbBases = [...new Set(selectedHours.map(hour => hour.wet_bulb_basis).filter(Boolean))];
+  const derivedWetBulbHours = Object.keys(selected.conversion || {}).length;
+  const psychrometricBasis = selected.record_id
+    ? `<small>Wet-bulb basis: ${esc(wetBulbBases.join(", ") || "not recorded")}${derivedWetBulbHours ? ` · ${derivedWetBulbHours} hour(s) derived from dew point` : ""}</small>`
+    : "";
+  const selection = selected.record_id ? `<article class="review-item"><div><b>${esc(mode)} selected · ${esc(data.selection || "selected")}</b><span>${esc(selected.publisher || "AIRAH")} · ${esc(selected.station_reference || selected.record_id)} · ${esc(selected.release_version || "")}</span><small>${esc(selected.citation || "Cited licensed source")} · ${esc(selected.expiry || "")}</small>${psychrometricBasis}</div></article>` : `<article class="review-item"><div><b>${esc(mode)} not selected</b><small>Draft calculations will not use a generic replacement.</small></div></article>`;
+  const conflictRows = conflicts.map(row => `<article class="review-item"><div><b>${esc(mode)} needs attention</b><small>${esc(row.message || row.code || "Choose a compatible profile.")}</small></div></article>`).join("");
+  const candidateRows = candidates.filter(row => row.record_id !== selected.record_id).slice(0, 4).map(row => `<article class="review-item"><div><b>${esc(mode)} alternative · ${esc(row.station_reference || row.record_id)}</b><small>${esc(row.calculation_eligible ? "24-hour profile" : "point-only — not calculation eligible")} · ${esc(row.selection_rationale || "")}</small></div></article>`).join("");
+  return selection + conflictRows + candidateRows;
+}
+
+function drawSiteDesignWeather(data){
+  const weather = data.site_design_weather_resolution || {};
+  if (document.activeElement !== requiredElement("siteDesignWeatherBasis")) requiredElement("siteDesignWeatherBasis").value = weather.design_basis || "";
+  const cooling = weather.cooling || {}, heating = weather.heating || {};
+  requiredElement("siteDesignWeatherCooling").innerHTML = `<option value="">${(cooling.candidates || []).length ? "Choose a cooling candidate" : "No cooling candidates yet"}</option>${(cooling.candidates || []).map(weatherOption).join("")}`;
+  requiredElement("siteDesignWeatherHeating").innerHTML = `<option value="">${(heating.candidates || []).length ? "Choose a heating candidate" : "No heating candidates yet"}</option>${(heating.candidates || []).map(weatherOption).join("")}`;
+  requiredElement("siteDesignWeatherCooling").value = cooling.selected?.record_id || "";
+  requiredElement("siteDesignWeatherHeating").value = heating.selected?.record_id || "";
+  requiredElement("siteDesignWeatherStatus").textContent = `${data.status || "awaiting_location"} · ${weather.design_basis || "no basis selected"} · cooling ${(cooling.candidates || []).length} candidate${(cooling.candidates || []).length === 1 ? "" : "s"} · heating ${(heating.candidates || []).length} candidate${(heating.candidates || []).length === 1 ? "" : "s"}. Draft-only; reviewed conditions are unchanged.`;
+  requiredElement("siteDesignWeatherResults").innerHTML = weatherReviewRows("Cooling", cooling) + weatherReviewRows("Heating", heating);
+}
+
+async function siteDesignWeatherAction(payload){
+  const response = await fetch("/api/site-design-weather-resolution", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({project_id:DATA.id, ...payload})});
+  const data = await response.json();
+  if (!response.ok || data.error) throw new Error(data.message || data.error || "Design-weather request failed.");
+  drawSiteDesignWeather(data);
+  return data;
+}
+
+async function setSiteDesignWeatherBasis(){
+  try {
+    const basis = requiredElement("siteDesignWeatherBasis").value;
+    if (!basis) throw new Error("Choose comfort or critical design conditions.");
+    await siteDesignWeatherAction({action:"set_design_basis", design_basis:basis});
+    toast("Design basis saved", "Resolve current licensed cooling and heating candidates next.");
+  } catch (error) { toast("Design weather", error.message); }
+}
+
+async function resolveSiteDesignWeather(){
+  try {
+    await siteDesignWeatherAction({action:"resolve_candidates"});
+    toast("Design weather resolved", "The best compatible profiles were selected for draft use unless an equally ranked conflict needs your choice.");
+  } catch (error) { toast("Design weather", error.message); }
+}
+
+async function selectSiteDesignWeather(scenario){
+  try {
+    const id = requiredElement(scenario === "cooling" ? "siteDesignWeatherCooling" : "siteDesignWeatherHeating").value;
+    if (!id) throw new Error(`Choose a ${scenario} candidate first.`);
+    await siteDesignWeatherAction({action:"select_candidate", scenario, record_id:id});
+    toast("Design weather selected", `The ${scenario} profile remains draft-only. Rebuild the AI preliminary model to use the cooling selection.`);
+  } catch (error) { toast("Design weather", error.message); }
 }
 
 function drawSiteOrientation(data){
@@ -856,7 +1654,6 @@ async function uploadSiteOrientationEvidence(){
 function visionSettings(){
   return {
     owner_opt_in: requiredElement("visionOptIn").checked,
-    max_budget_aud: requiredElement("visionBudget").value === "" ? null : Number(requiredElement("visionBudget").value),
     selected_group_ids: [...requiredElement("visionGroups").querySelectorAll("input:checked")].map(input => input.value),
   };
 }
@@ -875,18 +1672,30 @@ function drawVisionExtraction(data){
   VISION_EXTRACTION = data;
   const settings = data.settings || {};
   requiredElement("visionOptIn").checked = !!settings.owner_opt_in;
-  requiredElement("visionBudget").value = settings.max_budget_aud ?? "";
   const selected = new Set(settings.selected_group_ids || data.available_groups?.map(group => group.group_id) || []);
-  requiredElement("visionGroups").innerHTML = (data.available_groups || []).map(group => `<label><input type="checkbox" value="${esc(group.group_id)}" ${selected.has(group.group_id) ? "checked" : ""}> ${esc(group.title)} (${group.pages.length} page${group.pages.length === 1 ? "" : "s"})</label>`).join("") || "<span>No eligible page groups are available yet.</span>";
-  const job = data.job || {}, estimate = data.estimate || {};
+  requiredElement("visionGroups").innerHTML = (data.available_groups || []).map(group => `<label class="vision-checkbox-row"><input type="checkbox" value="${esc(group.group_id)}" ${selected.has(group.group_id) ? "checked" : ""}><span><b>${esc(group.title)}</b><small>${group.pages.length} page${group.pages.length === 1 ? "" : "s"}</small></span></label>`).join("") || "<span>No eligible page groups are available yet.</span>";
+  const job = data.job || {}, selection = data.selection || {};
   const progress = job.total_groups ? ` · ${job.completed_groups || 0}/${job.total_groups} groups` : "";
-  requiredElement("visionStatus").textContent = job.status ? `${job.status}${progress}${job.error ? ` · ${job.error}` : ""}` : (estimate.estimate_available ? `Estimate: $${estimate.estimated_cost_aud.toFixed(2)} AUD for ${estimate.request_count} request(s).` : "Set a server-side estimate rate before starting.");
+  const pageCount = Number(selection.page_count || 0);
+  const groupCount = Number(selection.group_count || 0);
+  requiredElement("visionScopeSummary").textContent = groupCount
+    ? `${pageCount} selected page${pageCount === 1 ? "" : "s"} across ${groupCount} evidence group${groupCount === 1 ? "" : "s"}.`
+    : "No evidence groups selected.";
+  requiredElement("visionStatus").textContent = job.status
+    ? `${job.status}${progress}${job.error ? ` · ${job.error}` : ""}`
+    : `${pageCount} selected rendered page${pageCount === 1 ? "" : "s"} will be sent in ${selection.request_count || 0} request${selection.request_count === 1 ? "" : "s"}.`;
   const active = ["queued", "running", "cancel_requested"].includes(job.status);
-  requiredElement("btnVisionStart").disabled = active;
+  const startBlocker = active ? "An AI extraction job is already in progress."
+    : !settings.owner_opt_in ? "Approve AI processing before starting."
+    : !groupCount ? "Select at least one evidence group before starting."
+    : !data.provider_configured ? "The AI provider is not configured for this workspace."
+    : "Ready to send the selected evidence to the configured AI provider.";
+  requiredElement("btnVisionStart").disabled = startBlocker !== "Ready to send the selected evidence to the configured AI provider.";
+  requiredElement("visionStartHelp").textContent = startBlocker;
   requiredElement("btnVisionCancel").classList.toggle("hide", !active);
   requiredElement("btnVisionRetry").classList.toggle("hide", !["failed", "cancelled", "interrupted"].includes(job.status));
-  const links = Object.entries(data.artifact_links || {}).map(([name, url]) => `<a class="btn ghost mini" href="${url}" target="_blank" rel="noopener">${esc(name)}</a>`).join(" ");
-  requiredElement("visionLinks").innerHTML = `<article class="review-item"><div><b>Evidence-only scope</b><span>Topology and geometry only; extraction cannot activate cooling inputs or a thermal envelope.</span></div>${links}</article>`;
+  const links = Object.entries(data.artifact_links || {}).map(([name, url]) => `<a class="btn ghost mini" href="${url}" target="_blank" rel="noopener">${esc(name)}</a>`).join("");
+  requiredElement("visionLinks").innerHTML = `<article class="review-item"><div><b>Evidence-only scope</b><span>Topology and geometry only; extraction cannot activate cooling inputs or a thermal envelope.</span></div><div class="artifact-links">${links || "<span>No extraction artifacts are available yet.</span>"}</div></article>`;
   if (VISION_POLL) clearTimeout(VISION_POLL);
   if (active) VISION_POLL = setTimeout(loadVisionExtraction, 2000);
 }
@@ -906,7 +1715,6 @@ function aiPreliminarySettings(){
   return {
     automatic_analysis_enabled: requiredElement("aiPreliminaryAuto").checked,
     saved_project_consent: requiredElement("aiPreliminaryConsent").checked,
-    maximum_provider_budget_aud: requiredElement("aiPreliminaryBudget").value === "" ? null : Number(requiredElement("aiPreliminaryBudget").value),
   };
 }
 
@@ -917,28 +1725,247 @@ async function loadAiPreliminary(){
     const data = await response.json();
     if (!response.ok || data.error) throw new Error(data.error || "Could not load the AI preliminary model.");
     drawAiPreliminary(data);
+    loadRoomUseResolution();
+    loadCeilingVolumeResolution();
+    loadInternalGainsResolution();
   } catch (error) { requiredElement("aiPreliminaryStatus").textContent = error.message; }
+}
+
+async function loadRoomUseResolution(){
+  if (!DATA?.id) return;
+  try {
+    const response = await fetch(`/api/room-use-resolution?project_id=${encodeURIComponent(DATA.id)}`);
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || "Could not load room-use resolution.");
+    drawRoomUseResolution(data);
+  } catch (error) { requiredElement("roomUseResolutionStatus").textContent = error.message; }
+}
+
+function drawRoomUseResolution(data){
+  const artifact = data.room_use_resolution || {};
+  const records = Array.isArray(artifact.records) ? artifact.records : [];
+  const taxonomy = data.taxonomy || {};
+  const visible = records.filter(row => row.status !== "resolved" || row.confidence_score < 0.8 || ["refrigeration_process", "unresolved_scope"].includes(row.space_scope));
+  const resolved = records.filter(row => row.status === "resolved").length;
+  requiredElement("roomUseResolutionStatus").textContent = records.length
+    ? `${resolved} resolved · ${visible.length} needing attention · ${data.status || artifact.status || "current"}${artifact.stale_reasons?.length ? ` · ${artifact.stale_reasons.join(" ")}` : ""}`
+    : "Resolve room uses after architect evidence is available.";
+  const options = Object.entries(taxonomy).map(([id, label]) => `<option value="${esc(id)}">${esc(label)}</option>`).join("");
+  requiredElement("roomUseResolutionResults").innerHTML = visible.length ? visible.map(row => {
+    const evidence = (row.evidence || []).map(ref => `${ref.drawing_number || "source"}${ref.page ? ` p.${ref.page}` : ""}`).join(" · ") || "No cited page";
+    const selected = row.override?.taxonomy_id || row.taxonomy_id || "generic_conditioned";
+    const choices = options.replace(`value="${esc(selected)}"`, `value="${esc(selected)}" selected`);
+    return `<article class="review-item readiness-${esc(row.status === "excluded" ? "blocked" : row.status === "needs_review" ? "draft" : "review_ready")}" data-room-use-id="${esc(row.room_id)}"><div><b>${esc(row.original_label)} · ${esc(row.taxonomy_label)}</b><span>${esc(row.space_scope)} · ${esc(row.preliminary_profile_id || "excluded from comfort HVAC")} · ${esc(row.confidence_band)} confidence</span><small>${esc(row.rationale || "Review this room-use classification.")}</small><small>Evidence: ${esc(evidence)}</small>${row.alternatives?.length ? `<small>Alternatives: ${esc(row.alternatives.join(", "))}</small>` : ""}${row.remediation ? `<small>Next step: ${esc(row.remediation)}</small>` : ""}</div><div class="requirements-form"><label>Room use<select data-room-use-category>${choices}</select></label><label>Reviewer<input data-room-use-reviewer placeholder="Name / initials"></label><label>Note<input data-room-use-note placeholder="Why this classification applies"></label></div><div class="bar"><button class="btn ghost mini" type="button" data-room-use-override>Save classification</button>${row.override ? `<button class="btn ghost mini" type="button" data-room-use-clear>Restore AI/PDF classification</button>` : ""}</div></article>`;
+  }).join("") : records.length ? "<p class=\"review-empty\">No uncertain or high-impact room-use classifications need attention.</p>" : "";
+  requiredElement("roomUseResolutionResults").querySelectorAll("[data-room-use-override]").forEach(button => button.addEventListener("click", () => {
+    const card = button.closest("[data-room-use-id]");
+    roomUseResolutionAction("apply_override", {room_id: card.dataset.roomUseId, taxonomy_id: card.querySelector("[data-room-use-category]").value, reviewer: card.querySelector("[data-room-use-reviewer]").value.trim(), note: card.querySelector("[data-room-use-note]").value.trim()});
+  }));
+  requiredElement("roomUseResolutionResults").querySelectorAll("[data-room-use-clear]").forEach(button => button.addEventListener("click", () => {
+    roomUseResolutionAction("clear_override", {room_id: button.closest("[data-room-use-id]").dataset.roomUseId});
+  }));
+}
+
+async function roomUseResolutionAction(action, details = {}){
+  if (!DATA?.id) return toast("No project selected", "Open or analyse a project first.");
+  try {
+    const response = await fetch("/api/room-use-resolution", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({project_id: DATA.id, action, ...details})});
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || "Could not resolve room uses.");
+    drawRoomUseResolution(data);
+    await loadAiPreliminary();
+    if (action === "apply_override") toast("Room use saved", "The preliminary model is now stale; rebuild it to apply this controlled profile.");
+  } catch (error) { toast("Room-use resolution", error.message); }
+}
+
+async function loadCeilingVolumeResolution(){
+  if (!DATA?.id) return;
+  try {
+    const response = await fetch(`/api/ceiling-volume-resolution?project_id=${encodeURIComponent(DATA.id)}`);
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || "Could not load ceiling-height resolution.");
+    drawCeilingVolumeResolution(data);
+  } catch (error) { requiredElement("ceilingVolumeResolutionStatus").textContent = error.message; }
+}
+
+function drawCeilingVolumeResolution(data){
+  const artifact = data.ceiling_volume_resolution || {};
+  const records = Array.isArray(artifact.records) ? artifact.records : [];
+  const visible = records.filter(row => row.status === "stale" || row.status === "needs_review" || row.origin === "preliminary_fallback" || row.status === "conflict" || row.confidence_score < 0.8 || row.volume_m3 == null);
+  const resolved = records.filter(row => row.status === "resolved").length;
+  requiredElement("ceilingVolumeResolutionStatus").textContent = records.length
+    ? `${resolved} cited · ${visible.length} needing attention · ${data.status || artifact.status || "current"}${artifact.stale_reasons?.length ? ` · ${artifact.stale_reasons.join(" ")}` : ""}`
+    : "Resolve ceiling heights after architect evidence is available.";
+  requiredElement("ceilingVolumeResolutionResults").innerHTML = visible.length ? visible.map(row => {
+    const evidence = (row.evidence || []).map(ref => `${ref.drawing_number || "source"}${ref.page ? ` p.${ref.page}` : ""}`).join(" · ") || "No cited page";
+    const height = row.ceiling_height_mm == null ? "—" : `${row.ceiling_height_mm} mm`;
+    const volume = row.volume_m3 == null ? "Area still required" : `${Number(row.volume_m3).toFixed(2)} m³`;
+    return `<article class="review-item readiness-${esc(row.status === "conflict" ? "blocked" : row.origin === "preliminary_fallback" ? "draft" : "review_ready")}" data-ceiling-room-id="${esc(row.room_id)}"><div><b>${esc(row.original_label)} · ${esc(row.level_name)}</b><span>${esc(height)} · ${esc(volume)} · ${esc(row.origin.replaceAll("_", " "))}</span><small>${esc(row.rationale || "Review this ceiling-height value.")}</small><small>Evidence: ${esc(evidence)}</small>${row.conflicts?.length ? `<small>Conflict: ${esc(row.conflicts.join(" "))}</small>` : ""}${row.remediation ? `<small>Next step: ${esc(row.remediation)}</small>` : ""}</div><div class="requirements-form"><label>Ceiling height (mm)<input data-ceiling-height type="number" min="1" step="1" value="${row.override?.height_mm ?? ""}"></label><label>Reviewer<input data-ceiling-reviewer placeholder="Name / initials"></label><label>Note<input data-ceiling-note placeholder="Why this height applies"></label></div><div class="bar"><button class="btn ghost mini" type="button" data-ceiling-override>Save height</button>${row.override ? `<button class="btn ghost mini" type="button" data-ceiling-clear>Restore AI/PDF height</button>` : ""}</div></article>`;
+  }).join("") : records.length ? "<p class=\"review-empty\">No uncertain ceiling heights need attention.</p>" : "";
+  requiredElement("ceilingVolumeResolutionResults").querySelectorAll("[data-ceiling-override]").forEach(button => button.addEventListener("click", () => {
+    const card = button.closest("[data-ceiling-room-id]");
+    ceilingVolumeResolutionAction("apply_override", {room_id: card.dataset.ceilingRoomId, ceiling_height_mm: card.querySelector("[data-ceiling-height]").value, reviewer: card.querySelector("[data-ceiling-reviewer]").value.trim(), note: card.querySelector("[data-ceiling-note]").value.trim()});
+  }));
+  requiredElement("ceilingVolumeResolutionResults").querySelectorAll("[data-ceiling-clear]").forEach(button => button.addEventListener("click", () => {
+    ceilingVolumeResolutionAction("clear_override", {room_id: button.closest("[data-ceiling-room-id]").dataset.ceilingRoomId});
+  }));
+}
+
+async function ceilingVolumeResolutionAction(action, details = {}){
+  if (!DATA?.id) return toast("No project selected", "Open or analyse a project first.");
+  try {
+    const response = await fetch("/api/ceiling-volume-resolution", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({project_id: DATA.id, action, ...details})});
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || "Could not resolve ceiling heights.");
+    drawCeilingVolumeResolution(data);
+    await loadAiPreliminary();
+    if (action === "apply_override") toast("Ceiling height saved", "The preliminary model is now stale; rebuild it to use the updated room volume.");
+  } catch (error) { toast("Ceiling heights", error.message); }
+}
+
+async function loadInternalGainsResolution(){
+  if (!DATA?.id) return;
+  try {
+    const response = await fetch(`/api/internal-gains-resolution?project_id=${encodeURIComponent(DATA.id)}`);
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || "Could not load internal-gains resolution.");
+    drawInternalGainsResolution(data);
+  } catch (error) { requiredElement("internalGainsResolutionStatus").textContent = error.message; }
+}
+
+function drawInternalGainsResolution(data){
+  const artifact = data.internal_gains_resolution || {};
+  const records = Array.isArray(artifact.records) ? artifact.records : [];
+  const usesFallback = row => ["preliminary_fallback", "controlled_fallback", "fallback"].includes(row.origin);
+  const visible = records.filter(row => row.status !== "provisional" || usesFallback(row) || row.confidence_score < 0.8 || (row.unresolved_fields || []).length);
+  const provisional = records.filter(row => row.status === "provisional" || usesFallback(row)).length;
+  requiredElement("internalGainsResolutionStatus").textContent = records.length
+    ? `${records.length - provisional} resolved · ${provisional} provisional · ${visible.length} needing attention · ${data.status || artifact.status || "current"}${data.stale_reasons?.length ? ` · ${data.stale_reasons.join(" ")}` : ""}`
+    : "Resolve internal gains after room use and ceiling inputs are available.";
+  requiredElement("internalGainsResolutionResults").innerHTML = visible.length ? visible.map(row => {
+    const occupancy = row.occupancy_count == null ? "—" : `${row.occupancy_count} people`;
+    const lighting = row.lighting_load_w == null ? "lighting unresolved" : `${Number(row.lighting_load_w).toFixed(1)} W lighting`;
+    const equipment = Array.isArray(row.equipment) ? `${row.equipment.length} equipment record${row.equipment.length === 1 ? "" : "s"}` : "equipment unresolved";
+    const evidence = (row.evidence || []).map(ref => `${ref.drawing_number || "source"}${ref.page ? ` p.${ref.page}` : ""}`).join(" · ") || "No cited page";
+    return `<article class="review-item readiness-${esc(row.status === "excluded" ? "blocked" : ["needs_review", "stale"].includes(row.status) ? "draft" : "review_ready")}" data-internal-gains-room-id="${esc(row.room_id)}"><div><b>${esc(row.original_label)} · ${esc(row.level)}</b><span>${esc(row.space_scope || "scope unresolved")} · ${esc(occupancy)} · ${esc(lighting)} · ${esc(equipment)}</span><small>${esc(row.rationale || "Review this internal-gains record.")}</small><small>Schedule: ${esc(row.schedule_id || "unresolved")} · ${esc(row.confidence_band || "low")} confidence</small><small>Evidence: ${esc(evidence)}</small>${row.unresolved_fields?.length ? `<small>Unresolved: ${esc(row.unresolved_fields.join(", "))}</small>` : ""}${row.remediation ? `<small>Next step: ${esc(row.remediation)}</small>` : ""}</div><div class="requirements-form"><label>Occupancy override<input data-internal-occupancy type="number" min="0" step="1" value="${row.override?.occupancy_count?.value ?? ""}"></label><label>Reviewer<input data-internal-reviewer placeholder="Name / initials"></label><label>Note<input data-internal-note placeholder="Why this value applies"></label></div><div class="bar"><button class="btn ghost mini" type="button" data-internal-override>Save occupancy</button>${row.override?.occupancy_count ? `<button class="btn ghost mini" type="button" data-internal-clear>Restore AI/PDF value</button>` : ""}</div></article>`;
+  }).join("") : records.length ? "<p class=\"review-empty\">No uncertain or high-impact internal-gains items need attention.</p>" : "";
+  requiredElement("internalGainsResolutionResults").querySelectorAll("[data-internal-override]").forEach(button => button.addEventListener("click", () => {
+    const card = button.closest("[data-internal-gains-room-id]");
+    internalGainsResolutionAction("apply_override", {room_id: card.dataset.internalGainsRoomId, field: "occupancy_count", value: card.querySelector("[data-internal-occupancy]").value, reviewer: card.querySelector("[data-internal-reviewer]").value.trim(), note: card.querySelector("[data-internal-note]").value.trim()});
+  }));
+  requiredElement("internalGainsResolutionResults").querySelectorAll("[data-internal-clear]").forEach(button => button.addEventListener("click", () => internalGainsResolutionAction("clear_override", {room_id: button.closest("[data-internal-gains-room-id]").dataset.internalGainsRoomId, field: "occupancy_count"})));
+}
+
+async function internalGainsResolutionAction(action, details = {}){
+  if (!DATA?.id) return toast("No project selected", "Open or analyse a project first.");
+  try {
+    const response = await fetch("/api/internal-gains-resolution", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({project_id: DATA.id, action, ...details})});
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || "Could not resolve internal gains.");
+    drawInternalGainsResolution(data);
+    await loadAiPreliminary();
+    if (action === "apply_override") toast("Internal-gains value saved", "The preliminary model is stale; rebuild it to apply the updated room input.");
+  } catch (error) { toast("Internal gains", error.message); }
 }
 
 function drawAiPreliminary(data){
   const settings = data.settings || {}, run = data.run || {}, report = data.hourly_ai_preliminary_load_report || {};
   requiredElement("aiPreliminaryAuto").checked = !!settings.automatic_analysis_enabled;
   requiredElement("aiPreliminaryConsent").checked = !!settings.saved_project_consent;
-  requiredElement("aiPreliminaryBudget").value = settings.maximum_provider_budget_aud ?? "";
   const proposal = run.manual_placeholder_proposal || (run.manual_placeholder_entities?.length ? {rooms: run.manual_placeholder_entities} : null);
   if (proposal && document.activeElement !== requiredElement("aiPreliminaryProposal")) requiredElement("aiPreliminaryProposal").value = JSON.stringify(proposal, null, 2);
   const stale = (data.stale_reasons || []).join(", ");
   requiredElement("aiPreliminaryStatus").textContent = `${data.status || "not_calculated"}${run.status ? ` · ${run.status}` : ""}${stale ? ` · stale: ${stale}` : ""}${run.message ? ` · ${run.message}` : ""}`;
+  drawValueResolution(data.value_resolution || {});
+  if (data.model_input_resolution) drawModelInputResolution(data);
   const peak = report.included_scope_peak || {};
   const coverage = report.assumption_coverage || {};
   const queue = report.review_queue || data.model?.review_queue || [];
   const surfaces = report.preliminary_surface_summary || data.model?.surface_summary || {};
   const refrigeration = report.refrigeration_process_exclusions || data.model?.excluded_spaces || [];
+  const handoffUrl = data.artifact_links?.codex_handoff || "";
+  const responseUrl = data.artifact_links?.codex_response || "";
+  const handoffStatus = run.codex_handoff_status || "not prepared";
+  requiredElement("codexHandoffStatus").innerHTML = handoffUrl
+    ? `Local Codex handoff: ${esc(handoffStatus)}. <a href="${esc(handoffUrl)}" target="_blank" rel="noopener">Open handoff JSON</a>${responseUrl ? `<a href="${esc(responseUrl)}" target="_blank" rel="noopener">Open response template</a>` : ""}`
+    : "No local Codex handoff has been prepared.";
   requiredElement("aiPreliminaryResults").innerHTML = report.label ? `
     <article class="review-item"><div><b>${esc(report.label)}</b><span>Included-scope peak: ${peak.design_total_kw ?? "—"} kW. Low-confidence assumptions: ${coverage.low_confidence_count ?? queue.length}. Unsupported components remain explicit exclusions.</span></div></article>
     <article class="review-item"><div><b>AI preliminary envelope coverage</b><span>Surfaces: ${surfaces.included ?? 0} included, ${surfaces.blocked ?? 0} blocked, ${surfaces.excluded ?? 0} excluded. Openings: ${surfaces.openings_included ?? 0} included, ${surfaces.openings_excluded ?? 0} excluded. Unknown shading is explicitly treated as unshaded and queued for review.</span></div></article>
     ${refrigeration.map(item => `<article class="review-item"><div><b>${esc(item.room_name || "Refrigeration/process room")}</b><span>${esc(item.reason || "Excluded from the comfort-HVAC subtotal.")}</span></div></article>`).join("")}
-    ${queue.slice(0, 8).map(item => `<article class="review-item"><div><b>${esc(item.room_id)} · ${esc(item.field)}</b><span>${esc(item.confidence_band)} confidence · ${esc(item.rationale || "Review this assumption.")}</span></div></article>`).join("")}` : "<span>Save settings, then assemble a local placeholder-AI draft or run the configured provider.</span>";
+    ${queue.slice(0, 8).map(item => `<article class="review-item"><div><b>${esc(item.room_id)} · ${esc(item.field)}</b><span>${esc(item.confidence_band)} confidence · ${esc(item.rationale || "Review this assumption.")}</span></div></article>`).join("")}` : "<p class=\"review-empty\">Save settings, then assemble a local placeholder-AI draft or run the configured provider.</p>";
+}
+
+function drawValueResolution(resolution){
+  const coverage = resolution.coverage_summary || {};
+  const records = Array.isArray(resolution.records) ? resolution.records : [];
+  const jobs = Array.isArray(resolution.research_jobs) ? resolution.research_jobs : [];
+  requiredElement("valueResolutionConsent").checked = !!resolution.research_consent;
+  requiredElement("valueResolutionStatus").textContent = records.length
+    ? `${coverage.resolved || 0} resolved · ${coverage.provisional || 0} draft assumptions · ${coverage.needs_source_lookup || 0} unresolved · ${jobs.length} lookup job${jobs.length === 1 ? "" : "s"}`
+    : "Resolve values after the draft AI proposal is available.";
+  const important = records.filter(item => item.status === "excluded" || item.origin === "preliminary_fallback").slice(0, 8);
+  requiredElement("valueResolutionResults").innerHTML = important.length
+    ? important.map(item => `<article class="review-item"><div><b>${esc(item.target_id)} · ${esc(item.target)}</b><span>${esc(item.status)} · ${esc(item.origin)} · ${esc(item.rationale || "Review this value source.")}</span></div></article>`).join("")
+    : records.length ? `<p class="review-empty">${coverage.provisional ? `${coverage.provisional} value${coverage.provisional === 1 ? " is" : "s are"} provisional draft assumption${coverage.provisional === 1 ? "" : "s"}; review the queue before calling the model complete.` : "All currently materialized values have a source or project override."}</p>` : "";
+}
+
+function drawModelInputResolution(data){
+  const summary = data.coverage_summary || data.model_input_resolution?.coverage_summary || {};
+  const queue = data.review_queue || data.model_input_resolution?.review_queue || [];
+  const stale = (data.stale_reasons || []).join(", ");
+  const status = data.status || "not_resolved";
+  const affected = (data.affected_component_ids || []).length;
+  const statusNode = optionalElement("modelInputResolutionStatus");
+  if (statusNode) statusNode.textContent = `${status} · ${summary.resolved || 0} resolved · ${summary.provisional || 0} provisional · ${(summary.needs_review || 0) + (summary.excluded || 0)} needing attention${affected ? ` · ${affected} affected component${affected === 1 ? "" : "s"}` : ""}${stale ? ` · stale: ${stale}` : ""}`;
+  const results = optionalElement("modelInputResolutionResults");
+  if (!results) return;
+  const rows = queue.slice(0, 12);
+  results.innerHTML = rows.length
+    ? `<article class="review-item"><div><b>Impact-ranked model-input review queue</b><span>${rows.length} highest-priority item${rows.length === 1 ? "" : "s"}</span></div></article>${rows.map(row => `<article class="review-item readiness-${esc(row.status === "excluded" ? "blocked" : "draft")}"><div><b>${esc(row.target_category || "Model input")} · ${esc(row.target_id || "project")}</b><span>${esc(row.target || row.field || "unresolved")} · ${esc(row.status || "needs_review")} · ${esc(row.impact_band || "low")} impact</span><small>${esc(row.rationale || "Review this value before relying on the draft subtotal.")}</small><small>${esc(row.remediation || "Provide cited evidence or an approved override.")}</small></div></article>`).join("")}`
+    : data.model_input_resolution ? `<p class="review-empty">No unresolved model-input items are currently ranked.</p>` : "";
+}
+
+async function modelInputResolutionAction(action){
+  if (!DATA?.id) return toast("No project selected", "Open or analyse a project first.");
+  try {
+    const payload = {project_id: DATA.id, action};
+    if (action === "queue_research") payload.research_consent = requiredElement("valueResolutionConsent").checked;
+    if (action === "accept_research_candidate") {
+      try { payload.candidate = JSON.parse(requiredElement("valueResolutionCandidate").value); }
+      catch { throw new Error("Candidate JSON is invalid."); }
+    }
+    const response = await fetch("/api/model-input-resolution", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
+    const data = await response.json();
+    if (!response.ok || data.error) {
+      const error = new Error(data.message || data.error || "Could not resolve model inputs.");
+      error.resolver = data;
+      throw error;
+    }
+    applyWorkflowResolution(data);
+    drawModelInputResolution(data);
+    drawValueResolution(data.value_resolution || {});
+    if (action === "rebuild_preliminary_model") await loadAiPreliminary();
+    if (action === "queue_research") toast("Source lookups queued", "No external content was fetched; each candidate remains project-scoped and requires acceptance.");
+    if (action === "accept_research_candidate") toast("Candidate accepted", "The cited value is now eligible for the draft model; rebuild to apply it.");
+    return true;
+  } catch (error) {
+    renderModelInputError(error?.resolver, error.message);
+    if (error?.resolver?.code === "room_inference_pending") loadRoomInference(true);
+    throw error;
+  }
+}
+
+async function valueResolutionAction(action){
+  if (!DATA?.id) return toast("No project selected", "Open or analyse a project first.");
+  try {
+    const payload = {project_id: DATA.id, action, research_consent: requiredElement("valueResolutionConsent").checked};
+    const response = await fetch("/api/value-resolution", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || "Could not resolve model inputs.");
+    drawAiPreliminary(data);
+    if (action === "queue_missing_source_research") toast("Source lookups queued", "No external content was fetched. Each lookup remains project-scoped and requires review.");
+  } catch (error) { toast("Model input resolution", error.message); }
 }
 
 async function aiPreliminaryAction(action){
@@ -1044,7 +2071,9 @@ const serviceConstraintFields = {
 
 const coolingLoadConditionFields = {
   indoor_cooling_wet_bulb_c: "reqCoolingWetBulb",
+  indoor_wet_bulb_basis: "reqIndoorWetBulbBasis",
   outdoor_summer_wet_bulb_c: "reqSummerWetBulb",
+  outdoor_wet_bulb_basis: "reqOutdoorWetBulbBasis",
   atmospheric_pressure_kpa: "reqAtmosphericPressure",
   verification_status: "reqCoolingLoadStatus",
   source: "reqCoolingLoadSource",
@@ -1136,6 +2165,7 @@ function addZone(zone = {}){
   const item = document.createElement("details");
   item.className = "zone-editor";
   item.dataset.zoneId = zone.zone_id || nextZoneId();
+  item._ruleAppliedValues = JSON.parse(JSON.stringify(zone.ventilation_requirements?.rule_applied_values || {}));
   item.innerHTML = `<summary><span class="zone-title"></span><span class="zone-warning"></span></summary>
     <div class="zone-fields">
       <label>Zone name<input class="zone-name" type="text" placeholder="e.g. sales area" value="${esc(zone.name || "")}"></label>
@@ -1154,16 +2184,21 @@ function addZone(zone = {}){
       <label>People diversity<input class="zone-people-diversity" type="number" min="0" max="1" step="0.01" value="${zone.cooling_load?.people_diversity_factor ?? ""}"></label>
       <label>Lighting W/m²<input class="zone-lighting-density" type="number" min="0" step="0.1" value="${zone.cooling_load?.lighting_w_m2 ?? ""}"></label>
       <label>Lighting diversity<input class="zone-lighting-diversity" type="number" min="0" max="1" step="0.01" value="${zone.cooling_load?.lighting_diversity_factor ?? ""}"></label>
-      <label>Outside air (L/s)<input class="zone-outside-air" type="number" min="0" step="0.1" value="${zone.cooling_load?.outside_air_lps ?? ""}"></label>
+      <label>Cooling outside-air flow (L/s)<input class="zone-outside-air" type="number" min="0" step="0.1" value="${zone.cooling_load?.outside_air_lps ?? ""}"></label>
+      <label>Outside-air volume reference<select class="zone-outside-air-reference"><option value="legacy_unverified">Legacy / not stated (outdoor-state calculation assumption)</option><option value="outdoor_design_condition">Outdoor design-air state, as stated in source</option><option value="standard_air_1_2kg_da_m3">Standard air, 1.2 kg dry air/m³, as stated in source</option></select></label>
+      <p class="fine">Choose only the basis stated by the airflow source. The standard-air choice uses 1.2 kg dry air/m³. Missing legacy values keep their previous outdoor-state calculation.</p>
+      <p class="fine zone-outside-air-help">Enter the design airflow from the mechanical schedule or contractor/designer basis. Archie uses it to calculate sensible and latent outside-air load; this field does not determine code compliance. Keep process exhaust and make-up air in their separate fields.</p>
+      <label>Outside-air flow review status<select class="zone-outside-air-status"><option value="missing">Missing</option><option value="provisional">Provisional / unverified</option><option value="confirmed">Confirmed against source</option></select></label>
+      <label>Outside-air flow source<input class="zone-outside-air-source" placeholder="Mechanical schedule, drawing, or designer/contractor basis" value="${esc(zone.cooling_load?.outside_air_source ?? zone.cooling_load?.source ?? "")}"></label>
       <label>Safety factor<input class="zone-safety" type="number" min="1" step="0.01" value="${zone.cooling_load?.safety_factor ?? ""}"></label>
-      <label>Load-input status<select class="zone-load-status"><option value="missing">Missing</option><option value="provisional">Provisional</option><option value="confirmed">Confirmed</option></select></label>
-      <label>Load-input source<textarea class="zone-load-source" rows="2" placeholder="Designer load basis">${esc(zone.cooling_load?.source || "")}</textarea></label>
+      <label>Other cooling-input status<select class="zone-load-status"><option value="missing">Missing</option><option value="provisional">Provisional</option><option value="confirmed">Confirmed</option></select></label>
+      <label>Other cooling-input source<textarea class="zone-load-source" rows="2" placeholder="Source for people, lighting, equipment, and envelope inputs">${esc(zone.cooling_load?.source || "")}</textarea></label>
       <label class="zone-internal"><input class="zone-envelope-na" type="checkbox" ${zone.cooling_load?.envelope_not_applicable ? "checked" : ""}> Internal zone: no exposed envelope</label>
     </div>
     <div class="zone-ventilation-fields">
       <label>Process type<select class="zone-vent-process"><option value="none">None</option><option value="retail">Retail</option><option value="office">Office</option><option value="toilet">Toilet</option><option value="kitchen">Kitchen</option><option value="baking">Baking</option><option value="other">Other</option></select></label>
-      <label>Approved basis name<input class="zone-vent-basis-name" placeholder="Standard/table/version" value="${esc(zone.ventilation_requirements?.basis_name || "")}"></label>
-      <label>Approved basis source<input class="zone-vent-basis-source" placeholder="Clause, table, designer record" value="${esc(zone.ventilation_requirements?.basis_source || "")}"></label>
+      <label>Approved basis name<input class="zone-vent-basis-name" placeholder="Standard and edition, or project design basis" value="${esc(zone.ventilation_requirements?.basis_name || "")}"></label>
+      <label>Approved basis source<input class="zone-vent-basis-source" placeholder="Applicable clause/table and approved project requirement" value="${esc(zone.ventilation_requirements?.basis_source || "")}"></label>
       <label>Outside-air method<select class="zone-vent-method"><option value="occupancy">Occupancy</option><option value="area">Area</option><option value="fixed">Fixed minimum</option><option value="combined">Combined</option></select></label>
       <label>People rate (L/s/person)<input class="zone-vent-people-rate" type="number" min="0" step="0.01" value="${zone.ventilation_requirements?.people_rate_lps_per_person ?? ""}"></label>
       <label>Area rate (L/s/m²)<input class="zone-vent-area-rate" type="number" min="0" step="0.01" value="${zone.ventilation_requirements?.area_rate_lps_per_m2 ?? ""}"></label>
@@ -1190,7 +2225,12 @@ function addZone(zone = {}){
   (zone.heat_sources || []).forEach(source => addZoneHeatSource(sources, source));
   (zone.cooling_load?.envelope_surfaces || []).forEach(surface => addEnvelopeSurface(surfaces, surface));
   item.querySelector(".zone-load-status").value = zone.cooling_load?.verification_status || "missing";
+  item.querySelector(".zone-outside-air-status").value = zone.cooling_load?.outside_air_verification_status || zone.cooling_load?.verification_status || "missing";
+  item.querySelector(".zone-outside-air-reference").value = zone.cooling_load?.outside_air_flow_reference_basis || "legacy_unverified";
   item.querySelector(".zone-vent-process").value = zone.ventilation_requirements?.process_type || "none";
+  item.querySelector(".zone-vent-basis-name").dataset.ruleId = zone.ventilation_requirements?.rule_id || "";
+  item.querySelector(".zone-vent-basis-name").dataset.rulePackVersion = zone.ventilation_requirements?.rule_pack_version || "";
+  item.querySelector(".zone-vent-basis-source").dataset.ruleCitation = zone.ventilation_requirements?.rule_citation || "";
   item.querySelector(".zone-vent-method").value = zone.ventilation_requirements?.outside_air_method || "combined";
   item.querySelector(".zone-vent-exhaust-requirement").value = zone.ventilation_requirements?.process_exhaust_requirement || "unknown";
   item.querySelector(".zone-vent-recirculable").value = zone.ventilation_requirements?.recirculable || "unknown";
@@ -1247,6 +2287,9 @@ function readZone(item){
       lighting_w_m2: blankToNull(item.querySelector(".zone-lighting-density").value),
       lighting_diversity_factor: blankToNull(item.querySelector(".zone-lighting-diversity").value),
       outside_air_lps: blankToNull(item.querySelector(".zone-outside-air").value),
+      outside_air_flow_reference_basis: item.querySelector(".zone-outside-air-reference").value,
+      outside_air_source: item.querySelector(".zone-outside-air-source").value.trim(),
+      outside_air_verification_status: item.querySelector(".zone-outside-air-status").value,
       safety_factor: blankToNull(item.querySelector(".zone-safety").value),
       envelope_not_applicable: item.querySelector(".zone-envelope-na").checked,
       verification_status: item.querySelector(".zone-load-status").value,
@@ -1283,6 +2326,10 @@ function readZone(item){
       dedicated_make_up_air_lps: blankToNull(item.querySelector(".zone-vent-make-up").value),
       verification_status: item.querySelector(".zone-vent-status").value,
       source: item.querySelector(".zone-vent-source").value.trim(),
+      rule_id: item.querySelector(".zone-vent-basis-name").dataset.ruleId || "",
+      rule_pack_version: item.querySelector(".zone-vent-basis-name").dataset.rulePackVersion || "",
+      rule_citation: item.querySelector(".zone-vent-basis-source").dataset.ruleCitation || "",
+      rule_applied_values: item._ruleAppliedValues || {},
     },
   };
 }
@@ -1332,7 +2379,7 @@ function showDesignRequirements(requirements = {}, readiness = {}, roomSuggestio
     requiredElement(id).value = requirements.service_constraints?.[key] || "";
   });
   Object.entries(coolingLoadConditionFields).forEach(([key, id]) => {
-    requiredElement(id).value = requirements.cooling_load_conditions?.[key] ?? "";
+    requiredElement(id).value = requirements.cooling_load_conditions?.[key] ?? (["indoor_wet_bulb_basis", "outdoor_wet_bulb_basis"].includes(key) ? "legacy_unverified" : "");
   });
   requiredElement("heatSources").innerHTML = "";
   (requirements.heat_sources || []).forEach(addHeatSource);
@@ -1355,6 +2402,7 @@ function showDesignRequirements(requirements = {}, readiness = {}, roomSuggestio
   loadCalculationInputEvidence();
   loadCalculatorDraft();
   loadEnvelope();
+  loadThermalSurfaceResolution();
   loadHourlyModel();
   loadInfiltrationGate();
   loadGlazingGate();
@@ -1363,9 +2411,13 @@ function showDesignRequirements(requirements = {}, readiness = {}, roomSuggestio
   loadDynamicThermalMassGate();
   loadSolarRadiationGate();
   loadSolarRadiationSource();
+  loadSiteLocation();
+  loadSiteDesignWeather();
   loadSiteOrientation();
   loadRoomCouplingGate();
   loadHourlyLoadReport();
+  loadSafetyFactorResolution();
+  loadSafetyFactorResolution();
   loadHeatingMethodGate();
   loadHourlyHeatingLoadReport();
   loadAhuAirside();
@@ -1598,6 +2650,52 @@ async function loadEnvelope(){
   } catch {}
 }
 
+async function loadThermalSurfaceResolution(){
+  if (!DATA?.id || !optionalElement("thermalSurfaceResolutionResults")) return;
+  try {
+    const response = await fetch("/api/thermal-surface-resolution?project_id=" + encodeURIComponent(DATA.id));
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || "Could not load opaque envelope resolution.");
+    drawThermalSurfaceResolution(data);
+  } catch (error) {
+    const status = optionalElement("thermalSurfaceResolutionStatus");
+    if (status) status.textContent = error.message;
+  }
+}
+
+function drawThermalSurfaceResolution(data){
+  const artifact = data.thermal_surface_resolution || {};
+  const rows = Array.isArray(artifact.surfaces) ? artifact.surfaces : [];
+  const summary = artifact.summary || {};
+  const status = data.status || artifact.status || "not_resolved";
+  const statusNode = optionalElement("thermalSurfaceResolutionStatus");
+  if (statusNode) statusNode.textContent = rows.length
+    ? `${summary.included_count || 0} eligible · ${summary.blocked_count || 0} blocked · ${summary.excluded_count || 0} excluded · ${status}${(data.stale_reasons || []).length ? " · stale" : ""}`
+    : "No opaque surfaces have been resolved yet.";
+  const list = optionalElement("thermalSurfaceResolutionResults");
+  if (!list) return;
+  list.innerHTML = rows.length ? rows.map(row => {
+    const area = row.net_opaque_area_m2 == null ? "area unresolved" : `${Number(row.net_opaque_area_m2).toFixed(2)} m² net`;
+    const source = row.property_origin || "unresolved source";
+    const unresolved = (row.unresolved_fields || []).join(", ");
+    return `<article class="review-item readiness-${esc(row.thermal_eligible ? "review_ready" : row.status === "excluded" ? "blocked" : "draft")}"><div><b>${esc(row.physical_type || "surface")} · ${esc(row.surface_id || "unidentified")}</b><span>${esc(row.status || "proposed")} · ${esc(area)} · ${esc(source)}</span><small>Owner ${esc(row.owner_room_id || row.owner_zone_id || "unresolved")} · boundary ${esc(row.boundary_method || row.boundary_condition || "unresolved")}${row.u_value_w_m2k != null ? ` · U ${esc(row.u_value_w_m2k)} W/m²K` : ""}</small>${unresolved ? `<small>Needs: ${esc(unresolved)}</small>` : ""}${row.remediation ? `<small>Next step: ${esc(row.remediation)}</small>` : ""}</div></article>`;
+  }).join("") : "<p class=\"review-empty\">No AI/PDF opaque surface records are available. Build the evidence ledger first.</p>";
+}
+
+async function thermalSurfaceResolutionAction(action, details = {}){
+  if (!DATA?.id) return toast("No project selected", "Open or analyse a project first.");
+  const button = optionalElement("btnResolveThermalSurfaces");
+  if (button) button.disabled = true;
+  try {
+    const response = await fetch("/api/thermal-surface-resolution", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({project_id: DATA.id, action, ...details})});
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || "Could not resolve opaque envelope evidence.");
+    drawThermalSurfaceResolution(data);
+    toast("Opaque envelope updated", "Only eligible surfaces can enter the calculation path; unresolved surfaces remain visible.");
+  } catch (error) { toast("Opaque envelope", error.message); }
+  finally { if (button) button.disabled = false; }
+}
+
 async function saveEnvelope(){
   if (!DATA?.id) return;
   requiredElement("btnSaveEnvelope").disabled = true;
@@ -1695,7 +2793,7 @@ async function loadCalculatorDraft(){
   try {
     const res = await fetch("/api/calculator-draft?project_id=" + encodeURIComponent(DATA.id));
     const data = await res.json();
-    if (res.ok && !data.error) showCalculatorDraft(data.calculator_draft || {}, data.artifact_url || "");
+    if (res.ok && !data.error) showCalculatorDraft({...data.calculator_draft, artifact_status: data.status, stale_reasons: data.stale_reasons || []}, data.artifact_url || "");
   } catch {}
 }
 
@@ -1787,9 +2885,18 @@ function showCalculationInputEvidence(evidence = {}, summary = {}, status = "not
   const geometry = evidence.geometry_resolution || {};
   const geometryProofs = (geometry.entities || []).filter(item => ["room_geometry_proof", "ai_room_geometry"].includes(item.kind));
   const geometryIssues = (geometry.review_items || []).filter(item => ["geometry", "geometry_area", "scale"].includes(item.field));
-  const geometrySummary = geometryProofs.length || geometryIssues.length
-    ? `<article class="review-item"><div><b>Room geometry and area proofs</b><span>${esc(`${geometry.summary?.confirmed_room_geometry_count || 0} confirmed · ${geometryProofs.length} boundary proofs · ${geometryIssues.length} geometry exceptions`)}</span><small>Derived areas need a closed calibrated boundary, a room-label witness, and an independent supporting witness. 3D pages remain cross-check-only.</small></div></article><div class="geometry-proof-list">${geometryProofs.map(proof => { const value = proof.value || {}; const calibration = value.calibration || {}; const readiness = proof.geometry_status === "geometry_confirmed" ? "review_ready" : proof.geometry_status === "ai_estimated" ? "draft" : "blocked"; return `<article class="review-item readiness-${esc(readiness)}"><div><b>${esc(proof.label || "Room boundary")} · ${esc(proof.geometry_status || "geometry_proposed")}</b><span>${value.area_m2 ? `${esc(value.area_m2)} m² derived area` : "Area cannot be derived yet"}</span><small>Level ${esc(proof.level_candidate || "unresolved")} · page ${esc(proof.source?.page || "?")} · ${esc((value.boundary_wall_ids || value.wall_ids || []).length)} boundary walls · scale ${calibration.mm_per_px ? `${esc(calibration.mm_per_px)} mm/px` : "not proven"}</small>${proof.unresolved_fields?.length ? `<small>Missing: ${esc(proof.unresolved_fields.join(", "))}</small>` : ""}${proof.review_warnings?.length ? `<small>Review warnings: ${esc(proof.review_warnings.join(", "))}</small>` : ""}</div></article>`; }).join("")}${geometryIssues.map(item => `<article class="review-item readiness-blocked"><div><b>Geometry exception · ${esc(item.affected_id || "room")}</b><span>${esc(item.reason || "Geometry evidence needs another witness.")}</span><small>Page ${esc(item.page || "?")} · ${esc(item.remediation || "Review the cited geometry.")}</small></div></article>`).join("")}</div>`
-    : "";
+  const diagnostics = geometry.deterministic_proof_diagnostics || {};
+  const diagnosticMarkup = (diagnostics.pages || []).map(page => {
+    const rejected = page.wall_lines?.rejected || [];
+    const reasons = Object.groupBy ? Object.groupBy(rejected, row => row.reason) : rejected.reduce((groups, row) => ((groups[row.reason] ||= []).push(row), groups), {});
+    const reasonText = Object.entries(reasons).map(([reason, rows]) => `${reason}: ${rows.length}${rows.slice(0, 8).length ? ` (${rows.slice(0, 8).map(row => row.candidate_id || "no id").join(", ")})` : ""}`).join(" · ") || "none";
+    const components = page.rejected_components || [];
+    return `<details class="geometry-diagnostic"><summary>Page ${esc(page.page)} · ${page.wall_lines?.accepted_count || 0} wall lines accepted · ${page.wall_lines?.rejected_count || 0} rejected · ${page.closed_loops_found || 0} loops</summary><small>Rejected vector-line reasons: ${esc(reasonText)}</small><small>Loop components rejected by degree/closure: ${esc(components.length ? components.map(item => `${item.reason} (${item.wall_ids?.length || 0} lines)`).join(" · ") : "none")}</small><small>Room labels: ${page.label_points?.accepted_count || 0} accepted · ${page.label_points?.status_filtered_count || 0} status-filtered. Dimension links: ${page.dimension_links?.matcher_link_count || 0} supplied · ${page.dimension_links?.calibration_link_count || 0} calibratable.</small></details>`;
+  }).join("");
+  const roomDiagnosticMarkup = (diagnostics.rooms || []).map(room => `<small class="geometry-diagnostic-room">${esc(room.room_label)}: ${esc(room.reason)}${room.attempts?.length ? ` · ${esc(room.attempts.map(item => `page ${item.page}: ${item.reason}`).join("; "))}` : ""}</small>`).join("");
+  const geometrySummary = geometryProofs.length || geometryIssues.length || diagnosticMarkup
+    ? `<article class="review-item"><div><b>Room geometry and area proofs</b><span>${esc(`${geometry.summary?.confirmed_room_geometry_count || 0} confirmed · ${geometryProofs.length} boundary proofs · ${geometryIssues.length} geometry exceptions`)}</span><small>Reviewer traces remain proposed until separate review accepts them; only the existing confirmed-area rule can activate an area.</small></div></article><div class="geometry-proof-list">${geometryProofs.map(proof => { const value = proof.value || {}; const calibration = value.calibration || {}; const scale = calibration.mm_per_px || value.derivation?.operands?.mm_per_px; const dimensions = value.dimension_bindings || []; const witnesses = value.independent_witness_ids || value.independent_witnesses || []; const readiness = proof.geometry_status === "geometry_confirmed" ? "review_ready" : proof.geometry_status === "ai_estimated" ? "draft" : "blocked"; return `<article class="review-item readiness-${esc(readiness)}"><div><b>${esc(proof.label || "Room boundary")} · ${esc(proof.geometry_status || "geometry_proposed")}</b><span>${value.area_m2 ? `${esc(value.area_m2)} m² derived area` : "Area cannot be derived yet"}</span><small>Level ${esc(proof.level_candidate || "unresolved")} · page ${esc(proof.source?.page || "?")} · ${esc((value.boundary_wall_ids || value.wall_ids || []).length)} boundary walls · scale ${scale ? `${esc(scale)} mm/px` : "not proven"}</small><small>Linked dimensions: ${esc(dimensions.length ? dimensions.map(link => `${link.dimension_id || "dimension"} → ${link.wall_id || "wall"}${link.value_mm ? ` (${link.value_mm} mm)` : ""}`).join(" · ") : "none")}</small><small>Independent witness: ${esc(witnesses.length ? witnesses.map(witness => typeof witness === "object" ? `page ${witness.page || "?"}` : witness).join(" · ") : "required for engineering review")}</small>${value.derivation?.formula ? `<small>Area basis: ${esc(value.derivation.formula)}</small>` : ""}${proof.unresolved_fields?.length ? `<small>Missing: ${esc(proof.unresolved_fields.join(", "))}</small>` : ""}${proof.review_warnings?.length ? `<small>Review warnings: ${esc(proof.review_warnings.join(", "))}</small>` : ""}</div></article>`; }).join("")}${geometryIssues.map(item => `<article class="review-item readiness-blocked"><div><b>Geometry exception · ${esc(item.affected_id || "room")}</b><span>${esc(item.reason || "Geometry evidence needs another witness.")}</span><small>Page ${esc(item.page || "?")} · ${esc(item.remediation || "Review the cited geometry.")}</small></div></article>`).join("")}</div><details class="geometry-diagnostics"><summary>Why automatic proofs are missing</summary>${diagnosticMarkup}${roomDiagnosticMarkup}</details><div id="reviewerRoomGeometryWorkspace" class="reviewer-room-geometry"></div>`
+    : `<div id="reviewerRoomGeometryWorkspace" class="reviewer-room-geometry"></div>`;
   const openingRows = evidence.opening_register?.openings || [];
   const openingSummary = openingRows.length ? `<div class="geometry-entity-list">${openingEvidenceMarkup(openingRows)}</div>` : "";
   requiredElement("calculationEvidenceSummary").innerHTML = evidence?.fingerprint
@@ -1801,7 +2908,87 @@ function showCalculationInputEvidence(evidence = {}, summary = {}, status = "not
     ? `<div class="draft-group-title">Extracted values and exceptions</div>${rows.map(row => `<article class="review-item readiness-${esc(row.status === "active" ? "review_ready" : row.status === "evidence_only" ? "draft" : "blocked")}"><div><b>${esc(row.category)} · ${esc(row.target)}</b><span>${esc(typeof row.value === "object" ? JSON.stringify(row.value) : `${row.value ?? "—"} ${row.unit || ""}`)}</span><small>${esc(row.status)} · ${esc(row.source?.drawing_number || "")}, page ${esc(row.source?.page || "?")} · ${esc(row.source?.excerpt || "")}</small>${row.binding_status ? `<small>Binding: ${esc(row.binding_status)} · ${esc(row.binding_basis || "")}</small>` : ""}${row.unresolved_fields?.length ? `<small>Unresolved: ${esc(row.unresolved_fields.join(", "))}</small>` : ""}</div></article>`).join("")}${bindingIssues}`
     : "";
   showComponentInterpretations(interpretations, interpretationsStatus, interpretationsUrl);
+  loadReviewerRoomGeometryWorkspace();
 }
+
+async function loadReviewerRoomGeometryWorkspace(){
+  const host = optionalElement("reviewerRoomGeometryWorkspace");
+  if (!host || !DATA?.id) return;
+  const previous = ROOM_TRACE_STATE || {};
+  host.innerHTML = '<p class="fine">Loading room tracing tools…</p>';
+  try {
+    const response = await fetch(`/api/reviewer-room-geometry?project_id=${encodeURIComponent(DATA.id)}`);
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || "Could not load room tracing tools.");
+    ROOM_GEOMETRY_CONTEXT = data;
+    ROOM_TRACE_STATE = {roomId: previous.roomId || "", page: previous.page || null, snap: null, mode: previous.mode || "boundary", points: [], snapped: [], dimensions: [], dimensionPoints: [], dimensionMm: "", secondDimension: false, reviewer: previous.reviewer || "", note: previous.note || "", cursorImagePx: null, zoom: previous.zoom || 1, panX: previous.panX || 0, panY: previous.panY || 0};
+    renderReviewerRoomGeometryWorkspace();
+    if (ROOM_TRACE_STATE.page) await loadReviewerGeometrySnap();
+  } catch (error) {
+    host.innerHTML = `<p class="reviewer-geometry-error" role="alert">Room tracing is unavailable: ${esc(error.message)}</p>`;
+  }
+}
+
+function renderReviewerRoomGeometryWorkspace(){
+  const host = optionalElement("reviewerRoomGeometryWorkspace"), ctx = ROOM_GEOMETRY_CONTEXT, state = ROOM_TRACE_STATE;
+  if (!host || !ctx || !state) return;
+  const traces = ctx.reviewer_room_geometry?.records || [];
+  const roomOptions = (ctx.rooms || []).map(room => `<option value="${esc(room.room_id)}" ${room.room_id === state.roomId ? "selected" : ""}>${esc(room.label)}${room.level_name ? ` · ${esc(room.level_name)}` : ""}${room.needs_trace ? " · area unresolved" : ""}</option>`).join("");
+  const trace = traces.find(row => row.room_id === state.roomId && row.page === state.page);
+  const pageOptions = (ctx.pages || []).map(page => `<option value="${page.page}" ${page.page === state.page ? "selected" : ""}>Page ${page.page} · ${esc(page.drawing_number || page.title || page.proposed_role)}${page.declared_scale ? ` · ${esc(page.declared_scale)}` : " · no declared scale"}</option>`).join("");
+  const page = (ctx.pages || []).find(row => row.page === state.page);
+  if (!roomOptions || !pageOptions) { host.innerHTML = '<div class="reviewer-geometry-head"><b>Trace a room boundary</b><span>No supported rooms or rendered plan pages are available.</span></div>'; return; }
+  if (trace && !state.points.length) { state.points = trace.points_image_px; state.snapped = trace.snapped_line_ids; state.reviewer = trace.reviewer || ""; state.note = trace.note || ""; state.dimensionPoints = trace.calibration?.dimension_points_image_px || []; state.dimensionMm = trace.calibration?.dimension_value_mm || ""; }
+  const options = state.snap?.snap_tolerance_px ? {threshold: state.snap.snap_tolerance_px} : {};
+  const svg = page ? reviewerGeometrySvg(page, state, options) : "";
+  host.innerHTML = `<div class="reviewer-geometry-head"><div><b>Trace and calibrate a room</b><span>Click boundary corners in order. Snapping is optional; the trace stays proposed until a separate review accepts it.</span></div><button type="button" class="btn ghost mini" data-geometry-reload>Reload source</button></div>
+    <div class="reviewer-geometry-controls"><label>Room<select data-geometry-room><option value="">Choose room</option>${roomOptions}</select></label><label>Plan page<select data-geometry-page><option value="">Choose page</option>${pageOptions}</select></label></div>
+    <div class="reviewer-geometry-tools"><button type="button" class="btn mini ${state.mode === "boundary" ? "key" : "ghost"}" data-geometry-mode="boundary">Trace boundary</button><button type="button" class="btn mini ${state.mode === "dimension" ? "key" : "ghost"}" data-geometry-mode="dimension">Set printed dimension</button><button type="button" class="btn mini ${state.mode === "second" ? "key" : "ghost"}" data-geometry-mode="second">Add cross-check dimension</button><button type="button" class="btn mini ${state.mode === "pan" ? "key" : "ghost"}" data-geometry-mode="pan">Pan plan</button><button type="button" class="btn ghost mini" data-geometry-zoom="in" ${state.zoom >= 8 ? "disabled" : ""}>Zoom in</button><button type="button" class="btn ghost mini" data-geometry-zoom="out" ${state.zoom <= 1 ? "disabled" : ""}>Zoom out</button><button type="button" class="btn ghost mini" data-geometry-zoom="reset">Reset view</button><button type="button" class="btn ghost mini" data-geometry-close>Close polygon</button><button type="button" class="btn ghost mini" data-geometry-reset>Clear points</button></div>
+    <p class="reviewer-geometry-help" aria-live="polite">${state.mode === "boundary" ? `Boundary: ${Math.max(0,state.points.length - (state.points.length > 1 && JSON.stringify(state.points[0]) === JSON.stringify(state.points.at(-1)) ? 1 : 0))} corners. Click the plan to add points; close it when done.` : state.mode === "dimension" ? "Click the two ends of a printed dimension, then enter its value in millimetres." : state.mode === "second" ? "Click the two ends of a second printed dimension, then enter its value in millimetres." : "Drag the plan to pan. Switch back to tracing or dimension mode to place points."}</p>
+    ${page ? (page.preview_url && page.preview_matches_vector_coordinates ? `<div class="reviewer-geometry-resolution">Full-resolution plan · ${page.preview_width_px} × ${page.preview_height_px} px · ${state.zoom.toFixed(1)}×</div><div class="reviewer-geometry-canvas">${svg}</div>` : `<p class="reviewer-geometry-error" role="alert">${esc(page.preview_error || "A matching full-resolution plan image is unavailable. Reload the drawing evidence before tracing.")}</p>`) : ""}
+    <div class="reviewer-geometry-controls"><label>Printed dimension (mm)<input data-geometry-dimension type="number" min="0.01" step="any" value="${esc(state.dimensionMm)}" placeholder="e.g. 4000"></label><label>Cross-check dimension (mm), optional<input data-geometry-second-dimension type="number" min="0.01" step="any" value="${esc(state.secondDimensionMm || "")}" placeholder="Only needed if declared scale disagrees"></label><label>Your name or initials<input data-geometry-reviewer value="${esc(state.reviewer)}" autocomplete="name" placeholder="Reviewer"></label><label>Note (optional)<input data-geometry-note value="${esc(state.note)}" placeholder="Boundary or calibration note"></label></div>
+    <div class="reviewer-geometry-actions"><button type="button" class="btn key" data-geometry-save ${state.roomId && state.page ? "" : "disabled"}>Save proposed trace</button>${trace ? `<button type="button" class="btn ghost" data-geometry-delete>Delete trace</button>` : ""}<span class="reviewer-geometry-result" aria-live="polite">${trace ? `${trace.freshness === "current" ? "Saved trace" : `Stale trace: ${(trace.stale_reasons || []).join(" ") || "reload source evidence"}`} · ${trace.calibration?.status || "calibration unresolved"}${Number.isFinite(trace.calibration?.difference_percent) ? ` · scale difference ${trace.calibration.difference_percent.toFixed(2)}%` : ""}${trace.freshness === "current" && trace.calibration?.mm_per_px ? ` · ${reviewerTraceArea(trace.points_image_px, trace.calibration.mm_per_px).toFixed(3)} m² proposed` : trace.freshness !== "current" ? " · saved area is not current" : ` · area blocked: ${esc(trace.calibration?.reason || "calibration unresolved")}`}` : "No saved trace for this room and page."}</span></div>
+    <small class="reviewer-geometry-disclaimer">A traced area is evidence for review only. It is not activated as a calculation input by this workflow.</small>
+    <div class="reviewer-geometry-error" data-geometry-error role="alert"></div>`;
+  host.querySelector("[data-geometry-room]").addEventListener("change", event => {state.roomId=event.target.value; state.points=[];state.snapped=[];state.dimensionPoints=[];state.secondDimensionMm="";state.dimensionMm="";state.snap=null;state.page=null;renderReviewerRoomGeometryWorkspace();});
+  host.querySelector("[data-geometry-page]").addEventListener("change", async event => {state.page=Number(event.target.value)||null;state.points=[];state.snapped=[];state.dimensionPoints=[];state.secondDimensionPoints=[];state.snap=null;const existing=ctx.reviewer_room_geometry?.records?.find(row=>row.room_id===state.roomId&&row.page===state.page);if(existing){state.points=existing.points_image_px;state.snapped=existing.snapped_line_ids;state.reviewer=existing.reviewer||"";state.note=existing.note||"";state.dimensionMm=existing.calibration?.dimension_value_mm||"";state.dimensionPoints=existing.calibration?.dimension_points_image_px||[];state.secondDimensionMm=existing.calibration?.second_dimension?.value_mm||"";state.secondDimensionPoints=existing.calibration?.second_dimension?.points_image_px||[];}renderReviewerRoomGeometryWorkspace();if(state.page) await loadReviewerGeometrySnap();});
+  host.querySelectorAll("[data-geometry-mode]").forEach(button=>button.addEventListener("click",()=>{state.mode=button.dataset.geometryMode;if(state.mode==="dimension")state.dimensionPoints=[];if(state.mode==="second")state.secondDimensionPoints=[];renderReviewerRoomGeometryWorkspace();}));
+  host.querySelectorAll("[data-geometry-zoom]").forEach(button=>button.addEventListener("click",()=>{const page=(ctx.pages||[]).find(row=>row.page===state.page);if(!page)return;const old=state.zoom||1,next=button.dataset.geometryZoom==="in"?Math.min(8,old*1.5):button.dataset.geometryZoom==="out"?Math.max(1,old/1.5):1;const width=Number(page.image_width_px),height=Number(page.image_height_px),centerX=state.panX+width/old/2,centerY=state.panY+height/old/2;state.zoom=next;state.panX=Math.max(0,Math.min(width-width/next,centerX-width/next/2));state.panY=Math.max(0,Math.min(height-height/next,centerY-height/next/2));renderReviewerRoomGeometryWorkspace();}));
+  host.querySelector("[data-geometry-dimension]").addEventListener("input",event=>state.dimensionMm=event.target.value);
+  host.querySelector("[data-geometry-second-dimension]").addEventListener("input",event=>state.secondDimensionMm=event.target.value);
+  host.querySelector("[data-geometry-reviewer]").addEventListener("input",event=>state.reviewer=event.target.value);
+  host.querySelector("[data-geometry-note]").addEventListener("input",event=>state.note=event.target.value);
+  host.querySelector("[data-geometry-close]").addEventListener("click",()=>{if(state.points.length<3)return showReviewerGeometryError("Add at least three boundary corners first.");const first=state.points[0];if(JSON.stringify(first)!==JSON.stringify(state.points.at(-1))){state.points.push([...first]);state.snapped.push(state.snapped[0]??null);}renderReviewerRoomGeometryWorkspace();});
+  host.querySelector("[data-geometry-reset]").addEventListener("click",()=>{state.points=[];state.snapped=[];state.dimensionPoints=[];renderReviewerRoomGeometryWorkspace();});
+  host.querySelector("[data-geometry-reload]").addEventListener("click",loadReviewerRoomGeometryWorkspace);
+  host.querySelector("[data-geometry-save]").addEventListener("click",saveReviewerRoomGeometryTrace);
+  if(page && (!page.preview_url || !page.preview_matches_vector_coordinates)) host.querySelector("[data-geometry-save]").disabled=true;
+  host.querySelector("[data-geometry-delete]")?.addEventListener("click",deleteReviewerRoomGeometryTrace);
+  host.querySelector("[data-geometry-svg]")?.addEventListener("click",event=>{if(state.mode!=="pan")addReviewerGeometryPoint(event,page);});
+  host.querySelector("[data-geometry-svg]")?.addEventListener("keydown",event=>reviewerGeometryKeydown(event,page));
+  const svgNode=host.querySelector("[data-geometry-svg]");
+  svgNode?.addEventListener("pointerdown",event=>{if(state.mode!=="pan")return;svgNode.setPointerCapture(event.pointerId);state.panDrag={x:event.clientX,y:event.clientY,panX:state.panX,panY:state.panY};});
+  svgNode?.addEventListener("pointermove",event=>{if(!state.panDrag)return;const box=svgNode.getBoundingClientRect(),width=Number(page.image_width_px),height=Number(page.image_height_px),viewW=width/state.zoom,viewH=height/state.zoom;state.panX=Math.max(0,Math.min(width-viewW,state.panDrag.panX-(event.clientX-state.panDrag.x)/box.width*viewW));state.panY=Math.max(0,Math.min(height-viewH,state.panDrag.panY-(event.clientY-state.panDrag.y)/box.height*viewH));svgNode.setAttribute("viewBox",`${state.panX} ${state.panY} ${viewW} ${viewH}`);});
+  svgNode?.addEventListener("pointerup",()=>{if(state.panDrag){state.panDrag=null;renderReviewerRoomGeometryWorkspace();}});
+}
+
+function reviewerGeometrySvg(page,state){
+  const width=Number(page.image_width_px),height=Number(page.image_height_px); if(!width||!height||!page.preview_url)return "";
+  const points=state.points.map(point=>point.join(",")).join(" "),dims=[...(state.dimensionPoints||[]),...(state.secondDimensionPoints||[])].map(point=>`<circle cx="${point[0]}" cy="${point[1]}" r="18" class="trace-dimension-point"/>`).join("");
+  const snapLines=(state.snap?.lines||[]).map(line=>`<line x1="${line.start_px[0]}" y1="${line.start_px[1]}" x2="${line.end_px[0]}" y2="${line.end_px[1]}" class="trace-snap-line"/>`).join("");
+  const cursor=state.cursorImagePx||[width/2,height/2];
+  const viewW=width/(state.zoom||1),viewH=height/(state.zoom||1),panX=Math.max(0,Math.min(width-viewW,state.panX||0)),panY=Math.max(0,Math.min(height-viewH,state.panY||0));
+  return `<svg data-geometry-svg viewBox="${panX} ${panY} ${viewW} ${viewH}" role="application" tabindex="0" aria-label="Interactive full-resolution plan page ${page.page}. Click, or use arrow keys to position and Enter to add a trace point."><image data-plan-preview href="${esc(page.preview_url)}" width="${width}" height="${height}" preserveAspectRatio="none"/>${snapLines}<polyline points="${points}" class="trace-polygon"/>${state.points.map((point,index)=>`<circle cx="${point[0]}" cy="${point[1]}" r="18" class="trace-vertex" aria-label="Boundary point ${index+1}"/>`).join("")}${dims}<circle cx="${cursor[0]}" cy="${cursor[1]}" r="24" class="trace-keyboard-cursor" aria-hidden="true"/></svg>`;
+}
+function reviewerTraceArea(points,scale){let area=0;for(let i=0;i<points.length-1;i++)area+=points[i][0]*points[i+1][1]-points[i+1][0]*points[i][1];return Math.abs(area/2)*scale*scale/1e6;}
+function nearestReviewerSnap(x,y){const snap=ROOM_TRACE_STATE?.snap;if(!snap)return {point:[x,y],lineId:null};let best=null;for(const endpoint of snap.endpoints||[]){const distance=Math.hypot(x-endpoint.point_px[0],y-endpoint.point_px[1]);if(distance<=snap.snap_tolerance_px&&(!best||distance<best.distance))best={point:endpoint.point_px,lineId:endpoint.line_id,distance};}for(const intersection of snap.intersections||[]){const distance=Math.hypot(x-intersection.point_px[0],y-intersection.point_px[1]);if(distance<=snap.snap_tolerance_px&&(!best||distance<best.distance))best={point:intersection.point_px,lineId:intersection.line_ids[0],distance};}return best||{point:[x,y],lineId:null};}
+function addReviewerGeometryAt(x,y,page){const state=ROOM_TRACE_STATE;if(state.mode==="boundary"){if(state.points.length>=4&&JSON.stringify(state.points[0])===JSON.stringify(state.points.at(-1))){state.points.pop();state.snapped.pop();}const snap=nearestReviewerSnap(x,y);state.points.push(snap.point);state.snapped.push(snap.lineId);}else{const key=state.mode==="second"?"secondDimensionPoints":"dimensionPoints";state[key] ||= [];state[key].push([x,y]);if(state[key].length>2)state[key]=[state[key].at(-1)];}state.cursorImagePx=[x,y];renderReviewerRoomGeometryWorkspace();}
+function addReviewerGeometryPoint(event,page){const svg=event.currentTarget,box=svg.getBoundingClientRect(),width=Number(page.image_width_px),height=Number(page.image_height_px),zoom=ROOM_TRACE_STATE.zoom||1,x=(ROOM_TRACE_STATE.panX||0)+(event.clientX-box.left)/box.width*(width/zoom),y=(ROOM_TRACE_STATE.panY||0)+(event.clientY-box.top)/box.height*(height/zoom);addReviewerGeometryAt(x,y,page);}
+function reviewerGeometryKeydown(event,page){const state=ROOM_TRACE_STATE,width=Number(page.image_width_px),height=Number(page.image_height_px),step=event.shiftKey?1:10;let [x,y]=state.cursorImagePx||[width/2,height/2];if(event.key==="Enter"||event.key===" "){event.preventDefault();addReviewerGeometryAt(x,y,page);optionalElement("reviewerRoomGeometryWorkspace")?.querySelector("[data-geometry-svg]")?.focus();return;}if(!["ArrowLeft","ArrowRight","ArrowUp","ArrowDown"].includes(event.key))return;event.preventDefault();if(event.key==="ArrowLeft")x-=step;if(event.key==="ArrowRight")x+=step;if(event.key==="ArrowUp")y-=step;if(event.key==="ArrowDown")y+=step;state.cursorImagePx=[Math.max(0,Math.min(width,x)),Math.max(0,Math.min(height,y))];renderReviewerRoomGeometryWorkspace();optionalElement("reviewerRoomGeometryWorkspace")?.querySelector("[data-geometry-svg]")?.focus();}
+async function loadReviewerGeometrySnap(){const state=ROOM_TRACE_STATE;try{const response=await fetch(`/api/plan-snap?project_id=${encodeURIComponent(DATA.id)}&page=${state.page}`),data=await response.json();if(!response.ok||data.error)throw new Error(data.error||"Could not load vector snap points.");state.snap=data;renderReviewerRoomGeometryWorkspace();}catch(error){showReviewerGeometryError(error.message);}}
+function showReviewerGeometryError(message){const node=optionalElement("reviewerRoomGeometryWorkspace")?.querySelector("[data-geometry-error]");if(node)node.textContent=message;}
+async function saveReviewerRoomGeometryTrace(){const s=ROOM_TRACE_STATE,ctx=ROOM_GEOMETRY_CONTEXT,page=ctx.pages.find(row=>row.page===s.page),secondPoints=s.secondDimensionPoints||[];try{const response=await fetch("/api/reviewer-room-geometry",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"save",project_id:DATA.id,room_id:s.roomId,page:s.page,points_image_px:s.points,snapped_line_ids:s.snapped,dimension_points_image_px:s.dimensionPoints.length? s.dimensionPoints:(ctx.reviewer_room_geometry.records.find(row=>row.room_id===s.roomId&&row.page===s.page)?.calibration?.dimension_points_image_px||[]),dimension_value_mm:Number(s.dimensionMm)||Number(ctx.reviewer_room_geometry.records.find(row=>row.room_id===s.roomId&&row.page===s.page)?.calibration?.dimension_value_mm),second_dimension_points_image_px:secondPoints,second_dimension_value_mm:Number(s.secondDimensionMm)||null,reviewer:s.reviewer,note:s.note,source_pdf_fingerprint:ctx.source_pdf_fingerprint,vector_page_fingerprint:s.snap?.vector_page_fingerprint})}),data=await response.json();if(!response.ok||data.error)throw new Error(data.error||"Could not save trace.");ROOM_GEOMETRY_CONTEXT={...ctx,...data};s.points=[];s.snapped=[];s.dimensionPoints=[];s.dimensionMm="";await loadCalculationInputEvidence();toast("Room trace saved","The geometry proof remains proposed pending separate review.");}catch(error){showReviewerGeometryError(error.message);}}
+async function deleteReviewerRoomGeometryTrace(){const trace=ROOM_GEOMETRY_CONTEXT?.reviewer_room_geometry?.records?.find(row=>row.room_id===ROOM_TRACE_STATE.roomId&&row.page===ROOM_TRACE_STATE.page);if(!trace)return;try{const response=await fetch("/api/reviewer-room-geometry",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"delete",project_id:DATA.id,trace_id:trace.trace_id})}),data=await response.json();if(!response.ok||data.error)throw new Error(data.error||"Could not delete trace.");await loadReviewerRoomGeometryWorkspace();await loadCalculationInputEvidence();}catch(error){showReviewerGeometryError(error.message);}}
 
 async function loadCalculationInputEvidence(){
   if (!DATA?.id) return;
@@ -1882,7 +3069,11 @@ function showCalculatorDraft(draft = {}, artifactUrl = ""){
   requiredElement("calculatorDraftSummary").innerHTML = (counts || artifactUrl || receipt) ? `<article class="review-item"><div><b>Application summary</b><span>${esc((counts || "No reviewed changes applied.") + receipt)}</span></div>${artifactUrl ? `<a class="btn ghost mini" href="${esc(artifactUrl)}" target="_blank" rel="noopener">Open draft JSON</a>` : ""}</article>` : "";
   requiredElement("calculatorDraftStatus").textContent = draft.status === "not_built" || !draft.status
     ? "Build a proposal queue after the thermal model and drawing evidence are ready."
-    : `${draft.status} · ${(Object.values(draft.candidates || {}).flat()).length} source-backed proposals · ${reviewItems.length} items needing review${DRAFT_DIRTY ? " · unsaved review" : ""}`;
+    : ["stale", "legacy_review_required"].includes(draft.artifact_status)
+      ? `${(draft.stale_reasons || [])[0] || "Draft is stale. Rebuild before reviewing or applying."} ${(Object.values(draft.candidates || {}).flat()).length} proposals · ${reviewItems.length} items needing review.`
+      : `${draft.status} · ${(Object.values(draft.candidates || {}).flat()).length} source-backed proposals · ${reviewItems.length} items needing review${DRAFT_DIRTY ? " · unsaved review" : ""}`;
+  const stale = ["stale", "legacy_review_required"].includes(draft.artifact_status);
+  ["btnSaveCalculatorReview", "btnPreviewCalculatorDraft", "btnApplyCalculatorDraft"].forEach(id => { requiredElement(id).disabled = stale; });
   document.querySelectorAll(".calculator-draft-decision, .calculator-draft-field, .calculator-draft-review-field").forEach(control => control.addEventListener("change", () => { DRAFT_DIRTY = true; DRAFT_PREVIEW_TOKEN = ""; }));
   document.querySelectorAll(".calculator-draft-field, .calculator-draft-review-field").forEach(control => control.addEventListener("input", () => { DRAFT_DIRTY = true; DRAFT_PREVIEW_TOKEN = ""; }));
   document.querySelectorAll(".geometry-focus[data-focus-candidate]").forEach(button => button.addEventListener("click", () => {
@@ -1919,7 +3110,8 @@ function geometryReviewMarkup(draft){
   const roomCards = rooms.map(room => {
     const value = room.value || {};
     const citedPages = [...new Set((room.citations || []).map(c => c.page).filter(Boolean))];
-    const referencePages = (value.geometry_reference || []).map(ref => String(ref).match(/page[-_ ]?(\\d+)/i)?.[1]).filter(Boolean);
+    const geometryRefs = Array.isArray(value.geometry_reference) ? value.geometry_reference : value.geometry_reference ? [value.geometry_reference] : [];
+    const referencePages = geometryRefs.map(ref => String(ref).match(/page[-_ ]?(\\d+)/i)?.[1]).filter(Boolean);
     const allPages = [...new Set([...citedPages, ...referencePages])].sort((a,b) => Number(a)-Number(b));
     const roomWitnesses = witnesses.filter(w => {
       const text = JSON.stringify(w).toLowerCase();
@@ -1936,7 +3128,7 @@ function geometryReviewMarkup(draft){
     return `<article class="geometry-room-card ${statusClass}">
       <div class="geometry-room-head"><div><b>${esc(value.name || room.candidate_id)}</b><span>${esc(status.replaceAll("_", " "))} · confidence ${esc(room.confidence || "unknown")} · decision ${esc(decision)}</span></div><span class="geometry-status">${esc(status.replaceAll("_", " "))}</span></div>
       <div class="geometry-room-grid"><div><small>Floor</small><strong>${esc(value.floor_id || "Unresolved")}</strong></div><div><small>Zone</small><strong>${esc(value.zone_id || "Unresolved")}</strong></div><div><small>Area</small><strong>${areaValue ? `${esc(areaValue)} m²` : "Not supported"}</strong></div><div><small>Ceiling</small><strong>${ceilingValue ? `${esc(ceilingValue)} mm` : "Not linked"}</strong></div></div>
-      <div class="geometry-evidence-lines"><small>${citationText(room.citations || [])}</small>${value.geometry_reference ? `<small>Geometry references: ${esc((value.geometry_reference || []).join(" · "))}</small>` : ""}${roomWitnesses.length ? `<small>Witnesses: ${esc(roomWitnesses.map(w => `page ${w.page} · ${w.kind || "evidence"}`).join(" · "))}</small>` : ""}</div>
+      <div class="geometry-evidence-lines"><small>Room source: ${esc((room.room_source || "building_evidence").replaceAll("_", " "))} · ${citationText(room.citations || [])}</small>${value.geometry_reference ? `<small>Geometry reference: ${esc(Array.isArray(value.geometry_reference) ? value.geometry_reference.join(" · ") : value.geometry_reference)}</small>` : ""}${room.reviewer_geometry_proof ? `<small>Current traced proof ${esc(room.reviewer_geometry_proof.proof_id)} · ${esc(room.reviewer_geometry_proof.area_m2)} m² · ${esc(room.reviewer_geometry_proof.calibration?.status || "calibration unresolved")} · ${esc(room.reviewer_geometry_proof.reviewer || "reviewer unavailable")}</small>` : ""}${roomWitnesses.length ? `<small>Witnesses: ${esc(roomWitnesses.map(w => `page ${w.page} · ${w.kind || "evidence"}`).join(" · "))}</small>` : ""}</div>
       ${unresolved.length ? `<div class="geometry-missing"><b>Still required:</b> ${esc(unresolved.join(", "))}</div>` : ""}
       <div class="geometry-review-actions"><button class="btn ghost mini geometry-focus" type="button" data-focus-candidate="${esc(room.candidate_id)}">Review proposal below</button><small class="geometry-guidance">A label alone cannot activate a room; geometry and area require evidence.</small></div>
     </article>`;
@@ -1956,7 +3148,7 @@ function geometryReviewMarkup(draft){
 function calculatorDraftCandidateMarkup(item, savedDecision){
   const action = savedDecision.decision || "pending";
   const value = savedDecision.value || item.value || {};
-  const fields = Object.entries(value).filter(([key]) => !["citations", "day_profiles", "geometry", "geometry_evidence"].includes(key)).map(([key, raw]) => {
+  const fields = Object.entries(value).filter(([key]) => !["citations", "day_profiles", "geometry", "geometry_evidence", "geometry_status", "geometry_reference", "room_source", "unresolved_fields"].includes(key)).map(([key, raw]) => {
     const input = typeof raw === "number" ? `<input class="calculator-draft-field" data-field="${esc(key)}" type="number" step="any" value="${raw}">` : `<input class="calculator-draft-field" data-field="${esc(key)}" value="${esc(raw ?? "")}">`;
     return `<label>${esc(key)}${input}</label>`;
   }).join("");
@@ -1969,7 +3161,11 @@ function calculatorDraftCandidateMarkup(item, savedDecision){
   const unresolved = unresolvedFields.length ? `<small>unresolved: ${esc(unresolvedFields.join(", "))}</small>` : "";
   const floor = item.floor_id ? `<small>floor candidate: ${esc(item.floor_id)}</small>` : "";
   const geometryEvidence = value.geometry || value.geometry_evidence ? `<small>geometry evidence: ${esc(JSON.stringify(value.geometry || value.geometry_evidence))}</small>` : "";
-  return `<article class="review-item draft-candidate" data-candidate="${esc(item.candidate_id)}"><div><b>${esc(item.kind)} · ${esc(item.candidate_id)}</b><span>${esc(item.reason || "Source-backed proposal")}</span><small>${citationText(item.citations)} · confidence ${esc(item.confidence || "unknown")} · target ${esc(item.target_artifact || "")}</small>${geometry}${geometryEvidence}${unresolved}${floor}<details><summary>Review fields and evidence</summary><div class="draft-fields">${fields}${profiles}<label>Engineer review source<input class="calculator-draft-review-field" data-field="source" placeholder="Reviewer, calculation note, or marked-up drawing"></label><label>Reviewer<input class="calculator-draft-review-field" data-field="reviewer" placeholder="Name / initials"></label><label>Review citation reference<input class="calculator-draft-review-field" data-field="citation_reference" value="${esc(citation.reference || "")}"></label><label>Review excerpt<textarea class="calculator-draft-review-field" data-field="citation_excerpt">${esc(citation.excerpt || "")}</textarea></label></div></details></div><label>Decision <select class="calculator-draft-decision" data-candidate="${esc(item.candidate_id)}"><option value="pending" ${action === "pending" ? "selected" : ""}>Pending review</option><option value="accept" ${action === "accept" ? "selected" : ""}>Accept</option><option value="edit" ${action === "edit" ? "selected" : ""}>Edit</option><option value="reject" ${action === "reject" ? "selected" : ""}>Reject</option><option value="needs_evidence" ${action === "needs_evidence" ? "selected" : ""}>Needs evidence</option></select></label></article>`;
+  const proof = item.reviewer_geometry_proof;
+  const proofRows = proof?.supporting_proofs || (proof ? [proof] : []);
+  const proofLine = proof ? `<small>Current trace${proofRows.length === 1 ? "" : "s"} ${esc(proofRows.map(row => `${row.trace_id} (p. ${row.page})`).join(" · "))} · ${esc(proof.area_m2)} m² · ${esc(proof.calibration?.status || "calibration unresolved")} · reviewer ${esc(proofRows.map(row => row.reviewer || "unavailable").join(" · "))}</small>` : "";
+  const acceptLabel = proof && item.kind === "room" ? "Accept traced geometry" : "Accept";
+  return `<article class="review-item draft-candidate" data-candidate="${esc(item.candidate_id)}"><div><b>${esc(item.kind)} · ${esc(item.candidate_id)}</b><span>${esc(item.reason || "Source-backed proposal")}</span><small>${citationText(item.citations)} · confidence ${esc(item.confidence || "unknown")} · target ${esc(item.target_artifact || "")}</small>${proofLine}${geometry}${geometryEvidence}${unresolved}${floor}<details><summary>Review fields and evidence</summary><div class="draft-fields">${fields}${profiles}<label>Engineer review source<input class="calculator-draft-review-field" data-field="source" placeholder="Reviewer, calculation note, or marked-up drawing"></label><label>Reviewer<input class="calculator-draft-review-field" data-field="reviewer" placeholder="Name / initials"></label><label>Review citation reference<input class="calculator-draft-review-field" data-field="citation_reference" value="${esc(citation.reference || "")}"></label><label>Review excerpt<textarea class="calculator-draft-review-field" data-field="citation_excerpt">${esc(citation.excerpt || "")}</textarea></label></div></details></div><label>Decision <select class="calculator-draft-decision" data-candidate="${esc(item.candidate_id)}"><option value="pending" ${action === "pending" ? "selected" : ""}>Pending review</option><option value="accept" ${action === "accept" ? "selected" : ""}>${acceptLabel}</option><option value="edit" ${action === "edit" ? "selected" : ""}>Edit</option><option value="reject" ${action === "reject" ? "selected" : ""}>Reject</option><option value="needs_evidence" ${action === "needs_evidence" ? "selected" : ""}>Needs evidence</option></select></label></article>`;
 }
 
 function calculatorDraftReviewMarkup(item, savedDecision){
@@ -1993,7 +3189,8 @@ function calculatorDraftDecisions(){
     const reviewer = row?.querySelector('[data-field="reviewer"]')?.value.trim() || row?.querySelector(`[data-reviewer-for="${CSS.escape(candidateId)}"]`)?.value.trim() || "";
     if (reviewer) decision.reviewer = reviewer;
     if (action === "edit") {
-      const original = (CALCULATOR_DRAFT?.candidates ? Object.values(CALCULATOR_DRAFT.candidates).flat().find(item => item.candidate_id === candidateId)?.value : {}) || {};
+      const candidate = CALCULATOR_DRAFT?.candidates ? Object.values(CALCULATOR_DRAFT.candidates).flat().find(item => item.candidate_id === candidateId) : null;
+      const original = candidate?.value || {};
       decision.value = structuredClone(original);
       row?.querySelectorAll(".calculator-draft-field, .calculator-draft-json-field").forEach(input => {
         let value = input.value;
@@ -2003,6 +3200,10 @@ function calculatorDraftDecisions(){
         }
         decision.value[input.dataset.field] = value;
       });
+      if (candidate?.kind === "room") {
+        delete decision.value.geometry_status;
+        delete decision.value.geometry_reference;
+      }
     }
     const source = row?.querySelector('[data-field="source"]')?.value.trim();
     const reference = row?.querySelector('[data-field="citation_reference"]')?.value.trim();
@@ -2029,8 +3230,12 @@ async function saveCalculatorDraft(action){
     if (action === "preview_apply" || action === "apply") { payload.expected_revision = CALCULATOR_DRAFT?.revision; if (action === "apply") payload.preview_token = DRAFT_PREVIEW_TOKEN; }
     const res = await fetch("/api/calculator-draft", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)});
     const data = await res.json();
-    if (!res.ok || data.error) throw new Error(data.error || "Could not update calculator draft.");
-    const displayDraft = {...(data.calculator_draft || {})};
+    if (!res.ok || data.error) {
+      const error = new Error(data.error || "Could not update calculator draft.");
+      error.code = data.code;
+      throw error;
+    }
+    const displayDraft = {...(data.calculator_draft || {}), artifact_status: data.status, stale_reasons: data.stale_reasons || []};
     if (data.preview || data.apply_summary) displayDraft.apply_summary = data.preview || data.apply_summary;
     showCalculatorDraft(displayDraft, data.artifact_url || data.artifact_links?.calculator_draft || "");
     if (action === "preview_apply") DRAFT_PREVIEW_TOKEN = data.preview_token || "";
@@ -2045,8 +3250,14 @@ async function saveCalculatorDraft(action){
       toast("Calculator draft built", "No calculator artifacts or cooling results were changed.");
     }
   } catch (error) {
-    requiredElement("calculatorDraftStatus").textContent = "Could not update calculator draft.";
-    toast("Calculator draft failed", error.message);
+    if (error.code === "revision_conflict") {
+      const message = "New evidence rebuilt this draft while you were reviewing. Reload the draft to see current candidates; unsaved entries may need to be re-entered.";
+      requiredElement("calculatorDraftStatus").textContent = message;
+      toast("Draft rebuilt from new evidence", message);
+    } else {
+      requiredElement("calculatorDraftStatus").textContent = "Could not update calculator draft.";
+      toast("Calculator draft failed", error.message);
+    }
   }
   button.disabled = false;
 }
@@ -2072,6 +3283,7 @@ async function saveDesignRequirements(){
     const data = await res.json();
     if (!res.ok || data.error) throw new Error(data.error || "Could not save design inputs.");
     showDesignRequirements(data.requirements, data.requirements_readiness, data.room_suggestions, {}, data.heat_load_status, {}, data.ventilation_status);
+    if (data.ventilation_rules_resolution) await loadAustralianVentilationRules();
     const links = [["design_requirements.json", data.requirements_url], ["refreshed reasoning packet", data.reasoning_zip_url]]
       .filter(([, url]) => url);
     requiredElement("requirementsLinks").innerHTML = links.map(([label, url]) => `<article class="review-item"><div><b>${esc(label)}</b></div><a class="btn ghost mini" href="${url}" target="_blank" rel="noopener">Open</a></article>`).join("");
@@ -2132,13 +3344,13 @@ function normaliseRoomComponents(components = []){
   return [...(components || []), ...defaultRoomComponents().filter(item => !supplied.has(item.component_type))];
 }
 
-function roomComponentMarkup(component = {}){
+function roomComponentMarkup(component = {}, scheduleId = ""){
   const typeOptions = ROOM_COMPONENT_TYPES.map(([value, label]) => `<option value="${value}">${label}</option>`).join("");
   const citation = component.citations?.[0]?.reference || "";
   return `<div class="room-component">
     <input class="room-component-id" placeholder="Component ID" value="${esc(component.component_id || "")}">
     <select class="room-component-type">${typeOptions}</select>
-    <select class="room-component-state"><option value="not_assessed">Not assessed</option><option value="not_present_confirmed">Not present, confirmed</option><option value="stored_not_calculated">Stored, not calculated</option><option value="calculated">Calculate (approved infiltration only)</option></select>
+    <select class="room-component-state"><option value="not_assessed">Not assessed</option><option value="not_present_confirmed">Not present, confirmed</option><option value="stored_not_calculated">Stored, not calculated</option><option value="calculated">Calculate (method may remain draft)</option></select>
     <input class="room-component-value" type="number" min="0" step="any" placeholder="Raw value" value="${component.value ?? ""}">
     <input class="room-component-unit" placeholder="Unit (e.g. L/s)" value="${esc(component.unit || "")}">
     <input class="room-component-source-room" placeholder="Source room ID (transfer only)" value="${esc(component.source_room_id || "")}">
@@ -2148,6 +3360,7 @@ function roomComponentMarkup(component = {}){
     <input class="room-component-method" placeholder="Method ID (infiltration)" value="${esc(component.method_id || "")}">
     <input class="room-component-air-path" placeholder="Air path (infiltration)" value="${esc(component.air_path || "")}">
     <input class="room-component-flow-reference" placeholder="Flow reference (infiltration)" value="${esc(component.flow_reference || "")}">
+    ${["transfer_air", "vapour_gain", "steam_gain", "process_latent_load"].includes(component.component_type) ? `<input class="room-component-schedule" placeholder="Dedicated schedule ID" value="${esc(scheduleId)}">` : ""}
   </div>`;
 }
 
@@ -2190,10 +3403,13 @@ function addHourlyRoom(room = {}){
         <label>Lighting W/m²<input class="room-lighting" type="number" min="0" step="any" value="${cooling.lighting_w_m2 ?? ""}"></label>
         <label>Lighting diversity<input class="room-lighting-diversity" type="number" min="0" step="any" value="${cooling.lighting_diversity_factor ?? ""}"></label>
         <label>Outside-air cooling L/s<input class="room-outside-air" type="number" min="0" step="any" value="${cooling.outside_air_lps ?? ""}"></label>
+        <label>Outside-air volume reference<select class="room-outside-air-reference"><option value="legacy_unverified">Legacy / not stated (outdoor-state calculation assumption)</option><option value="outdoor_design_condition">Outdoor design-air state, as stated in source</option><option value="standard_air_1_2kg_da_m3">Standard air, 1.2 kg dry air/m³, as stated in source</option></select></label>
+        <p class="fine">Choose only the basis stated by the airflow source. The standard-air choice uses 1.2 kg dry air/m³. Existing missing values stay legacy and keep their previous calculation.</p>
         <label>Safety factor<input class="room-safety" type="number" min="0" step="any" value="${cooling.safety_factor ?? ""}"></label>
         <label>Cooling input status<select class="room-cooling-status"><option value="missing">Missing</option><option value="provisional">Provisional</option><option value="confirmed">Confirmed</option></select></label>
         <label>Cooling input source<input class="room-cooling-source" value="${esc(cooling.source || "")}"></label>
         <label>Indoor cooling WB °C<input class="room-wet-bulb" type="number" step="any" value="${conditions.indoor_cooling_wet_bulb_c ?? ""}"></label>
+        <label>Indoor wet-bulb basis<select class="room-wet-bulb-basis"><option value="legacy_unverified" ${conditions.indoor_wet_bulb_basis === "thermodynamic" || conditions.indoor_wet_bulb_basis === "psychrometer" ? "" : "selected"}>Legacy / unverified</option><option value="thermodynamic" ${conditions.indoor_wet_bulb_basis === "thermodynamic" ? "selected" : ""}>Thermodynamic wet-bulb</option><option value="psychrometer" ${conditions.indoor_wet_bulb_basis === "psychrometer" ? "selected" : ""}>Psychrometer reading (approximate)</option></select></label>
         <label>Condition status<select class="room-condition-status"><option value="missing">Missing</option><option value="provisional">Provisional</option><option value="confirmed">Confirmed</option></select></label>
         <label>Condition source<input class="room-condition-source" value="${esc(conditions.source || "")}"></label>
       </fieldset>
@@ -2204,12 +3420,13 @@ function addHourlyRoom(room = {}){
         <label>Infiltration schedule<input class="room-infiltration-schedule" value="${esc(room.schedule_assignments?.infiltration || "")}"></label>
         <p class="fine">Heat-source and solar schedules remain tied to their existing reviewed source/surface records.</p>
       </fieldset>
-      <fieldset class="room-airflow-components"><legend>Airflow declarations — infiltration can calculate only after the approved method gate</legend>${components.filter(item => ROOM_COMPONENT_TYPES.find(row => row[0] === item.component_type)?.[2] === "airflow").map(roomComponentMarkup).join("")}</fieldset>
-      <fieldset class="room-moisture-components"><legend>Moisture and process declarations — stored, not calculated</legend>${components.filter(item => ROOM_COMPONENT_TYPES.find(row => row[0] === item.component_type)?.[2] === "moisture").map(roomComponentMarkup).join("")}</fieldset>
+      <fieldset class="room-airflow-components"><legend>Airflow declarations — infiltration and transfer air can calculate as draft pending method review</legend>${components.filter(item => ROOM_COMPONENT_TYPES.find(row => row[0] === item.component_type)?.[2] === "airflow").map(item => roomComponentMarkup(item, room.schedule_assignments?.airflow?.[item.component_id] || "")).join("")}</fieldset>
+      <fieldset class="room-moisture-components"><legend>Moisture and process declarations — latent calculations need dedicated schedules and method review</legend>${components.filter(item => ROOM_COMPONENT_TYPES.find(row => row[0] === item.component_type)?.[2] === "moisture").map(item => roomComponentMarkup(item, room.schedule_assignments?.moisture?.[item.component_id] || "")).join("")}</fieldset>
     </div>`;
   card.querySelector(".hourly-room-mapping").value = room.mapping_status || "inferred";
   card.querySelector(".hourly-room-status").value = room.verification_status || "missing";
   card.querySelector(".room-cooling-status").value = cooling.verification_status || "missing";
+  card.querySelector(".room-outside-air-reference").value = cooling.outside_air_flow_reference_basis || "legacy_unverified";
   card.querySelector(".room-condition-status").value = conditions.verification_status || "missing";
   card.querySelector(".room-heating-applicability").value = room.heating_applicability || "not_assessed";
   card.querySelector(".room-heating-gain-status").value = room.heating_internal_gain_status || "not_assessed";
@@ -2283,6 +3500,7 @@ function readHourlyModel(){
       const componentType = component.querySelector(".room-component-type").value;
       const calculationStatus = component.querySelector(".room-component-state").value;
       const calculatedInfiltration = componentType === "infiltration" && calculationStatus === "calculated";
+      const calculatedTransfer = componentType === "transfer_air" && calculationStatus === "calculated";
       return {
         component_id: componentId, component_type: componentType,
         calculation_status: calculationStatus,
@@ -2290,20 +3508,32 @@ function readHourlyModel(){
         source_room_id: component.querySelector(".room-component-source-room").value.trim(), verification_status: component.querySelector(".room-component-status").value,
         source: component.querySelector(".room-component-source").value.trim(),
         citations: citation === originalCitation ? (original?.citations || []) : (citation ? [{reference: citation, page: null, excerpt: ""}] : []),
-        method_id: calculatedInfiltration ? "infiltration_psychrometric_v1" : component.querySelector(".room-component-method").value.trim(),
-        air_path: calculatedInfiltration ? "uncontrolled_infiltration" : component.querySelector(".room-component-air-path").value.trim(),
-        flow_reference: calculatedInfiltration ? "outdoor_design_condition" : component.querySelector(".room-component-flow-reference").value.trim(),
+        method_id: calculatedInfiltration ? "infiltration_psychrometric_v1" : calculatedTransfer ? "room_air_transfer_psychrometric_v1" : component.querySelector(".room-component-method").value.trim(),
+        air_path: calculatedInfiltration ? "uncontrolled_infiltration" : calculatedTransfer ? "room_to_room" : component.querySelector(".room-component-air-path").value.trim(),
+        flow_reference: calculatedInfiltration ? "outdoor_design_condition" : calculatedTransfer ? "sending_room_air_state" : component.querySelector(".room-component-flow-reference").value.trim(),
       };
+    });
+    const airflowSchedules = {...(existing.schedule_assignments?.airflow || {})};
+    const moistureSchedules = {...(existing.schedule_assignments?.moisture || {})};
+    card.querySelectorAll(".room-component").forEach(component => {
+      const componentId = component.querySelector(".room-component-id").value.trim();
+      const componentType = component.querySelector(".room-component-type").value;
+      const schedule = component.querySelector(".room-component-schedule")?.value.trim() || "";
+      if (componentType === "transfer_air") airflowSchedules[componentId] = schedule;
+      if (["vapour_gain", "steam_gain", "process_latent_load"].includes(componentType)) moistureSchedules[componentId] = schedule;
     });
     Object.assign(load, {
       people_sensible_w_per_person: blankToNull(card.querySelector(".room-people-sensible").value), people_latent_w_per_person: blankToNull(card.querySelector(".room-people-latent").value),
       people_diversity_factor: blankToNull(card.querySelector(".room-people-diversity").value), lighting_w_m2: blankToNull(card.querySelector(".room-lighting").value),
       lighting_diversity_factor: blankToNull(card.querySelector(".room-lighting-diversity").value), outside_air_lps: blankToNull(card.querySelector(".room-outside-air").value),
+      outside_air_flow_reference_basis: card.querySelector(".room-outside-air-reference").value,
       safety_factor: blankToNull(card.querySelector(".room-safety").value), verification_status: card.querySelector(".room-cooling-status").value,
       source: card.querySelector(".room-cooling-source").value.trim(),
     });
     Object.assign(conditions, {
-      indoor_cooling_wet_bulb_c: blankToNull(card.querySelector(".room-wet-bulb").value), verification_status: card.querySelector(".room-condition-status").value,
+      indoor_cooling_wet_bulb_c: blankToNull(card.querySelector(".room-wet-bulb").value),
+      indoor_wet_bulb_basis: card.querySelector(".room-wet-bulb-basis").value,
+      verification_status: card.querySelector(".room-condition-status").value,
       source: card.querySelector(".room-condition-source").value.trim(),
     });
     return {
@@ -2324,7 +3554,7 @@ function readHourlyModel(){
       heating_safety_factor: blankToNull(card.querySelector(".room-heating-safety").value),
       heating_safety_factor_source: card.querySelector(".room-heating-safety-source").value.trim(),
       heating_safety_factor_citations: card.querySelector(".room-heating-safety-citation").value.trim() ? [{reference: card.querySelector(".room-heating-safety-citation").value.trim(), page: null, excerpt: "Heating safety factor basis"}] : [],
-      schedule_assignments: {...(existing.schedule_assignments || {}), people: card.querySelector(".room-people-schedule").value.trim(), lighting: card.querySelector(".room-lighting-schedule").value.trim(), outside_air: card.querySelector(".room-outside-air-schedule").value.trim(), infiltration: card.querySelector(".room-infiltration-schedule").value.trim()},
+      schedule_assignments: {...(existing.schedule_assignments || {}), people: card.querySelector(".room-people-schedule").value.trim(), lighting: card.querySelector(".room-lighting-schedule").value.trim(), outside_air: card.querySelector(".room-outside-air-schedule").value.trim(), infiltration: card.querySelector(".room-infiltration-schedule").value.trim(), airflow: airflowSchedules, moisture: moistureSchedules},
       unapproved_components: components,
     };
   });
@@ -2927,28 +4157,77 @@ function drawCoolingReadiness(readiness = {}, artifacts = {}){
   }).join("")}</section>`).join("");
 }
 
+function airflowReferenceLabel(input = {}){
+  const declared = input.flow_reference_status === "declared_basis_unverified";
+  if (input.flow_reference_basis === "outdoor_design_condition") return `outdoor design-air state (${declared ? "declared; source not independently verified" : "calculation assumption; source basis not verified"})`;
+  if (input.flow_reference_basis === "standard_air_1_2kg_da_m3") return `standard air at 1.2 kg dry air/m³ (${declared ? "declared; source not independently verified" : "status not recorded"})`;
+  if (input.flow_reference_basis === "legacy_unverified") return "legacy / basis not recorded (calculation assumes outdoor design-air state)";
+  if (input.flow_reference_basis) return `${input.flow_reference_basis} (${input.flow_reference_status || "status not recorded"})`;
+  return "not recorded; calculation uses outdoor design-air state";
+}
+
 function drawHourlyLoadReport(report = {}, artifactStatus = "not_calculated"){
   const status = report.status || artifactStatus;
+  const policySummary = report.safety_policy_applied
+    ? ` · raw ${Number(report.raw_coincident_total_kw || 0).toFixed(2)} kW × ${Number(report.safety_factor || 1).toFixed(2)} = ${Number(report.final_design_total_kw || 0).toFixed(2)} kW`
+    : (report.safety_policy_mode ? " · final design policy unresolved or blocked" : "");
   requiredElement("hourlyReportStatus").textContent = artifactStatus === "stale"
     ? "Cooling Load Report is stale. Refresh the changed inputs and calculate again."
-    : `${status} · ${report.scope_summary?.complete_scope ? "complete room scope" : "included room scope only"}`;
+    : `${status} · ${report.scope_summary?.complete_scope ? "complete room scope" : "included room scope only"}${policySummary}`;
   drawCoolingReadiness(report.readiness || {}, report.input_artifacts || {});
   const scenarios = report.scenario_results || [];
   const scopeRows = [
     ...(report.known_exclusions || []).map(item => `<article class="heat-load-result"><b>${esc(item.room_id)} · known excluded room input</b><span>${esc(`${item.component_type}: ${item.value} ${item.unit}`)} · ${esc(item.source || "source required")}</span></article>`),
     ...(report.unresolved_room_inputs || []).map(item => `<article class="heat-load-result"><b>${esc(item.room_id)} · unresolved room input</b><span>Assess ${esc(item.component_type)} before calling this a complete room scope.</span></article>`),
   ];
+  const provenanceMarkup = renderReportProvenance(report.provenance);
   requiredElement("hourlyLoadResults").innerHTML = [...scenarios.map(scenario => {
     const peak = scenario.included_scope_peak || {};
     const blocked = scenario.scope_summary?.blocked_rooms || [];
+    const fmt = (value, places = 2) => value != null && value !== "" && Number.isFinite(Number(value)) ? Number(value).toFixed(places) : "—";
     const infiltrationRows = (scenario.rooms || []).map(room => {
       const infiltration = room.peak?.components?.infiltration;
       if (!infiltration) return "";
       const input = infiltration.inputs || infiltration.input_rows?.[0] || {};
       const volume = input.room_volume_m3 == null ? "not required" : `${Number(input.room_volume_m3).toFixed(2)} m³`;
+      const weather = input.outdoor_weather_provenance || {};
+      const dbSource = weather.dry_bulb?.source ? `${weather.dry_bulb.source} (${weather.dry_bulb.status || "status unknown"})` : "dry-bulb source not recorded";
+      const wbSource = weather.wet_bulb?.source ? `${weather.wet_bulb.source} (${weather.wet_bulb.status || "status unknown"})` : "wet-bulb source not recorded";
       return `<li><b>${esc(room.name || room.room_id)}</b> · ${Number(infiltration.total_kw || 0).toFixed(2)} kW `
         + `(sensible ${Number(infiltration.sensible_kw || 0).toFixed(2)} kW, latent ${Number(infiltration.latent_kw || 0).toFixed(2)} kW)`
-        + `<br><small>Peak hour ${esc(room.peak?.hour ?? "—")} · ${Number(input.resolved_flow_lps || 0).toFixed(2)} L/s resolved, ${Number(input.applied_flow_lps || 0).toFixed(2)} L/s applied · volume ${volume} · schedule ${Number(input.schedule_factor ?? 0).toFixed(2)} · signed diagnostics: ${Number(input.raw_signed_sensible_kw || 0).toFixed(2)} sensible / ${Number(input.raw_signed_latent_kw || 0).toFixed(2)} latent kW</small></li>`;
+        + `<br><small>Peak hour ${esc(room.peak?.hour ?? "—")} · ${Number(input.resolved_flow_lps || 0).toFixed(2)} L/s resolved, ${Number(input.applied_flow_lps || 0).toFixed(2)} L/s applied · volume ${volume} · schedule ${Number(input.schedule_factor ?? 0).toFixed(2)} · signed diagnostics: ${Number(input.raw_signed_sensible_kw || 0).toFixed(2)} sensible / ${Number(input.raw_signed_latent_kw || 0).toFixed(2)} latent kW</small>`
+        + `<br><small>Flow reference: ${esc(airflowReferenceLabel(input))} · wet-bulb basis: ${esc(weather.wet_bulb_basis || input.outdoor_wet_bulb_basis || "legacy / unverified")} · outdoor weather: ${esc(dbSource)}; ${esc(wbSource)}. Confirm weather applicability and wet-bulb basis.</small></li>`;
+    }).filter(Boolean);
+    const transferRows = (scenario.rooms || []).map(room => {
+      const transfer = room.peak?.components?.transfer_air;
+      if (!transfer) return "";
+      const input = transfer.inputs || transfer.input_rows?.[0] || {};
+      const source = input.source_room_conditions || {};
+      const target = input.target_room_conditions || {};
+      const citations = (input.flow_citations || []).map(item => item.reference || item.url || item.label).filter(Boolean);
+      const state = item => `${fmt(item.dry_bulb_c, 1)}°C DB / ${fmt(item.wet_bulb_c, 1)}°C WB (${esc(item.wet_bulb_basis || "legacy / unverified")}; ${esc(item.verification_status || "status unknown")})`;
+      return `<li><b>${esc(room.name || room.room_id)}</b> · ${fmt(transfer.total_kw)} kW total `
+        + `(sensible ${fmt(transfer.sensible_kw)} kW, latent ${fmt(transfer.latent_kw)} kW)`
+        + `<br><small>Peak hour ${esc(room.peak?.hour ?? "—")} · ${fmt(input.flow_lps)} L/s referenced to the sending-room state · from ${esc(source.room_id || input.source_room_id || "unknown room")} (${state(source)}) to ${esc(target.room_id || "unknown room")} (${state(target)}) · ${esc(input.method_validation || "method status not recorded")}</small>`
+        + `<br><small>Airflow source: ${esc(input.flow_source || "not recorded")} · status ${esc(input.flow_verification_status || "not recorded")}${citations.length ? ` · ${esc(citations.join(", "))}` : " · citation not recorded"}</small></li>`;
+    }).filter(Boolean);
+    const outsideAirRows = (scenario.rooms || []).map(room => {
+      const outsideAir = room.peak?.components?.outside_air;
+      if (!outsideAir) return "";
+      const input = outsideAir.inputs || outsideAir.input_rows?.[0] || {};
+      const weatherProvenance = input.outdoor_weather_provenance || {};
+      const weatherStateSource = (label, evidence) => {
+        if (!evidence?.source) return `${label} source not recorded in this report`;
+        const citations = (evidence.citations || []).map(item => item.reference || item.url || item.label).filter(Boolean);
+        return `${label}: ${evidence.source} (${evidence.status || "status not recorded"})${citations.length ? ` · ${citations.join(", ")}` : " · citation not recorded"}`;
+      };
+      const basis = value => value === "thermodynamic" ? "thermodynamic wet-bulb"
+        : value === "psychrometer" ? "psychrometer reading (approximate)"
+          : "legacy / unverified wet-bulb basis";
+      return `<li><b>${esc(room.name || room.room_id)}</b> · ${fmt(outsideAir.total_kw)} kW total `
+        + `(sensible ${fmt(outsideAir.sensible_kw)} kW, latent ${fmt(outsideAir.latent_kw)} kW)`
+        + `<br><small>Peak hour ${esc(room.peak?.hour ?? "—")} · ${fmt(input.flow_lps)} L/s · indoor ${fmt(input.indoor_db_c, 1)}°C DB / ${fmt(input.indoor_wb_c, 1)}°C WB (${esc(basis(input.indoor_wet_bulb_basis))}) · outdoor ${fmt(input.outdoor_db_c, 1)}°C DB / ${fmt(input.outdoor_wb_c, 1)}°C WB (${esc(basis(input.outdoor_wet_bulb_basis))}) · ${fmt(input.atmospheric_pressure_kpa, 3)} kPa</small>`
+        + `<br><small>Airflow status: ${esc(input.flow_verification_status || "not recorded")}${input.flow_source ? ` · source: ${esc(input.flow_source)}` : ""}. Flow reference: ${esc(airflowReferenceLabel(input))}. Outdoor source evidence: ${esc(weatherStateSource("DB", weatherProvenance.dry_bulb))}; ${esc(weatherStateSource("WB", weatherProvenance.wet_bulb))}; wet-bulb basis ${esc(basis(weatherProvenance.wet_bulb_basis || input.outdoor_wet_bulb_basis))}. Confirm weather applicability and basis.</small></li>`;
     }).filter(Boolean);
     const glazingRows = (scenario.rooms || []).map(room => {
       const conduction = room.peak?.components?.glazing_conduction;
@@ -2971,10 +4250,18 @@ function drawHourlyLoadReport(report = {}, artifactStatus = "not_calculated"){
     return `<article class="heat-load-result"><b>${esc(scenario.title || scenario.scenario_id)} · ${esc(scenario.status)}</b>
       <span>Included-scope subtotal peak ${Number(peak.design_total_kw || 0).toFixed(2)} kW${scenario.scope_summary?.complete_scope ? "" : " · not a complete project duty"}</span>
       ${blocked.length ? `<span>Omitted rooms: ${esc(blocked.map(item => item.room_id).join(", "))}</span>` : ""}
+      ${outsideAirRows.length ? `<details open><summary>Outside-air cooling at each room governing hour</summary><ul class="audit-list">${outsideAirRows.join("")}</ul></details>` : ""}
+      ${transferRows.length ? `<details><summary>Transfer-air cooling at each room governing hour</summary><ul class="audit-list">${transferRows.join("")}</ul></details>` : ""}
       ${infiltrationRows.length ? `<details><summary>Infiltration at each room governing hour</summary><ul class="audit-list">${infiltrationRows.join("")}</ul></details>` : ""}
       ${glazingRows.length ? `<details><summary>Reviewed glazing at each room governing hour</summary><ul class="audit-list">${glazingRows.join("")}</ul></details>` : ""}
       ${couplingRows.length ? `<details><summary>Dynamic partitions at each room governing hour</summary><ul class="audit-list">${couplingRows.join("")}</ul></details>` : ""}</article>`;
-  }), ...scopeRows].join("");
+  }), ...scopeRows, provenanceMarkup].join("");
+}
+
+function renderReportProvenance(provenance = {}){
+  const rows = (provenance.governing_components || []).filter(row => row.provenance?.length).slice(0, 80);
+  if (!rows.length) return "";
+  return `<article class="heat-load-result"><details><summary>Governing-hour provenance drill-down</summary>${rows.map(row => `<details class="input-register-group"><summary><b>${esc(row.entity_id || "project")} · ${esc(row.component)}</b><span>${row.load_kw == null ? "—" : `${Number(row.load_kw).toFixed(3)} kW`} · hour ${esc(row.hour ?? "—")}</span></summary>${row.provenance.map(item => `<div class="input-register-row"><div><b>${esc(item.target_category || "Model input")} · ${esc(item.target || "value")}</b><span>${esc(item.origin || "unresolved")} · ${esc(item.status || "needs_review")} · ${Number(item.confidence || 0).toFixed(2)} confidence</span><small>${esc(item.formula || "No formula recorded")}${item.operands && Object.keys(item.operands).length ? ` · operands: ${esc(JSON.stringify(item.operands))}` : ""}</small><small>${esc(item.rationale || "")}${item.citation?.citation ? ` · ${esc(item.citation.citation)}` : ""}</small></div></div>`).join("")}</details>`).join("")}</details></article>`;
 }
 
 async function loadHourlyLoadReport(){
@@ -2985,6 +4272,41 @@ async function loadHourlyLoadReport(){
     if (!res.ok || data.error) return;
     drawHourlyLoadReport(data.hourly_load_report || {}, data.status || "not_calculated");
   } catch (_) { /* Report is optional until all hourly artifacts exist. */ }
+}
+
+function drawSafetyFactorResolution(payload = {}){
+  const artifact = payload.safety_factor_resolution || {};
+  const policies = artifact.policies || {};
+  const rows = ["cooling", "heating"].map(mode => {
+    const row = policies[mode] || {};
+    const factor = row.factor == null ? "unresolved" : Number(row.factor).toFixed(2);
+    const source = row.source || "No cited source";
+    const status = row.status || "blocked";
+    return `<article class="review-item"><div><b>${mode[0].toUpperCase() + mode.slice(1)} · ${esc(status)}</b><span>Factor ${esc(factor)}${row.allowance_percent == null ? "" : ` · allowance ${Number(row.allowance_percent).toFixed(1)}%`} · ${esc(source)}</span><small>${esc(row.origin === "controlled_preliminary_fallback" ? "Controlled preliminary assumption — draft only." : (row.citations?.[0]?.reference || row.remediation || "Cited policy required."))}</small></div></article>`;
+  }).join("");
+  const status = artifact.status || payload.status || "blocked";
+  requiredElement("safetyFactorResolutionStatus").textContent = `${status} · factors apply once at the final coincident project rollup`;
+  requiredElement("safetyFactorResolutionResults").innerHTML = rows;
+}
+
+async function loadSafetyFactorResolution(){
+  if (!DATA?.id || !document.getElementById("safetyFactorResolutionResults")) return;
+  try {
+    const res = await fetch(`/api/safety-factor-resolution?project_id=${encodeURIComponent(DATA.id)}`);
+    const data = await res.json();
+    if (!res.ok || data.error) return;
+    drawSafetyFactorResolution(data);
+  } catch (_) { /* policy is optional until the user resolves it */ }
+}
+
+async function resolveSafetyFactor(){
+  try {
+    const res = await fetch("/api/safety-factor-resolution", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({project_id: DATA.id, action: "resolve"})});
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || "Could not resolve safety-factor policy.");
+    drawSafetyFactorResolution(data);
+    toast("Final design policy resolved", "Review the cited source and complete engineer approval in the controlled review workflow.");
+  } catch (error) { toast("Safety-factor resolution failed", error.message); }
 }
 
 async function calculateHourlyLoad(){
@@ -3020,12 +4342,27 @@ function drawHeatingLoadReport(report = {}, artifactStatus = "not_calculated", s
     const blocked = scenario.scope_summary?.blocked_rooms || [];
     const roomRows = (scenario.rooms || []).map(room => {
       const components = room.peak?.components || {};
+      const format = (value, places = 2) => value != null && value !== "" && Number.isFinite(Number(value)) ? Number(value).toFixed(places) : "—";
       const value = name => Number(components[name]?.total_kw || 0).toFixed(2);
       const credit = Math.abs(Number(components.heating_internal_gain_credit?.total_kw || 0)).toFixed(2);
       const safety = Number(room.peak?.safety_allowance_kw || 0).toFixed(2);
       const omitted = components.heating_internal_gain_credit?.inputs?.omitted_sources || [];
+      const psychrometricRows = ["heating_outside_air", "heating_infiltration"].map(name => {
+        const component = components[name];
+        if (!component) return "";
+        const input = component.inputs || component.input_rows?.[0] || {};
+        const weather = input.weather_provenance || {};
+        const citations = (state => (state?.citations || []).map(item => item.reference || item.url || item.label).filter(Boolean).join(", "));
+        const weatherState = (label, state) => state?.source
+          ? `${label} source ${state.source} (${state.status || "status unknown"})${citations(state) ? ` · ${citations(state)}` : " · citation not recorded"}`
+          : `${label} source not recorded`;
+        const basis = weather.wet_bulb_basis || input.outdoor_wet_bulb_basis || "legacy / unverified";
+        const flow = input.flow_lps ?? input.applied_flow_lps ?? input.resolved_flow_lps;
+        return `<small>${esc(name === "heating_outside_air" ? "Outside air" : "Infiltration")}: ${format(component.sensible_kw)} kW · ${flow == null ? "flow not recorded" : `${format(flow)} L/s`} · airflow source ${esc(input.flow_source || "not recorded")} · flow reference ${esc(airflowReferenceLabel(input))} · indoor setpoint source ${esc(input.indoor_heating_setpoint_source || "not recorded")} · outdoor ${format(input.outdoor_db_c ?? weather.dry_bulb?.value, 1)}°C DB / ${format(input.outdoor_wb_c ?? weather.wet_bulb?.value, 1)}°C WB · basis ${esc(basis)} · ${format(input.atmospheric_pressure_kpa ?? weather.pressure?.value, 3)} kPa · ${esc(weatherState("DB", weather.dry_bulb))}; ${esc(weatherState("WB", weather.wet_bulb))} · airflow status ${esc(input.flow_verification_status || "not recorded")}</small>`;
+      }).filter(Boolean).join("");
       return `<li><b>${esc(room.name || room.room_id)}</b> · ${esc(room.status)} · ${Number(room.peak?.design_total_kw || 0).toFixed(2)} kW`
         + `<br><small>Envelope ${value("heating_envelope")} · glazing ${value("heating_glazing_conduction")} · outside air ${value("heating_outside_air")} · infiltration ${value("heating_infiltration")} · sensible credit −${credit} · safety +${safety} · governing hour ${esc(room.peak?.hour ?? "—")}</small>`
+        + (psychrometricRows ? `<br>${psychrometricRows}` : "")
         + (omitted.length ? `<br><small>Uncredited equipment: ${esc(omitted.map(item => item.source_id || "unidentified").join(", "))}</small>` : "")
         + `</li>`;
     }).join("");
@@ -3037,7 +4374,7 @@ function drawHeatingLoadReport(report = {}, artifactStatus = "not_calculated", s
   }).join("");
   const blockedMarkup = (report.blocked_reasons || []).map(reason => `<article class="heat-load-result"><b>Heating blocked</b><span>${esc(reason)}</span></article>`).join("");
   const readinessMarkup = readiness.issues?.length ? `<article class="heat-load-result"><b>Heating readiness issues</b><ul class="audit-list">${readiness.issues.map(issue => `<li>${esc(issue.reason)} — ${esc(issue.remediation || "Resolve the cited input.")}</li>`).join("")}</ul></article>` : "";
-  requiredElement("heatingLoadResults").innerHTML = (scenarioMarkup || blockedMarkup) + readinessMarkup;
+  requiredElement("heatingLoadResults").innerHTML = (scenarioMarkup || blockedMarkup) + readinessMarkup + renderReportProvenance(report.provenance);
 }
 
 function drawProjectHealth(health = {}, audit = {}){
@@ -3140,21 +4477,65 @@ function drawAhuAirside(report = {}, status = "not_calculated", gate = {}, syste
   const blocked = (report.blocked_ahus || []).map(item => `<li><b>${esc(item.ahu_id || "AHU")}</b> · ${esc((item.reasons || []).join("; "))}</li>`).join("");
   const scenarios = (report.scenario_results || []).map(scenario => {
     const peak = scenario.included_scope_peak || {};
-    const ahus = (scenario.ahus || []).map(ahu => `<li><b>${esc(ahu.name || ahu.ahu_id)}</b> · ${esc(ahu.status)} · coil ${Number(ahu.peak?.design_total_kw || 0).toFixed(2)} kW · ${esc(ahu.system_type)} · number-off ${ahu.number_off}</li>`).join("");
+    const citations = rows => (rows || []).map(item => item.reference || item.url || item.label).filter(Boolean).join(", ");
+    const evidence = item => item?.source ? `${item.source} (${item.status || item.review_status || "status unknown"})${citations(item.citations) ? ` · ${citations(item.citations)}` : " · citation not recorded"}` : "source not recorded";
+    const fmt = (value, places) => value != null && value !== "" && Number.isFinite(Number(value)) ? Number(value).toFixed(places) : "—";
+    const ahus = (scenario.ahus || []).map(ahu => {
+      const p = ahu.peak?.psychrometric_provenance || {};
+      const outdoor = p.outdoor || {};
+      const ret = p.return_air || {};
+      const coil = p.coil_leaving || {};
+      const sensibleSplit = p.coil_sensible_split || {};
+      const airflowReference = p.supply_airflow_reference || {};
+      const airflowState = airflowReference.state || {};
+      const splitDetails = sensibleSplit.basis ? `<br><b>Sensible/latent split:</b> ${esc(sensibleSplit.basis)} · cp ${fmt(sensibleSplit.specific_heat_kj_kg_da_k, 3)} kJ/(kg dry air·K); latent is total minus sensible (${esc(sensibleSplit.review_status || "status unknown")})` : "";
+      const details = `<br><small>Peak hour ${esc(ahu.peak?.hour ?? "—")} · outdoor DB ${fmt(outdoor.dry_bulb?.value, 1)}°C (${esc(evidence(outdoor.dry_bulb))}) · WB ${fmt(outdoor.wet_bulb?.value, 1)}°C, ${esc(outdoor.wet_bulb_basis || "legacy / unverified")} (${esc(evidence(outdoor.wet_bulb))}) · pressure ${fmt(p.pressure?.value, 3)} kPa (${esc(evidence(p.pressure))}) · return-air ${esc(ret.wet_bulb_basis || "legacy / unverified")} (${esc(evidence(ret))}) · coil-leaving ${esc(coil.wet_bulb_basis || "legacy / unverified")} (${esc(evidence(coil))})${splitDetails}<br><b>Supply airflow basis:</b> ${esc(airflowReference.basis || "not recorded")} at ${fmt(airflowState.dry_bulb_c, 1)}°C and ${fmt(airflowState.pressure_kpa, 3)} kPa; ${airflowReference.verified ? "verified" : "assumption — confirm before design use"}</small>`;
+      const condensate = ahu.peak?.coil_condensate_kg_s == null ? "not recorded" : `${fmt(Number(ahu.peak.coil_condensate_kg_s) * 1000, 2)} g/s condensate`;
+      return `<li><b>${esc(ahu.name || ahu.ahu_id)}</b> · ${esc(ahu.status)} · coil ${fmt(ahu.peak?.coil_total_kw ?? ahu.peak?.design_total_kw, 2)} kW total / ${fmt(ahu.peak?.coil_sensible_kw, 2)} kW sensible / ${fmt(ahu.peak?.coil_latent_kw, 2)} kW latent · ${esc(condensate)} · ${esc(ahu.system_type)} · number-off ${ahu.number_off}${details}</li>`;
+    }).join("");
     return `<article class="heat-load-result"><b>${esc(scenario.scenario_id)} · ${esc(scenario.status)}</b><span>Included AHU subtotal ${Number(peak.design_total_kw || 0).toFixed(2)} kW${report.project_peak?.design_total_kw ? ` · project ${Number(report.project_peak.design_total_kw).toFixed(2)} kW` : " · project peak suppressed"}</span>${ahus ? `<ul class="audit-list">${ahus}</ul>` : ""}</article>`;
   }).join("");
   requiredElement("ahuAirsideResults").innerHTML = blocked ? `${scenarios}<article class="heat-load-result"><b>Blocked AHUs</b><ul class="audit-list">${blocked}</ul></article>` : scenarios;
+}
+
+function drawAhuResolution(payload = {}){
+  const artifact = payload.ahu_resolution || {};
+  const summary = artifact.summary || {};
+  const stale = (payload.stale_reasons || []).length;
+  const status = requiredElement("ahuResolutionStatus");
+  status.textContent = stale ? `Preliminary AHU resolution is stale · ${payload.stale_reasons.join(", ")}` : `${artifact.status || payload.status || "needs_review"} · ${summary.systems || 0} system(s) · ${summary.paths || 0} path(s) · ${summary.issues || 0} issue(s)`;
+  const issues = (artifact.issues || []).map(item => `<li><b>${esc(item.type || "Review issue")}</b> · ${esc(item.remediation || "Confirm the proposed AHU evidence.")}</li>`).join("");
+  const systems = (artifact.systems || []).map(item => `<li><b>${esc(item.name || item.ahu_id)}</b> · ${esc(item.system_type || "unresolved")} · ${esc(item.status || "proposed")} · ${esc((item.served_zone_ids || []).join(", ") || "zone ownership unresolved")}</li>`).join("");
+  requiredElement("ahuResolutionResults").innerHTML = (systems || issues) ? `<article class="heat-load-result"><b>AI preliminary AHU proposals</b>${systems ? `<ul class="audit-list">${systems}</ul>` : ""}${issues ? `<b>Needs review</b><ul class="audit-list">${issues}</ul>` : ""}</article>` : "";
+}
+
+async function resolveAhuResolution(action = "resolve"){
+  if (!DATA?.id) return;
+  const status = requiredElement("ahuResolutionStatus");
+  const button = action === "materialize_preliminary" ? optionalElement("btnMaterializeAhuPreliminary") : optionalElement("btnResolveAhuResolution");
+  if (button) button.disabled = true;
+  status.textContent = action === "materialize_preliminary" ? "Building isolated preliminary AHU inputs…" : "Resolving proposed AHU systems and air paths…";
+  try {
+    const res = await fetch("/api/ahu-resolution", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({project_id: DATA.id, action})});
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.message || data.error || "Could not resolve AHU inputs.");
+    drawAhuResolution(data);
+    if (action === "materialize_preliminary") toast("Preliminary AHU inputs built", "The reviewed AHU files were not changed.");
+    else toast("AHU inputs resolved", "Proposals remain draft-only until reviewed.");
+  } catch (error) { status.textContent = "AHU resolution needs attention."; toast("AHU resolution failed", error.message); }
+  if (button) button.disabled = false;
 }
 
 async function loadAhuAirside(){
   if (!DATA?.id) return;
   try {
     const query = `?project_id=${encodeURIComponent(DATA.id)}`;
-    const [gateRes, systemsRes, modelRes, reportRes] = await Promise.all([
-      fetch(`/api/air-side-method-gate${query}`), fetch(`/api/ahu-systems${query}`), fetch(`/api/air-side-model${query}`), fetch(`/api/hourly-ahu-load-report${query}`),
+    const [gateRes, systemsRes, modelRes, reportRes, resolutionRes] = await Promise.all([
+      fetch(`/api/air-side-method-gate${query}`), fetch(`/api/ahu-systems${query}`), fetch(`/api/air-side-model${query}`), fetch(`/api/hourly-ahu-load-report${query}`), fetch(`/api/ahu-resolution${query}`),
     ]);
-    const gate = await gateRes.json(); const systems = await systemsRes.json(); const model = await modelRes.json(); const report = await reportRes.json();
+    const gate = await gateRes.json(); const systems = await systemsRes.json(); const model = await modelRes.json(); const report = await reportRes.json(); const resolution = await resolutionRes.json();
     if (reportRes.ok) drawAhuAirside(report.hourly_ahu_load_report || {}, report.status || "not_calculated", gate.readiness || {}, systems.readiness || {}, model.readiness || {});
+    if (resolutionRes.ok) drawAhuResolution(resolution);
   } catch (_) { /* AHU setup is optional until the explicit air-side model exists. */ }
 }
 
@@ -3189,15 +4570,50 @@ function drawPlantReport(report = {}, status = "not_calculated", gate = {}, plan
   requiredElement("plantResults").innerHTML = blocked ? `${scenarios}<article class="heat-load-result"><b>Blocked plant systems</b><ul class="audit-list">${blocked}</ul></article>` : scenarios;
 }
 
+function drawPlantResolution(payload = {}){
+  const artifact = payload.plant_resolution || {};
+  const summary = artifact.summary || {};
+  const stale = payload.stale_reasons || [];
+  const status = optionalElement("plantResolutionStatus");
+  if (!status) return;
+  status.textContent = stale.length ? `Preliminary plant resolution is stale · ${stale.join(", ")}` : `${artifact.status || payload.status || "needs_review"} · ${summary.systems || 0} plant(s) · ${summary.circuits || 0} circuit(s) · ${summary.issues || 0} issue(s)`;
+  const systems = (artifact.systems || []).map(item => `<li><b>${esc(item.name || item.plant_id || "Plant")}</b> · ${esc(item.plant_type || "unresolved")} · ${esc(item.status || "proposed")} · ${item.number_off || 1} number-off${item.deferred ? " · deferred from cooling subtotal" : ""}</li>`).join("");
+  const circuits = (artifact.circuits || []).map(item => `<li><b>${esc(item.circuit_id || "Circuit")}</b> · ${esc(item.circuit_type || "unresolved")} · ${esc(item.status || "proposed")} · ${item.flow_lps == null ? "flow unresolved" : `${Number(item.flow_lps).toFixed(1)} L/s`}</li>`).join("");
+  const issues = (artifact.issues || []).map(item => `<li><b>${esc(item.type || "Review issue")}</b> · ${esc(item.remediation || item.message || "Resolve the plant evidence.")}</li>`).join("");
+  const report = payload.preliminary_report || {};
+  const peak = report.project_peak || {};
+  const subtotal = report.scenario_results?.[0]?.included_scope_peak?.plant_duty_kw;
+  const summaryLine = Number.isFinite(Number(subtotal)) ? `<p>Preliminary plant subtotal ${Number(subtotal).toFixed(2)} kW${peak.plant_duty_kw ? ` · project ${Number(peak.plant_duty_kw).toFixed(2)} kW` : ""}</p>` : "";
+  const target = optionalElement("plantResolutionResults");
+  if (target) target.innerHTML = (systems || circuits || issues || summaryLine) ? `<article class="heat-load-result"><b>AI preliminary plant and hydraulic proposal</b>${summaryLine}${systems ? `<b>Plant systems</b><ul class="audit-list">${systems}</ul>` : ""}${circuits ? `<b>Hydraulic circuits</b><ul class="audit-list">${circuits}</ul>` : ""}${issues ? `<b>Needs review</b><ul class="audit-list">${issues}</ul>` : ""}</article>` : "";
+}
+
+async function resolvePlantResolution(action = "resolve"){
+  if (!DATA?.id) return;
+  const status = optionalElement("plantResolutionStatus");
+  const button = action === "materialize_preliminary" ? optionalElement("btnMaterializePlantPreliminary") : optionalElement("btnResolvePlantResolution");
+  if (button) button.disabled = true;
+  if (status) status.textContent = action === "materialize_preliminary" ? "Building isolated preliminary plant inputs…" : "Resolving proposed plant systems and hydraulic circuits…";
+  try {
+    const res = await fetch("/api/plant-resolution", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({project_id: DATA.id, action})});
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.message || data.error || "Could not resolve plant inputs.");
+    drawPlantResolution(data);
+    toast(action === "materialize_preliminary" ? "Preliminary plant model built" : "Plant inputs resolved", "Draft plant records do not change reviewed plant files.");
+  } catch (error) { if (status) status.textContent = "Plant resolution needs attention."; toast("Plant resolution failed", error.message); }
+  if (button) button.disabled = false;
+}
+
 async function loadPlant(){
   if (!DATA?.id) return;
   try {
     const query = `?project_id=${encodeURIComponent(DATA.id)}`;
-    const [gateRes, plantRes, circuitRes, reportRes] = await Promise.all([
-      fetch(`/api/plant-method-gate${query}`), fetch(`/api/plant-systems${query}`), fetch(`/api/hydraulic-circuits${query}`), fetch(`/api/hourly-plant-load-report${query}`),
+    const [gateRes, plantRes, circuitRes, reportRes, resolutionRes] = await Promise.all([
+      fetch(`/api/plant-method-gate${query}`), fetch(`/api/plant-systems${query}`), fetch(`/api/hydraulic-circuits${query}`), fetch(`/api/hourly-plant-load-report${query}`), fetch(`/api/plant-resolution${query}`),
     ]);
-    const gate = await gateRes.json(); const plants = await plantRes.json(); const circuits = await circuitRes.json(); const report = await reportRes.json();
+    const gate = await gateRes.json(); const plants = await plantRes.json(); const circuits = await circuitRes.json(); const report = await reportRes.json(); const resolution = await resolutionRes.json();
     if (reportRes.ok) drawPlantReport(report.hourly_plant_load_report || {}, report.status || "not_calculated", gate.readiness || {}, plants.readiness || {}, circuits.readiness || {});
+    if (resolutionRes.ok) drawPlantResolution(resolution);
   } catch (_) { /* Plant setup is optional until an AHU report and mappings exist. */ }
 }
 
@@ -3229,9 +4645,11 @@ function drawAnnualEnergy(report = {}, status = "not_calculated", exports = {}){
   const months = Array.from({length: 12}, (_, index) => index + 1);
   const cooling = report.cooling?.monthly_kwh || {};
   const heating = report.heating?.monthly_kwh || {};
-  const monthlyRows = months.map(month => `<tr><th scope="row">${month}</th><td>${Number(cooling[String(month)] || 0).toFixed(1)}</td><td>${Number(heating[String(month)] || 0).toFixed(1)}</td></tr>`).join("");
+  const coolingIncomplete = report.cooling?.monthly_incomplete_hours || {};
+  const heatingIncomplete = report.heating?.monthly_incomplete_hours || {};
+  const monthlyRows = months.map(month => `<tr><th scope="row">${month}</th><td>${Number(cooling[String(month)] || 0).toFixed(1)}</td><td>${Number(coolingIncomplete[String(month)] || 0)}</td><td>${Number(heating[String(month)] || 0).toFixed(1)}</td><td>${Number(heatingIncomplete[String(month)] || 0)}</td></tr>`).join("");
   const exportLinks = [exports.hourly_csv_url && `<a class="btn ghost mini" href="${esc(exports.hourly_csv_url)}" download>Hourly CSV</a>`, exports.monthly_csv_url && `<a class="btn ghost mini" href="${esc(exports.monthly_csv_url)}" download>Monthly CSV</a>`].filter(Boolean).join(" ");
-  requiredElement("annualResults").innerHTML = `<article class="heat-load-result"><b>Annual energy summary</b><ul class="audit-list">${section("cooling", "Cooling")}${section("heating", "Heating")}${section("ahu", "AHU")}${section("plant", "Plant")}</ul>${report.scope_summary?.complete_scope ? "<span>Complete active scope</span>" : "<span>Included-scope subtotal only; complete project totals are suppressed.</span>"}${exportLinks ? `<div class="bar">${exportLinks}</div>` : ""}</article><article class="heat-load-result"><b>Monthly energy (kWh)</b><table><thead><tr><th scope="col">Month</th><th scope="col">Cooling</th><th scope="col">Heating</th></tr></thead><tbody>${monthlyRows}</tbody></table></article>${issues ? `<article class="heat-load-result"><b>Annual readiness issues</b><ul class="audit-list">${issues}</ul></article>` : ""}`;
+  requiredElement("annualResults").innerHTML = `<article class="heat-load-result"><b>Annual energy summary</b><ul class="audit-list">${section("cooling", "Cooling")}${section("heating", "Heating")}${section("ahu", "AHU")}${section("plant", "Plant")}</ul>${report.scope_summary?.complete_scope ? "<span>Complete active scope</span>" : "<span>Included-scope subtotal only; complete project totals are suppressed.</span>"}${exportLinks ? `<div class="bar">${exportLinks}</div>` : ""}</article><article class="heat-load-result"><b>Monthly energy subtotals (kWh)</b><p>Incomplete hours are excluded; counts show hours missing from one or more included rooms.</p><table><thead><tr><th scope="col">Month</th><th scope="col">Cooling</th><th scope="col">Cooling incomplete hours</th><th scope="col">Heating</th><th scope="col">Heating incomplete hours</th></tr></thead><tbody>${monthlyRows}</tbody></table></article>${issues ? `<article class="heat-load-result"><b>Annual readiness issues</b><ul class="audit-list">${issues}</ul></article>` : ""}`;
 }
 
 async function loadAnnualEnergy(){
@@ -3306,6 +4724,47 @@ async function calculateVentilation(){
   requiredElement("btnCalculateVentilation").disabled = false;
 }
 
+async function resolveAirflow(){
+  if (!DATA?.id) return;
+  const button = document.getElementById("btnResolveAirflow");
+  const status = document.getElementById("airflowResolutionStatus");
+  const results = document.getElementById("airflowResolutionResults");
+  if (button) button.disabled = true;
+  if (status) status.textContent = "Resolving draft air paths…";
+  try {
+    const res = await fetch("/api/airflow-resolution", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({project_id: DATA.id, action: "resolve"}),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || "Could not resolve air paths.");
+    const artifact = data.airflow_resolution || {};
+    const summary = artifact.summary || {};
+    if (status) status.textContent = `${data.status || artifact.status || "draft"} · ${summary.resolved || 0} resolved · ${summary.provisional || 0} provisional · ${summary.blocked || 0} blocked`;
+    if (results) {
+      const records = Array.isArray(artifact.records) ? artifact.records : [];
+      results.textContent = "";
+      records.slice(0, 12).forEach(record => {
+        const item = document.createElement("article");
+        item.className = "review-item";
+        const title = document.createElement("b");
+        title.textContent = `${record.owner_room_id || "Unassigned room"} · ${record.air_path_type || "air path"}`;
+        const detail = document.createElement("span");
+        const explanations = [...(record.unresolved_fields || []), ...(record.conflicts || []).map(id => `conflicts with ${id}`)];
+        detail.textContent = `${record.status || "needs_review"} · ${record.value == null ? "value unresolved" : `${record.value} ${record.unit || ""}`} · ${record.origin || "unresolved"}${explanations.length ? ` · ${explanations.join("; ")}` : ""}`;
+        item.append(title, detail);
+        results.appendChild(item);
+      });
+      if (!records.length) results.textContent = "No air paths were resolved. Review room use, volume, and source evidence.";
+    }
+    toast("Air paths resolved", "Draft airflow inputs are available for review before ventilation calculation.");
+  } catch (error) {
+    if (status) status.textContent = "Could not resolve draft air paths.";
+    toast("Airflow resolution failed", error.message);
+  }
+  if (button) button.disabled = false;
+}
+
 function drawVentilationReport(report = {}, reportStatus = "not_calculated"){
   if (!report?.zone_results?.length) {
     requiredElement("ventilationStatus").textContent = reportStatus === "stale" ? "Ventilation report is stale. Calculate again after reviewing inputs." : "Enter zone ventilation inputs, then calculate a preliminary breakdown.";
@@ -3322,6 +4781,162 @@ function drawVentilationReport(report = {}, reportStatus = "not_calculated"){
 }
 
 /* ---------------- projects ---------------- */
+let TEST_WORKSPACE_ENABLED = false;
+let TEST_RUN_ID = "";
+let TEST_RUN_POLL = null;
+
+async function initTestWorkspace(){
+  try {
+    const response = await fetch("/api/test-mode/status");
+    const state = await response.json();
+    if (!response.ok || !state.enabled) return;
+    TEST_WORKSPACE_ENABLED = true;
+    requiredElement("testWorkspacePanel").classList.remove("hide");
+    requiredElement("testWorkspaceFixture").textContent = state.available
+      ? `Fixture: ${state.fixture_name}. Runs locally with deterministic AI responses and draft-only assumptions. ${state.fixture_warning || ""}`
+      : (state.message || "A saved local fixture is not available.");
+    requiredElement("btnTestWorkspaceRun").disabled = !state.available;
+    if (state.active_run){
+      TEST_RUN_ID = state.active_run.run_id || "";
+      renderTestWorkspaceRun(state.active_run);
+      if (state.active_run.status === "running") pollTestWorkspaceRun();
+    }
+  } catch {
+    // Normal development and hosted pages do not expose this local-only tool.
+  }
+}
+
+requiredElement("btnTestWorkspaceRun").addEventListener("click", startTestWorkspaceRun);
+requiredElement("btnTestWorkspaceReset").addEventListener("click", resetTestWorkspaceRun);
+
+async function startTestWorkspaceRun(){
+  if (!TEST_WORKSPACE_ENABLED) return;
+  const button = requiredElement("btnTestWorkspaceRun");
+  button.disabled = true;
+  requiredElement("testWorkspaceStatus").textContent = "Starting the isolated walkthrough…";
+  try {
+    const response = await fetch("/api/test-mode/run", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({scenario:"complete"})});
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || "Test walkthrough could not start.");
+    TEST_RUN_ID = data.run?.run_id || "";
+    renderTestWorkspaceRun(data.run || {});
+    if (data.run?.status === "running") pollTestWorkspaceRun();
+  } catch (error) {
+    requiredElement("testWorkspaceStatus").textContent = `${error.message} Retry the walkthrough or check that ./start_web --test is running.`;
+    button.disabled = false;
+  }
+}
+
+function pollTestWorkspaceRun(){
+  if (!TEST_RUN_ID || TEST_RUN_POLL) return;
+  const poll = async () => {
+    if (!TEST_RUN_ID) return;
+    try {
+      const response = await fetch(`/api/test-mode/run/${encodeURIComponent(TEST_RUN_ID)}`);
+      const data = await response.json();
+      if (!response.ok || data.error) throw new Error(data.error || "Test-run status could not be loaded.");
+      const run = data.run || {};
+      renderTestWorkspaceRun(run);
+      if (run.status === "running") TEST_RUN_POLL = setTimeout(poll, 700);
+      else TEST_RUN_POLL = null;
+    } catch (error) {
+      TEST_RUN_POLL = null;
+      requiredElement("testWorkspaceStatus").textContent = `${error.message} Refresh the page to reconnect to the saved run.`;
+      requiredElement("btnTestWorkspaceRun").disabled = false;
+    }
+  };
+  TEST_RUN_POLL = setTimeout(poll, 400);
+}
+
+function renderTestWorkspaceRun(run){
+  const stages = requiredElement("testWorkspaceStages");
+  stages.replaceChildren();
+  for (const item of run.stages || []){
+    const row = document.createElement("li");
+    row.className = `test-stage test-${item.status || "pending"}`;
+    row.textContent = `${String(item.id || "workflow").replaceAll("_", " ")} · ${item.status || "pending"}`;
+    if (item.remediation) row.title = item.remediation;
+    stages.append(row);
+  }
+  const status = run.status || "not_started";
+  requiredElement("testWorkspaceStatus").textContent = status === "running"
+    ? `Running ${String(run.current_stage || "workflow").replaceAll("_", " ")}…`
+    : status === "completed" ? "Walkthrough complete. Review the coverage and preliminary report summary below."
+      : status === "failed" ? `${run.error || "A workflow stage failed."} ${run.remediation || "Retry the walkthrough."}`
+        : "No test run yet.";
+  requiredElement("btnTestWorkspaceRun").disabled = status === "running";
+  requiredElement("btnTestWorkspaceReset").disabled = !run.run_id || status === "running";
+  const summary = requiredElement("testWorkspaceSummary");
+  summary.replaceChildren();
+  const coverage = run.coverage || {};
+  const counts = [
+    ["Rooms", coverage.rooms], ["Surfaces", coverage.surfaces], ["Openings", coverage.openings],
+    ["Air systems", coverage.air_systems], ["Plant systems", coverage.plant_systems],
+  ];
+  if (status === "completed" || status === "failed"){
+    if (run.fixture_notice){
+      const notice = document.createElement("p");
+      notice.className = "test-fixture-warning";
+      notice.textContent = run.fixture_notice;
+      summary.append(notice);
+    }
+    const coverageList = document.createElement("div");
+    coverageList.className = "test-workspace-coverage";
+    for (const [label, value] of counts){
+      const item = document.createElement("span");
+      item.textContent = `${label}: ${Number(value?.resolved ?? value?.total ?? 0)}/${Number(value?.total || 0)}`;
+      coverageList.append(item);
+    }
+    summary.append(coverageList);
+    const report = document.createElement("p");
+    report.textContent = `Report: ${run.report_status || "not calculated"} · ${run.report_label || "TEST RUN — draft only"}`;
+    summary.append(report);
+    if (run.report_summary && Object.keys(run.report_summary).length){
+      const detail = document.createElement("p");
+      const total = run.report_summary.final_design_total_kw ?? run.report_summary.peak_total_kw;
+      detail.textContent = total == null ? "A complete project load was not produced; see the stage status above." : `Governing result: ${Number(total).toFixed(2)} kW${run.report_summary.peak_hour != null ? ` at hour ${run.report_summary.peak_hour}` : ""}.`;
+      summary.append(detail);
+      const provenance = run.report_summary.provenance_components || [];
+      if (provenance.length){
+        const heading = document.createElement("b");
+        heading.textContent = "Governing-hour components and provenance";
+        summary.append(heading);
+        const list = document.createElement("ul");
+        for (const row of provenance.slice(0, 12)){
+          const item = document.createElement("li");
+          const load = row.load_kw == null ? "load unavailable" : `${Number(row.load_kw).toFixed(3)} kW`;
+          const refs = (row.sources || []).map(source => [source.origin, source.formula, source.citation, source.page ? `p. ${source.page}` : ""].filter(Boolean).join(" · ")).filter(Boolean);
+          item.textContent = `${row.entity_id || "Building"} · ${row.component || "component"} · ${load}${refs.length ? ` — ${refs.join("; ")}` : " — source detail unavailable"}`;
+          list.append(item);
+        }
+        summary.append(list);
+      }
+    }
+    const countsLine = document.createElement("p");
+    countsLine.textContent = `Provisional ${Number(run.provisional_count || 0)} · blocked ${Number(run.blocked_count || 0)} · excluded ${Number(run.excluded_count || 0)}`;
+    summary.append(countsLine);
+  }
+}
+
+async function resetTestWorkspaceRun(){
+  if (!TEST_RUN_ID) return;
+  try {
+    const response = await fetch("/api/test-mode/reset", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({run_id:TEST_RUN_ID})});
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || "Test run could not be reset.");
+    if (TEST_RUN_POLL) clearTimeout(TEST_RUN_POLL);
+    TEST_RUN_POLL = null;
+    TEST_RUN_ID = "";
+    requiredElement("testWorkspaceStages").replaceChildren();
+    requiredElement("testWorkspaceSummary").replaceChildren();
+    requiredElement("testWorkspaceStatus").textContent = "Test run reset. The saved fixture and real projects are unchanged.";
+    requiredElement("btnTestWorkspaceReset").disabled = true;
+    requiredElement("btnTestWorkspaceRun").disabled = false;
+  } catch (error) {
+    requiredElement("testWorkspaceStatus").textContent = `${error.message} The run was kept so its results are not lost.`;
+  }
+}
+
 async function loadProjects(){
   try {
     const res = await fetch("/api/projects");
@@ -3332,17 +4947,36 @@ async function loadProjects(){
       requiredElement("projects").innerHTML = '<div class="empty-proj">Your drawing sets will appear here after upload.</div>';
       return;
     }
-    requiredElement("projects").innerHTML = list.map(p => `
+    const identityCounts = new Map();
+    list.forEach(project => {
+      const identity = `${project.name}\u0000${projectSidebarIdentity(project)}`;
+      identityCounts.set(identity, (identityCounts.get(identity) || 0) + 1);
+    });
+    requiredElement("projects").innerHTML = list.map(p => {
+      const identity = `${p.name}\u0000${projectSidebarIdentity(p)}`;
+      const idSuffix = identityCounts.get(identity) > 1 ? ` · ID ${String(p.id || "").slice(-8)}` : "";
+      return `
       <button class="proj ${DATA && p.id === DATA.id ? "on" : ""}" data-open="${esc(p.id)}">
         <b>${esc(p.name)}</b>
-        <span>${p.analysed ? p.relevant + " of " + p.pages + " pages" : p.pages + " pages · not analysed"}</span>
-      </button>`).join("");
+        <span>${esc(projectSidebarIdentity(p) + idSuffix)}</span>
+      </button>`;
+    }).join("");
     requiredElement("projects").querySelectorAll("[data-open]").forEach(b =>
       b.addEventListener("click", () => openProject(b.dataset.open)));
   } catch {
     requiredElement("projects").innerHTML = '<div class="empty-proj" role="status">Could not load your projects. Check the connection, then try again.<button class="project-retry" type="button">Retry</button></div>';
     requiredElement("projects").querySelector(".project-retry").addEventListener("click", loadProjects);
   }
+}
+
+function projectSidebarIdentity(project){
+  const coverage = project.analysed
+    ? `${project.relevant || 0} of ${project.pages || 0} pages`
+    : `${project.pages || 0} pages · not analysed`;
+  const stamp = String(project.updated_at || project.created_at || "").slice(0, 10);
+  const revision = String(project.revision || project.id || "").split("-").pop().slice(-10);
+  const details = [coverage, stamp ? `updated ${stamp}` : "", revision ? `ref ${revision}` : ""].filter(Boolean);
+  return details.join(" · ");
 }
 
 async function openProject(id){
@@ -3394,3 +5028,4 @@ function toast(title, body){
 }
 
 loadProjects();
+initTestWorkspace();

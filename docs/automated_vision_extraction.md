@@ -9,14 +9,13 @@ Set these values only in the server environment:
 ```text
 OPENAI_API_KEY=...
 ARCHIE_VISION_MODEL=gpt-5
-ARCHIE_VISION_ESTIMATED_COST_PER_GROUP_AUD=...
 ```
 
-The browser never receives the API key. Every request sets `store: false`; no live web research occurs. The configured estimate is a local guardrail, not a provider invoice. A project owner must opt in, select evidence groups, and set a maximum budget that covers the estimate before a job can begin.
+The browser never receives the API key. Every request sets `store: false`; no live web research occurs. A project owner must opt in and select evidence groups before a job can begin.
 
 ## Job lifecycle
 
-`GET /api/vision-extraction?project_id=...` returns settings, available evidence groups, estimate, latest job, and artifact links. `POST /api/vision-extraction` accepts `estimate`, `start`, `cancel`, and `retry` with a project id and settings.
+`GET /api/vision-extraction?project_id=...` returns settings, available evidence groups, selected-page scope, latest job, and artifact links. `POST /api/vision-extraction` accepts `start`, `cancel`, and `retry` with a project id and settings.
 
 Each run stores a request manifest, selected rendered-page hashes, raw provider outputs, normalized output, validation outcome, and redacted failure message in the local project review directory. A server restart changes an in-flight job to `interrupted`; it never resumes or repeats a provider request automatically.
 

@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ai.envelope import validate_envelope_library
 from ai.glazing_calculation import (
     assess_glazing_eligibility, calculate_glazing, corrected_glass_area,
-    glass_area, glazing_conduction, manual_solar_transmission, opening_area,
+    glass_area, glazing_conduction, manual_solar_transmission, opening_area, resolve_opening_area,
 )
 
 
@@ -44,6 +44,10 @@ def main():
     surface, window, solar = records()
     check("reviewed window properties remain in envelope storage", window["shgc"] == 0.6 and window["internal_shading_factor"] == 0.9)
     check("opening area uses explicit dimensions and quantity", opening_area(2, 1.5, 2) == 6.0)
+    check("dimension and explicit opening areas share one resolver", resolve_opening_area(width_m=2, height_m=1.5, quantity=2, explicit_opening_area_m2=6) == 6)
+    area_conflict = {**surface, "explicit_opening_area_m2": 7.0}
+    check("conflicting dimension and explicit areas block glazing", "conflicts with dimension-derived" in " ".join(assess_glazing_eligibility(area_conflict, window, solar, indoor_temperature_c=24)))
+    check("partial dimensions cannot silently override an explicit area", calculate_glazing({**surface, "opening_height_m": None, "opening_quantity": None, "explicit_opening_area_m2": 6}, window, solar, indoor_temperature_c=24)["status"] == "blocked")
     check("frame fraction derives glass area", glass_area(opening_area_m2=6, frame_fraction=0.1) == 5.4)
     check("explicit glass area is retained", glass_area(explicit_glass_area_m2=4.2, frame_fraction=0.1) == 4.2)
     check("glass correction is applied", corrected_glass_area(5.4, 0.95) == 5.13)

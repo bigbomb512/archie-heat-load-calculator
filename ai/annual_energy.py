@@ -29,7 +29,12 @@ from ai.heating_loads import (
     heating_infiltration_load,
     heating_internal_gain_credit,
 )
-from ai.heat_loads import humidity_ratio_from_db_wb, saturation_pressure_kpa
+from ai.heat_loads import (
+    ashrae_saturation_pressure_kpa,
+    humidity_ratio_from_db_wb,
+    humidity_ratio_from_vapour_pressure,
+    saturation_pressure_kpa,
+)
 from ai.heating_gate import empty_heating_method_gate, heating_gate_is_approved, validate_heating_method_gate
 from ai.infiltration_gate import empty_infiltration_method_gate, validate_infiltration_method_gate
 from ai.glazing_gate import empty_glazing_method_gate, validate_glazing_method_gate
@@ -125,6 +130,8 @@ def validate_annual_weather(raw):
     if not isinstance(records, list) or len(records) != HOURS_PER_YEAR:
         raise ValueError("Annual weather requires exactly 8,760 hourly records.")
     checked = []
+    previous_wall_time = None
+    source_utc_offset = None
     for index, row in enumerate(records):
         if not isinstance(row, dict):
             raise ValueError(f"Annual weather hour {index} must be an object.")
@@ -135,9 +142,24 @@ def validate_annual_weather(raw):
         if not stamp:
             raise ValueError(f"Annual weather hour {index} requires a local timestamp.")
         try:
-            datetime.fromisoformat(stamp)
+            parsed_stamp = datetime.fromisoformat(stamp)
         except ValueError as error:
             raise ValueError(f"Annual weather hour {index} timestamp is invalid.") from error
+        wall_time = parsed_stamp.replace(tzinfo=None)
+        utc_offset = parsed_stamp.utcoffset()
+        if index == 0:
+            source_utc_offset = utc_offset
+        elif utc_offset != source_utc_offset:
+            raise ValueError(
+                "Annual weather timestamps must use one fixed time offset; "
+                "normalize daylight-saving transitions before import."
+            )
+        if previous_wall_time is not None and wall_time - previous_wall_time != timedelta(hours=1):
+            raise ValueError(
+                f"Annual weather timestamp at hour {index} must be exactly one local hour "
+                "after the prior record; missing or repeated hours require source normalization."
+            )
+        previous_wall_time = wall_time
         db = _number(row.get("outdoor_dry_bulb_c"), f"Annual weather hour {index} dry-bulb")
         wb = row.get("outdoor_wet_bulb_c")
         dew = row.get("outdoor_dew_point_c")
@@ -147,6 +169,10 @@ def validate_annual_weather(raw):
             wb = _number(wb, f"Annual weather hour {index} wet-bulb")
             if wb > db:
                 raise ValueError(f"Annual weather hour {index} wet-bulb cannot exceed dry-bulb.")
+        basis = row.get("outdoor_wet_bulb_basis")
+        from ai.heat_loads import WET_BULB_BASES
+        if basis is not None and basis not in WET_BULB_BASES:
+            raise ValueError(f"Annual weather hour {index} has an invalid wet-bulb basis.")
         if dew is not None:
             dew = _number(dew, f"Annual weather hour {index} dew-point")
             if dew > db:
@@ -157,6 +183,7 @@ def validate_annual_weather(raw):
             "timestamp": stamp,
             "outdoor_dry_bulb_c": db,
             "outdoor_wet_bulb_c": wb,
+            "outdoor_wet_bulb_basis": basis,
             "outdoor_dew_point_c": dew,
             "atmospheric_pressure_kpa": pressure,
             "wind_speed_m_s": _optional_number(row.get("wind_speed_m_s"), f"Annual weather hour {index} wind speed"),
@@ -298,23 +325,50 @@ def validate_annual_radiation(raw):
 
 
 def _annual_weather_row(row):
-    wb = row.get("outdoor_wet_bulb_c")
-    if wb is None:
-        wb = _wet_bulb_from_dew_point(
-            row["outdoor_dry_bulb_c"], row.get("outdoor_dew_point_c"), row["atmospheric_pressure_kpa"]
-        )
+    wb, basis = _resolved_annual_wet_bulb(
+        row["outdoor_dry_bulb_c"], row.get("outdoor_wet_bulb_c"), row.get("outdoor_wet_bulb_basis"),
+        row.get("outdoor_dew_point_c"), row["atmospheric_pressure_kpa"],
+    )
     return {
         "outdoor_dry_bulb_c": {"value": row["outdoor_dry_bulb_c"]},
         "outdoor_wet_bulb_c": {"value": wb},
+        "outdoor_wet_bulb_basis": basis,
     }
+
+
+def _resolved_annual_wet_bulb(dry_bulb_c, wet_bulb_c, wet_bulb_basis, dew_point_c, pressure_kpa):
+    if wet_bulb_c is not None:
+        return wet_bulb_c, wet_bulb_basis
+    wet_bulb_c = _wet_bulb_from_dew_point(dry_bulb_c, dew_point_c, pressure_kpa)
+    basis = "thermodynamic" if dew_point_c >= 0 else "legacy_unverified"
+    return wet_bulb_c, basis
 
 
 def _wet_bulb_from_dew_point(dry_bulb_c, dew_point_c, pressure_kpa):
     """Convert a cited dew point to wet bulb without treating dew point as wet bulb."""
     if dew_point_c is None:
         raise ValueError("Annual weather requires wet-bulb or dew-point data.")
+    if dew_point_c >= 0:
+        target_vapour = ashrae_saturation_pressure_kpa(dew_point_c)
+        target_ratio = humidity_ratio_from_vapour_pressure(target_vapour, pressure_kpa)
+        low = 0.0
+        high = float(dry_bulb_c)
+        if high < low:
+            raise ValueError("A nonnegative dew point cannot exceed a sub-zero dry-bulb state.")
+        for _ in range(80):
+            mid = (low + high) / 2.0
+            ratio = humidity_ratio_from_db_wb(dry_bulb_c, mid, pressure_kpa, "thermodynamic")
+            if ratio > target_ratio:
+                high = mid
+            else:
+                low = mid
+        return round((low + high) / 2.0, 6)
+
+    # A sub-zero weather dew point does not say whether the source reports a
+    # frost point or a supercooled-water dew point. Preserve the old explicitly
+    # unverified conversion rather than silently choosing an ice reference.
     target_vapour = saturation_pressure_kpa(dew_point_c)
-    target_ratio = 0.621945 * target_vapour / (pressure_kpa - target_vapour)
+    target_ratio = humidity_ratio_from_vapour_pressure(target_vapour, pressure_kpa)
     low, high = -80.0, float(dry_bulb_c)
     for _ in range(80):
         mid = (low + high) / 2.0
@@ -347,7 +401,8 @@ def calculate_annual_report(requirements, schedule_library, model, annual_weathe
     infiltration_gate = validate_infiltration_method_gate(infiltration_gate or empty_infiltration_method_gate())
     glazing_gate = validate_glazing_method_gate(glazing_gate or empty_glazing_method_gate())
     shading_gate = validate_shading_method_gate(shading_gate or empty_shading_method_gate())
-    selected_sections = set(selected_sections or {"cooling", "heating", "ahu", "plant"})
+    allowed_sections = {"cooling", "heating", "ahu", "plant"}
+    selected_sections = set(allowed_sections if selected_sections is None else selected_sections)
     report = {
         "schema_version": 1, "report_type": "annual_energy_report", "status": "blocked", "validated": False,
         "input_snapshot_fingerprint": calculator_input_snapshot_fingerprint,
@@ -365,8 +420,17 @@ def calculate_annual_report(requirements, schedule_library, model, annual_weathe
     }
     if not calculator_input_snapshot_fingerprint:
         report["blocked_reasons"].append("A current calculator-input snapshot is required for annual analysis.")
+    unknown_sections = selected_sections - allowed_sections
+    if not selected_sections:
+        report["blocked_reasons"].append("At least one annual report section must be selected.")
+    if unknown_sections:
+        report["blocked_reasons"].append("Unsupported annual report section(s): " + ", ".join(sorted(unknown_sections)) + ".")
     if len(weather["records"]) != HOURS_PER_YEAR or len(calendar["dates"]) != 365:
         report["blocked_reasons"].append("Annual weather and calendar must cover exactly 8,760 local hours.")
+    if weather["timezone"] != calendar["timezone"]:
+        report["blocked_reasons"].append("Annual weather and calendar timezones must match before hourly schedules can be aligned.")
+    if radiation.get("surfaces") and radiation["timezone"] != calendar["timezone"]:
+        report["blocked_reasons"].append("Annual radiation and calendar timezones must match before hourly solar values can be aligned.")
     if report["blocked_reasons"]:
         return report
     zones = {item["zone_id"]: item for item in model["zones"]}
@@ -377,12 +441,13 @@ def calculate_annual_report(requirements, schedule_library, model, annual_weathe
         room_result = _annual_room(room, zone, floors, schedules, weather, calendar, radiation, infiltration_gate, glazing_gate, shading_gate, dynamic_mass_gate, radiation_gate, heating_gate)
         annual_rooms.append(room_result)
     report["rooms"] = annual_rooms
+    month_by_hour = [int(day["date"][5:7]) for day in calendar["dates"] for _ in range(24)]
     calculated = [item for item in annual_rooms if item.get("status") != "blocked"]
     report["scope_summary"] = {"active_room_ids": [item["room_id"] for item in annual_rooms], "included_room_ids": [item["room_id"] for item in calculated], "blocked_rooms": [{"room_id": item["room_id"], "reasons": item.get("blocked_reasons", [])} for item in annual_rooms if item.get("status") == "blocked"], "complete_scope": bool(annual_rooms) and len(calculated) == len(annual_rooms) and all(item.get("status") == "review_ready" for item in annual_rooms)}
     if "cooling" in selected_sections:
-        report["cooling"] = _aggregate_annual_section(calculated, "cooling", zones=zones, floors=floors)
+        report["cooling"] = _aggregate_annual_section(calculated, "cooling", zones=zones, floors=floors, month_by_hour=month_by_hour)
     if "heating" in selected_sections:
-        report["heating"] = _aggregate_annual_section(calculated, "heating", zones=zones, floors=floors)
+        report["heating"] = _aggregate_annual_section(calculated, "heating", zones=zones, floors=floors, month_by_hour=month_by_hour)
     if "ahu" in selected_sections:
         report["ahu"] = _aggregate_ahu(calculated, ahu_systems or {})
     if "plant" in selected_sections:
@@ -394,10 +459,19 @@ def calculate_annual_report(requirements, schedule_library, model, annual_weathe
 
 
 def _annual_room(room, zone, floors, schedules, weather, calendar, radiation, infiltration_gate, glazing_gate, shading_gate, dynamic_mass_gate, radiation_gate, heating_gate):
-    result = {"room_id": room["room_id"], "name": room.get("name", room["room_id"]), "zone_id": room.get("zone_id", ""), "status": "blocked", "cooling_hours": [], "heating_hours": [], "cooling": _empty_summary(), "heating": _empty_summary(), "blocked_reasons": [], "excluded_components": []}
+    cooling_load = room.get("cooling_load", {})
+    cooling_factor = cooling_load.get("safety_factor")
+    heating_factor = room.get("heating_safety_factor")
+    result = {"room_id": room["room_id"], "name": room.get("name", room["room_id"]), "zone_id": room.get("zone_id", ""), "status": "blocked", "cooling_hours": [], "heating_hours": [], "cooling": _empty_summary(), "heating": _empty_summary(), "blocked_reasons": [], "excluded_components": [], "safety_factor_application": {
+        "cooling": {"factor": cooling_factor, "basis": "legacy_room_factor", "source": cooling_load.get("source", ""), "citations": [], "citation_status": "not_recorded_on_cooling_factor", "status": "pending" if cooling_factor is not None else "missing", "applied_at": ""},
+        "heating": {"factor": heating_factor, "basis": "legacy_room_factor", "source": room.get("heating_safety_factor_source", ""), "citations": deepcopy(room.get("heating_safety_factor_citations", [])), "status": "pending" if heating_factor is not None else "missing", "applied_at": ""},
+    }}
     missing = room_static_missing(room, zone, infiltration_gate, glazing_gate)
     if missing:
         result["blocked_reasons"] = sorted(set(missing))
+        for mode in ("cooling", "heating"):
+            if result["safety_factor_application"][mode]["status"] == "pending":
+                result["safety_factor_application"][mode]["status"] = "not_applied_blocked"
         return result
     dynamic_states = {surface["surface_id"]: surface.get("dynamic_thermal_mass", {}).get("initial_state_temperature_c", room["indoor_cooling_setpoint_c"]) for surface in room.get("cooling_load", {}).get("envelope_surfaces", []) if surface.get("dynamic_thermal_mass", {}).get("enabled")}
     cooling_blocked = []
@@ -422,15 +496,23 @@ def _annual_room(room, zone, floors, schedules, weather, calendar, radiation, in
             heating_hour["hour_index"] = index
             heating_hour["timestamp"] = weather_row.get("timestamp", "")
             heating_hour["month"] = cooling_hour["month"]
-            result["heating_hours"].append(heating_hour)
+            if "cited heating safety factor is missing" not in heating_errors:
+                result["heating_hours"].append(heating_hour)
             heating_blocked.extend(heating_errors)
             if provisional:
                 result["excluded_components"].append("provisional annual schedule evidence")
         except (KeyError, TypeError, ValueError) as error:
             cooling_blocked.append(str(error))
     if not result["cooling_hours"]:
+        for mode in ("cooling", "heating"):
+            if result["safety_factor_application"][mode]["status"] == "pending":
+                result["safety_factor_application"][mode]["status"] = "not_applied_blocked"
         result["blocked_reasons"] = sorted(set(cooling_blocked or ["No annual cooling hours were calculable."]))
         return result
+    if result["cooling_hours"] and result["safety_factor_application"]["cooling"]["status"] == "pending":
+        result["safety_factor_application"]["cooling"].update({"status": "applied", "applied_at": "room-hour"})
+    if result["heating_hours"] and result["safety_factor_application"]["heating"]["status"] == "pending":
+        result["safety_factor_application"]["heating"].update({"status": "applied", "applied_at": "room-hour"})
     result["cooling"] = _annual_summary(result["cooling_hours"], "design_total_kw")
     result["heating"] = _annual_summary(result["heating_hours"], "design_total_kw") if result["heating_hours"] else _empty_summary()
     result["blocked_reasons"] = sorted(set(cooling_blocked + heating_blocked))
@@ -440,29 +522,37 @@ def _annual_room(room, zone, floors, schedules, weather, calendar, radiation, in
 
 def _annual_heating_hour(room, zone, profiles, hour, weather, heating_gate, infiltration_gate, glazing_gate):
     setpoint = room.get("indoor_heating_setpoint_c")
+    blockers = []
     if setpoint in (None, ""):
-        return {"hour": hour, "components": {}, "design_total_kw": 0.0, "subtotal_kw": 0.0, "safety_allowance_kw": 0.0}, ["heating setpoint is missing"]
+        blockers.append("heating setpoint is missing")
+    if room.get("heating_safety_factor") is None:
+        blockers.append("cited heating safety factor is missing")
+    if blockers:
+        return {"hour": hour, "components": {}, "design_total_kw": 0.0, "subtotal_kw": 0.0, "safety_allowance_kw": 0.0}, blockers
     outdoor_db = weather["outdoor_dry_bulb_c"]
-    outdoor_wb = weather.get("outdoor_wet_bulb_c")
-    if outdoor_wb is None:
-        outdoor_wb = _wet_bulb_from_dew_point(outdoor_db, weather.get("outdoor_dew_point_c"), weather["atmospheric_pressure_kpa"])
+    outdoor_wb, resolved_outdoor_wb_basis = _resolved_annual_wet_bulb(
+        outdoor_db, weather.get("outdoor_wet_bulb_c"), weather.get("outdoor_wet_bulb_basis"),
+        weather.get("outdoor_dew_point_c"), weather["atmospheric_pressure_kpa"],
+    )
     pressure = weather["atmospheric_pressure_kpa"]
     envelope, blocked = heating_conduction(room["cooling_load"].get("envelope_surfaces", []), outdoor_db, setpoint)
     glazing, glazing_blocked = heating_glazing_conduction(room, outdoor_db, setpoint, glazing_gate)
     contributions = [envelope, glazing]
     flow = room["cooling_load"].get("outside_air_lps")
     if flow:
-        contributions.append(heating_air_load(flow * profiles.get("outside_air", [0.0] * 24)[hour], setpoint, room["cooling_load_conditions"].get("indoor_cooling_wet_bulb_c", setpoint), outdoor_db, outdoor_wb, pressure))
+        conditions = room["cooling_load_conditions"]
+        contributions.append(heating_air_load(flow * profiles.get("outside_air", [0.0] * 24)[hour], setpoint, conditions.get("indoor_cooling_wet_bulb_c", setpoint), outdoor_db, outdoor_wb, pressure, indoor_wet_bulb_basis=conditions.get("indoor_wet_bulb_basis", "legacy_unverified"), outdoor_wet_bulb_basis=resolved_outdoor_wb_basis or conditions.get("outdoor_wet_bulb_basis", "legacy_unverified"), airflow_reference_basis=room["cooling_load"].get("outside_air_flow_reference_basis", "legacy_unverified")))
     infiltration = next((item for item in room.get("unapproved_components", []) if item.get("component_type") == "infiltration" and item.get("calculation_status") == "calculated"), None)
     if infiltration:
-        contributions.append(heating_infiltration_load(infiltration["value"], infiltration["unit"], setpoint, room["cooling_load_conditions"].get("indoor_cooling_wet_bulb_c", setpoint), outdoor_db, outdoor_wb, pressure, room_volume_m3=room.get("area_m2", 0) * (room.get("ceiling_height_mm", 0) or zone.get("ceiling_height_mm", 0)) / 1000.0, schedule_factor=profiles.get("infiltration", [0.0] * 24)[hour], method_id=infiltration.get("method_id", ""), gate_version=infiltration_gate.get("updated_at", "")))
+        conditions = room["cooling_load_conditions"]
+        contributions.append(heating_infiltration_load(infiltration["value"], infiltration["unit"], setpoint, conditions.get("indoor_cooling_wet_bulb_c", setpoint), outdoor_db, outdoor_wb, pressure, room_volume_m3=room.get("area_m2", 0) * (room.get("ceiling_height_mm", 0) or zone.get("ceiling_height_mm", 0)) / 1000.0, schedule_factor=profiles.get("infiltration", [0.0] * 24)[hour], method_id=infiltration.get("method_id", ""), gate_version=infiltration_gate.get("updated_at", ""), indoor_wet_bulb_basis=conditions.get("indoor_wet_bulb_basis", "legacy_unverified"), outdoor_wet_bulb_basis=resolved_outdoor_wb_basis or conditions.get("outdoor_wet_bulb_basis", "legacy_unverified")))
     gross = round(sum(max(item["sensible_kw"], 0.0) for item in contributions), 6)
     credit, _ = heating_internal_gain_credit(room, profiles, hour, gross)
     net = max(0.0, gross + credit["sensible_kw"])
-    factor = float(room.get("heating_safety_factor") or 1.0)
+    factor = float(room["heating_safety_factor"])
     allowance = round(net * (factor - 1.0), 6)
     rows = {item["name"]: {"sensible_kw": item["sensible_kw"], "latent_kw": 0.0, "total_kw": item["total_kw"], "inputs": item.get("inputs", {}), "formula": item.get("formula", "")} for item in [*contributions, credit]}
-    return {"hour": hour, "components": rows, "gross_heating_sensible_kw": gross, "net_heating_sensible_kw": net, "subtotal_kw": net, "safety_allowance_kw": allowance, "design_total_kw": round(net + allowance, 6), "blocked_surfaces": blocked + glazing_blocked}, sorted({row.get("reason", "") for row in blocked + glazing_blocked if row.get("reason")})
+    return {"hour": hour, "components": rows, "gross_heating_sensible_kw": gross, "net_heating_sensible_kw": net, "subtotal_kw": net, "safety_factor": factor, "safety_allowance_kw": allowance, "design_total_kw": round(net + allowance, 6), "blocked_surfaces": blocked + glazing_blocked}, sorted({row.get("reason", "") for row in blocked + glazing_blocked if row.get("reason")})
 
 
 def _radiation_source_for_hour(radiation, index):
@@ -504,21 +594,44 @@ def _annual_summary(hours, key):
     return summary
 
 
-def _aggregate_annual_section(rooms, section, *, zones=None, floors=None):
+def _aggregate_annual_section(rooms, section, *, zones=None, floors=None, month_by_hour=None):
     hours = []
+    missing_hours_by_room = {}
+    rows_by_room = {}
+    for room in rooms:
+        indexed = _index_annual_hours(room.get(f"{section}_hours", []))
+        rows_by_room[room["room_id"]] = indexed
+        missing = [index for index in range(HOURS_PER_YEAR) if index not in indexed]
+        if missing:
+            missing_hours_by_room[room["room_id"]] = {
+                "count": len(missing), "ranges": _hour_index_ranges(missing),
+            }
     for index in range(HOURS_PER_YEAR):
-        total = sum(float(room.get(f"{section}_hours", [])[index].get("design_total_kw", 0.0)) for room in rooms if len(room.get(f"{section}_hours", [])) > index)
-        month = next((room["cooling_hours"][index].get("month", 1) for room in rooms if len(room.get("cooling_hours", [])) > index), 1)
-        hours.append({"hour_index": index, "month": month, "demand_kw": round(total, 6), "energy_kwh": round(total, 6), "status": "calculated"})
+        total = sum(float(rows_by_room[room["room_id"]][index].get("design_total_kw", 0.0)) for room in rooms if index in rows_by_room[room["room_id"]])
+        month = (month_by_hour[index] if month_by_hour and index < len(month_by_hour)
+                 else next((rows_by_room[room["room_id"]][index].get("month", 1) for room in rooms if index in rows_by_room[room["room_id"]]), 1))
+        missing_room_ids = [room["room_id"] for room in rooms if index not in rows_by_room[room["room_id"]]]
+        hours.append({"hour_index": index, "month": month, "demand_kw": round(total, 6), "energy_kwh": round(total, 6),
+                      "status": "incomplete" if missing_room_ids else "calculated" if rooms else "not_calculated",
+                      "missing_room_ids": missing_room_ids})
     summary = _annual_summary(hours, "demand_kw")
-    summary["status"] = "review_ready" if rooms and all(room.get("status") == "review_ready" for room in rooms) else "draft" if rooms else "blocked"
+    summary["incomplete_room_hours"] = missing_hours_by_room
+    summary["blocked_reasons"] = [
+        f"Room {room_id} has {details['count']} missing {section} hour(s); annual energy excludes those hours."
+        for room_id, details in sorted(missing_hours_by_room.items())
+    ]
+    summary["monthly_incomplete_hours"] = {
+        str(month): sum(1 for row in hours if row["month"] == month and row["status"] == "incomplete")
+        for month in MONTHS
+    }
+    summary["status"] = "review_ready" if rooms and not missing_hours_by_room and all(room.get("status") == "review_ready" for room in rooms) else "draft" if rooms else "blocked"
     zone_rows = {}
     for room in rooms:
         zone_id = room.get("zone_id", "")
         if zone_id:
             zone_rows.setdefault(zone_id, []).append(room)
     summary["zone_summaries"] = {
-        zone_id: _annual_group_summary(group, section)
+        zone_id: _annual_group_summary(group, section, month_by_hour=month_by_hour)
         for zone_id, group in zone_rows.items()
     }
     floor_rows = {}
@@ -527,22 +640,60 @@ def _aggregate_annual_section(rooms, section, *, zones=None, floors=None):
         if floor_id:
             floor_rows.setdefault(floor_id, []).extend(group)
     summary["floor_summaries"] = {
-        floor_id: _annual_group_summary(group, section)
+        floor_id: _annual_group_summary(group, section, month_by_hour=month_by_hour)
         for floor_id, group in floor_rows.items()
     }
     return summary
 
 
-def _annual_group_summary(rooms, section):
+def _annual_group_summary(rooms, section, *, month_by_hour=None):
+    rows_by_room = {room["room_id"]: _index_annual_hours(room.get(f"{section}_hours", [])) for room in rooms}
+    missing_hours_by_room = {}
+    for room in rooms:
+        missing = [index for index in range(HOURS_PER_YEAR) if index not in rows_by_room[room["room_id"]]]
+        if missing:
+            missing_hours_by_room[room["room_id"]] = {
+                "count": len(missing), "ranges": _hour_index_ranges(missing),
+            }
     hours = []
     for index in range(HOURS_PER_YEAR):
         total = sum(
-            float(room.get(f"{section}_hours", [])[index].get("design_total_kw", 0.0))
-            for room in rooms if len(room.get(f"{section}_hours", [])) > index
+            float(rows_by_room[room["room_id"]][index].get("design_total_kw", 0.0))
+            for room in rooms if index in rows_by_room[room["room_id"]]
         )
-        month = next((room[f"{section}_hours"][index].get("month", 1) for room in rooms if len(room.get(f"{section}_hours", [])) > index), 1)
-        hours.append({"hour_index": index, "month": month, "demand_kw": round(total, 6), "energy_kwh": round(total, 6)})
-    return _annual_summary(hours, "demand_kw")
+        month = (month_by_hour[index] if month_by_hour and index < len(month_by_hour)
+                 else next((rows_by_room[room["room_id"]][index].get("month", 1) for room in rooms if index in rows_by_room[room["room_id"]]), 1))
+        missing_room_ids = [room["room_id"] for room in rooms if index not in rows_by_room[room["room_id"]]]
+        hours.append({"hour_index": index, "month": month, "demand_kw": round(total, 6), "energy_kwh": round(total, 6),
+                      "status": "incomplete" if missing_room_ids else "calculated", "missing_room_ids": missing_room_ids})
+    summary = _annual_summary(hours, "demand_kw")
+    summary["incomplete_room_hours"] = missing_hours_by_room
+    summary["monthly_incomplete_hours"] = {
+        str(month): sum(1 for row in hours if row["month"] == month and row["status"] == "incomplete")
+        for month in MONTHS
+    }
+    summary["status"] = "draft" if missing_hours_by_room else "calculated"
+    return summary
+
+
+def _index_annual_hours(rows):
+    """Index sparse annual results by their source hour; never compact gaps."""
+    indexed = {}
+    for row in rows:
+        index = row.get("hour_index")
+        if isinstance(index, int) and not isinstance(index, bool) and 0 <= index < HOURS_PER_YEAR:
+            indexed[index] = row
+    return indexed
+
+
+def _hour_index_ranges(indices):
+    ranges = []
+    for index in indices:
+        if ranges and index == ranges[-1][1] + 1:
+            ranges[-1][1] = index
+        else:
+            ranges.append([index, index])
+    return ranges
 
 
 def _aggregate_ahu(rooms, systems):
@@ -595,20 +746,31 @@ def _annual_readiness(report, gate, heating_gate):
 def annual_hourly_csv(report):
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["hour_index", "cooling_demand_kw", "heating_demand_kw", "cooling_energy_kwh", "heating_energy_kwh"])
+    writer.writerow(["hour_index", "cooling_demand_kw", "heating_demand_kw", "cooling_energy_kwh", "heating_energy_kwh", "cooling_status", "heating_status", "cooling_missing_rooms", "heating_missing_rooms"])
     cooling = {row.get("hour_index"): row for row in report.get("cooling", {}).get("hours", [])}
     heating = {row.get("hour_index"): row for row in report.get("heating", {}).get("hours", [])}
     for index in range(HOURS_PER_YEAR):
         c = cooling.get(index, {})
         h = heating.get(index, {})
-        writer.writerow([index, c.get("demand_kw", 0.0), h.get("demand_kw", 0.0), c.get("demand_kw", 0.0), h.get("demand_kw", 0.0)])
+        c_status, h_status = c.get("status", "not_calculated"), h.get("status", "not_calculated")
+        writer.writerow([
+            index,
+            c.get("demand_kw", "") if c_status == "calculated" else "",
+            h.get("demand_kw", "") if h_status == "calculated" else "",
+            c.get("energy_kwh", "") if c_status == "calculated" else "",
+            h.get("energy_kwh", "") if h_status == "calculated" else "",
+            c_status, h_status,
+            ";".join(c.get("missing_room_ids", [])), ";".join(h.get("missing_room_ids", [])),
+        ])
     return output.getvalue()
 
 
 def annual_monthly_csv(report):
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["month", "cooling_kwh", "heating_kwh"])
+    writer.writerow(["month", "cooling_kwh", "cooling_incomplete_hours", "heating_kwh", "heating_incomplete_hours"])
     for month in MONTHS:
-        writer.writerow([month, report.get("cooling", {}).get("monthly_kwh", {}).get(str(month), 0.0), report.get("heating", {}).get("monthly_kwh", {}).get(str(month), 0.0)])
+        cooling, heating = report.get("cooling", {}), report.get("heating", {})
+        writer.writerow([month, cooling.get("monthly_kwh", {}).get(str(month), 0.0), cooling.get("monthly_incomplete_hours", {}).get(str(month), 0),
+                         heating.get("monthly_kwh", {}).get(str(month), 0.0), heating.get("monthly_incomplete_hours", {}).get(str(month), 0)])
     return output.getvalue()

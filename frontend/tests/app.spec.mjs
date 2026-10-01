@@ -32,6 +32,22 @@ const analysis = {
 };
 
 async function mockApi(page) {
+  await page.route("**/api/test-mode/status", route => route.fulfill({ json: { enabled: false } }));
+  await page.route("**/api/room-inference?project_id=demo-project", route => route.fulfill({ json: {
+    status: "completed", candidate_count: 2,
+  } }));
+  await page.route("**/api/vision-extraction?project_id=demo-project", route => route.fulfill({ json: {
+    settings: {}, available_groups: [], provider_configured: false,
+  } }));
+  await page.route("**/api/ai-preliminary-model?project_id=demo-project", route => route.fulfill({ json: {} }));
+  await page.route("**/api/room-use-resolution?project_id=demo-project", route => route.fulfill({ json: {} }));
+  await page.route("**/api/au-ventilation-rules?project_id=demo-project", route => route.fulfill({json:{
+    id:"demo-project", project_regulatory_context:{building_approval_application_date:"", building_class:"unknown", building_use:"", project_specific_ventilation_basis:""},
+    ruleset_status:"candidate", ventilation_rules_resolution:{status:"needs_review", jurisdiction:"", ncc_edition:"", zone_results:[], conflicts:[]},
+  }}));
+  await page.route("**/api/ceiling-volume-resolution?project_id=demo-project", route => route.fulfill({ json: {} }));
+  await page.route("**/api/internal-gains-resolution?project_id=demo-project", route => route.fulfill({ json: {} }));
+  await page.route("**/api/window-scan?project_id=demo-project", route => route.fulfill({ json: {} }));
   await page.route("**/api/project-health?project_id=demo-project", route => route.fulfill({ json: { status: "review_required", issues: [] } }));
   await page.route("**/api/audit-log?project_id=demo-project&limit=20", route => route.fulfill({ json: { events: [] } }));
   await page.route("**/api/projects", route => route.fulfill({ json: [
@@ -49,6 +65,11 @@ async function mockApi(page) {
   await page.route("**/api/analysis?id=demo-project", route => route.fulfill({ json: analysis }));
   await page.route("**/api/hourly-load-model?project_id=demo-project", route => route.fulfill({ json: { hourly_load_model: {floors: [], zones: [], rooms: []}, readiness: {status: "review_required", issues: []} } }));
   await page.route("**/api/hourly-load-report?project_id=demo-project", route => route.fulfill({ json: { hourly_load_report: {}, status: "not_calculated" } }));
+  await page.route("**/api/model-input-resolution", route => route.fulfill({ json: {
+    id: "demo-project", status: "current", coverage_summary: {total: 2, resolved: 1, provisional: 1, needs_review: 0, excluded: 0, complete: true},
+    model_input_resolution: {records: [], review_queue: [], coverage_summary: {total: 2, resolved: 1, provisional: 1, needs_review: 0, excluded: 0, complete: true}},
+    value_resolution: {records: [], coverage_summary: {}}, review_queue: [], stale_reasons: [],
+  } }));
 }
 
 const designRequirements = {
@@ -128,15 +149,165 @@ test("confirmation unlocks only after analysis has selected pages", async ({ pag
     buffer: Buffer.from("%PDF-1.4 test fixture"),
   });
   await expect(page.locator("#fState")).toHaveText("Ready");
-  await expect(page.locator("#btnConfirm")).toBeDisabled();
+  await expect(page.locator("#btnContinue")).toBeDisabled();
 
   await page.locator("#btnAnalyse").click();
   await expect(page.locator("#topTitle")).toHaveText("Analysis complete");
-  await expect(page.locator("#btnConfirm")).toBeEnabled();
+  await expect(page.locator("#btnContinue")).toBeEnabled();
 
-  await page.locator("#btnConfirm").click();
+  await page.locator("#btnContinue").click();
   await expect(page.locator("#visionPanel")).toBeVisible();
-  await expect(page.locator("#btnConfirm")).toBeEnabled();
+  await expect(page.locator("#btnContinue")).toHaveText("Drawings confirmed");
+  await expect(page.locator("#btnContinue")).toBeDisabled();
+});
+
+test("analysis gives one clear next action before exposing advanced workflow", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/");
+  await page.locator("#pdf").setInputFiles({
+    name: "workflow-drawing-set.pdf",
+    mimeType: "application/pdf",
+    buffer: Buffer.from("%PDF-1.4 workflow fixture"),
+  });
+  await page.locator("#btnAnalyse").click();
+  await expect(page.getByRole("button", { name: "Settings" })).toHaveCount(0);
+  await expect(page.locator("#btnApproveSafetyFactor")).toHaveCount(0);
+  await expect(page.locator("#btnConfirm, #btnConfirmTop")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Confirm selected drawings", exact: true })).toHaveCount(1);
+  await expect(page.locator("#btnContinue")).toHaveText("Confirm selected drawings");
+  await expect(page.locator("#workflowSkeleton")).toBeHidden();
+  await page.locator("#btnContinue").click();
+  await expect(page.locator("#workflowSkeleton")).toBeVisible();
+  await expect(page.locator("#workflowStageList .workflow-stage-card")).toHaveCount(9);
+  await expect(page.locator("#workflowStageList .workflow-stage-card").first()).toContainText("Evidence");
+  await expect(page.locator("#workflowStageList .workflow-stage-card").last()).toContainText("Calculate and deliver");
+  await expect(page.locator("#workflowOverallStatus")).toHaveText("Draft in progress");
+  await page.locator('[data-workflow-action="envelope"]').click();
+  await expect(page.locator("#workflowSkeletonNotice")).toContainText("Stage actions run");
+});
+
+test("contractor saves Australian ventilation rules context once and sees safe unmatched status", async ({ page }) => {
+  let saved;
+  await page.route("**/api/au-ventilation-rules*", async route => {
+    if (route.request().method() === "POST") {
+      saved = route.request().postDataJSON().project_regulatory_context;
+      return route.fulfill({json:{
+        id:"demo-project", project_regulatory_context:saved, ruleset_status:"candidate",
+        ventilation_rules_resolution:{status:"rules_unavailable", jurisdiction:"NSW", ncc_edition:"NCC edition unresolved", zone_results:[], conflicts:["No released NCC adoption record covers NSW."]},
+      }});
+    }
+    return route.fulfill({json:{
+      id:"demo-project", project_regulatory_context:{building_approval_application_date:"", building_class:"unknown", building_use:"", project_specific_ventilation_basis:""},
+      ruleset_status:"candidate", ventilation_rules_resolution:{status:"needs_review", jurisdiction:"NSW", ncc_edition:"NCC edition unresolved", zone_results:[], conflicts:[]},
+    }});
+  });
+  await page.goto("/");
+  await page.evaluate(() => {
+    DATA = {id:"demo-project"};
+    show("vRes");
+    requiredElement("designRequirementsPanel").classList.remove("hide");
+    drawAustralianVentilationRules({
+      project_regulatory_context:{}, ruleset_status:"candidate",
+      ventilation_rules_resolution:{status:"needs_review", jurisdiction:"NSW", ncc_edition:"NCC edition unresolved", zone_results:[], conflicts:[]},
+    });
+  });
+  await page.locator("#buildingApprovalDate").fill("2025-03-15");
+  await page.locator("#nccBuildingClass").selectOption("class_6");
+  await page.locator("#projectBuildingUse").fill("Restaurant fit-out");
+  await page.locator("#btnSaveVentilationRulesContext").click();
+  await expect.poll(() => saved?.building_approval_application_date).toBe("2025-03-15");
+  expect(saved.building_class).toBe("class_6");
+  expect(saved.building_use).toBe("Restaurant fit-out");
+  await expect(page.locator("#ventilationRulesStatus")).toContainText("NSW");
+  await expect(page.locator("#ventilationRulesStatus")).toContainText("no reviewed ventilation rates yet");
+});
+
+test("cooling outside-air flow records its own source and review status", async ({ page }) => {
+  await page.goto("/");
+  const result = await page.evaluate(() => {
+    const item = addZone({zone_id:"zone_oa", name:"Dining", area_m2:40, occupancy:24});
+    item.querySelector(".zone-outside-air").value = "180";
+    item.querySelector(".zone-outside-air-source").value = "Mechanical schedule M-201";
+    item.querySelector(".zone-outside-air-status").value = "provisional";
+    item.querySelector(".zone-outside-air-reference").value = "standard_air_1_2kg_da_m3";
+    return {zone: readZone(item), help: item.querySelector(".zone-outside-air-help").textContent};
+  });
+  expect(result.help).toContain("does not determine code compliance");
+  const zone = result.zone;
+  expect(zone.cooling_load.outside_air_lps).toBe(180);
+  expect(zone.cooling_load.outside_air_source).toBe("Mechanical schedule M-201");
+  expect(zone.cooling_load.outside_air_verification_status).toBe("provisional");
+  expect(zone.cooling_load.outside_air_flow_reference_basis).toBe("standard_air_1_2kg_da_m3");
+});
+
+test("guided resolver reports contractor-friendly skill stages then refreshes coverage", async ({ page }) => {
+  await mockApi(page);
+  await page.route("**/api/airflow-resolution", route => route.fulfill({json: {
+    status: "draft", airflow_resolution: {status: "draft", summary: {resolved: 0, provisional: 0, blocked: 1}, records: [{
+      owner_room_id: "room-dining", air_path_type: "outside_air", status: "blocked", value: 40, unit: "L/s", origin: "project_evidence",
+      unresolved_fields: ["records for the same physical airflow path disagree on value, unit, or direction"], conflicts: ["airflow-duplicate"],
+    }]},
+  }}));
+  let statusChecks = 0;
+  await page.route("**/api/skill-workflow**", async route => {
+    if (route.request().method() === "POST") {
+      return route.fulfill({ json: { status: "running", stages: [] } });
+    }
+    statusChecks += 1;
+    return route.fulfill({ json: {
+      status: "needs_review",
+      stages: [
+        { label: "Drawing set and page mapping", status: "needs_review" },
+        { label: "Rooms, geometry, and gains", status: "needs_review" },
+      ],
+    } });
+  });
+  await page.goto("/");
+  await page.locator("#pdf").setInputFiles({
+    name: "guided-workflow.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 guided fixture"),
+  });
+  await page.locator("#btnAnalyse").click();
+  await page.locator("#btnContinue").click();
+  await page.locator("#btnGuidedResolveModelInputs").click();
+  await expect(page.locator("#guidedModelInputsStatus")).toContainText("Coverage hydrated");
+  await page.evaluate(() => resolveAirflow());
+  await expect(page.locator("#airflowResolutionResults")).toContainText("disagree on value");
+  await expect(page.locator("#airflowResolutionResults")).toContainText("conflicts with airflow-duplicate");
+  expect(statusChecks).toBe(1);
+});
+
+test("local test workspace runs and resets an isolated draft walkthrough", async ({ page }) => {
+  await mockApi(page);
+  await page.route("**/api/test-mode/status", route => route.fulfill({json: {
+    enabled: true, available: true, fixture_name: "Local full-building fixture",
+    fixture_warning: "Synthetic test-only areas are not extracted from the PDF.", active_run: null,
+  }}));
+  await page.route("**/api/test-mode/run", route => route.fulfill({json: {run: {
+    run_id: "test-123", status: "running", current_stage: "analyse_pdf", stages: [],
+  }}}));
+  await page.route("**/api/test-mode/run/test-123", route => route.fulfill({json: {run: {
+    run_id: "test-123", status: "completed", current_stage: "completed",
+    stages: [{id: "analyse_pdf", status: "complete"}, {id: "room_inference", status: "complete"}],
+    coverage: {rooms: {total: 8, resolved: 8}, surfaces: {total: 12, resolved: 7}, openings: {total: 5, resolved: 3}, air_systems: {total: 1, resolved: 0}, plant_systems: {total: 0, resolved: 0}},
+    provisional_count: 4, blocked_count: 2, excluded_count: 1,
+    report_status: "calculated_provisional", report_label: "TEST RUN — AI preliminary estimate — not engineering reviewed or validated",
+    report_summary: {peak_total_kw: 48.2, peak_hour: 15},
+  }}}));
+  await page.route("**/api/test-mode/reset", route => route.fulfill({json: {reset: true, run_id: "test-123"}}));
+  await page.goto("/");
+  await expect(page.locator("#testWorkspacePanel")).toBeVisible();
+  await expect(page.locator("#testWorkspaceFixture")).toContainText("not extracted from the PDF");
+  await expect(page.locator("#testWorkspaceFixture")).toContainText("Local full-building fixture");
+  await page.locator('[data-open="demo-project"]').click();
+  await expect(page.locator("#vRes")).toBeVisible();
+  await expect(page.locator("#testWorkspacePanel")).toBeVisible();
+  await page.locator("#btnTestWorkspaceRun").click();
+  await expect(page.locator("#testWorkspaceStatus")).toContainText("Walkthrough complete");
+  await expect(page.locator("#testWorkspaceSummary")).toContainText("Rooms: 8/8");
+  await expect(page.locator("#testWorkspaceSummary")).toContainText("48.20 kW");
+  await expect(page.locator("#testWorkspaceSummary")).toContainText("not engineering reviewed or validated");
+  await page.locator("#btnTestWorkspaceReset").click();
+  await expect(page.locator("#testWorkspaceStatus")).toContainText("Test run reset");
 });
 
 test("design-input verification controls save with the reasoning packet", async ({ page }) => {
@@ -217,6 +388,11 @@ test("hourly cooling workflow displays a labelled partial draft", async ({ page 
     zones: [{zone_id: "zone_001", name: "Sales zone", floor_id: "level_01", verification_status: "confirmed", source: "Engineer", citations: []}],
     rooms: [{room_id: "room_001", name: "Sales area", zone_id: "zone_001", mapping_status: "confirmed", verification_status: "confirmed", source: "Engineer", source_zone_id: "zone_001", source_room_labels: [], area_m2: 30, occupancy: 18, indoor_cooling_setpoint_c: 24, heat_sources: [], cooling_load: {}, cooling_load_conditions: {}, schedule_assignments: {people: "", lighting: "", outside_air: "", equipment: {}, solar: {}}}],
   };
+  const weatherProvenance = {
+    wet_bulb_basis: "legacy_unverified",
+    dry_bulb: {status: "provisional", source: "UQ/NIWA Parramatta draft data", citations: [{reference: "ACDB Table 1"}]},
+    wet_bulb: {status: "provisional", source: "UQ/NIWA Parramatta draft data", citations: [{reference: "ACDB Table 1"}]},
+  };
   await page.route("**/api/hourly-load-model?project_id=demo-project", route => route.fulfill({json: {hourly_load_model: hourlyModel, readiness: {status: "confirmed", issues: []}}}));
   await page.route("**/api/hourly-load-model", async route => {
     const body = route.request().postDataJSON();
@@ -225,6 +401,8 @@ test("hourly cooling workflow displays a labelled partial draft", async ({ page 
     expect(body.hourly_load_model.floors[0]).toEqual(expect.objectContaining({floor_id: "level_01", verification_status: "confirmed"}));
     expect(body.hourly_load_model.zones[0]).toEqual(expect.objectContaining({zone_id: "zone_001", floor_id: "level_01"}));
     expect(body.hourly_load_model.rooms[0]).toEqual(expect.objectContaining({room_id: "room_001", zone_id: "zone_001", mapping_status: "confirmed"}));
+    expect(body.hourly_load_model.rooms[0].cooling_load_conditions).toEqual(expect.objectContaining({indoor_wet_bulb_basis: "thermodynamic"}));
+    expect(body.hourly_load_model.rooms[0].cooling_load).toEqual(expect.objectContaining({outside_air_flow_reference_basis: "standard_air_1_2kg_da_m3"}));
     expect(body.hourly_load_model.rooms[0].unapproved_components).toEqual(expect.arrayContaining([expect.objectContaining({component_id: "infiltration", calculation_status: "stored_not_calculated", value: 0.25, unit: "ACH", source: "Site note"})]));
     return route.fulfill({json: {hourly_load_model: body.hourly_load_model, readiness: {status: "confirmed", issues: []}}});
   });
@@ -241,7 +419,44 @@ test("hourly cooling workflow displays a labelled partial draft", async ({ page 
         scope_summary: {complete_scope: false, blocked_rooms: [{room_id: "room_002", reasons: ["people schedule assignment"]}]},
         known_exclusions: [{room_id: "room_001", component_type: "infiltration", value: 0.25, unit: "ACH", source: "Site note"}],
         unresolved_room_inputs: [{room_id: "room_001", component_type: "steam_gain"}],
-        scenario_results: [{scenario_id: "summer_day", title: "Summer design day", status: "draft", included_scope_peak: {design_total_kw: 4.2}, scope_summary: {complete_scope: false, blocked_rooms: [{room_id: "room_002", reasons: ["people schedule assignment"]}]}}],
+        scenario_results: [{
+          scenario_id: "summer_day", title: "Summer design day", status: "draft",
+          included_scope_peak: {design_total_kw: 4.2},
+          scope_summary: {complete_scope: false, blocked_rooms: [{room_id: "room_002", reasons: ["people schedule assignment"]}]},
+          rooms: [{
+            room_id: "room_001", name: "Dining",
+            peak: {hour: 14, components: {
+              outside_air: {
+                sensible_kw: 13.47, latent_kw: -5.35, total_kw: 8.12,
+                inputs: {
+                  flow_lps: 1050, flow_source: "140 scheduled seats × 7.5 L/s/person", flow_verification_status: "provisional",
+                  flow_reference_basis: "standard_air_1_2kg_da_m3", flow_reference_status: "declared_basis_unverified", flow_reference_state: {dry_air_density_kg_m3: 1.2},
+                  indoor_db_c: 24, indoor_wb_c: 18, indoor_wet_bulb_basis: "legacy_unverified",
+                  outdoor_db_c: 35.3, outdoor_wb_c: 20.2, outdoor_wet_bulb_basis: "legacy_unverified", atmospheric_pressure_kpa: 100.159,
+                  outdoor_weather_provenance: weatherProvenance,
+                },
+              },
+              infiltration: {
+                sensible_kw: 0.12, latent_kw: 0.04, total_kw: 0.16,
+                inputs: {
+                  resolved_flow_lps: 6, applied_flow_lps: 6, room_volume_m3: 60, schedule_factor: 1,
+                  raw_signed_sensible_kw: 0.12, raw_signed_latent_kw: 0.04, outdoor_wet_bulb_basis: "legacy_unverified",
+                  flow_reference_basis: "outdoor_design_condition", flow_reference_status: "calculation_assumption_unverified",
+                  outdoor_weather_provenance: weatherProvenance,
+                },
+              },
+              transfer_air: {
+                sensible_kw: -0.42, latent_kw: -0.10, total_kw: -0.52,
+                inputs: {
+                  flow_lps: 50, source_room_id: "kitchen", method_validation: "draft_pending_engineer_review",
+                  flow_source: "Air balance AB-1", flow_citations: [{reference: "Air balance AB-1"}], flow_verification_status: "provisional",
+                  source_room_conditions: {room_id: "kitchen", dry_bulb_c: 26, wet_bulb_c: 19, wet_bulb_basis: "thermodynamic", verification_status: "provisional"},
+                  target_room_conditions: {room_id: "dining", dry_bulb_c: 24, wet_bulb_c: 18, wet_bulb_basis: "legacy_unverified", verification_status: "provisional"},
+                },
+              },
+            }},
+          }],
+        }],
       },
     } });
   });
@@ -259,6 +474,8 @@ test("hourly cooling workflow displays a labelled partial draft", async ({ page 
   await infiltration.locator(".room-component-unit").fill("ACH");
   await infiltration.locator(".room-component-status").selectOption("confirmed");
   await infiltration.locator(".room-component-source").fill("Site note");
+  await page.locator(".room-outside-air-reference").selectOption("standard_air_1_2kg_da_m3");
+  await page.locator(".room-wet-bulb-basis").selectOption("thermodynamic");
   await page.locator("#btnSaveHourlyModel").click();
   await page.getByRole("button", {name: "4 Calculate cooling"}).click();
   await page.locator("#hourlyScenarioIds").fill("summer_day");
@@ -270,7 +487,89 @@ test("hourly cooling workflow displays a labelled partial draft", async ({ page 
   await expect(page.locator("#coolingReadiness")).toContainText("Open evidence");
   await expect(page.locator("#hourlyLoadResults")).toContainText("known excluded room input");
   await expect(page.locator("#hourlyLoadResults")).toContainText("unresolved room input");
+  await expect(page.locator("#hourlyLoadResults")).toContainText("Outside-air cooling at each room governing hour");
+  await expect(page.locator("#hourlyLoadResults")).toContainText("sensible 13.47 kW, latent -5.35 kW");
+  await expect(page.locator("#hourlyLoadResults")).toContainText("legacy / unverified wet-bulb basis");
+  await expect(page.locator("#hourlyLoadResults")).toContainText("DB: UQ/NIWA Parramatta draft data (provisional) · ACDB Table 1");
+  await expect(page.locator("#hourlyLoadResults")).toContainText("source: 140 scheduled seats × 7.5 L/s/person");
+  await page.getByText("Outside-air cooling at each room governing hour").click();
+  await expect(page.locator("#hourlyLoadResults")).toContainText("Flow reference: standard air at 1.2 kg dry air/m³ (declared; source not independently verified)");
+  await expect(page.locator("#hourlyLoadResults")).toContainText("Transfer-air cooling at each room governing hour");
+  await page.getByText("Transfer-air cooling at each room governing hour").click();
+  await expect(page.locator("#hourlyLoadResults")).toContainText("from kitchen (26.0°C DB / 19.0°C WB");
+  await expect(page.locator("#hourlyLoadResults")).toContainText("Air balance AB-1");
+  await page.getByText("Infiltration at each room governing hour").click();
+  await expect(page.locator("#hourlyLoadResults")).toContainText("UQ/NIWA Parramatta draft data (provisional)");
+  await expect(page.locator("#hourlyLoadResults")).toContainText("wet-bulb basis: legacy_unverified");
+  await expect(page.locator("#hourlyLoadResults")).toContainText("Flow reference: outdoor design-air state (calculation assumption; source basis not verified)");
   expect(errors).toEqual([]);
+});
+
+test("heating report exposes psychrometric source and wet-bulb basis", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/");
+  await page.evaluate(() => drawHeatingLoadReport({
+    status: "draft",
+    readiness: {status: "draft", issues: []},
+    scenario_results: [{
+      scenario_id: "winter_case", title: "Winter case", status: "draft",
+      included_scope_peak: {design_total_kw: 7.2}, scope_summary: {complete_scope: false, blocked_rooms: []},
+      rooms: [{room_id: "room_01", name: "Dining", status: "draft", peak: {
+        hour: 6, design_total_kw: 7.2, safety_allowance_kw: 0.7,
+        components: {
+          heating_outside_air: {sensible_kw: 2.1, total_kw: 2.1, inputs: {
+            flow_lps: 1050, indoor_heating_setpoint_source: "Heating brief HB-1", indoor_heating_setpoint_citations: [{reference: "HB-1"}],
+            outdoor_db_c: 0, outdoor_wb_c: -2, outdoor_wet_bulb_basis: "thermodynamic", atmospheric_pressure_kpa: 100.4,
+            flow_source: "Air schedule AS-1", flow_verification_status: "provisional",
+            flow_reference_basis: "outdoor_design_condition", flow_reference_status: "calculation_assumption_unverified",
+            weather_provenance: {
+              wet_bulb_basis: "thermodynamic",
+              dry_bulb: {value: 0, status: "provisional", source: "Parramatta winter record", citations: [{reference: "WX-2"}]},
+              wet_bulb: {value: -2, status: "provisional", source: "Parramatta winter record", citations: [{reference: "WX-2"}]},
+              pressure: {value: 100.4, status: "provisional", source: "Station pressure", citations: [{reference: "WX-2"}]},
+            },
+          }},
+        },
+      }}],
+    }],
+  }, "current"));
+  await expect(page.locator("#heatingLoadResults")).toContainText("Outside air: 2.10 kW");
+  await expect(page.locator("#heatingLoadResults")).toContainText("Parramatta winter record (provisional)");
+  await expect(page.locator("#heatingLoadResults")).toContainText("basis thermodynamic");
+  await expect(page.locator("#heatingLoadResults")).toContainText("Air schedule AS-1");
+  await expect(page.locator("#heatingLoadResults")).toContainText("flow reference outdoor design-air state (calculation assumption; source basis not verified)");
+});
+
+test("AHU peak report exposes outdoor, return, coil, and pressure provenance", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/");
+  await page.evaluate(() => drawAhuAirside({status: "draft", scenario_results: [{
+    scenario_id: "summer_case", status: "draft", included_scope_peak: {design_total_kw: 8.4},
+    ahus: [{ahu_id: "ahu_01", name: "Dining AHU", status: "draft", system_type: "single_zone_constant_volume", number_off: 1, peak: {
+      hour: 15, design_total_kw: 8.4, coil_total_kw: 8.4, coil_sensible_kw: 6.7, coil_latent_kw: 1.7, coil_condensate_kg_s: 0.0008, psychrometric_provenance: {
+        outdoor: {
+          dry_bulb: {value: 35, status: "provisional", source: "Design weather pack", citations: [{reference: "WX-DB"}]},
+          wet_bulb: {value: 23, status: "provisional", source: "Design weather pack", citations: [{reference: "WX-WB"}]},
+          wet_bulb_basis: "thermodynamic",
+        },
+        pressure: {value: 101.325, status: "confirmed", source: "Station pressure", citations: [{reference: "WX-P"}]},
+        return_air: {wet_bulb_basis: "psychrometer", source: "Return sensor schedule", review_status: "confirmed", citations: [{reference: "RA-1"}]},
+        coil_leaving: {wet_bulb_basis: "thermodynamic", source: "Coil schedule", review_status: "confirmed", citations: [{reference: "CL-1"}]},
+        supply_airflow_reference: {basis: "assumed_at_mixed_air_coil_inlet", state: {dry_bulb_c: 25.2, pressure_kpa: 101.325}, verified: false},
+        coil_sensible_split: {basis: "dry_air_specific_heat_only", specific_heat_kj_kg_da_k: 1.006, latent_definition: "total coil duty minus reported sensible duty", review_status: "unvalidated_component_convention"},
+      },
+    }}],
+  }]}, "draft", {}, {count: 1}, {airflow_count: 3}));
+  await expect(page.locator("#ahuAirsideResults")).toContainText("Design weather pack (provisional) · WX-DB");
+  await expect(page.locator("#ahuAirsideResults")).toContainText("thermodynamic");
+  await expect(page.locator("#ahuAirsideResults")).toContainText("Station pressure (confirmed) · WX-P");
+  await expect(page.locator("#ahuAirsideResults")).toContainText("Return sensor schedule (confirmed) · RA-1");
+  await expect(page.locator("#ahuAirsideResults")).toContainText("Coil schedule (confirmed) · CL-1");
+  await expect(page.locator("#ahuAirsideResults")).toContainText("0.80 g/s condensate");
+  await expect(page.locator("#ahuAirsideResults")).toContainText("6.70 kW sensible / 1.70 kW latent");
+  await expect(page.locator("#ahuAirsideResults")).toContainText("Sensible/latent split: dry_air_specific_heat_only · cp 1.006 kJ/(kg dry air·K); latent is total minus sensible (unvalidated_component_convention)");
+  await expect(page.locator("#ahuAirsideResults")).toContainText("Supply airflow basis: assumed_at_mixed_air_coil_inlet");
+  await expect(page.locator("#ahuAirsideResults")).toContainText("assumption — confirm before design use");
 });
 
 test("evidence-to-calculator bridge saves, previews, and applies reviewed proposals", async ({ page }) => {
@@ -317,6 +616,120 @@ test("evidence-to-calculator bridge saves, previews, and applies reviewed propos
   await page.locator("#btnApplyCalculatorDraft").click();
   await expect(page.locator("#calculatorDraftSummary")).toContainText("Reports stale");
   expect(errors).toEqual([]);
+});
+
+test("stale calculator draft explains upgrade and requires rebuilding before review", async ({ page }) => {
+  await mockApi(page);
+  const draft = {schema_version: 2, revision: 4, status: "review_required", candidates: {floors: [], zones: [], rooms: [], room_inputs: [], schedules: [], envelope: []}, review_items: [], decisions: {}};
+  await page.goto("/");
+  await page.evaluate(input => {
+    show("vRes");
+    showCalculatorDraft({...input, artifact_status: "stale", stale_reasons: ["This saved draft predates room and trace freshness tracking. Rebuild after upgrade. Decisions on unchanged candidates are retained; changed or new candidates return to review."]});
+  }, draft);
+  await expect(page.locator("#calculatorDraftStatus")).toContainText("predates room and trace freshness tracking");
+  await expect(page.locator("#btnBuildCalculatorDraft")).toBeEnabled();
+  await expect(page.locator("#btnSaveCalculatorReview")).toBeDisabled();
+  await expect(page.locator("#btnPreviewCalculatorDraft")).toBeDisabled();
+  await expect(page.locator("#btnApplyCalculatorDraft")).toBeDisabled();
+});
+
+test("background draft rebuild explains revision conflict and reload requirement", async ({ page }) => {
+  await mockApi(page);
+  const candidate = {candidate_id: "floor-ground", kind: "floor", value: {floor_id: "floor-ground", name: "Ground"},
+    reason: "Review floor", target_artifact: "hourly_load_model", citations: [{reference: "A-01", page: 1, excerpt: "Ground"}],
+    dependencies: [], fingerprint: "floor-fingerprint"};
+  const draft = {schema_version: 2, revision: 3, status: "review_required", candidates: {floors: [candidate], zones: [], rooms: [], room_inputs: [], schedules: [], envelope: []}, review_items: [], decisions: {}};
+  await page.route("**/api/calculator-draft", route => route.fulfill({status: 409, json: {
+    error: "The draft changed. Reload and review the latest version.", code: "revision_conflict", conflict: true, action: "reload_review_preview",
+  }}));
+  await page.goto("/");
+  await page.evaluate(input => { DATA = {id: "demo-project"}; show("vRes"); requiredElement("designRequirementsPanel").classList.remove("hide"); showCalculatorDraft(input); }, draft);
+  await page.locator(".draft-candidate details").evaluate(element => { element.open = true; });
+  await page.locator('.draft-candidate [data-field="reviewer"]').fill("ENG-1");
+  await page.locator(".draft-candidate .calculator-draft-decision").selectOption("accept");
+  await page.locator("#btnSaveCalculatorReview").click();
+  await expect(page.locator("#calculatorDraftStatus")).toContainText("New evidence rebuilt this draft while you were reviewing");
+  await expect(page.locator("#calculatorDraftStatus")).toContainText("Reload the draft");
+});
+
+test("reviewer can trace, calibrate, save, and reload a proposal-only room boundary", async ({ page }) => {
+  const posts = [];
+  let context = {
+    id: "demo-project", source_pdf_fingerprint: "pdf-fixture",
+    rooms: [{room_id:"room-shop",label:"Shop",level_name:"Ground",needs_trace:true}],
+    pages: [{page:1,title:"Ground Plan",drawing_number:"A-01",declared_scale:"1:100",scale_denominator:100,
+      image_width_px:1000,image_height_px:800,image_px_per_pt:3.5277777778,preview_url:"/fake-plan.svg",preview_width_px:1000,preview_height_px:800,preview_matches_vector_coordinates:true,
+      vector_page_fingerprint:"vector-fixture"}],
+    reviewer_room_geometry:{schema_version:1,records:[]},
+  };
+  const trace = {trace_id:"trace-shop",room_id:"room-shop",room_label:"Shop",level_name:"Ground",page:1,
+    points_image_px:[[100,100],[300,100],[300,300],[100,300],[100,100]],snapped_line_ids:[null,null,null,null,null],
+    calibration:{status:"agreed",mm_per_px:10,difference_percent:0,dimension_points_image_px:[[100,600],[300,600]],dimension_value_mm:2000},
+    reviewer:"QA-1",note:"Synthetic browser fixture",freshness:"current"};
+  await page.route("**/api/reviewer-room-geometry?project_id=demo-project", route => route.fulfill({json:context}));
+  await page.route("**/api/plan-snap?project_id=demo-project&page=1", route => route.fulfill({json:{...context.pages[0],page:context.pages[0],lines:[],endpoints:[],intersections:[],snap_tolerance_px:8,source_pdf_fingerprint:"pdf-fixture",vector_page_fingerprint:"vector-fixture"}}));
+  await page.route("**/api/reviewer-room-geometry", async route => {
+    const body=route.request().postDataJSON(); posts.push(body);
+    context={...context,reviewer_room_geometry:{schema_version:1,records:[trace]}};
+    return route.fulfill({json:{...context,calculation_input_evidence:{},geometry_resolution:{}}});
+  });
+  await page.route("**/api/calculation-input-evidence?project_id=demo-project", route => route.fulfill({json:{status:"current",calculation_input_evidence:{fingerprint:"evidence-fixture",candidates:[],geometry_resolution:{entities:[{kind:"room_geometry_proof",geometry_status:"geometry_proposed",label:"Shop",source:{page:1},value:{area_m2:4,calibration:{mm_per_px:10}}}],summary:{active_room_area_count:0},deterministic_proof_diagnostics:{pages:[],rooms:[]}},opening_register:{openings:[]}},summary:{candidate_count:1,status_counts:{proposed:1},category_counts:{}},component_interpretations:{}}}));
+  await page.route("**/fake-plan.svg", route => route.fulfill({contentType:"image/svg+xml",body:'<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="800"><rect width="1000" height="800" fill="#eee"/><path d="M100 100h200v200H100z" fill="none" stroke="#222" stroke-width="3"/></svg>'}));
+  await page.setViewportSize({width:390,height:844});
+  await page.goto("/");
+  await page.evaluate(() => { DATA={id:"demo-project"}; show("vRes"); requiredElement("designRequirementsPanel").classList.remove("hide"); showCalculationInputEvidence({fingerprint:"initial",geometry_resolution:{entities:[],review_items:[],summary:{},deterministic_proof_diagnostics:{pages:[],rooms:[]}},candidates:[]}, {}, "current"); });
+  await page.locator("[data-geometry-room]").selectOption("room-shop");
+  await page.locator("[data-geometry-page]").selectOption("1");
+  await expect(page.locator("[data-geometry-svg]")).toBeVisible();
+  const svg=page.locator("[data-geometry-svg]");
+  await expect(page.locator(".reviewer-geometry-resolution")).toContainText("1000 × 800 px");
+  const naturalSize=await page.evaluate(async()=>{const image=new Image();image.src=document.querySelector("[data-plan-preview]").getAttribute("href");await image.decode();return [image.naturalWidth,image.naturalHeight];});
+  expect(naturalSize).toEqual([1000,800]);
+  await page.locator('[data-geometry-zoom="in"]').click();
+  const zoomBox=await svg.getAttribute("viewBox");expect(zoomBox.split(" ")).toHaveLength(4);expect(Number(zoomBox.split(" ")[2])).toBeCloseTo(1000/1.5,5);
+  const zoomBounds=await svg.boundingBox();await svg.click({position:{x:zoomBounds.width/2,y:zoomBounds.height/2}});
+  expect(Math.abs(Number(await page.locator(".trace-vertex").getAttribute("cx"))-500)).toBeLessThan(2);expect(Math.abs(Number(await page.locator(".trace-vertex").getAttribute("cy"))-400)).toBeLessThan(2);
+  await page.locator("[data-geometry-reset]").click();
+  await page.locator('[data-geometry-mode="pan"]').click();
+  const panBox=await svg.boundingBox();await page.mouse.move(panBox.x+100,panBox.y+100);await page.mouse.down();await page.mouse.move(panBox.x+150,panBox.y+140);await page.mouse.up();
+  const pannedBox=(await svg.getAttribute("viewBox")).split(" ").map(Number);expect(pannedBox[0]).not.toBe(Number(zoomBox.split(" ")[0]));
+  await page.locator('[data-geometry-zoom="reset"]').click();
+  await page.locator('[data-geometry-mode="boundary"]').click();
+  await svg.focus(); await page.keyboard.press("Enter");
+  await expect(page.locator(".reviewer-geometry-help")).toContainText("Boundary: 1 corners");
+  await page.locator("[data-geometry-reset]").click();
+  for (const [x,y] of [[.1,.125],[.3,.125],[.3,.375],[.1,.375]]) { const box=await svg.boundingBox(); await svg.click({position:{x:box.width*x,y:box.height*y}}); }
+  await expect(page.locator(".reviewer-geometry-help")).toContainText("Boundary: 4 corners");
+  await page.locator("[data-geometry-close]").click();
+  await page.locator('[data-geometry-mode="dimension"]').click();
+  for (const [x,y] of [[.1,.75],[.3,.75]]) { const box=await svg.boundingBox(); await svg.click({position:{x:box.width*x,y:box.height*y}}); }
+  await page.locator("[data-geometry-dimension]").fill("2000");
+  await page.locator("[data-geometry-reviewer]").fill("QA-1");
+  await page.locator("[data-geometry-save]").click();
+  await expect.poll(()=>posts.length).toBe(1);
+  expect(posts[0].points_image_px).toHaveLength(5);
+  expect(posts[0].snapped_line_ids).toEqual([null,null,null,null,null]);
+  expect(posts[0].dimension_value_mm).toBe(2000);
+  await expect(page.locator("#calculationEvidenceSummary")).toContainText("geometry_proposed");
+  await expect(page.locator("#calculationEvidenceSummary")).toContainText("4 m² derived area");
+  await expect(page.locator("#calculationEvidenceSummary")).toContainText("not activated");
+  await expect(page.locator(".reviewer-geometry-result")).toContainText("4.000 m² proposed");
+  const mobileWidth=await page.evaluate(()=>({viewport:document.documentElement.clientWidth,workspace:document.querySelector(".reviewer-room-geometry").scrollWidth}));
+  expect(mobileWidth.workspace).toBeLessThanOrEqual(mobileWidth.viewport);
+});
+
+test("draft offers traced-geometry acceptance only for a linked current proof", async ({ page }) => {
+  await page.goto("/");
+  const markup = await page.evaluate(() => {
+    const base = {candidate_id:"room-1",kind:"room",value:{room_id:"room-1",name:"Shop",geometry_status:"geometry_proposed",geometry_reference:"proof-1"},citations:[],dependencies:[],reason:"Review geometry"};
+    const current = calculatorDraftCandidateMarkup({...base,reviewer_geometry_proof:{proof_id:"proof-1",trace_id:"trace-1",area_m2:20,reviewer:"QA-1",calibration:{status:"agreed"}}},{});
+    const absent = calculatorDraftCandidateMarkup(base,{});
+    return {current,absent};
+  });
+  expect(markup.current).toContain("Accept traced geometry");
+  expect(markup.absent).not.toContain("Accept traced geometry");
+  expect(markup.current).toContain("trace-1");
+  expect(markup.current).toContain("20");
 });
 
 test("AI input assembly saves one project scope and calculates from an immutable snapshot", async ({ page }) => {
@@ -467,8 +880,8 @@ test("analysis reaches results without browser errors", async ({ page }) => {
   await page.locator("#btnAnalyse").click();
 
   await expect(page.locator("#summaryTitle")).toHaveText("Ready for ChatGPT packet");
-  await expect(page.locator("#btnConfirm")).toBeEnabled();
-  await expect(page.locator("#btnConfirmTop")).not.toHaveClass(/hide/);
+  await expect(page.locator("#btnConfirm, #btnConfirmTop")).toHaveCount(0);
+  await expect(page.locator("#btnContinue")).toBeEnabled();
   expect(errors).toEqual([]);
 });
 
@@ -481,8 +894,36 @@ test("saved project opens into results", async ({ page }) => {
   await page.locator("[data-open='demo-project']").click();
 
   await expect(page.locator("#summaryTitle")).toHaveText("Ready for ChatGPT packet");
-  await expect(page.locator("#btnConfirm")).toBeEnabled();
+  await expect(page.locator("#btnContinue")).toBeEnabled();
   expect(errors).toEqual([]);
+});
+
+test("annual report shows monthly subtotals and incomplete-hour counts", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/");
+  await page.evaluate(() => drawAnnualEnergy({
+    status: "draft", scope_summary: {complete_scope: false, included_room_ids: ["room_001"]},
+    cooling: {status: "draft", annual_energy_kwh: 2, peak_kw: 1, monthly_kwh: {"1": 2}, monthly_incomplete_hours: {"1": 3}, blocked_reasons: ["Room room_001 has missing cooling hours."]},
+    heating: {status: "not selected", monthly_kwh: {}, monthly_incomplete_hours: {}},
+    ahu: {status: "not selected"}, plant: {status: "not selected"}, readiness: {issues: []},
+  }, "current", {}));
+  await expect(page.locator("#annualResults")).toContainText("Cooling incomplete hours");
+  await expect(page.locator("#annualResults")).toContainText("Incomplete hours are excluded");
+  await expect(page.locator("#annualResults")).toContainText("3");
+});
+
+test("selected design weather displays the wet-bulb basis and dew-point derivation", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/");
+  await page.evaluate(() => drawSiteDesignWeather({status: "draft_ready", site_design_weather_resolution: {
+    design_basis: "comfort", cooling: {selection: "contractor_selected", selected: {
+      record_id: "weather-cooling", publisher: "AIRAH", station_reference: "Sydney", release_version: "fixture-1",
+      citation: "DA09 fixture", expiry: "2099-01-01", profile: {hours: [{wet_bulb_basis: "thermodynamic"}]},
+      conversion: {"0": {wet_bulb_method_id: "thermodynamic_ashrae_eq33_iapws_water_ice_v3"}},
+    }}, heating: {candidates: [], selected: {}, conflicts: []},
+  }}));
+  await expect(page.locator("#siteDesignWeatherResults")).toContainText("Wet-bulb basis: thermodynamic");
+  await expect(page.locator("#siteDesignWeatherResults")).toContainText("1 hour(s) derived from dew point");
 });
 
 test("frontend assets do not cache and accept query strings", async ({ request }) => {
@@ -509,9 +950,106 @@ test('project list failure offers a working inline retry', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Retry', exact: true })).toHaveCount(0);
 });
 
+test('project list distinguishes records with otherwise identical labels', async ({ page }) => {
+  await page.route('**/api/test-mode/status', route => route.fulfill({ json: { enabled: false } }));
+  await page.route('**/api/projects', route => route.fulfill({ json: [
+    { id: 'drawing-set-12345678', name: 'Same drawings.pdf', pages: 4, analysed: true, relevant: 3, revision: 'rev-v7', updated_at: '2026-09-01' },
+    { id: 'drawing-set-87654321', name: 'Same drawings.pdf', pages: 4, analysed: true, relevant: 3, revision: 'rev-v7', updated_at: '2026-09-01' },
+  ] }));
+  await page.goto('/');
+
+  await expect(page.locator('#projects [data-open="drawing-set-12345678"]')).toContainText('ID 12345678');
+  await expect(page.locator('#projects [data-open="drawing-set-87654321"]')).toContainText('ID 87654321');
+});
+
 test('current project navigation returns keyboard focus to the workspace', async ({ page }) => {
   await page.route('**/api/projects', route => route.fulfill({ json: [] }));
   await page.goto('/');
   await page.getByRole('button', { name: 'Current project', exact: true }).click();
   await expect(page.locator('#main')).toBeFocused();
+});
+
+test('room-input panels show stale state and accept overrides after re-resolution', async ({ page }) => {
+  const posts = [];
+  await mockApi(page);
+  await page.route('**/api/ceiling-volume-resolution', async route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    const body = route.request().postDataJSON();
+    posts.push(body);
+    return route.fulfill({ json: {
+      status: 'draft_ready', stale_reasons: [], ceiling_volume_resolution: {records: [{
+        room_id: body.room_id, original_label: 'Kitchen', level_name: 'Ground',
+        ceiling_height_mm: Number(body.ceiling_height_mm), volume_m3: 56, origin: 'contractor_override',
+        confidence_score: 1, status: 'resolved', evidence: [], override: {height_mm: Number(body.ceiling_height_mm)},
+      }]},
+    }});
+  });
+  await page.route('**/api/internal-gains-resolution', async route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    const body = route.request().postDataJSON();
+    posts.push(body);
+    return route.fulfill({ json: {
+      status: 'provisional', stale_reasons: [], internal_gains_resolution: {records: [{
+        room_id: body.room_id, original_label: 'Kitchen', level: 'Ground', space_scope: 'comfort_hvac',
+        occupancy_count: Number(body.value), lighting_load_w: 0, equipment: [], schedule_id: 'schedule-kitchen',
+        confidence_score: 1, confidence_band: 'high', status: 'provisional', evidence: [],
+        override: {occupancy_count: {value: Number(body.value)}}, unresolved_fields: [],
+      }]},
+    }});
+  });
+  await page.goto('/');
+  await page.locator("[data-open='demo-project']").click();
+  await page.getByRole('button', {name: 'Confirm selected drawings'}).click();
+  await page.waitForLoadState('networkidle');
+  await page.evaluate(() => {
+    setContractorWorkflowStage('calculate', {focus: false});
+    document.querySelector('details.workflow-advanced-tools').open = true;
+    loadAiPreliminary = async () => {};
+  });
+  await expect(page.locator('#internalGainsResolutionStatus')).toContainText('Resolve internal gains');
+  await page.evaluate(() => {
+    const ceiling = {room_id: 'ceiling-kitchen', original_label: 'Kitchen', level_name: 'Ground',
+      ceiling_height_mm: 2800, volume_m3: 50, origin: 'preliminary_fallback', confidence_score: 0.35,
+      status: 'stale', evidence: [], rationale: 'Retained override', override: {height_mm: 2800}};
+    const internal = {room_id: 'internal-kitchen', original_label: 'Kitchen', level: 'Ground',
+      space_scope: 'comfort_hvac', occupancy_count: 20, lighting_load_w: 0, equipment: [],
+      schedule_id: 'schedule-kitchen', confidence_score: 0.35, confidence_band: 'low', status: 'stale',
+      evidence: [], unresolved_fields: [], override: {occupancy_count: {value: 20}}};
+    drawCeilingVolumeResolution({status: 'stale', stale_reasons: ['Ceiling inputs changed.'],
+      ceiling_volume_resolution: {records: [ceiling], stale_reasons: ['Ceiling inputs changed.']}});
+    drawInternalGainsResolution({status: 'stale', stale_reasons: ['Room inputs changed.'],
+      internal_gains_resolution: {records: [internal]}});
+  });
+  await expect(page.locator('#ceilingVolumeResolutionStatus')).toContainText('stale');
+  await expect(page.locator('#ceilingVolumeResolutionStatus')).toContainText('Ceiling inputs changed');
+  await expect(page.locator('#internalGainsResolutionStatus')).toContainText('stale');
+  await expect(page.locator('#internalGainsResolutionStatus')).toContainText('Room inputs changed');
+
+  await page.evaluate(() => {
+    drawCeilingVolumeResolution({status: 'draft_ready', stale_reasons: [], ceiling_volume_resolution: {records: [{
+      room_id: 'ceiling-kitchen', original_label: 'Kitchen', level_name: 'Ground', ceiling_height_mm: 2800,
+      volume_m3: 50, origin: 'preliminary_fallback', confidence_score: 0.35, status: 'provisional', evidence: [],
+    }]}});
+    drawInternalGainsResolution({status: 'provisional', stale_reasons: [], internal_gains_resolution: {records: [{
+      room_id: 'internal-kitchen', original_label: 'Kitchen', level: 'Ground', space_scope: 'comfort_hvac',
+      occupancy_count: 20, lighting_load_w: 0, equipment: [], schedule_id: 'schedule-kitchen',
+      confidence_score: 0.35, confidence_band: 'low', status: 'provisional', evidence: [], unresolved_fields: [],
+    }]}});
+  });
+  await page.locator('[data-ceiling-room-id="ceiling-kitchen"] [data-ceiling-height]').fill('3100');
+  await page.locator('[data-ceiling-room-id="ceiling-kitchen"] [data-ceiling-reviewer]').fill('Engineer');
+  await page.locator('[data-ceiling-room-id="ceiling-kitchen"] [data-ceiling-override]').click();
+  await expect.poll(() => posts.length).toBe(1);
+  await page.evaluate(() => drawInternalGainsResolution({status: 'provisional', stale_reasons: [], internal_gains_resolution: {records: [{
+    room_id: 'internal-kitchen', original_label: 'Kitchen', level: 'Ground', space_scope: 'comfort_hvac',
+    occupancy_count: 20, lighting_load_w: 0, equipment: [], schedule_id: 'schedule-kitchen',
+    confidence_score: 0.5, confidence_band: 'low', status: 'provisional', evidence: [], unresolved_fields: [],
+  }]}}));
+  await page.evaluate(() => document.querySelector('#visionPanel').classList.remove('hide'));
+  await page.locator('[data-internal-gains-room-id="internal-kitchen"] [data-internal-reviewer]').fill('Engineer');
+  await page.locator('[data-internal-gains-room-id="internal-kitchen"] [data-internal-occupancy]').fill('24');
+  await page.locator('[data-internal-gains-room-id="internal-kitchen"] [data-internal-override]').click();
+  await expect.poll(() => posts.length).toBe(2);
+  expect(posts.map(item => item.action)).toEqual(['apply_override', 'apply_override']);
+  expect(posts.map(item => item.reviewer)).toEqual(['Engineer', 'Engineer']);
 });

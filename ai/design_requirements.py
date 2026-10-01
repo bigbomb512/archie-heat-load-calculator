@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 from datetime import datetime, timezone
+from math import isfinite
 import re
 
 
@@ -123,6 +124,8 @@ def numeric_value(value, label):
         result = float(value)
     except (TypeError, ValueError) as error:
         raise ValueError(f"{label.capitalize()} must be a number or blank.") from error
+    if not isfinite(result):
+        raise ValueError(f"{label.capitalize()} must be a finite number.")
     if result < 0:
         raise ValueError(f"{label.capitalize()} cannot be negative.")
     return result
@@ -278,7 +281,9 @@ def unique_text(values):
 def empty_cooling_load_conditions():
     return {
         "indoor_cooling_wet_bulb_c": None,
+        "indoor_wet_bulb_basis": "legacy_unverified",
         "outdoor_summer_wet_bulb_c": None,
+        "outdoor_wet_bulb_basis": "legacy_unverified",
         "atmospheric_pressure_kpa": None,
         "verification_status": "missing",
         "source": "",
@@ -293,6 +298,9 @@ def empty_zone_cooling_load():
         "lighting_w_m2": None,
         "lighting_diversity_factor": None,
         "outside_air_lps": None,
+        "outside_air_flow_reference_basis": "legacy_unverified",
+        "outside_air_source": "",
+        "outside_air_verification_status": "missing",
         "safety_factor": None,
         "envelope_not_applicable": False,
         "envelope_surfaces": [],
@@ -321,6 +329,8 @@ def empty_envelope_surface():
         "construction_id": "",
         "construction_revision": None,
         "manual_solar_source": "",
+        "solar_radiation_source_id": "",
+        "solar_absorptance": None,
         "verification_status": "missing",
         "source": "",
     }
@@ -346,6 +356,10 @@ def empty_zone_ventilation_requirements():
         "dedicated_make_up_air_lps": None,
         "verification_status": "missing",
         "source": "",
+        "rule_id": "",
+        "rule_pack_version": "",
+        "rule_citation": "",
+        "rule_applied_values": {},
     }
 
 
@@ -375,8 +389,23 @@ def validate_zone_ventilation_requirements(raw, zone):
         ("dedicated_make_up_air_lps", "dedicated make-up air"),
     ):
         result[key] = numeric_value(result[key], f"Zone {label}")
-    for key in ("basis_name", "basis_source", "hood_type_or_duty", "source"):
+    for key in ("basis_name", "basis_source", "hood_type_or_duty", "source", "rule_id", "rule_pack_version", "rule_citation"):
         result[key] = text_value(result[key], f"Zone ventilation {key.replace('_', ' ')}")
+    if not isinstance(result["rule_applied_values"], dict):
+        raise ValueError("Zone ventilation rule-applied values must be an object.")
+    rule_state = result["rule_applied_values"]
+    allowed_rule_fields = {"outside_air_method", "people_rate_lps_per_person", "area_rate_lps_per_m2", "fixed_minimum_lps",
+                           "basis_name", "basis_source", "source", "verification_status", "cooling_load.outside_air_lps", "cooling_load.source",
+                           "cooling_load.outside_air_source", "cooling_load.outside_air_verification_status"}
+    if set(rule_state) - {"applied", "previous"}:
+        raise ValueError("Zone ventilation rule-applied values have an unsupported structure.")
+    for section in ("applied", "previous"):
+        values = rule_state.get(section, {})
+        if not isinstance(values, dict) or set(values) - allowed_rule_fields:
+            raise ValueError("Zone ventilation rule-applied values contain unsupported fields.")
+        for value in values.values():
+            if value is not None and not isinstance(value, (str, int, float)):
+                raise ValueError("Zone ventilation rule-applied values must contain scalar values.")
 
     required_rates = {
         "occupancy": ("people_rate_lps_per_person",),
@@ -432,6 +461,10 @@ def validate_cooling_load_conditions(raw):
         result[key] = numeric_value(result[key], label)
     result["verification_status"] = validate_choice(result["verification_status"], VERIFICATION_STATUSES, "Cooling-load conditions verification status")
     result["source"] = text_value(result["source"], "Cooling-load conditions source")
+    from ai.heat_loads import WET_BULB_BASES
+    for key in ("indoor_wet_bulb_basis", "outdoor_wet_bulb_basis"):
+        if result[key] not in WET_BULB_BASES:
+            raise ValueError(f"{key.replace('_', ' ').capitalize()} must be thermodynamic, psychrometer, or legacy_unverified.")
     return result
 
 
@@ -442,6 +475,12 @@ def validate_zone_cooling_load(raw):
     for key in result:
         if key in raw:
             result[key] = raw[key]
+    # Older projects had one shared cooling-input source/status. Preserve that
+    # provenance for existing airflow values while new entries record it directly.
+    if "outside_air_source" not in raw and result["outside_air_lps"] is not None:
+        result["outside_air_source"] = result.get("source", "")
+    if "outside_air_verification_status" not in raw and result["outside_air_lps"] is not None:
+        result["outside_air_verification_status"] = result.get("verification_status", "missing")
     for key, label in (
         ("people_sensible_w_per_person", "people sensible gain"),
         ("people_latent_w_per_person", "people latent gain"),
@@ -452,6 +491,13 @@ def validate_zone_cooling_load(raw):
     for key, label in (("people_diversity_factor", "people diversity factor"), ("lighting_diversity_factor", "lighting diversity factor")):
         result[key] = optional_factor(result[key], f"Zone {label}")
     result["safety_factor"] = optional_safety_factor(result["safety_factor"], "Zone safety factor")
+    result["outside_air_source"] = text_value(result["outside_air_source"], "Zone outside-air source")
+    result["outside_air_verification_status"] = validate_choice(
+        result["outside_air_verification_status"], VERIFICATION_STATUSES, "Zone outside-air verification status"
+    )
+    from ai.heat_loads import AIRFLOW_REFERENCE_BASES
+    if result["outside_air_flow_reference_basis"] not in AIRFLOW_REFERENCE_BASES:
+        raise ValueError("Zone outside-air flow reference basis must be legacy_unverified, outdoor_design_condition, or standard_air_1_2kg_da_m3.")
     if not isinstance(result["envelope_not_applicable"], bool):
         raise ValueError("Zone internal-envelope declaration must be true or false.")
     result["envelope_surfaces"] = validate_envelope_surfaces(result["envelope_surfaces"])
@@ -480,6 +526,8 @@ def validate_envelope_surfaces(surfaces):
             surface[key] = numeric_value(surface[key], f"Envelope surface {index} {label}")
         surface["solar_gain_factor"] = optional_factor(surface["solar_gain_factor"], f"Envelope surface {index} solar-gain factor")
         surface["shading_factor"] = optional_factor(surface["shading_factor"], f"Envelope surface {index} shading factor")
+        surface["solar_radiation_source_id"] = text_value(surface["solar_radiation_source_id"], f"Envelope surface {index} solar-radiation source ID")
+        surface["solar_absorptance"] = optional_factor(surface["solar_absorptance"], f"Envelope surface {index} solar absorptance")
         surface["verification_status"] = validate_choice(surface["verification_status"], VERIFICATION_STATUSES, f"Envelope surface {index} verification status")
         surface["boundary_method"] = validate_choice(surface["boundary_method"], {"external", "fixed_adjacent_temperature", "ground_contact"}, f"Envelope surface {index} boundary method")
         if surface["boundary_temperature_c"] in (None, ""):

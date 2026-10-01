@@ -1,0 +1,145 @@
+{
+  "schema_version": 1,
+  "suite_id": "core_room_heating_analytical_v1",
+  "purpose": "Fixed-value equation checks for heating components; not engineering acceptance, Australian compliance, or DA09/CAMEL parity.",
+  "sources": {
+    "ashrae_loads": {
+      "title": "ASHRAE Handbook—Fundamentals (2025), Chapter 18: Nonresidential Cooling and Heating Load Calculations",
+      "url": "https://handbook.ashrae.org/Handbooks/F25/SI/F25_Ch18/f25_ch18_si.aspx",
+      "supports": "Heating-load calculation context and sensible ventilation-load relationship. Section 3.1 discusses standard-air volume and the distinction between mass-flow and point-state volume bases; fixture arithmetic uses the calculator's explicitly declared 1.2 kg dry-air/m³ and 1.006 kJ/(kg dry air·K) constants."
+    },
+    "ashrae_psychrometrics": {
+      "title": "ASHRAE Handbook—Fundamentals (2025), Chapter 1: Psychrometrics",
+      "url": "https://handbook.ashrae.org/Handbooks/F25/SI/F25_Ch01/F25_Ch01_si.aspx",
+      "supports": "IAPWS liquid-water saturation pressure (Eq. 5), thermodynamic wet-bulb relation (Eq. 33), and moist-air specific volume (Eq. 28) used in the fixed infiltration case."
+    },
+    "archie_heating_v1": {
+      "title": "Archie hourly heating V1 documented calculation policy",
+      "url": "../../docs/heating_method_gate.md",
+      "supports": "Software arithmetic for explicit sensible-only scheduled internal-gain credits, capping the credit at gross heating demand. This is not an external engineering reference or approval of the policy."
+    }
+  },
+  "rounding_policy": {
+    "result_decimals": 4,
+    "absolute_tolerance_kw": 0.00005,
+    "meaning": "Allowance for the calculation result's four-decimal rounding only; not an engineering acceptance tolerance."
+  },
+  "cases": [
+    {
+      "case_id": "single_opaque_surface_heating_transmission",
+      "calculation": "heating_conduction",
+      "source_ids": ["ashrae_loads"],
+      "inputs": {
+        "surfaces": [{"surface_id": "wall_1", "boundary_method": "external", "area_m2": 24.0, "u_value_w_m2k": 0.45}],
+        "outdoor_db_c": -5.0,
+        "indoor_db_c": 20.0
+      },
+      "expected": {"sensible_kw": 0.27, "latent_kw": 0.0, "total_kw": 0.27},
+      "equation": "Q = U × area × (indoor temperature − boundary temperature) ÷ 1000",
+      "assumptions": ["Steady-state one-dimensional conduction", "Boundary temperature equals outdoor dry-bulb", "Supplied U-value includes the construction layers and surface resistances intended by the design input"],
+      "exclusions": ["Thermal storage", "Thermal bridges", "Ground-contact and dynamic boundary methods", "Heating method approval"]
+    },
+    {
+      "case_id": "outside_air_sensible_heating_standard_air_basis",
+      "calculation": "heating_air_load",
+      "source_ids": ["ashrae_loads"],
+      "inputs": {
+        "flow_lps": 100.0,
+        "indoor_db_c": 20.0,
+        "indoor_wb_c": 15.0,
+        "outdoor_db_c": 5.0,
+        "outdoor_wb_c": 2.0,
+        "pressure_kpa": 101.325,
+        "indoor_wet_bulb_basis": "thermodynamic",
+        "outdoor_wet_bulb_basis": "thermodynamic",
+        "airflow_reference_basis": "standard_air_1_2kg_da_m3"
+      },
+      "expected": {"mass_flow_kg_s": 0.12, "sensible_kw": 1.8108, "latent_kw": 0.0, "total_kw": 1.8108},
+      "equation": "ṁda = flow × 1.2 kg_da/m³; Q = ṁda × 1.006 kJ/(kg_da·K) × (indoor DB − outdoor DB)",
+      "assumptions": ["The selected flow reference is explicitly standard air at 1.2 kg dry air/m³", "Heating outside-air contribution is sensible-only", "Wet-bulb states are valid inputs required by the API but do not set this sensible-only result"],
+      "exclusions": ["Latent humidification load", "Coil or plant duty", "Whether a real project airflow schedule uses standard-air volume", "Heating method approval"]
+    },
+    {
+      "case_id": "outside_air_warm_outdoor_state_has_no_heating_demand",
+      "calculation": "heating_air_load",
+      "source_ids": ["ashrae_loads"],
+      "inputs": {
+        "flow_lps": 100.0,
+        "indoor_db_c": 20.0,
+        "indoor_wb_c": 15.0,
+        "outdoor_db_c": 25.0,
+        "outdoor_wb_c": 20.0,
+        "pressure_kpa": 101.325,
+        "indoor_wet_bulb_basis": "thermodynamic",
+        "outdoor_wet_bulb_basis": "thermodynamic",
+        "airflow_reference_basis": "standard_air_1_2kg_da_m3"
+      },
+      "expected": {"mass_flow_kg_s": 0.12, "sensible_kw": 0.0, "latent_kw": 0.0, "total_kw": 0.0},
+      "equation": "Heating demand = max(ṁda × 1.006 × (indoor DB − outdoor DB), 0)",
+      "assumptions": ["Same declared standard-air reference as the heating case above"],
+      "exclusions": ["Cooling load from this warm outdoor air", "Latent load"]
+    },
+    {
+      "case_id": "scheduled_ach_infiltration_heating_at_outdoor_state",
+      "calculation": "heating_infiltration_load",
+      "source_ids": ["ashrae_loads", "ashrae_psychrometrics"],
+      "inputs": {
+        "value": 0.5,
+        "unit": "ACH",
+        "room_volume_m3": 720.0,
+        "schedule_factor": 0.8,
+        "indoor_db_c": 20.0,
+        "indoor_wb_c": 15.0,
+        "outdoor_db_c": 5.0,
+        "outdoor_wb_c": 2.0,
+        "pressure_kpa": 101.325,
+        "outdoor_wet_bulb_basis": "thermodynamic"
+      },
+      "expected": {"resolved_flow_lps": 100.0, "applied_flow_lps": 80.0, "outdoor_humidity_ratio_kg_kg": 0.003147841442, "outdoor_specific_volume_m3_kg_da": 0.7919886244, "mass_flow_kg_s": 0.1010115519, "raw_signed_sensible_kw": -1.5242643174, "sensible_kw": 1.5243, "latent_kw": 0.0, "total_kw": 1.5243},
+      "equation": "V̇ = ACH × volume ÷ 3.6; ṁda = (V̇ × schedule factor) ÷ vout; Q = ṁda × 1.006 × (indoor DB − outdoor DB)",
+      "assumptions": ["ASHRAE F25 Eqs. 5, 28, and 33 applied to the 5°C dry-bulb / 2°C thermodynamic wet-bulb outdoor state", "Infiltration volume is referenced to the outdoor state as fixed by the existing V1 method policy", "Expected flow, humidity ratio, specific volume, and sensible load were independently calculated from the stated equations and constants"],
+      "exclusions": ["Wind and stack pressure prediction", "Leakage distribution", "Latent humidification load", "Infiltration method approval"]
+    },
+    {
+      "case_id": "zero_outside_air_flow_has_zero_heating_demand",
+      "calculation": "heating_air_load",
+      "source_ids": ["ashrae_loads"],
+      "inputs": {
+        "flow_lps": 0.0,
+        "indoor_db_c": 20.0,
+        "indoor_wb_c": 15.0,
+        "outdoor_db_c": 5.0,
+        "outdoor_wb_c": 2.0,
+        "pressure_kpa": 101.325,
+        "indoor_wet_bulb_basis": "thermodynamic",
+        "outdoor_wet_bulb_basis": "thermodynamic",
+        "airflow_reference_basis": "standard_air_1_2kg_da_m3"
+      },
+      "expected": {"mass_flow_kg_s": 0.0, "sensible_kw": 0.0, "latent_kw": 0.0, "total_kw": 0.0},
+      "equation": "Q = 0 × 1.2 × 1.006 × ΔT = 0",
+      "assumptions": ["Psychrometric conditions remain valid even at zero flow"],
+      "exclusions": ["Invalid-state behavior", "Infiltration"]
+    },
+    {
+      "case_id": "scheduled_internal_sensible_credit_is_capped_at_gross_heating",
+      "calculation": "heating_internal_gain_credit",
+      "source_ids": ["archie_heating_v1"],
+      "inputs": {
+        "gross_heating_sensible_kw": 0.7,
+        "room": {
+          "area_m2": 20.0,
+          "occupancy": 4,
+          "heating_internal_gain_status": "confirmed",
+          "heating_internal_gain_policy": "explicit_sensible_only",
+          "cooling_load": {"people_sensible_w_per_person": 75.0, "lighting_w_m2": 10.0},
+          "heat_sources": [{"source_id": "display_case", "heating_credit_status": "confirmed", "heating_heat_to_space_watts": 400.0, "quantity": 2}]
+        },
+        "schedule_factors": {"people": 1.0, "lighting": 1.0, "equipment:display_case": 0.5}
+      },
+      "expected": {"people_requested_credit_kw": 0.3, "lighting_requested_credit_kw": 0.2, "equipment_requested_credit_kw": 0.4, "total_requested_credit_kw": 0.9, "applied_credit_kw": 0.7, "sensible_kw": -0.7, "latent_kw": 0.0, "total_kw": -0.7},
+      "equation": "requested sensible credit = (people × W/person × people schedule + area × W/m² × lighting schedule + Σ confirmed equipment heat-to-space watts × quantity × equipment schedule) ÷ 1000; applied credit = −min(gross heating sensible demand, requested credit)",
+      "assumptions": ["All rates and heat-to-space values are fixed synthetic inputs", "The test verifies Archie V1 arithmetic and cap only, not whether a project is entitled to these credits"],
+      "exclusions": ["Latent gains", "Solar gains", "Credit method approval", "Safety-factor application"]
+    }
+  ]
+}

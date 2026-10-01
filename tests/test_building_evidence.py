@@ -18,7 +18,9 @@ def main():
         {"page": 4, "title": "Lighting Schedule", "level_name": "Ground Floor", "sheet_classification": "schedule", "thermal_role": "services_or_internal_load", "rooms": [], "structured_content": {"markdown": "20W LED QTY: 6"}},
         {"page": 5, "title": "Equipment Schedule", "level_name": "Ground Floor", "sheet_classification": "schedule", "thermal_role": "services_or_internal_load", "rooms": [], "structured_content": {"markdown": "Oven and display fridge"}},
     ]
-    coverage = {"levels": [{"level_name": "Ground Floor", "proposed_purpose": "food retail", "purpose_status": "inferred", "conditioned_status": "unknown", "purpose_evidence": []}], "coverage_exceptions": []}
+    coverage = {"levels": [{"level_name": "Ground Floor", "proposed_purpose": "food retail", "purpose_status": "inferred", "conditioned_status": "unknown", "purpose_evidence": []}],
+                "pages": [{"page": row["page"], "level_name": "Ground Floor", "level_status": "confirmed_by_review"} for row in pages],
+                "coverage_exceptions": []}
     evidence = build_building_evidence({"source_pdf": "fixture.pdf", "drawing_set": {"pages": pages}}, coverage)
     for family in ("spaces", "surfaces", "openings", "constructions", "lighting", "equipment"):
         check(f"extracts {family}", evidence[family])
@@ -55,6 +57,17 @@ def main():
     dimensioned = next(item for item in elevation_evidence["openings"] if item.get("tag") == "W01" and item.get("dimensions"))
     check("opening elevation stores explicit dimensions", dimensioned["dimensions"] == {"width_mm": 1200.0, "height_mm": 2100.0, "unit": "mm"})
     check("dimensioned opening remains unresolved until plan matched", dimensioned["geometry"]["unique_target"] is False)
+
+    stale_level = build_building_evidence(
+        {"source_pdf": "fixture.pdf", "drawing_set": {"pages": [{"page": 8, "title": "Shopfront Elevation",
+          "level_name": "FL 02", "sheet_classification": "elevation", "rooms": []}]}},
+        {"pages": [{"page": 8, "level_name": "", "level_status": "missing"}],
+         "levels": [{"level_name": "Unassigned level"}]},
+        vision_response={"result": {"auto_extraction": {"entities": [{"kind": "floor", "page": 8,
+          "label": "Level 2", "level_name": "Level 2", "candidate_fingerprint": "vision-floor"}]}}},
+    )
+    check("building evidence does not promote stale page or vision labels into floors", not stale_level["levels"])
+    check("non-text floor proposal remains visible as a candidate", stale_level["level_candidates"][0]["name"] == "Level 2")
 
 
 if __name__ == "__main__":

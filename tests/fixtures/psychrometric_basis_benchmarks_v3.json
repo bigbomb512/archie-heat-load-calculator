@@ -1,0 +1,34 @@
+{
+  "schema_version": 3,
+  "suite_id": "psychrometric_basis_v3",
+  "purpose": "Regression checks for ASHRAE's distinct IAPWS liquid-water and ice saturation branches and below-freezing thermodynamic wet-bulb equation. Analytical checks are not engineering approval.",
+  "sources": {
+    "ashrae_fundamentals_f25_ch1": {
+      "title": "ASHRAE Handbook—Fundamentals (2025), Chapter 1: Psychrometrics, Equations 6, 21, 30 and 37",
+      "url": "https://handbook.ashrae.org/Handbooks/F25/SI/F25_Ch01/F25_Ch01_si.aspx",
+      "supports": "IAPWS 2008 saturation pressure over ice and the below-freezing thermodynamic wet-bulb humidity-ratio relation."
+    }
+  },
+  "cases": [
+    {
+      "case_id": "ashrae_f25_iapws_ice_saturation_pressure",
+      "source_id": "ashrae_fundamentals_f25_ch1",
+      "inputs": {"temperatures_c": [-60.0, -20.0, -10.0, -5.0, -1.0]},
+      "expected_saturation_pressure_kpa": [0.001081347545, 0.103239029002, 0.259873810798, 0.401741022116, 0.562664883741],
+      "tolerance_kpa": 0.00000000001,
+      "equation": "ASHRAE F25 Eq. 6: theta=T/273.16, pws=0.611657 exp((sum ai theta^bi)/theta) kPa, with the published IAPWS 2008 coefficients.",
+      "assumptions": ["Temperature is in the IAPWS ice-saturation range and pressure is pure-water sublimation pressure."],
+      "exclusions": ["Enhancement factor for real moist air", "Engineering approval"]
+    },
+    {
+      "case_id": "ashrae_f25_below_freezing_thermodynamic_state",
+      "source_id": "ashrae_fundamentals_f25_ch1",
+      "inputs": {"dry_bulb_c": 0.0, "wet_bulb_c": -5.0, "pressure_kpa": 101.325},
+      "expected": {"saturation_pressure_kpa": 0.401741022116, "humidity_ratio_kg_kg": 0.000696829828, "enthalpy_kj_kg": 1.742771401},
+      "tolerance": {"pressure_kpa": 0.00000000001, "humidity_ratio_kg_kg": 0.000000000001, "enthalpy_kj_kg": 0.000001},
+      "equation": "ASHRAE F25 Eqs. 6, 21, 30 and 37; below-freezing wet-bulb uses ice saturation pressure and h_w*= -333.4 + 2.1 t* kJ/kg_water.",
+      "assumptions": ["This is an idealized thermodynamic ice-bulb state, not a measured psychrometer reading."],
+      "exclusions": ["Instrument corrections", "Zero-degree instrument imprecision", "Engineering approval"]
+    }
+  ]
+}

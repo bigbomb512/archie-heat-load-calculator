@@ -237,6 +237,7 @@ def normalise_room_geometry(item, page_number, ordinal):
     return {
         "room_geometry_id": candidate_id,
         "label": str(label or ""),
+        "room_label_bbox": item.get("room_label_bbox") or item.get("label_bbox") or item.get("label_bounding_box"),
         "level_name": item.get("level_name") or item.get("level") or item.get("floor") or "",
         "boundary_points_px": points,
         "wall_ids": [str(value) for value in (item.get("wall_ids") or item.get("ordered_wall_ids") or []) if value],
