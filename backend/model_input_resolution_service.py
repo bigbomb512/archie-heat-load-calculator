@@ -273,6 +273,7 @@ def _room_area_coverage(paths):
         }
     except (OSError, ValueError, TypeError, KeyError):
         current_trace_sources = {}
+    current_trace_ids = set(current_trace_sources)
     proof_entities = {
         str(row.get("entity_id")): row for row in geometry.get("entities", [])
         if isinstance(row, dict) and row.get("kind") == "room_geometry_proof"
@@ -318,25 +319,47 @@ def _room_area_coverage(paths):
         if area > 0:
             area_keys.add(key(row.get("label"), row.get("level_name")))
 
-    # A room area applied by the calculator draft has an area candidate in
-    # bridge_provenance. Requiring that marker avoids treating arbitrary
-    # unreviewed hourly-model values as validated geometry.
+    # A room area applied by the calculator draft must retain provenance to a
+    # reviewer trace that is still present in the current trace register.
     model = _read(paths["model"], {"rooms": [], "floors": []})
     if not isinstance(model, dict):
         model = {}
-    floors = {str(row.get("floor_id")): row for row in model.get("floors", []) if isinstance(row, dict)}
+    room_use_by_id = {str(row.get("room_id")): row for row in room_use.get("records", [])
+                      if isinstance(row, dict) and row.get("room_id")}
+    labels_to_ids = {}
+    for room_id, room in room_use_by_id.items():
+        label = key(room.get("original_label"), "")[0]
+        if label:
+            labels_to_ids.setdefault(label, set()).add(room_id)
     for row in model.get("rooms", []):
         if not isinstance(row, dict) or not isinstance(row.get("bridge_provenance"), dict):
             continue
-        if not any(str(candidate_id).startswith("area_") for candidate_id in row["bridge_provenance"]):
+        area_provenance = [provenance for candidate_id, provenance in row["bridge_provenance"].items()
+                           if str(candidate_id).startswith("area_") and isinstance(provenance, dict)
+                           and current_trace_ids.intersection(str(value) for value in provenance.get("evidence_ids", []))]
+        if not area_provenance:
             continue
         try:
             area = float(row.get("area_m2"))
         except (TypeError, ValueError):
             area = 0
         if math.isfinite(area) and area > 0:
-            floor = floors.get(str(row.get("floor_id")), {})
-            area_keys.add(key(row.get("name"), row.get("level_name") or floor.get("name") or row.get("floor_id")))
+            # Calculator room candidates preserve their source room-use ID in
+            # their own provenance. Labels are a fallback only when they map
+            # to one room-use identity; floor labels are deliberately ignored.
+            room_ids = set()
+            for provenance in row["bridge_provenance"].values():
+                if isinstance(provenance, dict):
+                    room_ids.update(str(value) for value in provenance.get("evidence_ids", [])
+                                    if str(value) in room_use_by_id)
+            if not room_ids:
+                for label in row.get("source_room_labels", []):
+                    matches = labels_to_ids.get(key(label, "")[0], set())
+                    if len(matches) == 1:
+                        room_ids.update(matches)
+            area_keys.update(key(room_use_by_id[room_id].get("original_label"),
+                                 room_use_by_id[room_id].get("level_name"))
+                             for room_id in room_ids)
 
     eligible = [row for row in room_use.get("records", []) if isinstance(row, dict)
                 and row.get("space_scope") in {"comfort_hvac", "comfort_hvac_with_process_exception"}
@@ -485,8 +508,7 @@ def _build(web, project):
         raise ModelInputResolutionError(
             code="room_area_unresolved", domain="rooms and geometry", artifact="geometry_resolution.json",
             message="Room identities were detected, but no comfort-scope room has a validated area. No heat-load report was generated.",
-            remediation=("Trace and calibrate the room, then accept it in the calculator draft for " + ", ".join(labels) +
-                         ". Then rebuild model inputs."),
+            remediation=f"For {', '.join(labels)}: trace and calibrate each room, accept its area in the calculator draft, then rebuild model inputs.",
             retryable=True, status_code=422,
             affected_component_ids=[str(row.get("room_id")) for row in rooms_missing_area if row.get("room_id")],
             missing_artifacts=["hourly_load_model"],

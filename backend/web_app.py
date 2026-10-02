@@ -42,6 +42,7 @@ from ai.hourly_loads import (
     empty_schedule_library,
     hourly_model_summary,
     schedule_library_summary,
+    artifact_snapshot,
     validate_design_day_scenarios,
     validate_hourly_load_model,
     validate_schedule_library,
@@ -1123,7 +1124,7 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             data = read_json_body(self)
             project = project_by_id(data.get("project_id") or data.get("id", ""))
-            result = airflow_resolution_service.post(self, project, data)
+            result = airflow_resolution_service.post(sys.modules[__name__], project, data)
         except Exception as error:
             return self.send_json(product_error(error), 400)
         self.send_json(result)
@@ -1132,7 +1133,7 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             data = read_json_body(self)
             project = project_by_id(data.get("project_id") or data.get("id", ""))
-            result = ahu_resolution_service.post(self, project, data)
+            result = ahu_resolution_service.post(sys.modules[__name__], project, data)
         except Exception as error:
             return self.send_json(product_error(error), 400)
         self.send_json(result)
@@ -1141,7 +1142,7 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             data = read_json_body(self)
             project = project_by_id(data.get("project_id") or data.get("id", ""))
-            result = plant_resolution_service.post(self, project, data)
+            result = plant_resolution_service.post(sys.modules[__name__], project, data)
         except Exception as error:
             return self.send_json(product_error(error), 400)
         self.send_json(result)
@@ -1150,7 +1151,7 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             data = read_json_body(self)
             project = project_by_id(data.get("project_id") or data.get("id", ""))
-            result = safety_factor_resolution_service.post(self, project, data)
+            result = safety_factor_resolution_service.post(sys.modules[__name__], project, data)
         except Exception as error:
             return self.send_json(product_error(error), 400)
         self.send_json(result)
@@ -4359,26 +4360,26 @@ def api_ventilation(request):
 def api_airflow_resolution(request):
     query = parse_qs(urlparse(request.path).query)
     project = project_by_id(query.get("project_id", [""])[0])
-    return airflow_resolution_service.get(request, project)
+    return airflow_resolution_service.get(sys.modules[__name__], project)
 
 
 def api_ahu_resolution(request):
     query = parse_qs(urlparse(request.path).query)
     project = project_by_id(query.get("project_id", [""])[0])
-    return ahu_resolution_service.get(request, project)
+    return ahu_resolution_service.get(sys.modules[__name__], project)
 
 
 def api_plant_resolution(request):
     query = parse_qs(urlparse(request.path).query)
     project = project_by_id(query.get("project_id", [""])[0])
-    return plant_resolution_service.get(request, project)
+    return plant_resolution_service.get(sys.modules[__name__], project)
 
 
 def api_safety_factor_resolution(request):
     query = parse_qs(urlparse(request.path).query)
     project = project_by_id(query.get("project_id", [""])[0])
     ensure_review_dir(project)
-    return safety_factor_resolution_service.get(request, project)
+    return safety_factor_resolution_service.get(sys.modules[__name__], project)
 
 
 def api_save_ventilation(request):

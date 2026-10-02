@@ -119,23 +119,36 @@ def main():
 
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
-        project = {"id": "draft-area", "review_dir": str(root)}
+        project = traced_project(root)
         (root / "room_use_resolution.json").write_text(json.dumps({"records": [
-            {"room_id": "shop", "original_label": "Shop", "level_name": "Level 1", "space_scope": "comfort_hvac", "status": "resolved"},
+            {"room_id": "shop", "original_label": "Shop", "level_name": "Unassigned level", "space_scope": "comfort_hvac", "status": "resolved"},
         ]}), encoding="utf-8")
-        (root / "hourly_load_model.json").write_text(json.dumps({"floors": [{"floor_id": "f1", "name": "Level 1"}], "rooms": [
-            {"room_id": "shop", "name": "Shop", "floor_id": "f1", "area_m2": 25.0,
-             "bridge_provenance": {"area_123": {"reviewer": "QA"}}},
+        (root / "hourly_load_model.json").write_text(json.dumps({"floors": [{"floor_id": "f1", "name": "Tenancy level"}], "rooms": [
+            {"room_id": "draft-room-shop", "name": "Shop", "floor_id": "f1", "area_m2": 25.0,
+             "bridge_provenance": {
+                 "room_shop": {"evidence_ids": ["shop"]},
+                 "area_123": {"evidence_ids": ["trace-shop"]},
+             }},
         ]}), encoding="utf-8")
         eligible, missing = model_input_resolution_service._room_area_coverage(model_input_resolution_service._paths(project))
-        check("calculator-draft-applied room area satisfies coverage", len(eligible) == 1 and not missing)
+        check("calculator-draft room identity matches across differing floor labels", len(eligible) == 1 and not missing)
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        project = traced_project(root, current_pdf="pdf-new", saved_pdf="pdf-old")
+        (root / "hourly_load_model.json").write_text(json.dumps({"floors": [{"floor_id": "f1", "name": "Tenancy level"}], "rooms": [
+            {"room_id": "draft-room-shop", "name": "Shop", "floor_id": "f1", "area_m2": 25.0,
+             "bridge_provenance": {"room_shop": {"evidence_ids": ["shop"]}, "area_123": {"evidence_ids": ["trace-shop"]}}},
+        ]}), encoding="utf-8")
+        eligible, missing = model_input_resolution_service._room_area_coverage(model_input_resolution_service._paths(project))
+        check("applied area referencing stale reviewer trace does not satisfy coverage", len(eligible) == 1 and [row["room_id"] for row in missing] == ["shop"])
 
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         project = {"id": "excluded-areas", "review_dir": str(root)}
         (root / "room_use_resolution.json").write_text(json.dumps({"records": [
-            {"room_id": "cool", "original_label": "Cool Room", "level_name": "Level 1", "space_scope": "excluded", "status": "excluded"},
-            {"room_id": "freezer", "original_label": "Freezer", "level_name": "Level 1", "space_scope": "excluded", "status": "excluded"},
+            {"room_id": "cool", "original_label": "Cool Room", "level_name": "Level 1", "space_scope": "refrigeration_process", "status": "excluded"},
+            {"room_id": "freezer", "original_label": "Freezer", "level_name": "Level 1", "space_scope": "refrigeration_process", "status": "excluded"},
         ]}), encoding="utf-8")
         (root / "hourly_load_model.json").write_text(json.dumps({"floors": [{"floor_id": "f1", "name": "Level 1"}], "rooms": [
             {"room_id": "cool", "name": "Cool Room", "floor_id": "f1", "area_m2": 15.0,
@@ -160,8 +173,8 @@ def main():
                 model_input_resolution_service.post(Web(), project, {"action": "resolve"})
         except model_input_resolution_service.ModelInputResolutionError as error:
             check("room-area remediation directs trace, calibration, and draft acceptance",
-                  error.code == "room_area_unresolved" and "Trace and calibrate the room, then accept it in the calculator draft" in error.remediation
-                  and "Do not use the drawing scale" not in error.remediation)
+                  error.code == "room_area_unresolved" and error.remediation ==
+                  "For Shop: trace and calibrate each room, accept its area in the calculator draft, then rebuild model inputs.")
         else:
             raise AssertionError("missing room area did not fail the gate")
 
