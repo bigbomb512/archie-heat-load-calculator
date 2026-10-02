@@ -1031,11 +1031,21 @@ async function guidedResolveModelInputs(){
     }
     if (["queued", "running"].includes(run.status)) throw new Error("Evidence processing is still running. Check status again before retrying.");
     renderSkillWorkflowAttempts(run);
-    if (["failed", "blocked", "stale"].includes(run.status)) throw new Error(run.remediation || "The evidence workflow needs attention before resolution can continue.");
-    status.textContent = "Evidence checks finished. Updating model-input coverage and remediation…";
+    // Stale, failed, or blocked evidence tasks are exceptions to review, not a
+    // reason to skip the resolver: it keeps independent findings and lists
+    // every missing input itself. Applying a calculator draft always marks the
+    // workflow stale, so aborting here would block every edited project.
+    const workflowWarning = ["failed", "blocked", "stale"].includes(run.status)
+      ? (run.remediation || "Some evidence tasks need review.")
+      : "";
+    status.textContent = workflowWarning
+      ? `Evidence checks finished with exceptions (${run.status}); updating model-input coverage with the available evidence…`
+      : "Evidence checks finished. Updating model-input coverage and remediation…";
     const ok = await modelInputResolutionAction("resolve");
     if (!ok) throw new Error("The consolidated resolver returned an error. Review the model-input status and remediation queue.");
-    status.textContent = "Coverage hydrated. Review provisional values and any remediation items before calculation.";
+    status.textContent = workflowWarning
+      ? `Coverage hydrated with evidence exceptions (${run.status}): ${workflowWarning} Review provisional values and any remediation items before calculation.`
+      : "Coverage hydrated. Review provisional values and any remediation items before calculation.";
   } catch (error) {
     const detail = error?.resolver || {};
     status.textContent = detail.code === "room_inference_pending"

@@ -282,6 +282,55 @@ test("guided resolver reports contractor-friendly skill stages then refreshes co
   expect(statusChecks).toBe(1);
 });
 
+async function openGuidedResolver(page){
+  await page.goto("/");
+  await page.locator("#pdf").setInputFiles({
+    name: "guided-workflow.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 guided fixture"),
+  });
+  await page.locator("#btnAnalyse").click();
+  await page.locator("#btnContinue").click();
+}
+
+test("guided resolver still resolves model inputs when the evidence workflow is stale", async ({ page }) => {
+  await mockApi(page);
+  const resolverActions = [];
+  await page.route("**/api/model-input-resolution", route => {
+    resolverActions.push(route.request().postDataJSON()?.action);
+    return route.fulfill({ json: {
+      id: "demo-project", status: "current", coverage_summary: {total: 1, resolved: 1, provisional: 0, needs_review: 0, excluded: 0, complete: true},
+      model_input_resolution: {records: [], review_queue: [], coverage_summary: {total: 1, resolved: 1, provisional: 0, needs_review: 0, excluded: 0, complete: true}},
+      value_resolution: {records: [], coverage_summary: {}}, review_queue: [], stale_reasons: [],
+    } });
+  });
+  await page.route("**/api/skill-workflow**", route => route.fulfill({ json: {
+    status: "stale", stages: [], subskills: [],
+    stale_reasons: ["A current domain artifact used by one or more skill proposals changed."],
+    remediation: "Some evidence tasks need review.",
+  } }));
+  await openGuidedResolver(page);
+  await page.locator("#btnGuidedResolveModelInputs").click();
+  await expect(page.locator("#guidedModelInputsStatus")).toContainText("Coverage hydrated with evidence exceptions (stale)");
+  await expect(page.locator("#guidedModelInputsStatus")).toContainText("Some evidence tasks need review.");
+  expect(resolverActions).toEqual(["resolve"]);
+  await expect(page.locator("#btnGuidedResolveModelInputs")).toBeEnabled();
+});
+
+test("guided resolver does not call the resolver when the evidence workflow cannot start", async ({ page }) => {
+  await mockApi(page);
+  let resolverCalls = 0;
+  await page.route("**/api/model-input-resolution", route => {
+    resolverCalls += 1;
+    return route.fulfill({ json: {} });
+  });
+  await page.route("**/api/skill-workflow**", route => route.request().method() === "POST"
+    ? route.fulfill({ status: 409, json: { error: "A workflow run is already active for this project." } })
+    : route.fulfill({ json: { status: "idle", stages: [] } }));
+  await openGuidedResolver(page);
+  await page.locator("#btnGuidedResolveModelInputs").click();
+  await expect(page.locator("#guidedModelInputsStatus")).toContainText("Resolver could not complete");
+  expect(resolverCalls).toBe(0);
+});
+
 test("local test workspace runs and resets an isolated draft walkthrough", async ({ page }) => {
   await mockApi(page);
   await page.route("**/api/test-mode/status", route => route.fulfill({json: {
