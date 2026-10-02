@@ -3,6 +3,7 @@
 from copy import deepcopy
 import json
 import logging
+import math
 import threading
 from pathlib import Path
 
@@ -258,6 +259,44 @@ def _room_area_coverage(paths):
             area = 0
         if area > 0:
             area_keys.add(key(entity.get("label"), entity.get("level_candidate")))
+
+    # Reviewer traces remain proposals in the geometry graph, but a current
+    # calibrated trace is sufficient evidence that the room has a measured
+    # area for this completeness gate. Use the same freshness filter as the
+    # trace review API, which checks both the PDF and vector-page fingerprints.
+    try:
+        from backend import reviewer_room_geometry_service
+        current_trace_sources = {
+            str(row.get("trace_id")): row.get("source_fingerprints", {})
+            for row in reviewer_room_geometry_service.current_artifact_input(paths["root"]).get("records", [])
+            if isinstance(row, dict) and row.get("trace_id")
+        }
+    except (OSError, ValueError, TypeError, KeyError):
+        current_trace_sources = {}
+    proof_entities = {
+        str(row.get("entity_id")): row for row in geometry.get("entities", [])
+        if isinstance(row, dict) and row.get("kind") == "room_geometry_proof"
+        and row.get("extraction_method") == "reviewer_traced_boundary"
+    }
+    for proof in geometry.get("room_geometry_proofs", []):
+        if not isinstance(proof, dict):
+            continue
+        entity = proof_entities.get(str(proof.get("proof_id", "")), {})
+        value = entity.get("value") if isinstance(entity.get("value"), dict) else {}
+        calibration = proof.get("calibration") if isinstance(proof.get("calibration"), dict) else value.get("calibration", {})
+        calibration = calibration if isinstance(calibration, dict) else {}
+        trace_id = str(value.get("reviewer_trace_id", ""))
+        proof_sources = value.get("source_fingerprints", {})
+        try:
+            area = float(proof.get("area_m2"))
+            mm_per_px = float(calibration.get("mm_per_px"))
+        except (TypeError, ValueError):
+            continue
+        if (trace_id in current_trace_sources and proof_sources == current_trace_sources[trace_id]
+                and math.isfinite(area) and math.isfinite(mm_per_px)
+                and area > 0 and mm_per_px > 0
+                and calibration.get("status") in {"agreed", "declared_scale_rejected"}):
+            area_keys.add(key(proof.get("room_label"), proof.get("level_name")))
     for row in building.get("spaces", []):
         if not isinstance(row, dict):
             continue
@@ -278,6 +317,26 @@ def _room_area_coverage(paths):
             area = 0
         if area > 0:
             area_keys.add(key(row.get("label"), row.get("level_name")))
+
+    # A room area applied by the calculator draft has an area candidate in
+    # bridge_provenance. Requiring that marker avoids treating arbitrary
+    # unreviewed hourly-model values as validated geometry.
+    model = _read(paths["model"], {"rooms": [], "floors": []})
+    if not isinstance(model, dict):
+        model = {}
+    floors = {str(row.get("floor_id")): row for row in model.get("floors", []) if isinstance(row, dict)}
+    for row in model.get("rooms", []):
+        if not isinstance(row, dict) or not isinstance(row.get("bridge_provenance"), dict):
+            continue
+        if not any(str(candidate_id).startswith("area_") for candidate_id in row["bridge_provenance"]):
+            continue
+        try:
+            area = float(row.get("area_m2"))
+        except (TypeError, ValueError):
+            area = 0
+        if math.isfinite(area) and area > 0:
+            floor = floors.get(str(row.get("floor_id")), {})
+            area_keys.add(key(row.get("name"), row.get("level_name") or floor.get("name") or row.get("floor_id")))
 
     eligible = [row for row in room_use.get("records", []) if isinstance(row, dict)
                 and row.get("space_scope") in {"comfort_hvac", "comfort_hvac_with_process_exception"}
@@ -426,8 +485,8 @@ def _build(web, project):
         raise ModelInputResolutionError(
             code="room_area_unresolved", domain="rooms and geometry", artifact="geometry_resolution.json",
             message="Room identities were detected, but no comfort-scope room has a validated area. No heat-load report was generated.",
-            remediation=("Complete the cited inside-face boundaries and dimension chains for " + ", ".join(labels) +
-                         ". Do not use the drawing scale; then rebuild model inputs."),
+            remediation=("Trace and calibrate the room, then accept it in the calculator draft for " + ", ".join(labels) +
+                         ". Then rebuild model inputs."),
             retryable=True, status_code=422,
             affected_component_ids=[str(row.get("room_id")) for row in rooms_missing_area if row.get("room_id")],
             missing_artifacts=["hourly_load_model"],
