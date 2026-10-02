@@ -490,6 +490,235 @@ class SkillWorkflowTests(unittest.TestCase):
         self.assertEqual(checked["status"], "needs_review")
         self.assertIn("confidence", checked["unresolved_fields"])
 
+    def test_structured_validation_errors_keep_stable_codes_and_explain_checks(self):
+        registry = skills.load_subskill_registry()
+        task = next(row for row in registry["subskills"] if row["id"] == "sheet_identity")
+        proposal = {"subskill_id": task["id"], "subskill_version": task["version"], "status": "needs_review",
+            "affected_ids": [], "observations": [], "inferences": [], "citations": [], "confidence": None,
+            "alternatives": [], "unresolved_fields": [], "remediation": [], "input_fingerprint": "a" * 64,
+            "proposal_fields": empty_typed_proposal(task)}
+        cases = [
+            ({key: value for key, value in proposal.items() if key != "observations"}, "envelope_missing_keys", "observations"),
+            ({**proposal, "subskill_version": task["version"] + 1}, "subskill_version_mismatch", "subskill_version"),
+            ({**proposal, "proposal_fields": {}}, "proposal_fields_mismatch", "proposal_fields"),
+        ]
+        for result, expected_check, expected_path in cases:
+            with self.subTest(expected_check=expected_check):
+                with self.assertRaises(skills.SubskillValidationError) as raised:
+                    skills._validate_subskill_output(task, result, registry)
+                self.assertEqual(str(raised.exception), "subskill_output_invalid")
+                self.assertEqual(raised.exception.check, expected_check)
+                self.assertEqual(raised.exception.path, expected_path)
+                self.assertTrue(raised.exception.detail)
+
+    def test_attempt_archive_keeps_raw_prompt_images_cli_and_validation(self):
+        registry = skills.load_subskill_registry()
+        task = next(row for row in registry["subskills"] if row["id"] == "sheet_identity")
+        valid = {"subskill_id": task["id"], "subskill_version": task["version"], "status": "needs_review",
+            "affected_ids": [], "observations": [], "inferences": [], "citations": [], "confidence": None,
+            "alternatives": [], "unresolved_fields": [], "remediation": [], "input_fingerprint": "a" * 64,
+            "proposal_fields": empty_typed_proposal(task)}
+        scenarios = [
+            ("invalid_json", "not-json", "skill_provider_invalid_json", "provider_json_parse", None),
+            ("missing_envelope", json.dumps({k: v for k, v in valid.items() if k != "observations"}),
+             "subskill_output_invalid", "envelope_missing_keys", {k: v for k, v in valid.items() if k != "observations"}),
+            ("wrong_version", json.dumps({**valid, "subskill_version": task["version"] + 1}),
+             "subskill_output_invalid", "subskill_version_mismatch", {**valid, "subskill_version": task["version"] + 1}),
+            ("fields_mismatch", json.dumps({**valid, "proposal_fields": {}}),
+             "subskill_output_invalid", "proposal_fields_mismatch", {**valid, "proposal_fields": {}}),
+            ("cli_failure", "Codex unavailable", "codex_cli_failed", "provider_exit_status", None),
+            ("valid", json.dumps(valid), "", "proposal_valid", valid),
+        ]
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            for name, raw_output, code, check, parsed in scenarios:
+                with self.subTest(name=name):
+                    validation = {}
+                    outcome = "accepted"
+                    if parsed is not None:
+                        try:
+                            skills._validate_subskill_output(task, parsed, registry)
+                        except skills.SubskillValidationError as error:
+                            validation = {"check": error.check, "path": error.path, "detail": error.detail}
+                            outcome, code = "rejected", str(error)
+                    else:
+                        outcome = "rejected"
+                        validation = {"check": check, "path": "$", "detail": "Provider output could not be accepted."}
+                    attempt_ref, metadata = skills._persist_skill_attempt(root, "run-1", task["id"],
+                        attempt_record={"prompt": "Prompt for " + name, "images": [{"page": 5, "path": "page-5.png"}],
+                            "raw_record": {"provider": "codex_cli", "exit_code": 2 if name == "cli_failure" else 0,
+                                "stderr_tail": "permission denied" if name == "cli_failure" else "",
+                                "reply_text": raw_output, "duration_seconds": 0.1}},
+                        input_fingerprint="b" * 64, outcome=outcome, failure_phase="proposal_validation",
+                        error_code=code, validation=validation)
+                    attempt_dir = root / attempt_ref
+                    saved = json.loads((attempt_dir / "attempt.json").read_text())
+                    self.assertEqual((attempt_dir / "raw_output.txt").read_text(), raw_output)
+                    self.assertIn("Prompt for " + name, (attempt_dir / "prompt.txt").read_text())
+                    self.assertEqual(json.loads((attempt_dir / "images.json").read_text())[0]["page"], 5)
+                    self.assertEqual(json.loads((attempt_dir / "cli.json").read_text()).get("exit_code"),
+                                     2 if name == "cli_failure" else 0)
+                    self.assertEqual(saved["validation_check"], check)
+                    self.assertEqual(saved["outcome"], outcome)
+
+    def test_codex_provider_archives_invalid_json_and_cli_stderr(self):
+        from types import SimpleNamespace
+        provider = skills.CodexCliSkillProposalProvider(executable="codex")
+        def invalid_json(command, **_kwargs):
+            output_path = Path(command[command.index("--output-last-message") + 1])
+            output_path.write_text("{broken", encoding="utf-8")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        with patch("backend.skill_workflow_service.subprocess.run", side_effect=invalid_json):
+            with self.assertRaises(skills.SkillProviderError) as raised:
+                provider.propose("prompt")
+        self.assertEqual(str(raised.exception), "skill_provider_invalid_json")
+        self.assertEqual(raised.exception.raw_record["reply_text"], "{broken")
+        raw_reply = "  ```json\n{}\n```  \n"
+        def fenced_reply(command, **_kwargs):
+            output_path = Path(command[command.index("--output-last-message") + 1])
+            output_path.write_text(raw_reply, encoding="utf-8")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        with patch("backend.skill_workflow_service.subprocess.run", side_effect=fenced_reply):
+            result = provider.propose("prompt")
+        self.assertEqual(result.raw_record["reply_text"], raw_reply)
+        self.assertEqual(result.proposal, {})
+        def failed_cli(_command, **_kwargs):
+            return SimpleNamespace(returncode=2, stdout="", stderr="not authorized")
+        with patch("backend.skill_workflow_service.subprocess.run", side_effect=failed_cli):
+            with self.assertRaises(skills.SkillProviderError) as raised:
+                provider.propose("prompt")
+        self.assertEqual(str(raised.exception), "codex_cli_failed")
+        self.assertEqual(raised.exception.raw_record["stderr_tail"], "not authorized")
+
+    def test_generic_domain_evidence_excludes_unvalidated_vector_candidates(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            project = self.project(root)
+            entities = [{"entity_id": f"wall-{index}", "kind": "wall", "geometry_status": "geometry_proposed", "source": {"page": 1}}
+                        for index in range(50)]
+            entities += [{"entity_id": "dim-1", "kind": "dimension", "geometry_status": "geometry_proposed", "source": {"page": 1}},
+                         {"entity_id": "wall-ok", "kind": "wall", "geometry_status": "geometry_confirmed", "source": {"page": 1}},
+                         {"entity_id": "room-1", "kind": "room", "geometry_status": "geometry_review_required", "source": {"page": 1}}]
+            (root / "geometry_resolution.json").write_text(json.dumps({"entities": entities}), encoding="utf-8")
+            (root / "value_resolution.json").write_text(json.dumps({"records": [
+                {"record_id": "v1", "target": "opening.window_1.u_value"},
+                {"record_id": "v2", "target": "room.people_sensible_w_per_person"},
+            ]}), encoding="utf-8")
+            surface, _ = skills._subskill_records("surface_inventory", project)
+            glazing, _ = skills._subskill_records("glazing_properties", project)
+        surface_ids = {row.get("entity_id") for row in surface["surfaces"]}
+        self.assertEqual(surface_ids, {"wall-ok", "room-1"})
+        self.assertEqual({row.get("record_id") for row in glazing["properties"] if row.get("source_artifact") == "value_resolution.json"}, {"v1"})
+
+    def test_prompt_compaction_drops_bookkeeping_and_reports_budget(self):
+        subskill = next(row for row in skills.load_subskill_registry()["subskills"] if row["id"] == "room_identity_use")
+        evidence = {"task_evidence": {"rooms": [{"room_id": "room-1", "label": "Bar", "witness_ids": ["w1", "w2"],
+                    "source_fingerprints": {"a": "b" * 64}, "record_fingerprint": "c" * 64,
+                    "evidence": [{"page": 20, "excerpt": "x" * 2000}]}]}}
+        dependencies = {"sheet_identity": {"status": "needs_review", "output_summary": {"record_count": 9},
+            "attempt_ref": "skill_workflow_runs/r/attempts/sheet_identity/1",
+            "proposal": {"status": "needs_review", "affected_ids": ["sheet:202"], "citations": [{"page": 20}],
+                         "proposal_fields": {"page_identities": []}, "unresolved_fields": [],
+                         "observations": [{"text": "long observation"}], "remediation": ["retry"]}}}
+        prompt, report = skills._bounded_proposal_prompt(subskill, dependencies, evidence)
+        for absent in ("witness_ids", "source_fingerprints", "record_fingerprint", "attempt_ref", "output_summary", "long observation"):
+            self.assertNotIn(absent, prompt)
+        self.assertIn("room-1", prompt)
+        self.assertIn("sheet:202", prompt)
+        self.assertIn("[truncated 1400 chars]", prompt)
+        self.assertEqual(report["status"], "within_budget")
+        self.assertEqual(report["prompt_chars"], len(prompt))
+        self.assertEqual(report["budget_chars"], 80_000)
+        self.assertGreaterEqual(report["dropped_provenance_keys"], 3)
+        self.assertEqual(report["truncated_strings"], 1)
+        self.assertEqual(skills._prompt_budget_chars("room_boundaries_areas"), 120_000)
+        with patch.dict("os.environ", {"ARCHIE_SKILL_PROMPT_MAX_CHARS": "5000"}):
+            self.assertEqual(skills._prompt_budget_chars("room_boundaries_areas"), 5000)
+        self.assertEqual(skills._compact_line({"candidate_id": "P20-VLINE-1", "start_px": [10.4, 20.6], "end_px": [99.5, 20.6],
+                                               "candidate_role_hint": "possible_wall_or_dimension"}),
+                         ["P20-VLINE-1", 10, 21, 100, 21, "W"])
+
+    def test_over_budget_task_is_blocked_without_contacting_provider(self):
+        original_factory, original_groups = skills.SKILL_PROVIDER_FACTORY, skills.select_page_groups
+        calls = []
+
+        def factory(_model):
+            calls.append("created")
+            raise AssertionError("An over-budget task must not create or call a provider.")
+
+        try:
+            skills.SKILL_PROVIDER_FACTORY = factory
+            skills.select_page_groups = lambda *_args: [{"group_id": "selected-floor-plan", "pages": [{"page": 1}]}]
+            with tempfile.TemporaryDirectory() as folder, patch.dict("os.environ", {"ARCHIE_SKILL_PROMPT_MAX_CHARS": "1000"}):
+                root = Path(folder)
+                (root / "ai_input.json").write_text(json.dumps({"source_files": {}}), encoding="utf-8")
+                (root / "drawing_coverage.json").write_text(json.dumps({"pages": [{"page": 1, "title": "Proposed Floor Plan"}]}), encoding="utf-8")
+                (root / "vision_extraction_settings.json").write_text(json.dumps({"owner_opt_in": True,
+                    "selected_group_ids": ["selected-floor-plan"], "model": "test-model"}), encoding="utf-8")
+                task = next(row for row in skills.load_subskill_registry()["subskills"] if row["id"] == "sheet_identity")
+                result = skills._execute_subskill(task, {"id": "p", "review_dir": str(root)}, {}, "a" * 64)
+                attempt_record = result.pop("_attempt_record")
+                checked = skills._validate_subskill_output(task, result, skills.load_subskill_registry(), allowed_pages={1})
+        finally:
+            skills.SKILL_PROVIDER_FACTORY, skills.select_page_groups = original_factory, original_groups
+        self.assertEqual(calls, [])
+        self.assertEqual(checked["status"], "blocked")
+        self.assertEqual(checked["provider_kind"], "prompt_budget_blocked")
+        self.assertIn("no AI provider was contacted", checked["remediation"][0])
+        self.assertEqual(attempt_record["prompt_budget"]["status"], "over_budget")
+        self.assertEqual(attempt_record["prompt_budget"]["budget_chars"], 1000)
+        self.assertEqual(attempt_record["raw_record"]["provider"], "none_prompt_over_budget")
+
+    def test_rooms_only_scope_runs_room_tasks_and_their_prerequisites(self):
+        original_execute = skills._execute_subskill
+        original_prepare = skills._ensure_room_evidence
+        executed = []
+        try:
+            def execute(subskill, _project, _dependencies, source_fp):
+                executed.append(subskill["id"])
+                return {"subskill_id": subskill["id"], "subskill_version": subskill["version"], "status": "needs_review",
+                        "affected_ids": [], "observations": [], "inferences": [], "citations": [], "confidence": None,
+                        "alternatives": [], "unresolved_fields": [], "remediation": [], "input_fingerprint": source_fp,
+                        "proposal_fields": empty_typed_proposal(subskill), "artifact_names": []}
+
+            skills._execute_subskill = execute
+            skills._ensure_room_evidence = lambda _web, _project: {"candidate_count": 1, "artifact_names": []}
+            with tempfile.TemporaryDirectory() as folder:
+                project = self.project(folder)
+                web = Web()
+                with self.assertRaisesRegex(ValueError, "scope"):
+                    skills.post(web, project, {"action": "start", "scope": "everything"})
+                skills.post(web, project, {"action": "start", "scope": "rooms_only"})
+                deadline = time.time() + 30
+                while time.time() < deadline:
+                    state = skills.get(web, project)
+                    if state["status"] in {"needs_review", "completed", "failed", "blocked"}:
+                        break
+                    time.sleep(0.01)
+                manifest = json.loads((Path(folder) / "skill_workflow_run.json").read_text())
+                reused = skills.post(web, project, {"action": "start", "scope": "rooms_only"})
+                full_run = skills.post(web, project, {"action": "start", "scope": "all"})
+                deadline = time.time() + 30
+                while time.time() < deadline:
+                    if skills.get(web, project)["status"] in {"needs_review", "completed", "failed", "blocked"}:
+                        break
+                    time.sleep(0.01)
+                full_manifest = json.loads((Path(folder) / "skill_workflow_run.json").read_text())
+        finally:
+            skills._execute_subskill = original_execute
+            skills._ensure_room_evidence = original_prepare
+        expected = {"sheet_identity", "revision_scope", "page_relationships", "room_identity_use",
+                    "room_boundaries_areas", "ceiling_height_volume"}
+        self.assertEqual(set(executed[:len(expected)]), expected)
+        self.assertEqual(manifest["scope"], "rooms_only")
+        self.assertEqual(state["status"], "needs_review")
+        self.assertEqual({key for key, row in manifest["subskills"].items() if row["status"] != "not_in_scope"}, expected)
+        self.assertEqual(manifest["skills"]["plant_hydraulics"]["status"], "not_in_scope")
+        self.assertEqual(reused["run_id"], state["run_id"])
+        self.assertNotEqual(full_run["run_id"], state["run_id"])
+        self.assertEqual(full_manifest["scope"], "all")
+        self.assertFalse(any(row["status"] == "not_in_scope" for row in full_manifest["subskills"].values()))
+
     def test_consented_ai_worker_uses_focused_instructions_and_downgrades_to_draft(self):
         original_factory, original_groups = skills.SKILL_PROVIDER_FACTORY, skills.select_page_groups
         captured = {}

@@ -321,6 +321,18 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(test_mode_service.get_run(sys.modules[__name__], unquote(test_run_match.group(1)), client_host=self.client_address[0]))
             except Exception as error:
                 return self.send_json({"error": product_error(error).get("error", "Test run is unavailable.")}, 404)
+        test_artifact_match = re.fullmatch(r"/api/test-mode/artifact/([^/]+)", urlparse(self.path).path)
+        if test_artifact_match:
+            try:
+                query = parse_qs(urlparse(self.path).query)
+                artifact = query.get("path", [""])[0]
+                path = test_mode_service.attempt_artifact(
+                    sys.modules[__name__], unquote(test_artifact_match.group(1)), artifact,
+                    client_host=self.client_address[0],
+                )
+                return self.send_file(path, "text/plain; charset=utf-8")
+            except Exception as error:
+                return self.send_json({"error": product_error(error).get("error", "Test attempt artifact is unavailable.")}, 404)
         if self.path == "/api/projects":
             try:
                 identity = self._require_api_access()
@@ -636,6 +648,11 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_json(api_vision_extraction(self))
             except Exception as error:
                 return self.send_json({"error": str(error)}, 400)
+        if urlparse(self.path).path == "/api/vision-response-history":
+            try:
+                return self.send_json(api_vision_response_history(self))
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
         if self.path.startswith("/api/window-scan"):
             try:
                 return self.send_json(api_window_scan(self))
@@ -1635,21 +1652,56 @@ def api_save_decisions(request):
 def api_save_vision_response(request):
     data = read_json_body(request)
     project = project_by_id(data.get("project_id") or data.get("id", ""))
-    raw_json = data.get("vision_json") or data.get("json") or data.get("vision_response")
-    if not raw_json:
+    raw_json = data.get("vision_json")
+    if raw_json is None:
+        raw_json = data.get("json")
+    if raw_json is None:
+        raw_json = data.get("vision_response")
+    if raw_json is None:
         raise ValueError("Paste the ChatGPT vision JSON before submitting.")
 
-    result = save_project_vision_response(project, raw_json, data.get("source_label", "manual_chatgpt"))
-    project["vision_response"] = result["vision_response_path"]
-    project["vision_validation"] = result["vision_validation_path"]
-    project["coordinate_review"] = result["coordinate_review_path"]
-    if result.get("geometry_confirmation_path"):
-        project["geometry_confirmation"] = result["geometry_confirmation_path"]
-    project["reasoning_packet"] = result["reasoning_packet_raw"]
-    _rebuild_evidence_chain(project)
-    project["updated_at"] = timestamp()
-    update_project(project)
+    prior_project = deepcopy(project)
+    prior_response_path = existing_path(project.get("vision_response"), Path(project["review_dir"]) / "vision_response.json")
+    previous_response = prior_response_path.read_bytes() if prior_response_path else None
+    result = save_project_vision_response(
+        project, raw_json, data.get("source_label", "manual_chatgpt"),
+        model_note=data.get("model_note", ""),
+        attached_pages=data.get("attached_pages", data.get("pages_attached", [])),
+        defer_outcome=True,
+    )
+    response_path = Path(result["vision_response_path"])
+    try:
+        project["vision_response"] = result["vision_response_path"]
+        project["vision_validation"] = result["vision_validation_path"]
+        project["coordinate_review"] = result["coordinate_review_path"]
+        if result.get("geometry_confirmation_path"):
+            project["geometry_confirmation"] = result["geometry_confirmation_path"]
+        project["reasoning_packet"] = result["reasoning_packet_raw"]
+        _rebuild_evidence_chain(project)
+        project["updated_at"] = timestamp()
+        update_project(project)
+        result["attempt"] = _finalize_vision_attempt(project, result["attempt"], outcome="accepted",
+            detail="Reply parsed and the full evidence chain was rebuilt.",
+            result_counts=result.get("attempt", {}).get("result_counts", {}))
+    except Exception as error:
+        if previous_response is None:
+            response_path.unlink(missing_ok=True)
+        else:
+            temporary = response_path.with_name(response_path.name + ".restore.tmp")
+            temporary.write_bytes(previous_response)
+            temporary.replace(response_path)
+        project.clear()
+        project.update(prior_project)
+        _finalize_vision_attempt(project, result.get("attempt", {}), outcome="rejected", detail=str(error))
+        raise
+    result["response"]["attempt"] = result.get("attempt")
     return result["response"]
+
+
+def api_vision_response_history(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    return {"attempts": vision_response_attempt_history(project)}
 
 
 def api_site_design_conditions(request):
@@ -4391,26 +4443,207 @@ def project_room_suggestions(project):
     return suggestions
 
 
-def save_project_vision_response(project, raw_json, source_label="manual_chatgpt"):
-    if not project.get("ai_input") or not project.get("chatgpt_packet"):
-        raise ValueError("Create the ChatGPT packet before pasting a vision response.")
+def save_project_vision_response(project, raw_json, source_label="manual_chatgpt", model_note="",
+                                attached_pages=None, defer_outcome=False):
+    raw_text = raw_json if isinstance(raw_json, str) else json.dumps(raw_json, ensure_ascii=False)
+    attempt = _archive_vision_attempt(project, raw_text, model_note, source_label, attached_pages)
+    attempt_path = Path(project["review_dir"]) / "chatgpt_runs" / attempt["attempt_id"] / "attempt.json"
+    vision_path = Path(project["review_dir"]) / "vision_response.json"
+    previous_response = vision_path.read_bytes() if vision_path.is_file() else None
+    try:
+        if not project.get("ai_input") or not project.get("chatgpt_packet"):
+            raise ValueError("Create the ChatGPT packet before pasting a vision response.")
 
-    review_dir = Path(project["review_dir"])
-    vision = parse_pasted_json(raw_json)
-    if not isinstance(vision, dict):
-        raise ValueError("Vision response must be a JSON object.")
-    vision.setdefault("provider", "chatgpt_manual")
-    vision.setdefault("model", "manual_vision_review")
-    vision["source"] = source_label or "manual_chatgpt"
-    candidate_review_path = existing_path(project.get("candidate_review"), review_dir / "candidate_review.json")
-    candidate_review = load_json(candidate_review_path) if candidate_review_path else {}
-    vision = normalise_vision(vision, candidate_review)
+        review_dir = Path(project["review_dir"])
+        vision = parse_pasted_json(raw_text)
+        if not isinstance(vision, dict):
+            raise ValueError("Vision response must be a JSON object.")
+        vision.setdefault("provider", "chatgpt_manual")
+        vision.setdefault("model", "manual_vision_review")
+        vision["source"] = source_label or "manual_chatgpt"
+        candidate_review_path = existing_path(project.get("candidate_review"), review_dir / "candidate_review.json")
+        candidate_review = load_json(candidate_review_path) if candidate_review_path else {}
+        vision = normalise_vision(vision, candidate_review)
 
-    vision_path = review_dir / "vision_response.json"
-    vision_path.write_text(json.dumps(vision, indent=2), encoding="utf-8")
+        staged_path = Path(project["review_dir"]) / "chatgpt_runs" / attempt["attempt_id"] / "candidate_vision_response.json"
+        staged_path.write_text(json.dumps(vision, indent=2, ensure_ascii=False), encoding="utf-8")
+        staged_path.replace(vision_path)
+        reasoning = rebuild_reasoning_packet(project, review_dir / "design_requirements.json")
+        validation = load_json(reasoning["vision_validation_path"])
+        result_counts = _vision_result_counts(vision, validation, reasoning)
+        if not defer_outcome:
+            attempt.update({"outcome": "accepted",
+                "outcome_detail": "Reply parsed and the reasoning packet was rebuilt.",
+                "result_counts": result_counts, "completed_at": timestamp()})
+            _write_vision_attempt(attempt_path, attempt)
+        reasoning["attempt"] = _public_vision_attempt(project, attempt)
+        reasoning["attempt"]["result_counts"] = result_counts
+        return reasoning
+    except Exception as error:
+        if previous_response is None:
+            vision_path.unlink(missing_ok=True)
+        else:
+            restore_path = vision_path.with_name(vision_path.name + ".restore.tmp")
+            restore_path.write_bytes(previous_response)
+            restore_path.replace(vision_path)
+        attempt.update({"outcome": "rejected", "outcome_detail": str(error), "completed_at": timestamp()})
+        _write_vision_attempt(attempt_path, attempt)
+        raise
 
-    reasoning = rebuild_reasoning_packet(project, review_dir / "design_requirements.json")
-    return reasoning
+
+def _archive_vision_attempt(project, raw_text, model_note="", source_label="manual_chatgpt", attached_pages=None):
+    review_dir = Path(project["review_dir"]).resolve()
+    attempts_root = review_dir / "chatgpt_runs"
+    attempts_root.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    while True:
+        attempt_id = f"{stamp}_{uuid.uuid4().hex[:12]}"
+        attempt_dir = attempts_root / attempt_id
+        try:
+            attempt_dir.mkdir()
+            break
+        except FileExistsError:
+            continue
+
+    (attempt_dir / "raw_reply.txt").write_text(raw_text, encoding="utf-8")
+    packet_fingerprint = ""
+    prompt_fingerprint = ""
+    packet_pages = []
+    attached = []
+    if isinstance(attached_pages, list):
+        for page in attached_pages:
+            if type(page) is int and page > 0 and page not in attached:
+                attached.append(page)
+    provenance_error = ""
+    try:
+        packet_folder = (project.get("chatgpt_packet") or {}).get("folder", "")
+        if not packet_folder:
+            raise ValueError("Current packet folder is unavailable.")
+        packet_dir = Path(packet_folder)
+        if not packet_dir.is_absolute():
+            packet_dir = review_dir / packet_dir
+        packet_dir = packet_dir.resolve()
+        packet_dir.relative_to(review_dir)
+        if packet_dir.is_dir():
+            prompt_path = packet_dir / "prompt.md"
+            prompt_fingerprint = _sha256_file(prompt_path) if prompt_path.is_file() else ""
+            packet_fingerprint = _sha256_tree(packet_dir)
+            packet_pages = _chatgpt_packet_pages(packet_dir)
+        else:
+            provenance_error = "Current packet folder is unavailable."
+    except (OSError, ValueError, TypeError) as error:
+        provenance_error = f"Packet provenance could not be captured: {error}"
+    attempt = {
+        "attempt_id": attempt_id,
+        "created_at": timestamp(),
+        "created_at_epoch_ns": time.time_ns(),
+        "model_note": str(model_note or "").strip()[:300],
+        "source_label": str(source_label or "manual_chatgpt"),
+        "packet_fingerprint": packet_fingerprint,
+        "prompt_fingerprint": prompt_fingerprint,
+        "packet_pages": packet_pages,
+        "attached_pages": attached,
+        "provenance_error": provenance_error,
+        "raw_reply_sha256": hashlib.sha256(raw_text.encode("utf-8")).hexdigest(),
+        "outcome": "processing",
+        "outcome_detail": "Reply archived; parsing is in progress.",
+        "raw_reply_path": "raw_reply.txt",
+    }
+    _write_vision_attempt(attempt_dir / "attempt.json", attempt)
+    return attempt
+
+
+def _write_vision_attempt(path, attempt):
+    path = Path(path)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(json.dumps(attempt, indent=2, ensure_ascii=False), encoding="utf-8")
+    temporary.replace(path)
+
+
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _sha256_tree(folder):
+    folder = Path(folder)
+    digest = hashlib.sha256()
+    for path in sorted(item for item in folder.rglob("*") if item.is_file() and not item.is_symlink()):
+        digest.update(path.relative_to(folder).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(bytes.fromhex(_sha256_file(path)))
+    return digest.hexdigest()
+
+
+def _chatgpt_packet_pages(packet_dir):
+    try:
+        manifest = load_json(Path(packet_dir) / "manifest.json")
+    except (OSError, ValueError, TypeError):
+        manifest = {}
+    pages = set()
+    entries = manifest.get("screenshots_kept_for_reasoning", []) if isinstance(manifest, dict) else []
+    for entry in entries:
+        try:
+            pages.add(int(entry["page"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    if not pages:
+        for path in (Path(packet_dir) / "screenshots").glob("page_*.png"):
+            match = re.match(r"page_(\d+)", path.name)
+            if match:
+                pages.add(int(match.group(1)))
+    return sorted(pages)
+
+
+def _vision_result_counts(vision, validation, reasoning):
+    result = vision.get("result", {}) if isinstance(vision, dict) else {}
+    if not isinstance(result, dict):
+        result = {}
+    geometry = result.get("geometry_review", {})
+    layered = result.get("layered_geometry", {})
+    extraction = result.get("auto_extraction", {})
+    manifest = load_json(reasoning["reasoning_packet_raw"]["manifest"])
+    return {
+        "validation_issues": int(validation.get("issue_count", 0) or 0),
+        "geometry_review_pages": len(geometry.get("pages", [])) if isinstance(geometry, dict) else 0,
+        "layered_geometry_pages": len(layered.get("pages", [])) if isinstance(layered, dict) else 0,
+        "auto_extraction_entities": len(extraction.get("entities", [])) if isinstance(extraction, dict) else 0,
+        "geometry_verification_status": manifest.get("geometry_verification_status", ""),
+    }
+
+
+def _public_vision_attempt(project, attempt):
+    public = {key: value for key, value in attempt.items() if key != "raw_reply_path"}
+    public["raw_reply_url"] = safe_link(Path(project["review_dir"]) / "chatgpt_runs" / attempt["attempt_id"] / "raw_reply.txt")
+    return public
+
+
+def _finalize_vision_attempt(project, attempt, *, outcome, detail, result_counts=None):
+    attempt_dir = Path(project["review_dir"]) / "chatgpt_runs" / str(attempt.get("attempt_id", ""))
+    metadata_path = attempt_dir / "attempt.json"
+    current = load_json(metadata_path) if metadata_path.is_file() else dict(attempt)
+    current.update({"outcome": outcome, "outcome_detail": str(detail or "")[:1000], "completed_at": timestamp()})
+    if result_counts is not None:
+        current["result_counts"] = result_counts
+    _write_vision_attempt(metadata_path, current)
+    return _public_vision_attempt(project, current)
+
+
+def vision_response_attempt_history(project):
+    attempts_root = Path(project["review_dir"]) / "chatgpt_runs"
+    attempts = []
+    if attempts_root.is_dir():
+        for metadata_path in attempts_root.glob("*/attempt.json"):
+            try:
+                metadata = load_json(metadata_path)
+            except (OSError, ValueError):
+                continue
+            if isinstance(metadata, dict):
+                attempts.append(_public_vision_attempt(project, metadata))
+    return sorted(attempts, key=lambda item: (item.get("created_at_epoch_ns", 0), item.get("attempt_id", "")), reverse=True)
 
 
 def rebuild_reasoning_packet(project, requirements_path=None):

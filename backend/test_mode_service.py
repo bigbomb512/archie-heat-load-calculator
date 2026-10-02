@@ -7,10 +7,12 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import threading
 import time
 import uuid
+from urllib.parse import urlencode
 
 from backend.vision_extraction_service import _atomic_json
 
@@ -20,6 +22,10 @@ _RUNNING: dict[str, threading.Thread] = {}
 RUN_NAMESPACE = "test_runs"
 _TEST_WORKFLOW_VERSION = "4"
 _TEST_REPORT_LABEL = "TEST RUN — AI preliminary estimate — not engineering reviewed or validated"
+# Real-PDF Codex scenarios and the skill-workflow scope each one runs. The
+# rooms-only scope tests room identity, boundaries and ceiling heights with a
+# fraction of the full workflow's provider usage.
+CODEX_SCENARIOS = {"codex_all_skills": "all", "codex_rooms_only": "rooms_only"}
 
 
 class _RunWeb:
@@ -112,9 +118,36 @@ def _public_run(run):
         "coverage", "provisional_count", "blocked_count", "excluded_count",
         "report_status", "report_label", "report_summary", "error", "remediation",
         "retryable", "fixture_notice", "downstream",
-        "skills_summary",
+        "skills_summary", "skill_tasks",
     ) if key in run}
     return result
+
+
+def _attempt_artifact_url(run_id, attempt_ref, filename):
+    if not attempt_ref or filename not in {"prompt.txt", "raw_output.txt"}:
+        return ""
+    artifact = "workspace/" + str(attempt_ref) + "/" + filename
+    return f"/api/test-mode/artifact/{run_id}?{urlencode({'path': artifact})}"
+
+
+def attempt_artifact(web, run_id, artifact, *, client_host="127.0.0.1"):
+    _assert_allowed(web, client_host=client_host)
+    run_dir, _ = _read_run(_root(web), run_id)
+    normalized = str(artifact or "").replace("\\", "/")
+    match = re.fullmatch(
+        r"workspace/skill_workflow_runs/[A-Za-z0-9_-]+/attempts/([a-z0-9_]+)/([1-9][0-9]*)/(prompt\.txt|raw_output\.txt)",
+        normalized,
+    )
+    if not match:
+        raise ValueError("Test attempt artifact was not found.")
+    candidate = (run_dir / normalized).resolve()
+    try:
+        candidate.relative_to(run_dir.resolve())
+    except ValueError as error:
+        raise ValueError("Test attempt artifact was not found.") from error
+    if not candidate.is_file():
+        raise ValueError("Test attempt artifact was not found.")
+    return candidate
 
 
 def _read_run(root, run_id):
@@ -478,8 +511,8 @@ def _run_worker(web, run_id, source_project, fingerprint, scenario):
         web._rebuild_evidence_chain(project)
         _write_stage(run_dir, run, "analyse_pdf", "complete", pages=int(project.get("pages", 0)))
 
-        codex_run = scenario == "codex_all_skills"
-        if scenario not in {"missing_geometry", "codex_all_skills"}:
+        codex_run = scenario in CODEX_SCENARIOS
+        if scenario != "missing_geometry" and not codex_run:
             _write_stage(run_dir, run, "test_fixture_geometry", "running")
             _inject_test_geometry_fixture(project, run)
             _write_stage(run_dir, run, "test_fixture_geometry", "complete", rooms=5,
@@ -498,27 +531,39 @@ def _run_worker(web, run_id, source_project, fingerprint, scenario):
             raise RuntimeError(inference.get("remediation", ["Room inference did not complete."])[0])
         _write_stage(run_dir, run, "room_inference", "complete", candidate_count=inference.get("candidate_count", 0))
 
-        if scenario not in {"missing_geometry", "codex_all_skills"}:
+        if scenario != "missing_geometry" and not codex_run:
             _inject_test_system_candidates(project, scenario)
 
         if codex_run:
             if os.environ.get("ARCHIE_TEST_CODEX") != "1":
                 raise PermissionError("Enable the loopback-only Codex test mode before starting this scenario.")
             image_groups = _prepare_codex_skill_inputs(project, run)
-            _write_stage(run_dir, run, "archie_skills", "running", parent_skills=10, subskills=44,
-                         selected_page_groups=image_groups, provider="Codex CLI", synthetic_domain_values=0)
             from backend import skill_workflow_service
-            skill_workflow_service.post(adapter, project, {"action": "start"})
+            workflow_scope = CODEX_SCENARIOS[scenario]
+            _write_stage(run_dir, run, "archie_skills", "running", workflow_scope=workflow_scope,
+                         selected_page_groups=image_groups, provider="Codex CLI", synthetic_domain_values=0)
+            skill_workflow_service.post(adapter, project, {"action": "start", "scope": workflow_scope})
             skills = _wait_skill_workflow(web, project)
             manifest = json.loads((workspace / "skill_workflow_run.json").read_text(encoding="utf-8"))
-            subskills = manifest.get("subskills", {})
+            subskills = {skill_id: item for skill_id, item in manifest.get("subskills", {}).items()
+                         if item.get("status") not in {"not_in_scope", "not_enabled"}}
             counts = {}
             for item in subskills.values():
                 status_value = item.get("status", "unknown")
                 counts[status_value] = counts.get(status_value, 0) + 1
-            run["skills_summary"] = {"parent_count": 10, "subskill_count": len(subskills),
+            run["skills_summary"] = {"parent_count": len({item.get("parent") for item in subskills.values()}),
+                                     "subskill_count": len(subskills), "workflow_scope": workflow_scope,
                                      "status_counts": counts, "workflow_status": skills.get("status", "unknown"),
                                      "provider": "Codex CLI", "external_research": False}
+            run["skill_tasks"] = [{
+                "id": skill_id, "status": item.get("status", "unknown"),
+                "error_code": item.get("error_code", ""), "failure_phase": item.get("failure_phase", ""),
+                "validation_check": item.get("validation_check", ""), "validation_path": item.get("validation_path", ""),
+                "validation_detail": item.get("validation_detail", ""),
+                "attempt_ref": item.get("attempt_ref", ""),
+                "raw_output_url": _attempt_artifact_url(run_id, item.get("attempt_ref", ""), "raw_output.txt"),
+                "prompt_url": _attempt_artifact_url(run_id, item.get("attempt_ref", ""), "prompt.txt"),
+            } for skill_id, item in subskills.items()]
             _write_stage(run_dir, run, "archie_skills", "complete" if skills.get("status") in {"completed", "needs_review"} else "needs_review",
                          **run["skills_summary"])
 
@@ -532,7 +577,7 @@ def _run_worker(web, run_id, source_project, fingerprint, scenario):
                      provisional_count=sum(bool(item.get("provisional")) for item in required),
                      blocked_count=sum(not item.get("exists") for item in required))
 
-        if scenario in {"missing_geometry", "codex_all_skills"}:
+        if scenario == "missing_geometry" or codex_run:
             geometry = json.loads((workspace / "geometry_resolution.json").read_text(encoding="utf-8"))
             proofs = geometry.get("room_geometry_proofs", [])
             eligible = [row for row in proofs if row.get("status") in {"ai_estimated", "geometry_confirmed"} and isinstance(row.get("area_m2"), (int, float)) and row["area_m2"] > 0]
@@ -691,9 +736,9 @@ def _coverage(workspace, records, room_count):
 
 def run(web, *, scenario="complete", client_host="127.0.0.1"):
     _assert_allowed(web, client_host=client_host)
-    if scenario not in {"complete", "missing_geometry", "resolver_failure", "stale_dependency", "blocked_ahu_plant", "codex_all_skills"}:
+    if scenario not in {"complete", "missing_geometry", "resolver_failure", "stale_dependency", "blocked_ahu_plant", *CODEX_SCENARIOS}:
         raise ValueError("Unknown local test scenario.")
-    if scenario == "codex_all_skills" and os.environ.get("ARCHIE_TEST_CODEX") != "1":
+    if scenario in CODEX_SCENARIOS and os.environ.get("ARCHIE_TEST_CODEX") != "1":
         raise PermissionError("Codex skill test mode is not enabled on this local server.")
     fixture = _fixture_project(web)
     fingerprint = _fingerprint(fixture)
@@ -716,7 +761,7 @@ def run(web, *, scenario="complete", client_host="127.0.0.1"):
         run_dir.mkdir(parents=True, exist_ok=False)
         now = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         fixture_notice = json.loads((Path(__file__).parent / "fixtures" / "test_workspace_full_building.json").read_text(encoding="utf-8")).get("warning", "")
-        if scenario == "codex_all_skills":
+        if scenario in CODEX_SCENARIOS:
             fixture_notice = (
                 "Codex AI test: selected pages from an isolated copy of this project PDF will be sent to the signed-in Codex service. "
                 "No external research or live lookups are enabled; all proposals remain draft-only."

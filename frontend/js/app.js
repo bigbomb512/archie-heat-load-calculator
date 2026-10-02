@@ -1014,6 +1014,7 @@ async function guidedResolveModelInputs(){
     const skillRun = await started.json();
     if (!started.ok || skillRun.error) throw new Error(skillRun.error || "The evidence workflow could not start.");
     let run = skillRun;
+    renderSkillWorkflowAttempts(run);
     const deadline = Date.now() + 600000;
     while (["queued", "running"].includes(run.status) && Date.now() < deadline){
       await new Promise(resolve => setTimeout(resolve, 750));
@@ -1029,6 +1030,7 @@ async function guidedResolveModelInputs(){
           : "Preparing the evidence workflow…";
     }
     if (["queued", "running"].includes(run.status)) throw new Error("Evidence processing is still running. Check status again before retrying.");
+    renderSkillWorkflowAttempts(run);
     if (["failed", "blocked", "stale"].includes(run.status)) throw new Error(run.remediation || "The evidence workflow needs attention before resolution can continue.");
     status.textContent = "Evidence checks finished. Updating model-input coverage and remediation…";
     const ok = await modelInputResolutionAction("resolve");
@@ -1043,6 +1045,49 @@ async function guidedResolveModelInputs(){
     toast("Model input resolution", detail.remediation || error.message);
   } finally {
     button.disabled = false;
+  }
+}
+
+function renderSkillWorkflowAttempts(run){
+  const details = optionalElement("skillWorkflowAttemptsDetails");
+  const container = optionalElement("skillWorkflowAttempts");
+  if (!details || !container) return;
+  const rows = Array.isArray(run && run.subskills) ? run.subskills : [];
+  details.hidden = rows.length === 0;
+  container.replaceChildren();
+  for (const task of rows){
+    const article = document.createElement("article");
+    article.className = "review-item";
+    const body = document.createElement("div");
+    const title = document.createElement("b");
+    title.textContent = (task.id || "Evidence task") + " · " + (task.status || "pending");
+    body.append(title);
+    const check = task.validation_check || task.error_code || task.failure_phase;
+    if (check){
+      const line = document.createElement("span");
+      line.textContent = check + (task.validation_path ? " · " + task.validation_path : "");
+      body.append(line);
+    }
+    if (task.validation_detail){
+      const detail = document.createElement("span");
+      detail.textContent = task.validation_detail;
+      body.append(detail);
+    }
+    const links = document.createElement("div");
+    links.className = "bar";
+    for (const item of [["Prompt", task.prompt_url], ["Raw reply", task.raw_output_url]]){
+      if (!item[1]) continue;
+      const link = document.createElement("a");
+      link.className = "btn ghost mini";
+      link.href = item[1];
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.textContent = "Open " + item[0].toLowerCase();
+      links.append(link);
+    }
+    body.append(links);
+    article.append(body);
+    container.append(article);
   }
 }
 
@@ -1200,6 +1245,7 @@ function showVisionPanel(){
   // adding another mandatory contractor step.
   loadRoomInference(true);
   loadVisionExtraction();
+  loadVisionHistory();
   loadAiPreliminary();
   loadWindowScan();
 }
@@ -1988,6 +2034,11 @@ async function submitVisionResponse(){
   if (!DATA?.id) return toast("No project selected", "Open or analyse a project first.");
   const visionJson = requiredElement("visionJson").value.trim();
   if (!visionJson) return toast("No vision JSON", "Paste the JSON returned by ChatGPT before submitting.");
+  const attachedText = optionalElement("visionAttachedPages")?.value.trim() || "";
+  if (attachedText && !/^\d+(?:[\s,]+\d+)*$/.test(attachedText)) {
+    return toast("Check attached pages", "Enter physical PDF page numbers separated by commas or spaces.");
+  }
+  const attachedPages = [...new Set((attachedText.match(/\d+/g) || []).map(Number).filter(page => page > 0))];
 
   requiredElement("btnVisionSubmit").disabled = true;
   requiredElement("visionStatus").textContent = "Validating vision JSON and creating reasoning packet…";
@@ -1998,17 +2049,65 @@ async function submitVisionResponse(){
         project_id: DATA.id,
         vision_json: visionJson,
         source_label: "manual_chatgpt",
+        model_note: requiredElement("visionModelNote").value.trim(),
+        attached_pages: attachedPages,
       }),
     });
     const data = await res.json();
     if (!res.ok || data.error) throw new Error(data.error || "Could not process the vision response.");
     drawVisionResult(data);
+    await loadVisionHistory();
     toast("Reasoning packet created", `Geometry status: ${esc(data.geometry_verification_status)}.`);
   } catch (err) {
     requiredElement("visionStatus").textContent = "Vision response failed.";
+    await loadVisionHistory();
     toast("Could not process vision JSON", err.message);
   }
   requiredElement("btnVisionSubmit").disabled = false;
+}
+
+async function loadVisionHistory(){
+  const history = optionalElement("visionHistory");
+  if (!history || !DATA?.id) return;
+  try {
+    const response = await fetch(`/api/vision-response-history?project_id=${encodeURIComponent(DATA.id)}`);
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || "Could not load reply history.");
+    drawVisionHistory(data.attempts || []);
+  } catch (error) {
+    history.innerHTML = `<div class="review-empty"><b>Reply history unavailable</b><span>${esc(error.message)}</span></div>`;
+  }
+}
+
+function drawVisionHistory(attempts){
+  const history = optionalElement("visionHistory");
+  if (!history) return;
+  if (!attempts.length){
+    history.innerHTML = '<div class="review-empty"><b>No pasted replies yet</b><span>Each submitted reply will appear here, including rejected attempts.</span></div>';
+    return;
+  }
+  history.innerHTML = attempts.map(attempt => {
+    const outcome = attempt.outcome || "processing";
+    const packetPages = (attempt.packet_pages || attempt.page_list || []).join(", ") || "not recorded";
+    const attachedPages = (attempt.attached_pages || []).join(", ") || "not recorded";
+    const counts = attempt.result_counts
+      ? Object.entries(attempt.result_counts).map(([key, value]) => `${key.replaceAll("_", " ")}: ${value}`).join(" · ")
+      : "";
+    const note = attempt.model_note ? `Model: ${attempt.model_note}` : "Model: not recorded";
+    const raw = attempt.raw_reply_url ? `<a class="btn ghost mini" href="${esc(attempt.raw_reply_url)}" target="_blank" rel="noopener">Open raw reply</a>` : "";
+    const provenance = attempt.provenance_error ? `<span>${esc(attempt.provenance_error)}</span>` : "";
+    return `<article class="review-item vision-attempt">
+      <div>
+        <b>${esc(outcome.toUpperCase())} · ${esc(attempt.created_at || attempt.attempt_id || "Unknown time")}</b>
+        <span>${esc(attempt.outcome_detail || "")}</span>
+        <span>${esc(note)} · Packet pages: ${esc(packetPages)} · pages attached: ${esc(attachedPages)}</span>
+        ${counts ? `<span>${esc(counts)}</span>` : ""}
+        <span>Packet ${esc((attempt.packet_fingerprint || "unavailable").slice(0, 12))} · Prompt ${esc((attempt.prompt_fingerprint || "unavailable").slice(0, 12))}</span>
+        ${provenance}
+      </div>
+      ${raw}
+    </article>`;
+  }).join("");
 }
 
 function drawVisionResult(data){
@@ -4795,7 +4894,11 @@ async function initTestWorkspace(){
     requiredElement("testWorkspaceFixture").textContent = state.available
       ? `Fixture: ${state.fixture_name}. Runs locally with deterministic AI responses and draft-only assumptions. ${state.fixture_warning || ""}`
       : (state.message || "A saved local fixture is not available.");
+    requiredElement("testWorkspaceFixture").textContent = state.available
+      ? "PDF fixture: " + state.fixture_name + ". Choose the synthetic workflow test or real-PDF Codex AI test below."
+      : (state.message || "A saved local fixture is not available.");
     requiredElement("btnTestWorkspaceRun").disabled = !state.available;
+    requiredElement("btnTestWorkspaceRunCodex").disabled = !state.available; requiredElement("btnTestWorkspaceRunCodexRooms").disabled = !state.available;
     if (state.active_run){
       TEST_RUN_ID = state.active_run.run_id || "";
       renderTestWorkspaceRun(state.active_run);
@@ -4806,16 +4909,22 @@ async function initTestWorkspace(){
   }
 }
 
-requiredElement("btnTestWorkspaceRun").addEventListener("click", startTestWorkspaceRun);
+requiredElement("btnTestWorkspaceRun").addEventListener("click", () => startTestWorkspaceRun("complete"));
+requiredElement("btnTestWorkspaceRunCodex").addEventListener("click", () => startTestWorkspaceRun("codex_all_skills"));
+requiredElement("btnTestWorkspaceRunCodexRooms").addEventListener("click", () => startTestWorkspaceRun("codex_rooms_only"));
 requiredElement("btnTestWorkspaceReset").addEventListener("click", resetTestWorkspaceRun);
 
-async function startTestWorkspaceRun(){
+async function startTestWorkspaceRun(scenario){
   if (!TEST_WORKSPACE_ENABLED) return;
-  const button = requiredElement("btnTestWorkspaceRun");
-  button.disabled = true;
-  requiredElement("testWorkspaceStatus").textContent = "Starting the isolated walkthrough…";
+  requiredElement("btnTestWorkspaceRun").disabled = true;
+  requiredElement("btnTestWorkspaceRunCodex").disabled = true; requiredElement("btnTestWorkspaceRunCodexRooms").disabled = true;
+  requiredElement("testWorkspaceStatus").textContent = scenario === "codex_rooms_only"
+    ? "Starting the rooms-only real-PDF Codex AI test on an isolated copy…"
+    : scenario === "codex_all_skills"
+      ? "Starting the real-PDF Codex AI test on an isolated copy…"
+      : "Starting the synthetic workflow test on an isolated copy…";
   try {
-    const response = await fetch("/api/test-mode/run", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({scenario:"complete"})});
+    const response = await fetch("/api/test-mode/run", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({scenario})});
     const data = await response.json();
     if (!response.ok || data.error) throw new Error(data.error || "Test walkthrough could not start.");
     TEST_RUN_ID = data.run?.run_id || "";
@@ -4823,7 +4932,8 @@ async function startTestWorkspaceRun(){
     if (data.run?.status === "running") pollTestWorkspaceRun();
   } catch (error) {
     requiredElement("testWorkspaceStatus").textContent = `${error.message} Retry the walkthrough or check that ./start_web --test is running.`;
-    button.disabled = false;
+    requiredElement("btnTestWorkspaceRun").disabled = false;
+    requiredElement("btnTestWorkspaceRunCodex").disabled = false; requiredElement("btnTestWorkspaceRunCodexRooms").disabled = false;
   }
 }
 
@@ -4843,6 +4953,7 @@ function pollTestWorkspaceRun(){
       TEST_RUN_POLL = null;
       requiredElement("testWorkspaceStatus").textContent = `${error.message} Refresh the page to reconnect to the saved run.`;
       requiredElement("btnTestWorkspaceRun").disabled = false;
+      requiredElement("btnTestWorkspaceRunCodex").disabled = false; requiredElement("btnTestWorkspaceRunCodexRooms").disabled = false;
     }
   };
   TEST_RUN_POLL = setTimeout(poll, 400);
@@ -4865,6 +4976,7 @@ function renderTestWorkspaceRun(run){
       : status === "failed" ? `${run.error || "A workflow stage failed."} ${run.remediation || "Retry the walkthrough."}`
         : "No test run yet.";
   requiredElement("btnTestWorkspaceRun").disabled = status === "running";
+  requiredElement("btnTestWorkspaceRunCodex").disabled = status === "running"; requiredElement("btnTestWorkspaceRunCodexRooms").disabled = status === "running";
   requiredElement("btnTestWorkspaceReset").disabled = !run.run_id || status === "running";
   const summary = requiredElement("testWorkspaceSummary");
   summary.replaceChildren();
@@ -4874,6 +4986,13 @@ function renderTestWorkspaceRun(run){
     ["Air systems", coverage.air_systems], ["Plant systems", coverage.plant_systems],
   ];
   if (status === "completed" || status === "failed"){
+    const scenario = document.createElement("p");
+    scenario.textContent = run.scenario === "codex_rooms_only"
+      ? "Scenario: Real PDF · Codex AI · rooms only (page identity, room identity, boundaries, ceiling heights) · no synthetic design values"
+      : run.scenario === "codex_all_skills"
+        ? "Scenario: Real PDF · Codex AI · no synthetic design values"
+        : "Scenario: Synthetic workflow fixture · not drawing-derived design evidence";
+    summary.append(scenario);
     if (run.fixture_notice){
       const notice = document.createElement("p");
       notice.className = "test-fixture-warning";
@@ -4915,6 +5034,51 @@ function renderTestWorkspaceRun(run){
     const countsLine = document.createElement("p");
     countsLine.textContent = `Provisional ${Number(run.provisional_count || 0)} · blocked ${Number(run.blocked_count || 0)} · excluded ${Number(run.excluded_count || 0)}`;
     summary.append(countsLine);
+    if (Array.isArray(run.skill_tasks) && run.skill_tasks.length){
+      const details = document.createElement("details");
+      const heading = document.createElement("summary");
+      heading.textContent = "Codex AI skill attempts (" + run.skill_tasks.length + ")";
+      details.append(heading);
+      const list = document.createElement("div");
+      list.className = "review-list";
+      list.id = "testWorkspaceSkillAttempts";
+      for (const task of run.skill_tasks){
+        const article = document.createElement("article");
+        article.className = "review-item";
+        const body = document.createElement("div");
+        const title = document.createElement("b");
+        title.textContent = (task.id || "Evidence task") + " · " + (task.status || "unknown");
+        body.append(title);
+        const check = task.validation_check || task.error_code || task.failure_phase;
+        if (check){
+          const statusLine = document.createElement("span");
+          statusLine.textContent = check + (task.validation_path ? " · " + task.validation_path : "");
+          body.append(statusLine);
+        }
+        if (task.validation_detail){
+          const detailLine = document.createElement("span");
+          detailLine.textContent = task.validation_detail;
+          body.append(detailLine);
+        }
+        const links = document.createElement("div");
+        links.className = "bar";
+        for (const item of [["Prompt", task.prompt_url], ["Raw reply", task.raw_output_url]]){
+          if (!item[1]) continue;
+          const link = document.createElement("a");
+          link.className = "btn ghost mini";
+          link.href = item[1];
+          link.target = "_blank";
+          link.rel = "noopener";
+          link.textContent = "Open " + item[0].toLowerCase();
+          links.append(link);
+        }
+        body.append(links);
+        article.append(body);
+        list.append(article);
+      }
+      details.append(list);
+      summary.append(details);
+    }
   }
 }
 
@@ -4932,6 +5096,7 @@ async function resetTestWorkspaceRun(){
     requiredElement("testWorkspaceStatus").textContent = "Test run reset. The saved fixture and real projects are unchanged.";
     requiredElement("btnTestWorkspaceReset").disabled = true;
     requiredElement("btnTestWorkspaceRun").disabled = false;
+    requiredElement("btnTestWorkspaceRunCodex").disabled = false; requiredElement("btnTestWorkspaceRunCodexRooms").disabled = false;
   } catch (error) {
     requiredElement("testWorkspaceStatus").textContent = `${error.message} The run was kept so its results are not lost.`;
   }

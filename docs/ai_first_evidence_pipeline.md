@@ -278,11 +278,71 @@ and per-room reasons that an automatic proof was not produced. These
 diagnostics explain pipeline behavior; they are not evidence that the source
 geometry or traced area is correct.
 
+### AI attempt archives
+
+Every skill-provider attempt is retained under the local, ignored project
+`output/skill_workflow_runs/<run_id>/attempts/<subskill_id>/<attempt_number>/`
+folder. The archive contains the exact prompt, image paths and page numbers,
+raw provider reply, CLI status and bounded stdout/stderr tails when applicable,
+and an outcome record with timing, input fingerprint, failure phase, and the
+specific validation check, field path, and safe diagnostic detail. A proposal
+and the run manifest link to the archive with `attempt_ref`; rejected replies
+remain available for diagnosis and are not accepted as calculation evidence.
+The validator and prompts are unchanged by this archive mechanism. Raw replies
+can contain drawing content, so these artifacts remain local and must not be
+copied into version control or shared without project authorization.
+
+Manual vision-response pastes use a separate `output/chatgpt_runs/` history.
+Each attempt preserves the raw reply before parsing, records packet pages
+separately from the optional pages actually attached, and remains visible in
+the history whether accepted or rejected. Acceptance is recorded only after
+the full evidence-chain rebuild succeeds; a failed rebuild restores the prior
+accepted response. These archives improve diagnosis and traceability, not
+extraction accuracy or engineering validation.
+
 Snap-to-vector tolerance is 8 image pixels and is only a placement aid; it does
 not classify a vector line as a wall or verify that a snapped corner is the
 correct room boundary. PDF fingerprinting, page-size lookup, and candidate
 intersection geometry are cached against source-file and vector-page
 fingerprints to avoid repeating expensive work while those inputs are unchanged.
+
+### Scoped AI task prompts
+
+Each skill task receives a scoped prompt rather than the whole project
+evidence package. This is a product decision, not only a test convenience:
+provider cost, input limits and reviewability all scale with prompt size.
+
+- Generic domain tasks no longer receive unvalidated vector `wall` and
+  `dimension` candidates from `geometry_resolution.json`; only confirmed or
+  AI-estimated geometry of those kinds is passed. Glazing and construction
+  tasks receive only value-resolution records whose target matches their
+  domain.
+- Before sending, resolver bookkeeping (hashes, fingerprints, witness lists,
+  timestamps, attempt and output summaries) is removed and text longer than
+  600 characters is truncated with an explicit `…[truncated N chars]` marker.
+  Prerequisite tasks are passed as their validated proposal content only.
+- The room-boundary task keeps the complete primary-plan vector line index so
+  it can cite real line IDs, encoded as `[candidate_id, x1, y1, x2, y2, role]`
+  in whole image pixels, with dimension and OCR label candidates in the same
+  compact form.
+- Every task has a character budget: 80,000 by default and 120,000 for
+  `room_boundaries_areas`. `ARCHIE_SKILL_PROMPT_MAX_CHARS` overrides it for all
+  tasks. A task whose scoped prompt is still over budget is **blocked before
+  any provider is created or called**, with the prompt size and its largest
+  sections in the remediation. Evidence is never silently dropped to fit.
+- Each attempt archive and run manifest row records the prompt size, budget,
+  status, and largest sections (`prompt_budget`).
+- The skill workflow accepts `scope`: `all` (default) or `rooms_only`. The
+  rooms-only scope runs page identity, revision scope, page relationships,
+  room identity and use, room boundaries and areas, and ceiling height and
+  volume; other tasks are recorded as `not_in_scope`. Test mode exposes it as
+  the `codex_rooms_only` scenario.
+
+On the archived Butcher Buffet Codex run, these rules reduced the 24 prompts
+from 5,565,061 to 893,718 characters; the largest task fell from 3,984,817 to
+about 40,000. The six rooms-only tasks total about 257,000 characters. These
+are measured prompt sizes from that archive; page images are sent as before,
+and the effect on extraction quality has not yet been compared on a new run.
 
 ### Ground-contact envelope method
 

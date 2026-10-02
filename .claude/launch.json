@@ -6,6 +6,10 @@
       "runtimeExecutable": "./start_web",
       "runtimeArgs": ["--port", "8000"],
       "port": 8000
+    },
+    {
+      "name": "archie-web-attach",
+      "url": "http://localhost:8000"
     }
   ]
 }

@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 
 import json
+from io import BytesIO
 import sys
 import zipfile
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -14,7 +16,8 @@ from ai.geometry_review import normalise_vision
 from ai.reasoning_packet import create_reasoning_packet_from_vision
 from ai.design_requirements import validate_design_requirements
 from ai.vision_validator import validate_vision
-from backend.web_app import rebuild_reasoning_packet, save_project_vision_response
+from backend import web_app
+from backend.web_app import rebuild_reasoning_packet, save_project_vision_response, vision_response_attempt_history
 
 
 def check_value(name, actual, expected):
@@ -126,6 +129,10 @@ def main():
         screenshots_dir = chatgpt_dir / "screenshots"
         screenshots_dir.mkdir(parents=True)
         tiny_png(screenshots_dir / "page_005_floor_plan.png")
+        (chatgpt_dir / "prompt.md").write_text("Review page 5 and return JSON.", encoding="utf-8")
+        (chatgpt_dir / "manifest.json").write_text(json.dumps({
+            "screenshots_kept_for_reasoning": [{"page": 5, "path": "screenshots/page_005_floor_plan.png"}],
+        }), encoding="utf-8")
         output = create_candidate_review(vector_path, matches_path)
         data = json.loads(output.read_text())
         page = data["pages"][0]
@@ -474,8 +481,20 @@ def main():
             "dimension_wall_matches": str(matches_path),
             "candidate_review": str(output),
         }
-        saved = save_project_vision_response(project, "```json\n" + json.dumps(vision) + "\n```")
+        raw_reply = "```json\n" + json.dumps(vision) + "\n```"
+        saved = save_project_vision_response(project, raw_reply, model_note="ChatGPT test model",
+            attached_pages=[2, 5, 2, 0, "4"])
         check_value("backend saves pasted vision response", Path(saved["vision_response_path"]).exists(), True)
+        attempt_path = Path(root / "chatgpt_runs" / saved["attempt"]["attempt_id"])
+        attempt_meta = json.loads((attempt_path / "attempt.json").read_text(encoding="utf-8"))
+        check_value("raw reply is preserved byte-for-byte", (attempt_path / "raw_reply.txt").read_text(encoding="utf-8"), raw_reply)
+        check_value("accepted attempt records outcome", attempt_meta["outcome"], "accepted")
+        check_value("attempt records model note", attempt_meta["model_note"], "ChatGPT test model")
+        check_value("attempt records packet pages", attempt_meta["packet_pages"], [5])
+        check_value("attempt records pages actually attached", attempt_meta["attached_pages"], [2, 5])
+        check_value("attempt records packet fingerprint", len(attempt_meta["packet_fingerprint"]) == 64, True)
+        check_value("attempt records prompt fingerprint", len(attempt_meta["prompt_fingerprint"]) == 64, True)
+        check_value("accepted attempt stores validation counts", "validation_issues" in attempt_meta["result_counts"], True)
         check_value("backend creates vision validation", Path(saved["vision_validation_path"]).exists(), True)
         check_value("backend creates coordinate review", Path(saved["coordinate_review_path"]).exists(), True)
         check_value("backend creates geometry confirmation", Path(saved["geometry_confirmation_path"]).exists(), True)
@@ -533,11 +552,78 @@ def main():
         check_value("stale heat-load file is removed from packet", (Path(stale["reasoning_packet_raw"]["folder"]) / "heat_load_report.json").exists(), False)
         check_value("stale ventilation file is removed from packet", (Path(stale["reasoning_packet_raw"]["folder"]) / "ventilation_report.json").exists(), False)
 
+        previous_current_response = Path(saved["vision_response_path"]).read_bytes()
         try:
             save_project_vision_response(project, "{not valid json")
             raise AssertionError("invalid pasted JSON should fail")
         except ValueError as error:
             check_value("backend rejects invalid pasted JSON", "not valid JSON" in str(error), True)
+        check_value("rejected paste does not replace current accepted response", Path(saved["vision_response_path"]).read_bytes(), previous_current_response)
+        attempts = vision_response_attempt_history(project)
+        check_value("accepted and rejected paste attempts both remain in history", len(attempts), 2)
+        rejected = next(item for item in attempts if item["outcome"] == "rejected")
+        rejected_dir = root / "chatgpt_runs" / rejected["attempt_id"]
+        check_value("rejected attempt retains raw reply", (rejected_dir / "raw_reply.txt").read_text(encoding="utf-8"), "{not valid json")
+        check_value("rejected attempt records parse reason", "not valid JSON" in rejected["outcome_detail"], True)
+
+        try:
+            with patch("backend.web_app.rebuild_reasoning_packet", side_effect=RuntimeError("reasoning rebuild failed")):
+                save_project_vision_response(project, json.dumps(vision), model_note="rebuild failure case")
+            raise AssertionError("a parsed reply with a failed reasoning rebuild should be rejected")
+        except RuntimeError as error:
+            check_value("reasoning rebuild failure is reported", str(error), "reasoning rebuild failed")
+        check_value("parsed reply rejected by rebuild does not replace accepted response",
+                    Path(saved["vision_response_path"]).read_bytes(), previous_current_response)
+        rebuild_rejected = next(item for item in vision_response_attempt_history(project)
+                                if item.get("model_note") == "rebuild failure case")
+        check_value("parsed reply rebuild failure is archived as rejected", rebuild_rejected["outcome"], "rejected")
+        check_value("rebuild failure text is retained", rebuild_rejected["outcome_detail"], "reasoning rebuild failed")
+
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            response_path = root / "vision_response.json"
+            previous = b'{"accepted":"before"}'
+            response_path.write_bytes(previous)
+            project_for_api = {"id": "api-test", "review_dir": str(root), "vision_response": str(response_path)}
+            attempt_id = "api-chain-failure"
+            attempt_dir = root / "chatgpt_runs" / attempt_id
+            attempt_dir.mkdir(parents=True)
+            (attempt_dir / "attempt.json").write_text(json.dumps({"attempt_id": attempt_id,
+                "created_at": "now", "outcome": "processing", "outcome_detail": "Working"}), encoding="utf-8")
+
+            def fake_save(*_args, **_kwargs):
+                response_path.write_bytes(b'{"accepted":"candidate"}')
+                return {"vision_response_path": str(response_path), "vision_validation_path": str(root / "vision_validation.json"),
+                    "coordinate_review_path": str(root / "coordinate_review.json"), "geometry_confirmation_path": "",
+                    "reasoning_packet_raw": {}, "attempt": {"attempt_id": attempt_id, "outcome": "processing"},
+                    "response": {}}
+
+            payload = json.dumps({"project_id": "api-test", "vision_json": "{}"}).encode("utf-8")
+            request = type("Request", (), {"path": "/api/vision-response", "headers": {
+                "Content-Length": str(len(payload))}, "rfile": BytesIO(payload)})()
+            try:
+                with patch.object(web_app, "project_by_id", return_value=project_for_api), \
+                     patch.object(web_app, "save_project_vision_response", side_effect=fake_save), \
+                     patch.object(web_app, "_rebuild_evidence_chain", side_effect=RuntimeError("evidence rebuild failed")):
+                    web_app.api_save_vision_response(request)
+                raise AssertionError("evidence-chain failure should reject the paste")
+            except RuntimeError as error:
+                check_value("full evidence-chain failure is reported", str(error), "evidence rebuild failed")
+            check_value("evidence-chain failure restores previously accepted response", response_path.read_bytes(), previous)
+            api_attempt = json.loads((attempt_dir / "attempt.json").read_text(encoding="utf-8"))
+            check_value("paste is not accepted until evidence chain completes", api_attempt["outcome"], "rejected")
+            check_value("evidence-chain failure reason is retained", api_attempt["outcome_detail"], "evidence rebuild failed")
+
+        missing_packet_project = {"review_dir": str(root / "missing-packet-project")}
+        try:
+            save_project_vision_response(missing_packet_project, "reply without packet")
+            raise AssertionError("missing packet should reject a pasted reply")
+        except ValueError as error:
+            check_value("missing packet is rejected after archive", "Create the ChatGPT packet" in str(error), True)
+        missing_attempt = vision_response_attempt_history(missing_packet_project)[0]
+        missing_attempt_dir = Path(missing_packet_project["review_dir"]) / "chatgpt_runs" / missing_attempt["attempt_id"]
+        check_value("reply is archived even when packet context is missing", (missing_attempt_dir / "raw_reply.txt").read_text(encoding="utf-8"), "reply without packet")
+        check_value("missing packet attempt has rejected outcome", missing_attempt["outcome"], "rejected")
 
 
 def tiny_png(path):

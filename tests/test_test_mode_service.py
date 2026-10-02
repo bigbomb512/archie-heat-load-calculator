@@ -92,6 +92,19 @@ def main():
             check("only one worker is created", len(FakeThread.instances) == 1)
             run_dir, run_data = test_mode_service._read_run(web.WEB_REVIEW / test_mode_service.RUN_NAMESPACE, first["run"]["run_id"])
             check("test run is stored under an isolated test namespace", run_dir.parent == (web.WEB_REVIEW / "test_runs").resolve())
+            attempt = run_dir / "workspace" / "skill_workflow_runs" / "run-1" / "attempts" / "room_boundaries_areas" / "1" / "raw_output.txt"
+            attempt.parent.mkdir(parents=True, exist_ok=True)
+            attempt.write_text("raw provider reply", encoding="utf-8")
+            linked_attempt = test_mode_service.attempt_artifact(
+                web, run_data["run_id"],
+                "workspace/skill_workflow_runs/run-1/attempts/room_boundaries_areas/1/raw_output.txt")
+            check("test run exposes an archived attempt reply through a confined path", linked_attempt.read_text(encoding="utf-8") == "raw provider reply")
+            try:
+                test_mode_service.attempt_artifact(web, run_data["run_id"], "../outside.txt")
+            except ValueError:
+                check("test attempt artifact route rejects path traversal", True)
+            else:
+                check("test attempt artifact route rejects path traversal", False)
             check("browser-safe status omits workspace paths", str(root) not in json.dumps(test_mode_service.get_run(web, run_data["run_id"])))
             try:
                 test_mode_service.reset(web, run_data["run_id"])
@@ -109,6 +122,21 @@ def main():
                 check("non-loopback clients are rejected", True)
             else:
                 check("non-loopback clients are rejected", False)
+            check("rooms-only Codex scenario runs the rooms-only skill scope",
+                  test_mode_service.CODEX_SCENARIOS.get("codex_rooms_only") == "rooms_only")
+            with patch.dict("os.environ", {"ARCHIE_TEST_CODEX": "0"}, clear=False):
+                try:
+                    test_mode_service.run(web, scenario="codex_rooms_only")
+                except PermissionError:
+                    check("rooms-only Codex scenario needs the explicit Codex test flag", True)
+                else:
+                    check("rooms-only Codex scenario needs the explicit Codex test flag", False)
+            try:
+                test_mode_service.run(web, scenario="codex_everything")
+            except ValueError:
+                check("unknown Codex scenarios are rejected", True)
+            else:
+                check("unknown Codex scenarios are rejected", False)
         with patch.dict("os.environ", {"ARCHIE_ENV": "test", "ARCHIE_TEST_MODE": "0"}, clear=False), \
              patch("backend.security.config", return_value=config):
             try:

@@ -198,8 +198,11 @@ resolvers. No visual-proportion area estimates.
   `possible_wall_or_dimension` is a wall. Use the attached primary-plan image
   to distinguish wall lines from dimension strings, furniture, and details.
   The primary page's `line_candidates` are tuples in this order:
-  `[candidate_id, start_px, end_px, role_hint, confidence_score]`; use the
-  supplied IDs and endpoints verbatim in `walls`, never invent wall IDs.
+  `[candidate_id, x1, y1, x2, y2, role]`, where `[x1, y1]` and `[x2, y2]` are
+  the line's start and end points in whole image pixels and `role` is `W`
+  (possible wall or dimension), `C` (neutral vector context) or the
+  extractor's role text; use the supplied IDs and endpoints verbatim in
+  `walls`, never invent wall IDs.
   Their coordinates refer to the full-page `image_px` coordinate frame.
   Attached pages may be higher-resolution renders; use the per-page
   `attached_image_coordinate_frames` supplied in the prompt to convert points

@@ -58,11 +58,14 @@
     <section class="local-test-workspace hide" id="testWorkspacePanel" aria-labelledby="testWorkspaceHeading">
       <div class="micro">LOCAL TEST WORKSPACE</div>
       <h3 id="testWorkspaceHeading">Run a full workflow test</h3>
-      <p id="testWorkspaceFixture">Checking for a saved local full-building fixture…</p>
+      <p id="testWorkspaceFixture">Checking for a saved local full-building PDF…</p>
       <div class="test-workspace-actions">
-        <button class="btn key" id="btnTestWorkspaceRun" type="button">Run full test walkthrough</button>
+        <button class="btn key" id="btnTestWorkspaceRun" type="button">Run synthetic workflow test</button>
+        <button class="btn ghost" id="btnTestWorkspaceRunCodex" type="button">Run real PDF with Codex AI</button>
+        <button class="btn ghost" id="btnTestWorkspaceRunCodexRooms" type="button">Run rooms-only Codex AI test (lower usage)</button>
         <button class="btn ghost" id="btnTestWorkspaceReset" type="button" disabled>Reset test run</button>
       </div>
+      <p class="fine">The synthetic run checks workflow wiring. The Codex AI run uses no synthetic design values; selected pages from an isolated PDF copy are sent to the signed-in local Codex CLI. Its proposals remain unreviewed. The rooms-only run sends just the page-identity and room tasks (about 6 instead of about 24), each with a size-limited prompt; a task whose prompt would exceed its limit is blocked before anything is sent.</p>
       <p class="test-workspace-status" id="testWorkspaceStatus" role="status" aria-live="polite">No test run yet.</p>
       <ol class="test-workspace-stages" id="testWorkspaceStages" aria-label="Test walkthrough progress"></ol>
       <div class="test-workspace-summary" id="testWorkspaceSummary"></div>
@@ -256,6 +259,10 @@
             </div>
             <button class="btn key" id="btnGuidedResolveModelInputs" type="button">Resolve model inputs</button>
             <p class="fine" id="guidedModelInputsStatus" role="status" aria-live="polite">Run this once after confirming the evidence packet.</p>
+            <details class="skill-attempt-details" id="skillWorkflowAttemptsDetails" hidden>
+              <summary id="skillWorkflowAttemptsHeading">AI evidence task attempts</summary>
+              <div class="review-list" id="skillWorkflowAttempts" aria-live="polite"></div>
+            </details>
           </section>
           <details class="workflow-advanced-tools">
             <summary>Advanced AI, source, and evidence controls</summary>
@@ -399,10 +406,17 @@
           </section>
           <details class="advanced-import"><summary>Advanced recovery: import pre-generated vision JSON</summary>
             <p class="fine">This fallback uses the same local validation rules. It is not the primary workflow.</p>
+            <label class="vision-model-note" for="visionModelNote">Model note (optional)<input id="visionModelNote" type="text" maxlength="300" placeholder="e.g. ChatGPT model shown in the conversation"></label>
+            <label class="vision-model-note" for="visionAttachedPages">Pages attached (optional)<input id="visionAttachedPages" type="text" inputmode="numeric" placeholder="e.g. 20, 21, 22"></label>
             <textarea id="visionJson" rows="10" spellcheck="false" placeholder='{"provider":"chatgpt_manual","result":{"layered_geometry":{"pages":[]}}}'></textarea>
             <button class="btn ghost mini" id="btnVisionSubmit" type="button">Validate imported JSON</button>
           </details>
           </details>
+          <section class="vision-history" aria-labelledby="visionHistoryHeading">
+            <h4 id="visionHistoryHeading">Pasted reply history</h4>
+            <p class="fine">Each paste is archived with its source packet, prompt, included pages, and processing outcome.</p>
+            <div class="review-list" id="visionHistory" aria-live="polite"><div class="review-empty">Loading reply history…</div></div>
+          </section>
         </div>
 
         <div class="review-panel hide" id="designRequirementsPanel">

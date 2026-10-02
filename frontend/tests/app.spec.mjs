@@ -39,6 +39,12 @@ async function mockApi(page) {
   await page.route("**/api/vision-extraction?project_id=demo-project", route => route.fulfill({ json: {
     settings: {}, available_groups: [], provider_configured: false,
   } }));
+  await page.route("**/api/vision-response-history?project_id=demo-project", route => route.fulfill({ json: { attempts: [{
+    attempt_id: "20261002T010203Z_abcd1234", created_at: "2026-10-02T12:02:03+1100", outcome: "accepted",
+    outcome_detail: "Reply parsed and the reasoning packet was rebuilt.", model_note: "ChatGPT model note", page_list: [1, 2],
+    packet_fingerprint: "abcdef1234567890", prompt_fingerprint: "123456abcdef7890", result_counts: {validation_issues: 0},
+    raw_reply_url: "/api/artifact?project_id=demo-project&artifact=chatgpt_runs%2Ftest%2Fraw_reply.txt",
+  }] } }));
   await page.route("**/api/ai-preliminary-model?project_id=demo-project", route => route.fulfill({ json: {} }));
   await page.route("**/api/room-use-resolution?project_id=demo-project", route => route.fulfill({ json: {} }));
   await page.route("**/api/au-ventilation-rules?project_id=demo-project", route => route.fulfill({json:{
@@ -292,11 +298,16 @@ test("local test workspace runs and resets an isolated draft walkthrough", async
     provisional_count: 4, blocked_count: 2, excluded_count: 1,
     report_status: "calculated_provisional", report_label: "TEST RUN — AI preliminary estimate — not engineering reviewed or validated",
     report_summary: {peak_total_kw: 48.2, peak_hour: 15},
+    skill_tasks: [{id: "room_boundaries_areas", status: "failed", validation_check: "proposal_fields_mismatch",
+      validation_detail: "Missing required proposal field.",
+      raw_output_url: "/api/test-mode/artifact/test-123?path=workspace%2Fskill_workflow_runs%2Frun%2Fattempts%2Froom_boundaries_areas%2F1%2Fraw_output.txt",
+      prompt_url: "/api/test-mode/artifact/test-123?path=workspace%2Fskill_workflow_runs%2Frun%2Fattempts%2Froom_boundaries_areas%2F1%2Fprompt.txt"}],
   }}}));
   await page.route("**/api/test-mode/reset", route => route.fulfill({json: {reset: true, run_id: "test-123"}}));
   await page.goto("/");
   await expect(page.locator("#testWorkspacePanel")).toBeVisible();
-  await expect(page.locator("#testWorkspaceFixture")).toContainText("not extracted from the PDF");
+  await expect(page.locator("#testWorkspaceFixture")).toContainText("synthetic workflow test");
+  await expect(page.locator("#testWorkspaceFixture")).toContainText("real-PDF Codex AI test");
   await expect(page.locator("#testWorkspaceFixture")).toContainText("Local full-building fixture");
   await page.locator('[data-open="demo-project"]').click();
   await expect(page.locator("#vRes")).toBeVisible();
@@ -306,6 +317,9 @@ test("local test workspace runs and resets an isolated draft walkthrough", async
   await expect(page.locator("#testWorkspaceSummary")).toContainText("Rooms: 8/8");
   await expect(page.locator("#testWorkspaceSummary")).toContainText("48.20 kW");
   await expect(page.locator("#testWorkspaceSummary")).toContainText("not engineering reviewed or validated");
+  await expect(page.locator("#testWorkspaceSkillAttempts")).toContainText("proposal_fields_mismatch");
+  await expect(page.locator("#testWorkspaceSkillAttempts")).toContainText("Missing required proposal field.");
+  await expect(page.locator("#testWorkspaceSkillAttempts a")).toHaveCount(2);
   await page.locator("#btnTestWorkspaceReset").click();
   await expect(page.locator("#testWorkspaceStatus")).toContainText("Test run reset");
 });
@@ -896,6 +910,18 @@ test("saved project opens into results", async ({ page }) => {
   await expect(page.locator("#summaryTitle")).toHaveText("Ready for ChatGPT packet");
   await expect(page.locator("#btnContinue")).toBeEnabled();
   expect(errors).toEqual([]);
+});
+
+test("vision reply history is shown in the app after opening the review workflow", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/");
+  await page.locator("[data-open='demo-project']").click();
+  await page.locator("#btnContinue").click();
+  await expect(page.locator("#visionPanel")).toBeVisible();
+  await expect(page.locator("#visionHistory")).toContainText("ACCEPTED");
+  await expect(page.locator("#visionHistory")).toContainText("ChatGPT model note");
+  await expect(page.locator("#visionHistory")).toContainText("Packet pages: 1, 2");
+  await expect(page.locator("#visionHistory a")).toHaveText("Open raw reply");
 });
 
 test("annual report shows monthly subtotals and incomplete-hour counts", async ({ page }) => {
