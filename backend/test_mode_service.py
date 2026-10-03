@@ -605,6 +605,17 @@ def _run_worker(web, run_id, source_project, fingerprint, scenario):
                 changed = json.loads(run_file.read_text(encoding="utf-8"))
                 changed["test_stale_injection"] = uuid.uuid4().hex
                 _atomic_json(run_file, changed)
+        # Test runs confirm the room list automatically under an explicit test
+        # reviewer; the resulting report is labelled TEST RUN below.
+        room_scope = ai_preliminary_service.get(adapter, project).get("room_scope", {})
+        if room_scope.get("candidates"):
+            ai_preliminary_service.post(adapter, project, {
+                "action": "confirm_room_scope", "reviewer": "Local test mode (not a review)",
+                "candidate_fingerprint": room_scope.get("candidate_fingerprint", ""),
+                "rows": [{"key": row["key"], "include": row["status"] == "calculated",
+                          "reason": "" if row["status"] == "calculated" else "Test mode: room use not chosen"}
+                         for row in room_scope["candidates"]],
+            })
         calculation = ai_preliminary_service.post(adapter, project, {"action": "calculate"})
         report = calculation.get("hourly_ai_preliminary_load_report", {})
         if not report:

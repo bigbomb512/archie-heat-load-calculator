@@ -838,7 +838,7 @@ test("zero-created apply shows unresolved reasons in the summary above candidate
   await page.evaluate(() => { DRAFT_PREVIEW_TOKEN = "preview"; });
   await page.locator("#btnApplyCalculatorDraft").click();
   const summary = page.locator("#calculatorDraftSummary");
-  await expect(summary).toContainText("Apply created 0 records");
+  await expect(summary).toContainText("Apply changed nothing: no records were created or filled in.");
   await expect(summary).toContainText("Zone Bar: A zone cannot be applied without a reviewed floor assignment.");
   expect(await summary.evaluate(element => element.compareDocumentPosition(document.querySelector("#calculatorDraftCandidates")) & Node.DOCUMENT_POSITION_FOLLOWING)).toBeTruthy();
 });
@@ -1329,4 +1329,112 @@ test("AI preliminary result shows unassessed components beneath the total", asyn
   await expect(result).toContainText("Make-up air — Bar, Kitchen, Shop");
   await expect(result).toContainText("Envelope — Kitchen");
   await expect(result).not.toContainText("bar-id");
+});
+
+test("draft summary counts reasons beyond the first eight and names unassigned room inputs", async ({ page }) => {
+  await mockApi(page); const draft = cardHDraft();
+  draft.candidates.room_inputs = [{candidate_id: "ceiling-1", kind: "ceiling", value: {room_id: ""}, reason: "Confirm room allocation",
+    citations: [{reference: "A-02", page: 22, excerpt: "CH:2600MM"}], target_artifact: "hourly_load_model", confidence: "medium"}];
+  draft.apply_summary = {created: [], populated_fields: [], already_present: [], skipped_conflicts: [], missing_dependencies: [],
+    unresolved: Array.from({length: 11}, (_, index) => ({candidate_id: index ? `zone-${index}` : "ceiling-1", reason: "Missing reviewed fields: room_id"}))};
+  await renderCardHDraft(page, draft);
+  const summary = page.locator("#calculatorDraftSummary");
+  await expect(summary).toContainText("+ 3 more not shown");
+  await expect(summary).toContainText("Ceiling CH:2600MM — room not assigned: Missing reviewed fields: room_id");
+  await expect(page.locator('[data-candidate="ceiling-1"] b')).toContainText("ceiling · CH:2600MM — room not assigned");
+});
+
+test("apply that only fills fields is not reported as changing nothing", async ({ page }) => {
+  await mockApi(page); const draft = cardHDraft();
+  await page.route("**/api/calculator-draft", route => route.fulfill({json: {calculator_draft: draft, status: "current", apply_summary: {
+    created: [], populated_fields: [{candidate_id: "room-1", fields: ["area_m2"]}], already_present: [], skipped_conflicts: [],
+    missing_dependencies: [], unresolved: [], reports_marked_stale: [],
+  }}}));
+  await renderCardHDraft(page, draft);
+  await page.evaluate(() => { DRAFT_PREVIEW_TOKEN = "preview"; });
+  await page.locator("#btnApplyCalculatorDraft").click();
+  const summary = page.locator("#calculatorDraftSummary");
+  await expect(summary).toContainText("1 fields populated");
+  await expect(summary).not.toContainText("Apply changed nothing");
+});
+
+function roomScopeState(status = "not_confirmed"){
+  return {status, candidate_fingerprint: "fp-1", confirmation: status === "confirmed" ? {reviewer: "QA", confirmed_at: "2026-10-03"} : null,
+    uses: {retail: "Retail / showroom", office: "Office / meeting", not_a_room: "Not a room (false detection)"},
+    candidates: [
+      {key: "room-use:level-2:office", label: "Office", level: "Level 2", area_m2: 9, area_origin: "pdf_evidence", source_pages: [5], status: "calculated", include: true, exclude_reason: ""},
+      {key: "room-use:level-2:retail-space", label: "Retail space", level: "Level 2", area_m2: 27.9, area_origin: "pdf_evidence", source_pages: [25], status: "calculated", include: true, exclude_reason: ""},
+      {key: "room-use:level-2:service-counter", label: "Service Counter", level: "Level 2", area_m2: null, area_origin: "", source_pages: [5], status: "needs_use", include: true, exclude_reason: ""},
+    ]};
+}
+
+async function renderRoomScope(page, state){
+  await page.goto("/");
+  await page.evaluate(input => {
+    DATA = {id: "demo-project"}; show("vRes"); requiredElement("workflowSkeleton").classList.remove("hide");
+    requiredElement("visionPanel").classList.remove("hide");
+    drawValueResolution = () => {};
+    drawAiPreliminary({settings: {}, run: {}, hourly_ai_preliminary_load_report: {}, room_scope: input});
+  }, state);
+}
+
+test("room confirmation lists rooms with area, source and page and blocks calculation until confirmed", async ({ page }) => {
+  await mockApi(page);
+  let confirmPayload;
+  await page.route("**/api/ai-preliminary-model", async route => {
+    const payload = route.request().postDataJSON();
+    if (payload.action === "confirm_room_scope") {
+      confirmPayload = payload;
+      return route.fulfill({json: {settings: {}, run: {}, hourly_ai_preliminary_load_report: {}, room_scope: roomScopeState("confirmed")}});
+    }
+    return route.fulfill({json: {settings: {}, run: {}, room_scope: roomScopeState("confirmed"), hourly_ai_preliminary_load_report: {
+      label: "AI preliminary estimate", included_scope_peak: {design_total_kw: 3.1},
+      confirmed_rooms: [{label: "Office", level: "Level 2", area_m2: 9, area_origin: "pdf_evidence", source_pages: [5]}],
+      room_scope_confirmation: {reviewer: "QA"},
+    }}});
+  });
+  await renderRoomScope(page, roomScopeState());
+  const block = page.locator("#roomScopeConfirmation");
+  await expect(block).toBeVisible();
+  await expect(block).toContainText("Not confirmed yet");
+  await expect(block.locator('[data-room-scope-key="room-use:level-2:office"]')).toContainText("9 m² · printed on drawing · p. 5");
+  await expect(block.locator('[data-room-scope-key="room-use:level-2:service-counter"]')).toContainText("No room use yet");
+  await expect(block.locator("[data-room-scope-calculate]")).toBeDisabled();
+  await block.locator('[data-room-scope-key="room-use:level-2:retail-space"] [data-room-scope-include]').uncheck();
+  await block.locator('[data-room-scope-key="room-use:level-2:retail-space"] [data-room-scope-reason]').fill("Render text, not a room");
+  await block.locator('[data-room-scope-key="room-use:level-2:service-counter"] [data-room-scope-include]').uncheck();
+  await block.locator("[data-room-scope-reviewer]").fill("QA");
+  await block.locator("[data-room-scope-confirm]").click();
+  await expect.poll(() => confirmPayload?.reviewer).toBe("QA");
+  expect(confirmPayload.candidate_fingerprint).toBe("fp-1");
+  expect(confirmPayload.rows).toEqual([
+    {key: "room-use:level-2:office", include: true, reason: ""},
+    {key: "room-use:level-2:retail-space", include: false, reason: "Render text, not a room"},
+    {key: "room-use:level-2:service-counter", include: false, reason: ""},
+  ]);
+  await expect(block).toContainText("Confirmed by QA");
+  await expect(block.locator("[data-room-scope-calculate]")).toBeEnabled();
+  await block.locator("[data-room-scope-calculate]").click();
+  await expect(page.locator("[data-confirmed-rooms]")).toContainText("Office — 9 m² · printed on drawing · p. 5");
+  await expect(block).toContainText("Draft load calculated: 3.1 kW");
+});
+
+test("room confirmation needs a reviewer and saves a chosen use before reassembling", async ({ page }) => {
+  await mockApi(page);
+  const calls = [];
+  await page.route("**/api/room-use-resolution", route => { calls.push(["room-use", route.request().postDataJSON()]); return route.fulfill({json: {records: []}}); });
+  await page.route("**/api/ai-preliminary-model", route => { calls.push(["preliminary", route.request().postDataJSON()]);
+    return route.fulfill({json: {settings: {}, run: {}, hourly_ai_preliminary_load_report: {}, room_scope: roomScopeState()}}); });
+  await renderRoomScope(page, roomScopeState());
+  const block = page.locator("#roomScopeConfirmation");
+  await block.locator("[data-room-scope-confirm]").click();
+  await expect(block).toContainText("Enter a reviewer name before confirming the room list.");
+  expect(calls).toEqual([]);
+  await block.locator("[data-room-scope-reviewer]").fill("QA");
+  const counter = block.locator('[data-room-scope-key="room-use:level-2:service-counter"]');
+  await counter.locator("[data-room-scope-use]").selectOption("retail");
+  await counter.locator("[data-room-scope-save-use]").click();
+  await expect.poll(() => calls.map(([kind, body]) => `${kind}:${body.action}`)).toEqual(["room-use:apply_override", "preliminary:assemble"]);
+  expect(calls[0][1]).toEqual(expect.objectContaining({room_id: "room-use:level-2:service-counter", taxonomy_id: "retail", reviewer: "QA"}));
+  await expect(block).toContainText("Use saved for Service Counter");
 });

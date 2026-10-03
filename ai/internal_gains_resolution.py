@@ -276,7 +276,7 @@ def resolve(building, vision=None, proposal=None, room_use=None, pack=None,
                     "diversity": _positive(item.get("diversity_factor")) or _positive(profile.get("equipment_diversity")),
                     "origin": "direct_project_evidence", "confidence": .85, "evidence": _evidence(item),
                     "formula": "quantity × rated_input_w × heat_to_space_factor"})
-        if not equipment_records and scope not in {"refrigeration_process", "unresolved_scope"} and area and _positive(profile.get("equipment_w_m2")):
+        if not equipment_records and scope not in {"refrigeration_process", "unresolved_scope", "not_a_room"} and area and _positive(profile.get("equipment_w_m2")):
             equipment_records.append({"name": "Controlled preliminary profile equipment", "quantity": 1,
                 "rated_input_w": area * profile["equipment_w_m2"], "heat_to_space_factor": _positive(profile.get("equipment_space_gain")) or 0,
                 "diversity": _positive(profile.get("equipment_diversity")) or 0, "origin": "controlled_preliminary_profile",
@@ -297,7 +297,7 @@ def resolve(building, vision=None, proposal=None, room_use=None, pack=None,
                           "invalid_day_types": invalid_schedule_days, "day_profiles": schedule_profiles,
                           "fields": {name: {"schedule_id": schedule_id, "day_types": list(DAY_TYPES)} for name in ("people", "lighting", "equipment", "outside_air", "infiltration", "process_equipment")},
                           "fingerprint": fingerprint(schedule_profiles)})
-        status = "excluded" if scope in {"refrigeration_process", "unresolved_scope"} else "needs_review" if invalid_schedule_days or any(field.get("origin") == "unresolved" for field in fields.values() if isinstance(field, dict)) else "provisional"
+        status = "excluded" if scope in {"refrigeration_process", "unresolved_scope", "not_a_room"} else "needs_review" if invalid_schedule_days or any(field.get("origin") == "unresolved" for field in fields.values() if isinstance(field, dict)) else "provisional"
         record = {"room_id": room_id, "level": level, "zone_id": f"zone-{room_id}", "geometry_proof_id": next((s.get("geometry_proof_id", "") for s in sources if s.get("geometry_proof_id")), ""),
                   "original_label": label, "room_use_taxonomy": use.get("taxonomy_id", "generic_conditioned"), "preliminary_profile_id": profile_id,
                   "space_scope": scope, "fields": fields, "occupancy_count": fields["occupancy_count"]["value"],

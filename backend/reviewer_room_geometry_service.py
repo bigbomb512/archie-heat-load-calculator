@@ -9,6 +9,7 @@ from copy import deepcopy
 from pathlib import Path
 
 from ai import ai_preliminary, reviewer_room_geometry
+from ai.room_use_resolution import room_identity
 from ai.drawing_coverage import has_current_level_classification
 from ai.geometry_resolution import fingerprint
 from backend.vision_extraction_service import _atomic_json
@@ -76,9 +77,15 @@ def current_artifact_input(root):
         "reviewer_room_geometry": _read(paths["artifact"], {}),
         "room_use_resolution": _read(paths["room_use"], {}),
     }
-    return {"fingerprint": artifact.get("fingerprint", ""),
-            "records": current_records(paths, artifact), "rooms": _rooms(paths),
-            "source_artifact_fingerprints": {name: fingerprint(value) for name, value in source_artifacts.items()}}
+    result = {"fingerprint": artifact.get("fingerprint", ""),
+              "records": current_records(paths, artifact), "rooms": _rooms(paths),
+              "source_artifact_fingerprints": {name: fingerprint(value) for name, value in source_artifacts.items()}}
+    excluded = _not_a_room_identities(source_artifacts["room_use_resolution"])
+    if excluded:
+        # Only present when a reviewer has excluded a detection, so existing
+        # registries (and the drafts fingerprinted from them) stay unchanged.
+        result["excluded_room_identities"] = sorted(excluded)
+    return result
 
 
 def current_traced_areas(root):
@@ -263,11 +270,25 @@ def _rooms(paths):
             rows.append({"room_id": row["room_id"], "label": row["label"], "level_name": row.get("level_name") or row.get("level", ""),
                          "source_pages": row.get("source_pages", []) or ([row["page"]] if isinstance(row.get("page"), int) else []),
                          "evidence": deepcopy(row.get("evidence", [])), "source": "room_inference_proposal"})
+    # A reviewer can mark a detected label as "not a room"; such identities are
+    # never offered as trace targets or passed on through the room registry.
+    excluded = _not_a_room_identities(room_use)
     unique = {}
     for row in rows:
+        if row.get("room_id") in excluded or _row_identity(row) in excluded:
+            continue
         row["needs_trace"] = row.get("room_id") not in active_area_ids
         unique.setdefault(row["room_id"], row)
     return sorted(unique.values(), key=lambda row: (row["label"].casefold(), row["level_name"].casefold(), row["room_id"]))
+
+
+def _row_identity(row):
+    return room_identity(row.get("label", ""), row.get("level_name") or "Unassigned level")
+
+
+def _not_a_room_identities(room_use):
+    return {str(row.get("room_id")) for row in (room_use or {}).get("records", [])
+            if isinstance(row, dict) and row.get("room_id") and row.get("space_scope") == "not_a_room"}
 
 
 def _response(web, project):

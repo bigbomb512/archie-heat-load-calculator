@@ -72,6 +72,16 @@ class CalculatorDraftTests(unittest.TestCase):
         self.assertTrue(any("confirm the proposed single-level assumption" in item.get("reason", "").lower()
                             for item in draft["review_items"]))
 
+    def test_not_a_room_detection_is_not_a_draft_candidate(self):
+        from ai.room_use_resolution import room_identity
+        data = source_data()
+        excluded = {"excluded_room_identities": [room_identity("Shop A", "Ground")], "rooms": [], "records": []}
+        draft = build_calculator_draft(data["thermal"], data["building"], data["coverage"], room_registry=excluded)
+        names = [row["value"].get("name") for kind in ("zones", "rooms") for row in draft["candidates"][kind]]
+        self.assertNotIn("Shop A", names)
+        kept = build_calculator_draft(data["thermal"], data["building"], data["coverage"], room_registry={"rooms": [], "records": []})
+        self.assertIn("Shop A", [row["value"].get("name") for row in kept["candidates"]["rooms"]])
+
     def test_named_level_prevents_assumed_floor_and_rejection_keeps_zones_unresolved(self):
         data = source_data()
         data["coverage"]["levels"] = [{"level_name": "Unassigned level", "page_numbers": [21]}]

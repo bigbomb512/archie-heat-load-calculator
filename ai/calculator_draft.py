@@ -17,6 +17,7 @@ from ai.envelope import (
     validate_envelope_model, CONSTRUCTION_KINDS,
 )
 from ai.drawing_coverage import has_current_level_classification
+from ai.room_use_resolution import room_identity
 
 DECISIONS = {"accept", "edit", "reject", "needs_evidence", "pending"}
 GROUPS = ("floors", "zones", "rooms", "room_inputs", "schedules", "envelope")
@@ -305,8 +306,12 @@ def build_calculator_draft(thermal_model, building_evidence, drawing_coverage, p
             "Confirm this drawing level; elevation remains optional.", confidence="inferred")
 
     spaces = {}
+    # Detections a reviewer marked "not a room" never become draft candidates.
+    not_a_room = set((room_registry or {}).get("excluded_room_identities", []))
     for space in building_evidence.get("spaces", []):
         if space.get("name"):
+            if room_identity(space["name"], str(space.get("level_name", "")).strip() or "Unassigned level") in not_a_room:
+                continue
             key = (str(space.get("level_name", "")).strip().casefold(), space["name"].casefold())
             spaces.setdefault(key, []).append(space)
     room_id_aliases = {}

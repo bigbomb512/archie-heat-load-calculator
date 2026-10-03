@@ -10,6 +10,7 @@ from pathlib import Path
 from ai import ai_preliminary
 from ai import value_resolution as value_resolver
 from ai import room_use_resolution
+from ai import room_scope_confirmation
 from ai import ceiling_volume_resolution
 from ai import internal_gains_resolution
 from ai import airflow_resolution
@@ -78,6 +79,7 @@ def _paths(project):
         "building": root / "building_evidence.json",
         "vision": root / "vision_response.json",
         "fusion": root / "architect_evidence_fusion.json",
+        "room_scope": root / "room_scope_confirmation.json",
     }
 
 
@@ -639,13 +641,46 @@ def _response(web, project):
         "ahu_resolution": ahu_resolution.validate(_read(paths["ahu_resolution"], ahu_resolution.empty_ahu_resolution())),
         "plant_resolution": plant_resolution.validate(_read(paths["plant_resolution"], plant_resolution.empty_plant_resolution())),
         "safety_factor_resolution": safety_factor_resolution.validate(_read(paths["safety_factor_resolution"], safety_factor_resolution.empty_safety_factor_resolution())),
+        "room_scope": _room_scope_state(paths, input_set),
         "artifact_links": {name: web.safe_link(path) for name, path in paths.items()
-                           if name in {"settings", "run", "model", "current_set", "report", "codex_handoff", "codex_response", "value_resolution", "room_use", "ceiling_volume", "internal_gains", "airflow", "ahu_resolution", "plant_resolution", "safety_factor_resolution"} and path.exists()},
+                           if name in {"settings", "run", "model", "current_set", "report", "codex_handoff", "codex_response", "value_resolution", "room_use", "room_scope", "ceiling_volume", "internal_gains", "airflow", "ahu_resolution", "plant_resolution", "safety_factor_resolution"} and path.exists()},
     }
 
 
 def get(web, project):
     return _response(web, project)
+
+
+class RoomScopeNotConfirmed(ValueError):
+    """The draft load needs a current reviewer-confirmed room list."""
+
+
+def _room_use_artifact(paths):
+    return _read(paths["room_use"], room_use_resolution.empty_room_use_resolution())
+
+
+def _room_scope_state(paths, input_set):
+    if not input_set:
+        return {"status": "not_available", "candidates": [], "candidate_fingerprint": "", "confirmation": None, "uses": {}}
+    current = room_scope_confirmation.state(input_set, _read(paths["room_scope"], None), _room_use_artifact(paths))
+    try:
+        categories = room_use_resolution.load_taxonomy()["categories"]
+        current["uses"] = {key: row["label"] for key, row in categories.items()}
+    except ValueError:
+        current["uses"] = {}
+    return current
+
+
+def _confirm_room_scope(paths, data):
+    input_set = _read(paths["current_set"], {})
+    if not input_set:
+        raise ValueError("Resolve model inputs before confirming the room list.")
+    stale = _stale_reasons(paths, input_set)
+    if stale:
+        raise ValueError("The draft model is out of date (" + ", ".join(stale) + " changed). Resolve model inputs again, then confirm the room list.")
+    confirmation = room_scope_confirmation.confirm(input_set, _room_use_artifact(paths), data, ai_preliminary.now())
+    _write(paths["room_scope"], confirmation)
+    return confirmation
 
 
 def _prepare_codex_handoff(web, project):
@@ -792,9 +827,16 @@ def _calculate(web, project):
     missing = [label for label, path in required.items() if not path.exists()]
     if missing:
         raise ValueError("Cannot calculate the preliminary load yet. Missing required artifacts: " + ", ".join(missing) + ".")
+    try:
+        confirmed_set, confirmed_rooms, confirmation_summary = room_scope_confirmation.apply(
+            input_set, _read(paths["room_scope"], None), _room_use_artifact(paths))
+    except ValueError as error:
+        raise RoomScopeNotConfirmed(str(error)) from error
     policy_artifact = _read(paths["safety_factor_resolution"], safety_factor_resolution.empty_safety_factor_resolution())
     policy = safety_factor_resolution.policy_for(policy_artifact, "cooling", preliminary=True)
-    report = ai_preliminary.calculate(input_set, safety_factor_policy=policy)
+    report = ai_preliminary.calculate(confirmed_set, safety_factor_policy=policy)
+    report["confirmed_rooms"] = confirmed_rooms
+    report["room_scope_confirmation"] = confirmation_summary
     # Provenance is attached at render time; it does not change any hourly
     # load value or reviewed artifact.
     try:
@@ -873,7 +915,12 @@ def provider_completed(web, project):
         pass
     _resolve_room_uses(_paths(project), persist=True)
     _assemble(web, project, source="provider")
-    _calculate(web, project)
+    try:
+        _calculate(web, project)
+    except RoomScopeNotConfirmed:
+        # The provider can propose rooms, but only a reviewer can confirm
+        # which ones make up the draft total.
+        return "awaiting_room_confirmation"
     return "completed"
 
 
@@ -915,6 +962,8 @@ def post(web, project, data):
         _assemble(web, project)
     elif action == "calculate":
         _calculate(web, project)
+    elif action == "confirm_room_scope":
+        _confirm_room_scope(paths, data)
     elif action == "run":
         _auto_start_provider(web, project)
     elif action == "prepare_codex_handoff":
@@ -933,7 +982,7 @@ def post(web, project, data):
                                "previous_input_fingerprint": prior.get("input_fingerprint", "")})
         _resolve_room_uses(paths, persist=True)
     else:
-        raise ValueError("AI preliminary action must be save_settings, save_manual_placeholder, save_placeholder_proposal, prepare_codex_handoff, apply_codex_response, resolve_from_packs, queue_source_research, queue_missing_source_research, accept_project_source, apply_override, rebuild_preliminary_model, run, assemble, or calculate.")
+        raise ValueError("AI preliminary action must be save_settings, save_manual_placeholder, save_placeholder_proposal, prepare_codex_handoff, apply_codex_response, resolve_from_packs, queue_source_research, queue_missing_source_research, accept_project_source, apply_override, rebuild_preliminary_model, run, assemble, confirm_room_scope, or calculate.")
     project["updated_at"] = ai_preliminary.now()
     web.update_project(project)
     return _response(web, project)

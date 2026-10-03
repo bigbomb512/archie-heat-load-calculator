@@ -28,7 +28,7 @@ PACK_PATH = ROOT / "config" / "ai_preliminary_assumption_pack.json"
 PACK_VERSION = "au-preliminary-v3"
 LEGACY_PACK_VERSIONS = {"au-preliminary-v2"}
 PROFILE_IDS = {"retail", "office", "hospitality", "storage", "residential", "generic_conditioned_room"}
-SPACE_SCOPES = {"comfort_hvac", "comfort_hvac_with_process_exception", "refrigeration_process", "unresolved_scope"}
+SPACE_SCOPES = {"comfort_hvac", "comfort_hvac_with_process_exception", "refrigeration_process", "unresolved_scope", "not_a_room"}
 # The proposal/ledger contract retains the complete opaque inventory.  The
 # preliminary hourly adapter currently materializes only externally exposed
 # wall/roof/ceiling surfaces; floors, partitions, and other boundaries remain
@@ -803,9 +803,10 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                            for issue in proposal.get("issues", []) if isinstance(issue, dict) and issue.get("component") == "room area")
     for row in space_rows:
         row["scope"] = row["scope"] if row["scope"] in SPACE_SCOPES else "unresolved_scope"
-        if row["scope"] in {"refrigeration_process", "unresolved_scope"}:
+        if row["scope"] in {"refrigeration_process", "unresolved_scope", "not_a_room"}:
             reason = ("Refrigeration load required; this room is excluded from the comfort-HVAC subtotal."
                       if row["scope"] == "refrigeration_process" else
+                      "A reviewer marked this detection as not a room." if row["scope"] == "not_a_room" else
                       "AI could not resolve whether this room belongs in comfort-HVAC scope.")
             excluded_spaces.append({"room_name": row["name"], "level": row["level"], "scope": row["scope"], "reason": reason,
                                     "evidence": row["evidence"]})

@@ -13,6 +13,7 @@
     "plant_or_unconditioned": {"label": "Plant / service / unconditioned", "profile_id": "", "space_scope": "unresolved_scope", "aliases": ["plant", "electrical", "switchboard", "service", "unconditioned", "external"]},
     "refrigeration_process": {"label": "Cool room / freezer", "profile_id": "", "space_scope": "refrigeration_process", "aliases": ["cool room", "coolroom", "freezer", "refrigerated"]},
     "residential": {"label": "Residential", "profile_id": "residential", "space_scope": "comfort_hvac", "aliases": ["bedroom", "apartment", "residential", "living", "lounge", "dwelling"]},
-    "generic_conditioned": {"label": "Generic conditioned room", "profile_id": "generic_conditioned_room", "space_scope": "comfort_hvac", "aliases": []}
+    "generic_conditioned": {"label": "Generic conditioned room", "profile_id": "generic_conditioned_room", "space_scope": "comfort_hvac", "aliases": []},
+    "not_a_room": {"label": "Not a room (false detection)", "profile_id": "", "space_scope": "not_a_room", "aliases": []}
   }
 }

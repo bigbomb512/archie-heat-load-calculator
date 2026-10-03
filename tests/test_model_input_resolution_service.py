@@ -38,8 +38,19 @@ def main():
         required = json.loads((root / "model_input_resolution.json").read_text(encoding="utf-8"))["required_artifacts"]
         check("missing draft artifacts are hydrated", all(item["exists"] and item["hydrated"] and item["provisional"] for item in required))
         check("hydration creates all four inputs", all((root / filename).exists() for filename in ("design_requirements.json", "schedule_library.json", "design_day_scenarios.json", "hourly_load_model.json")))
+        try:
+            ai_preliminary_service.post(Web(), project, {"action": "calculate"})
+        except ValueError as error:
+            check("draft load is refused until the room list is confirmed", "Confirm the room list" in str(error))
+        else:
+            raise AssertionError("calculation ran without a confirmed room list")
+        room_scope = ai_preliminary_service.get(Web(), project)["room_scope"]
+        ai_preliminary_service.post(Web(), project, {
+            "action": "confirm_room_scope", "reviewer": "QA", "candidate_fingerprint": room_scope["candidate_fingerprint"],
+            "rows": [{"key": row["key"], "include": True} for row in room_scope["candidates"]]})
         calculated = ai_preliminary_service.post(Web(), project, {"action": "calculate"})
         report = calculated["hourly_ai_preliminary_load_report"]
+        check("confirmed rooms are listed with the draft total", [row["label"] for row in report["confirmed_rooms"]] == ["Office"])
         check("a freshly hydrated draft input set calculates without stale-state drift", report.get("status") == "draft" and not calculated.get("stale_reasons"))
         refreshed = model_input_resolution_service.get(Web(), project)
         check("repeated GET is read-only and current", refreshed["status"] in {"current", "stale"})

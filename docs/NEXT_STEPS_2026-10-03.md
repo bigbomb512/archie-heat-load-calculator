@@ -143,6 +143,17 @@ findings #1–#3, #5). Files: `ai/room_inference.py`, `ai/building_evidence.py`,
 
 ### Card N — reviewer confirms the room list before a draft number
 
+**Status 2026-10-03:** implemented by Claude (with the three Card H follow-ups:
+room-input names, "+ N more" reasons, "Apply changed nothing" wording).
+Room list confirmation lives in `ai/room_scope_confirmation.py`; the gate is in
+`backend/ai_preliminary_service._calculate`; "Not a room" is taxonomy category
+`not_a_room` (scope `not_a_room`), honoured by room-use, the trace room list, the
+room registry/calculator draft and the preliminary assembler. Local test mode
+auto-confirms as "Local test mode (not a review)"; the provider auto-run stops
+at `awaiting_room_confirmation`. Verified on the Butcher Buffet walkthrough
+project: confirming Bar/Kitchen/Shop gives the unchanged 33.8 kW with the rooms
+listed under the total.
+
 Start after Card H merges (both touch `frontend/js/app.js`). Independent of
 Card M, but verify after M lands so the list is realistic.
 

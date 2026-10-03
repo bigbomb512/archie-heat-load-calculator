@@ -11,6 +11,7 @@ let DATA = null, FILTER = "rel", PICK = new Set(), CUR = null, DEBUG = false, PA
 let ANALYSIS_IN_PROGRESS = false, CONFIRMATION_IN_PROGRESS = false;
 let CALCULATOR_DRAFT = null, DRAFT_PREVIEW_TOKEN = "", DRAFT_DIRTY = false;
 let DRAFT_REVIEW_SESSION = {projectId: null, reviewer: "", source: ""};
+let ROOM_SCOPE_REVIEWER = {projectId: null, reviewer: ""};
 let ENVELOPE_LIBRARY = {constructions: [], windows: [], shading_records: []}, ENVELOPE_MODEL = {surfaces: []};
 let GLAZING_GATE = {}, SHADING_GATE = {}, GROUND_CONTACT_GATE = {};
 let CALCULATOR_INPUT_SET = null, CALCULATOR_INPUT_OVERRIDES = {revision: 0, records: []}, PROJECT_CONTEXT = {};
@@ -1069,6 +1070,8 @@ async function guidedResolveModelInputs(){
     status.textContent = workflowWarning
       ? `Coverage hydrated with evidence exceptions (${run.status}): ${workflowWarning} Review provisional values and any remediation items before calculation.`
       : "Coverage hydrated. Review provisional values and any remediation items before calculation.";
+    status.textContent += " Next: confirm the room list below, then calculate the draft load.";
+    await loadAiPreliminary();
   } catch (error) {
     const detail = error?.resolver || {};
     status.textContent = detail.code === "room_inference_pending"
@@ -1962,6 +1965,7 @@ async function internalGainsResolutionAction(action, details = {}){
 
 function drawAiPreliminary(data){
   const settings = data.settings || {}, run = data.run || {}, report = data.hourly_ai_preliminary_load_report || {};
+  drawRoomScopeConfirmation(data.room_scope || {});
   requiredElement("aiPreliminaryAuto").checked = !!settings.automatic_analysis_enabled;
   requiredElement("aiPreliminaryConsent").checked = !!settings.saved_project_consent;
   const proposal = run.manual_placeholder_proposal || (run.manual_placeholder_entities?.length ? {rooms: run.manual_placeholder_entities} : null);
@@ -2003,6 +2007,7 @@ function drawAiPreliminary(data){
     : "No local Codex handoff has been prepared.";
   requiredElement("aiPreliminaryResults").innerHTML = report.label ? `
     <article class="review-item"><div><b>${esc(report.label)}</b><span>Included-scope peak: ${peak.design_total_kw ?? "—"} kW. Low-confidence assumptions: ${coverage.low_confidence_count ?? queue.length}. Unsupported components remain explicit exclusions.</span></div></article>
+    ${(report.confirmed_rooms || []).length ? `<article class="review-item" data-confirmed-rooms><div><b>Rooms in this total</b><ul class="audit-list">${report.confirmed_rooms.map(room => `<li>${esc(room.label)} — ${room.area_m2 != null ? `${esc(room.area_m2)} m²` : "no area"} · ${esc(roomScopeOriginLabel(room.area_origin))}${room.source_pages?.length ? ` · p. ${esc(room.source_pages.join(", "))}` : ""}</li>`).join("")}</ul>${report.room_scope_confirmation?.reviewer ? `<span>Room list confirmed by ${esc(report.room_scope_confirmation.reviewer)}.</span>` : ""}</div></article>` : ""}
     ${excludedSummary.length ? `<article class="review-item"><div><b>Not included in this total</b><ul class="audit-list">${excludedSummary.map(line => `<li>${esc(line)}</li>`).join("")}</ul></div></article>` : ""}
     <article class="review-item"><div><b>AI preliminary envelope coverage</b><span>Surfaces: ${surfaces.included ?? 0} included, ${surfaces.blocked ?? 0} blocked, ${surfaces.excluded ?? 0} excluded. Openings: ${surfaces.openings_included ?? 0} included, ${surfaces.openings_excluded ?? 0} excluded. Unknown shading is explicitly treated as unshaded and queued for review.</span></div></article>
     ${refrigeration.map(item => `<article class="review-item"><div><b>${esc(item.room_name || "Refrigeration/process room")}</b><span>${esc(item.reason || "Excluded from the comfort-HVAC subtotal.")}</span></div></article>`).join("")}
@@ -2079,6 +2084,133 @@ async function valueResolutionAction(action){
     drawAiPreliminary(data);
     if (action === "queue_missing_source_research") toast("Source lookups queued", "No external content was fetched. Each lookup remains project-scoped and requires review.");
   } catch (error) { toast("Model input resolution", error.message); }
+}
+
+function roomScopeOriginLabel(origin){
+  return {pdf_evidence: "printed on drawing", reviewer_traced: "reviewer trace", ai_geometry: "AI estimate"}[origin] || (origin ? origin.replaceAll("_", " ") : "source not recorded");
+}
+
+function drawRoomScopeConfirmation(state = {}){
+  const container = optionalElement("roomScopeConfirmation");
+  if (!container) return;
+  const rows = state.candidates || [];
+  if (!rows.length) { container.classList.add("hide"); container.innerHTML = ""; return; }
+  if (ROOM_SCOPE_REVIEWER.projectId !== DATA?.id) ROOM_SCOPE_REVIEWER = {projectId: DATA?.id || null, reviewer: state.confirmation?.reviewer || ""};
+  const confirmed = state.status === "confirmed";
+  const statusText = confirmed
+    ? `Confirmed by ${state.confirmation?.reviewer || "reviewer"}${state.confirmation?.confirmed_at ? ` · ${state.confirmation.confirmed_at}` : ""}. Calculate the draft load, or change the list and confirm again.`
+    : state.status === "stale"
+      ? "The room list changed since it was confirmed. Review it and confirm again before calculating."
+      : "Not confirmed yet. The draft load is only calculated from the rooms you confirm here.";
+  const uses = Object.entries(state.uses || {});
+  const useOptions = uses.filter(([id]) => id !== "not_a_room").map(([id, label]) => `<option value="${esc(id)}">${esc(label)}</option>`).join("");
+  container.innerHTML = `<div class="room-scope-head"><div><div class="micro">Before calculating</div><h4 id="roomScopeHeading">Confirm rooms for the draft load</h4></div></div>
+    <p class="fine" data-room-scope-status>${esc(statusText)}</p>
+    <div class="room-scope-rows">${rows.map(row => {
+      const needsUse = row.status === "needs_use";
+      const meta = [row.level, row.area_m2 != null ? `${row.area_m2} m²` : "no area", roomScopeOriginLabel(row.area_origin), row.source_pages?.length ? `p. ${row.source_pages.join(", ")}` : ""].filter(Boolean).join(" · ");
+      return `<article class="review-item room-scope-row${needsUse ? " readiness-draft" : ""}" data-room-scope-key="${esc(row.key)}" data-room-scope-status="${esc(row.status)}">
+        <label class="room-scope-include"><input type="checkbox" data-room-scope-include ${row.include ? "checked" : ""}> <b>${esc(row.label)}</b></label>
+        <div><span>${esc(meta)}</span>${needsUse ? `<small>No room use yet${row.reason ? ` — ${esc(row.reason)}` : ""}. Choose a use to include it, or untick it.</small>` : ""}</div>
+        <div class="room-scope-actions">
+          ${needsUse ? `<select data-room-scope-use><option value="">Choose a use…</option>${useOptions}</select><button class="btn ghost mini" type="button" data-room-scope-save-use>Save use</button>` : ""}
+          <button class="btn ghost mini" type="button" data-room-scope-not-room title="Remove this detection everywhere">Not a room</button>
+          <input data-room-scope-reason placeholder="Reason if excluded" value="${esc(row.exclude_reason || "")}">
+        </div>
+      </article>`;
+    }).join("")}</div>
+    <div class="bar room-scope-footer"><label>Reviewer<input data-room-scope-reviewer placeholder="Name / initials" value="${esc(ROOM_SCOPE_REVIEWER.reviewer)}"></label>
+      <span class="draft-actions"><button class="btn ghost" type="button" data-room-scope-confirm>Confirm room list</button><button class="btn key" type="button" data-room-scope-calculate ${confirmed ? "" : "disabled"}>Calculate draft load</button></span></div>`;
+  container.classList.remove("hide");
+  container.dataset.candidateFingerprint = state.candidate_fingerprint || "";
+  container.querySelector("[data-room-scope-reviewer]").addEventListener("input", event => { ROOM_SCOPE_REVIEWER.reviewer = event.target.value; });
+  container.querySelector("[data-room-scope-confirm]").addEventListener("click", confirmRoomScope);
+  container.querySelector("[data-room-scope-calculate]").addEventListener("click", calculateConfirmedDraft);
+  container.querySelectorAll("[data-room-scope-save-use]").forEach(button => button.addEventListener("click", () => {
+    const row = button.closest("[data-room-scope-key]");
+    const use = row.querySelector("[data-room-scope-use]").value;
+    if (!use) return setRoomScopeMessage("Choose a use first, or untick the room to exclude it.");
+    saveRoomScopeUse(row.dataset.roomScopeKey, use, row.querySelector("b").textContent);
+  }));
+  container.querySelectorAll("[data-room-scope-not-room]").forEach(button => button.addEventListener("click", () => {
+    const row = button.closest("[data-room-scope-key]");
+    saveRoomScopeUse(row.dataset.roomScopeKey, "not_a_room", row.querySelector("b").textContent);
+  }));
+}
+
+function setRoomScopeMessage(message){
+  const target = optionalElement("roomScopeConfirmation")?.querySelector("[data-room-scope-status]");
+  if (target) target.textContent = message;
+}
+
+function roomScopeReviewer(){
+  return (optionalElement("roomScopeConfirmation")?.querySelector("[data-room-scope-reviewer]")?.value || ROOM_SCOPE_REVIEWER.reviewer || "").trim();
+}
+
+async function postJson(url, body){
+  const response = await fetch(url, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  const data = await response.json();
+  if (!response.ok || data.error) throw new Error(data.message || data.error || "Request failed.");
+  return data;
+}
+
+async function saveRoomScopeUse(roomId, taxonomyId, label){
+  if (!DATA?.id) return;
+  const reviewer = roomScopeReviewer();
+  if (!reviewer) return setRoomScopeMessage("Enter a reviewer name before changing a room.");
+  const override = {project_id: DATA.id, action: "apply_override", room_id: roomId, taxonomy_id: taxonomyId, reviewer,
+                    note: taxonomyId === "not_a_room" ? "Marked as not a room in the room confirmation list." : "Use chosen in the room confirmation list."};
+  setRoomScopeMessage(taxonomyId === "not_a_room" ? `Removing ${label}…` : `Saving the use for ${label}…`);
+  try {
+    try {
+      await postJson("/api/room-use-resolution", override);
+    } catch (error) {
+      // Room-use evidence can be stale after re-analysis; refresh it once.
+      if (!/stale/i.test(error.message)) throw error;
+      await postJson("/api/room-use-resolution", {project_id: DATA.id, action: "resolve"});
+      await postJson("/api/room-use-resolution", override);
+    }
+    const data = await postJson("/api/ai-preliminary-model", {project_id: DATA.id, action: "assemble", settings: aiPreliminarySettings()});
+    drawAiPreliminary(data);
+    setRoomScopeMessage(taxonomyId === "not_a_room"
+      ? `${label} was marked as not a room and removed. Review the list and confirm it.`
+      : `Use saved for ${label}. Review the list and confirm it.`);
+  } catch (error) {
+    setRoomScopeMessage(`Could not update ${label}: ${error.message}`);
+  }
+}
+
+async function confirmRoomScope(){
+  if (!DATA?.id) return;
+  const container = requiredElement("roomScopeConfirmation");
+  const reviewer = roomScopeReviewer();
+  if (!reviewer) return setRoomScopeMessage("Enter a reviewer name before confirming the room list.");
+  const rows = [...container.querySelectorAll("[data-room-scope-key]")].map(row => ({
+    key: row.dataset.roomScopeKey,
+    include: row.querySelector("[data-room-scope-include]").checked,
+    reason: row.querySelector("[data-room-scope-reason]").value.trim(),
+  }));
+  try {
+    const data = await postJson("/api/ai-preliminary-model", {project_id: DATA.id, action: "confirm_room_scope", reviewer,
+      candidate_fingerprint: container.dataset.candidateFingerprint || "", rows, settings: aiPreliminarySettings()});
+    drawAiPreliminary(data);
+    toast("Room list confirmed", "The draft load will use only the included rooms.");
+  } catch (error) {
+    setRoomScopeMessage(`Could not confirm the room list: ${error.message}`);
+  }
+}
+
+async function calculateConfirmedDraft(){
+  if (!DATA?.id) return;
+  setRoomScopeMessage("Calculating the draft load from the confirmed rooms…");
+  try {
+    const data = await postJson("/api/ai-preliminary-model", {project_id: DATA.id, action: "calculate", settings: aiPreliminarySettings()});
+    drawAiPreliminary(data);
+    const total = data.hourly_ai_preliminary_load_report?.included_scope_peak?.design_total_kw;
+    setRoomScopeMessage(total != null ? `Draft load calculated: ${total} kW (AI preliminary estimate, not engineering reviewed). See the result for what it includes and excludes.` : "Draft load calculated.");
+  } catch (error) {
+    setRoomScopeMessage(`Could not calculate: ${error.message}`);
+  }
 }
 
 async function aiPreliminaryAction(action){
@@ -3237,13 +3369,14 @@ function showCalculatorDraft(draft = {}, artifactUrl = ""){
     [`${summary.missing_dependencies?.length || 0} missing dependencies`, summary.missing_dependencies?.length],
     [`${summary.unresolved?.length || 0} unresolved`, summary.unresolved?.length],
   ].filter(([, count]) => count !== undefined).map(([label]) => label).join(" · ");
-  const reasons = [...(summary.unresolved || []), ...(summary.missing_dependencies || [])].slice(0, 8).map(item => {
+  const reasonRows = [...(summary.unresolved || []), ...(summary.missing_dependencies || [])];
+  const reasons = reasonRows.slice(0, 8).map(item => {
     const label = calculatorDraftLabel(draft, item.candidate_id);
     return `<li>${esc(label ? `${label}: ` : "")}${esc(item.reason || "Review required.")}</li>`;
-  }).join("");
+  }).join("") + (reasonRows.length > 8 ? `<li class="draft-summary-more">+ ${reasonRows.length - 8} more not shown</li>` : "");
   const receipt = summary.reports_marked_stale?.length ? ` Reports stale: ${summary.reports_marked_stale.join(", ")}.` : "";
-  const outcome = draft.outcome_action === "apply" && !(summary.created || []).length
-    ? "Apply created 0 records; unresolved items remain below. " : "";
+  const outcome = draft.outcome_action === "apply" && !(summary.created || []).length && !populatedFields
+    ? "Apply changed nothing: no records were created or filled in. The reasons are listed below. " : "";
   requiredElement("calculatorDraftSummary").innerHTML = (counts || artifactUrl || receipt || reasons) ? `<article class="review-item"><div><b>Application summary</b><span>${esc(outcome + (counts || "No preview or apply results yet.") + receipt)}</span>${reasons ? `<ul class="draft-summary-reasons">${reasons}</ul>` : ""}</div>${artifactUrl ? `<a class="btn ghost mini" href="${esc(artifactUrl)}" target="_blank" rel="noopener">Open draft JSON</a>` : ""}</article>` : "";
   requiredElement("calculatorDraftStatus").textContent = draft.status === "not_built" || !draft.status
     ? "Build a proposal queue after the thermal model and drawing evidence are ready."
@@ -3339,13 +3472,8 @@ function calculatorDraftLabel(draft, candidateId){
     const review = (draft.review_items || []).find(candidate => candidate.item_id === candidateId);
     return review ? `${review.scope || "Review"} · ${review.affected_id || "project"}` : "";
   }
-  const value = item.value || {};
-  let name = value.name || value.label;
-  if (item.kind === "area" && !name && value.room_id) {
-    const room = (draft.candidates?.rooms || []).find(candidate => candidate.value?.room_id === value.room_id || candidate.candidate_id === value.room_id);
-    name = room?.value?.name || room?.value?.label;
-  }
-  return `${String(item.kind).replace(/^./, character => character.toUpperCase())}${name ? ` ${name}` : ""}`;
+  const kind = String(item.kind).replace(/^./, character => character.toUpperCase());
+  return `${kind} ${calculatorDraftDisplayName(draft, item)}`.trim();
 }
 
 function calculatorDraftCandidateMarkup(item, savedDecision, draft = CALCULATOR_DRAFT || {}){
@@ -3357,7 +3485,7 @@ function calculatorDraftCandidateMarkup(item, savedDecision, draft = CALCULATOR_
   }).join("");
   const profiles = value.day_profiles ? `<label>Day profiles (24-hour JSON, edit only when fully cited)<textarea class="calculator-draft-json-field" data-field="day_profiles" spellcheck="false">${esc(JSON.stringify(value.day_profiles, null, 2))}</textarea></label>` : "";
   const citation = savedDecision.citations?.[0] || item.citations?.[0] || {};
-  const displayName = value.name || value.label || (item.kind === "area" ? calculatorDraftAreaRoomName(draft, value) : "") || item.candidate_id;
+  const displayName = calculatorDraftDisplayName(draft, item) || item.candidate_id;
   const geometryStatus = item.geometry_status || value.geometry_status;
   const geometryReference = item.geometry_reference || value.geometry_reference;
   const geometry = geometryStatus ? `<small>geometry: ${esc(geometryStatus)}${geometryReference ? ` · witness ${esc(Array.isArray(geometryReference) ? geometryReference.join(" · ") : geometryReference)}` : ""}</small>` : "";
@@ -3376,6 +3504,20 @@ function calculatorDraftAreaRoomName(draft, value){
   if (!value?.room_id) return "";
   const room = (draft.candidates?.rooms || []).find(candidate => candidate.value?.room_id === value.room_id || candidate.candidate_id === value.room_id);
   return room?.value?.name || room?.value?.label || "";
+}
+
+// Readable candidate name: rooms/zones/floors use their own name; areas and
+// room inputs (ceiling, lighting, equipment) name their room, or say plainly
+// that no room is assigned yet.
+function calculatorDraftDisplayName(draft, item){
+  const value = item.value || {};
+  const own = value.name || value.label || "";
+  if (["floor", "zone", "room"].includes(item.kind)) return own;
+  const roomName = calculatorDraftAreaRoomName(draft, value);
+  if (item.kind === "area") return roomName || own;
+  if (!["ceiling", "lighting", "equipment"].includes(item.kind)) return own;
+  const subject = own || item.citations?.[0]?.excerpt || "";
+  return `${subject}${subject ? " — " : ""}${roomName || "room not assigned"}`;
 }
 
 function calculatorDraftReviewMarkup(item, savedDecision){

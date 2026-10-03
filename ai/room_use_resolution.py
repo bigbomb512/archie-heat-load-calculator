@@ -14,7 +14,10 @@ ROOT = Path(__file__).resolve().parents[1]
 PACK_PATH = ROOT / "config" / "au_room_use_taxonomy_v1.json"
 PACK_ID = "au-room-use-v1"
 STATUSES = {"resolved", "needs_review", "excluded", "stale"}
-SCOPES = {"comfort_hvac", "comfort_hvac_with_process_exception", "refrigeration_process", "unresolved_scope"}
+SCOPES = {"comfort_hvac", "comfort_hvac_with_process_exception", "refrigeration_process", "unresolved_scope", "not_a_room"}
+# Scopes that never enter comfort-HVAC totals. "not_a_room" is a reviewer
+# decision that a detected label is not a real space at all.
+EXCLUDED_SCOPES = {"refrigeration_process", "unresolved_scope", "not_a_room"}
 PROFILES = {"retail", "office", "hospitality", "storage", "residential", "generic_conditioned_room"}
 
 
@@ -182,7 +185,7 @@ def _record(room, taxonomy, source_fingerprints, existing=None):
         scope = scope_override
         category = deepcopy(category)
         category["space_scope"] = scope
-    special = scope in {"refrigeration_process", "unresolved_scope"}
+    special = scope in EXCLUDED_SCOPES
     status = "excluded" if special else "needs_review" if origin in {"generic_fallback", "conflict"} or score < 0.5 else "resolved"
     evidence = []
     for item in [room["building"], *(room["ai"] or [])]:
@@ -201,7 +204,8 @@ def _record(room, taxonomy, source_fingerprints, existing=None):
         "override": override, "status": status, "remediation": (
             "Confirm the room use before relying on this generic preliminary profile." if status == "needs_review" else
             "Provide a refrigeration/process load method; this space is excluded from comfort-HVAC totals." if scope == "refrigeration_process" else
-            "Confirm whether this plant, service, or unconditioned space belongs in comfort-HVAC scope." if scope == "unresolved_scope" else ""
+            "Confirm whether this plant, service, or unconditioned space belongs in comfort-HVAC scope." if scope == "unresolved_scope" else
+            "A reviewer marked this detection as not a room; it is excluded from tracing, the calculator draft and preliminary totals." if scope == "not_a_room" else ""
         ),
         "source_fingerprints": deepcopy(source_fingerprints or {}),
     }
@@ -280,7 +284,7 @@ def resolve_from_existing(artifact):
             row.update({"taxonomy_id": category_id, "taxonomy_label": category["label"], "preliminary_profile_id": category.get("profile_id", ""),
                         "space_scope": category["space_scope"], "classification_origin": "contractor_override", "confidence_score": 1.0,
                         "confidence_band": "high", "rationale": _text(prior["override"].get("note")) or "Contractor room-use override."})
-        row["status"] = "excluded" if row["space_scope"] in {"refrigeration_process", "unresolved_scope"} else "resolved"
+        row["status"] = "excluded" if row["space_scope"] in EXCLUDED_SCOPES else "resolved"
         row["record_fingerprint"] = fingerprint({key: value for key, value in row.items() if key != "record_fingerprint"})
         rows.append(row)
     result = {**artifact, "records": rows, "status": "needs_review" if any(row["status"] == "needs_review" for row in rows) else "draft_ready", "updated_at": now()}
