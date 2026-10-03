@@ -30,7 +30,7 @@ def _paths(project):
             "ai_input": root / "ai_input.json", "coverage": root / "drawing_coverage.json",
             "vector": root / "vector_geometry.json", "building": root / "building_evidence.json",
             "room_use": root / "room_use_resolution.json", "run": root / "ai_preliminary_run.json",
-            "geometry": root / "geometry_resolution.json"}
+            "geometry": root / "geometry_resolution.json", "spatial": root / "spatial_ocr.json"}
 
 
 def _source_pdf_fingerprint(paths):
@@ -189,6 +189,7 @@ def _page_context(paths, web):
     else:
         pdf_sizes = {}
     fallback_numbers = _fallback_trace_page_numbers(role_pages, coverage_pages, drawing_pages, vector_pages)
+    printed_dimensions = _printed_dimension_pages(paths) if fallback_numbers else {}
     pages = []
     for number, vector in sorted(vector_pages.items()):
         drawing = drawing_pages.get(number, {})
@@ -233,13 +234,27 @@ def _page_context(paths, web):
                       "preview_matches_vector_coordinates": bool(preview_matches),
                       "preview_error": "Full-resolution plan image unavailable or does not match vector coordinates." if not preview_matches else "",
                       "fallback_plan": fallback_plan,
-                      "fallback_reason": FALLBACK_TRACE_REASON if fallback_plan else ""})
+                      "fallback_reason": FALLBACK_TRACE_REASON if fallback_plan else "",
+                      "printed_dimensions_found": bool(printed_dimensions.get(number)) if fallback_plan else None,
+                      "calibration_warning": NO_DIMENSION_WARNING if fallback_plan and not printed_dimensions.get(number) else ""})
     return pages
 
 
 TRACE_FLOOR_PLAN_ROLES = {"main_floor_plan", "primary_geometry_plan", "supporting_geometry_plan", "floor_plan"}
 TRACE_SERVICES_PLAN_ROLES = {"existing_hvac_plan", "services_or_lighting_plan"}
 FALLBACK_TRACE_REASON = "No architectural floor plan in this set; tracing on a services plan."
+# Calibration always needs a printed dimension that agrees with the declared
+# scale (decided 2026-10-04: no scale-only calibration on services plans).
+ARCHITECTURAL_SET_ADVICE = "Upload the architectural drawings for this tenancy to trace its rooms."
+NO_DIMENSION_WARNING = ("No printed building dimensions were found on this services plan, so a room trace here cannot be "
+                        "calibrated and saved. " + ARCHITECTURAL_SET_ADVICE)
+
+
+def _printed_dimension_pages(paths):
+    """Pages whose text layer has printed dimension candidates (spatial OCR)."""
+    spatial = _read(paths["spatial"], {})
+    return {page.get("page"): len(page.get("dimension_candidates") or []) for page in spatial.get("pages", [])
+            if isinstance(page, dict)}
 
 
 def _fallback_trace_page_numbers(role_pages, coverage_pages, drawing_pages, vector_pages):
@@ -540,7 +555,9 @@ def post(web, project, data):
             raise ValueError("Room boundary vertices must stay inside the rendered page image.")
         dimension_points = data.get("dimension_points_image_px")
         if not isinstance(dimension_points, list) or len(dimension_points) != 2:
-            raise ValueError("Choose both ends of one printed dimension before saving.")
+            raise ValueError("Choose both ends of one printed dimension before saving."
+                             + (" Services plans often have none; " + ARCHITECTURAL_SET_ADVICE[0].lower() + ARCHITECTURAL_SET_ADVICE[1:]
+                                if page_context.get("fallback_plan") else ""))
         dimension_value = data.get("dimension_value_mm")
         if not isinstance(dimension_value, (int, float)) or not math.isfinite(dimension_value) or dimension_value <= 0:
             raise ValueError("Enter the printed dimension as a positive value in millimetres.")

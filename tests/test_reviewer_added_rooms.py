@@ -102,6 +102,14 @@ def end_to_end_checks():
         check("the shared room proposal includes the added room",
               [row["label"] for row in proposal["rooms"]] == ["Kiosk"] and proposal["rooms"][0]["source"] == "reviewer_added")
 
+        no_dimension = {"action": "save", "room_id": kiosk_id, "page": 1,
+                        "points_image_px": [[100, 100], [300, 100], [300, 300], [100, 300], [100, 100]],
+                        "snapped_line_ids": [None] * 5, "dimension_points_image_px": [], "dimension_value_mm": 1000,
+                        "reviewer": "QA", "source_pdf_fingerprint": "pdf-fixture",
+                        "vector_page_fingerprint": service._page_fp(VECTOR_PAGE)}
+        with patch.object(service, "_page_context", return_value=[PAGE_CONTEXT]):
+            expect_error("a services-plan trace without a printed dimension points to the architectural drawings",
+                         lambda: service.post(web, project, no_dimension), "upload the architectural drawings")
         saved = trace(web, project, kiosk_id)
         check("a trace on a services plan is saved and flagged",
               saved["reviewer_room_geometry"]["records"][0].get("fallback_plan") is True)

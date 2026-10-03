@@ -208,6 +208,12 @@ Report commands and results.
   **no printed building dimensions**, so a trace cannot be calibrated and saved
   under the current rule (printed dimension must agree with the declared scale).
   Needs a decision before mechanical-only sets can produce a draft.
+- **Decision 2026-10-04 (user): option 3 — keep the rule.** No scale-only
+  calibration on services plans. Fallback pages report
+  `printed_dimensions_found`; when none are found the trace tool shows an alert
+  telling the user to upload the architectural drawings, and the save error on a
+  services plan carries the same advice. Revisit "calibrate from a known object"
+  (e.g. a scheduled 450×450 diffuser) only if real contractors hit this.
 
 Start after Card N (both touch the trace/room UI). Larger than F–N: do it in
 two parts and stop after part 1 to report.

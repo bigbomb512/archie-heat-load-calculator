@@ -1485,5 +1485,17 @@ test("mechanical-only set offers services plans and lets a reviewer add a room w
   await expect(workspace.locator("[data-remove-room]")).toBeVisible();
   await workspace.locator("[data-geometry-page]").selectOption("5");
   await expect(workspace.locator("[data-geometry-page] option:checked")).toContainText("services plan (no architectural plan in set)");
-  await expect(workspace.locator(".reviewer-geometry-warning")).toContainText("tracing on a services plan");
+  await expect(workspace.locator(".reviewer-geometry-warning").first()).toContainText("tracing on a services plan");
+});
+
+test("services plan without printed dimensions tells the reviewer to upload the architectural drawings", async ({ page }) => {
+  const context = mechanicalTraceContext([{room_id: "room-use:level-2:kiosk", label: "Kiosk", level_name: "Level 2", needs_trace: true, reviewer_added: true}]);
+  context.pages[0] = {...context.pages[0], printed_dimensions_found: false,
+    calibration_warning: "No printed building dimensions were found on this services plan, so a room trace here cannot be calibrated and saved. Upload the architectural drawings for this tenancy to trace its rooms."};
+  await page.route("**/api/reviewer-room-geometry?project_id=demo-project", route => route.fulfill({json: context}));
+  await openTraceWorkspace(page);
+  const workspace = page.locator("#reviewerRoomGeometryWorkspace");
+  await workspace.locator("[data-geometry-room]").selectOption("room-use:level-2:kiosk");
+  await workspace.locator("[data-geometry-page]").selectOption("5");
+  await expect(workspace.locator(".reviewer-geometry-blocking")).toContainText("Upload the architectural drawings for this tenancy");
 });

@@ -651,3 +651,4 @@ button,input{ font:inherit; color:inherit }
 .reviewer-add-room summary{ cursor:pointer; font-weight:600; font-size:12.5px }
 .reviewer-add-room .fine{ margin:6px 0 }
 .reviewer-add-room-result{ color:var(--text-2); font-size:12px }
+.reviewer-geometry-blocking{ border-left-color:var(--bad, #c53030); color:var(--text) }

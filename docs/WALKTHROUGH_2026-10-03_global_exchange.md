@@ -116,3 +116,39 @@ Proposed cards (to be written in full after the user confirms priorities):
   server on port 8001 are still running; both Global Exchange copies live only
   in that worktree's `output/` — the main `output/web_projects.json` was not
   touched.
+
+## Re-run after Cards M and N (2026-10-03, commit `b4b1be3`)
+
+Fresh upload of the architectural set (`RERUN …`, isolated worktree, port
+8001); upload + analysis 30 s, confirmation via the UI, guided resolve, then the
+new Card N room confirmation.
+
+| | First run (`66fecb3`) | Re-run (`b4b1be3`) |
+|---|---|---|
+| Rooms detected | 11 records, mostly phantom | Office, Service Counter, **Kiosk**, **Counter** (Level 2) |
+| Rooms offered for confirmation | — (no confirmation step) | **Office 9 m², Service Counter 13 m²** — both "printed on drawing", with pages |
+| Service Counter use | unresolved, silently dropped | resolved as Retail (Card M mapping) — no use choice needed |
+| Draft result | 3.04 kW from two phantom rooms + Office | **1.68 kW design** (1.52 raw, 1.01 sensible, 2 pm) from Office + Service Counter only |
+
+What the 1.68 kW is and is not:
+- Built only from the two confirmed rooms (22 m²). The GA plan states the
+  tenancy as A = 40.8 m²; the remaining ~19 m² (front/circulation area inside
+  the lease line) is not labelled as a room, so it is not in the total.
+- Envelope not assessed (0 kW); equipment is the preliminary default
+  (0.16 kW); outside air 0.67 kW; generic design-day weather.
+- Not comparable with the FCU-01 schedule value (5.58 kW total, 5.31 kW
+  sensible) until the user confirms that value as the kiosk's full design load;
+  the large sensible share suggests significant equipment heat that the draft
+  does not have.
+
+Remaining detection leaks on a fresh analysis (no area, so they are excluded
+from totals and from the confirmation list, but they still appear in the
+trace room list, the calculator draft and the exclusions):
+- **"Kiosk"** — from the title-block project line "International Kiosk,
+  Level 2," on page 13 (which is still misclassified as a plan; finding #7).
+  Title-block regions (already recorded as `title_blocks` in spatial OCR) are
+  not excluded from label detection.
+- **"Counter"** — the second line of the two-line label "Service / Counter" on
+  page 5 (a tag "VY1" sits between the lines in reading order). The fragment
+  rule is applied in room inference but not in the building-evidence path.
+A reviewer can remove both with "Not a room".
