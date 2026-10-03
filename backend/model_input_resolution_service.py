@@ -262,42 +262,28 @@ def _room_area_coverage(paths):
 
     # Reviewer traces remain proposals in the geometry graph, but a current
     # calibrated trace is sufficient evidence that the room has a measured
-    # area for this completeness gate. Use the same freshness filter as the
-    # trace review API, which checks both the PDF and vector-page fingerprints.
+    # area for this completeness gate. Share the trace validation with the
+    # preliminary assembler so the two paths agree about eligible areas.
     try:
         from backend import reviewer_room_geometry_service
-        current_trace_sources = {
-            str(row.get("trace_id")): row.get("source_fingerprints", {})
+        traced_areas = reviewer_room_geometry_service.current_traced_areas(paths["root"])
+        current_trace_ids = {
+            str(row.get("trace_id"))
             for row in reviewer_room_geometry_service.current_artifact_input(paths["root"]).get("records", [])
             if isinstance(row, dict) and row.get("trace_id")
         }
     except (OSError, ValueError, TypeError, KeyError):
-        current_trace_sources = {}
-    current_trace_ids = set(current_trace_sources)
-    proof_entities = {
-        str(row.get("entity_id")): row for row in geometry.get("entities", [])
-        if isinstance(row, dict) and row.get("kind") == "room_geometry_proof"
-        and row.get("extraction_method") == "reviewer_traced_boundary"
-    }
-    for proof in geometry.get("room_geometry_proofs", []):
-        if not isinstance(proof, dict):
+        traced_areas, current_trace_ids = {}, set()
+    for traced_area in traced_areas.values():
+        if not isinstance(traced_area, dict) or traced_area.get("conflict"):
             continue
-        entity = proof_entities.get(str(proof.get("proof_id", "")), {})
-        value = entity.get("value") if isinstance(entity.get("value"), dict) else {}
-        calibration = proof.get("calibration") if isinstance(proof.get("calibration"), dict) else value.get("calibration", {})
-        calibration = calibration if isinstance(calibration, dict) else {}
-        trace_id = str(value.get("reviewer_trace_id", ""))
-        proof_sources = value.get("source_fingerprints", {})
         try:
-            area = float(proof.get("area_m2"))
-            mm_per_px = float(calibration.get("mm_per_px"))
+            traced_value = float(traced_area.get("area_m2"))
         except (TypeError, ValueError):
             continue
-        if (trace_id in current_trace_sources and proof_sources == current_trace_sources[trace_id]
-                and math.isfinite(area) and math.isfinite(mm_per_px)
-                and area > 0 and mm_per_px > 0
-                and calibration.get("status") in {"agreed", "declared_scale_rejected"}):
-            area_keys.add(key(proof.get("room_label"), proof.get("level_name")))
+        if not math.isfinite(traced_value) or traced_value <= 0:
+            continue
+        area_keys.add(key(traced_area.get("room_label"), traced_area.get("level_name")))
     for row in building.get("spaces", []):
         if not isinstance(row, dict):
             continue

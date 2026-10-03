@@ -445,6 +445,7 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
     their authoritative artifacts.
     """
     from backend.calculation_extraction_service import _room_geometry_skill_proposals
+    from backend import reviewer_room_geometry_service
 
     if isinstance(raw_proposal, list):
         proposal = {"rooms": deepcopy(raw_proposal)}
@@ -461,9 +462,30 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
     for row in _room_geometry_skill_proposals(paths["root"]):
         if isinstance(row, dict) and row.get("room_id"):
             geometry_by_id[row["room_id"]] = row
+    trace_review_issue = None
+    try:
+        trace_registry_path = paths["root"] / "reviewer_room_geometry.json"
+        if trace_registry_path.exists():
+            # The shared reader tolerates malformed JSON by returning an empty
+            # default. Validate strictly here so that corruption is visible to
+            # the reviewer instead of looking like simply absent evidence.
+            json.loads(trace_registry_path.read_text(encoding="utf-8"))
+        traced_areas = reviewer_room_geometry_service.current_traced_areas(paths["root"])
+    except (OSError, ValueError, TypeError, KeyError):
+        traced_areas = {}
+        trace_review_issue = {
+            "component": "room area",
+            "reason": "Reviewer trace artifact could not be read; trace-derived areas were ignored.",
+            "remediation": "Repair reviewer_room_geometry.json, then resolve room areas from current calibrated traces.",
+        }
     for room in proposal["rooms"]:
         if not isinstance(room, dict):
             continue
+        # These provenance fields are reserved for this service's fresh
+        # reviewer-registry match. Never accept them from a provider proposal.
+        for field in ("area_origin", "area_verification_status", "reviewer_trace_id",
+                      "geometry_proof_id", "reviewer_traced_area"):
+            room.pop(field, None)
         room_id = room.get("room_id")
         use = use_by_id.get(room_id)
         if not use:
@@ -480,6 +502,24 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
             # or unresolved rooms can remain visible without being mistaken
             # for an evidence-backed room-use decision.
             room.setdefault("preliminary_profile_id", "generic_conditioned_room")
+        if ai_preliminary._number(room.get("area_m2")) is None or ai_preliminary._number(room.get("area_m2")) <= 0:
+            room_use_id = str((use or {}).get("room_id") or room_id or
+                              room_use_resolution.room_identity(room.get("label", ""), room.get("level_name", "")))
+            traced_area = traced_areas.get(room_use_id)
+            if traced_area and not traced_area.get("conflict"):
+                page = traced_area.get("page")
+                trace_id = str(traced_area.get("trace_id", ""))
+                proof_id = str(traced_area.get("proof_id", ""))
+                room["area_m2"] = traced_area["area_m2"]
+                room["area_origin"] = "reviewer_traced"
+                room["area_verification_status"] = "provisional"
+                room["reviewer_trace_id"] = trace_id
+                room["geometry_proof_id"] = proof_id
+                room["reviewer_traced_area"] = deepcopy(traced_area)
+                trace_citation = {"page": page, "reference": f"Reviewer trace {trace_id}",
+                                  "excerpt": f"Reviewer-traced room boundary; calibration status {traced_area.get('calibration_status')}.",
+                                  "reviewer_trace_id": trace_id, "geometry_proof_id": proof_id}
+                room["evidence"] = ai_preliminary._combined_evidence(room, {"evidence": [trace_citation]})
         geometry_row = geometry_by_id.get(room_id)
         if geometry_row:
             room["geometry"] = deepcopy(geometry_row.get("geometry", {}))
@@ -517,10 +557,12 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
             "scope": str(room.get("space_scope", "unresolved_scope")),
             "reason": "Room identity was detected, but no validated area or structured boundary is available; it is excluded from this draft subtotal.",
             "evidence": deepcopy(room.get("evidence", [])),
-            "remediation": "Complete and cite the room's inside-face dimension chain, or enter an explicit project area override.",
+            "remediation": "Trace and calibrate the room, then accept its area in the calculator draft.",
         })
     proposal["rooms"] = calculation_rooms
     proposal.setdefault("issues", []).extend(area_issues)
+    if trace_review_issue:
+        proposal["issues"].append(trace_review_issue)
     return proposal
 
 

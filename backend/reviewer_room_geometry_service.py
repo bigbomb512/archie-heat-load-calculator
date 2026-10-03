@@ -81,6 +81,86 @@ def current_artifact_input(root):
             "source_artifact_fingerprints": {name: fingerprint(value) for name, value in source_artifacts.items()}}
 
 
+def current_traced_areas(root):
+    """Return positive areas from current, calibrated reviewer boundary proofs.
+
+    Keys are room-use IDs. A geometry proof is eligible only when its linked
+    reviewer trace is in the current trace register and the proof carries the
+    same source fingerprints as that trace.
+    """
+    paths = _paths({"review_dir": str(root)})
+    artifact_input = current_artifact_input(root)
+    traces = {str(row.get("trace_id")): row for row in artifact_input.get("records", [])
+              if isinstance(row, dict) and row.get("trace_id") and row.get("room_id")}
+    room_use = _read(paths["room_use"], {})
+    rooms_by_id = {str(row.get("room_id")): row for row in room_use.get("records", [])
+                   if isinstance(row, dict) and row.get("room_id")}
+    # Building evidence remains a valid identity source for a trace when its
+    # room-use row has not yet been materialized.
+    for row in _read(paths["building"], {}).get("spaces", []):
+        if isinstance(row, dict) and row.get("id"):
+            rooms_by_id.setdefault(str(row["id"]), {
+                "room_id": row["id"], "original_label": row.get("name", ""),
+                "level_name": row.get("level_name", ""),
+            })
+    geometry = _read(paths["geometry"], {})
+    proof_entities = {
+        str(row.get("entity_id")): row for row in geometry.get("entities", [])
+        if isinstance(row, dict) and row.get("kind") == "room_geometry_proof"
+        and row.get("extraction_method") == "reviewer_traced_boundary"
+    }
+    areas = {}
+    for proof in geometry.get("room_geometry_proofs", []):
+        if not isinstance(proof, dict):
+            continue
+        entity = proof_entities.get(str(proof.get("proof_id", "")), {})
+        value = entity.get("value") if isinstance(entity.get("value"), dict) else {}
+        trace_id = str(value.get("reviewer_trace_id", ""))
+        trace = traces.get(trace_id)
+        if not trace:
+            continue
+        trace_sources = trace.get("source_fingerprints", {})
+        if value.get("source_fingerprints") != trace_sources:
+            continue
+        calibration = proof.get("calibration") if isinstance(proof.get("calibration"), dict) else value.get("calibration", {})
+        calibration = calibration if isinstance(calibration, dict) else {}
+        try:
+            area = float(proof.get("area_m2"))
+            mm_per_px = float(calibration.get("mm_per_px"))
+        except (TypeError, ValueError):
+            continue
+        status = calibration.get("status")
+        if (not math.isfinite(area) or area <= 0 or not math.isfinite(mm_per_px) or mm_per_px <= 0
+                or status not in {"agreed", "declared_scale_rejected"}):
+            continue
+        room_id = str(trace["room_id"])
+        room = rooms_by_id.get(room_id, {})
+        page = entity.get("source", {}).get("page") or trace.get("page")
+        candidate = {
+            "room_id": room_id, "area_m2": area, "trace_id": trace_id,
+            "proof_id": str(proof.get("proof_id", "")), "calibration_status": status,
+            "page": page, "source_fingerprints": deepcopy(trace_sources),
+            "room_label": proof.get("room_label") or room.get("original_label") or room.get("name") or trace.get("room_label", ""),
+            "level_name": proof.get("level_name") or room.get("level_name") or trace.get("level_name", ""),
+        }
+        areas.setdefault(room_id, []).append(candidate)
+    # Multiple eligible traces are safe to use only when they agree within
+    # the comparison allowance already used by calculator-draft tracing.
+    result = {}
+    for room_id, candidates in areas.items():
+        candidates.sort(key=lambda row: (row["trace_id"], row["proof_id"]))
+        values = [row["area_m2"] for row in candidates]
+        spread = (max(values) - min(values)) / ((max(values) + min(values)) / 2.0) if len(values) > 1 else 0.0
+        selected = deepcopy(candidates[0])
+        if spread > 0.02:
+            selected.update({"area_m2": None, "conflict": True, "supporting_traces": candidates})
+        elif len(candidates) > 1:
+            selected["area_m2"] = sum(values) / len(values)
+            selected["supporting_traces"] = candidates
+        result[room_id] = selected
+    return result
+
+
 def _scale_denominator(value):
     match = re.search(r"(?:1\s*:\s*|scale\s*1\s*:\s*)(\d+(?:\.\d+)?)", str(value or ""), re.I)
     return float(match.group(1)) if match else None

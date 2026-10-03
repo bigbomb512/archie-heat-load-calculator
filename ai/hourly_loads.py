@@ -668,8 +668,10 @@ def validate_room_component(raw, room_id, index):
         else:
             raise ValueError(f"Room {room_id} component '{component_id}' has no calculation method.")
     else:
-        if value is not None or unit or source_room_id or source or citations or verification_status != "missing":
-            raise ValueError(f"Room {room_id} component '{component_id}' not assessed cannot include a value, source, citation, or review status.")
+        if (value is not None or unit or source_room_id or citations
+                or verification_status not in {"missing", "provisional"}
+                or (verification_status == "provisional" and not source)):
+            raise ValueError(f"Room {room_id} component '{component_id}' not assessed cannot include a value, unit, source-room, or citation; provisional status requires an explanatory source.")
     return {
         "component_id": component_id,
         "component_type": component_type,
@@ -1008,6 +1010,8 @@ def calculate_room_hours(requirements, library, scenario, room, zone, infiltrati
         result["warnings"].append("Known room airflow or moisture inputs are stored but excluded until their calculation method and required inputs are supplied.")
     if component_scope["not_assessed"]:
         result["warnings"].append("Room airflow or moisture input categories have not been assessed.")
+    if not room["cooling_load"].get("envelope_surfaces") and not room["cooling_load"].get("envelope_not_applicable"):
+        result["warnings"].append("Envelope has not been assessed; its load is excluded from this subtotal.")
     dynamic_states = {
         surface["surface_id"]: surface.get("dynamic_thermal_mass", {}).get("initial_state_temperature_c", room["indoor_cooling_setpoint_c"])
         for surface in room["cooling_load"].get("envelope_surfaces", [])
@@ -1093,7 +1097,8 @@ def room_static_missing(room, zone=None, infiltration_gate=None, glazing_gate=No
             if source.get(key) in (None, ""):
                 missing.append(f"{source.get('source_id', 'heat source')} {label}")
     surfaces = load.get("envelope_surfaces", [])
-    if not surfaces and not load.get("envelope_not_applicable"):
+    preliminary = isinstance(preliminary_policy, dict) and preliminary_policy.get("mode") == "ai_preliminary"
+    if not surfaces and not load.get("envelope_not_applicable") and not preliminary:
         missing.append("envelope surfaces or internal-room declaration")
     for surface in surfaces:
         for key, label in (("surface_id", "surface ID"), ("area_m2", "area"), ("u_value_w_m2k", "U-value"), ("solar_design_w_m2", "design solar"), ("solar_gain_factor", "solar gain"), ("shading_factor", "shading"), ("source", "source")):
@@ -1123,6 +1128,7 @@ def active_infiltration_components(room):
 def infiltration_path_missing(room, zone=None, infiltration_gate=None, preliminary_policy=None):
     """Shared eligibility checks for room-level infiltration calculations."""
     missing = []
+    preliminary = isinstance(preliminary_policy, dict) and preliminary_policy.get("mode") == "ai_preliminary"
     active = active_infiltration_components(room)
     if len(active) > 1:
         ids = ", ".join(sorted(item.get("component_id", "") for item in active))
@@ -1131,7 +1137,7 @@ def infiltration_path_missing(room, zone=None, infiltration_gate=None, prelimina
             "separate uncontrolled air paths are not represented by this model and are never summed)"
         )
     infiltration = infiltration_component(room)
-    if infiltration["calculation_status"] == "not_assessed":
+    if infiltration["calculation_status"] == "not_assessed" and not preliminary:
         missing.append("infiltration assessment")
     elif infiltration["calculation_status"] == "stored_not_calculated":
         missing.append("infiltration calculation eligibility")
@@ -1310,6 +1316,14 @@ def room_component_scope(room):
             "air_path": component["air_path"],
         }
         result[component["calculation_status"]].append(item)
+    load = room.get("cooling_load", {})
+    if not load.get("envelope_surfaces") and not load.get("envelope_not_applicable"):
+        result["not_assessed"].append({
+            "component_id": "envelope", "component_type": "envelope", "value": None, "unit": "",
+            "source": "No accepted envelope surfaces or reviewer declaration were available.",
+            "citations": [], "source_room_id": "", "verification_status": "provisional",
+            "method_id": "", "air_path": "",
+        })
     result["status"] = "complete" if not result["stored_not_calculated"] and not result["not_assessed"] else "incomplete"
     return result
 

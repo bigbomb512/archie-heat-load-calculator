@@ -1937,6 +1937,8 @@ function drawAiPreliminary(data){
   const peak = report.included_scope_peak || {};
   const coverage = report.assumption_coverage || {};
   const queue = report.review_queue || data.model?.review_queue || [];
+  const unresolved = report.unresolved_room_inputs || [];
+  const knownExclusions = report.known_exclusions || [];
   const surfaces = report.preliminary_surface_summary || data.model?.surface_summary || {};
   const refrigeration = report.refrigeration_process_exclusions || data.model?.excluded_spaces || [];
   const handoffUrl = data.artifact_links?.codex_handoff || "";
@@ -1947,6 +1949,7 @@ function drawAiPreliminary(data){
     : "No local Codex handoff has been prepared.";
   requiredElement("aiPreliminaryResults").innerHTML = report.label ? `
     <article class="review-item"><div><b>${esc(report.label)}</b><span>Included-scope peak: ${peak.design_total_kw ?? "—"} kW. Low-confidence assumptions: ${coverage.low_confidence_count ?? queue.length}. Unsupported components remain explicit exclusions.</span></div></article>
+    ${(unresolved.length || knownExclusions.length) ? `<article class="review-item"><div><b>Not included in this total</b><ul class="audit-list">${[...knownExclusions, ...unresolved].map(item => `<li>${esc(item.component_type || "component")} · ${esc(item.room_id || "project")}</li>`).join("")}</ul></div></article>` : ""}
     <article class="review-item"><div><b>AI preliminary envelope coverage</b><span>Surfaces: ${surfaces.included ?? 0} included, ${surfaces.blocked ?? 0} blocked, ${surfaces.excluded ?? 0} excluded. Openings: ${surfaces.openings_included ?? 0} included, ${surfaces.openings_excluded ?? 0} excluded. Unknown shading is explicitly treated as unshaded and queued for review.</span></div></article>
     ${refrigeration.map(item => `<article class="review-item"><div><b>${esc(item.room_name || "Refrigeration/process room")}</b><span>${esc(item.reason || "Excluded from the comfort-HVAC subtotal.")}</span></div></article>`).join("")}
     ${queue.slice(0, 8).map(item => `<article class="review-item"><div><b>${esc(item.room_id)} · ${esc(item.field)}</b><span>${esc(item.confidence_band)} confidence · ${esc(item.rationale || "Review this assumption.")}</span></div></article>`).join("")}` : "<p class=\"review-empty\">Save settings, then assemble a local placeholder-AI draft or run the configured provider.</p>";

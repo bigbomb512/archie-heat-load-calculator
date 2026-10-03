@@ -307,7 +307,10 @@ def _space_rows(building, vision, manual_entities=None, geometry_resolution=None
         identities.add(_room_identity(name, level))
         rows.append({"key": key, "name": name, "level": level, "source_room_id": str(space.get("id", "")),
                      "area_m2": _number(space.get("area")) or _number(ai.get("area_m2")),
-                     "area_origin": "pdf_evidence" if _number(space.get("area")) else ("ai_geometry" if _number(ai.get("area_m2")) else ""),
+                     "area_origin": "pdf_evidence" if _number(space.get("area")) else (ai.get("area_origin") or ("ai_geometry" if _number(ai.get("area_m2")) else "")),
+                     "area_verification_status": ai.get("area_verification_status", "provisional"),
+                     "reviewer_trace_id": ai.get("reviewer_trace_id", ""),
+                     "geometry_proof_id": ai.get("geometry_proof_id", ""),
                      "profile_id": ai.get("preliminary_profile_id", ""), "confidence": _confidence(ai.get("confidence", space.get("confidence"))),
                      "scope": ai.get("space_scope", _scope_from_label(name)), "evidence": evidence, "ai": ai})
     for ai in vision_rooms:
@@ -320,7 +323,10 @@ def _space_rows(building, vision, manual_entities=None, geometry_resolution=None
         seen.add(key)
         identities.add(_room_identity(name, level))
         rows.append({"key": key, "name": name, "level": level, "source_room_id": "", "area_m2": _number(ai.get("area_m2")),
-                     "area_origin": "ai_geometry" if _number(ai.get("area_m2")) else "",
+                     "area_origin": ai.get("area_origin") or ("ai_geometry" if _number(ai.get("area_m2")) else ""),
+                     "area_verification_status": ai.get("area_verification_status", "provisional"),
+                     "reviewer_trace_id": ai.get("reviewer_trace_id", ""),
+                     "geometry_proof_id": ai.get("geometry_proof_id", ""),
                      "profile_id": ai.get("preliminary_profile_id", ""), "confidence": _confidence(ai.get("confidence")),
                      "scope": ai.get("space_scope", _scope_from_label(name)), "evidence": _evidence_refs(ai) or [{"page": ai.get("page"), "drawing_number": ai.get("drawing_number", ""), "excerpt": ai.get("excerpt", name)}], "ai": ai})
     if not rows:
@@ -516,6 +522,10 @@ def validate_manual_placeholder_entities(raw):
             "ceiling_datum_operands": deepcopy(item.get("ceiling_datum_operands", {})) if isinstance(item.get("ceiling_datum_operands", {}), dict) else {},
             "ceiling_conflicts": list(ceiling_conflicts),
             "geometry": deepcopy(item.get("geometry", {})) if isinstance(item.get("geometry", {}), dict) else {},
+            "area_origin": str(item.get("area_origin", "")) if str(item.get("area_origin", "")) in {"reviewer_traced", "ai_geometry"} else "",
+            "area_verification_status": "provisional",
+            "reviewer_trace_id": str(item.get("reviewer_trace_id", "")),
+            "geometry_proof_id": str(item.get("geometry_proof_id", "")),
             "source_pages": sorted({int(row.get("page")) for row in evidence if str(row.get("page", "")).isdigit()}),
             # Internal-gains evidence is preserved as proposed evidence.  The
             # resolver below applies citation and controlled-value checks; this
@@ -863,7 +873,8 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                    "people_diversity_factor": people_diversity, "lighting_w_m2": lighting_w_m2,
                    "lighting_diversity_factor": lighting_diversity,
                    "outside_air_lps": outside_air,
-                   "safety_factor": scenario_values["safety_factor"], "envelope_not_applicable": True,
+                   "safety_factor": scenario_values["safety_factor"],
+                   "envelope_not_applicable": row.get("envelope_not_applicable") is True,
                    "verification_status": "provisional", "source": _source(profile_id), "envelope_surfaces": [], "glazing_surfaces": []}
         equipment_rows = internal_record.get("equipment", []) if internal_record and internal_record.get("fields", {}).get("equipment", {}).get("origin") in {"direct_project_evidence", "contractor_override", "project_evidence", "ai_interpretation", "ai_estimated"} else []
         if not equipment_rows:
@@ -876,7 +887,7 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
         zones.append({"zone_id": zone_id, "name": row["name"], "floor_id": floor_id, "ceiling_height_mm": room_resolution.get("ceiling_height_mm"),
                       "verification_status": "provisional", "source": _source("topology"), "citations": []})
         ledger.extend([
-            {"room_id": room_id, "field": "area_m2", "value": area, "origin": area_origin, "profile_id": profile_id, "confidence": score, "confidence_band": confidence_band(score), "rationale": "Normalized geometry proof when available; otherwise a direct PDF value or controlled profile fallback.", "evidence": row["evidence"], "geometry_proof_id": row.get("geometry_proof_id", ""), "geometry_mode": row.get("geometry_mode", ""), "derivation": row.get("geometry_evidence", {}).get("derivation", {})},
+            {"room_id": room_id, "field": "area_m2", "value": area, "origin": area_origin, "verification_status": row.get("area_verification_status", "provisional"), "profile_id": profile_id, "confidence": score, "confidence_band": confidence_band(score), "rationale": ("Current calibrated reviewer trace; provisional until the room area is accepted in the calculator draft." if area_origin == "reviewer_traced" else "Normalized geometry proof when available; otherwise a direct PDF value or controlled profile fallback."), "evidence": row["evidence"], "geometry_proof_id": row.get("geometry_proof_id", ""), "reviewer_trace_id": row.get("reviewer_trace_id", ""), "geometry_mode": row.get("geometry_mode", ""), "derivation": row.get("geometry_evidence", {}).get("derivation", {})},
             {"room_id": room_id, "field": "ceiling_height_mm", "value": room_resolution.get("ceiling_height_mm"), "origin": room_resolution.get("ceiling_height_origin", "unresolved"), "profile_id": profile_id, "confidence": room_resolution.get("ceiling_height_confidence", 0.0), "confidence_band": confidence_band(room_resolution.get("ceiling_height_confidence", 0.0)), "rationale": room_resolution.get("ceiling_height_rationale", "Ceiling-height resolver."), "evidence": room_resolution.get("ceiling_height_evidence", []), "derivation": room_resolution.get("volume_derivation", {})},
             {"room_id": room_id, "field": "room_profile", "value": profile_id, "origin": "ai_profile", "profile_id": profile_id, "confidence": row["confidence"], "confidence_band": confidence_band(row["confidence"]), "rationale": "AI proposal when valid; otherwise label-based controlled profile selection.", "evidence": row["evidence"]},
             {"room_id": room_id, "field": "space_scope", "value": row["scope"], "origin": "ai_profile", "profile_id": profile_id, "confidence": row["confidence"], "confidence_band": confidence_band(row["confidence"]), "rationale": "AI preliminary scope classification.", "evidence": row["evidence"]},
@@ -929,7 +940,7 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
             schedules.append({"schedule_id": infiltration_schedule_id, "title": "Resolved preliminary infiltration schedule", "description": "Dedicated schedule from airflow resolver; review required.", "status": "provisional", "source": infiltration_record.get("source", "airflow resolution"), "citations": citations, "day_profiles": {"weekday": {"values": day_profiles.get("weekday", [1.0] * 24), "status": "provisional", "source": infiltration_record.get("source", "airflow resolution"), "citations": citations}, "saturday": {"values": day_profiles.get("saturday", [1.0] * 24), "status": "provisional", "source": infiltration_record.get("source", "airflow resolution"), "citations": citations}, "sunday_holiday": {"values": day_profiles.get("sunday", day_profiles.get("holiday", [1.0] * 24)), "status": "provisional", "source": infiltration_record.get("source", "airflow resolution"), "citations": citations}}})
             room["schedule_assignments"]["infiltration"] = infiltration_schedule_id
         for component in room["unapproved_components"]:
-            component.update({"value": None, "unit": "", "source_room_id": "", "source": "Excluded from AI preliminary model pending a project-specific method.", "citations": [], "verification_status": "confirmed", "calculation_status": "not_present_confirmed"})
+            component.update({"value": None, "unit": "", "source_room_id": "", "source": "Excluded from AI preliminary model pending a project-specific method.", "citations": [], "verification_status": "provisional", "calculation_status": "not_assessed"})
             if component.get("component_type") == "infiltration" and infiltration_record.get("value") is not None and infiltration_record.get("status") not in {"blocked", "excluded"}:
                 component.update({"value": infiltration_record.get("value"), "unit": infiltration_record.get("unit", "ACH"), "source": infiltration_record.get("source", "airflow resolution"), "citations": airflow_citations(infiltration_record), "verification_status": "provisional", "calculation_status": "calculated", "method_id": "infiltration_psychrometric_v1", "air_path": "uncontrolled_infiltration", "flow_reference": "outdoor_design_condition", "preliminary_assumption": infiltration_record.get("origin") == "controlled_fallback"})
         room_rows[_room_identity(row["name"], row["level"])] = {"room": room, "row": row, "profile": profile, "profile_id": profile_id}
@@ -1221,6 +1232,9 @@ def calculate(input_set, safety_factor_policy=None):
     report["review_queue"] = deepcopy(input_set["review_queue"])
     report["provenance"] = shared_resolution.build_report_provenance(report, input_set.get("value_resolution", {}))
     report["excluded_components"] = sorted(set(report.get("excluded_components", []) + [item["component"] for item in input_set["exclusions"]]))
+    warning = "Envelope and listed air-side loads were not assessed; the total excludes them and understates the load."
+    if warning not in report["warnings"]:
+        report["warnings"].append(warning)
     report["input_fingerprints"].update(input_set["dependency_fingerprints"])
     report["input_fingerprints"]["ai_preliminary_input_set"] = input_set["input_fingerprint"]
     return report

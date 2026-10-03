@@ -1128,3 +1128,25 @@ test('room-input panels show stale state and accept overrides after re-resolutio
   expect(posts.map(item => item.action)).toEqual(['apply_override', 'apply_override']);
   expect(posts.map(item => item.reviewer)).toEqual(['Engineer', 'Engineer']);
 });
+
+test("AI preliminary result shows unassessed components beneath the total", async ({ page }) => {
+  await page.goto("/");
+  await page.evaluate(() => {
+    drawValueResolution = () => {};
+    drawAiPreliminary({
+      settings: {}, run: {},
+      hourly_ai_preliminary_load_report: {
+        label: "AI preliminary estimate", included_scope_peak: {design_total_kw: 30.75},
+        unresolved_room_inputs: [
+          {room_id: "room-kitchen", component_type: "envelope"},
+          {room_id: "room-kitchen", component_type: "extract_air"},
+        ],
+      },
+    });
+  });
+  const result = page.locator("#aiPreliminaryResults");
+  await expect(result).toContainText("Included-scope peak: 30.75 kW");
+  await expect(result).toContainText("Not included in this total");
+  await expect(result).toContainText("envelope · room-kitchen");
+  await expect(result).toContainText("extract_air · room-kitchen");
+});

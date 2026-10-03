@@ -166,6 +166,19 @@ def assess_cooling_readiness(report, model, requirements_updated_at="", coverage
             "calculated": calculated, "not_assessed": unassessed, "not_present_confirmed": confirmed_absent,
             "status": "complete" if not stored and not unassessed else "incomplete",
         })
+        load = room.get("cooling_load", {})
+        if not load.get("envelope_surfaces") and not load.get("envelope_not_applicable"):
+            room_input_coverage[-1]["not_assessed"].append({
+                "component_id": "envelope", "component_type": "envelope", "value": None,
+                "unit": "", "source": "No accepted envelope surfaces or reviewer declaration were available.",
+                "citations": [], "source_room_id": "",
+            })
+            room_input_coverage[-1]["status"] = "incomplete"
+            issues.append(issue(
+                "draft", "room", room.get("room_id", ""),
+                "Envelope assessment is missing; its load is excluded from this subtotal.",
+                "hourly_load_model",
+            ))
     incomplete_component_rooms = [row["room_id"] for row in room_input_coverage if row["status"] != "complete"]
     complete_scope = (bool(active_room_ids) and set(active_room_ids) == included_room_ids
                       and not blocked_rooms and not incomplete_component_rooms

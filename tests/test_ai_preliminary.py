@@ -54,6 +54,31 @@ def main():
     check("low-confidence estimates remain in the preliminary input set", any(row["confidence_band"] == "low" for row in direct["review_queue"]))
     report = calculate(direct)
     check("preliminary report uses the hourly engine and stays draft", report["status"] == "draft" and report["included_scope_peak"] and not report["project_peak"])
+    room_ids = {room["room_id"] for room in rooms}
+    unresolved = report["unresolved_room_inputs"]
+    check("missing envelope stays calculable but prevents complete-scope claim",
+          report["included_scope_peak"] and not report["scope_summary"]["complete_scope"]
+          and {row["room_id"] for row in unresolved if row["component_type"] == "envelope"} == room_ids)
+    check("preliminary report lists unassessed room components and undercount warning",
+          all(any(row["room_id"] == room_id and row["component_type"] == "infiltration" for row in unresolved)
+              for room_id in room_ids)
+          and "Envelope and listed air-side loads were not assessed; the total excludes them and understates the load." in report["warnings"])
+    check("AI preliminary unapproved components are provisional and never falsely confirmed absent",
+          all(component["calculation_status"] == "not_assessed"
+              and component["verification_status"] == "provisional"
+              and component["source"] == "Excluded from AI preliminary model pending a project-specific method."
+              for room in rooms for component in room["unapproved_components"]))
+    from ai import ceiling_volume_resolution
+    infiltration_room_id = ceiling_volume_resolution.room_identity("Retail tenancy", "Level 1")
+    with_infiltration = assemble({"spaces": [building()["spaces"][0]]}, airflow_resolution={"records": [{
+        "owner_room_id": infiltration_room_id, "air_path_type": "infiltration", "status": "resolved",
+        "origin": "project_evidence", "value": 0.4, "unit": "ACH", "source": "Airflow schedule",
+        "citations": [{"reference": "Airflow schedule"}],
+    }]})
+    infiltration_component = next(component for room in with_infiltration["material"]["hourly_load_model"]["rooms"]
+                                 if room["name"] == "Retail tenancy" for component in room["unapproved_components"]
+                                 if component["component_type"] == "infiltration")
+    check("resolved infiltration airflow remains calculated", infiltration_component["calculation_status"] == "calculated")
     fallback_policy = safety_factor_resolution.policy_for(safety_factor_resolution.resolve({}), "cooling", preliminary=True)
     fallback_report = calculate(direct, safety_factor_policy=fallback_policy)
     fallback_peak = fallback_report["included_scope_peak"]
@@ -112,6 +137,10 @@ def main():
     envelope_report = calculate(preliminary_envelope)
     peak_components = envelope_report["included_scope_peak"]["components"]
     check("preliminary report keeps opaque and glazing solar components separate", "envelope" in peak_components and "glazing_conduction" in peak_components and "glazing_solar" in peak_components)
+    envelope_room_id = preliminary_envelope["material"]["hourly_load_model"]["rooms"][0]["room_id"]
+    check("accepted opaque surface resolves that room's envelope assessment",
+          not any(row["room_id"] == envelope_room_id and row["component_type"] == "envelope"
+                  for row in envelope_report["unresolved_room_inputs"]))
     refrigeration = assemble({"spaces": [{"name": "Cool Room", "level_name": "Level 1", "area": 10, "evidence": [{"page": 2}]}]})
     check("cool rooms are refrigeration exceptions rather than comfort-HVAC rooms", not refrigeration["material"]["hourly_load_model"]["rooms"] and refrigeration["excluded_spaces"][0]["scope"] == "refrigeration_process")
     no_orientation = deepcopy(proposal)
