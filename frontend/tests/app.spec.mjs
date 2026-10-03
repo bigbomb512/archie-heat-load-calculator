@@ -185,6 +185,32 @@ test("confirmation unlocks only after analysis has selected pages", async ({ pag
   expect(noAiCalls).toBe(1);
 });
 
+test("reopening a no-AI project restores its notice and reviewed-workspace status", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/");
+  await page.evaluate(project => showResults({...project, has_reasoning_packet:true,
+    vision_evidence_source:"none", design_requirements:{zones:[]}}), analysis);
+  await expect(page.locator("#visionPanel")).toBeVisible();
+  await expect(page.locator("#noAiEvidenceNotice")).toBeVisible();
+  await expect(page.locator("#statusText")).toHaveText("Reviewed workspace ready");
+  await expect(page.locator("#summaryTitle")).toHaveText("Reviewed workspace ready");
+});
+
+test("confirmation does not show the no-AI notice when a real reply is preserved", async ({ page }) => {
+  await mockApi(page);
+  await page.route("**/api/vision-response/no-ai", route => route.fulfill({json:{
+    status:"real_reply_preserved", has_reasoning_packet:true,
+  }}));
+  await page.goto("/");
+  await page.locator("#pdf").setInputFiles({
+    name:"real-reply-project.pdf", mimeType:"application/pdf", buffer:Buffer.from("%PDF-1.4 test"),
+  });
+  await page.locator("#btnAnalyse").click();
+  await page.locator("#btnContinue").click();
+  await expect(page.locator("#workflowSkeleton")).toBeVisible();
+  await expect(page.locator("#noAiEvidenceNotice")).toBeHidden();
+});
+
 test("analysis gives one clear next action before exposing advanced workflow", async ({ page }) => {
   await mockApi(page);
   await page.goto("/");

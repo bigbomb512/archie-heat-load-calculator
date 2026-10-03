@@ -579,8 +579,17 @@ function showResults(data){
   requiredElement("workflowSkeleton").classList.toggle("hide", !data.has_reasoning_packet);
   loadRoomInference(true);
   drawSummary(); drawReviewList(); drawGrid(); drawAside(); loadProjects();
-  if (PACKET?.zip || PACKET?.prompt) showVisionPanel();
+  if (PACKET?.zip || PACKET?.prompt || data.vision_evidence_source === "none") showVisionPanel();
   if (data.has_reasoning_packet) showDesignRequirements(data.design_requirements);
+  if (data.has_reasoning_packet) {
+    requiredElement("statusText").textContent = "Reviewed workspace ready";
+    requiredElement("statusSub").textContent = "The reviewed workspace is available. AI evidence is optional.";
+    requiredElement("summaryTitle").textContent = "Reviewed workspace ready";
+    requiredElement("summaryLead").textContent = "Trace drawings, enter project inputs, and build a calculator draft now. Paste a ChatGPT reply any time to add AI evidence.";
+    requiredElement("nextActionTitle").textContent = "Resolve model inputs";
+    requiredElement("nextActionText").textContent = "Use the single guided resolver first; advanced AI and window controls remain available below for recovery and testing.";
+    requiredElement("noAiEvidenceNotice").classList.toggle("hide", data.vision_evidence_source !== "none");
+  }
 }
 
 requiredElement("fRel").addEventListener("click", () => { FILTER = "rel"; requiredElement("fRel").classList.add("on"); requiredElement("fAll").classList.remove("on"); drawGrid(); });
@@ -1250,7 +1259,8 @@ async function confirmSelection(){
       requiredElement("designRequirementsPanel").classList.remove("hide");
       showDesignRequirements(workspace.requirements || {}, workspace.requirements_readiness || {});
     }
-    requiredElement("noAiEvidenceNotice").classList.remove("hide");
+    requiredElement("noAiEvidenceNotice").classList.toggle("hide",
+      !["created_without_ai_evidence", "already_started_without_ai"].includes(workspace.status));
     await loadVisionHistory();
   } catch (err) {
     toast("Could not confirm", err.message);

@@ -120,12 +120,16 @@ def main():
 
             packet_path = root / "packet.json"
             packet_path.write_text(json.dumps({"primary_pages": [], "reference_pages": [], "discarded_pages": []}), encoding="utf-8")
+            vision_path = root / "vision_response.json"
+            vision_path.write_text(json.dumps({"evidence_source": "none"}), encoding="utf-8")
             analysis = web_app.analysis_response({
                 "id": "project-1", "name": "example.pdf", "pages": 1,
                 "packet": str(packet_path), "review_dir": str(root),
                 "site_design_conditions": str(root / "site_design_conditions.json"),
+                "vision_response": str(vision_path), "reasoning_packet": {"status": "created"},
             })
             check("analysis retains site-condition discovery without leaking a local path", analysis["site_design_conditions_url"] == "" and analysis["site_design_conditions_status"] == "confirmed")
+            check("analysis response identifies the current no-AI marker", analysis["has_reasoning_packet"] and analysis["vision_evidence_source"] == "none")
     finally:
         web_app.project_by_id, web_app.update_project = originals
 
