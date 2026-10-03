@@ -20,6 +20,7 @@ from ai import safety_factor_resolution
 from ai.geometry_resolution import build_geometry_resolution
 from ai.research_cache import empty_research_cache, validate_cache
 from backend import productization
+from backend.room_proposal import room_proposal
 
 
 def _read(path, default):
@@ -119,9 +120,7 @@ def _sources(paths):
 def _preliminary_geometry(paths):
     """Rebuild current draft geometry in memory without mutating reviewed artifacts."""
     run = _read(paths["run"], {})
-    proposal = run.get("local_room_inference_proposal") or run.get("manual_placeholder_proposal", {"rooms": run.get("manual_placeholder_entities", [])})
-    if isinstance(proposal, list):
-        proposal = {"rooms": proposal}
+    proposal = room_proposal(run, paths["root"])
     from backend.calculation_extraction_service import _room_geometry_skill_proposals
     from backend import reviewer_room_geometry_service
     return build_geometry_resolution(
@@ -282,11 +281,7 @@ def _resolve_airflow(paths, persist=False):
 
 def _proposal_for_resolution(paths):
     run = _read(paths["run"], {})
-    proposal = run.get("local_room_inference_proposal") or run.get("manual_placeholder_proposal", run.get("manual_placeholder_entities", {"rooms": []}))
-    if isinstance(proposal, list):
-        proposal = {"rooms": proposal}
-    proposal = deepcopy(proposal) if isinstance(proposal, dict) else {"rooms": []}
-    proposal.setdefault("rooms", [])
+    proposal = room_proposal(run, paths["root"])
 
     # Runtime skills produce bounded proposals, not calculation artifacts.
     # Join their room-use findings into the existing preliminary proposal so
@@ -406,7 +401,7 @@ def _save_resolution(paths, resolution, action, affected_ids=None):
 def _resolve_from_packs(paths, project):
     building, vision = _read(paths["building"], {}), _read(paths["vision"], {})
     run = _read(paths["run"], {})
-    proposal = run.get("local_room_inference_proposal") or run.get("manual_placeholder_proposal", run.get("manual_placeholder_entities", []))
+    proposal = room_proposal(run, paths["root"])
     # Older projects stored the placeholder as a room list.  Retain that
     # compatibility rather than assuming every existing project has the new
     # proposal envelope.
@@ -736,7 +731,7 @@ def _assemble(web, project, source="manual_placeholder"):
     if not building:
         raise ValueError("Analyse the PDF before assembling an AI preliminary model.")
     existing_run = _read(paths["run"], {})
-    proposal = existing_run.get("local_room_inference_proposal") or existing_run.get("manual_placeholder_proposal", existing_run.get("manual_placeholder_entities", []))
+    proposal = room_proposal(existing_run, paths["root"])
     room_use = _resolve_room_uses(paths, persist=True)
     geometry = _preliminary_geometry(paths)
     ceiling_artifact = _resolve_ceiling_volumes(paths, persist=True)

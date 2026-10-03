@@ -278,7 +278,8 @@ def _rooms(paths):
     building = _read(paths["building"], {})
     room_use = _read(paths["room_use"], {})
     run = _read(paths["run"], {})
-    proposal = run.get("local_room_inference_proposal") or run.get("manual_placeholder_proposal", {})
+    from backend.room_proposal import room_proposal
+    proposal = room_proposal(run, paths["root"])
     geometry = _read(paths["geometry"], {})
     active_area_ids = {row.get("room_source_id") for row in geometry.get("entities", [])
                        if isinstance(row, dict) and row.get("kind") == "area"
@@ -304,10 +305,14 @@ def _rooms(paths):
     # A reviewer can mark a detected label as "not a room"; such identities are
     # never offered as trace targets or passed on through the room registry.
     excluded = _not_a_room_identities(room_use)
+    reviewer_added = {str(row.get("room_id")) for row in proposal.get("rooms", [])
+                      if isinstance(row, dict) and row.get("reviewer_added")}
     unique = {}
     for row in rows:
         if row.get("room_id") in excluded or _row_identity(row) in excluded:
             continue
+        if row.get("room_id") in reviewer_added or _row_identity(row) in reviewer_added:
+            row["reviewer_added"] = True
         row["needs_trace"] = row.get("room_id") not in active_area_ids
         unique.setdefault(row["room_id"], row)
     return sorted(unique.values(), key=lambda row: (row["label"].casefold(), row["level_name"].casefold(), row["room_id"]))
@@ -335,8 +340,16 @@ def _response(web, project):
         current = source_current and room_current
         row["freshness"] = "current" if current else "stale"
         row["stale_reasons"] = [] if current else (["Room is no longer present in the current room registry."] if source_current and not room_current else ["Source PDF or vector page changed since this trace was saved."])
+    rooms, pages = _rooms(paths), _page_context(paths, web)
+    try:
+        from ai.room_use_resolution import load_taxonomy
+        uses = {key: row["label"] for key, row in load_taxonomy()["categories"].items() if key != "not_a_room"}
+    except ValueError:
+        uses = {}
+    named_levels = {str(row.get("level_name") or "").strip() for row in [*rooms, *pages]} - {""}
+    levels = sorted(named_levels | {"Unassigned level"}, key=lambda value: (value == "Unassigned level", value.casefold()))
     return {"id": project["id"], "reviewer_room_geometry": display, "source_pdf_fingerprint": pdf_fp,
-            "rooms": _rooms(paths), "pages": _page_context(paths, web),
+            "rooms": rooms, "pages": pages, "room_uses": uses, "levels": levels,
             "artifact_url": web.safe_link(paths["artifact"]) if paths["artifact"].exists() else ""}
 
 
@@ -428,6 +441,55 @@ def _validate_snaps(points, snapped, vector_page):
             raise ValueError("A snapped room vertex is outside the server snap tolerance for its cited line.")
 
 
+def _add_reviewer_room(paths, artifact, data):
+    from ai.room_use_resolution import load_taxonomy
+    label = " ".join(str(data.get("label", "")).split())
+    level = " ".join(str(data.get("level_name", "")).split()) or "Unassigned level"
+    taxonomy_id = str(data.get("taxonomy_id", "")).strip()
+    reviewer = str(data.get("reviewer", "")).strip()
+    if not label:
+        raise ValueError("Enter a room name.")
+    if not reviewer:
+        raise ValueError("Enter your name or initials before adding a room.")
+    categories = load_taxonomy()["categories"]
+    if not taxonomy_id or taxonomy_id not in categories or taxonomy_id == "not_a_room":
+        raise ValueError("Choose a room use for the new room.")
+    room_id = room_identity(label, level)
+    if any(row.get("room_id") == room_id or _row_identity(row) == room_id for row in _rooms(paths)):
+        raise ValueError(f"A room called {label} already exists on {level}.")
+    page = data.get("page") if isinstance(data.get("page"), int) and data.get("page") > 0 else None
+    room = {"room_id": room_id, "label": label, "level_name": level, "taxonomy_id": taxonomy_id,
+            "page": page, "reviewer": reviewer, "note": str(data.get("note", "")).strip(),
+            "created_at": ai_preliminary.now(), "source": "reviewer_added"}
+    return reviewer_room_geometry.validate_artifact({"records": artifact["records"],
+                                                     "rooms": [*artifact.get("rooms", []), room]})
+
+
+def _remove_reviewer_room(artifact, data):
+    room_id = str(data.get("room_id", "")).strip()
+    if not str(data.get("reviewer", "")).strip():
+        raise ValueError("Enter your name or initials before removing a room.")
+    rooms = artifact.get("rooms", [])
+    if not any(row.get("room_id") == room_id for row in rooms):
+        raise ValueError("Only rooms added by a reviewer can be removed here.")
+    # The room's traces go with it: a trace without its room is never used.
+    return reviewer_room_geometry.validate_artifact({
+        "records": [row for row in artifact["records"] if row.get("room_id") != room_id],
+        "rooms": [row for row in rooms if row.get("room_id") != room_id]})
+
+
+def _sync_room_use(web, project, action, data, artifact):
+    """Keep room-use in step: a new room gets the reviewer's chosen use."""
+    from backend import room_use_resolution_service
+    room_use_resolution_service.post(web, project, {"action": "resolve"})
+    if action == "add_room":
+        room = next(row for row in artifact.get("rooms", []) if row.get("room_id") == room_identity(
+            " ".join(str(data.get("label", "")).split()), " ".join(str(data.get("level_name", "")).split()) or "Unassigned level"))
+        room_use_resolution_service.post(web, project, {
+            "action": "apply_override", "room_id": room["room_id"], "taxonomy_id": room["taxonomy_id"],
+            "reviewer": room["reviewer"], "note": "Room use chosen when the reviewer added this room."})
+
+
 def _known_room(room_id, paths):
     return next((row for row in _rooms(paths) if row.get("room_id") == room_id), None)
 
@@ -442,7 +504,11 @@ def post(web, project, data):
         kept = [row for row in artifact["records"] if row.get("trace_id") != trace_id]
         if len(kept) == len(artifact["records"]):
             raise ValueError("Room geometry trace was not found.")
-        artifact = reviewer_room_geometry.validate_artifact({"records": kept})
+        artifact = reviewer_room_geometry.validate_artifact({"records": kept, "rooms": artifact.get("rooms", [])})
+    elif action == "add_room":
+        artifact = _add_reviewer_room(paths, artifact, data)
+    elif action == "remove_room":
+        artifact = _remove_reviewer_room(artifact, data)
     elif action == "save":
         room_id, page_number = str(data.get("room_id", "")).strip(), data.get("page")
         room = _known_room(room_id, paths)
@@ -502,9 +568,9 @@ def post(web, project, data):
             raise ValueError("Enter your name or initials as the trace reviewer.")
         new_records = [row for row in artifact["records"] if not (row.get("room_id") == room_id and row.get("page") == page_number)]
         new_records.append(record)
-        artifact = reviewer_room_geometry.validate_artifact({"records": new_records})
+        artifact = reviewer_room_geometry.validate_artifact({"records": new_records, "rooms": artifact.get("rooms", [])})
     else:
-        raise ValueError("Room geometry action must be save or delete.")
+        raise ValueError("Room geometry action must be save, delete, add_room or remove_room.")
     _atomic_json(paths["artifact"], artifact)
     from backend import calculation_extraction_service, productization
     productization.record_change_if_fingerprint_changed(
@@ -512,6 +578,8 @@ def post(web, project, data):
         previous_fingerprint=previous_fingerprint, new_fingerprint=artifact.get("fingerprint", ""),
         affected_ids=[data.get("room_id", data.get("trace_id", ""))],
     )
+    if action in {"add_room", "remove_room"}:
+        _sync_room_use(web, project, action, data, artifact)
     project["reviewer_room_geometry"] = str(paths["artifact"])
     project["updated_at"] = ai_preliminary.now()
     web.update_project(project)

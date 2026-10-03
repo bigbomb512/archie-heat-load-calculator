@@ -647,3 +647,7 @@ button,input{ font:inherit; color:inherit }
 .draft-summary-more{ list-style:none; color:var(--text-2); font-style:italic }
 @media(max-width:900px){ .room-scope-row{ grid-template-columns:1fr } .room-scope-actions{ justify-content:flex-start } }
 .reviewer-geometry-warning{ margin:8px 0; padding:8px 12px; border-left:3px solid var(--warn, #b7791f); background:var(--wash); color:var(--text-2); font-size:12.5px }
+.reviewer-add-room{ margin:10px 0; border:1px dashed var(--line); border-radius:var(--r); padding:8px 12px }
+.reviewer-add-room summary{ cursor:pointer; font-weight:600; font-size:12.5px }
+.reviewer-add-room .fine{ margin:6px 0 }
+.reviewer-add-room-result{ color:var(--text-2); font-size:12px }

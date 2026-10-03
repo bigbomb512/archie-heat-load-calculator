@@ -293,8 +293,8 @@ def _room_area_coverage(paths):
             area = 0
         if area > 0:
             area_keys.add(key(row.get("name"), row.get("level_name")))
-    proposal = run.get("local_room_inference_proposal") or run.get("manual_placeholder_proposal") or {}
-    rows = proposal.get("rooms", []) if isinstance(proposal, dict) else proposal if isinstance(proposal, list) else []
+    from backend.room_proposal import room_proposal
+    rows = room_proposal(run, paths["run"].parent)["rooms"]
     for row in rows:
         if not isinstance(row, dict):
             continue

@@ -43,9 +43,8 @@ def _paths(project):
 
 
 def _proposal(paths):
-    run = _read(paths["run"], {})
-    proposal = run.get("local_room_inference_proposal") or run.get("manual_placeholder_proposal", run.get("manual_placeholder_entities", {}))
-    return proposal if isinstance(proposal, dict) else {"rooms": proposal if isinstance(proposal, list) else []}
+    from backend.room_proposal import room_proposal
+    return room_proposal(_read(paths["run"], {}), paths["run"].parent)
 
 
 def _known_ids(paths):

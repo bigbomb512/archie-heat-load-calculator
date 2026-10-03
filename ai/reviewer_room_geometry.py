@@ -73,8 +73,47 @@ def validate_artifact(raw):
             raise ValueError("Room geometry trace needs source fingerprints.")
         records.append(deepcopy(row))
     result = {"schema_version": SCHEMA_VERSION, "records": records}
+    rooms = validate_reviewer_rooms(raw.get("rooms", []))
+    if rooms:
+        # Only present once a reviewer adds a room, so existing artifacts keep
+        # their fingerprints.
+        result["rooms"] = rooms
     result["fingerprint"] = fingerprint(result)
     return result
+
+
+def validate_reviewer_rooms(raw):
+    """Rooms a reviewer added because detection could not find them.
+
+    Each room needs a label, level, controlled room use and reviewer; the room
+    ID is the room-use identity so traces, room-use, the area gate and the
+    room confirmation all refer to the same room.
+    """
+    if raw in (None, []):
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("Reviewer-added rooms must be a list.")
+    rooms, seen = [], set()
+    for row in raw:
+        if not isinstance(row, dict):
+            raise ValueError("Every reviewer-added room must be an object.")
+        room_id = str(row.get("room_id", "")).strip()
+        label = str(row.get("label", "")).strip()
+        if not room_id or room_id in seen:
+            raise ValueError("Reviewer-added room IDs must be present and unique.")
+        if not label or len(label) > 60:
+            raise ValueError("A reviewer-added room needs a name of at most 60 characters.")
+        if not str(row.get("level_name", "")).strip():
+            raise ValueError("A reviewer-added room needs a level.")
+        if not str(row.get("taxonomy_id", "")).strip():
+            raise ValueError("A reviewer-added room needs a room use.")
+        if not str(row.get("reviewer", "")).strip():
+            raise ValueError("A reviewer-added room needs a reviewer name.")
+        if row.get("source") != "reviewer_added":
+            raise ValueError("Reviewer-added rooms must have source reviewer_added.")
+        seen.add(room_id)
+        rooms.append(deepcopy(row))
+    return rooms
 
 
 def calibration(dimension_points, dimension_value_mm, scale_denominator, image_px_per_pt,

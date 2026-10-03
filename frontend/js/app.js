@@ -3232,21 +3232,23 @@ function renderReviewerRoomGeometryWorkspace(){
   const host = optionalElement("reviewerRoomGeometryWorkspace"), ctx = ROOM_GEOMETRY_CONTEXT, state = ROOM_TRACE_STATE;
   if (!host || !ctx || !state) return;
   const traces = ctx.reviewer_room_geometry?.records || [];
-  const roomOptions = (ctx.rooms || []).map(room => `<option value="${esc(room.room_id)}" ${room.room_id === state.roomId ? "selected" : ""}>${esc(room.label)}${room.level_name ? ` · ${esc(room.level_name)}` : ""}${room.needs_trace ? " · area unresolved" : ""}</option>`).join("");
+  const roomOptions = (ctx.rooms || []).map(room => `<option value="${esc(room.room_id)}" ${room.room_id === state.roomId ? "selected" : ""}>${esc(room.label)}${room.level_name ? ` · ${esc(room.level_name)}` : ""}${room.reviewer_added ? " · added by reviewer" : ""}${room.needs_trace ? " · area unresolved" : ""}</option>`).join("");
   const trace = traces.find(row => row.room_id === state.roomId && row.page === state.page);
   const pageOptions = (ctx.pages || []).map(page => `<option value="${page.page}" ${page.page === state.page ? "selected" : ""}>Page ${page.page} · ${esc(page.drawing_number || page.title || page.proposed_role)}${page.declared_scale ? ` · ${esc(page.declared_scale)}` : " · no declared scale"}${page.fallback_plan ? " · services plan (no architectural plan in set)" : ""}</option>`).join("");
   const page = (ctx.pages || []).find(row => row.page === state.page);
   if (!roomOptions || !pageOptions) {
     const reason = !pageOptions ? "No scaled plan pages with a full-resolution render are available for tracing."
       : "Plan pages are available, but no rooms were detected in this drawing set to trace.";
-    host.innerHTML = `<div class="reviewer-geometry-head"><b>Trace a room boundary</b><span>${esc(reason)}</span></div>`;
+    host.innerHTML = `<div class="reviewer-geometry-head"><b>Trace a room boundary</b><span>${esc(reason)}</span></div>${pageOptions ? reviewerAddRoomMarkup(ctx, state, true) : ""}`;
+    bindReviewerAddRoom(host);
     return;
   }
   if (trace && !state.points.length) { state.points = trace.points_image_px; state.snapped = trace.snapped_line_ids; state.reviewer = trace.reviewer || ""; state.note = trace.note || ""; state.dimensionPoints = trace.calibration?.dimension_points_image_px || []; state.dimensionMm = trace.calibration?.dimension_value_mm || ""; }
   const options = state.snap?.snap_tolerance_px ? {threshold: state.snap.snap_tolerance_px} : {};
   const svg = page ? reviewerGeometrySvg(page, state, options) : "";
   host.innerHTML = `<div class="reviewer-geometry-head"><div><b>Trace and calibrate a room</b><span>Click boundary corners in order. Snapping is optional; the trace stays proposed until a separate review accepts it.</span></div><button type="button" class="btn ghost mini" data-geometry-reload>Reload source</button></div>
-    <div class="reviewer-geometry-controls"><label>Room<select data-geometry-room><option value="">Choose room</option>${roomOptions}</select></label><label>Plan page<select data-geometry-page><option value="">Choose page</option>${pageOptions}</select></label></div>
+    <div class="reviewer-geometry-controls"><label>Room<select data-geometry-room><option value="">Choose room</option>${roomOptions}</select></label><label>Plan page<select data-geometry-page><option value="">Choose page</option>${pageOptions}</select></label>${(ctx.rooms || []).find(room => room.room_id === state.roomId)?.reviewer_added ? `<button type="button" class="btn ghost mini" data-remove-room>Remove added room</button>` : ""}</div>
+    ${reviewerAddRoomMarkup(ctx, state, false)}
     <div class="reviewer-geometry-tools"><button type="button" class="btn mini ${state.mode === "boundary" ? "key" : "ghost"}" data-geometry-mode="boundary">Trace boundary</button><button type="button" class="btn mini ${state.mode === "dimension" ? "key" : "ghost"}" data-geometry-mode="dimension">Set printed dimension</button><button type="button" class="btn mini ${state.mode === "second" ? "key" : "ghost"}" data-geometry-mode="second">Add cross-check dimension</button><button type="button" class="btn mini ${state.mode === "pan" ? "key" : "ghost"}" data-geometry-mode="pan">Pan plan</button><button type="button" class="btn ghost mini" data-geometry-zoom="in" ${state.zoom >= 8 ? "disabled" : ""}>Zoom in</button><button type="button" class="btn ghost mini" data-geometry-zoom="out" ${state.zoom <= 1 ? "disabled" : ""}>Zoom out</button><button type="button" class="btn ghost mini" data-geometry-zoom="reset">Reset view</button><button type="button" class="btn ghost mini" data-geometry-close>Close polygon</button><button type="button" class="btn ghost mini" data-geometry-reset>Clear points</button></div>
     <p class="reviewer-geometry-help" aria-live="polite">${state.mode === "boundary" ? `Boundary: ${Math.max(0,state.points.length - (state.points.length > 1 && JSON.stringify(state.points[0]) === JSON.stringify(state.points.at(-1)) ? 1 : 0))} corners. Click the plan to add points; close it when done.` : state.mode === "dimension" ? "Click the two ends of a printed dimension, then enter its value in millimetres." : state.mode === "second" ? "Click the two ends of a second printed dimension, then enter its value in millimetres." : "Drag the plan to pan. Switch back to tracing or dimension mode to place points."}</p>
     ${page?.fallback_plan ? `<p class="reviewer-geometry-warning" role="note">${esc(page.fallback_reason || "No architectural floor plan in this set; tracing on a services plan.")} Room outlines on services plans are often faint; the traced area is approximate.</p>` : ""}
@@ -3255,6 +3257,8 @@ function renderReviewerRoomGeometryWorkspace(){
     <div class="reviewer-geometry-actions"><button type="button" class="btn key" data-geometry-save ${state.roomId && state.page ? "" : "disabled"}>Save proposed trace</button>${trace ? `<button type="button" class="btn ghost" data-geometry-delete>Delete trace</button>` : ""}<span class="reviewer-geometry-result" aria-live="polite">${trace ? `${trace.freshness === "current" ? "Saved trace" : `Stale trace: ${(trace.stale_reasons || []).join(" ") || "reload source evidence"}`}${trace.fallback_plan ? " · traced on a services plan" : ""} · ${trace.calibration?.status || "calibration unresolved"}${Number.isFinite(trace.calibration?.difference_percent) ? ` · scale difference ${trace.calibration.difference_percent.toFixed(2)}%` : ""}${trace.freshness === "current" && trace.calibration?.mm_per_px ? ` · ${reviewerTraceArea(trace.points_image_px, trace.calibration.mm_per_px).toFixed(3)} m² proposed` : trace.freshness !== "current" ? " · saved area is not current" : ` · area blocked: ${esc(trace.calibration?.reason || "calibration unresolved")}`}` : "No saved trace for this room and page."}</span></div>
     <small class="reviewer-geometry-disclaimer">A traced area is evidence for review only. It is not activated as a calculation input by this workflow.</small>
     <div class="reviewer-geometry-error" data-geometry-error role="alert"></div>`;
+  bindReviewerAddRoom(host);
+  host.querySelector("[data-remove-room]")?.addEventListener("click", removeReviewerAddedRoom);
   host.querySelector("[data-geometry-room]").addEventListener("change", event => {state.roomId=event.target.value; state.points=[];state.snapped=[];state.dimensionPoints=[];state.secondDimensionMm="";state.dimensionMm="";state.snap=null;state.page=null;renderReviewerRoomGeometryWorkspace();});
   host.querySelector("[data-geometry-page]").addEventListener("change", async event => {state.page=Number(event.target.value)||null;state.points=[];state.snapped=[];state.dimensionPoints=[];state.secondDimensionPoints=[];state.snap=null;const existing=ctx.reviewer_room_geometry?.records?.find(row=>row.room_id===state.roomId&&row.page===state.page);if(existing){state.points=existing.points_image_px;state.snapped=existing.snapped_line_ids;state.reviewer=existing.reviewer||"";state.note=existing.note||"";state.dimensionMm=existing.calibration?.dimension_value_mm||"";state.dimensionPoints=existing.calibration?.dimension_points_image_px||[];state.secondDimensionMm=existing.calibration?.second_dimension?.value_mm||"";state.secondDimensionPoints=existing.calibration?.second_dimension?.points_image_px||[];}renderReviewerRoomGeometryWorkspace();if(state.page) await loadReviewerGeometrySnap();});
   host.querySelectorAll("[data-geometry-mode]").forEach(button=>button.addEventListener("click",()=>{state.mode=button.dataset.geometryMode;if(state.mode==="dimension")state.dimensionPoints=[];if(state.mode==="second")state.secondDimensionPoints=[];renderReviewerRoomGeometryWorkspace();}));
@@ -3292,6 +3296,69 @@ function addReviewerGeometryPoint(event,page){const svg=event.currentTarget,box=
 function reviewerGeometryKeydown(event,page){const state=ROOM_TRACE_STATE,width=Number(page.image_width_px),height=Number(page.image_height_px),step=event.shiftKey?1:10;let [x,y]=state.cursorImagePx||[width/2,height/2];if(event.key==="Enter"||event.key===" "){event.preventDefault();addReviewerGeometryAt(x,y,page);optionalElement("reviewerRoomGeometryWorkspace")?.querySelector("[data-geometry-svg]")?.focus();return;}if(!["ArrowLeft","ArrowRight","ArrowUp","ArrowDown"].includes(event.key))return;event.preventDefault();if(event.key==="ArrowLeft")x-=step;if(event.key==="ArrowRight")x+=step;if(event.key==="ArrowUp")y-=step;if(event.key==="ArrowDown")y+=step;state.cursorImagePx=[Math.max(0,Math.min(width,x)),Math.max(0,Math.min(height,y))];renderReviewerRoomGeometryWorkspace();optionalElement("reviewerRoomGeometryWorkspace")?.querySelector("[data-geometry-svg]")?.focus();}
 async function loadReviewerGeometrySnap(){const state=ROOM_TRACE_STATE;try{const response=await fetch(`/api/plan-snap?project_id=${encodeURIComponent(DATA.id)}&page=${state.page}`),data=await response.json();if(!response.ok||data.error)throw new Error(data.error||"Could not load vector snap points.");state.snap=data;renderReviewerRoomGeometryWorkspace();}catch(error){showReviewerGeometryError(error.message);}}
 function showReviewerGeometryError(message){const node=optionalElement("reviewerRoomGeometryWorkspace")?.querySelector("[data-geometry-error]");if(node)node.textContent=message;}
+function reviewerAddRoomMarkup(ctx, state, open){
+  const page = (ctx.pages || []).find(row => row.page === state.page);
+  const defaultLevel = page?.level_name || (ctx.levels || []).find(level => level !== "Unassigned level") || "Unassigned level";
+  const levels = (ctx.levels || ["Unassigned level"]).map(level => `<option value="${esc(level)}" ${level === defaultLevel ? "selected" : ""}>${esc(level)}</option>`).join("");
+  const uses = Object.entries(ctx.room_uses || {}).map(([id, label]) => `<option value="${esc(id)}">${esc(label)}</option>`).join("");
+  return `<details class="reviewer-add-room" ${open ? "open" : ""}><summary>Add a room the drawings don't name</summary>
+    <p class="fine">Use this when detection found no room to trace, for example on a mechanical-only drawing set. The room needs a use so it is never dropped from the draft.</p>
+    <div class="reviewer-geometry-controls"><label>Room name<input data-add-room-label maxlength="60" placeholder="e.g. Kiosk"></label><label>Level<select data-add-room-level>${levels}</select></label><label>Room use<select data-add-room-use><option value="">Choose a use…</option>${uses}</select></label><label>Your name or initials<input data-add-room-reviewer value="${esc(state.reviewer || "")}" placeholder="Reviewer"></label></div>
+    <div class="reviewer-geometry-actions"><button type="button" class="btn ghost" data-add-room>Add room</button><span class="reviewer-add-room-result" data-add-room-result aria-live="polite"></span></div></details>`;
+}
+
+function bindReviewerAddRoom(host){
+  host.querySelector("[data-add-room]")?.addEventListener("click", addReviewerRoom);
+}
+
+async function addReviewerRoom(){
+  const host = optionalElement("reviewerRoomGeometryWorkspace"), state = ROOM_TRACE_STATE || {};
+  if (!host || !DATA?.id) return;
+  const result = host.querySelector("[data-add-room-result]");
+  const body = {action: "add_room", project_id: DATA.id, label: host.querySelector("[data-add-room-label]").value.trim(),
+    level_name: host.querySelector("[data-add-room-level]").value, taxonomy_id: host.querySelector("[data-add-room-use]").value,
+    reviewer: host.querySelector("[data-add-room-reviewer]").value.trim(), page: state.page || null};
+  if (!body.label) { result.textContent = "Enter a room name."; return; }
+  if (!body.taxonomy_id) { result.textContent = "Choose a room use for the new room."; return; }
+  if (!body.reviewer) { result.textContent = "Enter your name or initials."; return; }
+  result.textContent = "Adding room…";
+  try {
+    const response = await fetch("/api/reviewer-room-geometry", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || "Could not add the room.");
+    const added = (data.rooms || []).find(room => room.reviewer_added && room.label.toLowerCase() === body.label.toLowerCase() && room.level_name === body.level_name);
+    ROOM_GEOMETRY_CONTEXT = data;
+    ROOM_TRACE_STATE = {...state, roomId: added?.room_id || state.roomId, reviewer: body.reviewer, points: [], snapped: [], dimensionPoints: []};
+    renderReviewerRoomGeometryWorkspace();
+    if (ROOM_TRACE_STATE.page) await loadReviewerGeometrySnap();
+    await loadCalculationInputEvidence();
+    toast("Room added", `${body.label} is ready to trace. Choose a plan page, trace it and calibrate it.`);
+  } catch (error) {
+    result.textContent = error.message;
+  }
+}
+
+async function removeReviewerAddedRoom(){
+  const state = ROOM_TRACE_STATE || {}, room = (ROOM_GEOMETRY_CONTEXT?.rooms || []).find(row => row.room_id === state.roomId);
+  if (!room?.reviewer_added) return;
+  const reviewer = (state.reviewer || optionalElement("reviewerRoomGeometryWorkspace")?.querySelector("[data-geometry-reviewer]")?.value || "").trim();
+  if (!reviewer) return showReviewerGeometryError("Enter your name or initials before removing a room.");
+  if (!window.confirm(`Remove ${room.label} and its traces?`)) return;
+  try {
+    const response = await fetch("/api/reviewer-room-geometry", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({action: "remove_room", project_id: DATA.id, room_id: room.room_id, reviewer})});
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || "Could not remove the room.");
+    ROOM_GEOMETRY_CONTEXT = data;
+    ROOM_TRACE_STATE = {...state, roomId: "", points: [], snapped: [], dimensionPoints: []};
+    renderReviewerRoomGeometryWorkspace();
+    await loadCalculationInputEvidence();
+    toast("Room removed", `${room.label} and its traces were removed.`);
+  } catch (error) {
+    showReviewerGeometryError(error.message);
+  }
+}
+
 async function saveReviewerRoomGeometryTrace(){const s=ROOM_TRACE_STATE,ctx=ROOM_GEOMETRY_CONTEXT,page=ctx.pages.find(row=>row.page===s.page),secondPoints=s.secondDimensionPoints||[];try{const response=await fetch("/api/reviewer-room-geometry",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"save",project_id:DATA.id,room_id:s.roomId,page:s.page,points_image_px:s.points,snapped_line_ids:s.snapped,dimension_points_image_px:s.dimensionPoints.length? s.dimensionPoints:(ctx.reviewer_room_geometry.records.find(row=>row.room_id===s.roomId&&row.page===s.page)?.calibration?.dimension_points_image_px||[]),dimension_value_mm:Number(s.dimensionMm)||Number(ctx.reviewer_room_geometry.records.find(row=>row.room_id===s.roomId&&row.page===s.page)?.calibration?.dimension_value_mm),second_dimension_points_image_px:secondPoints,second_dimension_value_mm:Number(s.secondDimensionMm)||null,reviewer:s.reviewer,note:s.note,source_pdf_fingerprint:ctx.source_pdf_fingerprint,vector_page_fingerprint:s.snap?.vector_page_fingerprint})}),data=await response.json();if(!response.ok||data.error)throw new Error(data.error||"Could not save trace.");ROOM_GEOMETRY_CONTEXT={...ctx,...data};s.points=[];s.snapped=[];s.dimensionPoints=[];s.dimensionMm="";await loadCalculationInputEvidence();toast("Room trace saved","The geometry proof remains proposed pending separate review.");}catch(error){showReviewerGeometryError(error.message);}}
 async function deleteReviewerRoomGeometryTrace(){const trace=ROOM_GEOMETRY_CONTEXT?.reviewer_room_geometry?.records?.find(row=>row.room_id===ROOM_TRACE_STATE.roomId&&row.page===ROOM_TRACE_STATE.page);if(!trace)return;try{const response=await fetch("/api/reviewer-room-geometry",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"delete",project_id:DATA.id,trace_id:trace.trace_id})}),data=await response.json();if(!response.ok||data.error)throw new Error(data.error||"Could not delete trace.");await loadReviewerRoomGeometryWorkspace();await loadCalculationInputEvidence();}catch(error){showReviewerGeometryError(error.message);}}
 

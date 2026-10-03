@@ -194,6 +194,21 @@ Report commands and results.
 
 ### Card O — trace rooms on mechanical-only drawing sets
 
+**Status 2026-10-03:** implemented by Claude.
+- Part 1 (commit `1e97844`): scaled services plans become vector/trace pages only
+  when a set has no floor-plan page (`ai/vector_geometry.fallback_services_plan_pages`,
+  `reviewer_room_geometry_service._fallback_trace_page_numbers`); traces on them
+  carry `fallback_plan`.
+- Part 2: reviewer-added rooms stored in `reviewer_room_geometry.json` `rooms`
+  (label, level, required room use, reviewer); one shared proposal reader
+  `backend/room_proposal.py` replaces 8 copy-pasted proposal reads (room-inference
+  job check and test mode intentionally keep detection-only reads); add/remove
+  room actions apply the room-use override; trace save/delete keep added rooms.
+- Known limit found on the real Global Exchange mechanical set: its plans have
+  **no printed building dimensions**, so a trace cannot be calibrated and saved
+  under the current rule (printed dimension must agree with the declared scale).
+  Needs a decision before mechanical-only sets can produce a draft.
+
 Start after Card N (both touch the trace/room UI). Larger than F–N: do it in
 two parts and stop after part 1 to report.
 

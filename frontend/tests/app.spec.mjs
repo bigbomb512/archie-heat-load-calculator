@@ -1438,3 +1438,52 @@ test("room confirmation needs a reviewer and saves a chosen use before reassembl
   expect(calls[0][1]).toEqual(expect.objectContaining({room_id: "room-use:level-2:service-counter", taxonomy_id: "retail", reviewer: "QA"}));
   await expect(block).toContainText("Use saved for Service Counter");
 });
+
+function mechanicalTraceContext(rooms = []){
+  return {id: "demo-project", source_pdf_fingerprint: "pdf-fixture", rooms,
+    pages: [{page: 5, title: "Ductwork plan", drawing_number: "M-210", declared_scale: "1:50", scale_denominator: 50, level_name: "Level 2",
+      image_width_px: 1000, image_height_px: 800, image_px_per_pt: 3.5277777778, preview_url: "/fake-plan.svg", preview_width_px: 1000,
+      preview_height_px: 800, preview_matches_vector_coordinates: true, vector_page_fingerprint: "vector-fixture",
+      fallback_plan: true, fallback_reason: "No architectural floor plan in this set; tracing on a services plan."}],
+    room_uses: {retail: "Retail / showroom", office: "Office / meeting"}, levels: ["Level 2", "Unassigned level"],
+    reviewer_room_geometry: {schema_version: 1, records: []}};
+}
+
+async function openTraceWorkspace(page){
+  await page.route("**/api/calculation-input-evidence?project_id=demo-project", route => route.fulfill({json: {status: "current", calculation_input_evidence: {fingerprint: "e", candidates: [], geometry_resolution: {entities: [], summary: {}, deterministic_proof_diagnostics: {pages: [], rooms: []}}, opening_register: {openings: []}}, summary: {candidate_count: 0, status_counts: {}, category_counts: {}}, component_interpretations: {}}}));
+  await page.route("**/api/plan-snap?project_id=demo-project&page=5", route => route.fulfill({json: {lines: [], endpoints: [], intersections: [], snap_tolerance_px: 8, source_pdf_fingerprint: "pdf-fixture", vector_page_fingerprint: "vector-fixture"}}));
+  await page.route("**/fake-plan.svg", route => route.fulfill({contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="800"><rect width="1000" height="800" fill="#eee"/></svg>'}));
+  await page.goto("/");
+  await page.evaluate(() => { DATA = {id: "demo-project"}; show("vRes"); requiredElement("designRequirementsPanel").classList.remove("hide"); showCalculationInputEvidence({fingerprint: "initial", geometry_resolution: {entities: [], review_items: [], summary: {}, deterministic_proof_diagnostics: {pages: [], rooms: []}}, candidates: []}, {}, "current"); });
+}
+
+test("mechanical-only set offers services plans and lets a reviewer add a room with a required use", async ({ page }) => {
+  let context = mechanicalTraceContext(); const posts = [];
+  await page.route("**/api/reviewer-room-geometry?project_id=demo-project", route => route.fulfill({json: context}));
+  await page.route("**/api/reviewer-room-geometry", route => {
+    const body = route.request().postDataJSON(); posts.push(body);
+    context = mechanicalTraceContext([{room_id: "room-use:level-2:kiosk", label: "Kiosk", level_name: "Level 2", needs_trace: true, reviewer_added: true, source: "room_inference_proposal"}]);
+    return route.fulfill({json: context});
+  });
+  await openTraceWorkspace(page);
+  const workspace = page.locator("#reviewerRoomGeometryWorkspace");
+  await expect(workspace).toContainText("Plan pages are available, but no rooms were detected");
+  const form = workspace.locator(".reviewer-add-room");
+  await expect(form).toHaveAttribute("open", "");
+  await form.locator("[data-add-room-label]").fill("Kiosk");
+  await form.locator("[data-add-room-reviewer]").fill("QA");
+  await form.locator("[data-add-room]").click();
+  await expect(form.locator("[data-add-room-result]")).toHaveText("Choose a room use for the new room.");
+  expect(posts).toEqual([]);
+  await expect(form.locator("[data-add-room-level]")).toHaveValue("Level 2");
+  await form.locator("[data-add-room-use]").selectOption("retail");
+  await form.locator("[data-add-room]").click();
+  await expect.poll(() => posts.length).toBe(1);
+  expect(posts[0]).toEqual(expect.objectContaining({action: "add_room", label: "Kiosk", level_name: "Level 2", taxonomy_id: "retail", reviewer: "QA"}));
+  await expect(workspace.locator("[data-geometry-room]")).toHaveValue("room-use:level-2:kiosk");
+  await expect(workspace.locator("[data-geometry-room] option:checked")).toContainText("added by reviewer");
+  await expect(workspace.locator("[data-remove-room]")).toBeVisible();
+  await workspace.locator("[data-geometry-page]").selectOption("5");
+  await expect(workspace.locator("[data-geometry-page] option:checked")).toContainText("services plan (no architectural plan in set)");
+  await expect(workspace.locator(".reviewer-geometry-warning")).toContainText("tracing on a services plan");
+});
