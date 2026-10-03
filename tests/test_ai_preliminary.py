@@ -141,6 +141,16 @@ def main():
     check("accepted opaque surface resolves that room's envelope assessment",
           not any(row["room_id"] == envelope_room_id and row["component_type"] == "envelope"
                   for row in envelope_report["unresolved_room_inputs"]))
+    fully_assessed = deepcopy(preliminary_envelope)
+    for room in fully_assessed["material"]["hourly_load_model"]["rooms"]:
+        for component in room["unapproved_components"]:
+            component.update({"calculation_status": "not_present_confirmed", "verification_status": "confirmed",
+                              "source": "Reviewer declaration", "value": None, "unit": ""})
+    fully_assessed_report = calculate(fully_assessed)
+    check("fully assessed envelope and reviewer-declared component absences omit the undercount warning",
+          not fully_assessed_report["unresolved_room_inputs"]
+          and "Envelope and listed air-side loads were not assessed; the total excludes them and understates the load."
+          not in fully_assessed_report["warnings"])
     refrigeration = assemble({"spaces": [{"name": "Cool Room", "level_name": "Level 1", "area": 10, "evidence": [{"page": 2}]}]})
     check("cool rooms are refrigeration exceptions rather than comfort-HVAC rooms", not refrigeration["material"]["hourly_load_model"]["rooms"] and refrigeration["excluded_spaces"][0]["scope"] == "refrigeration_process")
     no_orientation = deepcopy(proposal)

@@ -1939,6 +1939,24 @@ function drawAiPreliminary(data){
   const queue = report.review_queue || data.model?.review_queue || [];
   const unresolved = report.unresolved_room_inputs || [];
   const knownExclusions = report.known_exclusions || [];
+  const roomNames = new Map();
+  for (const room of [...(data.model?.topology?.rooms || []), ...(report.scenario_results || []).flatMap(scenario => scenario.rooms || [])]) {
+    if (room?.room_id && room?.name) roomNames.set(room.room_id, room.name);
+  }
+  const componentLabels = {
+    minimum_supply_air: "Minimum supply air", extract_air: "Extract air", spill_air: "Spill air",
+    transfer_air: "Transfer air", make_up_air: "Make-up air", vapour_gain: "Vapour gain",
+    steam_gain: "Steam gain", process_latent_load: "Process latent load", envelope: "Envelope",
+    infiltration: "Infiltration",
+  };
+  const excludedByComponent = new Map();
+  for (const item of [...knownExclusions, ...unresolved]) {
+    const type = item.component_type || "component";
+    if (!excludedByComponent.has(type)) excludedByComponent.set(type, new Set());
+    excludedByComponent.get(type).add(roomNames.get(item.room_id) || "Room name unavailable");
+  }
+  const excludedSummary = [...excludedByComponent.entries()].sort(([left], [right]) => left.localeCompare(right))
+    .map(([type, names]) => `${componentLabels[type] || type.replaceAll("_", " ").replace(/\b\w/g, letter => letter.toUpperCase())} — ${[...names].join(", ")}`);
   const surfaces = report.preliminary_surface_summary || data.model?.surface_summary || {};
   const refrigeration = report.refrigeration_process_exclusions || data.model?.excluded_spaces || [];
   const handoffUrl = data.artifact_links?.codex_handoff || "";
@@ -1949,7 +1967,7 @@ function drawAiPreliminary(data){
     : "No local Codex handoff has been prepared.";
   requiredElement("aiPreliminaryResults").innerHTML = report.label ? `
     <article class="review-item"><div><b>${esc(report.label)}</b><span>Included-scope peak: ${peak.design_total_kw ?? "—"} kW. Low-confidence assumptions: ${coverage.low_confidence_count ?? queue.length}. Unsupported components remain explicit exclusions.</span></div></article>
-    ${(unresolved.length || knownExclusions.length) ? `<article class="review-item"><div><b>Not included in this total</b><ul class="audit-list">${[...knownExclusions, ...unresolved].map(item => `<li>${esc(item.component_type || "component")} · ${esc(item.room_id || "project")}</li>`).join("")}</ul></div></article>` : ""}
+    ${excludedSummary.length ? `<article class="review-item"><div><b>Not included in this total</b><ul class="audit-list">${excludedSummary.map(line => `<li>${esc(line)}</li>`).join("")}</ul></div></article>` : ""}
     <article class="review-item"><div><b>AI preliminary envelope coverage</b><span>Surfaces: ${surfaces.included ?? 0} included, ${surfaces.blocked ?? 0} blocked, ${surfaces.excluded ?? 0} excluded. Openings: ${surfaces.openings_included ?? 0} included, ${surfaces.openings_excluded ?? 0} excluded. Unknown shading is explicitly treated as unshaded and queued for review.</span></div></article>
     ${refrigeration.map(item => `<article class="review-item"><div><b>${esc(item.room_name || "Refrigeration/process room")}</b><span>${esc(item.reason || "Excluded from the comfort-HVAC subtotal.")}</span></div></article>`).join("")}
     ${queue.slice(0, 8).map(item => `<article class="review-item"><div><b>${esc(item.room_id)} · ${esc(item.field)}</b><span>${esc(item.confidence_band)} confidence · ${esc(item.rationale || "Review this assumption.")}</span></div></article>`).join("")}` : "<p class=\"review-empty\">Save settings, then assemble a local placeholder-AI draft or run the configured provider.</p>";

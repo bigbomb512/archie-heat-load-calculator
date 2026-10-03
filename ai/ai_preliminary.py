@@ -1233,7 +1233,7 @@ def calculate(input_set, safety_factor_policy=None):
     report["provenance"] = shared_resolution.build_report_provenance(report, input_set.get("value_resolution", {}))
     report["excluded_components"] = sorted(set(report.get("excluded_components", []) + [item["component"] for item in input_set["exclusions"]]))
     warning = "Envelope and listed air-side loads were not assessed; the total excludes them and understates the load."
-    if warning not in report["warnings"]:
+    if report.get("unresolved_room_inputs") and warning not in report["warnings"]:
         report["warnings"].append(warning)
     report["input_fingerprints"].update(input_set["dependency_fingerprints"])
     report["input_fingerprints"]["ai_preliminary_input_set"] = input_set["input_fingerprint"]

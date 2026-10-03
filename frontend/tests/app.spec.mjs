@@ -1137,9 +1137,16 @@ test("AI preliminary result shows unassessed components beneath the total", asyn
       settings: {}, run: {},
       hourly_ai_preliminary_load_report: {
         label: "AI preliminary estimate", included_scope_peak: {design_total_kw: 30.75},
+        scenario_results: [{rooms: [
+          {room_id: "bar-id", name: "Bar"},
+          {room_id: "kitchen-id", name: "Kitchen"},
+          {room_id: "shop-id", name: "Shop"},
+        ]}],
         unresolved_room_inputs: [
-          {room_id: "room-kitchen", component_type: "envelope"},
-          {room_id: "room-kitchen", component_type: "extract_air"},
+          {room_id: "bar-id", component_type: "make_up_air"},
+          {room_id: "kitchen-id", component_type: "make_up_air"},
+          {room_id: "shop-id", component_type: "make_up_air"},
+          {room_id: "kitchen-id", component_type: "envelope"},
         ],
       },
     });
@@ -1147,6 +1154,7 @@ test("AI preliminary result shows unassessed components beneath the total", asyn
   const result = page.locator("#aiPreliminaryResults");
   await expect(result).toContainText("Included-scope peak: 30.75 kW");
   await expect(result).toContainText("Not included in this total");
-  await expect(result).toContainText("envelope · room-kitchen");
-  await expect(result).toContainText("extract_air · room-kitchen");
+  await expect(result).toContainText("Make-up air — Bar, Kitchen, Shop");
+  await expect(result).toContainText("Envelope — Kitchen");
+  await expect(result).not.toContainText("bar-id");
 });
