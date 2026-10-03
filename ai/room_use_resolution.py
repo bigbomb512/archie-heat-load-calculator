@@ -117,6 +117,12 @@ def _label_matches(label, taxonomy):
         if any(re.search(r"(?<![a-z0-9])" + re.escape(alias.casefold()) + r"(?![a-z0-9])", text)
                for alias in category.get("aliases", []) if alias):
             matches.append(category_id)
+    # Specific retail/front-of-house phrases take precedence over the broad
+    # "service" alias used for unresolved plant/service rooms.
+    if re.search(r"(?<![a-z0-9])(?:service\s+counter|counter|kiosk)(?![a-z0-9])", text):
+        if "kitchen" in matches:
+            return ["kitchen"]
+        return ["retail"] if "retail" in taxonomy["categories"] else sorted(set(matches))
     return sorted(set(matches))
 
 

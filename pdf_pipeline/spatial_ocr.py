@@ -85,6 +85,10 @@ def analyse_page(pdf_page, packet_page):
         "scale_candidates": scale_candidates(words, title_blocks),
         "drawing_number_candidates": drawing_number_candidates(words, title_blocks),
         "dimension_candidates": dimension_candidates(words, marker_bboxes),
+        # Keep the complete text layer for local evidence consumers. The
+        # compact candidate/sample fields below are bounded for handoff size
+        # and can otherwise drop room labels that occur late on busy plans.
+        "standalone_text_items": words,
         "room_label_candidates": room_label_candidates(words),
         "rotated_text": [word for word in words if word["orientation"] != "horizontal"][:80],
         "word_samples": words[:120],

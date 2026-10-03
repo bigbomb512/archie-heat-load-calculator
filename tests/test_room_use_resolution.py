@@ -22,6 +22,7 @@ def building():
         {"name": "Kitchen", "level_name": "Level 1", "area": 20, "evidence": [{"page": 2, "excerpt": "KITCHEN"}]},
         {"name": "Cool Room", "level_name": "Level 1", "area": 10, "evidence": [{"page": 2, "excerpt": "COOL ROOM"}]},
         {"name": "Plant Room", "level_name": "Level 1", "area": 8, "evidence": [{"page": 2, "excerpt": "PLANT ROOM"}]},
+        {"name": "Service Counter", "level_name": "Level 1", "area": 13, "evidence": [{"page": 2, "excerpt": "SERVICE COUNTER"}]},
         {"name": "Room 14", "level_name": "Level 1", "area": 12, "evidence": [{"page": 2, "excerpt": "ROOM 14"}]},
     ]}
 
@@ -38,6 +39,11 @@ def main():
     check("kitchens retain HVAC profile and process exception scope", kitchen["preliminary_profile_id"] == "hospitality" and kitchen["space_scope"] == "comfort_hvac_with_process_exception")
     check("cool rooms are classified as excluded refrigeration scope", record(artifact, "Cool Room")["status"] == "excluded" and record(artifact, "Cool Room")["space_scope"] == "refrigeration_process")
     check("plant rooms remain excluded from comfort-HVAC scope", record(artifact, "Plant Room")["space_scope"] == "unresolved_scope")
+    service_counter = record(artifact, "Service Counter")
+    check("service counters map to retail comfort HVAC", service_counter["taxonomy_id"] == "retail" and service_counter["space_scope"] == "comfort_hvac")
+    kitchen_counter = room_use_resolution.resolve({"spaces": [{"name": "Kitchen Counter", "level_name": "Level 1", "area": 4,
+        "evidence": [{"page": 2, "excerpt": "KITCHEN COUNTER"}]}]}, source_fingerprints=source)
+    check("explicit kitchen label outranks the counter shortcut", record(kitchen_counter, "Kitchen Counter")["taxonomy_id"] == "kitchen")
     generic = record(artifact, "Room 14")
     check("unresolved conditioned rooms use visible low-confidence generic fallback", generic["taxonomy_id"] == "generic_conditioned" and generic["status"] == "needs_review")
     check("room use records preserve cited evidence and stable room identity", dining["evidence"][0]["page"] == 2 and dining["room_id"] == room_use_resolution.room_identity("Dining area", "Level 1"))

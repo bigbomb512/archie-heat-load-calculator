@@ -775,12 +775,15 @@ def main():
                 "drawing_number_candidates": [],
                 "dimension_candidates": [{"text": "4328", "value_mm": 4328, "bbox": [40, 20, 65, 30]}],
                 "room_label_candidates": [],
+                "standalone_text_items": [{"text": f"legend note {index}", "bbox": [0, index, 10, index + 1]} for index in range(100)]
+                    + [{"text": "Kitchen", "bbox": [20, 200, 60, 210]}],
                 "rotated_text": [],
             }
         ],
     }
     spatial_ai_packet = build_ai_packet(packet, spatial_ocr=spatial_ocr)
     check_value("spatial ocr reaches ai packet", spatial_ai_packet["spatial_ocr"]["pages"][0]["scale_candidates"][0]["text"], "1:100")
+    check_value("spatial OCR packet omits full standalone items", "standalone_text_items" not in spatial_ai_packet["spatial_ocr"]["pages"][0], True)
     check_value(
         "spatial ocr respects confirmed unclassified page",
         [page["page"] for page in spatial_useful_pages(packet, {"pages": [{"page": 3, "decision": "Keep as reference"}]})],

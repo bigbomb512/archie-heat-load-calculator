@@ -6,7 +6,7 @@
   "categories": {
     "dining": {"label": "Dining / café / bar", "profile_id": "hospitality", "space_scope": "comfort_hvac", "aliases": ["dining", "cafe", "café", "bar", "restaurant", "bistro"]},
     "kitchen": {"label": "Kitchen", "profile_id": "hospitality", "space_scope": "comfort_hvac_with_process_exception", "aliases": ["kitchen", "cook", "cooking", "food preparation", "prep"]},
-    "retail": {"label": "Retail / showroom", "profile_id": "retail", "space_scope": "comfort_hvac", "aliases": ["retail", "shop", "showroom", "tenancy"]},
+    "retail": {"label": "Retail / showroom", "profile_id": "retail", "space_scope": "comfort_hvac", "aliases": ["retail", "shop", "showroom", "tenancy", "service counter", "counter", "kiosk"]},
     "office": {"label": "Office / meeting", "profile_id": "office", "space_scope": "comfort_hvac", "aliases": ["office", "meeting", "admin", "reception", "boardroom"]},
     "storage": {"label": "Store / stockroom", "profile_id": "storage", "space_scope": "comfort_hvac", "aliases": ["store", "storage", "stock", "warehouse"]},
     "ancillary_conditioned": {"label": "Amenity / corridor / foyer", "profile_id": "generic_conditioned_room", "space_scope": "comfort_hvac", "aliases": ["amenity", "toilet", "wc", "bathroom", "corridor", "hall", "foyer", "lobby"]},

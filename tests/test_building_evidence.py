@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from ai.building_evidence import build_building_evidence
+from ai.building_evidence import build_building_evidence, deduplicate
 from ai.thermal_model import build_thermal_evidence, build_thermal_model, apply_thermal_model
 
 
@@ -46,6 +46,50 @@ def main():
     rcp_evidence = build_building_evidence({"source_pdf": "fixture.pdf", "drawing_set": {"pages": rcp}},
                                            {"page_roles": [{"page": 6, "proposed_role": "reflected_ceiling_plan"}]}, rcp_ocr)
     check("service legends do not create room candidates", not rcp_evidence["spaces"])
+
+    false_rooms = [
+        {"page": 10, "title": "Render", "level_name": "Level 1", "sheet_classification": "render_or_photo",
+         "rooms": [{"name": "Retail space including a museum and Front of house", "area": "27.9 m²"}],
+         "structured_content": {"markdown": "Retail space including a museum and Front of house 27.9 m²"}},
+        {"page": 11, "title": "Electrical", "level_name": "Level 1", "sheet_classification": "electrical_or_fire",
+         "rooms": [{"name": "Plant room", "area": "9.6 m²"}],
+         "structured_content": {"markdown": "Plant room AREA 9.6 m²"}},
+        {"page": 12, "title": "General notes", "level_name": "Level 1", "sheet_classification": "notes", "rooms": [],
+         "structured_content": {"markdown": "coordinate with the fitout shopfitter"}},
+    ]
+    false_ocr = {"pages": [
+        {"page": 10, "room_label_candidates": [{"text": "Retail space including a museum and Front of house 27.9 m²", "status": "possible_room_or_area_label"}]},
+        {"page": 11, "room_label_candidates": [{"text": "Plant room 9.6 m²", "status": "possible_room_or_area_label"}]},
+        {"page": 12, "room_label_candidates": [{"text": "coordinate with the fitout shopfitter", "status": "possible_room_or_area_label"}]},
+    ]}
+    false_evidence = build_building_evidence({"source_pdf": "fixture.pdf", "drawing_set": {"pages": false_rooms}}, {}, false_ocr)
+    check("render, electrical and notes text never create spaces", not false_evidence["spaces"])
+
+    plan_rooms = [{"page": 13, "title": "GA Plan", "level_name": "Level 2", "sheet_classification": "floor_plan",
+                   "rooms": [], "structured_content": {"markdown": "Office AREA 9 m²\nService Counter AREA 13 m²"}},
+                  {"page": 13, "title": "GA Plan duplicate", "level_name": "Unassigned level", "sheet_classification": "floor_plan",
+                   "rooms": [], "structured_content": {"markdown": ""}}]
+    plan_ocr = {"pages": [{"page": 13, "room_label_candidates": [
+        {"text": "Office 01.02 9 m²", "status": "possible_room_or_area_label"},
+        {"text": "Service Counter 01.01 13 m²", "status": "possible_room_or_area_label"},
+        {"text": "SHOPFITTER CLEAN", "status": "possible_room_or_area_label"},
+        {"text": "3mm FLAT BAR IN MT3 FINISH", "status": "possible_room_or_area_label"},
+        {"text": "submit shop drawings to the architect", "status": "possible_room_or_area_label"},
+        {"text": "coordinate with the fitout shopfitter", "status": "possible_room_or_area_label"},
+        {"text": "BASE BUILDING EXISTING KITCHEN EXCHANGE AIR DUCTWORK", "status": "possible_room_or_area_label"},
+    ]}]}
+    plan_coverage = {"pages": [{"page": 13, "level_name": "Level 2", "level_status": "confirmed_by_review"}]}
+    plan_evidence = build_building_evidence({"source_pdf": "fixture.pdf", "drawing_set": {"pages": plan_rooms}}, plan_coverage, plan_ocr)
+    spaces = plan_evidence["spaces"]
+    check("plan room labels and areas are retained without phantom OCR labels", {(s["name"], s["level_name"]) for s in spaces} == {("Office", "Level 2"), ("Service Counter", "Level 2")})
+    check("plan room areas survive with citations", {(s["name"], s["area"]) for s in spaces} == {("Office", "9 m²"), ("Service Counter", "13 m²")} and all(s["evidence"][0]["page"] == 13 for s in spaces))
+    check("same-page Unassigned duplicate is removed", all(s["level_name"] != "Unassigned level" for s in spaces))
+    duplicate_fixture = {"spaces": [
+        {"name": "Office", "area": "9 m²", "level_name": "Level 2", "evidence": [{"page": 13}]},
+        {"name": "Office", "area": "9 m²", "level_name": "Unassigned level", "evidence": [{"page": 13}]},
+    ], "surfaces": [], "openings": [], "constructions": [], "lighting": [], "equipment": []}
+    deduplicate(duplicate_fixture)
+    check("same-label same-page Unassigned duplicate loses to named level", len(duplicate_fixture["spaces"]) == 1 and duplicate_fixture["spaces"][0]["level_name"] == "Level 2")
 
     elevation = [{"page": 7, "title": "Shopfront Elevation", "level_name": "Ground Floor",
                   "sheet_classification": "elevation", "thermal_role": "surface_confirmation", "rooms": [],

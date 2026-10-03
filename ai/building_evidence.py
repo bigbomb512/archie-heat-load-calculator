@@ -3,6 +3,7 @@
 import re
 
 from ai.drawing_coverage import has_current_level_classification, source_fingerprint, timestamp
+from ai.room_inference import parse_room_label_item, room_label_items
 
 
 EQUIPMENT_WORDS = {
@@ -68,7 +69,8 @@ def empty_evidence(ai_input):
 
 def source_pages(ai_input, spatial_ocr, drawing_coverage=None):
     ocr_text = {}
-    for page in spatial_ocr.get("pages", []):
+    spatial_pages = {page.get("page"): page for page in spatial_ocr.get("pages", []) if isinstance(page, dict)}
+    for page in spatial_pages.values():
         excerpts = [item.get("text_excerpt", "") for item in page.get("title_blocks", [])]
         excerpts.extend(item.get("text", "") for item in page.get("word_samples", []) if item.get("text"))
         ocr_text[page.get("page")] = "\n".join(excerpts)
@@ -80,13 +82,20 @@ def source_pages(ai_input, spatial_ocr, drawing_coverage=None):
                       if isinstance(row, dict)}
     drawing_pages = ai_input.get("drawing_set", {}).get("pages", [])
     if not drawing_pages:
-        drawing_pages = ai_input.get("confirmed_pages", {}).get("floor_plans", []) + ai_input.get("confirmed_pages", {}).get("reference_pages", [])
+        confirmed = ai_input.get("confirmed_pages", {})
+        drawing_pages = [dict(page, sheet_classification=page.get("sheet_classification", "floor_plan"),
+                              plan_role=page.get("plan_role", "main_floor_plan"))
+                         for page in confirmed.get("floor_plans", [])]
+        drawing_pages.extend(dict(page, sheet_classification=page.get("sheet_classification", "reference_context"),
+                                  plan_role=page.get("plan_role", "reference_context"))
+                             for page in confirmed.get("reference_pages", []))
     for page in drawing_pages:
         coverage_page = coverage_pages.get(page.get("page"), {})
         coverage_role = coverage_roles.get(page.get("page"), {})
         pages.append({
             "page": page.get("page"), "drawing_number": page.get("drawing_number", ""),
-            "level_name": coverage_page.get("level_name", "") if level_method_current else "",
+            "level_name": (coverage_page.get("level_name", "") if level_method_current and coverage_page.get("level_name")
+                           else page.get("level_name", "") if not drawing_coverage else ""),
             "level_candidates": coverage_page.get("level_candidates", []),
             "level_status": coverage_page.get("level_status", "missing"),
             "classification": page.get("sheet_classification", page.get("detected_type", "other")),
@@ -102,8 +111,9 @@ def source_pages(ai_input, spatial_ocr, drawing_coverage=None):
             "visual_available": coverage_role.get("visual_available", False),
             "text_available": coverage_role.get("text_available", bool(page.get("structured_content", {}).get("markdown"))),
             "vector_available": coverage_role.get("vector_available", False),
-            "room_labels": next((item.get("room_label_candidates", []) for item in spatial_ocr.get("pages", [])
-                                  if item.get("page") == page.get("page")), []),
+            "room_labels": [{"text": label + (f" {area:g} m²" if area else ""),
+                             "status": "possible_room_or_area_label"}
+                            for label, area in room_label_items(spatial_pages.get(page.get("page"), {}))],
             "text": page.get("structured_content", {}).get("markdown", "") + "\n" + ocr_text.get(page.get("page"), ""),
         })
     return pages
@@ -125,7 +135,27 @@ def record(result, family, page, value, status="direct", **extra):
     entries.append(item)
 
 
+def _space_page_eligible(page):
+    blocked = {"render_or_photo", "electrical_or_fire", "schedule", "cover_or_drawing_list", "detail", "notes",
+               "reference", "reference_context", "services_or_lighting_plan", "reflected_ceiling_plan",
+               "architect_lighting_plan", "architect_electrical_plan", "opening_elevation", "opening_schedule",
+               "elevation_or_section", "3d_render"}
+    role = str(page.get("proposed_role") or page.get("page_role") or "").casefold()
+    classification = str(page.get("classification") or "").casefold()
+    if classification in blocked or role in blocked or page.get("reference_only"):
+        return False
+    return classification in {"floor_plan", "main_floor_plan"} or role in {
+        "main_floor_plan", "primary_geometry_plan", "supporting_geometry_plan", "enlarged_plan", "enlarged_floor_plan",
+    }
+
+
 def add_spaces(result, page):
+    # Room identities can only originate on geometry plans. Other sheets may
+    # contain useful thermal evidence, but their notes, legends and schedules
+    # are not evidence of room topology.
+    if not _space_page_eligible(page):
+        return
+
     for room in page["rooms"]:
         label = room.get("name", "").strip()
         if label:
@@ -143,30 +173,14 @@ def add_spaces(result, page):
         record(result, "spaces", page, {"name": label, "area": match.group(2) + " " + match.group(3), "level_name": page["level_name"],
                 "geometry_status": "geometry_review_required", "geometry_reference": None, "unresolved_fields": ["geometry"]},
                 excerpt=match.group(0), extraction_method="explicit_area_text")
-    known_room_terms = ("shop", "kitchen", "bar", "dining", "cool room", "freezer", "storage", "toilet", "office", "staff", "entry", "service", "room")
-    non_room_terms = ("legend", "symbol", "tile", "tiles", "grout", "joint", "colour", "color", "coated", "concealed", "services", "floor", "location")
     existing = {item.get("name", "").casefold() for item in result["spaces"] if item.get("level_name") == page["level_name"]}
-    # Reflected-ceiling and service/electrical sheets are useful supporting
-    # evidence for ceilings, lighting and equipment, but their legends and
-    # notes routinely contain room-like phrases.  Do not promote those OCR
-    # fragments to room identities; room topology must come from geometry
-    # plans or an explicit source-room record.
-    if (page.get("reference_only")
-            or page.get("proposed_role") in {"reference", "detail", "services_or_lighting_plan",
-                                              "reflected_ceiling_plan", "architect_lighting_plan",
-                                              "architect_electrical_plan", "opening_elevation",
-                                              "opening_schedule", "elevation_or_section", "3d_render"}
-            or page.get("classification") in {"reflected_ceiling_plan", "architect_lighting_plan",
-                                                "architect_electrical_plan"}):
-        return
     for candidate in page.get("room_labels", []):
-        label = re.sub(r"\s+", " ", str(candidate.get("text", ""))).strip(" .:-")
-        if (candidate.get("status") not in {"possible_room_or_area_label", "room_label"}
-                or len(label) < 3 or len(label) > 45 or not any(term in label.casefold() for term in known_room_terms)
-                or any(term in label.casefold() for term in non_room_terms)
+        label, _, area = parse_room_label_item(candidate.get("text", "")) if isinstance(candidate, dict) else (None, None, None)
+        if (not isinstance(candidate, dict) or candidate.get("status") not in {"possible_room_or_area_label", "room_label"}
+                or not label or len(label) < 3 or len(label) > 45
                 or label.casefold() in existing):
             continue
-        record(result, "spaces", page, {"name": label, "area": "", "level_name": page["level_name"], "status": "inferred",
+        record(result, "spaces", page, {"name": label, "area": (str(area) + " m²") if area else "", "level_name": page["level_name"], "status": "inferred",
                 "geometry_status": "label_detected", "geometry_reference": None,
                 "unresolved_fields": ["floor", "geometry", "area"]}, status="inferred", excerpt=label,
                extraction_method="spatial_ocr_room_label")
@@ -224,6 +238,8 @@ def add_vision_entities(result, vision_response, pages):
                 "evidence": [source(page, row.get("excerpt", ""))],
             })
         elif kind == "room":
+            if not _space_page_eligible(page):
+                continue
             area = (str(row["area_m2"]) + " m²") if row.get("area_m2") else ""
             record(result, "spaces", page, {
                 "name": row.get("label"), "area": area, "level_name": row.get("level_name", ""),
@@ -436,6 +452,18 @@ def issue(item_id, question):
 
 
 def deduplicate(result):
+    # When page classification has no confirmed level, it may emit an
+    # Unassigned duplicate of the same room already tied to a named level.
+    spaces = result["spaces"]
+    named = {}
+    for item in spaces:
+        evidence_pages = tuple(sorted(e.get("page") for e in item.get("evidence", []) if e.get("page") is not None))
+        if evidence_pages and item.get("level_name") and not str(item["level_name"]).casefold().startswith("unassigned"):
+            named.setdefault((item.get("name", "").casefold(), evidence_pages), set()).add(item["level_name"].casefold())
+    result["spaces"] = [item for item in spaces if not (
+        str(item.get("level_name", "")).casefold().startswith("unassigned")
+        and (item.get("name", "").casefold(), tuple(sorted(e.get("page") for e in item.get("evidence", []) if e.get("page") is not None))) in named
+    )]
     for family in ["spaces", "surfaces", "openings", "constructions", "lighting", "equipment"]:
         seen, unique = set(), []
         for item in result[family]:
