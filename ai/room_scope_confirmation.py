@@ -16,6 +16,7 @@ from ai.room_use_resolution import room_identity
 
 SCHEMA_VERSION = 1
 CONFIRMED, NOT_CONFIRMED, STALE = "confirmed", "not_confirmed", "stale"
+COMFORT_SCOPES = {"comfort_hvac", "comfort_hvac_with_process_exception"}
 
 
 def fingerprint(value):
@@ -43,11 +44,13 @@ def _room_use_ids(room_use):
 
 
 def candidates(input_set, room_use=None):
-    """Rows a reviewer must confirm: calculated rooms plus rooms with no use.
+    """Rows a reviewer must review: calculated rooms, rooms with no use, and
+    comfort rooms that have no area yet.
 
-    Refrigeration/process rooms, rooms without an area and reviewer-declared
-    "not a room" detections are not offered: they cannot enter the comfort
-    total from this list, and are already shown as exclusions.
+    Rooms without an area are listed (status "no_area") so a reviewer can see
+    they are missing from the total; they cannot be included until traced.
+    Refrigeration/process rooms and reviewer-declared "not a room" detections
+    are not offered: they cannot enter the comfort total from this list.
     """
     material = (input_set or {}).get("material", {}) if isinstance(input_set, dict) else {}
     model = material.get("hourly_load_model", {}) if isinstance(material, dict) else {}
@@ -76,7 +79,19 @@ def candidates(input_set, room_use=None):
             "status": "calculated",
         }
     for space in (input_set or {}).get("excluded_spaces", []):
-        if not isinstance(space, dict) or space.get("scope") != "unresolved_scope":
+        if not isinstance(space, dict) or space.get("scope") not in COMFORT_SCOPES | {"unresolved_scope"}:
+            continue
+        if space.get("scope") in COMFORT_SCOPES:
+            name = str(space.get("room_name", "")).strip()
+            level = str(space.get("level", "") or "Unassigned level")
+            key = use_ids.get((name.casefold(), level.casefold())) or room_identity(name, level)
+            if name and key not in rows and not str(space.get("reason", "")).startswith("Excluded by reviewer"):
+                rows[key] = {
+                    "key": key, "model_room_id": "", "label": name, "level": level, "area_m2": None,
+                    "area_origin": "", "source_pages": _pages(space.get("evidence", [])),
+                    "scope": str(space.get("scope")), "status": "no_area",
+                    "reason": "No traced or printed area yet; this room is not in the total.",
+                }
             continue
         name = str(space.get("room_name", "")).strip()
         level = str(space.get("level", "") or "Unassigned level")
@@ -110,7 +125,8 @@ def state(input_set, confirmation, room_use=None):
     decisions = {row.get("key"): row for row in (confirmation or {}).get("rows", []) if isinstance(row, dict)}
     for row in rows:
         decision = decisions.get(row["key"]) if status == CONFIRMED else None
-        row["include"] = bool(decision.get("include")) if decision else row["status"] == "calculated" or row["status"] == "needs_use"
+        row["include"] = (bool(decision.get("include")) if decision
+                          else row["status"] in {"calculated", "needs_use"})
         row["exclude_reason"] = str(decision.get("reason", "")) if decision else ""
     return {"status": status, "candidate_fingerprint": current, "candidates": rows,
             "confirmation": deepcopy(confirmation) if confirmation else None}
@@ -150,11 +166,15 @@ def confirm(input_set, room_use, data, now):
         include = bool(decision.get("include"))
         if include and row["status"] == "needs_use":
             raise ValueError(f"Choose a use for {row['label']} (or exclude it) before confirming the room list.")
+        if include and row["status"] == "no_area":
+            raise ValueError(f"Trace {row['label']} before including it in the room list.")
         reason = str(decision.get("reason", "")).strip()
         output.append({"key": row["key"], "label": row["label"], "level": row["level"], "area_m2": row["area_m2"],
                        "area_origin": row["area_origin"], "source_pages": row["source_pages"],
                        "status": row["status"], "include": include,
                        "reason": "" if include else (reason or "Excluded by reviewer")})
+    if not any(row["status"] == "calculated" for row in output):
+        raise ValueError("Trace at least one room before confirming the room list.")
     if not any(row["include"] for row in output):
         raise ValueError("Include at least one room before confirming the room list.")
     return {"schema_version": SCHEMA_VERSION, "candidate_fingerprint": current, "reviewer": reviewer,

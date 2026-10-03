@@ -128,6 +128,45 @@ def pure_checks():
     check("a new room makes the confirmation stale", scope.state(added, confirmation)["status"] == scope.STALE)
 
 
+def untraced_room_checks():
+    data = input_set()
+    data["excluded_spaces"].append({"room_name": "Kitchen", "level": "Level 2", "scope": "comfort_hvac_with_process_exception",
+                                    "reason": "Room identity was detected, but no validated area or structured boundary is available.",
+                                    "evidence": [{"page": 5}]})
+    data["excluded_spaces"].append({"room_name": "Kitchen", "level": "Level 2", "scope": "comfort_hvac_with_process_exception",
+                                    "reason": "No explicit or geometry-resolved room area is available.", "evidence": []})
+    rows = scope.candidates(data)
+    kitchen = [row for row in rows if row["label"] == "Kitchen"]
+    check("an untraced comfort room is listed once as having no area",
+          len(kitchen) == 1 and kitchen[0]["status"] == "no_area" and kitchen[0]["area_m2"] is None)
+    check("an untraced room is not included by default", scope.state(data, None)["candidates"][0]["label"] == "Kitchen"
+          and not next(row for row in scope.state(data, None)["candidates"] if row["label"] == "Kitchen")["include"])
+    k = keys(rows)
+    base = [{"key": k["Office"], "include": True}, {"key": k["Retail space"], "include": True},
+            {"key": k["Service Counter"], "include": False}]
+    expect_error("an untraced room cannot be included",
+                 lambda: scope.confirm(data, None, {"reviewer": "QA", "rows": base + [{"key": k["Kitchen"], "include": True}]}, "t"),
+                 "Trace Kitchen before including it")
+    confirmation = scope.confirm(data, None, {"reviewer": "QA", "rows": base + [{"key": k["Kitchen"], "include": False}]}, "t")
+    check("the list can be confirmed with the untraced room left out", scope.state(data, confirmation)["status"] == scope.CONFIRMED)
+    applied, confirmed_rooms, _ = scope.apply(data, confirmation)
+    check("the untraced room stays out of the calculation", "Kitchen" not in [row["label"] for row in confirmed_rooms])
+
+    traced = deepcopy(data)
+    traced["excluded_spaces"] = [space for space in traced["excluded_spaces"] if space["room_name"] != "Kitchen"]
+    traced["material"]["hourly_load_model"]["zones"].append({"zone_id": "z-kitchen", "floor_id": "f1"})
+    traced["material"]["hourly_load_model"]["rooms"].append({"room_id": "r-kitchen", "name": "Kitchen", "zone_id": "z-kitchen", "area_m2": 20.0})
+    check("tracing the room later makes the confirmation stale", scope.state(traced, confirmation)["status"] == scope.STALE)
+
+    only_untraced = {"input_fingerprint": "x", "material": {"hourly_load_model": {"floors": [], "zones": [], "rooms": []}},
+                     "materialized_fields": [], "review_queue": [], "exclusions": [],
+                     "excluded_spaces": [data["excluded_spaces"][-1]]}
+    k2 = keys(scope.candidates(only_untraced))
+    expect_error("with nothing traced the reviewer is told to trace a room first",
+                 lambda: scope.confirm(only_untraced, None, {"reviewer": "QA", "rows": [{"key": k2["Kitchen"], "include": False}]}, "t"),
+                 "Trace at least one room")
+
+
 def taxonomy_checks():
     categories = room_use_resolution.load_taxonomy()["categories"]
     check("taxonomy offers a not-a-room choice", categories["not_a_room"]["space_scope"] == "not_a_room")
@@ -183,6 +222,7 @@ def service_checks():
 
 def main():
     pure_checks()
+    untraced_room_checks()
     taxonomy_checks()
     service_checks()
 

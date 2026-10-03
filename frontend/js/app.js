@@ -2102,17 +2102,21 @@ function drawRoomScopeConfirmation(state = {}){
     : state.status === "stale"
       ? "The room list changed since it was confirmed. Review it and confirm again before calculating."
       : "Not confirmed yet. The draft load is only calculated from the rooms you confirm here.";
+  const untraced = rows.filter(row => row.status === "no_area");
   const uses = Object.entries(state.uses || {});
   const useOptions = uses.filter(([id]) => id !== "not_a_room").map(([id, label]) => `<option value="${esc(id)}">${esc(label)}</option>`).join("");
   container.innerHTML = `<div class="room-scope-head"><div><div class="micro">Before calculating</div><h4 id="roomScopeHeading">Confirm rooms for the draft load</h4></div></div>
     <p class="fine" data-room-scope-status>${esc(statusText)}</p>
+    ${untraced.length ? `<p class="room-scope-untraced" role="note" data-room-scope-untraced>${untraced.length} room${untraced.length === 1 ? " has" : "s have"} no area yet and ${untraced.length === 1 ? "is" : "are"} not in the total: ${esc(untraced.map(row => row.label).join(", "))}. Trace ${untraced.length === 1 ? "it" : "them"} to include ${untraced.length === 1 ? "it" : "them"}.</p>` : ""}
     <div class="room-scope-rows">${rows.map(row => {
       const needsUse = row.status === "needs_use";
-      const meta = [row.level, row.area_m2 != null ? `${row.area_m2} m²` : "no area", roomScopeOriginLabel(row.area_origin), row.source_pages?.length ? `p. ${row.source_pages.join(", ")}` : ""].filter(Boolean).join(" · ");
+      const noArea = row.status === "no_area";
+      const meta = [row.level, row.area_m2 != null ? `${row.area_m2} m²` : "no area", row.area_m2 != null ? roomScopeOriginLabel(row.area_origin) : "", row.source_pages?.length ? `p. ${row.source_pages.join(", ")}` : ""].filter(Boolean).join(" · ");
       return `<article class="review-item room-scope-row${needsUse ? " readiness-draft" : ""}" data-room-scope-key="${esc(row.key)}" data-room-scope-status="${esc(row.status)}">
-        <label class="room-scope-include"><input type="checkbox" data-room-scope-include ${row.include ? "checked" : ""}> <b>${esc(row.label)}</b></label>
-        <div><span>${esc(meta)}</span>${needsUse ? `<small>No room use yet${row.reason ? ` — ${esc(row.reason)}` : ""}. Choose a use to include it, or untick it.</small>` : ""}</div>
+        <label class="room-scope-include"><input type="checkbox" data-room-scope-include ${row.include ? "checked" : ""} ${noArea ? "disabled" : ""}> <b>${esc(row.label)}</b></label>
+        <div><span>${esc(meta)}</span>${needsUse ? `<small>No room use yet${row.reason ? ` — ${esc(row.reason)}` : ""}. Choose a use to include it, or untick it.</small>` : ""}${noArea ? `<small>Not traced — not included in the total.</small>` : ""}</div>
         <div class="room-scope-actions">
+          ${noArea ? `<button class="btn ghost mini" type="button" data-room-scope-trace>Trace this room</button>` : ""}
           ${needsUse ? `<select data-room-scope-use><option value="">Choose a use…</option>${useOptions}</select><button class="btn ghost mini" type="button" data-room-scope-save-use>Save use</button>` : ""}
           <button class="btn ghost mini" type="button" data-room-scope-not-room title="Remove this detection everywhere">Not a room</button>
           <input data-room-scope-reason placeholder="Reason if excluded" value="${esc(row.exclude_reason || "")}">
@@ -2132,10 +2136,28 @@ function drawRoomScopeConfirmation(state = {}){
     if (!use) return setRoomScopeMessage("Choose a use first, or untick the room to exclude it.");
     saveRoomScopeUse(row.dataset.roomScopeKey, use, row.querySelector("b").textContent);
   }));
+  container.querySelectorAll("[data-room-scope-trace]").forEach(button => button.addEventListener("click", () => {
+    openRoomForTracing(button.closest("[data-room-scope-key]").dataset.roomScopeKey);
+  }));
   container.querySelectorAll("[data-room-scope-not-room]").forEach(button => button.addEventListener("click", () => {
     const row = button.closest("[data-room-scope-key]");
     saveRoomScopeUse(row.dataset.roomScopeKey, "not_a_room", row.querySelector("b").textContent);
   }));
+}
+
+// Jump from the room confirmation to the trace tool with the room selected.
+async function openRoomForTracing(roomId){
+  openWorkflowAdvancedTarget("rooms");
+  const host = optionalElement("reviewerRoomGeometryWorkspace");
+  if (!ROOM_GEOMETRY_CONTEXT || !ROOM_TRACE_STATE) await loadReviewerRoomGeometryWorkspace();
+  if (!ROOM_TRACE_STATE) return setRoomScopeMessage("The room tracing tool is not available for this project yet.");
+  if (!(ROOM_GEOMETRY_CONTEXT?.rooms || []).some(room => room.room_id === roomId)) {
+    return setRoomScopeMessage("That room is not in the tracing tool's room list; reload the drawing evidence and try again.");
+  }
+  ROOM_TRACE_STATE = {...ROOM_TRACE_STATE, roomId, points: [], snapped: [], dimensionPoints: []};
+  renderReviewerRoomGeometryWorkspace();
+  host?.scrollIntoView({behavior: "smooth", block: "start"});
+  host?.querySelector("[data-geometry-page]")?.focus();
 }
 
 function setRoomScopeMessage(message){

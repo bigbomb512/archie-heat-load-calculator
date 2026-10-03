@@ -1499,3 +1499,25 @@ test("services plan without printed dimensions tells the reviewer to upload the 
   await workspace.locator("[data-geometry-page]").selectOption("5");
   await expect(workspace.locator(".reviewer-geometry-blocking")).toContainText("Upload the architectural drawings for this tenancy");
 });
+
+test("room confirmation lists untraced rooms as not in the total and cannot include them", async ({ page }) => {
+  await mockApi(page);
+  const state = roomScopeState();
+  state.candidates.push({key: "room-use:level-2:kitchen", label: "Kitchen", level: "Level 2", area_m2: null, area_origin: "",
+    source_pages: [21], status: "no_area", include: false, exclude_reason: ""});
+  let confirmPayload;
+  await page.route("**/api/ai-preliminary-model", route => { confirmPayload = route.request().postDataJSON();
+    return route.fulfill({json: {settings: {}, run: {}, hourly_ai_preliminary_load_report: {}, room_scope: state}}); });
+  await renderRoomScope(page, state);
+  const block = page.locator("#roomScopeConfirmation");
+  await expect(block.locator("[data-room-scope-untraced]")).toContainText("1 room has no area yet and is not in the total: Kitchen");
+  const kitchen = block.locator('[data-room-scope-key="room-use:level-2:kitchen"]');
+  await expect(kitchen).toContainText("Not traced — not included in the total.");
+  await expect(kitchen.locator("[data-room-scope-include]")).toBeDisabled();
+  await expect(kitchen.locator("[data-room-scope-trace]")).toBeVisible();
+  await block.locator('[data-room-scope-key="room-use:level-2:service-counter"] [data-room-scope-include]').uncheck();
+  await block.locator("[data-room-scope-reviewer]").fill("QA");
+  await block.locator("[data-room-scope-confirm]").click();
+  await expect.poll(() => confirmPayload?.action).toBe("confirm_room_scope");
+  expect(confirmPayload.rows).toContainEqual({key: "room-use:level-2:kitchen", include: false, reason: ""});
+});
