@@ -481,10 +481,39 @@ def main():
             "dimension_wall_matches": str(matches_path),
             "candidate_review": str(output),
         }
+        (root / "vision_response.json").unlink(missing_ok=True)
+        no_ai_payload = json.dumps({"project_id": "test-project"}).encode("utf-8")
+        no_ai_request = type("Request", (), {"path": "/api/vision-response/no-ai", "headers": {
+            "Content-Length": str(len(no_ai_payload))}, "rfile": BytesIO(no_ai_payload)})()
+        with patch.object(web_app, "project_by_id", return_value=project), patch.object(web_app, "update_project"):
+            no_ai_result = web_app.api_start_without_ai_evidence(no_ai_request)
+            repeated_no_ai = web_app.api_start_without_ai_evidence(no_ai_request)
+        check_value("no-AI path creates a reasoning packet", no_ai_result["has_reasoning_packet"], True)
+        check_value("repeated no-AI start is idempotent", repeated_no_ai["status"], "already_started_without_ai")
+        no_ai_attempt = next(item for item in vision_response_attempt_history(project)
+                             if item["outcome"] == "no_ai_evidence")
+        no_ai_attempt_dir = root / "chatgpt_runs" / no_ai_attempt["attempt_id"]
+        check_value("no-AI start is archived with its own outcome", no_ai_attempt["outcome"], "no_ai_evidence")
+        check_value("no-AI history is not reported as an accepted AI reply",
+                    no_ai_attempt["outcome"] != "accepted", True)
+        check_value("no-AI provenance records none as its evidence source",
+                    json.loads(Path(project["vision_response"]).read_text())["evidence_source"], "none")
+        check_value("no-AI marker is not labelled as a ChatGPT provider",
+                    json.loads(Path(project["vision_response"]).read_text())["provider"], "none")
+        check_value("no-AI attempt preserves a raw marker", json.loads((no_ai_attempt_dir / "raw_reply.txt").read_text())["evidence_source"], "none")
+        requirement_body = json.dumps({"project_id": "test-project", "requirements": web_app.empty_design_requirements()}).encode("utf-8")
+        requirement_request = type("Request", (), {"path": "/api/design-requirements", "headers": {
+            "Content-Length": str(len(requirement_body))}, "rfile": BytesIO(requirement_body)})()
+        with patch.object(web_app, "project_by_id", return_value=project), patch.object(web_app, "update_project"):
+            saved_requirements = web_app.api_save_design_requirements(requirement_request)
+        check_value("design inputs can be saved without an AI reply",
+                    Path(project["design_requirements"]).is_file() and bool(saved_requirements.get("requirements")), True)
         raw_reply = "```json\n" + json.dumps(vision) + "\n```"
         saved = save_project_vision_response(project, raw_reply, model_note="ChatGPT test model",
             attached_pages=[2, 5, 2, 0, "4"])
         check_value("backend saves pasted vision response", Path(saved["vision_response_path"]).exists(), True)
+        check_value("later real reply replaces the no-AI marker",
+                    json.loads(Path(saved["vision_response_path"]).read_text()).get("source"), "manual_chatgpt")
         attempt_path = Path(root / "chatgpt_runs" / saved["attempt"]["attempt_id"])
         attempt_meta = json.loads((attempt_path / "attempt.json").read_text(encoding="utf-8"))
         check_value("raw reply is preserved byte-for-byte", (attempt_path / "raw_reply.txt").read_text(encoding="utf-8"), raw_reply)
@@ -524,6 +553,14 @@ def main():
             },
         })), encoding="utf-8")
         project["vision_response"] = saved["vision_response_path"]
+        current_real_reply = Path(saved["vision_response_path"]).read_bytes()
+        project.pop("reasoning_packet", None)
+        with patch.object(web_app, "project_by_id", return_value=project), patch.object(web_app, "update_project"):
+            preserved = web_app.api_start_without_ai_evidence(no_ai_request)
+        check_value("no-AI start never replaces a later real reply", preserved["status"], "real_reply_preserved")
+        check_value("re-confirming with a real reply rebuilds the workspace", preserved["has_reasoning_packet"], True)
+        check_value("real reply bytes stay unchanged after a repeated no-AI start",
+                    Path(saved["vision_response_path"]).read_bytes(), current_real_reply)
         from ai.heat_loads import calculate_heat_load_report
         from ai.ventilation import calculate_ventilation_report
 
@@ -560,7 +597,7 @@ def main():
             check_value("backend rejects invalid pasted JSON", "not valid JSON" in str(error), True)
         check_value("rejected paste does not replace current accepted response", Path(saved["vision_response_path"]).read_bytes(), previous_current_response)
         attempts = vision_response_attempt_history(project)
-        check_value("accepted and rejected paste attempts both remain in history", len(attempts), 2)
+        check_value("no-AI, accepted and rejected attempts remain in history", len(attempts), 3)
         rejected = next(item for item in attempts if item["outcome"] == "rejected")
         rejected_dir = root / "chatgpt_runs" / rejected["attempt_id"]
         check_value("rejected attempt retains raw reply", (rejected_dir / "raw_reply.txt").read_text(encoding="utf-8"), "{not valid json")

@@ -49,14 +49,47 @@ class CalculatorDraftTests(unittest.TestCase):
         self.assertTrue(any("schedule" in item["reason"].lower() for item in draft["review_items"]))
         self.assertFalse(draft["candidates"]["schedules"])
 
-    def test_unassigned_coverage_creates_floor_issue_but_no_floor_candidate(self):
+    def test_unassigned_only_evidence_proposes_reviewable_single_floor(self):
+        data = source_data()
+        data["coverage"]["levels"] = [{"level_name": "Unassigned", "page_numbers": [21]}]
+        data["building"]["levels"] = []
+        data["building"]["spaces"][0]["level_name"] = "Unassigned"
+        draft = build_calculator_draft(data["thermal"], data["building"], data["coverage"])
+        self.assertEqual(len(draft["candidates"]["floors"]), 1)
+        floor = draft["candidates"]["floors"][0]
+        self.assertEqual(floor["value"]["name"], "Single level (assumed — no level stated in drawings)")
+        self.assertEqual(floor["confidence"], "assumed")
+        zone = draft["candidates"]["zones"][0]
+        room = draft["candidates"]["rooms"][0]
+        self.assertEqual(zone["value"]["floor_status"], "proposed")
+        self.assertIn(floor["candidate_id"], zone["dependencies"])
+        self.assertEqual(room["value"]["floor_id"], floor["value"]["floor_id"])
+        ids = [floor["candidate_id"], zone["candidate_id"], room["candidate_id"]]
+        applied = apply_calculator_draft(self.reviewed(draft, ids))
+        self.assertEqual((len(applied["hourly_load_model"]["floors"]),
+                          len(applied["hourly_load_model"]["zones"]),
+                          len(applied["hourly_load_model"]["rooms"])), (1, 1, 1))
+        self.assertTrue(any("confirm the proposed single-level assumption" in item.get("reason", "").lower()
+                            for item in draft["review_items"]))
+
+    def test_named_level_prevents_assumed_floor_and_rejection_keeps_zones_unresolved(self):
         data = source_data()
         data["coverage"]["levels"] = [{"level_name": "Unassigned level", "page_numbers": [21]}]
+        data["building"]["levels"] = [{"name": "Level 2", "evidence": EVIDENCE}]
+        data["building"]["spaces"][0]["level_name"] = "Unassigned level"
+        draft = build_calculator_draft(data["thermal"], data["building"], data["coverage"])
+        self.assertFalse(any("assumed" in row["value"]["name"].lower() for row in draft["candidates"]["floors"]))
+
         data["building"]["levels"] = []
         draft = build_calculator_draft(data["thermal"], data["building"], data["coverage"])
-        self.assertEqual(draft["candidates"]["floors"], [])
-        self.assertTrue(any("confirm the drawing level" in item.get("reason", "").lower()
-                            for item in draft["review_items"]))
+        floor, zone = draft["candidates"]["floors"][0], draft["candidates"]["zones"][0]
+        reviewed = self.reviewed(draft, [zone["candidate_id"]])
+        reviewed["decisions"][floor["candidate_id"]] = {"decision": "reject", "reviewer": "ENG-1"}
+        outcome = apply_calculator_draft(reviewed)
+        self.assertEqual(outcome["hourly_load_model"]["floors"], [])
+        self.assertEqual(outcome["hourly_load_model"]["zones"], [])
+        self.assertEqual(outcome["summary"]["unresolved"][0]["reason"],
+                         "A zone cannot be applied without a reviewed floor assignment.")
 
     def test_pre_classifier_coverage_cannot_build_a_draft(self):
         data = source_data()

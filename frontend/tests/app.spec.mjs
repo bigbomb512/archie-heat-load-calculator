@@ -33,6 +33,8 @@ const analysis = {
 
 async function mockApi(page) {
   await page.route("**/api/test-mode/status", route => route.fulfill({ json: { enabled: false } }));
+  await page.route("**/api/vision-response/no-ai", route => route.fulfill({json:{status:"created_without_ai_evidence",
+    has_reasoning_packet:true, requirements:{zones:[]}, requirements_readiness:{status:"draft"}}}));
   await page.route("**/api/room-inference?project_id=demo-project", route => route.fulfill({ json: {
     status: "completed", candidate_count: 2,
   } }));
@@ -147,6 +149,17 @@ const ventilationRequirements = {
 
 test("confirmation unlocks only after analysis has selected pages", async ({ page }) => {
   await mockApi(page);
+  let noAiCalls = 0;
+  await page.route("**/api/vision-response/no-ai", async route => {
+    noAiCalls += 1;
+    return route.fulfill({json:{status:"created_without_ai_evidence", has_reasoning_packet:true,
+      requirements:{zones:[]}, requirements_readiness:{status:"draft"}}});
+  });
+  await page.route("**/api/vision-response-history?project_id=demo-project", route => route.fulfill({json:{attempts:[{
+    attempt_id:"no-ai-1", outcome:"no_ai_evidence", outcome_detail:"No AI reply — started without AI evidence.",
+    model_note:"No AI reply — started without AI evidence", packet_pages:[1], attached_pages:[],
+    packet_fingerprint:"a".repeat(64), prompt_fingerprint:"b".repeat(64), result_counts:{},
+  }]}}));
   await page.goto("/");
 
   await page.locator("#pdf").setInputFiles({
@@ -165,6 +178,11 @@ test("confirmation unlocks only after analysis has selected pages", async ({ pag
   await expect(page.locator("#visionPanel")).toBeVisible();
   await expect(page.locator("#btnContinue")).toHaveText("Drawings confirmed");
   await expect(page.locator("#btnContinue")).toBeDisabled();
+  await expect(page.locator("#designRequirementsPanel")).toBeVisible();
+  await expect(page.locator("#noAiEvidenceNotice")).toBeVisible();
+  await expect(page.locator("#noAiEvidenceNotice")).toContainText("Tracing and manual inputs work");
+  await expect(page.locator("#visionHistory")).toContainText("NO_AI_EVIDENCE");
+  expect(noAiCalls).toBe(1);
 });
 
 test("analysis gives one clear next action before exposing advanced workflow", async ({ page }) => {

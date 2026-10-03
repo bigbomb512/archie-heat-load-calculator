@@ -260,10 +260,42 @@ def build_calculator_draft(thermal_model, building_evidence, drawing_coverage, p
             "conditioned_status": level.get("conditioned_status", "unknown"),
             "page_numbers": sorted({item.get("page") for item in evidence if item.get("page")}),
         })
+    all_level_names = [str(level.get("level_name", "")).strip()
+                       for level in coverage_levels if isinstance(level, dict)]
+    all_level_names.extend(str(level.get("name", level.get("level_name", ""))).strip()
+                           for level in building_evidence.get("levels", []) if isinstance(level, dict))
+    all_level_names.extend(str(space.get("level_name", "")).strip()
+                           for space in building_evidence.get("spaces", []) if isinstance(space, dict))
+    registry_rooms_for_levels = [row for row in (room_registry or {}).get("rooms", []) if isinstance(row, dict)]
+    all_level_names.extend(str(row.get("level_name", "")).strip() for row in registry_rooms_for_levels)
+    named_levels_exist = any(name and not name.casefold().startswith("unassigned") for name in all_level_names)
+    unassigned_only = bool(all_level_names) and not named_levels_exist
+    assumed_floor = None
+    if unassigned_only:
+        evidence = []
+        for level in coverage_levels:
+            evidence.extend({"page": page, "excerpt": "No building level stated on this plan."}
+                            for page in level.get("page_numbers", []) if page)
+        for space in building_evidence.get("spaces", []):
+            evidence.extend(space.get("evidence", []))
+        for room in registry_rooms_for_levels:
+            evidence.extend(room.get("evidence", []))
+        seen = set()
+        evidence = [row for row in evidence if isinstance(row, dict)
+                    and not (fingerprint(row) in seen or seen.add(fingerprint(row)))]
+        floor_id = "floor_" + fingerprint([document, "assumed_single_level"])[:12]
+        assumed_floor = add("floors", "floor", ["assumed_single_level"],
+            {"floor_id": floor_id, "name": "Single level (assumed — no level stated in drawings)", "elevation_m": None},
+            evidence, "No building level is stated; confirm this single-level assumption.", confidence="assumed")
+        floors["unassigned level"] = assumed_floor
+        floors[""] = assumed_floor
     for level in sorted(coverage_levels, key=lambda r: r.get("level_name", "")):
         name = level.get("level_name", "").strip()
         if not name or name.lower().startswith("unassigned"):
-            issue("floor_unknown", "Confirm the drawing level; no real floor was identified.")
+            reason = ("No building level is stated; confirm the proposed single-level assumption."
+                      if assumed_floor else "Confirm the drawing level; no real floor was identified.")
+            issue("floor_unknown", reason,
+                  evidence=level.get("purpose_evidence", []), affected_id="project")
             continue
         evidence = [{"page": page, "excerpt": name} for page in level.get("page_numbers", [])]
         evidence = evidence or level.get("purpose_evidence", [])
@@ -275,7 +307,7 @@ def build_calculator_draft(thermal_model, building_evidence, drawing_coverage, p
     spaces = {}
     for space in building_evidence.get("spaces", []):
         if space.get("name"):
-            key = (space.get("level_name", "").casefold(), space["name"].casefold())
+            key = (str(space.get("level_name", "")).strip().casefold(), space["name"].casefold())
             spaces.setdefault(key, []).append(space)
     room_id_aliases = {}
     registry_rooms = [row for row in (room_registry or {}).get("rooms", [])
@@ -368,6 +400,8 @@ def build_calculator_draft(thermal_model, building_evidence, drawing_coverage, p
             issue([key, "duplicate"], "Ambiguous repeated room identity. Resolve duplicate rooms and conflicting areas before drafting topology.", evidence)
             continue
         floor = floors.get(key[0])
+        if not floor and assumed_floor and key[0].strip().startswith("unassigned"):
+            floor = assumed_floor
         if not floor:
             issue([key, "floor"], "Room evidence is present but its drawing level is unresolved. Map it to a reviewed floor.", evidence)
         # Candidate identity is anchored to the evidence record and sheet/page,
@@ -665,7 +699,12 @@ def apply_calculator_draft(draft, decisions=None, hourly_model=None, schedule_li
                   "lighting": ("room_id", "rooms"), "equipment": ("room_id", "rooms")}.get(item["kind"])
         mapped = parent and parent[0] in supplied and any(r[parent[0]] == value[parent[0]] for r in model[parent[1]])
         if dependencies and not mapped:
-            summary["missing_dependencies"].append({"candidate_id": cid, "dependencies": dependencies, "reason": "Review the parent proposals or explicitly map to an existing parent."})
+            rejected_parent = next((parent_id for parent_id in dependencies
+                                    if decisions.get(parent_id, {}).get("decision") == "reject"), None)
+            if item["kind"] == "zone" and rejected_parent:
+                summary["unresolved"].append({"candidate_id": cid, "reason": "A zone cannot be applied without a reviewed floor assignment."})
+            else:
+                summary["missing_dependencies"].append({"candidate_id": cid, "dependencies": dependencies, "reason": "Review the parent proposals or explicitly map to an existing parent."})
             continue
         trial = deepcopy(artifacts)
         provenance = {"candidate_id": cid, "candidate_fingerprint": item["fingerprint"], "evidence_ids": item["evidence_ids"],

@@ -711,6 +711,11 @@ class Handler(SimpleHTTPRequestHandler):
             return self.save_decisions()
         if self.path == "/api/vision-response":
             return self.save_vision_response()
+        if self.path == "/api/vision-response/no-ai":
+            try:
+                return self.send_json(api_start_without_ai_evidence(self))
+            except Exception as error:
+                return self.send_json({"error": str(error)}, 400)
         if self.path == "/api/site-design-conditions":
             return self.save_site_design_conditions()
         if self.path == "/api/site-location-resolution":
@@ -1697,6 +1702,71 @@ def api_save_vision_response(request):
         raise
     result["response"]["attempt"] = result.get("attempt")
     return result["response"]
+
+
+def api_start_without_ai_evidence(request):
+    """Build the reviewed workspace while recording that no AI reply was used."""
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    review_dir = Path(project["review_dir"])
+    vision_path = existing_path(project.get("vision_response"), review_dir / "vision_response.json")
+    if vision_path and vision_path.is_file():
+        existing = load_json(vision_path)
+        no_ai = existing.get("evidence_source") == "none"
+        if not project.get("reasoning_packet"):
+            prior_project = deepcopy(project)
+            try:
+                project["vision_response"] = str(vision_path)
+                project["vision_validation"] = str(review_dir / "vision_validation.json")
+                project["coordinate_review"] = str(review_dir / "coordinate_review.json")
+                geometry_path = review_dir / "geometry_confirmation.json"
+                if geometry_path.exists():
+                    project["geometry_confirmation"] = str(geometry_path)
+                reasoning = rebuild_reasoning_packet(project, review_dir / "design_requirements.json")
+                project["reasoning_packet"] = reasoning["reasoning_packet_raw"]
+                _rebuild_evidence_chain(project)
+                project["updated_at"] = timestamp()
+                update_project(project)
+                response = reasoning["response"]
+            except Exception:
+                project.clear()
+                project.update(prior_project)
+                raise
+        else:
+            response = {}
+        return {**response, "id": project["id"],
+                "status": "already_started_without_ai" if no_ai else "real_reply_preserved",
+                "has_reasoning_packet": bool(project.get("reasoning_packet")),
+                "requirements": response.get("requirements", empty_design_requirements()),
+                "requirements_readiness": response.get("requirements_readiness", {})}
+
+    marker = {"evidence_source": "none", "evidence_note": "No AI reply — started without AI evidence"}
+    result = save_project_vision_response(project, marker, source_label="no_ai_evidence",
+        model_note="No AI reply — started without AI evidence", attached_pages=[], defer_outcome=True)
+    prior_project = deepcopy(project)
+    try:
+        project["vision_response"] = result["vision_response_path"]
+        project["vision_validation"] = result["vision_validation_path"]
+        project["coordinate_review"] = result["coordinate_review_path"]
+        if result.get("geometry_confirmation_path"):
+            project["geometry_confirmation"] = result["geometry_confirmation_path"]
+        project["reasoning_packet"] = result["reasoning_packet_raw"]
+        _rebuild_evidence_chain(project)
+        project["updated_at"] = timestamp()
+        update_project(project)
+        attempt = _finalize_vision_attempt(project, result["attempt"], outcome="no_ai_evidence",
+            detail="No AI reply — started without AI evidence; reviewers can add a real reply later.",
+            result_counts=result.get("attempt", {}).get("result_counts", {}))
+    except Exception as error:
+        response_path = Path(result["vision_response_path"])
+        response_path.unlink(missing_ok=True)
+        project.clear()
+        project.update(prior_project)
+        _finalize_vision_attempt(project, result.get("attempt", {}), outcome="rejected", detail=str(error))
+        raise
+    return {**result["response"], "status": "created_without_ai_evidence", "has_reasoning_packet": True,
+            "attempt": attempt, "requirements": result["response"].get("requirements", empty_design_requirements()),
+            "requirements_readiness": result["response"].get("requirements_readiness", {})}
 
 
 def api_vision_response_history(request):
@@ -4465,6 +4535,9 @@ def save_project_vision_response(project, raw_json, source_label="manual_chatgpt
         candidate_review_path = existing_path(project.get("candidate_review"), review_dir / "candidate_review.json")
         candidate_review = load_json(candidate_review_path) if candidate_review_path else {}
         vision = normalise_vision(vision, candidate_review)
+        if source_label == "no_ai_evidence":
+            vision.update(provider="none", model="none", evidence_source="none",
+                          evidence_note="No AI reply — started without AI evidence")
 
         staged_path = Path(project["review_dir"]) / "chatgpt_runs" / attempt["attempt_id"] / "candidate_vision_response.json"
         staged_path.write_text(json.dumps(vision, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -4908,6 +4981,8 @@ def analysis_response(project):
     }
     hourly_current = current_hourly_load_report_path(project)
     required_artifacts = workflow_required_artifacts(project, paths)
+    vision_response_path = existing_path(project.get("vision_response"), review_dir / "vision_response.json")
+    vision_response = load_json(vision_response_path) if vision_response_path else {}
     return {
         "id": project["id"],
         "name": project["name"],
@@ -4931,6 +5006,7 @@ def analysis_response(project):
         "chatgpt_packet": link_pipeline_files(project.get("chatgpt_packet", {})),
         "reasoning_packet": link_pipeline_files(project.get("reasoning_packet", {})),
         "has_reasoning_packet": bool(project.get("reasoning_packet")),
+        "vision_evidence_source": vision_response.get("evidence_source", ""),
         "design_requirements": load_json(project["design_requirements"]) if project.get("design_requirements") and Path(project["design_requirements"]).exists() else empty_design_requirements(),
         "site_design_conditions_url": safe_link(site_conditions_path) if site_conditions_path else "",
         "site_design_conditions_status": site_design_conditions_summary(site_conditions)["status"],

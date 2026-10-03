@@ -567,6 +567,7 @@ function showResults(data){
   requiredElement("rRel").textContent = data.relevant_count;
   requiredElement("debugPanel").classList.add("hide");
   requiredElement("visionPanel").classList.add("hide");
+  requiredElement("noAiEvidenceNotice").classList.add("hide");
   requiredElement("designRequirementsPanel").classList.add("hide");
   requiredElement("visionLinks").innerHTML = "";
   requiredElement("visionStatus").textContent = "Waiting for vision JSON";
@@ -1223,6 +1224,12 @@ async function confirmSelection(){
     selectionConfirmed = true;
     PACKET = data.chatgpt_packet || null;
     DATA.chatgpt_packet = PACKET;
+    const workspaceResponse = await fetch("/api/vision-response/no-ai", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({project_id: DATA.id}),
+    });
+    const workspace = await workspaceResponse.json();
+    if (!workspaceResponse.ok || workspace.error) throw new Error(workspace.error || "Could not open the reviewed workspace.");
     const links = [`<a href="${data.ai_input_url}" target="_blank" rel="noopener">ai_input.json</a>`];
     if (PACKET?.prompt) links.push(`<a href="${PACKET.prompt}" target="_blank" rel="noopener">prompt.md</a>`);
     if (PACKET?.manifest) links.push(`<a href="${PACKET.manifest}" target="_blank" rel="noopener">manifest.json</a>`);
@@ -1230,15 +1237,21 @@ async function confirmSelection(){
     toast("Selection confirmed",
       `${pages.length} page${pages.length===1?"":"s"} packaged for one ChatGPT vision review. ` +
       links.join(" · "));
-    requiredElement("statusText").textContent = "AI packet ready";
-    requiredElement("statusSub").textContent = `${pages.length} selected evidence page${pages.length === 1 ? "" : "s"} are ready for the guided resolver.`;
-    requiredElement("summaryTitle").textContent = "AI packet ready";
-    requiredElement("summaryLead").textContent = "The selected evidence has been packaged. Run Resolve model inputs to hydrate the draft coverage and review queue.";
+    requiredElement("statusText").textContent = "Reviewed workspace ready";
+    requiredElement("statusSub").textContent = `${pages.length} selected evidence page${pages.length === 1 ? "" : "s"} are ready. AI evidence is optional.`;
+    requiredElement("summaryTitle").textContent = "Reviewed workspace ready";
+    requiredElement("summaryLead").textContent = "Trace drawings, enter project inputs, and build a calculator draft now. Paste a ChatGPT reply any time to add AI evidence.";
     requiredElement("nextActionTitle").textContent = "Resolve model inputs";
     requiredElement("nextActionText").textContent = "Use the single guided resolver first; advanced AI and window controls remain available below for recovery and testing.";
     requiredElement("workflowSkeleton").classList.remove("hide");
     requiredElement("btnContinue").textContent = "Drawings confirmed";
     showVisionPanel();
+    if (workspace.has_reasoning_packet) {
+      requiredElement("designRequirementsPanel").classList.remove("hide");
+      showDesignRequirements(workspace.requirements || {}, workspace.requirements_readiness || {});
+    }
+    requiredElement("noAiEvidenceNotice").classList.remove("hide");
+    await loadVisionHistory();
   } catch (err) {
     toast("Could not confirm", err.message);
   } finally {
@@ -2142,6 +2155,7 @@ function drawVisionHistory(attempts){
 }
 
 function drawVisionResult(data){
+  requiredElement("noAiEvidenceNotice").classList.add("hide");
   const status = data.geometry_verification_status || "geometry_not_vision_verified";
   requiredElement("visionStatus").textContent = `${status} · ${data.issue_count || 0} validation issue${data.issue_count === 1 ? "" : "s"}`;
   const links = [
