@@ -725,6 +725,134 @@ test("evidence-to-calculator bridge saves, previews, and applies reviewed propos
   expect(errors).toEqual([]);
 });
 
+function cardHDraft(){
+  const candidate = (candidate_id, kind, name) => ({candidate_id, kind, value: {[kind === "floor" ? "name" : "name"]: name, [`${kind}_id`]: candidate_id}, reason: `Review ${name}`, citations: [{reference: "A-01", page: 1, excerpt: name}], target_artifact: "hourly_load_model", confidence: "high"});
+  return {schema_version: 2, revision: 1, status: "review_required", candidates: {
+    floors: [candidate("floor-1", "floor", "Ground")], zones: [candidate("zone-1", "zone", "Bar"), candidate("zone-2", "zone", "Kitchen")],
+    rooms: [candidate("room-1", "room", "Bar"), candidate("room-2", "room", "Kitchen")], room_inputs: [], schedules: [], envelope: [],
+  }, review_items: [], decisions: {}, apply_summary: {}};
+}
+
+async function renderCardHDraft(page, draft = cardHDraft()){
+  await page.goto("/");
+  await page.evaluate(input => { DATA = {id: "demo-project"}; show("vRes"); requiredElement("designRequirementsPanel").classList.remove("hide"); showCalculatorDraft(input); }, draft);
+}
+
+test("draft session reviewer fills candidate attribution and per-row reviewer wins", async ({ page }) => {
+  await mockApi(page);
+  const draft = cardHDraft(); let saved;
+  await page.route("**/api/calculator-draft", async route => {
+    saved = route.request().postDataJSON().decisions;
+    return route.fulfill({json: {calculator_draft: {...draft, decisions: saved}, status: "current"}});
+  });
+  await renderCardHDraft(page, draft);
+  await page.locator("#calculatorDraftReviewer").fill("Shared Reviewer");
+  await page.locator("#calculatorDraftReviewSource").fill("Review meeting");
+  const rows = page.locator(".draft-candidate");
+  await rows.nth(0).locator(".calculator-draft-decision").selectOption("accept");
+  await rows.nth(1).locator(".calculator-draft-decision").selectOption("accept");
+  await rows.nth(3).locator(".calculator-draft-decision").selectOption("accept");
+  await rows.nth(3).locator("details").evaluate(element => { element.open = true; });
+  await rows.nth(3).locator('[data-field="reviewer"]').fill("Row Reviewer");
+  await page.locator("#btnSaveCalculatorReview").click();
+  await expect.poll(() => saved).toBeTruthy();
+  expect(saved["floor-1"].reviewer).toBe("Shared Reviewer");
+  expect(saved["zone-1"].reviewer).toBe("Shared Reviewer");
+  expect(saved["zone-1"].source).toBe("Review meeting");
+  expect(saved["room-1"].reviewer).toBe("Row Reviewer");
+});
+
+test("draft save without any reviewer is blocked inline before the API request", async ({ page }) => {
+  await mockApi(page); let requests = 0;
+  await page.route("**/api/calculator-draft", route => { requests++; return route.fulfill({json: {}}); });
+  const draft = cardHDraft(); await renderCardHDraft(page, draft);
+  await page.locator(".draft-candidate .calculator-draft-decision").first().selectOption("accept");
+  await page.locator("#btnSaveCalculatorReview").click();
+  await expect(page.locator("#calculatorDraftStatus")).toContainText("Enter a reviewer name (top of the panel) before saving.");
+  expect(requests).toBe(0);
+});
+
+test("accept all changes only pending candidates in its group", async ({ page }) => {
+  await mockApi(page); const draft = cardHDraft(); await renderCardHDraft(page, draft);
+  const zoneGroup = page.locator('[data-draft-group="zones"]');
+  await zoneGroup.locator('.calculator-draft-decision[data-candidate="zone-2"]').selectOption("reject");
+  await zoneGroup.locator("[data-accept-draft-group]").click();
+  await expect(zoneGroup.locator('.calculator-draft-decision[data-candidate="zone-1"]')).toHaveValue("accept");
+  await expect(zoneGroup.locator('.calculator-draft-decision[data-candidate="zone-2"]')).toHaveValue("reject");
+  await expect(page.locator('[data-draft-group="rooms"] .calculator-draft-decision').first()).toHaveValue("pending");
+});
+
+test("saved reviewer source and citations are restored for a second save", async ({ page }) => {
+  await mockApi(page); const draft = cardHDraft(); let saveCount = 0; const payloads = [];
+  await page.route("**/api/calculator-draft", async route => {
+    const payload = route.request().postDataJSON(); payloads.push(payload); saveCount++;
+    return route.fulfill({json: {calculator_draft: {...draft, revision: saveCount + 1, decisions: payload.decisions}, status: "current"}});
+  });
+  await renderCardHDraft(page, draft);
+  await page.locator("#calculatorDraftReviewer").fill("Shared");
+  const row = page.locator(".draft-candidate").first();
+  await row.locator("details").evaluate(element => { element.open = true; });
+  await row.locator('[data-field="source"]').fill("Marked-up plan");
+  await row.locator('[data-field="citation_reference"]').fill("R-17");
+  await row.locator('[data-field="citation_excerpt"]').fill("Reviewed dimensions");
+  await row.locator(".calculator-draft-decision").selectOption("accept");
+  await page.locator("#btnSaveCalculatorReview").click();
+  await expect.poll(() => saveCount).toBe(1);
+  await page.locator("#btnSaveCalculatorReview").click();
+  await expect.poll(() => saveCount).toBe(2);
+  expect(payloads[1].decisions["floor-1"]).toEqual(expect.objectContaining({reviewer: "Shared", source: "Marked-up plan", citations: [{reference: "R-17", page: null, excerpt: "Reviewed dimensions"}]}));
+  await row.locator("details").evaluate(element => { element.open = true; });
+  await expect(row.locator('[data-field="source"]')).toHaveValue("Marked-up plan");
+  await expect(row.locator('[data-field="citation_reference"]')).toHaveValue("R-17");
+});
+
+test("draft candidate headings show readable names while retaining IDs", async ({ page }) => {
+  await mockApi(page); await renderCardHDraft(page);
+  const zone = page.locator('[data-candidate="zone-1"]');
+  await expect(zone.locator("b")).toContainText("zone · Bar");
+  await expect(zone.locator(".draft-candidate-id")).toHaveText("zone-1");
+});
+
+test("preview with unsaved decisions saves then previews in one click", async ({ page }) => {
+  await mockApi(page); const draft = cardHDraft(); const actions = [];
+  await page.route("**/api/calculator-draft", async route => {
+    const payload = route.request().postDataJSON(); actions.push(payload.action);
+    if (payload.action === "save_review") return route.fulfill({json: {calculator_draft: {...draft, revision: 2, decisions: payload.decisions}, status: "current"}});
+    return route.fulfill({json: {calculator_draft: {...draft, revision: 2, decisions: {}}, preview_token: "preview", preview: {created: []}, status: "current"}});
+  });
+  await renderCardHDraft(page, draft);
+  await page.locator("#calculatorDraftReviewer").fill("Reviewer");
+  await page.locator(".draft-candidate .calculator-draft-decision").first().selectOption("accept");
+  await page.locator("#btnPreviewCalculatorDraft").click();
+  await expect.poll(() => actions).toEqual(["save_review", "preview_apply"]);
+  await expect(page.locator("#calculatorDraftSummary")).toContainText("created");
+});
+
+test("zero-created apply shows unresolved reasons in the summary above candidates", async ({ page }) => {
+  await mockApi(page); const draft = cardHDraft();
+  await page.route("**/api/calculator-draft", route => route.fulfill({json: {calculator_draft: draft, status: "current", apply_summary: {
+    created: [], populated_fields: [], already_present: [], skipped_conflicts: [], missing_dependencies: [],
+    unresolved: [{candidate_id: "zone-1", reason: "A zone cannot be applied without a reviewed floor assignment."}], reports_marked_stale: [],
+  }}}));
+  await renderCardHDraft(page, draft);
+  await page.evaluate(() => { DRAFT_PREVIEW_TOKEN = "preview"; });
+  await page.locator("#btnApplyCalculatorDraft").click();
+  const summary = page.locator("#calculatorDraftSummary");
+  await expect(summary).toContainText("Apply created 0 records");
+  await expect(summary).toContainText("Zone Bar: A zone cannot be applied without a reviewed floor assignment.");
+  expect(await summary.evaluate(element => element.compareDocumentPosition(document.querySelector("#calculatorDraftCandidates")) & Node.DOCUMENT_POSITION_FOLLOWING)).toBeTruthy();
+});
+
+test("server draft failure remains visible inline with its message", async ({ page }) => {
+  await mockApi(page);
+  await page.route("**/api/calculator-draft", route => route.fulfill({status: 422, json: {error: "Reviewer attribution is required: floor-1"}}));
+  const draft = cardHDraft(); await renderCardHDraft(page, draft);
+  await page.locator("#calculatorDraftReviewer").fill("Reviewer");
+  await page.locator(".draft-candidate .calculator-draft-decision").first().selectOption("accept");
+  await page.locator("#btnSaveCalculatorReview").click();
+  await expect(page.locator("#calculatorDraftStatus")).toContainText("Could not update calculator draft: Reviewer attribution is required: floor-1");
+});
+
 test("stale calculator draft explains upgrade and requires rebuilding before review", async ({ page }) => {
   await mockApi(page);
   const draft = {schema_version: 2, revision: 4, status: "review_required", candidates: {floors: [], zones: [], rooms: [], room_inputs: [], schedules: [], envelope: []}, review_items: [], decisions: {}};

@@ -318,6 +318,17 @@ button,input{ font:inherit; color:inherit }
 #visionPanel .fine{ margin:0; padding:14px 18px 0; color:var(--text-2); font-size:12.5px }
 .calculator-draft-panel{ border-top:1px solid var(--line); margin-top:16px; padding-top:0 }
 .calculator-draft-panel > .fine{ margin:0; padding:14px 18px; color:var(--text-2); font-size:12.5px }
+.calculator-draft-toolbar{ align-items:flex-end; flex-wrap:wrap }
+.calculator-draft-toolbar>.conf{ flex:1 1 240px; align-self:center }
+.draft-review-attribution{ display:flex; flex:1 1 300px; gap:8px; min-width:240px }
+.draft-review-attribution label{ display:grid; gap:3px; flex:1; color:var(--text-2); font-size:11px }
+.draft-review-attribution input{ width:100%; min-width:0; padding:6px 8px; border:1px solid var(--line); border-radius:var(--r); background:var(--surface); color:var(--surface-ink); font-size:12px }
+.draft-group-heading{ display:flex; align-items:center; justify-content:space-between; gap:10px; padding-right:12px; background:var(--wash) }
+.draft-group-heading .draft-group-title{ padding:10px 6px 10px 18px; background:transparent }
+.draft-candidate-id{ display:block; color:var(--text-2); font:10px var(--mono); overflow-wrap:anywhere }
+.draft-summary-reasons{ margin:6px 0 0; padding-left:18px; color:var(--text-2); font-size:12px }
+.draft-summary-reasons li+li{ margin-top:3px }
+@media(max-width:900px){.calculator-draft-toolbar{align-items:stretch}.draft-review-attribution{flex-basis:100%}.calculator-draft-toolbar>.draft-actions{flex-wrap:wrap}}
 .draft-group{ border-top:1px solid var(--line-soft) }
 .draft-group-title{ padding:10px 18px; background:var(--wash); color:var(--text-2); font-size:11px; font-family:var(--mono); text-transform:uppercase; letter-spacing:.04em }
 .geometry-review-workspace{ border-top:1px solid var(--line-soft); background:var(--raise-bg) }

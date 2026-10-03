@@ -10,6 +10,7 @@ function optionalElement(id){
 let DATA = null, FILTER = "rel", PICK = new Set(), CUR = null, DEBUG = false, PACKET = null, ROOM_SUGGESTIONS = [];
 let ANALYSIS_IN_PROGRESS = false, CONFIRMATION_IN_PROGRESS = false;
 let CALCULATOR_DRAFT = null, DRAFT_PREVIEW_TOKEN = "", DRAFT_DIRTY = false;
+let DRAFT_REVIEW_SESSION = {projectId: null, reviewer: "", source: ""};
 let ENVELOPE_LIBRARY = {constructions: [], windows: [], shading_records: []}, ENVELOPE_MODEL = {surfaces: []};
 let GLAZING_GATE = {}, SHADING_GATE = {}, GROUND_CONTACT_GATE = {};
 let CALCULATOR_INPUT_SET = null, CALCULATOR_INPUT_OVERRIDES = {revision: 0, records: []}, PROJECT_CONTEXT = {};
@@ -553,6 +554,12 @@ function renderWorkflowSkeleton(){
 
 /* ---------------- results ---------------- */
 function showResults(data){
+  const nextProjectId = data.id || DATA?.id || null;
+  if (nextProjectId !== DRAFT_REVIEW_SESSION.projectId) {
+    DRAFT_REVIEW_SESSION = {projectId: nextProjectId, reviewer: "", source: ""};
+    if (optionalElement("calculatorDraftReviewer")) requiredElement("calculatorDraftReviewer").value = "";
+    if (optionalElement("calculatorDraftReviewSource")) requiredElement("calculatorDraftReviewSource").value = "";
+  }
   DATA = Object.assign({}, DATA, data);
   CALCULATOR_INPUTS_AVAILABLE = false;
   PACKET = data.chatgpt_packet || null;
@@ -946,6 +953,12 @@ requiredElement("componentInterpretations").addEventListener("click", event => {
 requiredElement("btnSaveCalculatorReview").addEventListener("click", () => saveCalculatorDraft("save_review"));
 requiredElement("btnPreviewCalculatorDraft").addEventListener("click", () => saveCalculatorDraft("preview_apply"));
 requiredElement("btnApplyCalculatorDraft").addEventListener("click", () => saveCalculatorDraft("apply"));
+[ ["calculatorDraftReviewer", "reviewer"], ["calculatorDraftReviewSource", "source"] ].forEach(([id, key]) => {
+  requiredElement(id).addEventListener("input", event => {
+    DRAFT_REVIEW_SESSION[key] = event.target.value;
+    if (CALCULATOR_DRAFT) { DRAFT_DIRTY = true; DRAFT_PREVIEW_TOKEN = ""; }
+  });
+});
 requiredElement("btnCalculateVentilation").addEventListener("click", calculateVentilation);
 const airflowResolverButton = document.getElementById("btnResolveAirflow");
 if (airflowResolverButton) airflowResolverButton.addEventListener("click", resolveAirflow);
@@ -3173,7 +3186,7 @@ function showCalculatorDraft(draft = {}, artifactUrl = ""){
   DRAFT_PREVIEW_TOKEN = "";
   DRAFT_DIRTY = false;
   const groups = [
-    ["floors", "Floors and drawing coverage"], ["zones", "Zones and rooms"], ["rooms", "Zones and rooms"],
+    ["floors", "Floors and drawing coverage"], ["zones", "Zones"], ["rooms", "Rooms"],
     ["room_inputs", "Directly supported room inputs"], ["schedules", "Schedules"], ["envelope", "Envelope and opening candidates"],
   ];
   const decisions = draft.decisions || {};
@@ -3207,20 +3220,31 @@ function showCalculatorDraft(draft = {}, artifactUrl = ""){
   const rendered = groups.map(([key, title]) => {
     const rows = draft.candidates?.[key] || [];
     if (!rows.length) return "";
-    return `<section class="draft-group"><div class="draft-group-title">${esc(title)}</div>${rows.map(item => calculatorDraftCandidateMarkup(item, decisions[item.candidate_id] || {})).join("")}</section>`;
+    return `<section class="draft-group" data-draft-group="${esc(key)}"><div class="draft-group-heading"><div class="draft-group-title">${esc(title)}</div><button class="btn ghost mini" type="button" data-accept-draft-group="${esc(key)}">Accept all in this group</button></div>${rows.map(item => calculatorDraftCandidateMarkup(item, decisions[item.candidate_id] || {}, draft)).join("")}</section>`;
   }).join("");
   requiredElement("calculatorDraftCandidates").innerHTML = geometryReviewMarkup(draft) + roleSummary + geometrySummary + factSummary + (rendered || (draft.status === "not_built" ? "" : `<article class="review-empty"><b>No source-backed calculator candidates found</b><span>Missing data stays in the review queue; Archie has not guessed any records.</span></article>`));
   const reviewItems = draft.review_items || [];
   requiredElement("calculatorDraftReviewItems").innerHTML = reviewItems.map(item => calculatorDraftReviewMarkup(item, decisions[item.item_id] || {})).join("");
+  requiredElement("calculatorDraftReviewer").value = DRAFT_REVIEW_SESSION.reviewer;
+  requiredElement("calculatorDraftReviewSource").value = DRAFT_REVIEW_SESSION.source;
   const summary = draft.apply_summary || {};
+  const populatedFields = (summary.populated_fields || []).reduce((total, row) => total + (row.fields?.length || 0), 0);
   const counts = [
-    summary.created?.length && `${summary.created.length} created`,
-    summary.already_present?.length && `${summary.already_present.length} already present`,
-    summary.skipped_conflicts?.length && `${summary.skipped_conflicts.length} conflict${summary.skipped_conflicts.length === 1 ? "" : "s"} skipped`,
-    summary.unresolved?.length && `${summary.unresolved.length} unresolved`,
-  ].filter(Boolean).join(" · ");
+    [`${summary.created?.length || 0} created`, summary.created?.length],
+    [`${populatedFields} fields populated`, populatedFields],
+    [`${summary.already_present?.length || 0} already present`, summary.already_present?.length],
+    [`${summary.skipped_conflicts?.length || 0} conflicts skipped`, summary.skipped_conflicts?.length],
+    [`${summary.missing_dependencies?.length || 0} missing dependencies`, summary.missing_dependencies?.length],
+    [`${summary.unresolved?.length || 0} unresolved`, summary.unresolved?.length],
+  ].filter(([, count]) => count !== undefined).map(([label]) => label).join(" · ");
+  const reasons = [...(summary.unresolved || []), ...(summary.missing_dependencies || [])].slice(0, 8).map(item => {
+    const label = calculatorDraftLabel(draft, item.candidate_id);
+    return `<li>${esc(label ? `${label}: ` : "")}${esc(item.reason || "Review required.")}</li>`;
+  }).join("");
   const receipt = summary.reports_marked_stale?.length ? ` Reports stale: ${summary.reports_marked_stale.join(", ")}.` : "";
-  requiredElement("calculatorDraftSummary").innerHTML = (counts || artifactUrl || receipt) ? `<article class="review-item"><div><b>Application summary</b><span>${esc((counts || "No reviewed changes applied.") + receipt)}</span></div>${artifactUrl ? `<a class="btn ghost mini" href="${esc(artifactUrl)}" target="_blank" rel="noopener">Open draft JSON</a>` : ""}</article>` : "";
+  const outcome = draft.outcome_action === "apply" && !(summary.created || []).length
+    ? "Apply created 0 records; unresolved items remain below. " : "";
+  requiredElement("calculatorDraftSummary").innerHTML = (counts || artifactUrl || receipt || reasons) ? `<article class="review-item"><div><b>Application summary</b><span>${esc(outcome + (counts || "No preview or apply results yet.") + receipt)}</span>${reasons ? `<ul class="draft-summary-reasons">${reasons}</ul>` : ""}</div>${artifactUrl ? `<a class="btn ghost mini" href="${esc(artifactUrl)}" target="_blank" rel="noopener">Open draft JSON</a>` : ""}</article>` : "";
   requiredElement("calculatorDraftStatus").textContent = draft.status === "not_built" || !draft.status
     ? "Build a proposal queue after the thermal model and drawing evidence are ready."
     : ["stale", "legacy_review_required"].includes(draft.artifact_status)
@@ -3230,6 +3254,14 @@ function showCalculatorDraft(draft = {}, artifactUrl = ""){
   ["btnSaveCalculatorReview", "btnPreviewCalculatorDraft", "btnApplyCalculatorDraft"].forEach(id => { requiredElement(id).disabled = stale; });
   document.querySelectorAll(".calculator-draft-decision, .calculator-draft-field, .calculator-draft-review-field").forEach(control => control.addEventListener("change", () => { DRAFT_DIRTY = true; DRAFT_PREVIEW_TOKEN = ""; }));
   document.querySelectorAll(".calculator-draft-field, .calculator-draft-review-field").forEach(control => control.addEventListener("input", () => { DRAFT_DIRTY = true; DRAFT_PREVIEW_TOKEN = ""; }));
+  document.querySelectorAll("[data-accept-draft-group]").forEach(button => button.addEventListener("click", () => {
+    const group = button.closest(".draft-group");
+    let changed = false;
+    group?.querySelectorAll(".calculator-draft-decision").forEach(select => {
+      if (select.value === "pending") { select.value = "accept"; changed = true; }
+    });
+    if (changed) { DRAFT_DIRTY = true; DRAFT_PREVIEW_TOKEN = ""; requiredElement("calculatorDraftStatus").textContent = "Pending candidates in this group are marked for acceptance. Save or preview to continue."; }
+  }));
   document.querySelectorAll(".geometry-focus[data-focus-candidate]").forEach(button => button.addEventListener("click", () => {
     const target = document.querySelector(`.draft-candidate[data-candidate="${CSS.escape(button.dataset.focusCandidate)}"]`);
     if (!target) return;
@@ -3299,7 +3331,24 @@ function geometryReviewMarkup(draft){
   return `<section class="geometry-review-workspace"><div class="draft-group-title">Geometry review workspace</div><div class="geometry-review-intro"><div><b>Resolve topology from evidence</b><span>${esc(readiness)} · ${floors.length} floor candidate${floors.length === 1 ? "" : "s"} · ${zones.length} zone candidates · ${pages.length} architect pages indexed.</span></div><span class="conf">No calculation inputs are changed here.</span></div><div class="geometry-page-groups">${groupSummary || `<span class="fine">Build the calculator draft to populate page groups.</span>`}</div><div class="geometry-room-list">${roomCards || `<article class="review-empty"><b>Room geometry is not ready</b><span>Build evidence and calculator proposals first; unresolved rooms remain excluded.</span></article>`}</div>${thermalSurfaceCards ? `<div class="geometry-entity-list"><div class="draft-group-title">AI thermal-surface ledger</div>${thermalSurfaceCards}</div>` : ""}${entityCards ? `<div class="geometry-entity-list"><div class="draft-group-title">Dimensions, walls, openings, and level witnesses</div>${entityCards}</div>` : ""}</section>`;
 }
 
-function calculatorDraftCandidateMarkup(item, savedDecision){
+function calculatorDraftLabel(draft, candidateId){
+  if (!candidateId) return "";
+  const all = Object.values(draft.candidates || {}).flat();
+  const item = all.find(candidate => candidate.candidate_id === candidateId);
+  if (!item) {
+    const review = (draft.review_items || []).find(candidate => candidate.item_id === candidateId);
+    return review ? `${review.scope || "Review"} · ${review.affected_id || "project"}` : "";
+  }
+  const value = item.value || {};
+  let name = value.name || value.label;
+  if (item.kind === "area" && !name && value.room_id) {
+    const room = (draft.candidates?.rooms || []).find(candidate => candidate.value?.room_id === value.room_id || candidate.candidate_id === value.room_id);
+    name = room?.value?.name || room?.value?.label;
+  }
+  return `${String(item.kind).replace(/^./, character => character.toUpperCase())}${name ? ` ${name}` : ""}`;
+}
+
+function calculatorDraftCandidateMarkup(item, savedDecision, draft = CALCULATOR_DRAFT || {}){
   const action = savedDecision.decision || "pending";
   const value = savedDecision.value || item.value || {};
   const fields = Object.entries(value).filter(([key]) => !["citations", "day_profiles", "geometry", "geometry_evidence", "geometry_status", "geometry_reference", "room_source", "unresolved_fields"].includes(key)).map(([key, raw]) => {
@@ -3307,7 +3356,8 @@ function calculatorDraftCandidateMarkup(item, savedDecision){
     return `<label>${esc(key)}${input}</label>`;
   }).join("");
   const profiles = value.day_profiles ? `<label>Day profiles (24-hour JSON, edit only when fully cited)<textarea class="calculator-draft-json-field" data-field="day_profiles" spellcheck="false">${esc(JSON.stringify(value.day_profiles, null, 2))}</textarea></label>` : "";
-  const citation = item.citations?.[0] || {};
+  const citation = savedDecision.citations?.[0] || item.citations?.[0] || {};
+  const displayName = value.name || value.label || (item.kind === "area" ? calculatorDraftAreaRoomName(draft, value) : "") || item.candidate_id;
   const geometryStatus = item.geometry_status || value.geometry_status;
   const geometryReference = item.geometry_reference || value.geometry_reference;
   const geometry = geometryStatus ? `<small>geometry: ${esc(geometryStatus)}${geometryReference ? ` · witness ${esc(Array.isArray(geometryReference) ? geometryReference.join(" · ") : geometryReference)}` : ""}</small>` : "";
@@ -3319,7 +3369,13 @@ function calculatorDraftCandidateMarkup(item, savedDecision){
   const proofRows = proof?.supporting_proofs || (proof ? [proof] : []);
   const proofLine = proof ? `<small>Current trace${proofRows.length === 1 ? "" : "s"} ${esc(proofRows.map(row => `${row.trace_id} (p. ${row.page})`).join(" · "))} · ${esc(proof.area_m2)} m² · ${esc(proof.calibration?.status || "calibration unresolved")} · reviewer ${esc(proofRows.map(row => row.reviewer || "unavailable").join(" · "))}</small>` : "";
   const acceptLabel = proof && item.kind === "room" ? "Accept traced geometry" : "Accept";
-  return `<article class="review-item draft-candidate" data-candidate="${esc(item.candidate_id)}"><div><b>${esc(item.kind)} · ${esc(item.candidate_id)}</b><span>${esc(item.reason || "Source-backed proposal")}</span><small>${citationText(item.citations)} · confidence ${esc(item.confidence || "unknown")} · target ${esc(item.target_artifact || "")}</small>${proofLine}${geometry}${geometryEvidence}${unresolved}${floor}<details><summary>Review fields and evidence</summary><div class="draft-fields">${fields}${profiles}<label>Engineer review source<input class="calculator-draft-review-field" data-field="source" placeholder="Reviewer, calculation note, or marked-up drawing"></label><label>Reviewer<input class="calculator-draft-review-field" data-field="reviewer" placeholder="Name / initials"></label><label>Review citation reference<input class="calculator-draft-review-field" data-field="citation_reference" value="${esc(citation.reference || "")}"></label><label>Review excerpt<textarea class="calculator-draft-review-field" data-field="citation_excerpt">${esc(citation.excerpt || "")}</textarea></label></div></details></div><label>Decision <select class="calculator-draft-decision" data-candidate="${esc(item.candidate_id)}"><option value="pending" ${action === "pending" ? "selected" : ""}>Pending review</option><option value="accept" ${action === "accept" ? "selected" : ""}>${acceptLabel}</option><option value="edit" ${action === "edit" ? "selected" : ""}>Edit</option><option value="reject" ${action === "reject" ? "selected" : ""}>Reject</option><option value="needs_evidence" ${action === "needs_evidence" ? "selected" : ""}>Needs evidence</option></select></label></article>`;
+  return `<article class="review-item draft-candidate" data-candidate="${esc(item.candidate_id)}"><div><b>${esc(item.kind)} · ${esc(displayName)}</b><small class="draft-candidate-id">${esc(item.candidate_id)}</small><span>${esc(item.reason || "Source-backed proposal")}</span><small>${citationText(savedDecision.citations || item.citations)} · confidence ${esc(item.confidence || "unknown")} · target ${esc(item.target_artifact || "")}</small>${proofLine}${geometry}${geometryEvidence}${unresolved}${floor}<details><summary>Review fields and evidence</summary><div class="draft-fields">${fields}${profiles}<label>Engineer review source<input class="calculator-draft-review-field" data-field="source" placeholder="Reviewer, calculation note, or marked-up drawing" value="${esc(savedDecision.source || "")}"></label><label>Reviewer<input class="calculator-draft-review-field" data-field="reviewer" placeholder="Name / initials" value="${esc(savedDecision.reviewer || "")}"></label><label>Review citation reference<input class="calculator-draft-review-field" data-field="citation_reference" value="${esc(citation.reference || "")}"></label><label>Review excerpt<textarea class="calculator-draft-review-field" data-field="citation_excerpt">${esc(citation.excerpt || "")}</textarea></label></div></details></div><label>Decision <select class="calculator-draft-decision" data-candidate="${esc(item.candidate_id)}"><option value="pending" ${action === "pending" ? "selected" : ""}>Pending review</option><option value="accept" ${action === "accept" ? "selected" : ""}>${acceptLabel}</option><option value="edit" ${action === "edit" ? "selected" : ""}>Edit</option><option value="reject" ${action === "reject" ? "selected" : ""}>Reject</option><option value="needs_evidence" ${action === "needs_evidence" ? "selected" : ""}>Needs evidence</option></select></label></article>`;
+}
+
+function calculatorDraftAreaRoomName(draft, value){
+  if (!value?.room_id) return "";
+  const room = (draft.candidates?.rooms || []).find(candidate => candidate.value?.room_id === value.room_id || candidate.candidate_id === value.room_id);
+  return room?.value?.name || room?.value?.label || "";
 }
 
 function calculatorDraftReviewMarkup(item, savedDecision){
@@ -3340,7 +3396,7 @@ function calculatorDraftDecisions(){
     if (action === "pending") return;
     const row = select.closest(".draft-candidate");
     const decision = {decision: action};
-    const reviewer = row?.querySelector('[data-field="reviewer"]')?.value.trim() || row?.querySelector(`[data-reviewer-for="${CSS.escape(candidateId)}"]`)?.value.trim() || "";
+    const reviewer = row?.querySelector('[data-field="reviewer"]')?.value.trim() || row?.querySelector(`[data-reviewer-for="${CSS.escape(candidateId)}"]`)?.value.trim() || DRAFT_REVIEW_SESSION.reviewer.trim();
     if (reviewer) decision.reviewer = reviewer;
     if (action === "edit") {
       const candidate = CALCULATOR_DRAFT?.candidates ? Object.values(CALCULATOR_DRAFT.candidates).flat().find(item => item.candidate_id === candidateId) : null;
@@ -3359,7 +3415,7 @@ function calculatorDraftDecisions(){
         delete decision.value.geometry_reference;
       }
     }
-    const source = row?.querySelector('[data-field="source"]')?.value.trim();
+    const source = row?.querySelector('[data-field="source"]')?.value.trim() || DRAFT_REVIEW_SESSION.source.trim();
     const reference = row?.querySelector('[data-field="citation_reference"]')?.value.trim();
     const excerpt = row?.querySelector('[data-field="citation_excerpt"]')?.value.trim();
     if (source) decision.source = source;
@@ -3371,26 +3427,48 @@ function calculatorDraftDecisions(){
 
 async function saveCalculatorDraft(action){
   if (!DATA?.id) return;
-  if (action === "apply" && !DRAFT_PREVIEW_TOKEN) return toast("Preview required", "Save the review, then preview changes before applying them.");
+  if (action === "apply" && !DRAFT_PREVIEW_TOKEN) {
+    const message = "Preview the saved review before applying changes.";
+    requiredElement("calculatorDraftStatus").textContent = message;
+    return toast("Preview required", message);
+  }
   const button = action === "build" ? requiredElement("btnBuildCalculatorDraft") : action === "save_review" ? requiredElement("btnSaveCalculatorReview") : action === "preview_apply" ? requiredElement("btnPreviewCalculatorDraft") : requiredElement("btnApplyCalculatorDraft");
   button.disabled = true;
   requiredElement("calculatorDraftStatus").textContent = action === "build" ? "Building a source-backed calculator proposal queue…" : action === "save_review" ? "Saving engineer decisions without changing calculator artifacts…" : action === "preview_apply" ? "Previewing reviewed changes and conflicts…" : "Applying reviewed proposals without overwriting authored records…";
-  try {
-    const payload = {project_id: DATA.id, action};
-    if (action === "save_review" || action === "preview_apply") {
-      if (action === "preview_apply" && DRAFT_DIRTY) throw new Error("Save the review before previewing changes.");
-      if (action === "save_review") { payload.expected_revision = CALCULATOR_DRAFT?.revision; payload.decisions = calculatorDraftDecisions(); }
-    }
-    if (action === "preview_apply" || action === "apply") { payload.expected_revision = CALCULATOR_DRAFT?.revision; if (action === "apply") payload.preview_token = DRAFT_PREVIEW_TOKEN; }
+  const postDraft = async payload => {
     const res = await fetch("/api/calculator-draft", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)});
     const data = await res.json();
-    if (!res.ok || data.error) {
-      const error = new Error(data.error || "Could not update calculator draft.");
-      error.code = data.code;
-      throw error;
+    if (!res.ok || data.error) { const error = new Error(data.error || "Could not update calculator draft."); error.code = data.code; throw error; }
+    return data;
+  };
+  try {
+    let data;
+    if (action === "preview_apply" && DRAFT_DIRTY) {
+      const decisions = calculatorDraftDecisions();
+      const missingReviewer = Object.entries(decisions).some(([candidateId, decision]) =>
+        Object.values(CALCULATOR_DRAFT?.candidates || {}).flat().some(item => item.candidate_id === candidateId) && !decision.reviewer?.trim());
+      if (missingReviewer) throw new Error("Enter a reviewer name (top of the panel) before saving.");
+      data = await postDraft({project_id: DATA.id, action: "save_review", expected_revision: CALCULATOR_DRAFT?.revision, decisions});
+      const savedDraft = {...(data.calculator_draft || {}), artifact_status: data.status, stale_reasons: data.stale_reasons || []};
+      CALCULATOR_DRAFT = savedDraft;
+      DRAFT_DIRTY = false;
+      showCalculatorDraft(savedDraft, data.artifact_url || data.artifact_links?.calculator_draft || "");
+      data = await postDraft({project_id: DATA.id, action: "preview_apply", expected_revision: CALCULATOR_DRAFT?.revision});
+    } else {
+      const payload = {project_id: DATA.id, action};
+      if (action === "save_review") {
+        payload.expected_revision = CALCULATOR_DRAFT?.revision;
+        payload.decisions = calculatorDraftDecisions();
+        const missingReviewer = Object.entries(payload.decisions).some(([candidateId, decision]) =>
+          Object.values(CALCULATOR_DRAFT?.candidates || {}).flat().some(item => item.candidate_id === candidateId) && !decision.reviewer?.trim());
+        if (missingReviewer) throw new Error("Enter a reviewer name (top of the panel) before saving.");
+      }
+      if (action === "preview_apply" || action === "apply") { payload.expected_revision = CALCULATOR_DRAFT?.revision; if (action === "apply") payload.preview_token = DRAFT_PREVIEW_TOKEN; }
+      data = await postDraft(payload);
     }
     const displayDraft = {...(data.calculator_draft || {}), artifact_status: data.status, stale_reasons: data.stale_reasons || []};
     if (data.preview || data.apply_summary) displayDraft.apply_summary = data.preview || data.apply_summary;
+    displayDraft.outcome_action = action;
     showCalculatorDraft(displayDraft, data.artifact_url || data.artifact_links?.calculator_draft || "");
     if (action === "preview_apply") DRAFT_PREVIEW_TOKEN = data.preview_token || "";
     if (action === "apply") {
@@ -3409,11 +3487,12 @@ async function saveCalculatorDraft(action){
       requiredElement("calculatorDraftStatus").textContent = message;
       toast("Draft rebuilt from new evidence", message);
     } else {
-      requiredElement("calculatorDraftStatus").textContent = "Could not update calculator draft.";
+      requiredElement("calculatorDraftStatus").textContent = `Could not update calculator draft: ${error.message}`;
       toast("Calculator draft failed", error.message);
     }
   }
   button.disabled = false;
+  if (["stale", "legacy_review_required"].includes(CALCULATOR_DRAFT?.artifact_status)) ["btnSaveCalculatorReview", "btnPreviewCalculatorDraft", "btnApplyCalculatorDraft"].forEach(id => { requiredElement(id).disabled = true; });
 }
 
 async function loadDesignRequirements(){
