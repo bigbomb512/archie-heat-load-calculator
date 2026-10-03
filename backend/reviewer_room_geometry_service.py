@@ -188,13 +188,15 @@ def _page_context(paths, web):
         pdf_sizes = _cached_pdf_sizes(source_pdf, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
     else:
         pdf_sizes = {}
+    fallback_numbers = _fallback_trace_page_numbers(role_pages, coverage_pages, drawing_pages, vector_pages)
     pages = []
     for number, vector in sorted(vector_pages.items()):
         drawing = drawing_pages.get(number, {})
         coverage_page = coverage_pages.get(number, {})
         role = role_pages.get(number, {})
         proposed_role = role.get("proposed_role") or coverage_page.get("proposed_role") or drawing.get("plan_role")
-        if proposed_role not in {"main_floor_plan", "primary_geometry_plan", "supporting_geometry_plan", "floor_plan"}:
+        fallback_plan = number in fallback_numbers
+        if proposed_role not in TRACE_FLOOR_PLAN_ROLES and not fallback_plan:
             continue
         system = vector.get("coordinate_systems", {}).get("image_px", {})
         image_width, image_height = system.get("image_width"), system.get("image_height")
@@ -229,8 +231,37 @@ def _page_context(paths, web):
                       "preview_width_px": image_width if preview_matches else None,
                       "preview_height_px": image_height if preview_matches else None,
                       "preview_matches_vector_coordinates": bool(preview_matches),
-                      "preview_error": "Full-resolution plan image unavailable or does not match vector coordinates." if not preview_matches else ""})
+                      "preview_error": "Full-resolution plan image unavailable or does not match vector coordinates." if not preview_matches else "",
+                      "fallback_plan": fallback_plan,
+                      "fallback_reason": FALLBACK_TRACE_REASON if fallback_plan else ""})
     return pages
+
+
+TRACE_FLOOR_PLAN_ROLES = {"main_floor_plan", "primary_geometry_plan", "supporting_geometry_plan", "floor_plan"}
+TRACE_SERVICES_PLAN_ROLES = {"existing_hvac_plan", "services_or_lighting_plan"}
+FALLBACK_TRACE_REASON = "No architectural floor plan in this set; tracing on a services plan."
+
+
+def _fallback_trace_page_numbers(role_pages, coverage_pages, drawing_pages, vector_pages):
+    """Scaled services plans offered for tracing only when no floor plan exists.
+
+    Mirrors ai.vector_geometry.fallback_services_plan_pages using the drawing
+    coverage roles: any floor-plan page in the set disables the fallback.
+    """
+    numbers = set(role_pages) | set(coverage_pages) | set(drawing_pages)
+
+    def role_of(number):
+        return (role_pages.get(number, {}).get("proposed_role") or coverage_pages.get(number, {}).get("proposed_role")
+                or drawing_pages.get(number, {}).get("plan_role") or "")
+
+    if any(role_of(number) in TRACE_FLOOR_PLAN_ROLES for number in numbers):
+        return set()
+    eligible = set()
+    for number in vector_pages:
+        scale = role_pages.get(number, {}).get("main_scale") or coverage_pages.get(number, {}).get("main_scale") or ""
+        if role_of(number) in TRACE_SERVICES_PLAN_ROLES and _scale_denominator(scale):
+            eligible.add(number)
+    return eligible
 
 
 @lru_cache(maxsize=8)
@@ -462,6 +493,11 @@ def post(web, project, data):
                   "note": str(data.get("note", "")).strip(), "status": "geometry_proposed",
                   "created_at": ai_preliminary.now(),
                   "source_fingerprints": {"source_pdf": current_pdf_fp, "vector_page": current_vector_fp}}
+        if page_context.get("fallback_plan"):
+            # Traced over a services plan because the set has no architectural
+            # plan; keep that visible wherever the trace is used.
+            record["fallback_plan"] = True
+            record["fallback_reason"] = page_context.get("fallback_reason", FALLBACK_TRACE_REASON)
         if not record["reviewer"]:
             raise ValueError("Enter your name or initials as the trace reviewer.")
         new_records = [row for row in artifact["records"] if not (row.get("room_id") == room_id and row.get("page") == page_number)]

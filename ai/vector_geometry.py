@@ -3,6 +3,7 @@
 import argparse
 import json
 import math
+import re
 from pathlib import Path
 
 import pdfplumber
@@ -65,6 +66,57 @@ def resolve_source_pdf(ai_input):
     raise FileNotFoundError("Source PDF path was not found in ai_input.json.")
 
 
+FLOOR_PLAN_ROLES = {"main_floor_plan", "primary_geometry_plan", "supporting_geometry_plan", "floor_plan"}
+SERVICES_PLAN_ROLES = {"existing_hvac_plan", "services_or_lighting_plan"}
+SERVICES_PLAN_TYPES = {"existing_hvac_or_services_plan"}
+FALLBACK_BUCKET = "fallback_services_plan"
+
+
+def _has_plan_scale(page):
+    return bool(re.search(r"\b1\s*:\s*\d+", str(page.get("scale") or page.get("main_scale") or "")))
+
+
+def fallback_services_plan_pages(ai_input):
+    """Scaled services plans usable for room tracing when a set has no floor plan.
+
+    A mechanical engineer's set often has no architectural plan at all, only
+    scaled services plans drawn over the tenancy outline. Those pages are
+    offered for reviewer tracing only in that case; sets with any floor-plan
+    page never fall back, and schedules, legends and details never qualify.
+    """
+    sheets = [page for page in ai_input.get("drawing_set", {}).get("pages", []) if isinstance(page, dict)]
+    confirmed = ai_input.get("confirmed_pages", {})
+    if confirmed.get("floor_plans") or any(
+            str(page.get("plan_role", "")).casefold() in FLOOR_PLAN_ROLES
+            or str(page.get("detected_type", "")).casefold() == "floor_plan" for page in sheets):
+        return []
+    candidates = sheets + [page for page in confirmed.get("existing_hvac_or_services_plans", []) if isinstance(page, dict)]
+    output, seen = [], set()
+    for page in candidates:
+        number = page.get("page")
+        role = str(page.get("plan_role", "")).casefold()
+        detected = str(page.get("detected_type", "")).casefold()
+        title = str(page.get("title", "")).casefold()
+        if (number in seen or not isinstance(number, int)
+                or not (role in SERVICES_PLAN_ROLES or detected in SERVICES_PLAN_TYPES)
+                or not _has_plan_scale(page)
+                or any(term in title for term in ("schedule", "legend", "detail", "notes", "cover", "drawing list"))):
+            continue
+        output.append(page)
+        seen.add(number)
+    return sorted(output, key=lambda page: page["page"])
+
+
+def _append_fallback_refs(ai_input, refs, seen):
+    for page in fallback_services_plan_pages(ai_input):
+        if page["page"] in seen:
+            continue
+        refs.append({"page": page["page"], "title": page.get("title", ""), "plan_role": page.get("plan_role", ""),
+                     "evidence_bucket": FALLBACK_BUCKET})
+        seen.add(page["page"])
+    return refs
+
+
 def geometry_page_refs(ai_input):
     design_inputs = ai_input.get("design_inputs", {})
     seen = set()
@@ -98,7 +150,7 @@ def geometry_page_refs(ai_input):
                 "evidence_bucket": "all_architect_geometry_capable_pages",
             })
             seen.add(page.get("page"))
-        return refs
+        return _append_fallback_refs(ai_input, refs, seen)
 
     for page in ai_input.get("confirmed_pages", {}).get("floor_plans", []):
         if page.get("page") not in seen and not is_detail_or_reference(page):
@@ -121,7 +173,7 @@ def geometry_page_refs(ai_input):
             "evidence_bucket": "all_architect_geometry_capable_pages",
         })
         seen.add(page.get("page"))
-    return refs
+    return _append_fallback_refs(ai_input, refs, seen)
 
 
 def page_is_geometry_capable(page):
