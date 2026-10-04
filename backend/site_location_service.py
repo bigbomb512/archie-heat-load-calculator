@@ -16,7 +16,7 @@ import urllib.request
 from ai.research_cache import eligible_bindings, empty_research_cache, source_pack_release_manifest, validate_cache
 from ai.site_location_resolution import (
     accept_map_or_survey, apply_geocode_candidates, confirm_address, empty_site_location_resolution,
-    fingerprint, infer_pdf_context, select_weather_source, validate_site_location_resolution, with_pdf_context,
+    fingerprint, infer_pdf_context, select_weather_source, set_cited_location, validate_site_location_resolution, with_pdf_context,
 )
 from ai.vision_extraction import timestamp
 from backend.vision_extraction_service import _atomic_json
@@ -223,6 +223,11 @@ def post(web, project, data):
         artifact = select_weather_source(current, data.get("source_id", ""))
     elif action == "accept_map_or_survey":
         artifact = accept_map_or_survey(current, data.get("evidence", {}))
+    elif action == "set_cited_location":
+        cited = {key: data.get(key) for key in ("latitude_deg", "longitude_deg", "state", "locality", "source", "citation", "reviewer")}
+        provisional = set_cited_location(current, data.get("confirmed_address", ""), cited)
+        artifact = set_cited_location(current, data.get("confirmed_address", ""), cited,
+                                      _weather_candidates(root, provisional["location"]))
     else:
-        raise ValueError("Site-location action must be infer_from_pdf, confirm_address, resolve_location, select_weather_source, or accept_map_or_survey.")
+        raise ValueError("Site-location action must be infer_from_pdf, confirm_address, resolve_location, select_weather_source, accept_map_or_survey, or set_cited_location.")
     return _save(web, project, artifact, "site_location_" + action)

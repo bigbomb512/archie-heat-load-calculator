@@ -54,6 +54,23 @@ def main():
         selected = site_location_service.post(web, project, {"action": "select_weather_source", "source_id": "bom-one"})
         check("weather selection remains separate and draft-scoped", selected["site_location_resolution"]["selected_weather_source"]["source_id"] == "bom-one")
 
+    with TemporaryDirectory() as directory:
+        root = Path(directory)
+        project, web = {"id": "cited-location-test", "review_dir": str(root)}, LocalWeb()
+        original = site_location_service._weather_candidates
+        try:
+            site_location_service._weather_candidates = lambda _root, location: [{"source_id": "near", "target": "scenario.weather_profile", "value": {}, "scope": {"state": location["state"]}}]
+            cited = site_location_service.post(web, project, {
+                "action": "set_cited_location", "confirmed_address": "Melrose Central, Melrose Park NSW 2114",
+                "latitude_deg": -33.8135, "longitude_deg": 151.0716, "state": "NSW", "locality": "Melrose Park",
+                "source": "Map service", "citation": "https://maps.example/melrose-central", "reviewer": "QA"})
+        finally:
+            site_location_service._weather_candidates = original
+        body = cited["site_location_resolution"]
+        check("the service confirms a cited site location without any network lookup",
+              body["status"] == "location_resolved" and body["location"]["basis"] == "reviewer_cited_map")
+        check("weather candidates are found for the cited location", [row["source_id"] for row in body["weather_candidates"]] == ["near"])
+
 
 if __name__ == "__main__":
     main()

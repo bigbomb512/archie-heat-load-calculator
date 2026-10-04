@@ -25,12 +25,33 @@ STATE_TIMEZONES = {
     "VIC": "Australia/Melbourne", "WA": "Australia/Perth",
 }
 STATE_PATTERN = r"(?:NSW|VIC|QLD|SA|WA|TAS|ACT|NT)"
+# The street type must be a whole word and the state an upper-case
+# abbreviation after a separator; otherwise "PLAN ... current" reads as a
+# "PL" street in the "NT".
 STREET_PATTERN = re.compile(
-    rf"\b\d{{1,5}}(?:[A-Z]?[-/]\d{{1,5}})?\s+[A-Z0-9][A-Z0-9 .'-]{{1,70}}?\s"
-    rf"(?:STREET|ST|ROAD|RD|AVENUE|AVE|DRIVE|DR|PLACE|PL|PARADE|PDE|HIGHWAY|HWY|LANE|LN|COURT|CT)"
-    rf"(?:\s*,?\s*[A-Z][A-Z .'-]{{1,45}})?\s*,?\s*{STATE_PATTERN}(?:\s+\d{{4}})?\b",
+    rf"\b(?:[A-Z]{{1,2}}\d{{1,4}}[A-Z]?/)?\d{{1,5}}(?:[A-Z]?[-/]\d{{1,5}})?\s+[A-Z0-9][A-Z0-9 .'-]{{1,70}}?\s"
+    rf"(?:STREET|ST|ROAD|RD|AVENUE|AVE|AV|DRIVE|DR|PLACE|PL|PARADE|PDE|HIGHWAY|HWY|LANE|LN|COURT|CT|"
+    rf"BOULEVARD|BLVD|CRESCENT|CRES|TERRACE|TCE|CIRCUIT|CCT|WAY)\b"
+    rf"(?:[\s,]+[A-Z][A-Z .'-]{{1,45}}?)?[\s,]+(?-i:{STATE_PATTERN})(?:\s+\d{{4}})?\b",
     re.I,
 )
+# A tenancy line names the centre or development the tenancy is in, e.g.
+# "TENANCY MZ01,M38, MELROSE CENTRAL".
+TENANCY_PATTERN = re.compile(
+    r"\b(?:TENANCY|SHOP|SUITE)\s+([A-Z0-9][A-Z0-9 ,/&.-]{0,30}?),\s*"
+    r"([A-Z][A-Z'&. -]{1,60}?\b(?:CENTRAL|CENTRE|CENTER|PLAZA|MALL|SQUARE|VILLAGE|MARKETPLACE|QUARTER|EXCHANGE|ARCADE))\b",
+    re.I,
+)
+EMAIL_PATTERN = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.]+\b")
+PHONE_PATTERN = re.compile(r"(?<!\d)(?:\(0\d\)\s?\d{4}\s?\d{4}|0\d{3}\s?\d{3}\s?\d{3}|0\d\s?\d{4}\s?\d{4}|1[38]00\s?\d{3}\s?\d{3})(?!\d)")
+# Standard sheet notes that mention "site" or "construction" without saying
+# anything about where the project is.
+BOILERPLATE_PATTERN = re.compile(
+    r"(?:checked|verified|confirmed)\s+on\s+site|for\s+construction|construction\s+issue|"
+    r"do\s+not\s+scale|site\s*-\s*do\s+not\s+scale|prior\s+to\s+construction|construction\s+and\s+fit-?out",
+    re.I,
+)
+SITE_NAME_REJECT = re.compile(r"^\W*\d|do not scale|drawing|dwg|scale|rev(?:ision)?\s+(?:no|date)|sheet|description|\babn\b|requirements", re.I)
 COORDINATE_PATTERN = re.compile(r"(?<!\d)(-?\d{1,2}\.\d{3,})\s*[,/]\s*(-?\d{2,3}\.\d{3,})(?!\d)")
 SURVEY_PATTERN = re.compile(r"\b(?:TRUE\s+NORTH|GRID\s+NORTH|NORTH\s+ARROW|SURVEY\s+BEARING|BEARING)\b", re.I)
 DATE_PATTERN = re.compile(r"\b(?:19|20)\d{2}[-/.]\d{1,2}[-/.]\d{1,2}\b|\b\d{1,2}[-/.]\d{1,2}[-/.](?:19|20)?\d{2}\b")
@@ -48,8 +69,11 @@ def fingerprint(value):
 
 def _clean_for_fingerprint(value):
     if isinstance(value, dict):
+        # Keys added later are left out while empty so older artifacts keep
+        # their fingerprint (design weather is bound to it).
         return {key: _clean_for_fingerprint(item) for key, item in value.items()
-                if key not in {"updated_at", "retrieved_at"}}
+                if key not in {"updated_at", "retrieved_at"}
+                and not (key in {"cited_location", "excluded_address_candidates"} and not item)}
     if isinstance(value, list):
         return [_clean_for_fingerprint(item) for item in value]
     return value
@@ -76,7 +100,7 @@ def empty_site_location_resolution():
         "status": "inferred",
         "pdf_context": {
             "source_fingerprint": "", "address_candidates": [], "site_name_candidates": [],
-            "coordinate_candidates": [], "orientation_clues": [],
+            "coordinate_candidates": [], "orientation_clues": [], "excluded_address_candidates": [],
         },
         "confirmed_address": "",
         "external_lookup_consent": False,
@@ -85,6 +109,7 @@ def empty_site_location_resolution():
         "weather_candidates": [],
         "selected_weather_source": {},
         "map_or_survey_evidence": {},
+        "cited_location": {},
         "conflicts": [],
         "updated_at": "",
     }
@@ -115,16 +140,27 @@ def _source(page, excerpt):
     return {"page": page.get("page"), "drawing_number": page.get("drawing_number", ""), "excerpt": excerpt[:500]}
 
 
+def _address_context(text, start, end, title):
+    raw = text[max(0, start - 140):min(len(text), end + 140)] + " " + title
+    return BOILERPLATE_PATTERN.sub(" ", raw).casefold(), raw
+
+
+def _consultant_signals(raw):
+    return bool(EMAIL_PATTERN.search(raw)) or bool(PHONE_PATTERN.search(raw))
+
+
 def _address_score(text, start, end, title):
-    context = (text[max(0, start - 140):min(len(text), end + 140)] + " " + title).casefold()
+    context, raw = _address_context(text, start, end, title)
     score = 0.55 + 0.12 * sum(term in context for term in GOOD_ADDRESS_CONTEXT)
     score -= 0.20 * sum(term in context for term in BAD_ADDRESS_CONTEXT)
+    score -= 0.20 if _consultant_signals(raw) else 0.0
     return max(0.0, min(1.0, round(score, 3)))
 
 
 def _unrelated_address_context(text, start, end, title):
-    context = (text[max(0, start - 140):min(len(text), end + 140)] + " " + title).casefold()
-    return any(term in context for term in BAD_ADDRESS_CONTEXT) and not any(term in context for term in GOOD_ADDRESS_CONTEXT)
+    context, raw = _address_context(text, start, end, title)
+    bad = any(term in context for term in BAD_ADDRESS_CONTEXT) or _consultant_signals(raw)
+    return bad and not any(term in context for term in GOOD_ADDRESS_CONTEXT)
 
 
 def _candidate_id(kind, value, source):
@@ -133,12 +169,16 @@ def _candidate_id(kind, value, source):
 
 def infer_pdf_context(ai_input, spatial_ocr=None, building_evidence=None):
     """Extract bounded, source-linked site clues without accepting them."""
-    addresses, names, coordinates, clues = [], [], [], []
+    addresses, names, coordinates, clues, excluded = [], [], [], [], []
     for page in _page_rows(ai_input, spatial_ocr or {}):
         text = page["text"]
         for match in STREET_PATTERN.finditer(text):
             value = re.sub(r"\s+", " ", match.group(0)).strip(" ,.;")
-            if DATE_PATTERN.search(value) or _unrelated_address_context(text, match.start(), match.end(), page["title"]):
+            if DATE_PATTERN.search(value):
+                continue
+            if _unrelated_address_context(text, match.start(), match.end(), page["title"]):
+                excluded.append({"address": value, "source": _source(page, value),
+                                 "reason": "Next to consultant contact details (phone, email or office); likely a consultant's address, not the site."})
                 continue
             source = _source(page, value)
             addresses.append({
@@ -161,12 +201,19 @@ def infer_pdf_context(ai_input, spatial_ocr=None, building_evidence=None):
             source = _source(page, excerpt)
             clues.append({"candidate_id": _candidate_id("orientation", excerpt, source), "kind": match.group(0).casefold(),
                           "source": source, "status": "proposed"})
-        for match in re.finditer(r"\b(?:PROJECT|SITE|DEVELOPMENT)\s*(?:NAME|TITLE)?\s*[:\-]\s*([^\n\r]{3,90})", text, re.I):
+        for match in re.finditer(r"\b(?:PROJECT|SITE|DEVELOPMENT)\s*(?:NAME|TITLE)?(?:\s*:\s*|\s+[-\u2013]\s+)([^\n\r]{3,90})", text, re.I):
             value = re.sub(r"\s+", " ", match.group(1)).strip(" .:-")
-            if value and not DATE_PATTERN.search(value):
+            if value and not DATE_PATTERN.search(value) and not SITE_NAME_REJECT.search(value):
                 source = _source(page, match.group(0))
                 names.append({"candidate_id": _candidate_id("site-name", value, source), "site_name": value,
                               "confidence": 0.65, "source": source, "status": "proposed"})
+        for match in TENANCY_PATTERN.finditer(text):
+            value = re.sub(r"\s+", " ", match.group(2)).strip(" .,-").title()
+            tenancy = re.sub(r"\s+", " ", match.group(1)).strip(" ,")
+            source = _source(page, re.sub(r"\s+", " ", match.group(0)))
+            names.append({"candidate_id": _candidate_id("site-name", value, source), "site_name": value,
+                          "tenancy": tenancy, "confidence": 0.75, "source": source, "status": "proposed",
+                          "basis": "tenancy_line"})
     def dedupe(rows, key):
         selected = {}
         for row in rows:
@@ -178,6 +225,8 @@ def infer_pdf_context(ai_input, spatial_ocr=None, building_evidence=None):
         "source_fingerprint": fingerprint({"ai_input": ai_input or {}, "spatial_ocr": spatial_ocr or {}, "building": building_evidence or {}}),
         "address_candidates": dedupe(addresses, "address"), "site_name_candidates": dedupe(names, "site_name"),
         "coordinate_candidates": dedupe(coordinates, "candidate_id"), "orientation_clues": sorted(clues, key=lambda row: row["candidate_id"]),
+        "excluded_address_candidates": [row for key, row in {row["address"].casefold(): row for row in excluded}.items()
+                                        if key not in {item["address"].casefold() for item in addresses}],
     }
 
 
@@ -222,7 +271,7 @@ def _status(result):
         return "needs_review"
     if not result.get("confirmed_address"):
         return "awaiting_address_confirmation" if result.get("pdf_context", {}).get("address_candidates") else "blocked"
-    selected = result.get("geocode", {}).get("selected_candidate_id")
+    selected = result.get("geocode", {}).get("selected_candidate_id") or result.get("cited_location")
     if selected and result.get("location", {}).get("timezone"):
         return "orientation_proposed" if result.get("map_or_survey_evidence") else "location_resolved"
     return "needs_review" if result.get("geocode", {}).get("candidates") else "inferred"
@@ -239,7 +288,7 @@ def validate_site_location_resolution(raw):
     context = result.get("pdf_context", {})
     if not isinstance(context, dict):
         raise ValueError("PDF context must be an object.")
-    for key in ("address_candidates", "site_name_candidates", "coordinate_candidates", "orientation_clues"):
+    for key in ("address_candidates", "site_name_candidates", "coordinate_candidates", "orientation_clues", "excluded_address_candidates"):
         if not isinstance(context.get(key, []), list):
             raise ValueError(f"PDF context {key} must be a list.")
     confirmed = _text(result.get("confirmed_address"))
@@ -258,9 +307,14 @@ def validate_site_location_resolution(raw):
     location = result.get("location", {})
     if not isinstance(location, dict):
         raise ValueError("Location must be an object.")
+    cited = _validate_cited_location(result.get("cited_location")) if result.get("cited_location") else {}
     if selected:
         location = {"latitude_deg": selected["latitude_deg"], "longitude_deg": selected["longitude_deg"], "state": selected["state"],
                     "locality": selected["locality"], "timezone": STATE_TIMEZONES[selected["state"]], "elevation": _validate_elevation(location.get("elevation"))}
+    elif cited:
+        location = {"latitude_deg": cited["latitude_deg"], "longitude_deg": cited["longitude_deg"], "state": cited["state"],
+                    "locality": cited["locality"], "timezone": STATE_TIMEZONES[cited["state"]], "elevation": {},
+                    "basis": "reviewer_cited_map"}
     else:
         location = {"latitude_deg": None, "longitude_deg": None, "state": "", "locality": "", "timezone": "", "elevation": {}}
     weather = result.get("weather_candidates", [])
@@ -284,6 +338,7 @@ def validate_site_location_resolution(raw):
     result["weather_candidates"] = [deepcopy(item) for item in weather if isinstance(item, dict)]
     result["selected_weather_source"] = selected_weather
     result["map_or_survey_evidence"] = evidence
+    result["cited_location"] = cited
     result["conflicts"] = [str(item)[:500] for item in result.get("conflicts", []) if _text(item)]
     result["status"] = _status(result)
     result["updated_at"] = _text(result.get("updated_at")) or now()
@@ -305,6 +360,7 @@ def confirm_address(current, address, consent):
     result.update({"confirmed_address": _text(address), "external_lookup_consent": True})
     result["geocode"] = {"provider": "G-NAF", "status": "awaiting_lookup", "candidates": [], "selected_candidate_id": ""}
     result["location"] = empty_site_location_resolution()["location"]
+    result["cited_location"] = {}
     result["weather_candidates"], result["selected_weather_source"] = [], {}
     result["updated_at"] = now()
     return validate_site_location_resolution(result)
@@ -352,6 +408,46 @@ def select_weather_source(current, source_id):
     if not selected:
         raise ValueError("Select a current compatible BOM/released-weather candidate.")
     result["selected_weather_source"] = deepcopy(selected)
+    result["updated_at"] = now()
+    return validate_site_location_resolution(result)
+
+
+def _validate_cited_location(raw):
+    """A reviewer-cited site position, used when no geocoder is configured.
+
+    The reviewer reads the position from a map or survey they can cite; the
+    tool never looks it up, so no external lookup consent is involved.
+    """
+    if not isinstance(raw, dict):
+        raise ValueError("Cited location must be an object.")
+    latitude, longitude = _number(raw.get("latitude_deg")), _number(raw.get("longitude_deg"))
+    if latitude is None or longitude is None or not (-44 <= latitude <= -9 and 110 <= longitude <= 155):
+        raise ValueError("Enter the site latitude and longitude in decimal degrees (Australia: latitude -44 to -9, longitude 110 to 155).")
+    state = _text(raw.get("state")).upper()
+    if state not in STATE_TIMEZONES:
+        raise ValueError("Choose the site's Australian state or territory.")
+    locality = _text(raw.get("locality"))
+    if not locality:
+        raise ValueError("Enter the site suburb or locality.")
+    source, citation, reviewer = _text(raw.get("source")), _text(raw.get("citation")), _text(raw.get("reviewer"))
+    if not source or not citation:
+        raise ValueError("Cite where the position was read from (map or survey, and a link or reference).")
+    if not reviewer:
+        raise ValueError("Enter a reviewer name for the cited site location.")
+    return {"latitude_deg": round(latitude, 6), "longitude_deg": round(longitude, 6), "state": state, "locality": locality,
+            "source": source[:200], "citation": citation[:500], "reviewer": reviewer[:120],
+            "declared_at": _text(raw.get("declared_at")) or now(), "status": "provisional"}
+
+
+def set_cited_location(current, address, cited, weather_candidates=None):
+    """Confirm the site from a reviewer-cited map position instead of G-NAF."""
+    if not 5 <= len(_text(address)) <= 200:
+        raise ValueError("Enter the project site (name, suburb and state) you are confirming, 5 to 200 characters.")
+    checked = _validate_cited_location(cited)
+    result = deepcopy(current or empty_site_location_resolution())
+    result.update({"confirmed_address": _text(address), "external_lookup_consent": False, "cited_location": checked})
+    result["geocode"] = {"provider": "G-NAF", "status": "not_requested", "candidates": [], "selected_candidate_id": ""}
+    result["weather_candidates"], result["selected_weather_source"] = deepcopy(weather_candidates or []), {}
     result["updated_at"] = now()
     return validate_site_location_resolution(result)
 

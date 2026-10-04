@@ -305,9 +305,66 @@ change the design):
   envelope exclusion (walkthrough finding #26).
 - **Card K — glazing/shopfront** from elevations or reviewer entry, with
   orientation; unknown orientation stays an explicit exclusion.
-- **Card L — site location → cited design day.** Typed suburb/state when the PDF
-  has no address; replace the generic `au-preliminary-v3` day with a cited
-  design day; keep the generic day only as a labelled fallback.
+- **Card L — site location → cited design day and roof sun** (Claude). Status
+  2026-10-04:
+  - **L1 site identification — done (uncommitted).**
+    `ai/site_location_resolution.py`:
+    - the street pattern no longer reads sheet text as an address ("PLAN …
+      current" was a "PL" street in the "NT");
+    - title-block boilerplate ("checked on site", "for construction") no
+      longer makes an office address look like the project's;
+    - addresses next to a phone number or email are excluded, listed with
+      their reason in `excluded_address_candidates`;
+    - tenancy lines ("TENANCY MZ01,M38, MELROSE CENTRAL") propose the centre
+      as the site name;
+    - note and revision text is rejected as a site name.
+
+    Butcher Buffet now proposes "Melrose Central" and excludes the
+    architect's Pacific Hwy address; GE detail design proposes Luddenham NSW
+    first.
+
+    Without G-NAF, a reviewer can confirm the site from a **cited map
+    position** (`set_cited_location`: latitude/longitude, state, locality,
+    source, citation, reviewer). Weather candidates are then found as for a
+    G-NAF location. Empty new fields are left out of the fingerprint, so
+    existing design-weather selections stay current.
+  - **L2a sun position — done (uncommitted).** `ai/solar_geometry.py`:
+    - hourly sun position from the NREL SPA (Reda & Andreas 2004) via
+      pvlib, matching the paper's worked example to 0.0001°;
+    - incidence cosines for N…NW walls and a flat roof on the 21st of the
+      representative month, in local clock time.
+
+    No irradiance yet.
+  - **L2b sunshine (W/m²) and L3 site design day — deferred until AIRAH DA09
+    is available (user decision 2026-10-04).** Until then the draft keeps the
+    generic `au-preliminary-v3` design day and sun profiles, labelled as
+    generic (L4).
+    - **Not to be used:** NOAA engineering weather data (user rejected it:
+      old, US-centred, unreliable for Australian sites).
+    - **When AIRAH arrives:** import it with the existing
+      `tools/import_airah_design_weather_pack.py`, select the design day
+      through `site_design_weather_resolution`, and take the sunshine source
+      from AIRAH if it provides one.
+    - **Engineer's design conditions:** the user does not know them.
+    - **Sensitivity:** the Butcher Buffet fresh-air load alone ranges from
+      6.5 to 15.0 kW across plausible Sydney design days, so the weather
+      source must be settled before claiming the result is in band.
+  - **Butcher Buffet site (user-confirmed 2026-10-04):** Shop G38/22 Lemon Tree
+    Av, Melrose Park NSW 2114 (Melrose Central). The site reader now reads
+    lettered unit numbers and "Av"; the address itself is not printed in the
+    drawing set, so a reviewer confirms it with a cited map position.
+  - **L4 labels and L5 Card K interface — waiting for Card K** (Codex is
+    editing `ai/ai_preliminary.py` and `frontend/js/app.js`). L4: scenario
+    title/source and the result say which design day and sun data were used.
+    L5: L supplies sun profiles by direction plus `horizontal`; K reads the
+    keys present. The location UI also needs a cited-position form in the
+    existing "Confirm project location" panel.
+  - **L6 AI proposal (for Card P)** — prompt draft: "Here are title-block and
+    note excerpts from one drawing set, each with page number. Which excerpt
+    names the project site (tenancy, centre or street address), and which
+    addresses belong to consultants (architect, engineer)? Return JSON
+    `{site: {text, page}, consultant_addresses: [{text, page}]}`; use only
+    the excerpts given; return `site: null` if none names the site."
 - Later: kitchen equipment from an equipment schedule (needs the equipment
   list), ventilation/exhaust for the kitchen.
 
