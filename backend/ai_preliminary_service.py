@@ -883,6 +883,7 @@ def _workspace_report(report):
         "known_exclusions": rows.get("known_exclusions", []),
         "room_names": [{"room_id": room_id, "name": name} for room_id, name in sorted(names.items())],
         "preliminary_surface_summary": report.get("preliminary_surface_summary", {}),
+        "design_conditions_basis": report.get("design_conditions_basis", {}),
         "refrigeration_process_exclusions": [{key: item.get(key) for key in ("room_name", "reason") if item.get(key) is not None}
                                               for item in report.get("refrigeration_process_exclusions", [])
                                               if isinstance(item, dict)],

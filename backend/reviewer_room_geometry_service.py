@@ -213,6 +213,36 @@ def _trace_with_current_room(trace, paths, rooms=None):
     return resolved
 
 
+def _room_trace_picker_fields(room, records, traced_areas):
+    """Add trace-area status for the room picker using the shared current-area rule."""
+    room_id = str(room.get("room_id", ""))
+    area = traced_areas.get(room_id)
+    if isinstance(area, dict) and area.get("conflict"):
+        return {**room, "needs_trace": True,
+                "trace_issue": "Current calibrated traces disagree; resolve the trace conflict."}
+    if isinstance(area, dict) and not area.get("conflict") and area.get("area_m2") is not None:
+        try:
+            value = float(area["area_m2"])
+        except (TypeError, ValueError):
+            value = 0
+        if math.isfinite(value) and value > 0:
+            return {**room, "traced_area_m2": value, "needs_trace": False, "trace_issue": ""}
+
+    matched = [row for row in records if row.get("room_id") == room_id]
+    if not matched:
+        matched = [row for row in records if room_identity(row.get("room_label", ""), row.get("level_name") or "Unassigned level")
+                   == room_identity(room.get("label", ""), room.get("level_name") or "Unassigned level")]
+    if not matched:
+        return room
+    trace = sorted(matched, key=lambda row: (row.get("freshness") == "current", row.get("page", 0)), reverse=True)[0]
+    if trace.get("freshness") != "current":
+        reason = "; ".join(trace.get("stale_reasons") or []) or "source evidence changed"
+        return {**room, "needs_trace": True, "trace_issue": f"Trace is stale: {reason}."}
+    calibration = trace.get("calibration") if isinstance(trace.get("calibration"), dict) else {}
+    reason = calibration.get("reason") or calibration.get("status") or "calibration is unresolved"
+    return {**room, "needs_trace": True, "trace_issue": f"Trace area unavailable: {str(reason).replace('_', ' ')}."}
+
+
 def _scale_denominator(value):
     match = re.search(r"(?:1\s*:\s*|scale\s*1\s*:\s*)(\d+(?:\.\d+)?)", str(value or ""), re.I)
     return float(match.group(1)) if match else None
@@ -441,6 +471,18 @@ def _response(web, project):
                     continue
                 row["edge_facings"][str(edge["index"])] = facing
     rooms, pages = _rooms(paths), _page_context(paths, web)
+    try:
+        traced_areas = current_traced_areas(paths["root"])
+    except (OSError, ValueError, TypeError, KeyError):
+        traced_areas = {}
+    canonical_records = []
+    for row in display["records"]:
+        canonical = _trace_with_current_room(row, paths, rooms)
+        if canonical:
+            canonical_records.append({**row, "room_id": canonical["room_id"],
+                                     "room_label": canonical["room_label"],
+                                     "level_name": canonical["level_name"]})
+    rooms = [_room_trace_picker_fields(room, canonical_records, traced_areas) for room in rooms]
     try:
         from ai.room_use_resolution import load_taxonomy
         uses = {key: row["label"] for key, row in load_taxonomy()["categories"].items() if key != "not_a_room"}

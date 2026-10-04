@@ -566,7 +566,43 @@ def _schedule(schedule_id, profile_id):
             "status": "provisional", "source": _source(profile_id), "citations": [], "day_profiles": day_profiles}
 
 
-def _scenario(pack, resolved=None):
+GENERIC_WEATHER_ORIGINS = {"preliminary_fallback", "unresolved", ""}
+
+
+def design_conditions_basis(resolution_artifact, site_location=None, pack_version=PACK_VERSION):
+    """Say plainly which design day, sun values and site the draft used.
+
+    The design day is site-specific only when value resolution selected a
+    cited source; the sun values are always the pack's generic façade
+    profiles until a cited site solar source exists.
+    """
+    record = next((row for row in (resolution_artifact or {}).get("records", [])
+                   if isinstance(row, dict) and row.get("target") == "scenario.weather_profile"), {})
+    origin = str(record.get("origin", ""))
+    citation = record.get("citation", {}) if isinstance(record.get("citation"), dict) else {}
+    cited = origin not in GENERIC_WEATHER_ORIGINS and bool(record.get("value"))
+    source_text = " — ".join(part for part in (citation.get("publisher", ""), citation.get("citation", "")) if part)
+    design_day = ({"site_specific": True, "origin": origin, "source": source_text or origin,
+                   "label": f"Site design day: {source_text or origin}"}
+                  if cited else
+                  {"site_specific": False, "origin": origin or "preliminary_fallback", "source": f"AI preliminary assumption pack {pack_version}",
+                   "label": f"Generic Australian cooling design day (assumption pack {pack_version}) — not site-specific"})
+    sun = {"site_specific": False, "source": f"AI preliminary assumption pack {pack_version}",
+           "directions": ["N", "E", "S", "W"],
+           "label": (f"Generic preliminary sun values by façade direction (assumption pack {pack_version}, N/E/S/W) — "
+                     "not site-specific; no flat-roof sun")}
+    location = (site_location or {}).get("location", {}) if isinstance(site_location, dict) else {}
+    address = str((site_location or {}).get("confirmed_address", "")).strip() if isinstance(site_location, dict) else ""
+    if address and location.get("latitude_deg") is not None:
+        basis = {"reviewer_cited_map": "reviewer-cited map position"}.get(location.get("basis"), "geocoded address")
+        site = {"confirmed": True, "address": address, "basis": location.get("basis", "gnaf"),
+                "label": f"Site: {address} ({basis})"}
+    else:
+        site = {"confirmed": False, "address": address, "basis": "", "label": "Site location not confirmed"}
+    return {"design_day": design_day, "sun": sun, "site": site}
+
+
+def _scenario(pack, resolved=None, basis=None):
     scenario = deepcopy(pack["scenario"])
     resolved = resolved or {}
     for key in ("indoor_dry_bulb_c", "indoor_wet_bulb_c"):
@@ -575,10 +611,13 @@ def _scenario(pack, resolved=None):
     weather = resolved.get("weather_profile")
     if isinstance(weather, dict) and isinstance(weather.get("hours"), list) and len(weather["hours"]) == 24:
         scenario = {**scenario, **weather}
+    design_day = (basis or {}).get("design_day", {})
+    title = ("Site cooling design day" if design_day.get("site_specific")
+             else "AI preliminary generic Australian cooling day (not site-specific)")
     return {"scenarios": [{
-        "scenario_id": "ai_preliminary_cooling_day", "title": "AI preliminary Australian cooling day", "mode": "cooling",
+        "scenario_id": "ai_preliminary_cooling_day", "title": title, "mode": "cooling",
         "representative_month": "January", "day_type": "weekday", "status": "provisional",
-        "source": f"AI preliminary assumption pack {pack['version']}", "citations": [],
+        "source": design_day.get("source") or f"AI preliminary assumption pack {pack['version']}", "citations": [],
         "atmospheric_pressure_kpa": {"value": scenario["pressure_kpa"], "status": "provisional", "source": _source("scenario"), "citations": []},
         "hours": [{"hour": hour, "outdoor_dry_bulb_c": {"value": point["db"], "status": "provisional", "source": _source("scenario"), "citations": []},
                    "outdoor_wet_bulb_c": {"value": point["wb"], "status": "provisional", "source": _source("scenario"), "citations": []},
@@ -801,6 +840,7 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
         airflow_resolution=airflow_artifact,
     )
     scenario_values = resolved_values["scenario"]
+    conditions_basis = design_conditions_basis(resolution_artifact, site_location, pack["version"])
     active_rows, excluded_spaces = [], []
     excluded_spaces.extend({"room_name": issue.get("label", ""), "level": issue.get("level", ""),
                             "scope": issue.get("scope", "unresolved_scope"),
@@ -1266,7 +1306,7 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
     surface_summary["excluded"] = surface_summary["discovered"] - surface_summary["included"] - surface_summary["blocked"]
     model["updated_at"] = now()
     model["source_requirements_updated_at"] = requirements["updated_at"]
-    material = {"requirements": requirements, "schedule_library": {"schema_version": 1, "updated_at": now(), "schedules": schedules}, "design_day_scenarios": _scenario(pack, scenario_values), "hourly_load_model": model,
+    material = {"requirements": requirements, "schedule_library": {"schema_version": 1, "updated_at": now(), "schedules": schedules}, "design_day_scenarios": _scenario(pack, scenario_values, conditions_basis), "hourly_load_model": model,
                 "preliminary_policy": {"pack_version": pack["version"], "mode": "ai_preliminary", "surface_ids": sorted(accepted_surface_ids), "opening_ids": sorted(accepted_opening_ids)}}
     dependency_fingerprints = dict(source_fingerprints or {})
     dependency_fingerprints.update({"preliminary_pack": fingerprint(pack), "room_use_taxonomy": room_use_artifact["taxonomy_fingerprint"], "room_use_resolution": room_use_artifact["fingerprint"], "ceiling_volume_resolution": ceiling_artifact["fingerprint"], "internal_gains_resolution": internal_artifact.get("fingerprint", ""), "airflow_resolution": airflow_artifact.get("fingerprint", ""), "ahu_resolution": ahu_artifact.get("fingerprint", ""), "plant_resolution": plant_artifact.get("fingerprint", ""), "geometry_resolution": fingerprint(geometry_resolution or {}), "thermal_surface_ledger": opaque_resolution.get("fingerprint", ""), "vision_response": fingerprint(vision or {}), "building_evidence": fingerprint(building or {}), "contractor_overrides": fingerprint(overrides),
@@ -1297,7 +1337,7 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
     return {"schema_version": 1, "status": "draft", "label": "AI preliminary estimate — not engineering reviewed or validated", "created_at": now(), "input_fingerprint": input_fingerprint,
             "pack": {"pack_id": pack["pack_id"], "version": pack["version"], "fingerprint": fingerprint(pack)}, "dependency_fingerprints": dependency_fingerprints,
             "material": material, "materialized_fields": ledger, "resolved_value_records": resolution_artifact["records"], "exclusions": exclusions, "excluded_spaces": excluded_spaces,
-            "surface_summary": surface_summary, "proposal": effective_proposal, "opaque_envelope_resolution": opaque_resolution, "room_use_resolution": room_use_artifact, "ceiling_volume_resolution": ceiling_artifact, "internal_gains_resolution": internal_artifact, "airflow_resolution": airflow_artifact, "ahu_resolution": ahu_artifact, "plant_resolution": plant_artifact, "geometry_resolution": deepcopy(geometry_resolution or {}), "value_resolution": resolution_artifact,
+            "surface_summary": surface_summary, "design_conditions_basis": conditions_basis, "proposal": effective_proposal, "opaque_envelope_resolution": opaque_resolution, "room_use_resolution": room_use_artifact, "ceiling_volume_resolution": ceiling_artifact, "internal_gains_resolution": internal_artifact, "airflow_resolution": airflow_artifact, "ahu_resolution": ahu_artifact, "plant_resolution": plant_artifact, "geometry_resolution": deepcopy(geometry_resolution or {}), "value_resolution": resolution_artifact,
             "review_queue": sorted(review_queue, key=lambda item: (item["confidence"], item["room_id"], item["field"]))}
 
 
@@ -1311,6 +1351,8 @@ def calculate(input_set, safety_factor_policy=None):
     report["preliminary_input_set_fingerprint"] = input_set["input_fingerprint"]
     report["assumption_coverage"] = {"field_count": len(input_set["materialized_fields"]), "low_confidence_count": len(input_set["review_queue"]), "excluded_component_count": len(input_set["exclusions"])}
     report["preliminary_surface_summary"] = deepcopy(input_set.get("surface_summary", {}))
+    report["design_conditions_basis"] = deepcopy(input_set.get("design_conditions_basis")
+                                                 or design_conditions_basis(input_set.get("value_resolution", {})))
     report["value_resolution"] = deepcopy(input_set.get("value_resolution", {}))
     report["safety_factor_resolution"] = deepcopy(input_set.get("safety_factor_resolution", {}))
     report["value_resolution_coverage"] = deepcopy(input_set.get("value_resolution", {}).get("coverage_summary", {}))

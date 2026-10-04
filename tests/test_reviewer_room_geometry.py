@@ -2,6 +2,7 @@
 """Analytical and integration checks for proposal-only room-boundary traces."""
 
 import unittest
+from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import json
@@ -57,16 +58,16 @@ class ReviewerRoomGeometryTests(unittest.TestCase):
                          ["W", "S", "E", "N"])
 
     def test_old_format_artifact_revalidation_preserves_fingerprint(self):
-        old = reviewer_room_geometry.validate_artifact({"records": [self.trace]})
-        old.pop("page_north", None)
-        old.pop("rooms", None)
-        old["fingerprint"] = reviewer_room_geometry.fingerprint({
-            key: value for key, value in old.items() if key != "fingerprint"
-        })
+        old = {"schema_version": reviewer_room_geometry.SCHEMA_VERSION, "records": [deepcopy(self.trace)]}
+        old["fingerprint"] = reviewer_room_geometry.fingerprint(old)
         checked = reviewer_room_geometry.validate_artifact(old)
         self.assertEqual(checked["fingerprint"], old["fingerprint"])
         self.assertNotIn("page_north", checked)
         self.assertNotIn("rooms", checked)
+        self.assertEqual(checked["records"][0]["edges"], [{"index": index, "boundary": "unknown"} for index in range(4)])
+        self.assertEqual(checked["records"][0]["roof"], "unknown")
+        self.assertEqual(checked["records"][0]["envelope_reviewer"], "")
+        self.assertEqual(checked["records"][0]["envelope_declared_at"], "")
 
     def test_north_arrow_bearing_and_page_declaration_validation(self):
         self.assertEqual(reviewer_room_geometry.page_up_bearing_from_north_arrow([[10, 20], [10, 5]]), 0)
@@ -89,6 +90,42 @@ class ReviewerRoomGeometryTests(unittest.TestCase):
                       "reviewer": "QA", "declared_at": "now"}}}), encoding="utf-8")
             second = ai_preliminary_service._sources(paths)["reviewer_room_geometry_north"]
         self.assertNotEqual(first, second)
+
+    def test_legacy_records_only_artifact_keeps_fingerprint_and_north_round_trips(self):
+        legacy = reviewer_room_geometry.validate_artifact({"records": [self.trace]})
+        legacy.pop("page_north", None)
+        legacy.pop("rooms", None)
+        # This is the exact persisted legacy shape: records only plus its saved fingerprint.
+        saved_fingerprint = legacy["fingerprint"]
+        checked = reviewer_room_geometry.validate_artifact(legacy)
+        self.assertNotIn("rooms", checked)
+        self.assertNotIn("page_north", checked)
+        self.assertEqual(checked["fingerprint"], saved_fingerprint)
+
+        north = {"1": {"page": 1, "plan_up_azimuth_deg": 0,
+                        "source": "reviewer_typed_page_up_bearing", "reviewer": "QA", "declared_at": "now"}}
+        with_north = reviewer_room_geometry.validate_artifact({"records": [self.trace], "page_north": north})
+        self.assertEqual(reviewer_room_geometry.validate_artifact(with_north)["page_north"], north)
+        self.assertNotIn("rooms", reviewer_room_geometry.validate_artifact({"records": [], "rooms": []}))
+
+    def test_room_picker_uses_only_current_calibrated_trace_area(self):
+        room = {"room_id": "room-shop", "label": "Shop", "level_name": "Ground", "needs_trace": True}
+        current = reviewer_room_geometry_service._room_trace_picker_fields(
+            room, [{"room_id": "room-shop", "freshness": "current", "calibration": {"status": "agreed"}}],
+            {"room-shop": {"area_m2": 30.78, "calibration_status": "agreed"}},
+        )
+        self.assertEqual(current["traced_area_m2"], 30.78)
+        self.assertFalse(current["needs_trace"])
+        stale = reviewer_room_geometry_service._room_trace_picker_fields(
+            room, [{"room_id": "room-shop", "freshness": "stale", "stale_reasons": ["vector changed"]}], {},
+        )
+        self.assertTrue(stale["needs_trace"])
+        self.assertIn("Trace is stale: vector changed", stale["trace_issue"])
+        uncalibrated = reviewer_room_geometry_service._room_trace_picker_fields(
+            room, [{"room_id": "room-shop", "freshness": "current", "calibration": {"status": "unresolved", "reason": "declared_scale_missing"}}], {},
+        )
+        self.assertTrue(uncalibrated["needs_trace"])
+        self.assertIn("declared scale missing", uncalibrated["trace_issue"])
 
     def test_workspace_shows_single_legacy_glazing_option_and_external_edge_facing(self):
         with TemporaryDirectory() as temporary:
@@ -209,6 +246,9 @@ class ReviewerRoomGeometryTests(unittest.TestCase):
         checked = reviewer_room_geometry.validate_artifact({"records": [self.trace]})["records"][0]
         self.assertEqual(checked["edges"], [{"index": index, "boundary": "unknown"} for index in range(4)])
         self.assertEqual(checked["roof"], "unknown")
+        defaults = reviewer_room_geometry.validate_envelope_classification([], "unknown", 4)
+        self.assertEqual(defaults["edges"], [{"index": index, "boundary": "unknown"} for index in range(4)])
+        self.assertEqual(defaults["roof"], "unknown")
         for edges, roof in (([{"index": 4, "boundary": "external"}], "unknown"),
                             ([{"index": 0, "boundary": "party_wall"}], "unknown"),
                             ([], "pitched")):

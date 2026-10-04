@@ -599,6 +599,20 @@
             <label for="siteLocationAddress">Confirmed project address</label><input id="siteLocationAddress" placeholder="Street address, suburb, state, postcode" autocomplete="street-address">
             <label class="ai-checkbox-row"><input id="siteLocationConsent" type="checkbox"><span><b>Confirm this address and approve the location lookup</b><small>G-NAF and approved government data are used server-side. No credential is exposed in this browser.</small></span></label>
             <div class="bar"><button class="btn ghost mini" id="btnConfirmSiteLocation" type="button">Save confirmed address</button><button class="btn key mini" id="btnResolveSiteLocation" type="button">Resolve location</button><span id="siteLocationStatus" role="status" aria-live="polite">Find site clues after PDF analysis.</span></div>
+            <details id="siteCitedLocation">
+              <summary>Confirm the site from a map position (no address lookup)</summary>
+              <p class="fine">Use this when the address lookup is not available. Read the site's position from a map you can cite, and enter the confirmed site above (for example "Shop G38/22 Lemon Tree Av, Melrose Park NSW 2114").</p>
+              <div class="requirements-form">
+                <label for="siteCitedLatitude">Latitude (decimal degrees)<input id="siteCitedLatitude" inputmode="decimal" placeholder="e.g. -33.8135"></label>
+                <label for="siteCitedLongitude">Longitude (decimal degrees)<input id="siteCitedLongitude" inputmode="decimal" placeholder="e.g. 151.0716"></label>
+                <label for="siteCitedState">State or territory<select id="siteCitedState"><option value="">Choose</option><option>NSW</option><option>VIC</option><option>QLD</option><option>SA</option><option>WA</option><option>TAS</option><option>ACT</option><option>NT</option></select></label>
+                <label for="siteCitedLocality">Suburb or locality<input id="siteCitedLocality" placeholder="e.g. Melrose Park"></label>
+                <label for="siteCitedSource">Map or survey source<input id="siteCitedSource" placeholder="e.g. NSW Spatial Services SIX Maps"></label>
+                <label for="siteCitedCitation">Link or reference<input id="siteCitedCitation" placeholder="Map link or survey reference"></label>
+                <label for="siteCitedReviewer">Your name or initials<input id="siteCitedReviewer" autocomplete="name"></label>
+              </div>
+              <div class="bar"><button class="btn key mini" id="btnSaveCitedSiteLocation" type="button">Save cited site location</button></div>
+            </details>
             <label for="siteLocationCandidate">Returned G-NAF address candidate</label><select id="siteLocationCandidate"><option value="">Resolve location to retrieve candidates</option></select>
             <div id="siteLocationResults" class="review-list" aria-live="polite"></div>
             <details id="ventilationRulesContext" open>

@@ -182,9 +182,19 @@ def validate_artifact(raw):
         # Only present once a reviewer adds a room, so existing artifacts keep
         # their fingerprints.
         result["rooms"] = rooms
-    elif "rooms" in raw:
-        result["rooms"] = []
-    result["fingerprint"] = fingerprint(result)
+    # Card I's explicit defaults are useful to downstream consumers, but are
+    # not new evidence and must not change a legacy record's fingerprint.
+    fingerprint_basis = deepcopy(result)
+    for record in fingerprint_basis["records"]:
+        if not any(edge["boundary"] != "unknown" for edge in record.get("edges", [])):
+            record.pop("edges", None)
+        if record.get("roof") == "unknown":
+            record.pop("roof", None)
+        if not record.get("envelope_reviewer"):
+            record.pop("envelope_reviewer", None)
+        if not record.get("envelope_declared_at"):
+            record.pop("envelope_declared_at", None)
+    result["fingerprint"] = fingerprint(fingerprint_basis)
     return result
 
 

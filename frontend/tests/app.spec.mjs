@@ -1529,10 +1529,14 @@ test("project load renders room confirmation from compact preliminary data and k
       review_queue: [], confirmed_rooms: [], preliminary_surface_summary: {included: 0, blocked: 0, excluded: 0}}};
   const loadedUrls = [];
   const actions = [];
+  let releaseFreshness;
+  const freshnessGate = new Promise(resolve => { releaseFreshness = resolve; });
   await page.route("**/api/ai-preliminary-model?project_id=demo-project**", route => {
     const url = route.request().url(); loadedUrls.push(url);
-    return route.fulfill({json: url.includes("check_freshness=1")
-      ? {...compact, status: "current", freshness_pending: false} : compact});
+    if (url.includes("check_freshness=1")) return freshnessGate.then(() => route.fulfill({json: {
+      ...compact, status: "current", freshness_pending: false,
+    }}));
+    return route.fulfill({json: compact});
   });
   await page.route("**/api/ai-preliminary-model", route => {
     const body = route.request().postDataJSON();
@@ -1560,8 +1564,14 @@ test("project load renders room confirmation from compact preliminary data and k
   const block = page.locator("#roomScopeConfirmation");
   await expect(block).toContainText("Bar");
   await expect(block.locator('[data-room-scope-key="room-use:level-2:kitchen"] [data-room-scope-trace]')).toBeVisible();
+  await expect(block.locator("p[data-room-scope-status]")).toContainText("Checking whether the draft is up to date…");
+  await expect(block.locator("[data-room-scope-confirm]")).toBeDisabled();
+  await expect(block.locator("[data-room-scope-calculate]")).toBeDisabled();
   await expect.poll(() => loadedUrls.some(url => url.includes("check_freshness=1"))).toBe(true);
+  releaseFreshness();
   await expect(page.locator("#aiPreliminaryStatus")).toContainText("current");
+  await expect(block.locator("[data-room-scope-confirm]")).toBeEnabled();
+  await expect(block.locator("p[data-room-scope-status]")).not.toContainText("Checking whether");
   await expect(block.locator("[data-room-scope-calculate]")).toBeDisabled();
   await block.locator("[data-room-scope-reviewer]").fill("QA");
   await block.locator("[data-room-scope-confirm]").click();
@@ -1572,6 +1582,63 @@ test("project load renders room confirmation from compact preliminary data and k
   expect(actions.at(-1).response_view).toBe("workspace");
   await block.locator('[data-room-scope-key="room-use:level-2:kitchen"] [data-room-scope-trace]').click();
   await expect(page.locator("#reviewerRoomGeometryWorkspace [data-geometry-room]")).toHaveValue(kitchenId);
+});
+
+test("freshness check failure re-enables confirmed room-scope actions and explains the error", async ({page}) => {
+  await mockApi(page);
+  const confirmed = roomScopeState("confirmed");
+  const compact = {id:"demo-project",settings:{},run:{},status:"freshness_pending",freshness_pending:true,
+    room_scope:confirmed,artifact_links:{},hourly_ai_preliminary_load_report:{label:"Draft",included_scope_peak:{design_total_kw:1},known_exclusions:[],unresolved_room_inputs:[],review_queue:[],confirmed_rooms:[]}};
+  let releaseFreshness;
+  const freshnessGate=new Promise(resolve=>{releaseFreshness=resolve;});
+  await page.route("**/api/ai-preliminary-model?project_id=demo-project**", route => {
+    const url=route.request().url();
+    return url.includes("check_freshness=1")
+      ? freshnessGate.then(()=>route.fulfill({status:503,json:{error:"temporary database error"}}))
+      : route.fulfill({json:compact});
+  });
+  await page.goto("/");
+  await page.evaluate(() => { DATA={id:"demo-project"}; show("vRes"); loadAiPreliminary(); });
+  const block=page.locator("#roomScopeConfirmation");
+  await expect(block.locator("[data-room-scope-confirm]")).toBeDisabled();
+  await expect(block.locator("[data-room-scope-calculate]")).toBeDisabled();
+  releaseFreshness();
+  await expect(block.locator("p[data-room-scope-status]")).toContainText("Could not check draft freshness: temporary database error");
+  await expect(block.locator("[data-room-scope-confirm]")).toBeEnabled();
+  await expect(block.locator("[data-room-scope-calculate]")).toBeEnabled();
+});
+
+test("guided area blocker names untraced rooms and opens the first trace target", async ({page}) => {
+  await mockApi(page);
+  const roomId="room-use:level-2:bar";
+  const kitchenId="room-use:level-2:kitchen";
+  const shopId="room-use:level-2:shop";
+  let roomScopeWasEmptyAtResolve = false;
+  await page.route("**/api/model-input-resolution", async route => {
+    roomScopeWasEmptyAtResolve = await page.locator("#roomScopeConfirmation").evaluate(node => !node.innerHTML.trim());
+    return route.fulfill({status:422,json:{
+    code:"room_area_unresolved", error:"No room has a validated area.", message:"No room has a validated area.",
+    remediation:"For Bar, Kitchen, Shop: trace and calibrate each room, accept its area in the calculator draft, then rebuild model inputs.",
+    affected_component_ids:[roomId,kitchenId,shopId],
+  }});
+  });
+  await page.route("**/api/skill-workflow**", route => route.fulfill({json:{status:"needs_review",stages:[],subskills:[]}}));
+  const traceContext=mechanicalTraceContext([{room_id:roomId,label:"Bar",level_name:"Level 2",needs_trace:true}]);
+  await page.route("**/api/calculation-input-evidence?project_id=demo-project", route => route.fulfill({json:{status:"current",
+    calculation_input_evidence:{fingerprint:"e",candidates:[],geometry_resolution:{entities:[],summary:{},deterministic_proof_diagnostics:{pages:[],rooms:[]}},opening_register:{openings:[]}},
+    summary:{candidate_count:0,status_counts:{},category_counts:{}},component_interpretations:{}}}));
+  await page.route("**/api/reviewer-room-geometry?project_id=demo-project", route => route.fulfill({json:traceContext}));
+  await page.route("**/fake-plan.svg", route => route.fulfill({contentType:"image/svg+xml",body:'<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="800"><rect width="1000" height="800" fill="#eee"/></svg>'}));
+  await page.goto("/");
+  await page.evaluate(() => {DATA={id:"demo-project"};show("vRes");requiredElement("visionPanel").classList.remove("hide");requiredElement("designRequirementsPanel").classList.remove("hide");requiredElement("workflowSkeleton").classList.remove("hide");});
+  await page.locator("#btnGuidedResolveModelInputs").click();
+  const status=page.locator("#guidedModelInputsStatus");
+  await expect(status).toContainText("For Bar, Kitchen, Shop: trace and calibrate each room");
+  expect(roomScopeWasEmptyAtResolve).toBe(true);
+  await expect(page.locator("#roomScopeConfirmation")).toBeEmpty();
+  await expect(status.locator("[data-guided-trace-rooms]")).toHaveText("Trace rooms");
+  await status.locator("[data-guided-trace-rooms]").click();
+  await expect(page.locator("#reviewerRoomGeometryWorkspace [data-geometry-room]")).toHaveValue(roomId);
 });
 
 async function renderRoomScope(page, state){
@@ -1694,6 +1761,23 @@ test("mechanical-only set offers services plans and lets a reviewer add a room w
   await expect(workspace.locator(".reviewer-geometry-warning").first()).toContainText("tracing on a services plan");
 });
 
+test("trace picker shows calibrated area and explains stale or uncalibrated traces", async ({page}) => {
+  const context=mechanicalTraceContext([
+    {room_id:"room-current",label:"Bar",level_name:"Level 2",needs_trace:false,traced_area_m2:30.78},
+    {room_id:"room-stale",label:"Kitchen",level_name:"Level 2",needs_trace:true,trace_issue:"Trace is stale: Source PDF changed."},
+    {room_id:"room-uncalibrated",label:"Shop",level_name:"Level 2",needs_trace:true,trace_issue:"Trace area unavailable: declared scale missing."},
+  ]);
+  await page.route("**/api/reviewer-room-geometry?project_id=demo-project",route=>route.fulfill({json:context}));
+  await openTraceWorkspace(page);
+  await page.evaluate(()=>loadReviewerRoomGeometryWorkspace());
+  const picker=page.locator("#reviewerRoomGeometryWorkspace [data-geometry-room]");
+  await expect(picker.locator("option[value='room-current']")).toContainText("Bar");
+  await expect(picker.locator("option[value='room-current']")).toContainText("traced 30.78 m²");
+  await expect(picker.locator("option[value='room-current']")).not.toContainText("area unresolved");
+  await expect(picker.locator("option[value='room-stale']")).toContainText("area unresolved — Trace is stale: Source PDF changed.");
+  await expect(picker.locator("option[value='room-uncalibrated']")).toContainText("area unresolved — Trace area unavailable: declared scale missing.");
+});
+
 test("services plan without printed dimensions tells the reviewer to upload the architectural drawings", async ({ page }) => {
   const context = mechanicalTraceContext([{room_id: "room-use:level-2:kiosk", label: "Kiosk", level_name: "Level 2", needs_trace: true, reviewer_added: true}]);
   context.pages[0] = {...context.pages[0], printed_dimensions_found: false,
@@ -1726,4 +1810,62 @@ test("room confirmation lists untraced rooms as not in the total and cannot incl
   await block.locator("[data-room-scope-confirm]").click();
   await expect.poll(() => confirmPayload?.action).toBe("confirm_room_scope");
   expect(confirmPayload.rows).toContainEqual({key: "room-use:level-2:kitchen", include: false, reason: ""});
+});
+
+async function showSiteLocationPanel(page, data){
+  await page.goto("/");
+  await page.evaluate(input => {
+    DATA = {id: "demo-project"}; show("vRes");
+    let node = requiredElement("siteLocationSection");
+    while (node) { node.classList?.remove("hide"); if (node.tagName === "DETAILS") node.open = true; node = node.parentElement; }
+    requiredElement("siteCitedLocation").open = true;
+    drawSiteLocation(input);
+  }, data);
+}
+
+test("project location shows the tenancy site clue and excluded consultant address, and saves a cited map position", async ({ page }) => {
+  await mockApi(page);
+  const inferred = {status: "awaiting_address_confirmation", site_location_resolution: {status: "awaiting_address_confirmation", pdf_context: {
+    address_candidates: [], excluded_address_candidates: [{address: "211-223 Pacific Hwy, North Sydney NSW 2060", source: {page: 3},
+      reason: "Next to consultant contact details (phone, email or office); likely a consultant's address, not the site."}],
+    site_name_candidates: [{site_name: "Melrose Central", tenancy: "MZ01,M38", confidence: 0.75, source: {page: 20, drawing_number: "26.02", excerpt: "TENANCY MZ01,M38, MELROSE CENTRAL"}}]},
+    geocode: {candidates: []}, location: {}}};
+  let payload;
+  await page.route("**/api/site-location-resolution", route => { payload = route.request().postDataJSON();
+    return route.fulfill({json: {status: "location_resolved", site_location_resolution: {status: "location_resolved", confirmed_address: payload.confirmed_address,
+      pdf_context: inferred.site_location_resolution.pdf_context, geocode: {candidates: []},
+      location: {latitude_deg: -33.81, longitude_deg: 151.07, state: "NSW", locality: "Melrose Park", timezone: "Australia/Sydney", basis: "reviewer_cited_map", elevation: {}},
+      cited_location: {source: "Map service", citation: "https://maps.example/lemon-tree-av", reviewer: "QA"}}}}); });
+  await showSiteLocationPanel(page, inferred);
+  const panel = page.locator("#siteLocationSection");
+  await expect(panel.locator("[data-site-name-clue]")).toContainText("Melrose Central · tenancy MZ01,M38");
+  await expect(panel.locator("[data-excluded-address]")).toContainText("Pacific Hwy");
+  await panel.locator("#siteLocationAddress").fill("Shop G38/22 Lemon Tree Av, Melrose Park NSW 2114");
+  await panel.locator("#siteCitedLatitude").fill("-33.81");
+  await panel.locator("#siteCitedLongitude").fill("151.07");
+  await panel.locator("#siteCitedState").selectOption("NSW");
+  await panel.locator("#siteCitedLocality").fill("Melrose Park");
+  await panel.locator("#siteCitedSource").fill("Map service");
+  await panel.locator("#siteCitedCitation").fill("https://maps.example/lemon-tree-av");
+  await panel.locator("#siteCitedReviewer").fill("QA");
+  await panel.locator("#btnSaveCitedSiteLocation").click();
+  await expect.poll(() => payload?.action).toBe("set_cited_location");
+  expect(payload).toMatchObject({confirmed_address: "Shop G38/22 Lemon Tree Av, Melrose Park NSW 2114", latitude_deg: -33.81, longitude_deg: 151.07,
+    state: "NSW", locality: "Melrose Park", source: "Map service", citation: "https://maps.example/lemon-tree-av", reviewer: "QA"});
+  await expect(panel.locator("[data-resolved-location]")).toContainText("from a reviewer-cited map position (Map service, https://maps.example/lemon-tree-av, QA)");
+});
+
+test("the draft result says which design day, sun values and site it used", async ({ page }) => {
+  await mockApi(page);
+  await renderRoomScope(page, {candidates: []});
+  await page.evaluate(() => drawAiPreliminary({settings: {}, run: {}, room_scope: {}, hourly_ai_preliminary_load_report: {
+    label: "AI preliminary estimate — not engineering reviewed or validated", included_scope_peak: {design_total_kw: 37.4},
+    design_conditions_basis: {
+      design_day: {site_specific: false, label: "Generic Australian cooling design day (assumption pack au-preliminary-v3) — not site-specific"},
+      sun: {site_specific: false, label: "Generic preliminary sun values by façade direction (assumption pack au-preliminary-v3, N/E/S/W) — not site-specific; no flat-roof sun"},
+      site: {confirmed: true, label: "Site: Shop G38/22 Lemon Tree Av, Melrose Park NSW 2114 (reviewer-cited map position)"}}}}));
+  const basis = page.locator("#aiPreliminaryResults [data-design-conditions-basis]");
+  await expect(basis).toContainText("Generic Australian cooling design day");
+  await expect(basis).toContainText("not site-specific; no flat-roof sun");
+  await expect(basis).toContainText("Site: Shop G38/22 Lemon Tree Av");
 });

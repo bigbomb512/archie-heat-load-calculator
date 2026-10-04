@@ -12,6 +12,7 @@ let ANALYSIS_IN_PROGRESS = false, CONFIRMATION_IN_PROGRESS = false;
 let CALCULATOR_DRAFT = null, DRAFT_PREVIEW_TOKEN = "", DRAFT_DIRTY = false;
 let DRAFT_REVIEW_SESSION = {projectId: null, reviewer: "", source: ""};
 let ROOM_SCOPE_REVIEWER = {projectId: null, reviewer: ""};
+let ROOM_SCOPE_CURRENT_STATE = {};
 let ENVELOPE_LIBRARY = {constructions: [], windows: [], shading_records: []}, ENVELOPE_MODEL = {surfaces: []};
 let GLAZING_GATE = {}, SHADING_GATE = {}, GROUND_CONTACT_GATE = {};
 let CALCULATOR_INPUT_SET = null, CALCULATOR_INPUT_OVERRIDES = {revision: 0, records: []}, PROJECT_CONTEXT = {};
@@ -21,7 +22,7 @@ let CALCULATOR_INPUT_SET = null, CALCULATOR_INPUT_OVERRIDES = {revision: 0, reco
 let CALCULATOR_INPUTS_AVAILABLE = false, CALCULATOR_EXCEPTION_ROWS = [], CALCULATOR_EXCEPTION_TOTAL = 0;
 let VISION_EXTRACTION = null, VISION_POLL = null, ROOM_INFERENCE_POLL = null;
 let WINDOW_SCAN_POLL = null, SITE_ORIENTATION = {};
-let ROOM_GEOMETRY_CONTEXT = null, ROOM_TRACE_STATE = null;
+let ROOM_GEOMETRY_CONTEXT = null, ROOM_TRACE_STATE = null, ROOM_GEOMETRY_LOAD = null;
 let AI_PRELIMINARY_LOAD_SEQUENCE = 0;
 const CONTRACTOR_WORKFLOW_STORAGE_KEY = "archie-contractor-workflow-stage";
 const WORKFLOW_SKELETON_STORAGE_KEY = "archie-workflow-skeleton-state";
@@ -930,6 +931,7 @@ requiredElement("btnConfirmSiteLocation").addEventListener("click", confirmSiteL
 requiredElement("btnResolveSiteLocation").addEventListener("click", resolveSiteLocation);
 requiredElement("btnSaveVentilationRulesContext").addEventListener("click", saveVentilationRulesContext);
 requiredElement("btnAcceptSiteMapSurvey").addEventListener("click", acceptSiteMapSurvey);
+requiredElement("btnSaveCitedSiteLocation").addEventListener("click", saveCitedSiteLocation);
 requiredElement("btnSetSiteDesignWeatherBasis").addEventListener("click", setSiteDesignWeatherBasis);
 requiredElement("btnResolveSiteDesignWeather").addEventListener("click", resolveSiteDesignWeather);
 requiredElement("btnSelectSiteDesignWeatherCooling").addEventListener("click", () => selectSiteDesignWeather("cooling"));
@@ -1075,9 +1077,15 @@ async function guidedResolveModelInputs(){
     await loadAiPreliminary();
   } catch (error) {
     const detail = error?.resolver || {};
-    status.textContent = detail.code === "room_inference_pending"
-      ? "Room detection is still running. This action will be available again when it finishes."
-      : "Resolver could not complete; review the visible exception and remediation links.";
+    if (detail.code === "room_area_unresolved" && detail.remediation && detail.affected_component_ids?.length) {
+      const firstRoom = detail.affected_component_ids[0];
+      status.innerHTML = `${esc(detail.remediation)} <button class="btn ghost mini" type="button" data-guided-trace-rooms>Trace rooms</button>`;
+      status.querySelector("[data-guided-trace-rooms]")?.addEventListener("click", () => openRoomForTracing(firstRoom));
+    } else {
+      status.textContent = detail.code === "room_inference_pending"
+        ? "Room detection is still running. This action will be available again when it finishes."
+        : "Resolver could not complete; review the visible exception and remediation links.";
+    }
     renderModelInputError(detail, error?.message || "The consolidated resolver could not complete.");
     toast("Model input resolution", detail.remediation || error.message);
   } finally {
@@ -1567,9 +1575,13 @@ function drawSiteLocation(data){
   requiredElement("siteLocationCandidate").innerHTML = `<option value="">${(geocode.candidates || []).length ? "Choose the exact returned address" : "Resolve location to retrieve candidates"}</option>${(geocode.candidates || []).map(row => `<option value="${esc(row.candidate_id)}">${esc(row.formatted_address)} · ${esc(row.locality || row.state || "Australian location")}</option>`).join("")}`;
   requiredElement("siteLocationCandidate").value = geocode.selected_candidate_id || "";
   const addressRows = (context.address_candidates || []).map(row => `<article class="review-item"><div><b>PDF address clue · ${esc(row.confidence)}</b><span>${esc(row.address)}</span><small>${esc(row.source?.drawing_number || "PDF page")} · page ${esc(row.source?.page || "?")} · ${esc(row.source?.excerpt || "")}</small></div></article>`).join("");
+  const nameRows = (context.site_name_candidates || []).slice(0, 3).map(row => `<article class="review-item" data-site-name-clue><div><b>PDF site-name clue · ${esc(row.confidence)}</b><span>${esc(row.site_name)}${row.tenancy ? ` · tenancy ${esc(row.tenancy)}` : ""}</span><small>${esc(row.source?.drawing_number || "PDF page")} · page ${esc(row.source?.page || "?")} · ${esc(row.source?.excerpt || "")}</small></div></article>`).join("");
+  const excludedRows = (context.excluded_address_candidates || []).map(row => `<article class="review-item" data-excluded-address><div><b>Not the site (likely a consultant's address)</b><span>${esc(row.address)}</span><small>${esc(row.reason || "")} · page ${esc(row.source?.page || "?")}</small></div></article>`).join("");
   const resolved = location.location || {};
-  const locationRow = resolved.latitude_deg == null ? "" : `<article class="review-item"><div><b>Resolved location</b><span>${esc(resolved.locality || "Locality unavailable")} · ${esc(resolved.state || "state unavailable")} · ${esc(resolved.timezone || "timezone unavailable")}</span><small>${esc(resolved.latitude_deg)}, ${esc(resolved.longitude_deg)}${resolved.elevation?.elevation_m == null ? " · elevation pending" : ` · ${esc(resolved.elevation.elevation_m)} m cited elevation`}</small></div></article>`;
-  requiredElement("siteLocationResults").innerHTML = addressRows + locationRow || `<p class="fine">No address clue was found. Enter the confirmed project address directly.</p>`;
+  const cited = location.cited_location || {};
+  const basis = resolved.basis === "reviewer_cited_map" ? ` · from a reviewer-cited map position (${esc(cited.source || "")}${cited.citation ? `, ${esc(cited.citation)}` : ""}${cited.reviewer ? `, ${esc(cited.reviewer)}` : ""})` : "";
+  const locationRow = resolved.latitude_deg == null ? "" : `<article class="review-item" data-resolved-location><div><b>Resolved location${location.confirmed_address ? ` · ${esc(location.confirmed_address)}` : ""}</b><span>${esc(resolved.locality || "Locality unavailable")} · ${esc(resolved.state || "state unavailable")} · ${esc(resolved.timezone || "timezone unavailable")}</span><small>${esc(resolved.latitude_deg)}, ${esc(resolved.longitude_deg)}${basis}${resolved.elevation?.elevation_m == null ? " · elevation pending" : ` · ${esc(resolved.elevation.elevation_m)} m cited elevation`}</small></div></article>`;
+  requiredElement("siteLocationResults").innerHTML = locationRow + nameRows + addressRows + excludedRows || `<p class="fine">No address clue was found. Enter the confirmed project address directly.</p>`;
 }
 
 async function siteLocationAction(payload){
@@ -1605,6 +1617,17 @@ async function resolveSiteLocation(){
 async function selectSiteWeather(){
   // Kept only for external integrations that still call this legacy helper.
   return resolveSiteDesignWeather();
+}
+
+async function saveCitedSiteLocation(){
+  try {
+    await siteLocationAction({action:"set_cited_location", confirmed_address:requiredElement("siteLocationAddress").value.trim(),
+      latitude_deg:Number(requiredElement("siteCitedLatitude").value), longitude_deg:Number(requiredElement("siteCitedLongitude").value),
+      state:requiredElement("siteCitedState").value, locality:requiredElement("siteCitedLocality").value.trim(),
+      source:requiredElement("siteCitedSource").value.trim(), citation:requiredElement("siteCitedCitation").value.trim(),
+      reviewer:requiredElement("siteCitedReviewer").value.trim()});
+    toast("Site location confirmed", "The site position is saved with its citation. The draft still uses the generic design day until a licensed design-weather source is added.");
+  } catch (error) { toast("Project location", error.message); }
 }
 
 async function acceptSiteMapSurvey(){
@@ -1823,6 +1846,7 @@ async function loadAiPreliminary(){
     if (!response.ok || data.error) throw new Error(data.error || "Could not load the AI preliminary model.");
     if (DATA?.id !== projectId || AI_PRELIMINARY_LOAD_SEQUENCE !== sequence) return;
     drawAiPreliminary(data);
+    if (data.freshness_pending) drawRoomScopeConfirmation({...data.room_scope, freshness_pending: true});
     if (data.freshness_pending) refreshAiPreliminaryFreshness(projectId, sequence);
     loadRoomUseResolution();
     loadCeilingVolumeResolution();
@@ -1835,10 +1859,14 @@ async function refreshAiPreliminaryFreshness(projectId, sequence){
     const response = await fetch(`/api/ai-preliminary-model?project_id=${encodeURIComponent(projectId)}&view=workspace&check_freshness=1`);
     const data = await response.json();
     if (!response.ok || data.error) throw new Error(data.error || "Could not check preliminary-model freshness.");
-    if (DATA?.id === projectId && AI_PRELIMINARY_LOAD_SEQUENCE === sequence) drawAiPreliminaryStatus(data);
+    if (DATA?.id === projectId && AI_PRELIMINARY_LOAD_SEQUENCE === sequence) {
+      drawAiPreliminaryStatus(data);
+      drawRoomScopeConfirmation({...ROOM_SCOPE_CURRENT_STATE, ...(data.room_scope || {}), freshness_pending: false, freshness_error: ""});
+    }
   } catch (error) {
     if (DATA?.id === projectId && AI_PRELIMINARY_LOAD_SEQUENCE === sequence) {
       requiredElement("aiPreliminaryStatus").textContent = `Freshness check unavailable · ${error.message}`;
+      drawRoomScopeConfirmation({...ROOM_SCOPE_CURRENT_STATE, freshness_pending: false, freshness_error: error.message});
     }
   }
 }
@@ -2034,6 +2062,7 @@ function drawAiPreliminary(data){
   requiredElement("aiPreliminaryResults").innerHTML = report.label ? `
     <article class="review-item"><div><b>${esc(report.label)}</b><span>Included-scope peak: ${peak.design_total_kw ?? "—"} kW. Low-confidence assumptions: ${coverage.low_confidence_count ?? queue.length}. Unsupported components remain explicit exclusions.</span></div></article>
     ${(report.confirmed_rooms || []).length ? `<article class="review-item" data-confirmed-rooms><div><b>Rooms in this total</b><ul class="audit-list">${report.confirmed_rooms.map(room => `<li>${esc(room.label)} — ${room.area_m2 != null ? `${esc(room.area_m2)} m²` : "no area"} · ${esc(roomScopeOriginLabel(room.area_origin))}${room.source_pages?.length ? ` · p. ${esc(room.source_pages.join(", "))}` : ""}</li>`).join("")}</ul>${report.room_scope_confirmation?.reviewer ? `<span>Room list confirmed by ${esc(report.room_scope_confirmation.reviewer)}.</span>` : ""}</div></article>` : ""}
+    ${report.design_conditions_basis?.design_day ? `<article class="review-item" data-design-conditions-basis><div><b>Weather and site used</b><ul class="audit-list"><li>${esc(report.design_conditions_basis.design_day.label)}</li><li>${esc(report.design_conditions_basis.sun?.label || "")}</li><li>${esc(report.design_conditions_basis.site?.label || "")}</li></ul></div></article>` : ""}
     ${excludedSummary.length ? `<article class="review-item"><div><b>Not included in this total</b><ul class="audit-list">${excludedSummary.map(line => `<li>${esc(line)}</li>`).join("")}</ul></div></article>` : ""}
     <article class="review-item"><div><b>AI preliminary envelope coverage</b><span>Surfaces: ${surfaces.included ?? 0} included, ${surfaces.blocked ?? 0} blocked, ${surfaces.excluded ?? 0} excluded. Openings: ${surfaces.openings_included ?? 0} included, ${surfaces.openings_excluded ?? 0} excluded. Unknown shading is explicitly treated as unshaded and queued for review.</span></div></article>
     ${refrigeration.map(item => `<article class="review-item"><div><b>${esc(item.room_name || "Refrigeration/process room")}</b><span>${esc(item.reason || "Excluded from the comfort-HVAC subtotal.")}</span></div></article>`).join("")}
@@ -2129,10 +2158,15 @@ function drawRoomScopeConfirmation(state = {}){
   const container = optionalElement("roomScopeConfirmation");
   if (!container) return;
   const rows = state.candidates || [];
+  ROOM_SCOPE_CURRENT_STATE = {...state, candidates: rows};
   if (!rows.length) { container.classList.add("hide"); container.innerHTML = ""; return; }
   if (ROOM_SCOPE_REVIEWER.projectId !== DATA?.id) ROOM_SCOPE_REVIEWER = {projectId: DATA?.id || null, reviewer: state.confirmation?.reviewer || ""};
   const confirmed = state.status === "confirmed";
-  const statusText = confirmed
+  const statusText = state.freshness_pending
+    ? "Checking whether the draft is up to date…"
+    : state.freshness_error
+      ? `Could not check draft freshness: ${state.freshness_error}. The server will still verify before accepting this action.`
+      : confirmed
     ? `Confirmed by ${state.confirmation?.reviewer || "reviewer"}${state.confirmation?.confirmed_at ? ` · ${state.confirmation.confirmed_at}` : ""}. Calculate the draft load, or change the list and confirm again.`
     : state.status === "stale"
       ? "The room list changed since it was confirmed. Review it and confirm again before calculating."
@@ -2159,7 +2193,7 @@ function drawRoomScopeConfirmation(state = {}){
       </article>`;
     }).join("")}</div>
     <div class="bar room-scope-footer"><label>Reviewer<input data-room-scope-reviewer placeholder="Name / initials" value="${esc(ROOM_SCOPE_REVIEWER.reviewer)}"></label>
-      <span class="draft-actions"><button class="btn ghost" type="button" data-room-scope-confirm>Confirm room list</button><button class="btn key" type="button" data-room-scope-calculate ${confirmed ? "" : "disabled"}>Calculate draft load</button></span></div>`;
+      <span class="draft-actions"><button class="btn ghost" type="button" data-room-scope-confirm ${state.freshness_pending ? "disabled" : ""}>Confirm room list</button><button class="btn key" type="button" data-room-scope-calculate ${confirmed && !state.freshness_pending ? "" : "disabled"}>Calculate draft load</button></span></div>`;
   container.classList.remove("hide");
   container.dataset.candidateFingerprint = state.candidate_fingerprint || "";
   container.querySelector("[data-room-scope-reviewer]").addEventListener("input", event => { ROOM_SCOPE_REVIEWER.reviewer = event.target.value; });
@@ -2182,14 +2216,36 @@ function drawRoomScopeConfirmation(state = {}){
 
 // Jump from the room confirmation to the trace tool with the room selected.
 async function openRoomForTracing(roomId){
+  optionalElement("designRequirementsPanel")?.classList.remove("hide");
   openWorkflowAdvancedTarget("rooms");
-  const host = optionalElement("reviewerRoomGeometryWorkspace");
-  if (!ROOM_GEOMETRY_CONTEXT || !ROOM_TRACE_STATE) await loadReviewerRoomGeometryWorkspace();
+  let host = optionalElement("reviewerRoomGeometryWorkspace");
+  if (!host) {
+    await loadCalculationInputEvidence();
+    host = optionalElement("reviewerRoomGeometryWorkspace");
+  }
+  if (!host) {
+    showCalculationInputEvidence();
+    host = optionalElement("reviewerRoomGeometryWorkspace");
+  }
+  if (!host) return setRoomScopeMessage("The room tracing tool could not load the drawing evidence; try reloading the project.");
+  if (!ROOM_GEOMETRY_CONTEXT || !ROOM_TRACE_STATE || ROOM_GEOMETRY_CONTEXT.id !== DATA?.id) await loadReviewerRoomGeometryWorkspace();
   if (!ROOM_TRACE_STATE) return setRoomScopeMessage("The room tracing tool is not available for this project yet.");
-  if (!(ROOM_GEOMETRY_CONTEXT?.rooms || []).some(room => room.room_id === roomId)) {
+  const pickerRooms = ROOM_GEOMETRY_CONTEXT?.rooms || [];
+  let pickerRoom = pickerRooms.find(room => room.room_id === roomId);
+  if (!pickerRoom) {
+    const candidate = ROOM_SCOPE_CURRENT_STATE.candidates?.find(row => row.key === roomId);
+    if (candidate) {
+      const label = String(candidate.label || "").trim().toLowerCase();
+      const level = String(candidate.level || "Unassigned level").trim().toLowerCase();
+      const sameLabel = pickerRooms.filter(room => String(room.label || "").trim().toLowerCase() === label);
+      pickerRoom = sameLabel.find(room => String(room.level_name || "Unassigned level").trim().toLowerCase() === level)
+        || (sameLabel.length === 1 ? sameLabel[0] : null);
+    }
+  }
+  if (!pickerRoom) {
     return setRoomScopeMessage("That room is not in the tracing tool's room list; reload the drawing evidence and try again.");
   }
-  ROOM_TRACE_STATE = {...ROOM_TRACE_STATE, roomId, points: [], snapped: [], dimensionPoints: []};
+  ROOM_TRACE_STATE = {...ROOM_TRACE_STATE, roomId: pickerRoom.room_id, points: [], snapped: [], dimensionPoints: []};
   renderReviewerRoomGeometryWorkspace();
   host?.scrollIntoView({behavior: "smooth", block: "start"});
   host?.querySelector("[data-geometry-page]")?.focus();
@@ -3270,19 +3326,30 @@ function showCalculationInputEvidence(evidence = {}, summary = {}, status = "not
 async function loadReviewerRoomGeometryWorkspace(){
   const host = optionalElement("reviewerRoomGeometryWorkspace");
   if (!host || !DATA?.id) return;
+  const projectId = DATA.id;
+  if (ROOM_GEOMETRY_LOAD?.projectId === projectId) return ROOM_GEOMETRY_LOAD.promise;
   const previous = ROOM_TRACE_STATE || {};
   host.innerHTML = '<p class="fine">Loading room tracing tools…</p>';
-  try {
-    const response = await fetch(`/api/reviewer-room-geometry?project_id=${encodeURIComponent(DATA.id)}`);
-    const data = await response.json();
-    if (!response.ok || data.error) throw new Error(data.error || "Could not load room tracing tools.");
-    ROOM_GEOMETRY_CONTEXT = data;
-    ROOM_TRACE_STATE = {roomId: previous.roomId || "", page: previous.page || null, snap: null, mode: previous.mode || "boundary", points: [], snapped: [], dimensions: [], dimensionPoints: [], dimensionMm: "", secondDimension: false, reviewer: previous.reviewer || "", note: previous.note || "", cursorImagePx: null, zoom: previous.zoom || 1, panX: previous.panX || 0, panY: previous.panY || 0, envelopeResetNotice: previous.envelopeResetNotice || ""};
-    renderReviewerRoomGeometryWorkspace();
-    if (ROOM_TRACE_STATE.page) await loadReviewerGeometrySnap();
-  } catch (error) {
-    host.innerHTML = `<p class="reviewer-geometry-error" role="alert">Room tracing is unavailable: ${esc(error.message)}</p>`;
-  }
+  const promise = (async () => {
+    try {
+      const response = await fetch(`/api/reviewer-room-geometry?project_id=${encodeURIComponent(projectId)}`);
+      const data = await response.json();
+      if (!response.ok || data.error) throw new Error(data.error || "Could not load room tracing tools.");
+      if (DATA?.id !== projectId) return;
+      ROOM_GEOMETRY_CONTEXT = data;
+      ROOM_TRACE_STATE = {roomId: previous.roomId || "", page: previous.page || null, snap: null, mode: previous.mode || "boundary", points: [], snapped: [], dimensions: [], dimensionPoints: [], dimensionMm: "", secondDimension: false, reviewer: previous.reviewer || "", note: previous.note || "", cursorImagePx: null, zoom: previous.zoom || 1, panX: previous.panX || 0, panY: previous.panY || 0, envelopeResetNotice: previous.envelopeResetNotice || ""};
+      renderReviewerRoomGeometryWorkspace();
+      if (ROOM_TRACE_STATE.page) await loadReviewerGeometrySnap();
+    } catch (error) {
+      if (DATA?.id === projectId) {
+        const currentHost = optionalElement("reviewerRoomGeometryWorkspace");
+        if (currentHost) currentHost.innerHTML = `<p class="reviewer-geometry-error" role="alert">Room tracing is unavailable: ${esc(error.message)}</p>`;
+      }
+    }
+  })();
+  ROOM_GEOMETRY_LOAD = {projectId, promise};
+  try { await promise; }
+  finally { if (ROOM_GEOMETRY_LOAD?.promise === promise) ROOM_GEOMETRY_LOAD = null; }
 }
 
 function traceEnvelopeStatus(trace){
@@ -3335,7 +3402,10 @@ function renderReviewerRoomGeometryWorkspace(){
   const roomOptions = (ctx.rooms || []).map(room => {
     const saved = traces.filter(row => row.room_id === room.room_id && row.freshness === "current").sort((a, b) => (b.page || 0) - (a.page || 0))[0];
     const status = saved ? ` · ${traceEnvelopeStatus(saved)}` : "";
-    return `<option value="${esc(room.room_id)}" ${room.room_id === state.roomId ? "selected" : ""}>${esc(room.label)}${room.level_name ? ` · ${esc(room.level_name)}` : ""}${room.reviewer_added ? " · added by reviewer" : ""}${room.needs_trace ? " · area unresolved" : ""}${esc(status)}</option>`;
+    const areaStatus = room.traced_area_m2 != null
+      ? ` · traced ${Number(room.traced_area_m2).toFixed(2)} m²`
+      : room.needs_trace ? ` · area unresolved${room.trace_issue ? ` — ${room.trace_issue}` : ""}` : "";
+    return `<option value="${esc(room.room_id)}" ${room.room_id === state.roomId ? "selected" : ""}>${esc(room.label)}${room.level_name ? ` · ${esc(room.level_name)}` : ""}${room.reviewer_added ? " · added by reviewer" : ""}${esc(areaStatus)}${esc(status)}</option>`;
   }).join("");
   const trace = traces.find(row => row.room_id === state.roomId && row.page === state.page);
   if (trace && !state.envelopeEdges) state.envelopeEdges = deepcopyEdges(trace.edges, (trace.points_image_px || []).length - 1);

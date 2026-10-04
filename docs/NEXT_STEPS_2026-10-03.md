@@ -353,13 +353,28 @@ change the design):
     Av, Melrose Park NSW 2114 (Melrose Central). The site reader now reads
     lettered unit numbers and "Av"; the address itself is not printed in the
     drawing set, so a reviewer confirms it with a cited map position.
-  - **L4 labels and L5 Card K interface — waiting for Card K** (Codex is
-    editing `ai/ai_preliminary.py` and `frontend/js/app.js`). L4: scenario
-    title/source and the result say which design day and sun data were used.
-    L5: L supplies sun profiles by direction plus `horizontal`; K reads the
-    keys present. The location UI also needs a cited-position form in the
-    existing "Confirm project location" panel.
-  - **L6 AI proposal (for Card P)** — prompt draft: "Here are title-block and
+  - **L4 labels — done (uncommitted).** `ai_preliminary.design_conditions_basis`
+    records which design day (generic or cited, with source), which sun values
+    (always generic for now) and which site the draft used. The scenario title
+    reads "AI preliminary generic Australian cooling day (not site-specific)",
+    and the result shows a "Weather and site used" block.
+  - **Cited-location form — done (uncommitted).** In "Confirm project location":
+    latitude/longitude, state, suburb, map source, link and reviewer, saved
+    through `set_cited_location`. The panel also lists site-name clues
+    ("Melrose Central · tenancy MZ01,M38") and excluded consultant addresses.
+  - **L5 Card K interface:** no change needed until a cited site solar source
+    exists; the assembler keeps reading the pack's N/E/S/W profiles, now
+    labelled generic.
+  - **Butcher Buffet site confirmed (2026-10-04):** Shop G38/22 Lemon Tree Av,
+    Melrose Park NSW 2114 (Melrose Central), at -33.81298, 151.07054
+    (user-supplied, approximate). Saved on the walkthrough project with
+    `set_cited_location`.
+  - **Roof answered (user, 2026-10-04): not exposed to the sun.** Melrose
+    Central is apartments above a retail precinct. Butcher Buffet traces must
+    use roof = not exposed. Corrected draft on a copy of the walkthrough
+    project, with north and the storefront wall and window: **35.20 kW** with
+    the generic design day (previously 37.37 kW with exposed roofs).
+  - **L6 AI proposal** — now task P1 in `docs/AI_PROPOSAL_PROMPTS.md`. Original draft: "Here are title-block and
     note excerpts from one drawing set, each with page number. Which excerpt
     names the project site (tenancy, centre or street address), and which
     addresses belong to consultants (architect, engineer)? Return JSON
