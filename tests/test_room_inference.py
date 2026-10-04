@@ -65,6 +65,24 @@ def main():
         {"text": "Counter", "status": "possible_room_or_area_label"},
     ]})
     check("label fragment is removed when full label exists", fragments == [("Service Counter", None)])
+    title_block = {"width": 100, "height": 100, "title_blocks": [{"region": "bottom_band", "bbox": [0, 80, 100, 100]}],
+                   "room_label_candidates": [{"text": "Office", "bbox": [10, 20, 25, 28], "status": "possible_room_or_area_label"},
+                                             {"text": "Kiosk", "bbox": [10, 90, 25, 96], "status": "possible_room_or_area_label"}],
+                   "standalone_text_items": [{"text": "Office", "bbox": [10, 20, 25, 28]},
+                                             {"text": "Kiosk", "bbox": [10, 90, 25, 96]}]}
+    check("room labels inside detected title blocks are ignored", room_inference.room_label_items(title_block) == [("Office", None)])
+    counter_with_tag = room_inference.room_label_items({
+        "room_label_candidates": [
+            {"text": "Service Counter", "status": "possible_room_or_area_label"},
+            {"text": "Counter", "status": "possible_room_or_area_label"},
+        ],
+        "standalone_text_items": [
+            {"text": "Service", "bbox": [10, 20, 25, 28]},
+            {"text": "VY1", "bbox": [26, 20, 34, 28]},
+            {"text": "Counter", "bbox": [10, 34, 30, 42]},
+        ],
+    })
+    check("two-line room label candidate suppresses its standalone fragment", counter_with_tag == [("Service Counter", None)])
     flat_bar = room_inference.room_label_items({"word_samples": [
         {"text": "3mm", "bbox": [0, 10, 14, 20]}, {"text": "FLAT", "bbox": [16, 10, 36, 20]},
         {"text": "BAR", "bbox": [38, 10, 50, 20]}, {"text": "IN", "bbox": [52, 10, 62, 20]},

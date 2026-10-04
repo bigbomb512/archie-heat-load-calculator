@@ -84,6 +84,28 @@ def main():
     check("plan room labels and areas are retained without phantom OCR labels", {(s["name"], s["level_name"]) for s in spaces} == {("Office", "Level 2"), ("Service Counter", "Level 2")})
     check("plan room areas survive with citations", {(s["name"], s["area"]) for s in spaces} == {("Office", "9 m²"), ("Service Counter", "13 m²")} and all(s["evidence"][0]["page"] == 13 for s in spaces))
     check("same-page Unassigned duplicate is removed", all(s["level_name"] != "Unassigned level" for s in spaces))
+    title_and_fragment_ocr = {"pages": [{"page": 14, "width": 100, "height": 100,
+        "title_blocks": [{"region": "bottom_band", "bbox": [0, 80, 100, 100]}],
+        "room_label_candidates": [
+            {"text": "Office", "bbox": [10, 20, 25, 28], "status": "possible_room_or_area_label"},
+            {"text": "Service Counter", "status": "possible_room_or_area_label"},
+            {"text": "Counter", "status": "possible_room_or_area_label"},
+            {"text": "Kiosk", "bbox": [10, 90, 25, 96], "status": "possible_room_or_area_label"},
+        ],
+        "standalone_text_items": [
+            {"text": "Office", "bbox": [10, 20, 25, 28]},
+            {"text": "Service", "bbox": [10, 40, 25, 48]},
+            {"text": "VY1", "bbox": [26, 40, 34, 48]},
+            {"text": "Counter", "bbox": [10, 54, 30, 62]},
+            {"text": "Kiosk", "bbox": [10, 90, 25, 96]},
+        ]}]}
+    title_and_fragment = build_building_evidence(
+        {"source_pdf": "fixture.pdf", "drawing_set": {"pages": [
+            {"page": 14, "title": "GA plan", "level_name": "Level 2", "sheet_classification": "floor_plan",
+             "rooms": [], "structured_content": {"markdown": ""}},
+        ]}}, {}, title_and_fragment_ocr)
+    check("building evidence excludes title-block labels and keeps combined room label",
+          {space["name"] for space in title_and_fragment["spaces"]} == {"Office", "Service Counter"})
     duplicate_fixture = {"spaces": [
         {"name": "Office", "area": "9 m²", "level_name": "Level 2", "evidence": [{"page": 13}]},
         {"name": "Office", "area": "9 m²", "level_name": "Unassigned level", "evidence": [{"page": 13}]},
