@@ -191,7 +191,7 @@ def _resolve_surface_area(row, openings, ceiling_by_room=None):
         if net is not None:
             return gross, net, {**derivation, "gross_area_m2": gross, "net_area_m2": net}, []
         return gross, None, derivation, ["opening_coverage_missing"]
-    if coverage != "confirmed":
+    if coverage not in {"confirmed", "reviewer_entered"}:
         return gross, None, derivation, ["opening_coverage_incomplete"]
     area_rows, missing = [], []
     for opening_id in linked_ids:

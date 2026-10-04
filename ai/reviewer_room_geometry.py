@@ -13,6 +13,7 @@ SCHEMA_VERSION = 1
 SNAP_TOLERANCE_PX = 8.0
 EDGE_BOUNDARIES = {"external", "adjacent_tenancy", "internal", "unknown"}
 ROOF_EXPOSURES = {"exposed", "not_exposed", "unknown"}
+NORTH_SOURCES = {"reviewer_read_north_arrow", "reviewer_typed_page_up_bearing"}
 
 
 def fingerprint(value):
@@ -51,6 +52,34 @@ def validate_envelope_classification(edges, roof, edge_count):
     if roof not in ROOF_EXPOSURES:
         raise ValueError("Roof exposure must be exposed, not_exposed or unknown.")
     return {"edges": [{"index": index, "boundary": values[index]} for index in range(edge_count)], "roof": roof}
+
+
+def page_up_bearing_from_north_arrow(points):
+    """Return true-north bearing of image-up from clicked tail-to-tip arrow points."""
+    if not isinstance(points, list) or len(points) != 2 or not all(valid_point(point) for point in points):
+        raise ValueError("Choose two points along the north arrow, from tail to tip.")
+    dx, dy = points[1][0] - points[0][0], points[1][1] - points[0][1]
+    if math.hypot(dx, dy) <= 0:
+        raise ValueError("North-arrow points must be distinct.")
+    return (-math.degrees(math.atan2(dx, -dy))) % 360
+
+
+def polygon_outward_side(points):
+    """Outward side of each ordered edge for image coordinates (y down)."""
+    signed_twice_area = sum(points[i][0] * points[i + 1][1] - points[i + 1][0] * points[i][1]
+                            for i in range(len(points) - 1))
+    if abs(signed_twice_area) <= 1e-9:
+        raise ValueError("Cannot orient edges of a zero-area trace.")
+    return "left" if signed_twice_area > 0 else "right"
+
+
+def oriented_edge_cardinal(points, edge_index, plan_up_azimuth_deg):
+    from ai.site_orientation import cardinal, outward_azimuth
+    if type(edge_index) is not int or not 0 <= edge_index < len(points) - 1:
+        raise ValueError("Edge index is outside the traced polygon.")
+    side = polygon_outward_side(points)
+    azimuth = outward_azimuth([points[edge_index], points[edge_index + 1]], side, plan_up_azimuth_deg)
+    return cardinal(azimuth), azimuth
 
 
 def validate_artifact(raw):
@@ -112,13 +141,49 @@ def validate_artifact(raw):
             raise ValueError("Envelope classifications require a reviewer and declaration timestamp.")
         checked["envelope_reviewer"] = declaration_reviewer
         checked["envelope_declared_at"] = declared_at
+        openings = checked.get("openings", [])
+        if not isinstance(openings, list):
+            raise ValueError("Trace openings must be a list.")
+        opening_ids = set()
+        for opening in openings:
+            if not isinstance(opening, dict) or not str(opening.get("opening_id", "")).strip():
+                raise ValueError("Each trace opening needs an ID.")
+            if opening["opening_id"] in opening_ids or type(opening.get("edge_index")) is not int or not 0 <= opening["edge_index"] < edge_count:
+                raise ValueError("Trace opening IDs and edge references must be unique and valid.")
+            opening_ids.add(opening["opening_id"])
         records.append(checked)
+    page_north = raw.get("page_north", {})
+    if not isinstance(page_north, dict):
+        raise ValueError("Page north declarations must be an object keyed by page number.")
+    checked_north = {}
+    for key, declaration in page_north.items():
+        if not isinstance(declaration, dict):
+            raise ValueError("Each page north declaration must be an object.")
+        page = declaration.get("page")
+        if not str(key).isdigit() or type(page) is not int or page <= 0 or int(key) != page:
+            raise ValueError("Page north declaration needs a matching positive page number.")
+        bearing = declaration.get("plan_up_azimuth_deg")
+        if type(bearing) not in (int, float) or not math.isfinite(bearing) or not 0 <= bearing < 360:
+            raise ValueError("Plan-up bearing must be between 0 and under 360 degrees.")
+        if declaration.get("source") not in NORTH_SOURCES:
+            raise ValueError("Page north source must be a reviewer-read arrow or typed bearing.")
+        if not str(declaration.get("reviewer", "")).strip() or not str(declaration.get("declared_at", "")).strip():
+            raise ValueError("Page north declarations need a reviewer and timestamp.")
+        arrow = declaration.get("north_arrow_points_image_px")
+        if declaration["source"] == "reviewer_read_north_arrow":
+            if not isinstance(arrow, list) or len(arrow) != 2 or not all(valid_point(point) for point in arrow) or math.dist(*arrow) <= 0:
+                raise ValueError("North-arrow declarations need two distinct image points.")
+        checked_north[str(page)] = deepcopy(declaration)
     result = {"schema_version": SCHEMA_VERSION, "records": records}
+    if checked_north:
+        result["page_north"] = checked_north
     rooms = validate_reviewer_rooms(raw.get("rooms", []))
     if rooms:
         # Only present once a reviewer adds a room, so existing artifacts keep
         # their fingerprints.
         result["rooms"] = rooms
+    elif "rooms" in raw:
+        result["rooms"] = []
     result["fingerprint"] = fingerprint(result)
     return result
 

@@ -32,6 +32,17 @@ class OpaqueEnvelopeResolutionTests(unittest.TestCase):
         self.assertFalse(result["surfaces"][0]["thermal_eligible"])
         self.assertIn("opening_coverage_incomplete", result["surfaces"][0]["unresolved_fields"])
 
+    def test_reviewer_entered_openings_subtract_without_claiming_complete_coverage(self):
+        result = resolve_opaque_envelope(
+            self._ledger("reviewer_entered"), {"openings": [{"opening_id": "opening-1", "opening_area_m2": 8}]},
+            source_pack={"preliminary_envelope": {"opaque_constructions": {"wall": {"construction_id": "wall-pack", "u_value_w_m2k": 0.6}}}},
+            resolution_mode="preliminary_ai_estimate", weather_available=True,
+        )
+        row = result["surfaces"][0]
+        self.assertTrue(row["thermal_eligible"])
+        self.assertEqual(row["net_opaque_area_m2"], 22)
+        self.assertEqual(row["opening_coverage_status"], "reviewer_entered")
+
     def test_non_external_boundary_requires_temperature(self):
         ledger = self._ledger("not_applicable")
         ledger["surfaces"][0].update({"thermal_role": "fixed_adjacent", "boundary_condition": "corridor"})

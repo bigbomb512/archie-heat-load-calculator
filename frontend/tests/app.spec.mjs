@@ -1136,6 +1136,67 @@ test("reviewer can classify calibrated trace edges and roof, and the picker show
   await expect(workspace.locator("[data-geometry-room] option:checked")).toContainText("walls: 1 of 4 classified · roof exposed");
 });
 
+test("reviewer can declare page north, add a cited shopfront, and see unresolved envelope wording", async ({page})=>{
+  const {context,trace}=envelopeTraceContext();
+  context.glazing_choices={retail:{label:"Preliminary single glazing (pack au-preliminary-v3): U 5.8, SHGC 0.45",u_value_w_m2k:5.8,shgc:0.45}};
+  context.shading_categories={unshaded:1,partial:.65,deep:.3};
+  context.glazing_frame_fraction=.15;
+  const posts=[];
+  await page.route("**/api/reviewer-room-geometry?project_id=demo-project",route=>route.fulfill({json:context}));
+  await openTraceWorkspace(page);
+  await page.evaluate(()=>loadReviewerRoomGeometryWorkspace());
+  const workspace=page.locator("#reviewerRoomGeometryWorkspace");
+  await workspace.locator("[data-geometry-room]").selectOption(trace.room_id);
+  await workspace.locator("[data-geometry-page]").selectOption("5");
+  await workspace.locator('[data-envelope-edge-class="0"]').selectOption("external");
+  await workspace.locator("[data-envelope-reviewer]").fill("QA-3");
+  await workspace.locator("[data-north-bearing]").fill("25");
+  await page.route("**/api/reviewer-room-geometry",async route=>{
+    const body=route.request().postDataJSON();posts.push(body);
+    if(body.action==="declare_north"){
+      context.page_north={"5":{page:5,plan_up_azimuth_deg:25,source:"reviewer_typed_page_up_bearing",reviewer:"QA-3",declared_at:"now"}};
+      context.reviewer_room_geometry.page_north=context.page_north;
+      trace.edge_facings={"0":"S"};
+    }else{
+      trace.edges=body.edges;trace.openings=body.openings;trace.roof=body.roof;trace.envelope_reviewer=body.reviewer;trace.envelope_declared_at="now";
+      context.reviewer_room_geometry.records=[trace];
+    }
+    return route.fulfill({json:context});
+  });
+  await workspace.locator("[data-north-save]").click();
+  await expect.poll(()=>posts.length).toBe(1);
+  expect(posts[0]).toEqual(expect.objectContaining({action:"declare_north",page:5,plan_up_azimuth_deg:25,reviewer:"QA-3"}));
+  await expect(workspace.locator('[data-envelope-edge-select="0"]')).toContainText("faces S");
+  await workspace.locator("[data-envelope-edge-class='0']").selectOption("external");
+  await workspace.locator("[data-opening-edge]").selectOption("0");
+  await workspace.locator("[data-opening-width]").evaluate(input=>{input.value="1.5";input.dispatchEvent(new Event("input",{bubbles:true}));});
+  await workspace.locator("[data-opening-sill]").fill("0.9");
+  await workspace.locator("[data-opening-head]").fill("2.65");
+  await workspace.locator("[data-opening-page]").fill("26");
+  await workspace.locator("[data-opening-glazing]").selectOption("retail");
+  await expect(workspace.locator("[data-opening-glazing] option")).toHaveCount(1);
+  await expect(workspace.locator("[data-opening-glazing] option").first()).toHaveText("Preliminary single glazing (pack au-preliminary-v3): U 5.8, SHGC 0.45");
+  await workspace.locator("[data-opening-shading]").selectOption("partial");
+  await workspace.locator("[data-opening-add]").click();
+  await expect(workspace.locator("[data-opening-row]")).toContainText("elevation p.26");
+  await workspace.locator("[data-envelope-save]").click();
+  await expect.poll(()=>posts.length).toBe(2);
+  expect(posts[1].openings).toEqual([expect.objectContaining({edge_index:0,width_m:1.5,elevation_page:26,glazing_choice:"retail",shading_category:"partial"})]);
+  await expect(workspace.locator("[data-north-saved]")).toContainText("25.00°");
+  await page.evaluate(()=>{
+    drawAiPreliminary({settings:{},run:{},hourly_ai_preliminary_load_report:{
+      label:"Preliminary cooling",included_scope_peak:{design_total_kw:12},room_names:[{room_id:"room-shop",name:"Shop"}],
+      unresolved_room_inputs:[
+        {room_id:"room-shop",component:"external walls — orientation not assessed (no façade solar)",component_id:"external_wall_orientation_0"},
+        {room_id:"room-shop",component:"Glazing sun — orientation not assessed",component_id:"glazing_solar_front"}
+      ],known_exclusions:[],preliminary_surface_summary:{included:1,openings_included:1}
+    },room_scope:{}});
+  });
+  await expect(page.locator("#aiPreliminaryResults")).toContainText("Not included in this total");
+  await expect(page.locator("#aiPreliminaryResults")).toContainText("Glazing sun — orientation not assessed — Shop");
+  await expect(page.locator("#aiPreliminaryResults")).toContainText("Openings: 1 included");
+});
+
 test("internal-room shortcut classifies every edge and roof, and classification errors remain visible", async ({page})=>{
   const {context,trace}=envelopeTraceContext({calibrationStatus:"unresolved"});
   await page.route("**/api/reviewer-room-geometry?project_id=demo-project",route=>route.fulfill({json:context}));
@@ -1176,7 +1237,7 @@ test("re-saving a classified trace warns that its envelope declarations reset", 
     return route.fulfill({json:context});
   });
   await workspace.locator("[data-geometry-save]").click();
-  await expect(workspace.locator("[data-envelope-reset]")).toContainText("Re-saving this trace reset its prior wall and roof classifications to unknown");
+  await expect(workspace.locator("[data-envelope-reset]")).toContainText("Re-saving this trace reset its prior wall, roof, and opening declarations");
 });
 
 test("analysis reaches results without browser errors", async ({ page }) => {

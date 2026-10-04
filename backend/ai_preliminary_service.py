@@ -9,6 +9,7 @@ from copy import deepcopy
 from pathlib import Path
 
 from ai import ai_preliminary
+from ai import reviewer_room_geometry
 from ai import value_resolution as value_resolver
 from ai import room_use_resolution
 from ai import room_scope_confirmation
@@ -106,6 +107,9 @@ def _sources(paths):
         "value_resolution_state": value_resolver.fingerprint(state),
         "site_location_resolution": ai_preliminary.fingerprint(_read(paths["site_location"], {})),
         "site_design_weather_resolution": ai_preliminary.fingerprint(_read(paths["site_design_weather"], {})),
+        "reviewer_room_geometry_north": ai_preliminary.fingerprint(
+            _read(paths["root"] / "reviewer_room_geometry.json", {}).get("page_north", {})
+        ),
         "room_use_resolution": artifact_fingerprint(paths["room_use"], {}),
         "ceiling_volume_resolution": artifact_fingerprint(paths["ceiling_volume"], {}),
         "internal_gains_resolution": artifact_fingerprint(paths["internal_gains"], {}),
@@ -478,6 +482,7 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
     else:
         proposal = {"rooms": []}
     proposal.setdefault("rooms", [])
+    proposal.setdefault("openings", [])
     # Envelope assessments are always rebuilt from the current reviewer trace
     # registry; never accept provider-supplied trace provenance or exclusions.
     proposal.pop("envelope_assessments", None)
@@ -493,14 +498,16 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
     trace_review_issue = None
     try:
         trace_registry_path = paths["root"] / "reviewer_room_geometry.json"
+        trace_registry = {}
         if trace_registry_path.exists():
             # The shared reader tolerates malformed JSON by returning an empty
             # default. Validate strictly here so that corruption is visible to
             # the reviewer instead of looking like simply absent evidence.
-            json.loads(trace_registry_path.read_text(encoding="utf-8"))
+            trace_registry = json.loads(trace_registry_path.read_text(encoding="utf-8"))
         traced_areas = reviewer_room_geometry_service.current_traced_areas(paths["root"])
     except (OSError, ValueError, TypeError, KeyError):
         traced_areas = {}
+        trace_registry = {}
         trace_review_issue = {
             "component": "room area",
             "reason": "Reviewer trace artifact could not be read; trace-derived areas were ignored.",
@@ -579,6 +586,8 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                 calibration = traced_area.get("calibration", {})
                 mm_per_px = ai_preliminary._number(calibration.get("mm_per_px"))
                 points = traced_area.get("points_image_px", [])
+                north = (trace_registry.get("page_north", {}) or {}).get(str(traced_area.get("page")), {})
+                plan_up_bearing = north.get("plan_up_azimuth_deg")
                 skip_roof = _ledger_has_included_external_surface(
                     geometry, room_use_id, room.get("label", ""), room.get("level_name", ""), "roof",
                 )
@@ -644,23 +653,56 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                         continue
                     if skip_walls:
                         continue
+                    surface_key = f"reviewer-trace:{traced_area['trace_id']}:wall:{index}"
+                    orientation = ""
+                    if plan_up_bearing is not None:
+                        orientation, _azimuth = reviewer_room_geometry.oriented_edge_cardinal(points, index, plan_up_bearing)
+                    wall_openings = [row for row in traced_area.get("openings", []) if row.get("edge_index") == index]
                     proposal["surfaces"].append({
-                        "surface_key": f"reviewer-trace:{traced_area['trace_id']}:wall:{index}",
+                        "surface_key": surface_key,
                         "label": f"{room.get('label', 'Room')} traced external wall edge {index + 1}",
                         "owner_room_label": room.get("label", ""), "owner_level_name": room.get("level_name", ""),
                         "physical_type": "wall", "thermal_role": "external", "external_exposure": "external",
-                        "orientation": "", "gross_area_m2": wall_area,
-                        "opening_coverage": "not_applicable", "confidence": 0.65,
+                        "orientation": orientation, "gross_area_m2": wall_area,
+                        "opening_coverage": "reviewer_entered" if wall_openings else "not_applicable", "confidence": 0.65,
                         "page": traced_area.get("page"), "evidence": [citation],
                         "reviewer_trace_id": traced_area.get("trace_id", ""),
                         "reviewer": declaration_reviewer, "verification_status": "provisional",
-                        "rationale": "Reviewer-declared external boundary edge; façade orientation is unknown, so conduction only is included and no façade solar is applied.",
-                        "assumptions": ["unknown_orientation_conduction_only"],
+                        "rationale": ("Reviewer-declared external boundary edge; outward orientation derived from the calibrated polygon winding and page north."
+                                      if orientation else "Reviewer-declared external boundary edge; façade orientation is unknown, so conduction only is included and no façade solar is applied."),
+                        "assumptions": ([] if orientation else ["unknown_orientation_conduction_only"]),
                     })
-                    assessment["not_assessed"].append({"component_id": f"external_wall_orientation_{index}",
-                        "component": "external walls — orientation not assessed (no façade solar)",
-                        "reason": f"External wall edge {index + 1} is included for conduction, but orientation and façade solar were not assessed.",
-                        "page": traced_area.get("page")})
+                    if orientation:
+                        assessment["not_assessed"] = [item for item in assessment["not_assessed"]
+                            if item.get("component_id") != f"external_wall_orientation_{index}"]
+                    else:
+                        assessment["not_assessed"].append({"component_id": f"external_wall_orientation_{index}",
+                            "component": "external walls — orientation not assessed (no façade solar)",
+                            "reason": f"External wall edge {index + 1} is included for conduction, but orientation and façade solar were not assessed.",
+                            "page": traced_area.get("page")})
+                    for opening in wall_openings:
+                        height = opening["head_height_m"] - opening["sill_height_m"]
+                        proposal.setdefault("openings", []).append({
+                            "opening_key": opening["opening_id"],
+                            "label": f"{room.get('label', 'Room')} shopfront opening",
+                            "owner_room_label": room.get("label", ""), "owner_level_name": room.get("level_name", ""),
+                            "host_surface_key": surface_key, "width_m": opening["width_m"], "height_m": height,
+                            "quantity": 1, "opening_area_m2": opening["width_m"] * height,
+                            "external_exposure": "external", "orientation": orientation,
+                            "shading_category": opening["shading_category"], "glazing_choice": opening["glazing_choice"],
+                            "preliminary_profile_id": opening["glazing_choice"], "page": opening["elevation_page"],
+                            "evidence": [{"page": opening["elevation_page"], "reference": "Reviewer-cited shopfront elevation",
+                                "excerpt": f"Opening width {opening['width_m']} m; sill {opening['sill_height_m']} m; head {opening['head_height_m']} m.",
+                                "reviewer": declaration_reviewer, "reviewer_trace_id": traced_area.get("trace_id", "")}],
+                            "confidence": 0.65, "verification_status": "provisional",
+                            "rationale": "Reviewer-entered opening geometry; glazing U-value and SHGC are preliminary assumption-pack values.",
+                            "assumptions": ["preliminary_glazing_profile", "reviewer_cited_elevation_geometry"],
+                        })
+                        if not orientation:
+                            assessment["not_assessed"].append({"component_id": f"glazing_solar_{opening['opening_id']}",
+                                "component": "Glazing sun — orientation not assessed",
+                                "reason": "Glazing conduction is included; glazing solar gain is omitted because page north is not declared.",
+                                "page": opening["elevation_page"]})
                 if unknown_edges:
                     assessment["not_assessed"].append({
                         "component_id": "unclassified_wall_boundaries",

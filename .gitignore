@@ -5,6 +5,7 @@ frontend/.DS_Store
 frontend/node_modules/
 frontend/test-results/
 frontend/playwright-report/
+test-results/
 
 # Local test and transaction artifacts
 .pytest_cache/

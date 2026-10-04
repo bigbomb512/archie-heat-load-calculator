@@ -688,6 +688,9 @@ def validate_placeholder_proposal(raw):
                     errors.append("glass area no greater than opening area")
                 if item["shading_category"] not in SHADING_CATEGORIES:
                     errors.append("a controlled shading category")
+                glazing_choice = item.get("glazing_choice")
+                if glazing_choice and glazing_choice not in load_pack().get("profiles", {}):
+                    errors.append("a glazing choice in the preliminary assumption pack")
                 if item["shading_category"] == "unshaded" and "unshaded" not in item["assumptions"]:
                     item["assumptions"].append("unshaded")
             item["validation_errors"] = errors + (["AI reported competing evidence."] if item["conflicts"] else [])
@@ -1147,7 +1150,7 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
         openings = openings_by_host.get(host_key, [])
         gross = candidate["gross_area_m2"]
         net = candidate.get("net_opaque_area_m2")
-        if openings and candidate.get("opening_coverage") != "complete":
+        if openings and candidate.get("opening_coverage") not in {"complete", "reviewer_entered"}:
             surface_summary["blocked"] += 1
             exclusions.append({"room_id": room["room_id"], "component": "opaque envelope", "candidate_id": candidate["candidate_id"],
                                "reason": "Opening coverage is incomplete; opaque host area is excluded to prevent wall/window double counting."})
@@ -1212,19 +1215,20 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                        "host_surface_id": candidate["candidate_id"], "opening_mapping_status": "proposed", "geometry_mode": "preliminary_ai_estimate",
                        "review_status": "provisional", "verification_status": "provisional", "boundary_method": "external", "external_exposure": "external",
                        "explicit_opening_area_m2": opening["opening_area_m2"], "explicit_glass_area_m2": opening.get("explicit_glass_area_m2"),
-                       "window": {"record_id": f"window-{opening['candidate_id']}", "u_value_w_m2k": profile["glazing_u_w_m2k"], "shgc": profile["shgc"],
+                       "window": {"record_id": f"window-{opening['candidate_id']}", "u_value_w_m2k": pack["profiles"].get(opening.get("glazing_choice"), profile)["glazing_u_w_m2k"], "shgc": pack["profiles"].get(opening.get("glazing_choice"), profile)["shgc"],
                                   "frame_fraction": envelope["glazing_frame_fraction"], "glass_area_correction": envelope["glazing_glass_area_correction"],
                                   "internal_shading_factor": envelope["glazing_internal_shading_factor"]},
                        "manual_solar": {"enabled": bool(glazing_peak), "incident_solar_w_m2": glazing_peak, "external_shading_factor": shade},
                        "solar_basis": "ai_preliminary_cardinal_profile", "preliminary_solar_profile_w_m2": glazing_profile,
                        "orientation": opening_orientation, "shading_category": opening["shading_category"], "preliminary_assumption": True,
-                       "source": _source(profile_id) + "; AI preliminary opening classification", "citations": [], "source_pages": opening["evidence"]}
+                       "source": _source(opening.get("glazing_choice") or profile_id) + "; preliminary assumption-pack glazing U-value and SHGC",
+                       "citations": [], "source_pages": opening["evidence"]}
             room["cooling_load"]["glazing_surfaces"].append(glazing)
             accepted_opening_ids.add(opening["candidate_id"])
             surface_summary["openings_included"] += 1
             exclusions[:] = [item for item in exclusions if not (item.get("room_id") == room["room_id"] and item.get("component") == "glazing and façade solar" and "No resolved" in item.get("reason", ""))]
             if not opening_orientation:
-                exclusions.append({"room_id": room["room_id"], "component": "glazing solar", "candidate_id": opening["candidate_id"], "reason": "Opening orientation is unresolved; preliminary glazing conduction is included but façade solar is excluded."})
+                exclusions.append({"room_id": room["room_id"], "component": "Glazing sun — orientation not assessed", "candidate_id": opening["candidate_id"], "reason": "Glazing conduction is included; glazing solar gain is omitted because page north is not declared."})
             if opening["shading_category"] == "unshaded":
                 exclusions.append({"room_id": room["room_id"], "component": "shading review", "candidate_id": opening["candidate_id"], "reason": "Unknown façade shading uses the explicit conservative unshaded preliminary assumption."})
             ledger.append({"room_id": room["room_id"], "field": "glazing_opening", "value": opening["opening_area_m2"], "origin": "ai_geometry", "profile_id": profile_id,

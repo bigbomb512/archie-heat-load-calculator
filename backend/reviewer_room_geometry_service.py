@@ -79,6 +79,7 @@ def current_artifact_input(root):
     }
     result = {"fingerprint": artifact.get("fingerprint", ""),
               "records": current_records(paths, artifact), "rooms": _rooms(paths),
+              "page_north": deepcopy(artifact.get("page_north", {})),
               "source_artifact_fingerprints": {name: fingerprint(value) for name, value in source_artifacts.items()}}
     excluded = _not_a_room_identities(source_artifacts["room_use_resolution"])
     if excluded:
@@ -142,6 +143,7 @@ def current_traced_areas(root):
             "calibration": deepcopy(calibration),
             "reviewer": str(trace.get("reviewer", "")),
             "edges": deepcopy(trace.get("edges", [])),
+            "openings": deepcopy(trace.get("openings", [])),
             "roof": str(trace.get("roof", "unknown")),
             "envelope_reviewer": str(trace.get("envelope_reviewer", "")),
             "envelope_declared_at": str(trace.get("envelope_declared_at", "")),
@@ -424,6 +426,20 @@ def _response(web, project):
         current = source_current and room_current
         row["freshness"] = "current" if current else "stale"
         row["stale_reasons"] = [] if current else (["Room is no longer present in the current room registry."] if source_current and not room_current else ["Source PDF or vector page changed since this trace was saved."])
+        north = display.get("page_north", {}).get(str(row.get("page")), {})
+        bearing = north.get("plan_up_azimuth_deg") if isinstance(north, dict) else None
+        if bearing is not None:
+            row["edge_facings"] = {}
+            for edge in row.get("edges", []):
+                if edge.get("boundary") != "external":
+                    continue
+                try:
+                    facing, _azimuth = reviewer_room_geometry.oriented_edge_cardinal(
+                        row.get("points_image_px", []), edge.get("index"), bearing,
+                    )
+                except ValueError:
+                    continue
+                row["edge_facings"][str(edge["index"])] = facing
     rooms, pages = _rooms(paths), _page_context(paths, web)
     try:
         from ai.room_use_resolution import load_taxonomy
@@ -432,8 +448,21 @@ def _response(web, project):
         uses = {}
     named_levels = {str(row.get("level_name") or "").strip() for row in [*rooms, *pages]} - {""}
     levels = sorted(named_levels | {"Unassigned level"}, key=lambda value: (value == "Unassigned level", value.casefold()))
+    pack = ai_preliminary.load_pack()
+    single_glazing = pack.get("profiles", {}).get("retail", {})
+    glazing_choices = {"retail": {
+        "label": ("Preliminary single glazing (pack au-preliminary-v3): "
+                  f"U {single_glazing.get('glazing_u_w_m2k')}, "
+                  f"SHGC {single_glazing.get('shgc')}"),
+        "u_value_w_m2k": single_glazing.get("glazing_u_w_m2k"),
+        "shgc": single_glazing.get("shgc"),
+    }}
+    envelope = pack.get("preliminary_envelope", {})
     return {"id": project["id"], "reviewer_room_geometry": display, "source_pdf_fingerprint": pdf_fp,
             "rooms": rooms, "pages": pages, "room_uses": uses, "levels": levels,
+            "page_north": deepcopy(display.get("page_north", {})),
+            "glazing_choices": glazing_choices, "shading_categories": deepcopy(envelope.get("shading_categories", {})),
+            "glazing_frame_fraction": envelope.get("glazing_frame_fraction"),
             "artifact_url": web.safe_link(paths["artifact"]) if paths["artifact"].exists() else ""}
 
 
@@ -545,7 +574,7 @@ def _add_reviewer_room(paths, artifact, data):
     room = {"room_id": room_id, "label": label, "level_name": level, "taxonomy_id": taxonomy_id,
             "page": page, "reviewer": reviewer, "note": str(data.get("note", "")).strip(),
             "created_at": ai_preliminary.now(), "source": "reviewer_added"}
-    return reviewer_room_geometry.validate_artifact({"records": artifact["records"],
+    return reviewer_room_geometry.validate_artifact({"records": artifact["records"], "page_north": artifact.get("page_north", {}),
                                                      "rooms": [*artifact.get("rooms", []), room]})
 
 
@@ -559,7 +588,65 @@ def _remove_reviewer_room(artifact, data):
     # The room's traces go with it: a trace without its room is never used.
     return reviewer_room_geometry.validate_artifact({
         "records": [row for row in artifact["records"] if row.get("room_id") != room_id],
+        "page_north": artifact.get("page_north", {}),
         "rooms": [row for row in rooms if row.get("room_id") != room_id]})
+
+
+def _validated_trace_openings(data, trace, paths, room, calibration_record):
+    openings = data.get("openings", [])
+    if not isinstance(openings, list):
+        raise ValueError("Shopfront openings must be a list.")
+    if not openings:
+        return []
+    edges = {row["index"]: row["boundary"] for row in trace.get("edges", [])}
+    points = trace.get("points_image_px", [])
+    mm_per_px = calibration_record.get("mm_per_px")
+    if not isinstance(mm_per_px, (int, float)) or mm_per_px <= 0:
+        raise ValueError("A calibrated trace is required before adding shopfront openings.")
+    from ai import ceiling_volume_resolution
+    ceiling = ceiling_volume_resolution.values_by_room(_read(paths["root"] / "ceiling_volume_resolution.json", {}))
+    identity = ceiling_volume_resolution.room_identity(room.get("label", ""), room.get("level_name", ""))
+    room_values = ceiling.get(room.get("room_id")) or ceiling.get(identity) or {}
+    height_mm = room_values.get("ceiling_height_mm")
+    if not isinstance(height_mm, (int, float)) or height_mm <= 0:
+        raise ValueError("Resolve ceiling height before adding shopfront openings.")
+    pack = ai_preliminary.load_pack()
+    profile_ids = set(pack.get("profiles", {}))
+    shading_ids = set(pack.get("preliminary_envelope", {}).get("shading_categories", {}))
+    width_by_edge, area_by_edge, result, seen = {}, {}, [], set()
+    for opening in openings:
+        if not isinstance(opening, dict):
+            raise ValueError("Each shopfront opening must be an object.")
+        opening_id = str(opening.get("opening_id", "")).strip()
+        edge_index = opening.get("edge_index")
+        width, head, sill = (opening.get(key) for key in ("width_m", "head_height_m", "sill_height_m"))
+        elevation_page = opening.get("elevation_page")
+        glazing_choice, shading = str(opening.get("glazing_choice", "")), str(opening.get("shading_category", ""))
+        if not opening_id or opening_id in seen:
+            raise ValueError("Each shopfront opening needs a unique ID.")
+        seen.add(opening_id)
+        if type(edge_index) is not int or edge_index not in edges or edges[edge_index] != "external":
+            raise ValueError("Shopfront openings can only be placed on an external edge.")
+        if any(type(value) not in (int, float) or not math.isfinite(value) or value <= 0 for value in (width, head)) or type(sill) not in (int, float) or not math.isfinite(sill) or sill < 0 or head <= sill:
+            raise ValueError("Opening width must be positive and head height must be above a non-negative sill height.")
+        if head > height_mm / 1000.0:
+            raise ValueError("Opening head is above the wall height used for this edge; enter only the glass below the ceiling.")
+        if type(elevation_page) is not int or elevation_page <= 0:
+            raise ValueError("Cite the positive drawing page for the opening heights.")
+        if glazing_choice not in profile_ids or shading not in shading_ids:
+            raise ValueError("Choose a glazing profile and shading category from the preliminary assumption pack.")
+        edge_length = math.dist(points[edge_index], points[edge_index + 1]) * mm_per_px / 1000.0
+        width_by_edge[edge_index] = width_by_edge.get(edge_index, 0.0) + width
+        area_by_edge[edge_index] = area_by_edge.get(edge_index, 0.0) + width * (head - sill)
+        if width_by_edge[edge_index] > edge_length + 1e-8:
+            raise ValueError("Total opening width cannot exceed the traced external edge length.")
+        if area_by_edge[edge_index] > edge_length * height_mm / 1000.0 + 1e-8:
+            raise ValueError("Opening area cannot exceed the derived wall area.")
+        result.append({"opening_id": opening_id, "edge_index": edge_index, "width_m": float(width),
+                       "head_height_m": float(head), "sill_height_m": float(sill),
+                       "elevation_page": elevation_page, "glazing_choice": glazing_choice,
+                       "shading_category": shading})
+    return result
 
 
 def _sync_room_use(web, project, action, data, artifact):
@@ -588,7 +675,36 @@ def post(web, project, data):
         kept = [row for row in artifact["records"] if row.get("trace_id") != trace_id]
         if len(kept) == len(artifact["records"]):
             raise ValueError("Room geometry trace was not found.")
-        artifact = reviewer_room_geometry.validate_artifact({"records": kept, "rooms": artifact.get("rooms", [])})
+        artifact = reviewer_room_geometry.validate_artifact({"records": kept, "rooms": artifact.get("rooms", []), "page_north": artifact.get("page_north", {})})
+    elif action == "declare_north":
+        page = data.get("page")
+        if type(page) is not int or page not in {row.get("page") for row in _page_context(paths, web)}:
+            raise ValueError("Choose a supported plan page before declaring north.")
+        reviewer = str(data.get("reviewer", "")).strip()
+        if not reviewer:
+            raise ValueError("Enter a reviewer name for the north declaration.")
+        points = data.get("north_arrow_points_image_px")
+        typed_bearing = data.get("plan_up_azimuth_deg")
+        if points is not None:
+            page_context = next(row for row in _page_context(paths, web) if row["page"] == page)
+            width, height = page_context.get("image_width_px"), page_context.get("image_height_px")
+            if (not page_context.get("preview_matches_vector_coordinates")
+                    or any(point[0] < 0 or point[1] < 0 or point[0] > width or point[1] > height for point in points)):
+                raise ValueError("North-arrow points must be inside a matching full-resolution plan image.")
+            bearing = reviewer_room_geometry.page_up_bearing_from_north_arrow(points)
+            source = "reviewer_read_north_arrow"
+        else:
+            if type(typed_bearing) not in (int, float) or not math.isfinite(typed_bearing) or not 0 <= typed_bearing < 360:
+                raise ValueError("Enter a plan-up bearing from 0 to under 360 degrees.")
+            bearing = float(typed_bearing)
+            source = "reviewer_typed_page_up_bearing"
+        north = deepcopy(artifact.get("page_north", {}))
+        declaration = {"page": page, "plan_up_azimuth_deg": bearing, "source": source,
+                       "reviewer": reviewer, "declared_at": ai_preliminary.now()}
+        if points is not None:
+            declaration["north_arrow_points_image_px"] = points
+        north[str(page)] = declaration
+        artifact = reviewer_room_geometry.validate_artifact({"records": artifact["records"], "rooms": artifact.get("rooms", []), "page_north": north})
     elif action == "classify_envelope":
         trace_id = str(data.get("trace_id", "")).strip()
         trace = next((row for row in artifact["records"] if row.get("trace_id") == trace_id), None)
@@ -606,10 +722,17 @@ def post(web, project, data):
         classification = reviewer_room_geometry.validate_envelope_classification(
             data.get("edges"), data.get("roof", "unknown"), len(trace["points_image_px"]) - 1,
         )
+        room = _known_room(trace.get("room_id"), paths) or trace
+        # Validate openings against the edge classifications being saved in
+        # this same request. Reviewers need to be able to classify an edge as
+        # external and add its opening together, without an intermediate save.
+        trace_for_openings = {**trace, **classification}
+        openings = _validated_trace_openings(data, trace_for_openings, paths, room, calibration)
         trace.update(classification)
+        trace["openings"] = openings
         trace["envelope_reviewer"] = reviewer
         trace["envelope_declared_at"] = ai_preliminary.now()
-        artifact = reviewer_room_geometry.validate_artifact({"records": artifact["records"], "rooms": artifact.get("rooms", [])})
+        artifact = reviewer_room_geometry.validate_artifact({"records": artifact["records"], "rooms": artifact.get("rooms", []), "page_north": artifact.get("page_north", {})})
     elif action == "add_room":
         artifact = _add_reviewer_room(paths, artifact, data)
     elif action == "remove_room":
@@ -675,15 +798,15 @@ def post(web, project, data):
             raise ValueError("Enter your name or initials as the trace reviewer.")
         new_records = [row for row in artifact["records"] if not (row.get("room_id") == room_id and row.get("page") == page_number)]
         new_records.append(record)
-        artifact = reviewer_room_geometry.validate_artifact({"records": new_records, "rooms": artifact.get("rooms", [])})
+        artifact = reviewer_room_geometry.validate_artifact({"records": new_records, "rooms": artifact.get("rooms", []), "page_north": artifact.get("page_north", {})})
     else:
-        raise ValueError("Room geometry action must be save, delete, classify_envelope, add_room or remove_room.")
+        raise ValueError("Room geometry action must be save, delete, declare_north, classify_envelope, add_room or remove_room.")
     _atomic_json(paths["artifact"], artifact)
     from backend import calculation_extraction_service, productization
     productization.record_change_if_fingerprint_changed(
         paths["root"], action="reviewer_room_geometry_" + action, target=paths["artifact"].name,
         previous_fingerprint=previous_fingerprint, new_fingerprint=artifact.get("fingerprint", ""),
-        affected_ids=[data.get("room_id", data.get("trace_id", ""))],
+        affected_ids=[data.get("room_id", data.get("trace_id", data.get("page", "")))],
     )
     if action in {"add_room", "remove_room"}:
         _sync_room_use(web, project, action, data, artifact)

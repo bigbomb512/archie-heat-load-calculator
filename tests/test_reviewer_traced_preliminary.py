@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -367,6 +368,66 @@ def main():
         check("same-type ledger roof prevents duplicate trace roof while leaving roof solar not assessed",
               not any(row.get("surface_key", "").endswith(":roof") for row in prepared["surfaces"])
               and any(row.get("component_id") == "roof_solar" for row in prepared["envelope_assessments"][0]["not_assessed"]))
+
+    with tempfile.TemporaryDirectory() as folder:
+        root = Path(folder)
+        room_use, proposal, _room_id, trace = write_fixture(root)
+        trace["points_image_px"] = [[0, 0], [400, 0], [400, 500], [0, 500], [0, 0]]
+        trace["snapped_line_ids"] = [None] * 5
+        trace_path = root / "reviewer_room_geometry.json"
+        trace_data = json.loads(trace_path.read_text())
+        trace_data["records"][0].update({"points_image_px": trace["points_image_px"], "snapped_line_ids": trace["snapped_line_ids"]})
+        trace_path.write_text(json.dumps(trace_data), encoding="utf-8")
+        edges = [{"index": index, "boundary": "external" if index == 0 else "internal"} for index in range(4)]
+        set_envelope_trace(root, trace, edges, "not_exposed")
+        artifact_path = root / "reviewer_room_geometry.json"
+        artifact = json.loads(artifact_path.read_text())
+        artifact["records"][0]["openings"] = [{
+            "opening_id": "shopfront", "edge_index": 0, "width_m": 2.025,
+            "head_height_m": 3.55, "sill_height_m": 0.9, "elevation_page": 26,
+            "glazing_choice": "retail", "shading_category": "unshaded",
+        }]
+        artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+        ceiling_key = ceiling_volume_resolution.room_identity("Shop", "Level 1")
+        ceiling = {ceiling_key: {"ceiling_height_mm": 3750}}
+        with patch("ai.ceiling_volume_resolution.values_by_room", return_value=ceiling):
+            prepared = prepare(root, room_use, proposal)
+        assembled = ai_preliminary.assemble({"spaces": []}, preliminary_proposal=prepared,
+                                            allow_area_fallbacks=False)
+        room = assembled["material"]["hourly_load_model"]["rooms"][0]
+        opaque = next(surface for surface in room["cooling_load"]["envelope_surfaces"] if surface["kind"] == "opaque_wall")
+        glazing = room["cooling_load"]["glazing_surfaces"]
+        report = ai_preliminary.calculate(assembled)
+        check("shopfront opening reduces its host wall and is included as glazing without north",
+              abs(opaque["area_m2"] - (4.0 * 3.75 - 2.025 * 2.65)) < 1e-8
+              and len(glazing) == 1 and glazing[0]["orientation"] == ""
+              and any(item.get("component") == "Glazing sun — orientation not assessed"
+                      for item in report["unresolved_room_inputs"]))
+        reviewer_surface = next(surface for surface in prepared["surfaces"] if surface.get("physical_type") == "wall")
+        reviewer_surface["opening_coverage"] = "reviewer_entered"
+        prepared["openings"] = [row for row in prepared["openings"] if row.get("host_surface_key") == reviewer_surface["surface_key"]]
+        reviewer_entered_set = ai_preliminary.assemble({"spaces": []}, preliminary_proposal=prepared,
+                                                       allow_area_fallbacks=False)
+        reviewer_entered_room = reviewer_entered_set["material"]["hourly_load_model"]["rooms"][0]
+        reviewer_entered_wall = next(surface for surface in reviewer_entered_room["cooling_load"]["envelope_surfaces"] if surface["kind"] == "opaque_wall")
+        check("reviewer-entered opening coverage subtracts glazing while keeping the host wall included",
+              abs(reviewer_entered_wall["area_m2"] - (4.0 * 3.75 - 2.025 * 2.65)) < 1e-8
+              and len(reviewer_entered_room["cooling_load"]["glazing_surfaces"]) == 1)
+        artifact["page_north"] = {"1": {"page": 1, "plan_up_azimuth_deg": 0,
+            "source": "reviewer_typed_page_up_bearing", "reviewer": "QA", "declared_at": "now"}}
+        artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
+        with patch("ai.ceiling_volume_resolution.values_by_room", return_value=ceiling):
+            prepared_north = prepare(root, room_use, proposal)
+        assembled_north = ai_preliminary.assemble({"spaces": []}, preliminary_proposal=prepared_north,
+                                                   allow_area_fallbacks=False)
+        north_room = assembled_north["material"]["hourly_load_model"]["rooms"][0]
+        north_wall = next(surface for surface in north_room["cooling_load"]["envelope_surfaces"] if surface["kind"] == "opaque_wall")
+        check("page north orients traced walls and applies the existing directional façade solar path",
+              north_wall["orientation"] == "N"
+              and any(schedule.get("schedule_id", "").startswith("prelim-solar-")
+                      for schedule in assembled_north["material"]["schedule_library"]["schedules"])
+              and not any(item.get("component") == "Glazing sun — orientation not assessed"
+                          for item in ai_preliminary.calculate(assembled_north)["unresolved_room_inputs"]))
 
 
 if __name__ == "__main__":

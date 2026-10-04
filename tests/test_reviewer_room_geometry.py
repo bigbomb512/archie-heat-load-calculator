@@ -48,6 +48,98 @@ class ReviewerRoomGeometryTests(unittest.TestCase):
         self.assertEqual(area["value"], 20.0)
         self.assertEqual(area["room_id"], "room-shop")
 
+    def test_page_north_orients_edges_for_both_polygon_windings(self):
+        clockwise = [[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]]
+        counter_clockwise = [[0, 0], [0, 10], [10, 10], [10, 0], [0, 0]]
+        self.assertEqual([reviewer_room_geometry.oriented_edge_cardinal(clockwise, i, 0)[0] for i in range(4)],
+                         ["N", "E", "S", "W"])
+        self.assertEqual([reviewer_room_geometry.oriented_edge_cardinal(counter_clockwise, i, 0)[0] for i in range(4)],
+                         ["W", "S", "E", "N"])
+
+    def test_old_format_artifact_revalidation_preserves_fingerprint(self):
+        old = reviewer_room_geometry.validate_artifact({"records": [self.trace]})
+        old.pop("page_north", None)
+        old.pop("rooms", None)
+        old["fingerprint"] = reviewer_room_geometry.fingerprint({
+            key: value for key, value in old.items() if key != "fingerprint"
+        })
+        checked = reviewer_room_geometry.validate_artifact(old)
+        self.assertEqual(checked["fingerprint"], old["fingerprint"])
+        self.assertNotIn("page_north", checked)
+        self.assertNotIn("rooms", checked)
+
+    def test_north_arrow_bearing_and_page_declaration_validation(self):
+        self.assertEqual(reviewer_room_geometry.page_up_bearing_from_north_arrow([[10, 20], [10, 5]]), 0)
+        self.assertEqual(reviewer_room_geometry.page_up_bearing_from_north_arrow([[10, 20], [10, 35]]), 180)
+        north = {"1": {"page": 1, "plan_up_azimuth_deg": 0, "source": "reviewer_read_north_arrow",
+                        "north_arrow_points_image_px": [[10, 20], [10, 5]], "reviewer": "QA", "declared_at": "now"}}
+        result = reviewer_room_geometry.validate_artifact({"records": [], "page_north": north})
+        self.assertEqual(result["page_north"]["1"]["reviewer"], "QA")
+        with self.assertRaisesRegex(ValueError, "under 360"):
+            reviewer_room_geometry.validate_artifact({"records": [], "page_north": {"1": {
+                **north["1"], "plan_up_azimuth_deg": 360}}})
+
+    def test_page_north_change_is_a_preliminary_source_change(self):
+        from backend import ai_preliminary_service
+        with TemporaryDirectory() as directory:
+            paths = ai_preliminary_service._paths({"review_dir": directory})
+            first = ai_preliminary_service._sources(paths)["reviewer_room_geometry_north"]
+            (paths["root"] / "reviewer_room_geometry.json").write_text(json.dumps({"page_north": {
+                "1": {"page": 1, "plan_up_azimuth_deg": 15, "source": "reviewer_typed_page_up_bearing",
+                      "reviewer": "QA", "declared_at": "now"}}}), encoding="utf-8")
+            second = ai_preliminary_service._sources(paths)["reviewer_room_geometry_north"]
+        self.assertNotEqual(first, second)
+
+    def test_workspace_shows_single_legacy_glazing_option_and_external_edge_facing(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            trace = {**self.trace, "edges": [{"index": 0, "boundary": "external"}],
+                     "envelope_reviewer": "QA", "envelope_declared_at": "now"}
+            north = {"1": {"page": 1, "plan_up_azimuth_deg": 0,
+                "source": "reviewer_typed_page_up_bearing", "reviewer": "QA", "declared_at": "now"}}
+            artifact_path = root / "reviewer_room_geometry.json"
+            artifact_path.write_text(json.dumps(reviewer_room_geometry.validate_artifact({
+                "records": [trace], "page_north": north,
+            })), encoding="utf-8")
+            project = {"id": "workspace-test", "review_dir": str(root)}
+            web = SimpleNamespace(safe_link=lambda _path: "")
+            with patch.object(reviewer_room_geometry_service, "_source_pdf_fingerprint", return_value=""), \
+                 patch.object(reviewer_room_geometry_service, "_vector_pages", return_value=[]), \
+                 patch.object(reviewer_room_geometry_service, "_trace_with_current_room", return_value={}), \
+                 patch.object(reviewer_room_geometry_service, "_rooms", return_value=[]), \
+                 patch.object(reviewer_room_geometry_service, "_page_context", return_value=[]):
+                result = reviewer_room_geometry_service._response(web, project)
+        self.assertEqual(list(result["glazing_choices"]), ["retail"])
+        self.assertEqual(result["glazing_choices"]["retail"]["label"],
+                         "Preliminary single glazing (pack au-preliminary-v3): U 5.8, SHGC 0.45")
+        self.assertEqual(result["reviewer_room_geometry"]["records"][0]["edge_facings"]["0"], "N")
+
+    def test_opening_dimensions_and_external_edge_are_validated(self):
+        with TemporaryDirectory() as directory:
+            paths = {"root": Path(directory)}
+            room = {"room_id": "room-shop", "label": "Shop", "level_name": "Ground"}
+            trace = {**self.trace, "edges": [{"index": 0, "boundary": "external"}]}
+            inputs = {"openings": [{"opening_id": "front", "edge_index": 0, "width_m": 2.025,
+                       "head_height_m": 3.55, "sill_height_m": 0.9, "elevation_page": 26,
+                       "glazing_choice": "retail", "shading_category": "unshaded"}]}
+            with patch("ai.ceiling_volume_resolution.values_by_room", return_value={"room-shop": {"ceiling_height_mm": 3750}}):
+                valid = reviewer_room_geometry_service._validated_trace_openings(
+                    inputs, trace, paths, room, self.calibration)
+                self.assertEqual(valid[0]["width_m"], 2.025)
+                legacy = {**inputs["openings"][0], "glazing_choice": "office"}
+                self.assertEqual(reviewer_room_geometry_service._validated_trace_openings(
+                    {"openings": [legacy]}, trace, paths, room, self.calibration)[0]["glazing_choice"], "office")
+                for bad, message in [
+                    ({**inputs["openings"][0], "edge_index": 1}, "external edge"),
+                    ({**inputs["openings"][0], "width_m": 5}, "edge length"),
+                    ({**inputs["openings"][0], "head_height_m": 0.8, "sill_height_m": 0.9}, "head height"),
+                    ({**inputs["openings"][0], "sill_height_m": 3.6}, "head height"),
+                    ({**inputs["openings"][0], "head_height_m": 3.76}, "enter only the glass below the ceiling"),
+                ]:
+                    with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
+                        reviewer_room_geometry_service._validated_trace_openings(
+                            {"openings": [bad]}, trace, paths, room, self.calibration)
+
     def test_trace_binds_to_current_room_use_registry_when_building_spaces_are_absent(self):
         ai = {"source_pdf": "synthetic.pdf", "drawing_set": {"pages": [
             {"page": 1, "title": "Ground Floor Plan", "drawing_number": "A-01", "level_name": "Ground"},
@@ -140,10 +232,14 @@ class ReviewerRoomGeometryTests(unittest.TestCase):
             project = {"id": "classification-test", "review_dir": str(root)}
             web = SimpleNamespace(safe_link=lambda _path: "", update_project=lambda _project: None)
             valid_payload = {"action": "classify_envelope", "trace_id": trace["trace_id"],
-                             "edges": [{"index": 0, "boundary": "external"}], "roof": "exposed", "reviewer": "QA-2"}
+                             "edges": [{"index": 0, "boundary": "external"}], "roof": "exposed", "reviewer": "QA-2",
+                             "openings": [{"opening_id": "front-window", "edge_index": 0,
+                                 "width_m": 1.0, "head_height_m": 2.0, "sill_height_m": 0.9,
+                                 "elevation_page": 26, "glazing_choice": "retail", "shading_category": "unshaded"}]}
             with patch.object(reviewer_room_geometry_service, "_response", return_value={"ok": True}), \
                  patch("backend.calculation_extraction_service.post", return_value={"calculation_input_evidence": {}, "geometry_resolution": {}}), \
-                 patch("backend.productization.record_change_if_fingerprint_changed"):
+                 patch("backend.productization.record_change_if_fingerprint_changed"), \
+                 patch("ai.ceiling_volume_resolution.values_by_room", return_value={"room-shop": {"ceiling_height_mm": 3750}}):
                 with self.assertRaisesRegex(ValueError, "reviewer name"):
                     reviewer_room_geometry_service.post(web, project, {**valid_payload, "reviewer": ""})
                 reviewer_room_geometry_service.post(web, project, valid_payload)
@@ -154,7 +250,29 @@ class ReviewerRoomGeometryTests(unittest.TestCase):
             self.assertEqual(saved["records"][0]["roof"], "exposed")
             self.assertEqual(saved["records"][0]["envelope_reviewer"], "QA-2")
             self.assertTrue(saved["records"][0]["envelope_declared_at"])
+            self.assertEqual(saved["records"][0]["openings"][0]["opening_id"], "front-window")
             self.assertEqual(saved["rooms"], [reviewer_room])
+
+    def test_declare_north_action_persists_page_bearing_reviewer_and_time(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root / "reviewer_room_geometry.json"
+            path.write_text(json.dumps(reviewer_room_geometry.empty_artifact()), encoding="utf-8")
+            project = {"id": "north-test", "review_dir": str(root)}
+            web = SimpleNamespace(safe_link=lambda _path: "", update_project=lambda _project: None)
+            with patch.object(reviewer_room_geometry_service, "_page_context", return_value=[{"page": 3}]), \
+                 patch.object(reviewer_room_geometry_service, "_response", return_value={"ok": True}), \
+                 patch("backend.calculation_extraction_service.post", return_value={}), \
+                 patch("backend.productization.record_change_if_fingerprint_changed"):
+                reviewer_room_geometry_service.post(web, project, {
+                    "action": "declare_north", "page": 3, "reviewer": "QA",
+                    "plan_up_azimuth_deg": 27.5,
+                })
+            saved = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(saved["page_north"]["3"]["plan_up_azimuth_deg"], 27.5)
+            self.assertEqual(saved["page_north"]["3"]["source"], "reviewer_typed_page_up_bearing")
+            self.assertEqual(saved["page_north"]["3"]["reviewer"], "QA")
+            self.assertTrue(saved["page_north"]["3"]["declared_at"])
 
     def test_service_rejects_unknown_room_and_unknown_or_distant_snap_lines(self):
         with TemporaryDirectory() as temporary:
