@@ -12,19 +12,22 @@ range before or during the session).
 
 ---
 
-## 1. Before the session — must be fixed first
+## 1. Before the session
 
-A dry run on commit `347b031` (2026-10-04, isolated copy) found two problems
-that would spoil the session. Fix both, re-run the dry run, then schedule.
+Status (updated 2026-10-04): **both session-blocking problems are fixed**, and
+so is the slow project-open (D7). The full dry run has **not yet been re-run**
+on the fixed code — do that (all three comfort rooms traced) before
+scheduling. Use commit `dcca237` or later.
 
-| # | Problem found in the dry run | Why it matters for the session | Fix |
-|---|---|---|---|
-| D3 | **Every room appears twice in the trace room picker** (e.g. "Bar · area unresolved" and "Bar · Unassigned level · area unresolved"). A trace saved on the first entry is calibrated and saved but **never counted**: the area gate and the draft still say the room has no area. | The participant will very likely pick the first entry, trace carefully, and be told to trace again. | Dedupe the trace room list by room identity (label + level, blank level = "Unassigned level"), keeping the room-use entry; key `current_traced_areas` by room identity so any existing trace on the old ID still counts. Files: `backend/reviewer_room_geometry_service.py` (Codex is editing this file for Card I — do it after Card I or inside it). Cause: Card M now emits building-evidence spaces with a blank level. |
-| D5 ✅ fixed 2026-10-04 (Claude, uncommitted at time of writing) | **The room confirmation list only showed rooms that already had an area.** Now untraced comfort rooms are listed as "Not traced — not included in the total" with a "Trace this room" button, cannot be included, and a line above the list names them. |
-| — | *(original D5 notes below)* | | |
-| D5 (original) | **The room confirmation list only shows rooms that already have an area.** Untraced rooms (Kitchen, Shop) are not listed at all. | The participant can trace one room, confirm, and get a small number (dry run: 4.1 kW from Bar alone) without noticing two rooms are missing. | List comfort rooms without an area in the confirmation block as "not traced — not included in the total" with a link to trace them; keep them out of the calculation. Files: `ai/room_scope_confirmation.py`, `frontend/js/app.js`. |
+### Fixed
 
-Worth fixing if time allows (not session-blocking):
+| # | Problem found in the first dry run (commit `347b031`) | Fix and how it was checked |
+|---|---|---|
+| D3 ✅ `dcca237` | **Every room appeared twice in the trace room picker** ("Bar · area unresolved" and "Bar · Unassigned level · area unresolved"). A trace saved on the first entry was calibrated but **never counted**. | The picker now lists one entry per room (label + level). A trace saved on the old entry is mapped to the room and counts. Checked on a copy of the dry-run project: one entry per room; the old Bar trace counts; the area gate lists only the really untraced Kitchen and Shop. |
+| D5 ✅ `6bb3754` | **The room confirmation list only showed rooms that already had an area**, so a participant could trace one room and get a small total (dry run: 4.1 kW, Bar only) without noticing two rooms were missing. | Untraced comfort rooms are listed as "Not traced — not included in the total" with a "Trace this room" button. They cannot be included, and a line above the list names them. |
+| D7 ✅ `dcca237` | **Opening a project took ~45 s** before the room confirmation block appeared (`GET /api/ai-preliminary-model` returned ~29 MB). | The room list now appears in **0.8 s (12 KB)**. A freshness check follows in the background; the status line reads "checking freshness" for up to ~30 s. Confirm/calculate each take 11–13 s. Checked in the real UI on the dry-run project. |
+
+### Still open (not session-blocking)
 
 - **D1** Before confirmation, the summary says "Review required before AI"
   and the next action is "Create ChatGPT packet". The manual ChatGPT route stays
@@ -34,35 +37,54 @@ Worth fixing if time allows (not session-blocking):
   ChatGPT (see section 4).
 - **D4** After saving a trace, the room picker still says "area unresolved"
   (walkthrough finding #15).
-- **D7** Opening a project takes ~45 s before the room confirmation block
-  appears: `GET /api/ai-preliminary-model` returns ~29 MB (the whole draft
-  model and input set) for Butcher Buffet. The participant may scroll past
-  before it renders. Fix: return only what the UI draws (status, report, room
-  scope) and fetch the rest on demand. File: `backend/ai_preliminary_service.py`
-  (Codex is editing it for Card I — do after).
 - **D6** When the guided resolver stops because rooms need tracing, the
   instruction ("For Bar, Kitchen, Shop: trace and calibrate each room…") only
   appears in a toast; the status line stays generic.
+- **D8 (new)** For ~30 s after opening a project the status line says
+  "checking freshness" while the Confirm button is already active. If the
+  participant confirms during that time and the model turns out to be stale,
+  confirmation is refused with "The draft model is out of date … Resolve model
+  inputs again". Safe, but may confuse — note it if it happens.
+
+### What the session result will and won't include
+
+- **Walls and roof cannot be declared in the UI yet.** The backend support
+  exists (Card I), but the screen to mark walls external/internal and the roof
+  exposed is Card J (with Codex). Unless Card J lands before the session, the
+  participant's total will have **no envelope**, and the result will list
+  "Envelope" under "Not included in this total". This is expected; don't
+  treat it as a participant error.
+- Also not included in any case: glazing and façade sun, roof sun, infiltration,
+  kitchen ventilation/exhaust, and the coolroom/freezer (refrigeration, outside
+  the comfort total).
+- For your reference only (do not tell the participant): with all three rooms
+  traced, the walkthrough project gave 33.8 kW without envelope, and 36.1 kW
+  with the roof declared exposed through the API. Neither is a validated number.
 
 ## 2. Dry-run timings (Claude, 2026-10-04)
+
+First dry run on `347b031`, except where marked. Re-measure all of these in the
+pending dry run on the fixed code.
 
 | Stage | Time | Notes |
 |---|---|---|
 | Upload + analysis (38 pages) | 45 s | |
 | Confirm selected drawings | 136 s | Long wait — watch whether the participant thinks it has stalled |
+| Open the project / room list appears | 0.8 s (`dcca237`) | Was ~45 s. Status says "checking freshness" for up to ~30 s afterwards |
 | Guided "Resolve model inputs" (no traces yet) | 60 s | Stops with "trace and calibrate each room" (toast only) |
 | Trace + calibrate one room | not representative | Claude placed corners by keyboard; budget **4–8 min per room** for a first-time user with a mouse (walkthrough: first room took ~19 min) |
 | Guided resolve after tracing | 90 s | |
-| Confirm rooms | < 10 s | |
-| Calculate draft load | ~25 s | |
+| Confirm rooms | 11–13 s (`dcca237`) | Was < 10 s; now includes the freshness check |
+| Calculate draft load | 12–13 s (`dcca237`) | Was ~25 s |
 
 Expected session length: **35–50 min** for three comfort rooms (Bar, Kitchen,
 Shop) plus reading the result. Stop at 60 min regardless.
 
 ## 3. Setting up (for you)
 
-1. Use a machine with this repo on the commit you want to test (after the D3
-   and D5 fixes). Start the app from the repo folder:
+1. Use a machine with this repo on commit `dcca237` or later (D3, D5 and D7
+   fixed), ideally the commit the re-run dry run passed on. Start the app from
+   the repo folder:
    ```bash
    ./start_web --port 8000
    ```
@@ -164,6 +186,11 @@ next cards.
   `dryrun-butcher-buffet-_not-for-design_-1791038318` (in the scratchpad
   worktree, not in your `output/`).
 - Result: 4.08 kW AI preliminary estimate from **Bar only** (30.78 m², reviewer
-  trace) — illustrates D5. Bar was traced twice to demonstrate D3: the trace on
-  the building-evidence entry (`spaces-21-2`) is saved and calibrated but not
-  counted; the trace on the room-use entry is counted.
+  trace) — illustrates D5. Bar was traced twice to demonstrate D3: on
+  `347b031` the trace on the building-evidence entry (`spaces-21-2`) was saved
+  and calibrated but not counted. With the D3 fix (`dcca237`) both Bar traces
+  map to Bar and count; the same project, re-resolved, confirmed and
+  calculated in the real UI, again gave 4.08 kW from Bar only, with Kitchen and
+  Shop listed as not traced.
+- Next: a fresh dry run on `dcca237` or later with Bar, Kitchen and Shop all
+  traced (pending).
