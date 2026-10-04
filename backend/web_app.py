@@ -3941,7 +3941,11 @@ def api_ai_preliminary_model(request):
     query = parse_qs(urlparse(request.path).query)
     project = project_by_id(query.get("project_id", [""])[0])
     ensure_review_dir(project)
-    return ai_preliminary_service.get(sys.modules[__name__], project)
+    check_freshness = query.get("check_freshness", [None])[0]
+    return ai_preliminary_service.get(
+        sys.modules[__name__], project, query.get("view", ["full"])[0],
+        None if check_freshness is None else check_freshness == "1",
+    )
 
 
 def api_value_resolution(request):

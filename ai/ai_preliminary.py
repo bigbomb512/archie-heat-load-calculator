@@ -526,6 +526,7 @@ def validate_manual_placeholder_entities(raw):
             "area_verification_status": "provisional",
             "reviewer_trace_id": str(item.get("reviewer_trace_id", "")),
             "geometry_proof_id": str(item.get("geometry_proof_id", "")),
+            "reviewer_traced_area": deepcopy(item.get("reviewer_traced_area", {})) if isinstance(item.get("reviewer_traced_area", {}), dict) else {},
             "source_pages": sorted({int(row.get("page")) for row in evidence if str(row.get("page", "")).isdigit()}),
             # Internal-gains evidence is preserved as proposed evidence.  The
             # resolver below applies citation and controlled-value checks; this
@@ -622,6 +623,8 @@ def validate_placeholder_proposal(raw):
     rooms = validate_manual_placeholder_entities(room_rows) if room_rows else []
     raw_issues = raw.get("issues", [])
     result = {"rooms": rooms, "surfaces": [], "openings": [],
+              "envelope_assessments": [deepcopy(row) for row in raw.get("envelope_assessments", []) if isinstance(row, dict)]
+              if isinstance(raw.get("envelope_assessments", []), list) else [],
               "issues": [deepcopy(item) for item in raw_issues if isinstance(item, dict)] if isinstance(raw_issues, list) else []}
     for group, prefix in (("surfaces", "ai-preliminary-surface"), ("openings", "ai-preliminary-opening")):
         rows = raw.get(group, [])
@@ -1006,6 +1009,43 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                 "conflicts": deepcopy(surface.get("conflicts", [])),
                 "validation_errors": deepcopy(surface.get("unresolved_fields", [])),
             })
+        # Reviewer-trace surfaces are independently sourced declarations. Keep
+        # them alongside the normalized ledger records even when that ledger
+        # is otherwise authoritative for AI/PDF surface proposals.
+        for surface in effective_proposal.get("surfaces", []):
+            if not isinstance(surface, dict) or not surface.get("reviewer_trace_id"):
+                continue
+            owner = _find_owner(active_rows, surface.get("owner_room_label", ""), surface.get("owner_level_name", ""))
+            target = room_rows.get(_room_identity(owner["name"], owner["level"]), {}) if owner else {}
+            candidate_id = str(surface.get("candidate_id", ""))
+            if not candidate_id or not target:
+                continue
+            candidate = deepcopy(surface)
+            candidate["owner_room_id"] = target["room"].get("room_id", "")
+            surface_candidates.append(candidate)
+            ledger_rows.append({
+                "surface_id": candidate_id,
+                "physical_type": surface.get("physical_type", "wall"),
+                "thermal_role": "external",
+                "boundary_condition": "outside",
+                "owner_room_id": target["room"].get("room_id", ""),
+                "owner_zone_id": target["room"].get("zone_id", ""),
+                "gross_area_m2": surface.get("gross_area_m2"),
+                "net_opaque_area_m2": None,
+                "opening_coverage_status": "not_applicable",
+                "linked_opening_ids": [],
+                "construction_id": "",
+                "u_value_w_m2k": None,
+                "boundary_temperature_c": None,
+                "evidence_refs": deepcopy(surface.get("evidence", [])),
+                "confidence": surface.get("confidence", 0.65),
+                "confidence_score": surface.get("confidence", 0.65),
+                "assumptions": deepcopy(surface.get("assumptions", [])),
+                "status": "proposed",
+                "area_basis": "reviewer_traced_boundary",
+                "area_derivation": {"formula": "trace_edge_length_m × ceiling_height_m" if surface.get("physical_type") == "wall" else "reviewer_traced_footprint_area_m2",
+                                    "reviewer_trace_id": surface.get("reviewer_trace_id")},
+            })
     else:
         for candidate in surface_candidates:
             owner = _find_owner(active_rows, candidate.get("owner_room_label", ""), candidate.get("owner_level_name", ""))
@@ -1132,8 +1172,15 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                   "orientation": orientation, "area_m2": net, "u_value_w_m2k": profile["roof_u_w_m2k"] if physical in {"roof", "ceiling"} else profile["wall_u_w_m2k"],
                   "solar_design_w_m2": solar_peak, "solar_gain_factor": envelope["opaque_solar_gain_factor"] if solar_peak else 0,
                   "shading_factor": 1, "boundary_method": "external", "boundary_temperature_c": None, "construction_id": "",
-                  "verification_status": "provisional", "source": _source(profile_id) + "; AI preliminary surface classification",
+                  "verification_status": "provisional",
+                  "source": (_source(profile_id) + "; reviewer-declared boundary" if candidate.get("reviewer_trace_id")
+                             else _source(profile_id) + "; AI preliminary surface classification"),
                   "preliminary_assumption": True, "source_pages": candidate["evidence"], "orientation": orientation}
+        if candidate.get("reviewer_trace_id"):
+            opaque.update({"reviewer_trace_id": candidate.get("reviewer_trace_id"),
+                           "reviewer": candidate.get("reviewer", ""),
+                           "boundary_rationale": candidate.get("rationale", "Reviewer-declared boundary."),
+                           "provenance_status": "provisional"})
         if candidate.get("resolved_u_value_w_m2k") is not None:
             opaque["u_value_w_m2k"] = candidate["resolved_u_value_w_m2k"]
         if candidate.get("resolved_construction_id"):
@@ -1146,7 +1193,11 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
         surface_summary["included"] += 1
         exclusions[:] = [item for item in exclusions if not (item.get("room_id") == room["room_id"] and item.get("component") == "opaque envelope" and "No structurally valid" in item.get("reason", ""))]
         ledger.append({"room_id": room["room_id"], "field": "envelope_surface", "value": net, "origin": "ai_geometry", "profile_id": profile_id,
-                       "confidence": candidate["confidence"], "confidence_band": candidate["confidence_band"], "rationale": "AI preliminary external surface; controlled profile U-value and solar basis.", "evidence": candidate["evidence"], "surface_id": candidate["candidate_id"]})
+                       "confidence": candidate["confidence"], "confidence_band": candidate["confidence_band"],
+                       "rationale": candidate.get("rationale", "AI preliminary external surface; controlled profile U-value and solar basis."),
+                       "evidence": candidate["evidence"], "surface_id": candidate["candidate_id"],
+                       "reviewer_trace_id": candidate.get("reviewer_trace_id", ""),
+                       "reviewer": candidate.get("reviewer", "")})
         for opening in openings:
             shade = envelope["shading_categories"][opening["shading_category"]]
             opening_orientation = opening.get("orientation") if opening.get("orientation") in CARDINALS else orientation if orientation in CARDINALS else ""
@@ -1178,6 +1229,28 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                 exclusions.append({"room_id": room["room_id"], "component": "shading review", "candidate_id": opening["candidate_id"], "reason": "Unknown façade shading uses the explicit conservative unshaded preliminary assumption."})
             ledger.append({"room_id": room["room_id"], "field": "glazing_opening", "value": opening["opening_area_m2"], "origin": "ai_geometry", "profile_id": profile_id,
                            "confidence": opening["confidence"], "confidence_band": opening["confidence_band"], "rationale": "AI preliminary glazing with controlled U-value, SHGC, directional solar, and shading category.", "evidence": opening["evidence"], "surface_id": opening["candidate_id"]})
+    for assessment in effective_proposal.get("envelope_assessments", []):
+        if not isinstance(assessment, dict):
+            continue
+        owner = _find_owner(active_rows, assessment.get("owner_room_label", ""), assessment.get("owner_level_name", ""))
+        target = room_rows.get(_room_identity(owner["name"], owner["level"]), {}) if owner else {}
+        if not target:
+            continue
+        room_id = target["room"].get("room_id", "")
+        for item in assessment.get("not_assessed", []):
+            if isinstance(item, dict):
+                exclusions.append({"room_id": room_id, "component": item.get("component", "opaque envelope"),
+                                   "component_id": item.get("component_id", "envelope"), "reason": item.get("reason", "Envelope item was not assessed."),
+                                   "page": item.get("page", assessment.get("page")),
+                                   "reviewer_trace_id": assessment.get("trace_id", ""),
+                                   "reviewer": assessment.get("reviewer", ""), "envelope_not_assessed": True})
+        for item in assessment.get("excluded", []):
+            if isinstance(item, dict):
+                exclusions.append({"room_id": room_id, "component": item.get("component", "opaque envelope"),
+                                   "component_id": item.get("component_id", "envelope"), "reason": item.get("reason", "Envelope item is outside the preliminary method scope."),
+                                   "page": item.get("page", assessment.get("page")),
+                                   "reviewer_trace_id": assessment.get("trace_id", ""),
+                                   "reviewer": assessment.get("reviewer", ""), "envelope_exclusion": True})
     surface_summary["excluded"] = surface_summary["discovered"] - surface_summary["included"] - surface_summary["blocked"]
     model["updated_at"] = now()
     model["source_requirements_updated_at"] = requirements["updated_at"]
@@ -1233,6 +1306,35 @@ def calculate(input_set, safety_factor_policy=None):
     report["review_queue"] = deepcopy(input_set["review_queue"])
     report["provenance"] = shared_resolution.build_report_provenance(report, input_set.get("value_resolution", {}))
     report["excluded_components"] = sorted(set(report.get("excluded_components", []) + [item["component"] for item in input_set["exclusions"]]))
+    room_names = {room.get("room_id"): room.get("name", "")
+                  for room in material.get("hourly_load_model", {}).get("rooms", []) if isinstance(room, dict)}
+    coverage_rows = report.get("scope_summary", {}).get("room_input_coverage", [])
+    coverage_by_id = {row.get("room_id"): row for row in coverage_rows if isinstance(row, dict)}
+    for item in input_set.get("exclusions", []):
+        if not isinstance(item, dict) or not item.get("room_id"):
+            continue
+        if item.get("envelope_not_assessed"):
+            record = {"room_id": item["room_id"], "room_name": room_names.get(item["room_id"], ""),
+                      "component_id": item.get("component_id", "envelope"), "component_type": "envelope",
+                      "value": None, "unit": "", "source": "Reviewer-declared boundary",
+                      "citations": ([{"page": item["page"], "reference": f"Reviewer trace {item.get('reviewer_trace_id', '')}",
+                                      "reviewer": item.get("reviewer", "")}] if item.get("page") else []),
+                      "verification_status": "provisional", "reason": item.get("reason", "Envelope item was not assessed."),
+                      "reviewer_trace_id": item.get("reviewer_trace_id", "")}
+            if not any(row.get("room_id") == record["room_id"] and row.get("component_id") == record["component_id"]
+                       for row in report.get("unresolved_room_inputs", []) if isinstance(row, dict)):
+                report.setdefault("unresolved_room_inputs", []).append(record)
+            row = coverage_by_id.get(record["room_id"])
+            if row is not None:
+                row.setdefault("not_assessed", []).append(record)
+                row["status"] = "incomplete"
+            report.setdefault("scope_summary", {})["complete_scope"] = False
+        elif item.get("envelope_exclusion"):
+            report.setdefault("known_exclusions", []).append({
+                "room_id": item["room_id"], "component_id": item.get("component_id", "envelope"),
+                "component_type": "envelope", "reason": item.get("reason", "Envelope item is outside the preliminary method scope."),
+                "source": "Reviewer-declared boundary", "reviewer_trace_id": item.get("reviewer_trace_id", ""),
+            })
     warning = "Envelope and listed air-side loads were not assessed; the total excludes them and understates the load."
     if report.get("unresolved_room_inputs") and warning not in report["warnings"]:
         report["warnings"].append(warning)

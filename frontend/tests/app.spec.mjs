@@ -47,7 +47,7 @@ async function mockApi(page) {
     packet_fingerprint: "abcdef1234567890", prompt_fingerprint: "123456abcdef7890", result_counts: {validation_issues: 0},
     raw_reply_url: "/api/artifact?project_id=demo-project&artifact=chatgpt_runs%2Ftest%2Fraw_reply.txt",
   }] } }));
-  await page.route("**/api/ai-preliminary-model?project_id=demo-project", route => route.fulfill({ json: {} }));
+  await page.route("**/api/ai-preliminary-model?project_id=demo-project**", route => route.fulfill({ json: {} }));
   await page.route("**/api/room-use-resolution?project_id=demo-project", route => route.fulfill({ json: {} }));
   await page.route("**/api/au-ventilation-rules?project_id=demo-project", route => route.fulfill({json:{
     id:"demo-project", project_regulatory_context:{building_approval_application_date:"", building_class:"unknown", building_use:"", project_specific_ventilation_basis:""},
@@ -1367,6 +1367,66 @@ function roomScopeState(status = "not_confirmed"){
       {key: "room-use:level-2:service-counter", label: "Service Counter", level: "Level 2", area_m2: null, area_origin: "", source_pages: [5], status: "needs_use", include: true, exclude_reason: ""},
     ]};
 }
+
+test("project load renders room confirmation from compact preliminary data and keeps actions available", async ({ page }) => {
+  await mockApi(page);
+  const roomScope = roomScopeState();
+  roomScope.candidates = [
+    {key: "room-use:level-2:bar", label: "Bar", level: "Level 2", area_m2: 25, area_origin: "reviewer_trace", source_pages: [20], status: "calculated", include: true, exclude_reason: ""},
+    {key: "room-use:level-2:kitchen", label: "Kitchen", level: "Level 2", area_m2: null, area_origin: "", source_pages: [21], status: "no_area", include: false, exclude_reason: ""},
+  ];
+  const compact = {id: "demo-project", settings: {}, run: {}, status: "freshness_pending", freshness_pending: true, stale_reasons: [],
+    value_resolution: {record_count: 0, research_job_count: 0, records: [], coverage_summary: {}},
+    room_scope: roomScope, artifact_links: {},
+    hourly_ai_preliminary_load_report: {label: "AI preliminary estimate", included_scope_peak: {design_total_kw: 4.2},
+      room_names: [{room_id: "room-bar", name: "Bar"}], known_exclusions: [], unresolved_room_inputs: [],
+      review_queue: [], confirmed_rooms: [], preliminary_surface_summary: {included: 0, blocked: 0, excluded: 0}}};
+  const loadedUrls = [];
+  const actions = [];
+  await page.route("**/api/ai-preliminary-model?project_id=demo-project**", route => {
+    const url = route.request().url(); loadedUrls.push(url);
+    return route.fulfill({json: url.includes("check_freshness=1")
+      ? {...compact, status: "current", freshness_pending: false} : compact});
+  });
+  await page.route("**/api/ai-preliminary-model", route => {
+    const body = route.request().postDataJSON();
+    actions.push(body);
+    const confirmed = {...roomScope, status: "confirmed", confirmation: {reviewer: "QA", confirmed_at: "2026-10-04"}};
+    return route.fulfill({json: {...compact, room_scope: confirmed,
+      hourly_ai_preliminary_load_report: {...compact.hourly_ai_preliminary_load_report,
+        confirmed_rooms: [{label: "Bar", area_m2: 25, area_origin: "reviewer_trace", source_pages: [20]}],
+        room_scope_confirmation: {reviewer: "QA"}}}});
+  });
+  const kitchenId = "room-use:level-2:kitchen";
+  await page.route("**/api/reviewer-room-geometry?project_id=demo-project", route => route.fulfill({json: mechanicalTraceContext([
+    {room_id: kitchenId, label: "Kitchen", level_name: "Level 2", needs_trace: true},
+  ])}));
+  await page.route("**/fake-plan.svg", route => route.fulfill({contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="800"><rect width="1000" height="800" fill="#eee"/></svg>'}));
+
+  await page.goto("/");
+  await page.evaluate(() => { DATA = {id: "demo-project"}; show("vRes");
+    requiredElement("workflowSkeleton").classList.remove("hide");
+    requiredElement("visionPanel").classList.remove("hide");
+    requiredElement("designRequirementsPanel").classList.remove("hide");
+    showCalculationInputEvidence({fingerprint: "initial", geometry_resolution: {entities: [], review_items: [], summary: {}, deterministic_proof_diagnostics: {pages: [], rooms: []}}, candidates: []}, {}, "current"); });
+  await page.evaluate(() => loadAiPreliminary());
+  expect(loadedUrls[0]).toContain("view=workspace");
+  const block = page.locator("#roomScopeConfirmation");
+  await expect(block).toContainText("Bar");
+  await expect(block.locator('[data-room-scope-key="room-use:level-2:kitchen"] [data-room-scope-trace]')).toBeVisible();
+  await expect.poll(() => loadedUrls.some(url => url.includes("check_freshness=1"))).toBe(true);
+  await expect(page.locator("#aiPreliminaryStatus")).toContainText("current");
+  await expect(block.locator("[data-room-scope-calculate]")).toBeDisabled();
+  await block.locator("[data-room-scope-reviewer]").fill("QA");
+  await block.locator("[data-room-scope-confirm]").click();
+  await expect.poll(() => actions.at(-1)?.action).toBe("confirm_room_scope");
+  expect(actions.at(-1).response_view).toBe("workspace");
+  await block.locator("[data-room-scope-calculate]").click();
+  await expect.poll(() => actions.at(-1)?.action).toBe("calculate");
+  expect(actions.at(-1).response_view).toBe("workspace");
+  await block.locator('[data-room-scope-key="room-use:level-2:kitchen"] [data-room-scope-trace]').click();
+  await expect(page.locator("#reviewerRoomGeometryWorkspace [data-geometry-room]")).toHaveValue(kitchenId);
+});
 
 async function renderRoomScope(page, state){
   await page.goto("/");

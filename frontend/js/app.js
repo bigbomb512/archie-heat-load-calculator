@@ -22,6 +22,7 @@ let CALCULATOR_INPUTS_AVAILABLE = false, CALCULATOR_EXCEPTION_ROWS = [], CALCULA
 let VISION_EXTRACTION = null, VISION_POLL = null, ROOM_INFERENCE_POLL = null;
 let WINDOW_SCAN_POLL = null, SITE_ORIENTATION = {};
 let ROOM_GEOMETRY_CONTEXT = null, ROOM_TRACE_STATE = null;
+let AI_PRELIMINARY_LOAD_SEQUENCE = 0;
 const CONTRACTOR_WORKFLOW_STORAGE_KEY = "archie-contractor-workflow-stage";
 const WORKFLOW_SKELETON_STORAGE_KEY = "archie-workflow-skeleton-state";
 const WORKFLOW_STAGE_DEFS = [
@@ -371,7 +372,7 @@ async function workflowPreviewAction(stageId){
     }
     applyWorkflowResolution(data);
     if (stageId === "calculate"){
-      const calculation = await fetch("/api/ai-preliminary-model", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({project_id: DATA.id, action:"calculate"})});
+      const calculation = await fetch("/api/ai-preliminary-model", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({project_id: DATA.id, action:"calculate", response_view:"workspace"})});
       const calculated = await calculation.json();
       if (!calculation.ok || calculated.error) throw new Error(calculated.error || "The preliminary calculation could not complete.");
       if (!["calculated", "current", "calculated_provisional"].includes(calculated.status)){
@@ -1815,15 +1816,31 @@ function aiPreliminarySettings(){
 
 async function loadAiPreliminary(){
   if (!DATA?.id) return;
+  const projectId = DATA.id, sequence = ++AI_PRELIMINARY_LOAD_SEQUENCE;
   try {
-    const response = await fetch(`/api/ai-preliminary-model?project_id=${encodeURIComponent(DATA.id)}`);
+    const response = await fetch(`/api/ai-preliminary-model?project_id=${encodeURIComponent(projectId)}&view=workspace`);
     const data = await response.json();
     if (!response.ok || data.error) throw new Error(data.error || "Could not load the AI preliminary model.");
+    if (DATA?.id !== projectId || AI_PRELIMINARY_LOAD_SEQUENCE !== sequence) return;
     drawAiPreliminary(data);
+    if (data.freshness_pending) refreshAiPreliminaryFreshness(projectId, sequence);
     loadRoomUseResolution();
     loadCeilingVolumeResolution();
     loadInternalGainsResolution();
   } catch (error) { requiredElement("aiPreliminaryStatus").textContent = error.message; }
+}
+
+async function refreshAiPreliminaryFreshness(projectId, sequence){
+  try {
+    const response = await fetch(`/api/ai-preliminary-model?project_id=${encodeURIComponent(projectId)}&view=workspace&check_freshness=1`);
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || "Could not check preliminary-model freshness.");
+    if (DATA?.id === projectId && AI_PRELIMINARY_LOAD_SEQUENCE === sequence) drawAiPreliminaryStatus(data);
+  } catch (error) {
+    if (DATA?.id === projectId && AI_PRELIMINARY_LOAD_SEQUENCE === sequence) {
+      requiredElement("aiPreliminaryStatus").textContent = `Freshness check unavailable · ${error.message}`;
+    }
+  }
 }
 
 async function loadRoomUseResolution(){
@@ -1970,8 +1987,7 @@ function drawAiPreliminary(data){
   requiredElement("aiPreliminaryConsent").checked = !!settings.saved_project_consent;
   const proposal = run.manual_placeholder_proposal || (run.manual_placeholder_entities?.length ? {rooms: run.manual_placeholder_entities} : null);
   if (proposal && document.activeElement !== requiredElement("aiPreliminaryProposal")) requiredElement("aiPreliminaryProposal").value = JSON.stringify(proposal, null, 2);
-  const stale = (data.stale_reasons || []).join(", ");
-  requiredElement("aiPreliminaryStatus").textContent = `${data.status || "not_calculated"}${run.status ? ` · ${run.status}` : ""}${stale ? ` · stale: ${stale}` : ""}${run.message ? ` · ${run.message}` : ""}`;
+  drawAiPreliminaryStatus(data);
   drawValueResolution(data.value_resolution || {});
   if (data.model_input_resolution) drawModelInputResolution(data);
   const peak = report.included_scope_peak || {};
@@ -1980,7 +1996,8 @@ function drawAiPreliminary(data){
   const unresolved = report.unresolved_room_inputs || [];
   const knownExclusions = report.known_exclusions || [];
   const roomNames = new Map();
-  for (const room of [...(data.model?.topology?.rooms || []), ...(report.scenario_results || []).flatMap(scenario => scenario.rooms || [])]) {
+  const roomNameRows = report.room_names || [...(data.model?.topology?.rooms || []), ...(report.scenario_results || []).flatMap(scenario => scenario.rooms || [])];
+  for (const room of roomNameRows) {
     if (room?.room_id && room?.name) roomNames.set(room.room_id, room.name);
   }
   const componentLabels = {
@@ -2014,18 +2031,27 @@ function drawAiPreliminary(data){
     ${queue.slice(0, 8).map(item => `<article class="review-item"><div><b>${esc(item.room_id)} · ${esc(item.field)}</b><span>${esc(item.confidence_band)} confidence · ${esc(item.rationale || "Review this assumption.")}</span></div></article>`).join("")}` : "<p class=\"review-empty\">Save settings, then assemble a local placeholder-AI draft or run the configured provider.</p>";
 }
 
+function drawAiPreliminaryStatus(data){
+  const run = data.run || {};
+  const stale = (data.stale_reasons || []).join(", ");
+  const status = data.freshness_pending ? "checking freshness" : (data.status || "not_calculated");
+  requiredElement("aiPreliminaryStatus").textContent = `${status}${run.status ? ` · ${run.status}` : ""}${stale ? ` · stale: ${stale}` : ""}${run.message ? ` · ${run.message}` : ""}`;
+}
+
 function drawValueResolution(resolution){
   const coverage = resolution.coverage_summary || {};
   const records = Array.isArray(resolution.records) ? resolution.records : [];
   const jobs = Array.isArray(resolution.research_jobs) ? resolution.research_jobs : [];
+  const recordCount = Number.isFinite(resolution.record_count) ? resolution.record_count : records.length;
+  const researchJobCount = Number.isFinite(resolution.research_job_count) ? resolution.research_job_count : jobs.length;
   requiredElement("valueResolutionConsent").checked = !!resolution.research_consent;
-  requiredElement("valueResolutionStatus").textContent = records.length
-    ? `${coverage.resolved || 0} resolved · ${coverage.provisional || 0} draft assumptions · ${coverage.needs_source_lookup || 0} unresolved · ${jobs.length} lookup job${jobs.length === 1 ? "" : "s"}`
+  requiredElement("valueResolutionStatus").textContent = recordCount
+    ? `${coverage.resolved || 0} resolved · ${coverage.provisional || 0} draft assumptions · ${coverage.needs_source_lookup || 0} unresolved · ${researchJobCount} lookup job${researchJobCount === 1 ? "" : "s"}`
     : "Resolve values after the draft AI proposal is available.";
   const important = records.filter(item => item.status === "excluded" || item.origin === "preliminary_fallback").slice(0, 8);
   requiredElement("valueResolutionResults").innerHTML = important.length
     ? important.map(item => `<article class="review-item"><div><b>${esc(item.target_id)} · ${esc(item.target)}</b><span>${esc(item.status)} · ${esc(item.origin)} · ${esc(item.rationale || "Review this value source.")}</span></div></article>`).join("")
-    : records.length ? `<p class="review-empty">${coverage.provisional ? `${coverage.provisional} value${coverage.provisional === 1 ? " is" : "s are"} provisional draft assumption${coverage.provisional === 1 ? "" : "s"}; review the queue before calling the model complete.` : "All currently materialized values have a source or project override."}</p>` : "";
+    : recordCount ? `<p class="review-empty">${coverage.provisional ? `${coverage.provisional} value${coverage.provisional === 1 ? " is" : "s are"} provisional draft assumption${coverage.provisional === 1 ? "" : "s"}; review the queue before calling the model complete.` : "All currently materialized values have a source or project override."}</p>` : "";
 }
 
 function drawModelInputResolution(data){
@@ -2077,7 +2103,7 @@ async function modelInputResolutionAction(action){
 async function valueResolutionAction(action){
   if (!DATA?.id) return toast("No project selected", "Open or analyse a project first.");
   try {
-    const payload = {project_id: DATA.id, action, research_consent: requiredElement("valueResolutionConsent").checked};
+    const payload = {project_id: DATA.id, action, response_view: "workspace", research_consent: requiredElement("valueResolutionConsent").checked};
     const response = await fetch("/api/value-resolution", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});
     const data = await response.json();
     if (!response.ok || data.error) throw new Error(data.error || "Could not resolve model inputs.");
@@ -2192,7 +2218,7 @@ async function saveRoomScopeUse(roomId, taxonomyId, label){
       await postJson("/api/room-use-resolution", {project_id: DATA.id, action: "resolve"});
       await postJson("/api/room-use-resolution", override);
     }
-    const data = await postJson("/api/ai-preliminary-model", {project_id: DATA.id, action: "assemble", settings: aiPreliminarySettings()});
+    const data = await postJson("/api/ai-preliminary-model", {project_id: DATA.id, action: "assemble", settings: aiPreliminarySettings(), response_view: "workspace"});
     drawAiPreliminary(data);
     setRoomScopeMessage(taxonomyId === "not_a_room"
       ? `${label} was marked as not a room and removed. Review the list and confirm it.`
@@ -2213,7 +2239,7 @@ async function confirmRoomScope(){
     reason: row.querySelector("[data-room-scope-reason]").value.trim(),
   }));
   try {
-    const data = await postJson("/api/ai-preliminary-model", {project_id: DATA.id, action: "confirm_room_scope", reviewer,
+    const data = await postJson("/api/ai-preliminary-model", {project_id: DATA.id, action: "confirm_room_scope", reviewer, response_view: "workspace",
       candidate_fingerprint: container.dataset.candidateFingerprint || "", rows, settings: aiPreliminarySettings()});
     drawAiPreliminary(data);
     toast("Room list confirmed", "The draft load will use only the included rooms.");
@@ -2226,7 +2252,7 @@ async function calculateConfirmedDraft(){
   if (!DATA?.id) return;
   setRoomScopeMessage("Calculating the draft load from the confirmed rooms…");
   try {
-    const data = await postJson("/api/ai-preliminary-model", {project_id: DATA.id, action: "calculate", settings: aiPreliminarySettings()});
+    const data = await postJson("/api/ai-preliminary-model", {project_id: DATA.id, action: "calculate", settings: aiPreliminarySettings(), response_view: "workspace"});
     drawAiPreliminary(data);
     const total = data.hourly_ai_preliminary_load_report?.included_scope_peak?.design_total_kw;
     setRoomScopeMessage(total != null ? `Draft load calculated: ${total} kW (AI preliminary estimate, not engineering reviewed). See the result for what it includes and excludes.` : "Draft load calculated.");
@@ -2238,7 +2264,7 @@ async function calculateConfirmedDraft(){
 async function aiPreliminaryAction(action){
   if (!DATA?.id) return toast("No project selected", "Open or analyse a project first.");
   try {
-    const payload = {project_id: DATA.id, action, settings: aiPreliminarySettings()};
+    const payload = {project_id: DATA.id, action, settings: aiPreliminarySettings(), response_view: "workspace"};
     if (action === "save_placeholder_proposal") {
       try { payload.placeholder_proposal = JSON.parse(requiredElement("aiPreliminaryProposal").value); }
       catch { throw new Error("Proposal JSON is invalid."); }

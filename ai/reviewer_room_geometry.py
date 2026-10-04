@@ -11,6 +11,8 @@ SCHEMA_VERSION = 1
 # Image-coordinate snap radius: this is only a UI convenience, not proof that a
 # candidate is a room boundary. Keep it small on full-resolution plan renders.
 SNAP_TOLERANCE_PX = 8.0
+EDGE_BOUNDARIES = {"external", "adjacent_tenancy", "internal", "unknown"}
+ROOF_EXPOSURES = {"exposed", "not_exposed", "unknown"}
 
 
 def fingerprint(value):
@@ -21,6 +23,34 @@ def empty_artifact():
     artifact = {"schema_version": SCHEMA_VERSION, "records": []}
     artifact["fingerprint"] = fingerprint(artifact)
     return artifact
+
+
+def validate_envelope_classification(edges, roof, edge_count):
+    if not isinstance(edge_count, int) or edge_count < 1:
+        raise ValueError("The traced room must contain at least one polygon edge.")
+    if edges is None:
+        edges = []
+    if not isinstance(edges, list):
+        raise ValueError("Envelope edges must be a list.")
+    values = {index: "unknown" for index in range(edge_count)}
+    seen = set()
+    for edge in edges:
+        if not isinstance(edge, dict):
+            raise ValueError("Each envelope edge classification must be an object.")
+        index = edge.get("index")
+        boundary = str(edge.get("boundary", ""))
+        if type(index) is not int or not 0 <= index < edge_count:
+            raise ValueError("Envelope edge index must identify an edge in the traced polygon.")
+        if index in seen:
+            raise ValueError("Envelope edge indices must be unique.")
+        if boundary not in EDGE_BOUNDARIES:
+            raise ValueError("Envelope edge boundary must be external, adjacent_tenancy, internal or unknown.")
+        seen.add(index)
+        values[index] = boundary
+    roof = str(roof)
+    if roof not in ROOF_EXPOSURES:
+        raise ValueError("Roof exposure must be exposed, not_exposed or unknown.")
+    return {"edges": [{"index": index, "boundary": values[index]} for index in range(edge_count)], "roof": roof}
 
 
 def validate_artifact(raw):
@@ -71,7 +101,18 @@ def validate_artifact(raw):
             raise ValueError("Room geometry trace requires a reviewer name.")
         if not isinstance(row.get("source_fingerprints"), dict):
             raise ValueError("Room geometry trace needs source fingerprints.")
-        records.append(deepcopy(row))
+        checked = deepcopy(row)
+        edge_count = len(points) - 1
+        classification = validate_envelope_classification(checked.get("edges", []), checked.get("roof", "unknown"), edge_count)
+        checked.update(classification)
+        declaration_reviewer = str(checked.get("envelope_reviewer", "")).strip()
+        declared_at = str(checked.get("envelope_declared_at", "")).strip()
+        has_classification = checked["roof"] != "unknown" or any(edge["boundary"] != "unknown" for edge in checked["edges"])
+        if has_classification and (not declaration_reviewer or not declared_at):
+            raise ValueError("Envelope classifications require a reviewer and declaration timestamp.")
+        checked["envelope_reviewer"] = declaration_reviewer
+        checked["envelope_declared_at"] = declared_at
+        records.append(checked)
     result = {"schema_version": SCHEMA_VERSION, "records": records}
     rooms = validate_reviewer_rooms(raw.get("rooms", []))
     if rooms:

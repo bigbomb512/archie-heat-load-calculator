@@ -1,6 +1,7 @@
 """Project-local orchestration for the draft-only AI preliminary cooling path."""
 
 import json
+import math
 import os
 import re
 import tempfile
@@ -431,6 +432,28 @@ def _resolve_from_packs(paths, project):
     return artifact
 
 
+def _ledger_has_included_external_surface(geometry, room_id, room_label, level_name):
+    ledger = (geometry or {}).get("thermal_surface_ledger", {})
+    for surface in ledger.get("surfaces", []) if isinstance(ledger, dict) else []:
+        if not isinstance(surface, dict):
+            continue
+        physical = str(surface.get("physical_type", surface.get("kind", ""))).casefold()
+        boundary = str(surface.get("boundary_condition", "")).casefold()
+        role = str(surface.get("thermal_role", "")).casefold()
+        external = (physical in {"wall", "roof", "ceiling", "opaque_wall"}
+                    and (surface.get("external_exposure") == "external" or boundary == "outside"
+                         or role in {"external", "outside", "outdoors"}))
+        if not external or surface.get("thermal_eligible") is False or surface.get("status") in {"blocked", "excluded", "stale"}:
+            continue
+        owner_id = str(surface.get("owner_room_id", ""))
+        owner_matches = owner_id == str(room_id)
+        label_matches = (str(surface.get("owner_room_label", "")).casefold() == str(room_label).casefold()
+                         and (not surface.get("level_name") or str(surface.get("level_name")).casefold() == str(level_name).casefold()))
+        if owner_matches or label_matches:
+            return True
+    return False
+
+
 def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
     """Join controlled room-use decisions and skill geometry proposals before validation.
 
@@ -451,6 +474,10 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
     else:
         proposal = {"rooms": []}
     proposal.setdefault("rooms", [])
+    # Envelope assessments are always rebuilt from the current reviewer trace
+    # registry; never accept provider-supplied trace provenance or exclusions.
+    proposal.pop("envelope_assessments", None)
+    proposal["surfaces"] = [row for row in proposal.get("surfaces", []) if isinstance(row, dict)]
     use_by_id = {
         row.get("room_id"): row for row in (room_use or {}).get("records", [])
         if isinstance(row, dict) and row.get("room_id")
@@ -475,6 +502,13 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
             "reason": "Reviewer trace artifact could not be read; trace-derived areas were ignored.",
             "remediation": "Repair reviewer_room_geometry.json, then resolve room areas from current calibrated traces.",
         }
+    try:
+        ceiling_values = ceiling_volume_resolution.values_by_room(
+            _read(paths["root"] / "ceiling_volume_resolution.json", {})
+        )
+    except (OSError, TypeError, ValueError):
+        ceiling_values = {}
+    envelope_assessments = []
     for room in proposal["rooms"]:
         if not isinstance(room, dict):
             continue
@@ -499,11 +533,12 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
             # or unresolved rooms can remain visible without being mistaken
             # for an evidence-backed room-use decision.
             room.setdefault("preliminary_profile_id", "generic_conditioned_room")
-        if ai_preliminary._number(room.get("area_m2")) is None or ai_preliminary._number(room.get("area_m2")) <= 0:
-            room_use_id = str((use or {}).get("room_id") or room_id or
-                              room_use_resolution.room_identity(room.get("label", ""), room.get("level_name", "")))
-            traced_area = traced_areas.get(room_use_id)
-            if traced_area and not traced_area.get("conflict"):
+        room_use_id = str((use or {}).get("room_id") or room_id or
+                          room_use_resolution.room_identity(room.get("label", ""), room.get("level_name", "")))
+        traced_area = traced_areas.get(room_use_id)
+        if traced_area and not traced_area.get("conflict"):
+            room["reviewer_traced_area"] = deepcopy(traced_area)
+            if ai_preliminary._number(room.get("area_m2")) is None or ai_preliminary._number(room.get("area_m2")) <= 0:
                 page = traced_area.get("page")
                 trace_id = str(traced_area.get("trace_id", ""))
                 proof_id = str(traced_area.get("proof_id", ""))
@@ -517,12 +552,112 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                                   "excerpt": f"Reviewer-traced room boundary; calibration status {traced_area.get('calibration_status')}.",
                                   "reviewer_trace_id": trace_id, "geometry_proof_id": proof_id}
                 room["evidence"] = ai_preliminary._combined_evidence(room, {"evidence": [trace_citation]})
+            declaration_reviewer = str(traced_area.get("envelope_reviewer", ""))
+            citation = {"page": traced_area.get("page"), "reference": f"Reviewer trace {traced_area.get('trace_id', '')}",
+                        "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+                        "reviewer_trace_id": traced_area.get("trace_id", ""),
+                        "reviewer": declaration_reviewer}
+            room["evidence"] = ai_preliminary._combined_evidence(room, {"evidence": [citation]})
+            assessment = {"owner_room_label": room.get("label", ""),
+                          "owner_level_name": room.get("level_name", ""),
+                          "trace_id": traced_area.get("trace_id", ""),
+                          "page": traced_area.get("page"), "reviewer": declaration_reviewer,
+                          "not_assessed": [], "excluded": []}
+            edges = traced_area.get("edges", [])
+            roof = traced_area.get("roof", "unknown")
+            area = ai_preliminary._number(traced_area.get("area_m2"))
+            ceiling = ceiling_values.get(room_use_id, {})
+            height_mm = ai_preliminary._number(ceiling.get("ceiling_height_mm"))
+            calibration = traced_area.get("calibration", {})
+            mm_per_px = ai_preliminary._number(calibration.get("mm_per_px"))
+            points = traced_area.get("points_image_px", [])
+            skip_trace_surfaces = _ledger_has_included_external_surface(
+                geometry, room_use_id, room.get("label", ""), room.get("level_name", ""),
+            )
+            if roof == "exposed":
+                if area and not skip_trace_surfaces:
+                    proposal["surfaces"].append({
+                        "surface_key": f"reviewer-trace:{traced_area['trace_id']}:roof",
+                        "label": f"{room.get('label', 'Room')} traced footprint roof",
+                        "owner_room_label": room.get("label", ""), "owner_level_name": room.get("level_name", ""),
+                        "physical_type": "roof", "thermal_role": "external", "external_exposure": "external",
+                        "orientation": "horizontal", "gross_area_m2": area,
+                        "opening_coverage": "not_applicable", "confidence": 0.65,
+                        "page": traced_area.get("page"), "evidence": [citation],
+                        "reviewer_trace_id": traced_area.get("trace_id", ""),
+                        "reviewer": declaration_reviewer, "verification_status": "provisional",
+                        "rationale": "Reviewer-declared exposed roof over the calibrated room trace; assumes a flat roof over the traced footprint.",
+                        "assumptions": ["flat_roof_over_traced_footprint"],
+                    })
+            elif roof == "unknown":
+                assessment["not_assessed"].append({"component_id": "roof_exposure", "component": "roof exposure",
+                    "reason": "Roof exposure was not assessed by the reviewer.", "page": traced_area.get("page")})
+            for edge in edges:
+                index, boundary = edge.get("index"), edge.get("boundary", "unknown")
+                if boundary == "unknown":
+                    assessment["not_assessed"].append({"component_id": f"boundary_edge_{index}",
+                        "component": f"boundary edge {index + 1}", "reason": "Boundary classification was not assessed by the reviewer.",
+                        "page": traced_area.get("page")})
+                    continue
+                if boundary in {"adjacent_tenancy", "internal"}:
+                    assessment["excluded"].append({"component_id": f"boundary_edge_{index}",
+                        "component": f"boundary edge {index + 1}",
+                        "reason": "Adjacent-tenancy and internal boundary conduction is outside this preliminary envelope method.",
+                        "page": traced_area.get("page")})
+                    continue
+                if boundary != "external":
+                    continue
+                if height_mm is None:
+                    reason = "Ceiling height unresolved; wall area cannot be derived."
+                    assessment["not_assessed"].append({"component_id": f"external_wall_edge_{index}",
+                        "component": f"external wall edge {index + 1}", "reason": reason,
+                        "page": traced_area.get("page")})
+                    assessment["excluded"].append({"component_id": f"external_wall_edge_{index}",
+                        "component": f"external wall edge {index + 1}", "reason": reason,
+                        "page": traced_area.get("page")})
+                    continue
+                if not mm_per_px or not isinstance(points, list) or index >= len(points) - 1:
+                    assessment["not_assessed"].append({"component_id": f"external_wall_edge_{index}",
+                        "component": f"external wall edge {index + 1}",
+                        "reason": "Calibrated trace edge length is unavailable; wall area cannot be derived.",
+                        "page": traced_area.get("page")})
+                    continue
+                length_m = math.dist(points[index], points[index + 1]) * mm_per_px / 1000.0
+                wall_area = length_m * height_mm / 1000.0
+                if wall_area <= 0 or not math.isfinite(wall_area):
+                    assessment["not_assessed"].append({"component_id": f"external_wall_edge_{index}",
+                        "component": f"external wall edge {index + 1}",
+                        "reason": "Calibrated trace edge produced no positive wall area.", "page": traced_area.get("page")})
+                    continue
+                if skip_trace_surfaces:
+                    continue
+                proposal["surfaces"].append({
+                    "surface_key": f"reviewer-trace:{traced_area['trace_id']}:wall:{index}",
+                    "label": f"{room.get('label', 'Room')} traced external wall edge {index + 1}",
+                    "owner_room_label": room.get("label", ""), "owner_level_name": room.get("level_name", ""),
+                    "physical_type": "wall", "thermal_role": "external", "external_exposure": "external",
+                    "orientation": "", "gross_area_m2": wall_area,
+                    "opening_coverage": "not_applicable", "confidence": 0.65,
+                    "page": traced_area.get("page"), "evidence": [citation],
+                    "reviewer_trace_id": traced_area.get("trace_id", ""),
+                    "reviewer": declaration_reviewer, "verification_status": "provisional",
+                    "rationale": "Reviewer-declared external boundary edge; façade orientation is unknown, so conduction only is included and no façade solar is applied.",
+                    "assumptions": ["unknown_orientation_conduction_only"],
+                })
+                assessment["not_assessed"].append({"component_id": f"external_wall_orientation_{index}",
+                    "component": "external walls — orientation not assessed (no façade solar)",
+                    "reason": f"External wall edge {index + 1} is included for conduction, but orientation and façade solar were not assessed.",
+                    "page": traced_area.get("page")})
+            if assessment["not_assessed"] or assessment["excluded"]:
+                envelope_assessments.append(assessment)
         geometry_row = geometry_by_id.get(room_id)
         if geometry_row:
             room["geometry"] = deepcopy(geometry_row.get("geometry", {}))
             room["page"] = geometry_row.get("page") or room.get("page")
             room["evidence"] = ai_preliminary._combined_evidence(room, geometry_row)
             room["geometry_candidate_status"] = "proposed"
+    if envelope_assessments:
+        proposal["envelope_assessments"] = envelope_assessments
     # Make sure all stable identities have evidence pages even when their
     # detector supplied only source_pages. The normal validator still checks
     # that a physical page is present.
@@ -614,13 +749,99 @@ def _stale_reasons(paths, input_set):
     return [name for name, value in current.items() if previous.get(name) != value]
 
 
-def _response(web, project):
+def _workspace_value_resolution(resolution):
+    resolution = resolution if isinstance(resolution, dict) else {}
+    records = resolution.get("records", []) if isinstance(resolution.get("records"), list) else []
+    important = [row for row in records if isinstance(row, dict)
+                 and (row.get("status") == "excluded" or row.get("origin") == "preliminary_fallback")]
+    jobs = resolution.get("research_jobs", []) if isinstance(resolution.get("research_jobs"), list) else []
+    fields = ("target_id", "target", "status", "origin", "rationale")
+    return {
+        "research_consent": bool(resolution.get("research_consent")),
+        "coverage_summary": resolution.get("coverage_summary", {}),
+        "record_count": len(records),
+        "research_job_count": len(jobs),
+        "records": [{key: row.get(key) for key in fields} for row in important[:8]],
+    }
+
+
+def _workspace_report(report):
+    report = report if isinstance(report, dict) else {}
+    names = {}
+    for scenario in report.get("scenario_results", []) if isinstance(report.get("scenario_results"), list) else []:
+        for room in scenario.get("rooms", []) if isinstance(scenario, dict) and isinstance(scenario.get("rooms"), list) else []:
+            if isinstance(room, dict) and room.get("room_id") and room.get("name"):
+                names[str(room["room_id"])] = str(room["name"])
+    rows = {}
+    for key in ("known_exclusions", "unresolved_room_inputs"):
+        rows[key] = []
+        items = report.get(key, []) if isinstance(report.get(key), list) else []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            room_id = str(item.get("room_id", ""))
+            if room_id and item.get("room_name"):
+                names.setdefault(room_id, str(item["room_name"]))
+            rows[key].append({field: item.get(field) for field in ("room_id", "room_name", "component_type")
+                              if item.get(field) is not None})
+    review_queue = report.get("review_queue", []) if isinstance(report.get("review_queue"), list) else []
+    queue_fields = ("room_id", "field", "confidence_band", "rationale")
+    confirmed = report.get("confirmed_rooms", []) if isinstance(report.get("confirmed_rooms"), list) else []
+    confirmed_fields = ("label", "level", "area_m2", "area_origin", "source_pages")
+    confirmation = report.get("room_scope_confirmation", {})
+    assumption_coverage = report.get("assumption_coverage")
+    assumption_coverage = assumption_coverage if isinstance(assumption_coverage, dict) else {}
+    return {
+        "label": report.get("label", ""),
+        "included_scope_peak": report.get("included_scope_peak", {}),
+        "assumption_coverage": {"low_confidence_count": assumption_coverage.get("low_confidence_count")},
+        "review_queue": [{key: row.get(key) for key in queue_fields} for row in review_queue[:8] if isinstance(row, dict)],
+        "unresolved_room_inputs": rows.get("unresolved_room_inputs", []),
+        "known_exclusions": rows.get("known_exclusions", []),
+        "room_names": [{"room_id": room_id, "name": name} for room_id, name in sorted(names.items())],
+        "preliminary_surface_summary": report.get("preliminary_surface_summary", {}),
+        "refrigeration_process_exclusions": [{key: item.get(key) for key in ("room_name", "reason") if item.get(key) is not None}
+                                              for item in report.get("refrigeration_process_exclusions", [])
+                                              if isinstance(item, dict)],
+        "confirmed_rooms": [{key: row.get(key) for key in confirmed_fields} for row in confirmed if isinstance(row, dict)],
+        "room_scope_confirmation": {key: confirmation.get(key) for key in ("reviewer", "confirmed_at")
+                                     if isinstance(confirmation, dict) and confirmation.get(key)},
+    }
+
+
+def _response(web, project, response_view="full", check_freshness=None):
+    if response_view not in {"full", "workspace"}:
+        raise ValueError("Response view must be full or workspace.")
+    if check_freshness is None:
+        # The workspace needs room candidates before the expensive geometry
+        # freshness rebuild. The browser follows with a compact status check.
+        check_freshness = response_view != "workspace"
     paths = _paths(project)
     settings = _settings(paths)
     input_set = _read(paths["current_set"], {})
     report = _read(paths["report"], {})
-    stale_reasons = _stale_reasons(paths, input_set)
+    stale_reasons = _stale_reasons(paths, input_set) if check_freshness else []
     run = _read(paths["run"], {})
+    value_resolution = _resolution(paths)
+    link_names = ({"codex_handoff", "codex_response"} if response_view == "workspace" else
+                  {"settings", "run", "model", "current_set", "report", "codex_handoff", "codex_response", "value_resolution", "room_use", "room_scope", "ceiling_volume", "internal_gains", "airflow", "ahu_resolution", "plant_resolution", "safety_factor_resolution"})
+    artifact_links = {name: web.safe_link(path) for name, path in paths.items()
+                      if name in link_names and path.exists()}
+    if response_view == "workspace":
+        workspace_run = {key: run.get(key) for key in ("status", "message", "manual_placeholder_proposal",
+                          "manual_placeholder_entities", "codex_handoff_status") if run.get(key) is not None}
+        return {
+            "id": project["id"], "settings": settings, "run": workspace_run,
+            "hourly_ai_preliminary_load_report": _workspace_report(report),
+            "status": ("stale" if stale_reasons else ("current" if input_set else "not_calculated"))
+                      if check_freshness else "freshness_pending",
+            "freshness_pending": not check_freshness,
+            "stale_reasons": stale_reasons,
+            "provider_configured": bool(os.environ.get("OPENAI_API_KEY")),
+            "value_resolution": _workspace_value_resolution(value_resolution),
+            "room_scope": _room_scope_state(paths, input_set),
+            "artifact_links": artifact_links,
+        }
     return {
         "id": project["id"], "settings": settings, "run": run,
         "model": _read(paths["model"], {}), "input_set": input_set,
@@ -628,7 +849,7 @@ def _response(web, project):
         "status": "stale" if stale_reasons else ("current" if input_set else "not_calculated"),
         "stale_reasons": stale_reasons,
         "provider_configured": bool(os.environ.get("OPENAI_API_KEY")),
-        "value_resolution": _resolution(paths),
+        "value_resolution": value_resolution,
         "room_use_resolution": room_use_resolution.validate(_read(paths["room_use"], room_use_resolution.empty_room_use_resolution())),
         "ceiling_volume_resolution": ceiling_volume_resolution.validate(_read(paths["ceiling_volume"], ceiling_volume_resolution.empty_ceiling_volume_resolution())),
         "internal_gains_resolution": internal_gains_resolution.validate(_read(paths["internal_gains"], internal_gains_resolution.empty_internal_gains_resolution())),
@@ -637,13 +858,12 @@ def _response(web, project):
         "plant_resolution": plant_resolution.validate(_read(paths["plant_resolution"], plant_resolution.empty_plant_resolution())),
         "safety_factor_resolution": safety_factor_resolution.validate(_read(paths["safety_factor_resolution"], safety_factor_resolution.empty_safety_factor_resolution())),
         "room_scope": _room_scope_state(paths, input_set),
-        "artifact_links": {name: web.safe_link(path) for name, path in paths.items()
-                           if name in {"settings", "run", "model", "current_set", "report", "codex_handoff", "codex_response", "value_resolution", "room_use", "room_scope", "ceiling_volume", "internal_gains", "airflow", "ahu_resolution", "plant_resolution", "safety_factor_resolution"} and path.exists()},
+        "artifact_links": artifact_links,
     }
 
 
-def get(web, project):
-    return _response(web, project)
+def get(web, project, response_view="full", check_freshness=None):
+    return _response(web, project, response_view, check_freshness)
 
 
 class RoomScopeNotConfirmed(ValueError):
@@ -980,4 +1200,4 @@ def post(web, project, data):
         raise ValueError("AI preliminary action must be save_settings, save_manual_placeholder, save_placeholder_proposal, prepare_codex_handoff, apply_codex_response, resolve_from_packs, queue_source_research, queue_missing_source_research, accept_project_source, apply_override, rebuild_preliminary_model, run, assemble, confirm_room_scope, or calculate.")
     project["updated_at"] = ai_preliminary.now()
     web.update_project(project)
-    return _response(web, project)
+    return _response(web, project, data.get("response_view", "full"), check_freshness=True)

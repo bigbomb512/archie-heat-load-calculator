@@ -64,8 +64,8 @@ def current_records(paths, artifact=None):
     artifact = artifact if isinstance(artifact, dict) else _read(paths["artifact"], reviewer_room_geometry.empty_artifact())
     checked = reviewer_room_geometry.validate_artifact(artifact)
     active = reviewer_room_geometry.active_records(checked, _source_pdf_fingerprint(paths), _vector_pages(paths))
-    known_rooms = {row["room_id"] for row in _rooms(paths)}
-    return [row for row in active if row.get("room_id") in known_rooms]
+    rooms = _rooms(paths)
+    return [resolved for row in active if (resolved := _trace_with_current_room(row, paths, rooms))]
 
 
 def current_artifact_input(root):
@@ -99,17 +99,8 @@ def current_traced_areas(root):
     artifact_input = current_artifact_input(root)
     traces = {str(row.get("trace_id")): row for row in artifact_input.get("records", [])
               if isinstance(row, dict) and row.get("trace_id") and row.get("room_id")}
-    room_use = _read(paths["room_use"], {})
-    rooms_by_id = {str(row.get("room_id")): row for row in room_use.get("records", [])
-                   if isinstance(row, dict) and row.get("room_id")}
-    # Building evidence remains a valid identity source for a trace when its
-    # room-use row has not yet been materialized.
-    for row in _read(paths["building"], {}).get("spaces", []):
-        if isinstance(row, dict) and row.get("id"):
-            rooms_by_id.setdefault(str(row["id"]), {
-                "room_id": row["id"], "original_label": row.get("name", ""),
-                "level_name": row.get("level_name", ""),
-            })
+    rooms = {str(row.get("room_id")): row for row in artifact_input.get("rooms", [])
+             if isinstance(row, dict) and row.get("room_id")}
     geometry = _read(paths["geometry"], {})
     proof_entities = {
         str(row.get("entity_id")): row for row in geometry.get("entities", [])
@@ -141,12 +132,19 @@ def current_traced_areas(root):
                 or status not in {"agreed", "declared_scale_rejected"}):
             continue
         room_id = str(trace["room_id"])
-        room = rooms_by_id.get(room_id, {})
+        room = rooms.get(room_id, {})
         page = entity.get("source", {}).get("page") or trace.get("page")
         candidate = {
             "room_id": room_id, "area_m2": area, "trace_id": trace_id,
             "proof_id": str(proof.get("proof_id", "")), "calibration_status": status,
             "page": page, "source_fingerprints": deepcopy(trace_sources),
+            "points_image_px": deepcopy(trace.get("points_image_px", [])),
+            "calibration": deepcopy(calibration),
+            "reviewer": str(trace.get("reviewer", "")),
+            "edges": deepcopy(trace.get("edges", [])),
+            "roof": str(trace.get("roof", "unknown")),
+            "envelope_reviewer": str(trace.get("envelope_reviewer", "")),
+            "envelope_declared_at": str(trace.get("envelope_declared_at", "")),
             "room_label": proof.get("room_label") or room.get("original_label") or room.get("name") or trace.get("room_label", ""),
             "level_name": proof.get("level_name") or room.get("level_name") or trace.get("level_name", ""),
         }
@@ -166,6 +164,51 @@ def current_traced_areas(root):
             selected["supporting_traces"] = candidates
         result[room_id] = selected
     return result
+
+
+def _trace_with_current_room(trace, paths, rooms=None):
+    """Return a current trace view bound to the canonical room-use identity.
+
+    Older traces may retain a building-evidence ID. Resolve them by the same
+    normalized label/level identity used by the room picker, without rewriting
+    the stored trace artifact.
+    """
+    rooms = _rooms(paths) if rooms is None else rooms
+    by_id = {str(row.get("room_id")): row for row in rooms if isinstance(row, dict) and row.get("room_id")}
+    trace_id = str(trace.get("room_id", ""))
+    if trace_id in by_id:
+        room = by_id[trace_id]
+    else:
+        identity = (_row_identity({"label": trace.get("room_label"), "level_name": trace.get("level_name")})
+                    if trace.get("room_label") else None)
+        if identity is None:
+            identity_by_source_id = {}
+            building = _read(paths["building"], {})
+            for row in building.get("spaces", []) if isinstance(building, dict) else []:
+                if isinstance(row, dict) and row.get("id"):
+                    identity_by_source_id[str(row["id"])] = _row_identity({
+                        "label": row.get("name", ""), "level_name": row.get("level_name", "")})
+            room_use = _read(paths["room_use"], {})
+            for row in room_use.get("records", []) if isinstance(room_use, dict) else []:
+                if isinstance(row, dict) and row.get("room_id"):
+                    identity_by_source_id[str(row["room_id"])] = _row_identity({
+                        "label": row.get("original_label") or row.get("label", ""),
+                        "level_name": row.get("level_name", "")})
+            from backend.room_proposal import room_proposal
+            proposal = room_proposal(_read(paths["run"], {}), paths["root"])
+            for row in proposal.get("rooms", []):
+                if isinstance(row, dict) and row.get("room_id"):
+                    identity_by_source_id[str(row["room_id"])] = _row_identity({
+                        "label": row.get("label", ""), "level_name": row.get("level_name") or row.get("level", "")})
+            identity = identity_by_source_id.get(trace_id)
+        room = next((row for row in rooms if identity is not None and _row_identity(row) == identity), None)
+    if room is None:
+        return None
+    resolved = deepcopy(trace)
+    resolved["room_id"] = str(room["room_id"])
+    resolved["room_label"] = room.get("label", trace.get("room_label", ""))
+    resolved["level_name"] = room.get("level_name", trace.get("level_name", ""))
+    return resolved
 
 
 def _scale_denominator(value):
@@ -323,13 +366,39 @@ def _rooms(paths):
     reviewer_added = {str(row.get("room_id")) for row in proposal.get("rooms", [])
                       if isinstance(row, dict) and row.get("reviewer_added")}
     unique = {}
+    source_priority = {"building_evidence": 0, "room_inference_proposal": 1, "room_use_resolution": 2}
     for row in rows:
         if row.get("room_id") in excluded or _row_identity(row) in excluded:
             continue
         if row.get("room_id") in reviewer_added or _row_identity(row) in reviewer_added:
             row["reviewer_added"] = True
         row["needs_trace"] = row.get("room_id") not in active_area_ids
-        unique.setdefault(row["room_id"], row)
+        identity = _row_identity(row)
+        existing = unique.get(identity)
+        if existing is None:
+            unique[identity] = row
+            continue
+        # Keep room-use identity and display values where available, while
+        # retaining all source evidence from duplicate detector records.
+        preferred = row if source_priority.get(row.get("source"), 0) > source_priority.get(existing.get("source"), 0) else existing
+        merged = deepcopy(preferred)
+        merged["source_pages"] = sorted({page for candidate in (existing, row)
+                                         for page in candidate.get("source_pages", [])
+                                         if isinstance(page, int)})
+        evidence = []
+        seen_evidence = set()
+        for candidate in (existing, row):
+            for item in candidate.get("evidence", []) if isinstance(candidate.get("evidence"), list) else []:
+                if not isinstance(item, dict):
+                    continue
+                marker = json.dumps(item, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+                if marker not in seen_evidence:
+                    seen_evidence.add(marker)
+                    evidence.append(deepcopy(item))
+        merged["evidence"] = evidence
+        merged["reviewer_added"] = bool(existing.get("reviewer_added") or row.get("reviewer_added"))
+        merged["needs_trace"] = bool(existing.get("needs_trace") and row.get("needs_trace"))
+        unique[identity] = merged
     return sorted(unique.values(), key=lambda row: (row["label"].casefold(), row["level_name"].casefold(), row["room_id"]))
 
 
@@ -351,7 +420,7 @@ def _response(web, project):
     for row in display["records"]:
         vector = vector_pages.get(row.get("page"), {})
         source_current = reviewer_room_geometry.trace_is_current(row, pdf_fp, _page_fp(vector))
-        room_current = _known_room(row.get("room_id"), paths) is not None
+        room_current = _trace_with_current_room(row, paths) is not None
         current = source_current and room_current
         row["freshness"] = "current" if current else "stale"
         row["stale_reasons"] = [] if current else (["Room is no longer present in the current room registry."] if source_current and not room_current else ["Source PDF or vector page changed since this trace was saved."])
@@ -520,6 +589,27 @@ def post(web, project, data):
         if len(kept) == len(artifact["records"]):
             raise ValueError("Room geometry trace was not found.")
         artifact = reviewer_room_geometry.validate_artifact({"records": kept, "rooms": artifact.get("rooms", [])})
+    elif action == "classify_envelope":
+        trace_id = str(data.get("trace_id", "")).strip()
+        trace = next((row for row in artifact["records"] if row.get("trace_id") == trace_id), None)
+        if not trace:
+            raise ValueError("Room geometry trace was not found.")
+        current = next((row for row in current_records(paths, artifact) if row.get("trace_id") == trace_id), None)
+        if not current:
+            raise ValueError("Envelope can only be classified on a current room trace.")
+        calibration = current.get("calibration", {})
+        if calibration.get("status") not in {"agreed", "declared_scale_rejected"} or not calibration.get("mm_per_px"):
+            raise ValueError("Envelope can only be classified on a calibrated room trace.")
+        reviewer = str(data.get("reviewer", "")).strip()
+        if not reviewer:
+            raise ValueError("Enter a reviewer name for the envelope classification.")
+        classification = reviewer_room_geometry.validate_envelope_classification(
+            data.get("edges"), data.get("roof", "unknown"), len(trace["points_image_px"]) - 1,
+        )
+        trace.update(classification)
+        trace["envelope_reviewer"] = reviewer
+        trace["envelope_declared_at"] = ai_preliminary.now()
+        artifact = reviewer_room_geometry.validate_artifact({"records": artifact["records"], "rooms": artifact.get("rooms", [])})
     elif action == "add_room":
         artifact = _add_reviewer_room(paths, artifact, data)
     elif action == "remove_room":
@@ -587,7 +677,7 @@ def post(web, project, data):
         new_records.append(record)
         artifact = reviewer_room_geometry.validate_artifact({"records": new_records, "rooms": artifact.get("rooms", [])})
     else:
-        raise ValueError("Room geometry action must be save, delete, add_room or remove_room.")
+        raise ValueError("Room geometry action must be save, delete, classify_envelope, add_room or remove_room.")
     _atomic_json(paths["artifact"], artifact)
     from backend import calculation_extraction_service, productization
     productization.record_change_if_fingerprint_changed(

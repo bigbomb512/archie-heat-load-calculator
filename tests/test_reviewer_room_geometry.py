@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from ai import reviewer_room_geometry
 from ai.drawing_coverage import build_drawing_coverage
-from ai.geometry_resolution import build_geometry_resolution
+from ai.geometry_resolution import build_geometry_resolution, fingerprint
 from ai.calculation_extraction import extract_calculation_input_evidence
 from backend import reviewer_room_geometry_service
 
@@ -112,6 +112,49 @@ class ReviewerRoomGeometryTests(unittest.TestCase):
         artifact = reviewer_room_geometry.validate_artifact({"records": [self.trace]})
         rows = reviewer_room_geometry.active_records(artifact, "pdf-a", [{"page": 1, "changed": True}])
         self.assertEqual(rows, [])
+
+    def test_envelope_classification_validation_defaults_and_rejects_bad_values(self):
+        checked = reviewer_room_geometry.validate_artifact({"records": [self.trace]})["records"][0]
+        self.assertEqual(checked["edges"], [{"index": index, "boundary": "unknown"} for index in range(4)])
+        self.assertEqual(checked["roof"], "unknown")
+        for edges, roof in (([{"index": 4, "boundary": "external"}], "unknown"),
+                            ([{"index": 0, "boundary": "party_wall"}], "unknown"),
+                            ([], "pitched")):
+            with self.assertRaises(ValueError):
+                reviewer_room_geometry.validate_envelope_classification(edges, roof, 4)
+
+    def test_classify_envelope_service_requires_reviewer_and_preserves_reviewer_rooms(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            vector_page = {"page": 1, "unchanged": True}
+            trace = {**self.trace, "source_fingerprints": {"source_pdf": "pdf-a", "vector_page": fingerprint(vector_page)}}
+            reviewer_room = {"room_id": "reviewer-room", "label": "Kiosk", "level_name": "Ground",
+                             "taxonomy_id": "retail", "reviewer": "QA", "source": "reviewer_added"}
+            (root / "ai_input.json").write_text(json.dumps({"source_pdf_fingerprint": "pdf-a"}), encoding="utf-8")
+            (root / "vector_geometry.json").write_text(json.dumps({"geometry_key_points": {"pages": [vector_page]}}), encoding="utf-8")
+            (root / "building_evidence.json").write_text(json.dumps({"spaces": [
+                {"id": "room-shop", "name": "Shop", "level_name": "Ground", "evidence": [{"page": 1}]},
+            ]}), encoding="utf-8")
+            path = root / "reviewer_room_geometry.json"
+            path.write_text(json.dumps(reviewer_room_geometry.validate_artifact({"records": [trace], "rooms": [reviewer_room]})), encoding="utf-8")
+            project = {"id": "classification-test", "review_dir": str(root)}
+            web = SimpleNamespace(safe_link=lambda _path: "", update_project=lambda _project: None)
+            valid_payload = {"action": "classify_envelope", "trace_id": trace["trace_id"],
+                             "edges": [{"index": 0, "boundary": "external"}], "roof": "exposed", "reviewer": "QA-2"}
+            with patch.object(reviewer_room_geometry_service, "_response", return_value={"ok": True}), \
+                 patch("backend.calculation_extraction_service.post", return_value={"calculation_input_evidence": {}, "geometry_resolution": {}}), \
+                 patch("backend.productization.record_change_if_fingerprint_changed"):
+                with self.assertRaisesRegex(ValueError, "reviewer name"):
+                    reviewer_room_geometry_service.post(web, project, {**valid_payload, "reviewer": ""})
+                reviewer_room_geometry_service.post(web, project, valid_payload)
+            saved = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(saved["records"][0]["edges"], [
+                {"index": 0, "boundary": "external"}, *[{"index": index, "boundary": "unknown"} for index in range(1, 4)],
+            ])
+            self.assertEqual(saved["records"][0]["roof"], "exposed")
+            self.assertEqual(saved["records"][0]["envelope_reviewer"], "QA-2")
+            self.assertTrue(saved["records"][0]["envelope_declared_at"])
+            self.assertEqual(saved["rooms"], [reviewer_room])
 
     def test_service_rejects_unknown_room_and_unknown_or_distant_snap_lines(self):
         with TemporaryDirectory() as temporary:
