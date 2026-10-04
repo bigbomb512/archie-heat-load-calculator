@@ -1097,6 +1097,88 @@ test("reviewed envelope editor saves a confirmed opaque boundary", async ({ page
   expect(errors).toEqual([]);
 });
 
+function envelopeTraceContext({calibrationStatus = "agreed", edges = null, roof = "unknown"} = {}){
+  const context = mechanicalTraceContext([{room_id:"room-use:level-2:shop",label:"Shop",level_name:"Level 2",needs_trace:false}]);
+  const trace = {trace_id:"trace-shop-envelope",room_id:"room-use:level-2:shop",room_label:"Shop",level_name:"Level 2",page:5,
+    points_image_px:[[100,100],[300,100],[300,300],[100,300],[100,100]],snapped_line_ids:[null,null,null,null,null],
+    calibration:{status:calibrationStatus,mm_per_px:calibrationStatus === "agreed" ? 10 : null,dimension_points_image_px:[[100,600],[300,600]],dimension_value_mm:2000},
+    reviewer:"QA-1",note:"Plan trace",freshness:"current",edges:edges || Array.from({length:4},(_,index)=>({index,boundary:"unknown"})),roof};
+  context.reviewer_room_geometry.records=[trace];
+  return {context,trace};
+}
+
+test("reviewer can classify calibrated trace edges and roof, and the picker shows saved status", async ({page}) => {
+  const {context,trace}=envelopeTraceContext(); const posts=[];
+  await page.route("**/api/reviewer-room-geometry?project_id=demo-project",route=>route.fulfill({json:context}));
+  await openTraceWorkspace(page);
+  await page.evaluate(()=>loadReviewerRoomGeometryWorkspace());
+  const workspace=page.locator("#reviewerRoomGeometryWorkspace");
+  await workspace.locator("[data-geometry-room]").selectOption(trace.room_id);
+  await workspace.locator("[data-geometry-page]").selectOption("5");
+  await expect(workspace.locator("[data-envelope-edge-class]")).toHaveCount(4);
+  await workspace.locator('[data-envelope-edge-select="0"]').click();
+  await expect(workspace.locator('[data-envelope-edge-select="0"]')).toHaveAttribute("aria-pressed","true");
+  await workspace.locator('[data-envelope-edge-class="0"]').selectOption("external");
+  await workspace.locator("[data-envelope-roof]").selectOption("exposed");
+  await workspace.locator("[data-envelope-reviewer]").fill("QA-2");
+  await page.route("**/api/reviewer-room-geometry",async route=>{
+    const body=route.request().postDataJSON();posts.push(body);
+    const saved={...trace,edges:body.edges,roof:body.roof,envelope_reviewer:body.reviewer,envelope_declared_at:"2026-10-04T00:00:00Z"};
+    context.reviewer_room_geometry.records=[saved];
+    return route.fulfill({json:context});
+  });
+  await workspace.locator("[data-envelope-save]").click();
+  await expect.poll(()=>posts.length).toBe(1);
+  expect(posts[0]).toEqual(expect.objectContaining({action:"classify_envelope",trace_id:trace.trace_id,reviewer:"QA-2",roof:"exposed"}));
+  expect(posts[0].edges).toHaveLength(4);
+  expect(posts[0].edges[0]).toEqual({index:0,boundary:"external"});
+  await expect(workspace.locator("[data-envelope-saved]")).toContainText("QA-2");
+  await expect(workspace.locator("[data-geometry-room] option:checked")).toContainText("walls: 1 of 4 classified · roof exposed");
+});
+
+test("internal-room shortcut classifies every edge and roof, and classification errors remain visible", async ({page})=>{
+  const {context,trace}=envelopeTraceContext({calibrationStatus:"unresolved"});
+  await page.route("**/api/reviewer-room-geometry?project_id=demo-project",route=>route.fulfill({json:context}));
+  await openTraceWorkspace(page);
+  await page.evaluate(()=>loadReviewerRoomGeometryWorkspace());
+  const workspace=page.locator("#reviewerRoomGeometryWorkspace");
+  await workspace.locator("[data-geometry-room]").selectOption(trace.room_id);
+  await workspace.locator("[data-geometry-page]").selectOption("5");
+  await expect(workspace.locator("[data-envelope-classification]")).toContainText("Envelope can only be classified on a calibrated room trace.");
+  await expect(workspace.locator("[data-envelope-save]")).toHaveCount(0);
+
+  trace.calibration={...trace.calibration,status:"agreed",mm_per_px:10};
+  await page.evaluate(()=>loadReviewerRoomGeometryWorkspace());
+  await workspace.locator("[data-geometry-room]").selectOption(trace.room_id);
+  await workspace.locator("[data-geometry-page]").selectOption("5");
+  await workspace.locator("[data-envelope-internal]").click();
+  await expect(workspace.locator('[data-envelope-edge-class="0"]')).toHaveValue("internal");
+  await expect(workspace.locator("[data-envelope-roof]")).toHaveValue("not_exposed");
+  await workspace.locator("[data-envelope-reviewer]").fill("QA");
+  await page.route("**/api/reviewer-room-geometry",route=>route.fulfill({status:400,json:{error:"Envelope can only be classified on a calibrated room trace."}}));
+  await workspace.locator("[data-envelope-save]").click();
+  await expect(workspace.locator("[data-geometry-error]")).toHaveText("Envelope can only be classified on a calibrated room trace.");
+});
+
+test("re-saving a classified trace warns that its envelope declarations reset", async ({page})=>{
+  const edges=Array.from({length:4},(_,index)=>({index,boundary:"internal"}));
+  const {context,trace}=envelopeTraceContext({edges,roof:"not_exposed"});
+  await page.route("**/api/reviewer-room-geometry?project_id=demo-project",route=>route.fulfill({json:context}));
+  await openTraceWorkspace(page);
+  await page.evaluate(()=>loadReviewerRoomGeometryWorkspace());
+  const workspace=page.locator("#reviewerRoomGeometryWorkspace");
+  await workspace.locator("[data-geometry-room]").selectOption(trace.room_id);
+  await workspace.locator("[data-geometry-page]").selectOption("5");
+  await page.route("**/api/reviewer-room-geometry",async route=>{
+    const body=route.request().postDataJSON();
+    const reset={...trace,points_image_px:body.points_image_px,edges:Array.from({length:4},(_,index)=>({index,boundary:"unknown"})),roof:"unknown"};
+    context.reviewer_room_geometry.records=[reset];
+    return route.fulfill({json:context});
+  });
+  await workspace.locator("[data-geometry-save]").click();
+  await expect(workspace.locator("[data-envelope-reset]")).toContainText("Re-saving this trace reset its prior wall and roof classifications to unknown");
+});
+
 test("analysis reaches results without browser errors", async ({ page }) => {
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));
@@ -1318,7 +1400,8 @@ test("AI preliminary result shows unassessed components beneath the total", asyn
           {room_id: "bar-id", component_type: "make_up_air"},
           {room_id: "kitchen-id", component_type: "make_up_air"},
           {room_id: "shop-id", component_type: "make_up_air"},
-          {room_id: "kitchen-id", component_type: "envelope"},
+          {room_id: "bar-id", component_type: "envelope", component_id: "roof_solar", component: "Roof sun — not assessed"},
+          {room_id: "shop-id", component_type: "envelope", component_id: "unclassified_wall_boundaries", component: "Walls — boundary not classified"},
         ],
       },
     });
@@ -1327,7 +1410,9 @@ test("AI preliminary result shows unassessed components beneath the total", asyn
   await expect(result).toContainText("Included-scope peak: 30.75 kW");
   await expect(result).toContainText("Not included in this total");
   await expect(result).toContainText("Make-up air — Bar, Kitchen, Shop");
-  await expect(result).toContainText("Envelope — Kitchen");
+  await expect(result).toContainText("Roof sun — not assessed — Bar");
+  await expect(result).toContainText("Walls — boundary not classified — Shop");
+  await expect(result).not.toContainText("Envelope —");
   await expect(result).not.toContainText("bar-id");
 });
 

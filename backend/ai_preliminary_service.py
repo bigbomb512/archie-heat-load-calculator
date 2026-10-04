@@ -432,7 +432,7 @@ def _resolve_from_packs(paths, project):
     return artifact
 
 
-def _ledger_has_included_external_surface(geometry, room_id, room_label, level_name):
+def _ledger_has_included_external_surface(geometry, room_id, room_label, level_name, physical_type):
     ledger = (geometry or {}).get("thermal_surface_ledger", {})
     for surface in ledger.get("surfaces", []) if isinstance(ledger, dict) else []:
         if not isinstance(surface, dict):
@@ -444,6 +444,10 @@ def _ledger_has_included_external_surface(geometry, room_id, room_label, level_n
                     and (surface.get("external_exposure") == "external" or boundary == "outside"
                          or role in {"external", "outside", "outdoors"}))
         if not external or surface.get("thermal_eligible") is False or surface.get("status") in {"blocked", "excluded", "stale"}:
+            continue
+        surface_type = "wall" if physical in {"wall", "opaque_wall"} else physical
+        requested_type = "wall" if physical_type in {"wall", "opaque_wall"} else physical_type
+        if surface_type != requested_type:
             continue
         owner_id = str(surface.get("owner_room_id", ""))
         owner_matches = owner_id == str(room_id)
@@ -552,104 +556,129 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                                   "excerpt": f"Reviewer-traced room boundary; calibration status {traced_area.get('calibration_status')}.",
                                   "reviewer_trace_id": trace_id, "geometry_proof_id": proof_id}
                 room["evidence"] = ai_preliminary._combined_evidence(room, {"evidence": [trace_citation]})
-            declaration_reviewer = str(traced_area.get("envelope_reviewer", ""))
-            citation = {"page": traced_area.get("page"), "reference": f"Reviewer trace {traced_area.get('trace_id', '')}",
-                        "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
-                        "reviewer_trace_id": traced_area.get("trace_id", ""),
-                        "reviewer": declaration_reviewer}
-            room["evidence"] = ai_preliminary._combined_evidence(room, {"evidence": [citation]})
-            assessment = {"owner_room_label": room.get("label", ""),
-                          "owner_level_name": room.get("level_name", ""),
-                          "trace_id": traced_area.get("trace_id", ""),
-                          "page": traced_area.get("page"), "reviewer": declaration_reviewer,
-                          "not_assessed": [], "excluded": []}
-            edges = traced_area.get("edges", [])
-            roof = traced_area.get("roof", "unknown")
-            area = ai_preliminary._number(traced_area.get("area_m2"))
-            ceiling = ceiling_values.get(room_use_id, {})
-            height_mm = ai_preliminary._number(ceiling.get("ceiling_height_mm"))
-            calibration = traced_area.get("calibration", {})
-            mm_per_px = ai_preliminary._number(calibration.get("mm_per_px"))
-            points = traced_area.get("points_image_px", [])
-            skip_trace_surfaces = _ledger_has_included_external_surface(
-                geometry, room_use_id, room.get("label", ""), room.get("level_name", ""),
-            )
-            if roof == "exposed":
-                if area and not skip_trace_surfaces:
+            if str(room.get("space_scope", "")).startswith("comfort_hvac"):
+                declaration_reviewer = str(traced_area.get("envelope_reviewer", ""))
+                citation = {"page": traced_area.get("page"), "reference": f"Reviewer trace {traced_area.get('trace_id', '')}",
+                            "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+                            "reviewer_trace_id": traced_area.get("trace_id", ""),
+                            "reviewer": declaration_reviewer}
+                room["evidence"] = ai_preliminary._combined_evidence(room, {"evidence": [citation]})
+                assessment = {"owner_room_label": room.get("label", ""),
+                              "owner_level_name": room.get("level_name", ""),
+                              "trace_id": traced_area.get("trace_id", ""),
+                              "page": traced_area.get("page"), "reviewer": declaration_reviewer,
+                              "not_assessed": [], "excluded": []}
+                edges = traced_area.get("edges", [])
+                roof = traced_area.get("roof", "unknown")
+                area = ai_preliminary._number(traced_area.get("area_m2"))
+                ceiling_identity = ceiling_volume_resolution.room_identity(
+                    room.get("label", ""), room.get("level_name", "")
+                )
+                ceiling = ceiling_values.get(room_use_id) or ceiling_values.get(ceiling_identity, {})
+                height_mm = ai_preliminary._number(ceiling.get("ceiling_height_mm"))
+                calibration = traced_area.get("calibration", {})
+                mm_per_px = ai_preliminary._number(calibration.get("mm_per_px"))
+                points = traced_area.get("points_image_px", [])
+                skip_roof = _ledger_has_included_external_surface(
+                    geometry, room_use_id, room.get("label", ""), room.get("level_name", ""), "roof",
+                )
+                skip_walls = _ledger_has_included_external_surface(
+                    geometry, room_use_id, room.get("label", ""), room.get("level_name", ""), "wall",
+                )
+                if roof == "exposed":
+                    if area and not skip_roof:
+                        proposal["surfaces"].append({
+                            "surface_key": f"reviewer-trace:{traced_area['trace_id']}:roof",
+                            "label": f"{room.get('label', 'Room')} traced footprint roof",
+                            "owner_room_label": room.get("label", ""), "owner_level_name": room.get("level_name", ""),
+                            "physical_type": "roof", "thermal_role": "external", "external_exposure": "external",
+                            "orientation": "horizontal", "gross_area_m2": area,
+                            "opening_coverage": "not_applicable", "confidence": 0.65,
+                            "page": traced_area.get("page"), "evidence": [citation],
+                            "reviewer_trace_id": traced_area.get("trace_id", ""),
+                            "reviewer": declaration_reviewer, "verification_status": "provisional",
+                            "rationale": "Reviewer-declared exposed roof over the calibrated room trace; assumes a flat roof over the traced footprint.",
+                            "assumptions": ["flat_roof_over_traced_footprint"],
+                        })
+                    if area:
+                        assessment["not_assessed"].append({
+                            "component_id": "roof_solar", "component": "Roof sun — not assessed",
+                            "reason": "Roof solar gain not assessed — no cited horizontal solar profile; conduction only.",
+                            "page": traced_area.get("page"),
+                        })
+                elif roof == "unknown":
+                    assessment["not_assessed"].append({"component_id": "roof_exposure", "component": "Roof — not checked",
+                        "reason": "Roof exposure was not assessed by the reviewer.", "page": traced_area.get("page")})
+                unknown_edges = []
+                for edge in edges:
+                    index, boundary = edge.get("index"), edge.get("boundary", "unknown")
+                    if boundary == "unknown":
+                        unknown_edges.append(index)
+                        continue
+                    if boundary in {"adjacent_tenancy", "internal"}:
+                        assessment["excluded"].append({"component_id": f"boundary_edge_{index}",
+                            "component": "Adjacent tenancy boundary" if boundary == "adjacent_tenancy" else "Internal boundary",
+                            "reason": "Adjacent-tenancy and internal boundary conduction is outside this preliminary envelope method.",
+                            "page": traced_area.get("page")})
+                        continue
+                    if boundary != "external":
+                        continue
+                    if height_mm is None:
+                        reason = "Ceiling height unresolved; wall area cannot be derived."
+                        assessment["not_assessed"].append({"component_id": f"external_wall_edge_{index}",
+                            "component": "External wall area — not assessed", "reason": reason,
+                            "page": traced_area.get("page")})
+                        continue
+                    if not mm_per_px or not isinstance(points, list) or index >= len(points) - 1:
+                        assessment["not_assessed"].append({"component_id": f"external_wall_edge_{index}",
+                            "component": "External wall area — not assessed",
+                            "reason": "Calibrated trace edge length is unavailable; wall area cannot be derived.",
+                            "page": traced_area.get("page")})
+                        continue
+                    length_m = math.dist(points[index], points[index + 1]) * mm_per_px / 1000.0
+                    wall_area = length_m * height_mm / 1000.0
+                    if wall_area <= 0 or not math.isfinite(wall_area):
+                        assessment["not_assessed"].append({"component_id": f"external_wall_edge_{index}",
+                            "component": "External wall area — not assessed",
+                            "reason": "Calibrated trace edge produced no positive wall area.", "page": traced_area.get("page")})
+                        continue
+                    if skip_walls:
+                        continue
                     proposal["surfaces"].append({
-                        "surface_key": f"reviewer-trace:{traced_area['trace_id']}:roof",
-                        "label": f"{room.get('label', 'Room')} traced footprint roof",
+                        "surface_key": f"reviewer-trace:{traced_area['trace_id']}:wall:{index}",
+                        "label": f"{room.get('label', 'Room')} traced external wall edge {index + 1}",
                         "owner_room_label": room.get("label", ""), "owner_level_name": room.get("level_name", ""),
-                        "physical_type": "roof", "thermal_role": "external", "external_exposure": "external",
-                        "orientation": "horizontal", "gross_area_m2": area,
+                        "physical_type": "wall", "thermal_role": "external", "external_exposure": "external",
+                        "orientation": "", "gross_area_m2": wall_area,
                         "opening_coverage": "not_applicable", "confidence": 0.65,
                         "page": traced_area.get("page"), "evidence": [citation],
                         "reviewer_trace_id": traced_area.get("trace_id", ""),
                         "reviewer": declaration_reviewer, "verification_status": "provisional",
-                        "rationale": "Reviewer-declared exposed roof over the calibrated room trace; assumes a flat roof over the traced footprint.",
-                        "assumptions": ["flat_roof_over_traced_footprint"],
+                        "rationale": "Reviewer-declared external boundary edge; façade orientation is unknown, so conduction only is included and no façade solar is applied.",
+                        "assumptions": ["unknown_orientation_conduction_only"],
                     })
-            elif roof == "unknown":
-                assessment["not_assessed"].append({"component_id": "roof_exposure", "component": "roof exposure",
-                    "reason": "Roof exposure was not assessed by the reviewer.", "page": traced_area.get("page")})
-            for edge in edges:
-                index, boundary = edge.get("index"), edge.get("boundary", "unknown")
-                if boundary == "unknown":
-                    assessment["not_assessed"].append({"component_id": f"boundary_edge_{index}",
-                        "component": f"boundary edge {index + 1}", "reason": "Boundary classification was not assessed by the reviewer.",
+                    assessment["not_assessed"].append({"component_id": f"external_wall_orientation_{index}",
+                        "component": "external walls — orientation not assessed (no façade solar)",
+                        "reason": f"External wall edge {index + 1} is included for conduction, but orientation and façade solar were not assessed.",
                         "page": traced_area.get("page")})
-                    continue
-                if boundary in {"adjacent_tenancy", "internal"}:
-                    assessment["excluded"].append({"component_id": f"boundary_edge_{index}",
-                        "component": f"boundary edge {index + 1}",
-                        "reason": "Adjacent-tenancy and internal boundary conduction is outside this preliminary envelope method.",
-                        "page": traced_area.get("page")})
-                    continue
-                if boundary != "external":
-                    continue
-                if height_mm is None:
-                    reason = "Ceiling height unresolved; wall area cannot be derived."
-                    assessment["not_assessed"].append({"component_id": f"external_wall_edge_{index}",
-                        "component": f"external wall edge {index + 1}", "reason": reason,
-                        "page": traced_area.get("page")})
-                    assessment["excluded"].append({"component_id": f"external_wall_edge_{index}",
-                        "component": f"external wall edge {index + 1}", "reason": reason,
-                        "page": traced_area.get("page")})
-                    continue
-                if not mm_per_px or not isinstance(points, list) or index >= len(points) - 1:
-                    assessment["not_assessed"].append({"component_id": f"external_wall_edge_{index}",
-                        "component": f"external wall edge {index + 1}",
-                        "reason": "Calibrated trace edge length is unavailable; wall area cannot be derived.",
-                        "page": traced_area.get("page")})
-                    continue
-                length_m = math.dist(points[index], points[index + 1]) * mm_per_px / 1000.0
-                wall_area = length_m * height_mm / 1000.0
-                if wall_area <= 0 or not math.isfinite(wall_area):
-                    assessment["not_assessed"].append({"component_id": f"external_wall_edge_{index}",
-                        "component": f"external wall edge {index + 1}",
-                        "reason": "Calibrated trace edge produced no positive wall area.", "page": traced_area.get("page")})
-                    continue
-                if skip_trace_surfaces:
-                    continue
-                proposal["surfaces"].append({
-                    "surface_key": f"reviewer-trace:{traced_area['trace_id']}:wall:{index}",
-                    "label": f"{room.get('label', 'Room')} traced external wall edge {index + 1}",
-                    "owner_room_label": room.get("label", ""), "owner_level_name": room.get("level_name", ""),
-                    "physical_type": "wall", "thermal_role": "external", "external_exposure": "external",
-                    "orientation": "", "gross_area_m2": wall_area,
-                    "opening_coverage": "not_applicable", "confidence": 0.65,
-                    "page": traced_area.get("page"), "evidence": [citation],
-                    "reviewer_trace_id": traced_area.get("trace_id", ""),
-                    "reviewer": declaration_reviewer, "verification_status": "provisional",
-                    "rationale": "Reviewer-declared external boundary edge; façade orientation is unknown, so conduction only is included and no façade solar is applied.",
-                    "assumptions": ["unknown_orientation_conduction_only"],
-                })
-                assessment["not_assessed"].append({"component_id": f"external_wall_orientation_{index}",
-                    "component": "external walls — orientation not assessed (no façade solar)",
-                    "reason": f"External wall edge {index + 1} is included for conduction, but orientation and façade solar were not assessed.",
-                    "page": traced_area.get("page")})
-            if assessment["not_assessed"] or assessment["excluded"]:
-                envelope_assessments.append(assessment)
+                if unknown_edges:
+                    assessment["not_assessed"].append({
+                        "component_id": "unclassified_wall_boundaries",
+                        "component": "Walls — boundary not classified",
+                        "reason": f"{len(unknown_edges)} of {len(edges)} wall edges not classified.",
+                        "unclassified_edge_indices": unknown_edges,
+                        "page": traced_area.get("page"),
+                    })
+                fully_internal = (bool(edges) and roof == "not_exposed"
+                                  and all(edge.get("boundary") in {"internal", "adjacent_tenancy"} for edge in edges))
+                if fully_internal:
+                    assessment["envelope_not_applicable"] = True
+                    proposal["surfaces"] = [surface for surface in proposal.get("surfaces", [])
+                        if not (str(surface.get("owner_room_label", "")).casefold() == str(room.get("label", "")).casefold()
+                                and (not surface.get("owner_level_name") or str(surface.get("owner_level_name", "")).casefold()
+                                     == str(room.get("level_name", "")).casefold()))]
+                if assessment["not_assessed"] or assessment["excluded"] or fully_internal:
+                    envelope_assessments.append(assessment)
         geometry_row = geometry_by_id.get(room_id)
         if geometry_row:
             room["geometry"] = deepcopy(geometry_row.get("geometry", {}))
@@ -658,6 +687,18 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
             room["geometry_candidate_status"] = "proposed"
     if envelope_assessments:
         proposal["envelope_assessments"] = envelope_assessments
+    # A room explicitly outside the comfort-HVAC scope cannot contribute any
+    # reviewer-traced or provider-proposed envelope surface to this subtotal.
+    excluded_rooms = [row for row in proposal["rooms"] if isinstance(row, dict)
+                      and row.get("space_scope") and not str(row.get("space_scope")).startswith("comfort_hvac")]
+    excluded_owners = {(str(row.get("label", "")).casefold(), str(row.get("level_name", "")).casefold())
+                       for row in excluded_rooms}
+    excluded_owner_ids = {str(row.get("room_id", "")) for row in excluded_rooms if row.get("room_id")}
+    if excluded_owners or excluded_owner_ids:
+        proposal["surfaces"] = [surface for surface in proposal.get("surfaces", [])
+            if str(surface.get("owner_room_id", "")) not in excluded_owner_ids
+            and (str(surface.get("owner_room_label", "")).casefold(), str(surface.get("owner_level_name", "")).casefold())
+            not in excluded_owners]
     # Make sure all stable identities have evidence pages even when their
     # detector supplied only source_pages. The normal validator still checks
     # that a physical page is present.
@@ -782,7 +823,7 @@ def _workspace_report(report):
             room_id = str(item.get("room_id", ""))
             if room_id and item.get("room_name"):
                 names.setdefault(room_id, str(item["room_name"]))
-            rows[key].append({field: item.get(field) for field in ("room_id", "room_name", "component_type")
+            rows[key].append({field: item.get(field) for field in ("room_id", "room_name", "component_type", "component", "component_id", "reason")
                               if item.get(field) is not None})
     review_queue = report.get("review_queue", []) if isinstance(report.get("review_queue"), list) else []
     queue_fields = ("room_id", "field", "confidence_band", "rationale")

@@ -8,7 +8,7 @@ import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ai import ai_preliminary, room_use_resolution
+from ai import ai_preliminary, ceiling_volume_resolution, room_use_resolution
 from ai.geometry_resolution import fingerprint
 from backend import ai_preliminary_service, model_input_resolution_service, reviewer_room_geometry_service
 
@@ -76,7 +76,10 @@ def set_envelope_trace(root, trace, edges, roof):
     path = root / "reviewer_room_geometry.json"
     artifact = json.loads(path.read_text(encoding="utf-8"))
     row = next(item for item in artifact["records"] if item["trace_id"] == trace["trace_id"])
-    row.update({"edges": edges, "roof": roof, "envelope_reviewer": "HVAC reviewer", "envelope_declared_at": "2026-10-04T00:00:00Z"})
+    edge_by_index = {edge["index"]: edge for edge in edges}
+    complete_edges = [{"index": index, "boundary": edge_by_index.get(index, {}).get("boundary", "unknown")}
+                      for index in range(len(row["points_image_px"]) - 1)]
+    row.update({"edges": complete_edges, "roof": roof, "envelope_reviewer": "HVAC reviewer", "envelope_declared_at": "2026-10-04T00:00:00Z"})
     path.write_text(json.dumps(artifact), encoding="utf-8")
 
 
@@ -151,13 +154,20 @@ def main():
 
     with tempfile.TemporaryDirectory() as folder:
         root = Path(folder)
-        room_use, proposal, _room_id, _trace = write_fixture(root, scope="refrigeration_process")
+        room_use, proposal, _room_id, trace = write_fixture(root, scope="refrigeration_process")
+        set_envelope_trace(root, trace, [{"index": 0, "boundary": "external"}], "exposed")
+        proposal["surfaces"] = [{"surface_key": "provider-roof", "physical_type": "roof",
+                                 "owner_room_id": "proposal-room", "owner_room_label": "Cool Room",
+                                 "owner_level_name": "Level 1", "thermal_role": "external"}]
         prepared = prepare(root, room_use, proposal)
         assembled = ai_preliminary.assemble({"spaces": []}, preliminary_proposal=prepared,
                                             allow_area_fallbacks=False)
         check("current traced refrigeration room stays excluded from comfort HVAC",
               not assembled["material"]["hourly_load_model"]["rooms"]
-              and assembled["excluded_spaces"][0]["scope"] == "refrigeration_process")
+              and assembled["excluded_spaces"][0]["scope"] == "refrigeration_process"
+              and not prepared["surfaces"]
+              and prepared["rooms"][0]["area_m2"] == 25.0
+              and prepared["rooms"][0]["area_origin"] == "reviewer_traced")
 
     with tempfile.TemporaryDirectory() as folder:
         root = Path(folder)
@@ -246,15 +256,25 @@ def main():
               and roof["orientation"] == "horizontal" and roof["reviewer_trace_id"] == trace["trace_id"])
         check("unknown edges and roof classification keep envelope scope incomplete",
               not report["scope_summary"]["complete_scope"]
-              and any(item.get("component_id") == "boundary_edge_0" and item.get("component_type") == "envelope"
-                      for item in report["unresolved_room_inputs"]))
+              and any(item.get("component_id") == "unclassified_wall_boundaries"
+                      and item.get("component") == "Walls — boundary not classified"
+                      and item.get("reason") == "4 of 4 wall edges not classified."
+                      for item in report["unresolved_room_inputs"])
+              and any(item.get("component_id") == "roof_solar"
+                      and item.get("component") == "Roof sun — not assessed"
+                      for item in report["unresolved_room_inputs"])
+              and not any(item.get("component") == "Envelope" for item in report["unresolved_room_inputs"]))
 
     with tempfile.TemporaryDirectory() as folder:
         root = Path(folder)
         room_use, proposal, room_id, trace = write_fixture(root)
-        set_envelope_trace(root, trace, [{"index": 0, "boundary": "external"}], "not_exposed")
+        set_envelope_trace(root, trace, [{"index": 0, "boundary": "external"},
+                                         {"index": 1, "boundary": "internal"},
+                                         {"index": 2, "boundary": "internal"},
+                                         {"index": 3, "boundary": "internal"}], "not_exposed")
         (root / "ceiling_volume_resolution.json").write_text(json.dumps({"records": [
-            {"room_id": room_id, "status": "resolved", "ceiling_height_mm": 3000},
+            {"room_id": ceiling_volume_resolution.room_identity("Shop", "Level 1"),
+             "status": "resolved", "ceiling_height_mm": 3000},
         ]}), encoding="utf-8")
         prepared = prepare(root, room_use, proposal)
         assembled = ai_preliminary.assemble({"spaces": []}, preliminary_proposal=prepared,
@@ -275,19 +295,45 @@ def main():
         room_use, proposal, _room_id, trace = write_fixture(root)
         set_envelope_trace(root, trace, [{"index": 0, "boundary": "external"}], "not_exposed")
         prepared = prepare(root, room_use, proposal)
-        check("external reviewer edge without ceiling height is excluded with its exact reason",
+        missing_height = prepared["envelope_assessments"][0]
+        check("external reviewer edge without ceiling height is listed once as not assessed",
               not prepared["surfaces"]
-              and any(item.get("reason") == "Ceiling height unresolved; wall area cannot be derived."
-                      for item in prepared["envelope_assessments"][0]["excluded"]))
+              and sum(item.get("component_id") == "external_wall_edge_0"
+                      for item in missing_height["not_assessed"] + missing_height["excluded"]) == 1
+              and any(item.get("component") == "External wall area — not assessed"
+                      and item.get("reason") == "Ceiling height unresolved; wall area cannot be derived."
+                      for item in missing_height["not_assessed"]))
         set_envelope_trace(root, trace, [{"index": 0, "boundary": "adjacent_tenancy"},
-                                         {"index": 1, "boundary": "internal"}], "unknown")
+                                         {"index": 1, "boundary": "internal"},
+                                         {"index": 2, "boundary": "internal"},
+                                         {"index": 3, "boundary": "internal"}], "unknown")
         prepared = prepare(root, room_use, proposal)
         assembled = ai_preliminary.assemble({"spaces": []}, preliminary_proposal=prepared,
                                             allow_area_fallbacks=False)
         check("unknown roof stays not assessed while adjacent and internal edges stay excluded",
               any(item.get("component_id") == "roof_exposure" for item in prepared["envelope_assessments"][0]["not_assessed"])
-              and {row["component_id"] for row in prepared["envelope_assessments"][0]["excluded"]} >= {"boundary_edge_0", "boundary_edge_1"}
+              and {row["component"] for row in prepared["envelope_assessments"][0]["excluded"]} >= {"Adjacent tenancy boundary", "Internal boundary"}
               and not assembled["material"]["hourly_load_model"]["rooms"][0]["cooling_load"]["envelope_surfaces"])
+        boundary_exclusions = [item for item in assembled["exclusions"] if item.get("envelope_exclusion")]
+        boundary_ids = [item.get("component_id") for item in boundary_exclusions]
+        check("each excluded reviewer boundary is recorded once in known exclusions",
+              len(boundary_exclusions) == 4 and len(boundary_ids) == len(set(boundary_ids)))
+
+    with tempfile.TemporaryDirectory() as folder:
+        root = Path(folder)
+        room_use, proposal, _room_id, trace = write_fixture(root)
+        set_envelope_trace(root, trace, [{"index": index, "boundary": "internal"} for index in range(4)], "not_exposed")
+        prepared = prepare(root, room_use, proposal)
+        assembled = ai_preliminary.assemble({"spaces": []}, preliminary_proposal=prepared,
+                                            allow_area_fallbacks=False)
+        report = ai_preliminary.calculate(assembled)
+        check("reviewer-declared internal room clears only the envelope assessment without leaving generic Envelope unresolved",
+              assembled["material"]["hourly_load_model"]["rooms"][0]["cooling_load"]["envelope_not_applicable"]
+              and not any(item.get("component_type") == "envelope" for item in report["unresolved_room_inputs"])
+              and not any(item.get("component") == "opaque envelope"
+                          and "No structurally valid surface geometry" in item.get("reason", "")
+                          for item in assembled["exclusions"])
+              and not report["scope_summary"]["complete_scope"])
 
     with tempfile.TemporaryDirectory() as folder:
         root = Path(folder)
@@ -303,8 +349,24 @@ def main():
         assembled = ai_preliminary.assemble({"spaces": []}, preliminary_proposal=prepared,
                                             geometry_resolution=ledger, allow_area_fallbacks=False)
         surfaces = assembled["material"]["hourly_load_model"]["rooms"][0]["cooling_load"]["envelope_surfaces"]
-        check("an included external ledger surface prevents duplicate trace roof or walls",
-              len(surfaces) == 1 and surfaces[0]["surface_id"] == "ledger-wall")
+        check("a ledger wall does not suppress a trace roof",
+              len(surfaces) == 2 and any(surface.get("surface_id") == "ledger-wall" for surface in surfaces)
+              and any(surface.get("kind") == "roof" for surface in surfaces))
+
+    with tempfile.TemporaryDirectory() as folder:
+        root = Path(folder)
+        room_use, proposal, room_id, trace = write_fixture(root)
+        set_envelope_trace(root, trace, [], "exposed")
+        ledger = {"thermal_surface_ledger": {"surfaces": [{
+            "surface_id": "ledger-roof", "owner_room_id": room_id, "owner_room_label": "Shop", "level_name": "Level 1",
+            "physical_type": "roof", "thermal_role": "external", "boundary_condition": "outside",
+            "external_exposure": "external", "thermal_eligible": True, "status": "provisional",
+            "gross_area_m2": 25.0, "opening_coverage": "not_applicable", "confidence_score": 0.9,
+        }]}}
+        prepared = prepare(root, room_use, proposal, geometry=ledger)
+        check("same-type ledger roof prevents duplicate trace roof while leaving roof solar not assessed",
+              not any(row.get("surface_key", "").endswith(":roof") for row in prepared["surfaces"])
+              and any(row.get("component_id") == "roof_solar" for row in prepared["envelope_assessments"][0]["not_assessed"]))
 
 
 if __name__ == "__main__":

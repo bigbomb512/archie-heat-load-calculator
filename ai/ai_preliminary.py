@@ -1237,6 +1237,13 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
         if not target:
             continue
         room_id = target["room"].get("room_id", "")
+        if assessment.get("envelope_not_applicable"):
+            target["room"].setdefault("cooling_load", {})["envelope_not_applicable"] = True
+            exclusions[:] = [item for item in exclusions if not (
+                item.get("room_id") == room_id
+                and item.get("component") == "opaque envelope"
+                and "No structurally valid surface geometry" in item.get("reason", "")
+            )]
         for item in assessment.get("not_assessed", []):
             if isinstance(item, dict):
                 exclusions.append({"room_id": room_id, "component": item.get("component", "opaque envelope"),
@@ -1246,8 +1253,9 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                                    "reviewer": assessment.get("reviewer", ""), "envelope_not_assessed": True})
         for item in assessment.get("excluded", []):
             if isinstance(item, dict):
-                exclusions.append({"room_id": room_id, "component": item.get("component", "opaque envelope"),
-                                   "component_id": item.get("component_id", "envelope"), "reason": item.get("reason", "Envelope item is outside the preliminary method scope."),
+                exclusions.append({"room_id": room_id, "component": item.get("component", "Envelope boundary"),
+                                   "component_id": item.get("component_id", "envelope_boundary"),
+                                   "reason": item.get("reason", "This boundary is not part of the room's external envelope."),
                                    "page": item.get("page", assessment.get("page")),
                                    "reviewer_trace_id": assessment.get("trace_id", ""),
                                    "reviewer": assessment.get("reviewer", ""), "envelope_exclusion": True})
@@ -1316,6 +1324,7 @@ def calculate(input_set, safety_factor_policy=None):
         if item.get("envelope_not_assessed"):
             record = {"room_id": item["room_id"], "room_name": room_names.get(item["room_id"], ""),
                       "component_id": item.get("component_id", "envelope"), "component_type": "envelope",
+                      "component": item.get("component", "Envelope item not assessed"),
                       "value": None, "unit": "", "source": "Reviewer-declared boundary",
                       "citations": ([{"page": item["page"], "reference": f"Reviewer trace {item.get('reviewer_trace_id', '')}",
                                       "reviewer": item.get("reviewer", "")}] if item.get("page") else []),
@@ -1332,6 +1341,7 @@ def calculate(input_set, safety_factor_policy=None):
         elif item.get("envelope_exclusion"):
             report.setdefault("known_exclusions", []).append({
                 "room_id": item["room_id"], "component_id": item.get("component_id", "envelope"),
+                "component": item.get("component", "Envelope boundary"),
                 "component_type": "envelope", "reason": item.get("reason", "Envelope item is outside the preliminary method scope."),
                 "source": "Reviewer-declared boundary", "reviewer_trace_id": item.get("reviewer_trace_id", ""),
             })

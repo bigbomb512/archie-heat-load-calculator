@@ -2008,12 +2008,21 @@ function drawAiPreliminary(data){
   };
   const excludedByComponent = new Map();
   for (const item of [...knownExclusions, ...unresolved]) {
-    const type = item.component_type || "component";
-    if (!excludedByComponent.has(type)) excludedByComponent.set(type, new Set());
-    excludedByComponent.get(type).add(roomNames.get(item.room_id) || "Room name unavailable");
+    const specificLabels = {
+      roof_solar: "Roof sun — not assessed", roof_exposure: "Roof — not checked",
+      unclassified_wall_boundaries: "Walls — boundary not classified",
+      external_wall_orientation: "External walls — orientation not assessed (no façade solar)",
+      external_wall_edge: "External wall area — not assessed",
+      boundary_edge: "Envelope boundary excluded",
+    };
+    const componentId = item.component_id || "";
+    const component = item.component || Object.entries(specificLabels).find(([prefix]) => componentId.startsWith(prefix))?.[1]
+      || componentLabels[item.component_type] || item.component_type || "Component";
+    if (!excludedByComponent.has(component)) excludedByComponent.set(component, new Set());
+    excludedByComponent.get(component).add(roomNames.get(item.room_id) || item.room_name || "Room name unavailable");
   }
   const excludedSummary = [...excludedByComponent.entries()].sort(([left], [right]) => left.localeCompare(right))
-    .map(([type, names]) => `${componentLabels[type] || type.replaceAll("_", " ").replace(/\b\w/g, letter => letter.toUpperCase())} — ${[...names].join(", ")}`);
+    .map(([component, names]) => `${component} — ${[...names].join(", ")}`);
   const surfaces = report.preliminary_surface_summary || data.model?.surface_summary || {};
   const refrigeration = report.refrigeration_process_exclusions || data.model?.excluded_spaces || [];
   const handoffUrl = data.artifact_links?.codex_handoff || "";
@@ -3268,7 +3277,7 @@ async function loadReviewerRoomGeometryWorkspace(){
     const data = await response.json();
     if (!response.ok || data.error) throw new Error(data.error || "Could not load room tracing tools.");
     ROOM_GEOMETRY_CONTEXT = data;
-    ROOM_TRACE_STATE = {roomId: previous.roomId || "", page: previous.page || null, snap: null, mode: previous.mode || "boundary", points: [], snapped: [], dimensions: [], dimensionPoints: [], dimensionMm: "", secondDimension: false, reviewer: previous.reviewer || "", note: previous.note || "", cursorImagePx: null, zoom: previous.zoom || 1, panX: previous.panX || 0, panY: previous.panY || 0};
+    ROOM_TRACE_STATE = {roomId: previous.roomId || "", page: previous.page || null, snap: null, mode: previous.mode || "boundary", points: [], snapped: [], dimensions: [], dimensionPoints: [], dimensionMm: "", secondDimension: false, reviewer: previous.reviewer || "", note: previous.note || "", cursorImagePx: null, zoom: previous.zoom || 1, panX: previous.panX || 0, panY: previous.panY || 0, envelopeResetNotice: previous.envelopeResetNotice || ""};
     renderReviewerRoomGeometryWorkspace();
     if (ROOM_TRACE_STATE.page) await loadReviewerGeometrySnap();
   } catch (error) {
@@ -3276,12 +3285,52 @@ async function loadReviewerRoomGeometryWorkspace(){
   }
 }
 
+function traceEnvelopeStatus(trace){
+  if (!trace) return "";
+  const edges = Array.isArray(trace.edges) ? trace.edges : [];
+  const classified = edges.filter(edge => edge.boundary && edge.boundary !== "unknown").length;
+  const roof = trace.roof === "exposed" ? "exposed" : trace.roof === "not_exposed" ? "not exposed" : "not checked";
+  return `walls: ${classified} of ${edges.length} classified · roof ${roof}`;
+}
+
+function deepcopyEdges(edges, edgeCount = null){
+  const count = Number.isInteger(edgeCount) && edgeCount >= 0 ? edgeCount : (Array.isArray(edges) ? edges.length : 0);
+  const byIndex = new Map((Array.isArray(edges) ? edges : []).map((edge, index) => [Number.isInteger(edge?.index) ? edge.index : index, edge]));
+  return Array.from({length: count}, (_, index) => ({index, boundary: byIndex.get(index)?.boundary || "unknown"}));
+}
+
+function traceEnvelopeClassificationMarkup(trace, state){
+  if (!trace) return "";
+  const calStatus = trace.calibration?.status;
+  if (trace.freshness !== "current") return `<section class="reviewer-envelope-classification" data-envelope-classification><h4>Walls and roof</h4><p class="reviewer-geometry-blocking" role="status">Envelope can only be classified on a current room trace. ${esc((trace.stale_reasons || []).join(" "))}</p></section>`;
+  if (!trace.calibration?.mm_per_px || !["agreed", "declared_scale_rejected"].includes(calStatus)) {
+    return `<section class="reviewer-envelope-classification" data-envelope-classification><h4>Walls and roof</h4><p class="reviewer-geometry-blocking" role="status">Envelope can only be classified on a calibrated room trace.</p></section>`;
+  }
+  const edges = deepcopyEdges(state.envelopeEdges || trace.edges, (trace.points_image_px || []).length - 1);
+  const roof = state.envelopeRoof || trace.roof || "unknown";
+  const points = trace.points_image_px || [];
+  const rows = edges.map((edge, index) => {
+    const length = Math.hypot(points[index + 1]?.[0] - points[index]?.[0], points[index + 1]?.[1] - points[index]?.[1]) * trace.calibration.mm_per_px / 1000;
+    const boundary = edge.boundary || "unknown";
+    return `<div class="reviewer-envelope-edge${state.selectedEnvelopeEdge === index ? " is-selected" : ""}"><button type="button" data-envelope-edge-select="${index}" aria-pressed="${state.selectedEnvelopeEdge === index}">Edge ${index + 1} · ${Number.isFinite(length) ? `${length.toFixed(2)} m` : "length unavailable"} · ${esc(boundary.replaceAll("_", " "))}</button><select data-envelope-edge-class="${index}" aria-label="Classify edge ${index + 1}"><option value="unknown" ${boundary === "unknown" ? "selected" : ""}>Unknown</option><option value="external" ${boundary === "external" ? "selected" : ""}>External</option><option value="adjacent_tenancy" ${boundary === "adjacent_tenancy" ? "selected" : ""}>Neighbouring tenancy</option><option value="internal" ${boundary === "internal" ? "selected" : ""}>Internal</option></select></div>`;
+  }).join("");
+  const declaration = trace.envelope_reviewer
+    ? `<p class="reviewer-geometry-result" data-envelope-saved>Declared by ${esc(trace.envelope_reviewer)}${trace.envelope_declared_at ? ` · ${esc(trace.envelope_declared_at)}` : ""}.</p><p class="reviewer-geometry-warning" role="note">The preliminary draft is stale after this declaration. Resolve model inputs again before calculating.</p>` : "";
+  return `<section class="reviewer-envelope-classification" data-envelope-classification><h4>Walls and roof</h4><p>Choose what each boundary faces. Unknown is appropriate when the drawing does not establish exposure.</p><div class="reviewer-envelope-edge-list">${rows}</div><div class="reviewer-envelope-bulk"><label>Set unclassified edges to<select data-envelope-bulk><option value="">Choose a boundary</option><option value="external">External</option><option value="adjacent_tenancy">Neighbouring tenancy</option><option value="internal">Internal</option></select></label><button type="button" class="btn ghost mini" data-envelope-bulk-apply>Apply to unknown edges</button></div><label class="reviewer-envelope-roof">Roof directly above<select data-envelope-roof><option value="unknown" ${roof === "unknown" ? "selected" : ""}>Not checked</option><option value="exposed" ${roof === "exposed" ? "selected" : ""}>Exposed</option><option value="not_exposed" ${roof === "not_exposed" ? "selected" : ""}>Floor or tenancy above (not exposed)</option></select></label><button type="button" class="btn ghost mini" data-envelope-internal>Internal room — no external walls or roof</button><div class="reviewer-envelope-save"><label>Your name or initials<input data-envelope-reviewer value="${esc(state.envelopeReviewer || trace.envelope_reviewer || "")}" autocomplete="name" placeholder="Reviewer"></label><button type="button" class="btn key" data-envelope-save>Save walls and roof</button></div>${state.envelopeResetNotice ? `<p class="reviewer-geometry-warning" role="status" data-envelope-reset>${esc(state.envelopeResetNotice)}</p>` : ""}${declaration}</section>`;
+}
+
 function renderReviewerRoomGeometryWorkspace(){
   const host = optionalElement("reviewerRoomGeometryWorkspace"), ctx = ROOM_GEOMETRY_CONTEXT, state = ROOM_TRACE_STATE;
   if (!host || !ctx || !state) return;
   const traces = ctx.reviewer_room_geometry?.records || [];
-  const roomOptions = (ctx.rooms || []).map(room => `<option value="${esc(room.room_id)}" ${room.room_id === state.roomId ? "selected" : ""}>${esc(room.label)}${room.level_name ? ` · ${esc(room.level_name)}` : ""}${room.reviewer_added ? " · added by reviewer" : ""}${room.needs_trace ? " · area unresolved" : ""}</option>`).join("");
+  const roomOptions = (ctx.rooms || []).map(room => {
+    const saved = traces.filter(row => row.room_id === room.room_id && row.freshness === "current").sort((a, b) => (b.page || 0) - (a.page || 0))[0];
+    const status = saved ? ` · ${traceEnvelopeStatus(saved)}` : "";
+    return `<option value="${esc(room.room_id)}" ${room.room_id === state.roomId ? "selected" : ""}>${esc(room.label)}${room.level_name ? ` · ${esc(room.level_name)}` : ""}${room.reviewer_added ? " · added by reviewer" : ""}${room.needs_trace ? " · area unresolved" : ""}${esc(status)}</option>`;
+  }).join("");
   const trace = traces.find(row => row.room_id === state.roomId && row.page === state.page);
+  if (trace && !state.envelopeEdges) state.envelopeEdges = deepcopyEdges(trace.edges, (trace.points_image_px || []).length - 1);
+  if (trace && !state.envelopeRoof) state.envelopeRoof = trace.roof || "unknown";
   const pageOptions = (ctx.pages || []).map(page => `<option value="${page.page}" ${page.page === state.page ? "selected" : ""}>Page ${page.page} · ${esc(page.drawing_number || page.title || page.proposed_role)}${page.declared_scale ? ` · ${esc(page.declared_scale)}` : " · no declared scale"}${page.fallback_plan ? " · services plan (no architectural plan in set)" : ""}</option>`).join("");
   const page = (ctx.pages || []).find(row => row.page === state.page);
   if (!roomOptions || !pageOptions) {
@@ -3294,6 +3343,7 @@ function renderReviewerRoomGeometryWorkspace(){
   if (trace && !state.points.length) { state.points = trace.points_image_px; state.snapped = trace.snapped_line_ids; state.reviewer = trace.reviewer || ""; state.note = trace.note || ""; state.dimensionPoints = trace.calibration?.dimension_points_image_px || []; state.dimensionMm = trace.calibration?.dimension_value_mm || ""; }
   const options = state.snap?.snap_tolerance_px ? {threshold: state.snap.snap_tolerance_px} : {};
   const svg = page ? reviewerGeometrySvg(page, state, options) : "";
+  const envelopeMarkup = traceEnvelopeClassificationMarkup(trace, state);
   host.innerHTML = `<div class="reviewer-geometry-head"><div><b>Trace and calibrate a room</b><span>Click boundary corners in order. Snapping is optional; the trace stays proposed until a separate review accepts it.</span></div><button type="button" class="btn ghost mini" data-geometry-reload>Reload source</button></div>
     <div class="reviewer-geometry-controls"><label>Room<select data-geometry-room><option value="">Choose room</option>${roomOptions}</select></label><label>Plan page<select data-geometry-page><option value="">Choose page</option>${pageOptions}</select></label>${(ctx.rooms || []).find(room => room.room_id === state.roomId)?.reviewer_added ? `<button type="button" class="btn ghost mini" data-remove-room>Remove added room</button>` : ""}</div>
     ${reviewerAddRoomMarkup(ctx, state, false)}
@@ -3304,12 +3354,13 @@ function renderReviewerRoomGeometryWorkspace(){
     ${page ? (page.preview_url && page.preview_matches_vector_coordinates ? `<div class="reviewer-geometry-resolution">Full-resolution plan · ${page.preview_width_px} × ${page.preview_height_px} px · ${state.zoom.toFixed(1)}×</div><div class="reviewer-geometry-canvas">${svg}</div>` : `<p class="reviewer-geometry-error" role="alert">${esc(page.preview_error || "A matching full-resolution plan image is unavailable. Reload the drawing evidence before tracing.")}</p>`) : ""}
     <div class="reviewer-geometry-controls"><label>Printed dimension (mm)<input data-geometry-dimension type="number" min="0.01" step="any" value="${esc(state.dimensionMm)}" placeholder="e.g. 4000"></label><label>Cross-check dimension (mm), optional<input data-geometry-second-dimension type="number" min="0.01" step="any" value="${esc(state.secondDimensionMm || "")}" placeholder="Only needed if declared scale disagrees"></label><label>Your name or initials<input data-geometry-reviewer value="${esc(state.reviewer)}" autocomplete="name" placeholder="Reviewer"></label><label>Note (optional)<input data-geometry-note value="${esc(state.note)}" placeholder="Boundary or calibration note"></label></div>
     <div class="reviewer-geometry-actions"><button type="button" class="btn key" data-geometry-save ${state.roomId && state.page ? "" : "disabled"}>Save proposed trace</button>${trace ? `<button type="button" class="btn ghost" data-geometry-delete>Delete trace</button>` : ""}<span class="reviewer-geometry-result" aria-live="polite">${trace ? `${trace.freshness === "current" ? "Saved trace" : `Stale trace: ${(trace.stale_reasons || []).join(" ") || "reload source evidence"}`}${trace.fallback_plan ? " · traced on a services plan" : ""} · ${trace.calibration?.status || "calibration unresolved"}${Number.isFinite(trace.calibration?.difference_percent) ? ` · scale difference ${trace.calibration.difference_percent.toFixed(2)}%` : ""}${trace.freshness === "current" && trace.calibration?.mm_per_px ? ` · ${reviewerTraceArea(trace.points_image_px, trace.calibration.mm_per_px).toFixed(3)} m² proposed` : trace.freshness !== "current" ? " · saved area is not current" : ` · area blocked: ${esc(trace.calibration?.reason || "calibration unresolved")}`}` : "No saved trace for this room and page."}</span></div>
+    ${envelopeMarkup}
     <small class="reviewer-geometry-disclaimer">A traced area is evidence for review only. It is not activated as a calculation input by this workflow.</small>
     <div class="reviewer-geometry-error" data-geometry-error role="alert"></div>`;
   bindReviewerAddRoom(host);
   host.querySelector("[data-remove-room]")?.addEventListener("click", removeReviewerAddedRoom);
-  host.querySelector("[data-geometry-room]").addEventListener("change", event => {state.roomId=event.target.value; state.points=[];state.snapped=[];state.dimensionPoints=[];state.secondDimensionMm="";state.dimensionMm="";state.snap=null;state.page=null;renderReviewerRoomGeometryWorkspace();});
-  host.querySelector("[data-geometry-page]").addEventListener("change", async event => {state.page=Number(event.target.value)||null;state.points=[];state.snapped=[];state.dimensionPoints=[];state.secondDimensionPoints=[];state.snap=null;const existing=ctx.reviewer_room_geometry?.records?.find(row=>row.room_id===state.roomId&&row.page===state.page);if(existing){state.points=existing.points_image_px;state.snapped=existing.snapped_line_ids;state.reviewer=existing.reviewer||"";state.note=existing.note||"";state.dimensionMm=existing.calibration?.dimension_value_mm||"";state.dimensionPoints=existing.calibration?.dimension_points_image_px||[];state.secondDimensionMm=existing.calibration?.second_dimension?.value_mm||"";state.secondDimensionPoints=existing.calibration?.second_dimension?.points_image_px||[];}renderReviewerRoomGeometryWorkspace();if(state.page) await loadReviewerGeometrySnap();});
+  host.querySelector("[data-geometry-room]").addEventListener("change", event => {state.roomId=event.target.value; state.points=[];state.snapped=[];state.dimensionPoints=[];state.secondDimensionMm="";state.dimensionMm="";state.envelopeEdges=null;state.envelopeRoof="unknown";state.envelopeReviewer="";state.selectedEnvelopeEdge=null;state.envelopeResetNotice="";state.snap=null;state.page=null;renderReviewerRoomGeometryWorkspace();});
+  host.querySelector("[data-geometry-page]").addEventListener("change", async event => {state.page=Number(event.target.value)||null;state.points=[];state.snapped=[];state.dimensionPoints=[];state.secondDimensionPoints=[];state.snap=null;const existing=ctx.reviewer_room_geometry?.records?.find(row=>row.room_id===state.roomId&&row.page===state.page);state.envelopeEdges=existing?deepcopyEdges(existing.edges,(existing.points_image_px||[]).length-1):null;state.envelopeRoof=existing?.roof||"unknown";state.envelopeReviewer=existing?.envelope_reviewer||"";state.selectedEnvelopeEdge=null;state.envelopeResetNotice="";if(existing){state.points=existing.points_image_px;state.snapped=existing.snapped_line_ids;state.reviewer=existing.reviewer||"";state.note=existing.note||"";state.dimensionMm=existing.calibration?.dimension_value_mm||"";state.dimensionPoints=existing.calibration?.dimension_points_image_px||[];state.secondDimensionMm=existing.calibration?.second_dimension?.value_mm||"";state.secondDimensionPoints=existing.calibration?.second_dimension?.points_image_px||[];}renderReviewerRoomGeometryWorkspace();if(state.page) await loadReviewerGeometrySnap();});
   host.querySelectorAll("[data-geometry-mode]").forEach(button=>button.addEventListener("click",()=>{state.mode=button.dataset.geometryMode;if(state.mode==="dimension")state.dimensionPoints=[];if(state.mode==="second")state.secondDimensionPoints=[];renderReviewerRoomGeometryWorkspace();}));
   host.querySelectorAll("[data-geometry-zoom]").forEach(button=>button.addEventListener("click",()=>{const page=(ctx.pages||[]).find(row=>row.page===state.page);if(!page)return;const old=state.zoom||1,next=button.dataset.geometryZoom==="in"?Math.min(8,old*1.5):button.dataset.geometryZoom==="out"?Math.max(1,old/1.5):1;const width=Number(page.image_width_px),height=Number(page.image_height_px),centerX=state.panX+width/old/2,centerY=state.panY+height/old/2;state.zoom=next;state.panX=Math.max(0,Math.min(width-width/next,centerX-width/next/2));state.panY=Math.max(0,Math.min(height-height/next,centerY-height/next/2));renderReviewerRoomGeometryWorkspace();}));
   host.querySelector("[data-geometry-dimension]").addEventListener("input",event=>state.dimensionMm=event.target.value);
@@ -3320,9 +3371,21 @@ function renderReviewerRoomGeometryWorkspace(){
   host.querySelector("[data-geometry-reset]").addEventListener("click",()=>{state.points=[];state.snapped=[];state.dimensionPoints=[];renderReviewerRoomGeometryWorkspace();});
   host.querySelector("[data-geometry-reload]").addEventListener("click",loadReviewerRoomGeometryWorkspace);
   host.querySelector("[data-geometry-save]").addEventListener("click",saveReviewerRoomGeometryTrace);
+  host.querySelectorAll("[data-envelope-edge-select]").forEach(button => button.addEventListener("click", () => {state.selectedEnvelopeEdge=Number(button.dataset.envelopeEdgeSelect);renderReviewerRoomGeometryWorkspace();}));
+  host.querySelectorAll("[data-envelope-edge-class]").forEach(select => select.addEventListener("change", () => {const index=Number(select.dataset.envelopeEdgeClass);const edges=deepcopyEdges(state.envelopeEdges || trace?.edges || [],(trace?.points_image_px||[]).length-1);edges[index]={index,boundary:select.value};state.envelopeEdges=edges;state.selectedEnvelopeEdge=index;renderReviewerRoomGeometryWorkspace();}));
+  host.querySelector("[data-envelope-bulk-apply]")?.addEventListener("click", () => {const boundary=host.querySelector("[data-envelope-bulk]")?.value;if(!boundary)return;const edges=deepcopyEdges(state.envelopeEdges || trace?.edges || [],(trace?.points_image_px||[]).length-1);state.envelopeEdges=edges.map(edge=>edge.boundary==="unknown"?{...edge,boundary}:edge);renderReviewerRoomGeometryWorkspace();});
+  host.querySelector("[data-envelope-roof]")?.addEventListener("change", event => {state.envelopeRoof=event.target.value;renderReviewerRoomGeometryWorkspace();});
+  host.querySelector("[data-envelope-internal]")?.addEventListener("click", () => {state.envelopeEdges=deepcopyEdges(trace?.edges,(trace?.points_image_px||[]).length-1).map(edge=>({...edge,boundary:"internal"}));state.envelopeRoof="not_exposed";state.selectedEnvelopeEdge=null;renderReviewerRoomGeometryWorkspace();});
+  host.querySelector("[data-envelope-reviewer]")?.addEventListener("input", event => {state.envelopeReviewer=event.target.value;});
+  host.querySelector("[data-envelope-save]")?.addEventListener("click", saveReviewerEnvelopeClassification);
   if(page && (!page.preview_url || !page.preview_matches_vector_coordinates)) host.querySelector("[data-geometry-save]").disabled=true;
   host.querySelector("[data-geometry-delete]")?.addEventListener("click",deleteReviewerRoomGeometryTrace);
   host.querySelector("[data-geometry-svg]")?.addEventListener("click",event=>{if(state.mode!=="pan")addReviewerGeometryPoint(event,page);});
+  host.querySelectorAll("[data-envelope-edge-index]").forEach(edge => {
+    const selectEdge = event => {event.preventDefault();event.stopPropagation();state.selectedEnvelopeEdge=Number(edge.dataset.envelopeEdgeIndex);renderReviewerRoomGeometryWorkspace();};
+    edge.addEventListener("click", selectEdge);
+    edge.addEventListener("keydown", event => {if(event.key === "Enter" || event.key === " ")selectEdge(event);});
+  });
   host.querySelector("[data-geometry-svg]")?.addEventListener("keydown",event=>reviewerGeometryKeydown(event,page));
   const svgNode=host.querySelector("[data-geometry-svg]");
   svgNode?.addEventListener("pointerdown",event=>{if(state.mode!=="pan")return;svgNode.setPointerCapture(event.pointerId);state.panDrag={x:event.clientX,y:event.clientY,panX:state.panX,panY:state.panY};});
@@ -3334,9 +3397,12 @@ function reviewerGeometrySvg(page,state){
   const width=Number(page.image_width_px),height=Number(page.image_height_px); if(!width||!height||!page.preview_url)return "";
   const points=state.points.map(point=>point.join(",")).join(" "),dims=[...(state.dimensionPoints||[]),...(state.secondDimensionPoints||[])].map(point=>`<circle cx="${point[0]}" cy="${point[1]}" r="18" class="trace-dimension-point"/>`).join("");
   const snapLines=(state.snap?.lines||[]).map(line=>`<line x1="${line.start_px[0]}" y1="${line.start_px[1]}" x2="${line.end_px[0]}" y2="${line.end_px[1]}" class="trace-snap-line"/>`).join("");
+  const trace=(ROOM_GEOMETRY_CONTEXT?.reviewer_room_geometry?.records||[]).find(row=>row.room_id===state.roomId&&row.page===state.page);
+  const boundaryEdges=trace?.freshness==="current"&&trace.calibration?.mm_per_px?deepcopyEdges(state.envelopeEdges||trace.edges||[],(trace.points_image_px||[]).length-1):[];
+  const edgeOverlays=boundaryEdges.map((edge,index)=>{const start=trace.points_image_px[index],end=trace.points_image_px[index+1];if(!start||!end)return "";const boundary=edge.boundary||"unknown";return `<line data-envelope-edge-index="${index}" tabindex="0" role="button" aria-label="Select edge ${index+1}, ${esc(boundary.replaceAll("_"," "))}" x1="${start[0]}" y1="${start[1]}" x2="${end[0]}" y2="${end[1]}" class="trace-envelope-edge boundary-${esc(boundary)}${state.selectedEnvelopeEdge===index?" is-selected":""}"/>`;}).join("");
   const cursor=state.cursorImagePx||[width/2,height/2];
   const viewW=width/(state.zoom||1),viewH=height/(state.zoom||1),panX=Math.max(0,Math.min(width-viewW,state.panX||0)),panY=Math.max(0,Math.min(height-viewH,state.panY||0));
-  return `<svg data-geometry-svg viewBox="${panX} ${panY} ${viewW} ${viewH}" role="application" tabindex="0" aria-label="Interactive full-resolution plan page ${page.page}. Click, or use arrow keys to position and Enter to add a trace point."><image data-plan-preview href="${esc(page.preview_url)}" width="${width}" height="${height}" preserveAspectRatio="none"/>${snapLines}<polyline points="${points}" class="trace-polygon"/>${state.points.map((point,index)=>`<circle cx="${point[0]}" cy="${point[1]}" r="18" class="trace-vertex" aria-label="Boundary point ${index+1}"/>`).join("")}${dims}<circle cx="${cursor[0]}" cy="${cursor[1]}" r="24" class="trace-keyboard-cursor" aria-hidden="true"/></svg>`;
+  return `<svg data-geometry-svg viewBox="${panX} ${panY} ${viewW} ${viewH}" role="application" tabindex="0" aria-label="Interactive full-resolution plan page ${page.page}. Click, or use arrow keys to position and Enter to add a trace point."><image data-plan-preview href="${esc(page.preview_url)}" width="${width}" height="${height}" preserveAspectRatio="none"/>${snapLines}<polyline points="${points}" class="trace-polygon"/>${edgeOverlays}${state.points.map((point,index)=>`<circle cx="${point[0]}" cy="${point[1]}" r="18" class="trace-vertex" aria-label="Boundary point ${index+1}"/>`).join("")}${dims}<circle cx="${cursor[0]}" cy="${cursor[1]}" r="24" class="trace-keyboard-cursor" aria-hidden="true"/></svg>`;
 }
 function reviewerTraceArea(points,scale){let area=0;for(let i=0;i<points.length-1;i++)area+=points[i][0]*points[i+1][1]-points[i+1][0]*points[i][1];return Math.abs(area/2)*scale*scale/1e6;}
 function nearestReviewerSnap(x,y){const snap=ROOM_TRACE_STATE?.snap;if(!snap)return {point:[x,y],lineId:null};let best=null;for(const endpoint of snap.endpoints||[]){const distance=Math.hypot(x-endpoint.point_px[0],y-endpoint.point_px[1]);if(distance<=snap.snap_tolerance_px&&(!best||distance<best.distance))best={point:endpoint.point_px,lineId:endpoint.line_id,distance};}for(const intersection of snap.intersections||[]){const distance=Math.hypot(x-intersection.point_px[0],y-intersection.point_px[1]);if(distance<=snap.snap_tolerance_px&&(!best||distance<best.distance))best={point:intersection.point_px,lineId:intersection.line_ids[0],distance};}return best||{point:[x,y],lineId:null};}
@@ -3408,7 +3474,36 @@ async function removeReviewerAddedRoom(){
   }
 }
 
-async function saveReviewerRoomGeometryTrace(){const s=ROOM_TRACE_STATE,ctx=ROOM_GEOMETRY_CONTEXT,page=ctx.pages.find(row=>row.page===s.page),secondPoints=s.secondDimensionPoints||[];try{const response=await fetch("/api/reviewer-room-geometry",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"save",project_id:DATA.id,room_id:s.roomId,page:s.page,points_image_px:s.points,snapped_line_ids:s.snapped,dimension_points_image_px:s.dimensionPoints.length? s.dimensionPoints:(ctx.reviewer_room_geometry.records.find(row=>row.room_id===s.roomId&&row.page===s.page)?.calibration?.dimension_points_image_px||[]),dimension_value_mm:Number(s.dimensionMm)||Number(ctx.reviewer_room_geometry.records.find(row=>row.room_id===s.roomId&&row.page===s.page)?.calibration?.dimension_value_mm),second_dimension_points_image_px:secondPoints,second_dimension_value_mm:Number(s.secondDimensionMm)||null,reviewer:s.reviewer,note:s.note,source_pdf_fingerprint:ctx.source_pdf_fingerprint,vector_page_fingerprint:s.snap?.vector_page_fingerprint})}),data=await response.json();if(!response.ok||data.error)throw new Error(data.error||"Could not save trace.");ROOM_GEOMETRY_CONTEXT={...ctx,...data};s.points=[];s.snapped=[];s.dimensionPoints=[];s.dimensionMm="";await loadCalculationInputEvidence();toast("Room trace saved","The geometry proof remains proposed pending separate review.");}catch(error){showReviewerGeometryError(error.message);}}
+async function saveReviewerRoomGeometryTrace(){
+  const s=ROOM_TRACE_STATE,ctx=ROOM_GEOMETRY_CONTEXT,page=ctx.pages.find(row=>row.page===s.page),secondPoints=s.secondDimensionPoints||[];
+  const previous=ctx.reviewer_room_geometry.records.find(row=>row.room_id===s.roomId&&row.page===s.page);
+  const resetEnvelope=!!previous&&(previous.roof!=="unknown"||(previous.edges||[]).some(edge=>edge.boundary!=="unknown"));
+  try{
+    const response=await fetch("/api/reviewer-room-geometry",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"save",project_id:DATA.id,room_id:s.roomId,page:s.page,points_image_px:s.points,snapped_line_ids:s.snapped,dimension_points_image_px:s.dimensionPoints.length? s.dimensionPoints:(previous?.calibration?.dimension_points_image_px||[]),dimension_value_mm:Number(s.dimensionMm)||Number(previous?.calibration?.dimension_value_mm),second_dimension_points_image_px:secondPoints,second_dimension_value_mm:Number(s.secondDimensionMm)||null,reviewer:s.reviewer,note:s.note,source_pdf_fingerprint:ctx.source_pdf_fingerprint,vector_page_fingerprint:s.snap?.vector_page_fingerprint})});
+    const data=await response.json();if(!response.ok||data.error)throw new Error(data.error||"Could not save trace.");
+    ROOM_GEOMETRY_CONTEXT={...ctx,...data};s.points=[];s.snapped=[];s.dimensionPoints=[];s.dimensionMm="";
+    s.envelopeResetNotice=resetEnvelope?"Re-saving this trace reset its prior wall and roof classifications to unknown. Classify the new trace before resolving the draft.":"";
+    renderReviewerRoomGeometryWorkspace();
+    await loadCalculationInputEvidence();toast("Room trace saved","The geometry proof remains proposed pending separate review.");
+  }catch(error){showReviewerGeometryError(error.message);}
+}
+
+async function saveReviewerEnvelopeClassification(){
+  const state=ROOM_TRACE_STATE,context=ROOM_GEOMETRY_CONTEXT;
+  const trace=context?.reviewer_room_geometry?.records?.find(row=>row.room_id===state?.roomId&&row.page===state?.page);
+  const reviewer=(optionalElement("reviewerRoomGeometryWorkspace")?.querySelector("[data-envelope-reviewer]")?.value||"").trim();
+  if(!reviewer){showReviewerGeometryError("Enter a reviewer name before saving wall and roof classifications.");return;}
+  try{
+    const response=await fetch("/api/reviewer-room-geometry",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"classify_envelope",project_id:DATA.id,trace_id:trace?.trace_id,reviewer,roof:state.envelopeRoof||"unknown",edges:deepcopyEdges(state.envelopeEdges||trace?.edges||[])})});
+    const data=await response.json();if(!response.ok||data.error)throw new Error(data.error||"Could not save envelope classifications.");
+    ROOM_GEOMETRY_CONTEXT={...context,...data};
+    const saved=ROOM_GEOMETRY_CONTEXT.reviewer_room_geometry?.records?.find(row=>row.trace_id===trace?.trace_id);
+    state.envelopeEdges=deepcopyEdges(saved?.edges);state.envelopeRoof=saved?.roof||"unknown";state.envelopeReviewer=saved?.envelope_reviewer||reviewer;state.envelopeResetNotice="";
+    renderReviewerRoomGeometryWorkspace();
+    const status=optionalElement("reviewerRoomGeometryWorkspace")?.querySelector("[data-envelope-saved]");
+    if(status) status.focus?.();
+  }catch(error){showReviewerGeometryError(error.message);}
+}
 async function deleteReviewerRoomGeometryTrace(){const trace=ROOM_GEOMETRY_CONTEXT?.reviewer_room_geometry?.records?.find(row=>row.room_id===ROOM_TRACE_STATE.roomId&&row.page===ROOM_TRACE_STATE.page);if(!trace)return;try{const response=await fetch("/api/reviewer-room-geometry",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"delete",project_id:DATA.id,trace_id:trace.trace_id})}),data=await response.json();if(!response.ok||data.error)throw new Error(data.error||"Could not delete trace.");await loadReviewerRoomGeometryWorkspace();await loadCalculationInputEvidence();}catch(error){showReviewerGeometryError(error.message);}}
 
 async function loadCalculationInputEvidence(){

@@ -386,6 +386,21 @@ button,input{ font:inherit; color:inherit }
 .reviewer-geometry-actions .reviewer-geometry-result{flex:1 1 240px;color:var(--text-2);font-size:12px}
 .reviewer-geometry-disclaimer{display:block;padding:0 14px 12px}
 .reviewer-geometry-error{color:#a03c25;font-size:12px;padding:0 14px 10px;min-height:1em}
+.reviewer-envelope-classification{margin:0 14px 14px;padding:12px;border:1px solid var(--line);border-radius:var(--r);background:var(--main-bg)}
+.reviewer-envelope-classification h4{margin:0 0 6px}.reviewer-envelope-classification>p{margin:6px 0;color:var(--text-2);font-size:12px}
+.reviewer-envelope-edge-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:6px;margin:10px 0}
+.reviewer-envelope-edge{display:grid;grid-template-columns:minmax(0,1fr) minmax(130px,.8fr);gap:6px;align-items:center}
+.reviewer-envelope-edge button{text-align:left;min-width:0;overflow-wrap:anywhere}.reviewer-envelope-edge select{min-width:0}
+.reviewer-envelope-bulk,.reviewer-envelope-save{display:flex;flex-wrap:wrap;gap:8px;align-items:end;margin:10px 0}
+.reviewer-envelope-bulk label,.reviewer-envelope-save label,.reviewer-envelope-roof{display:grid;gap:4px;color:var(--text-2);font-size:12px}
+.reviewer-envelope-bulk select,.reviewer-envelope-save input,.reviewer-envelope-roof select{min-width:180px}
+.reviewer-envelope-roof{margin:10px 0}.reviewer-envelope-save label{flex:1 1 220px}.reviewer-envelope-save input{width:100%}
+.reviewer-geometry-canvas .trace-envelope-edge{fill:none;stroke:#c47b00;stroke-width:8;stroke-dasharray:7 5;vector-effect:non-scaling-stroke;cursor:pointer}
+.reviewer-geometry-canvas .trace-envelope-edge.boundary-external{stroke:#c53030;stroke-dasharray:none}
+.reviewer-geometry-canvas .trace-envelope-edge.boundary-adjacent_tenancy{stroke:#805ad5;stroke-dasharray:5 4}
+.reviewer-geometry-canvas .trace-envelope-edge.boundary-internal{stroke:#2f855a;stroke-dasharray:3 4}
+.reviewer-geometry-canvas .trace-envelope-edge.is-selected{stroke-width:13;filter:drop-shadow(0 0 2px #fff)}
+.reviewer-geometry-canvas .trace-envelope-edge:focus{outline:none;stroke-width:15}
 @media(max-width:650px){.reviewer-geometry-controls{grid-template-columns:1fr}.reviewer-geometry-head{align-items:stretch;flex-direction:column}.reviewer-geometry-canvas{margin-inline:8px;max-height:58vh}.reviewer-geometry-tools .btn{flex:1 1 auto}}
 .input-register-row b,.input-register-row span,.input-register-row small{ display:block }
 .input-register-row b{ font:11px var(--mono); overflow-wrap:anywhere }

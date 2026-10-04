@@ -40,8 +40,12 @@ class PreliminaryWorkspaceViewTests(unittest.TestCase):
         self.write("hourly_ai_preliminary_load_report.json", {
             "label": "AI preliminary estimate", "included_scope_peak": {"design_total_kw": 12.3},
             "scenario_results": [{"rooms": [{"room_id": "room-bar", "name": "Bar", "loads": ["detailed"]}]}],
-            "unresolved_room_inputs": [{"room_id": "room-bar", "room_name": "Bar", "component_type": "envelope"}],
-            "known_exclusions": [], "review_queue": [], "confirmed_rooms": [],
+            "unresolved_room_inputs": [{"room_id": "room-bar", "room_name": "Bar", "component_type": "envelope",
+                                         "component_id": "roof_solar", "component": "Roof sun — not assessed",
+                                         "reason": "No cited horizontal solar profile."}],
+            "known_exclusions": [{"room_id": "room-bar", "room_name": "Bar", "component_type": "envelope",
+                                  "component_id": "internal_boundary", "component": "Internal boundary",
+                                  "reason": "No external conduction."}], "review_queue": [], "confirmed_rooms": [],
         })
 
         compact = ai_preliminary_service.get(FakeWeb, self.project, "workspace")
@@ -53,7 +57,13 @@ class PreliminaryWorkspaceViewTests(unittest.TestCase):
         self.assertEqual(compact["hourly_ai_preliminary_load_report"]["included_scope_peak"]["design_total_kw"], 12.3)
         self.assertEqual(compact["hourly_ai_preliminary_load_report"]["room_names"], [{"room_id": "room-bar", "name": "Bar"}])
         self.assertEqual(compact["hourly_ai_preliminary_load_report"]["unresolved_room_inputs"], [
-            {"room_id": "room-bar", "room_name": "Bar", "component_type": "envelope"}
+            {"room_id": "room-bar", "room_name": "Bar", "component_type": "envelope",
+             "component": "Roof sun — not assessed", "component_id": "roof_solar",
+             "reason": "No cited horizontal solar profile."}
+        ])
+        self.assertEqual(compact["hourly_ai_preliminary_load_report"]["known_exclusions"], [
+            {"room_id": "room-bar", "room_name": "Bar", "component_type": "envelope",
+             "component": "Internal boundary", "component_id": "internal_boundary", "reason": "No external conduction."}
         ])
         self.assertNotIn("input_set", compact)
         self.assertNotIn("model", compact)
