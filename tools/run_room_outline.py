@@ -44,10 +44,16 @@ def _context(review_dir, pdf_path, page_number):
         scale = image.get("image_width", pdf_page.width * 2.5) / float(pdf_page.width)
         objects = ro.extract_page_objects(pdf_page, scale)
         page_image = pdf_page.to_image(resolution=72 * scale).original
-    dpi = 72 * scale
-    declared = page_mm_per_px(spatial.get("scale_candidates", []), render_dpi=dpi)
-    viewport = tuple((page.get("plan_viewport") or {}).get("bbox_px") or (0, 0, page_image.size[0], page_image.size[1]))
-    return {"objects": objects, "image": page_image, "viewport": viewport, "declared_mm_per_px": declared}
+        dpi = 72 * scale
+        declared = page_mm_per_px(spatial.get("scale_candidates", []), render_dpi=dpi)
+        viewport = tuple((page.get("plan_viewport") or {}).get("bbox_px") or (0, 0, page_image.size[0], page_image.size[1]))
+        # Sizing only (gap closing, raster cells, line density): the declared scale,
+        # or 1:100 when the sheet's scale cannot be read. Areas always use a
+        # printed-dimension calibration.
+        working = declared or page_mm_per_px([{"text": "1:100"}], render_dpi=dpi)
+        raster = ro.page_is_raster(pdf_page, viewport, scale, working, objects)
+    return {"objects": objects, "image": page_image, "viewport": viewport, "declared_mm_per_px": declared,
+            "working_mm_per_px": working, "raster": raster}
 
 
 def _inferred_rooms(review_dir):
@@ -86,6 +92,10 @@ def packets(args):
         crop.save(dimensions / f"dimension_{index}.png")
     (dimensions / "lines.json").write_text(json.dumps(rows, indent=1), encoding="utf-8")
     (dimensions / "prompt.txt").write_text(ro.dimension_prompt() + "\n\n(Send one image at a time; save each reply as reply_N.json.)\n", encoding="utf-8")
+    if context["raster"]:
+        print(f"Page {args.page} is a scanned (raster) plan: walls come from the image, so there is no wall-style step.")
+        print(f"Declared scale: {context['declared_mm_per_px']} mm/px · {len(rows)} dimension crops. Next: run 'areas'.")
+        return
     styles = out / "02_wall_styles"
     styles.mkdir(parents=True, exist_ok=True)
     summary = ro.style_summary(context["objects"], context["viewport"], context["declared_mm_per_px"])
@@ -99,17 +109,23 @@ def packets(args):
 
 def _areas(args, context):
     out = Path(args.out)
+    if context["raster"]:
+        walls = ro.raster_wall_geometry(context["image"], context["viewport"], context["working_mm_per_px"])
+        return [], ro.enclosed_rooms(walls, context["viewport"], context["working_mm_per_px"], args.door_gap_mm)
     summary = _read(out / "02_wall_styles" / "summary.json")
     numbered = [row for row in summary if not row["hatch"]][:14]
     wall_ids = ro.validate_wall_style_reply(_read(out / "02_wall_styles" / "reply.json"), numbered)
     walls = ro.wall_geometry(context["objects"], wall_ids, context["viewport"])
-    rooms = ro.enclosed_rooms(walls, context["viewport"], context["declared_mm_per_px"], args.door_gap_mm)
+    rooms = ro.enclosed_rooms(walls, context["viewport"], context["working_mm_per_px"], args.door_gap_mm)
     return wall_ids, rooms
 
 
 def areas(args):
     context = _context(args.review_dir, args.pdf, args.page)
     _wall_ids, rooms = _areas(args, context)
+    if not rooms:
+        print("No area on this plan is fully enclosed by walls; skip naming and run 'outlines' for rooms without a printed area.")
+        return
     folder = Path(args.out) / "03_room_names"
     folder.mkdir(parents=True, exist_ok=True)
     image, transform = ro.render_candidate_areas(context["image"], rooms, context["viewport"])
@@ -126,8 +142,11 @@ def outlines(args):
     context = _context(args.review_dir, args.pdf, args.page)
     out = Path(args.out)
     _wall_ids, rooms = _areas(args, context)
-    names, splits = ro.validate_naming_reply(_read(out / "03_room_names" / "reply.json"), len(rooms), _room_names(args.review_dir),
-                                             _read(out / "03_room_names" / "transform.json"))
+    if rooms:
+        names, splits = ro.validate_naming_reply(_read(out / "03_room_names" / "reply.json"), len(rooms), _room_names(args.review_dir),
+                                                 _read(out / "03_room_names" / "transform.json"))
+    else:
+        names, splits = {}, []  # no enclosed area on this plan: every room goes to the outline step
     placed = {name for name in names.values() if name != ro.NOT_A_ROOM} | {item["room"] for split in splits for item in split["rooms"]}
     missing = [name for name in _room_names(args.review_dir) if name not in placed and name not in _printed_areas(args.review_dir)]
     if not missing:
@@ -152,21 +171,30 @@ def apply(args):
         reply = _read(out / "01_dimensions" / f"reply_{index}.json")
         if not reply or reply.get("value_mm") is None:
             continue
-        try:
-            calibrations.append(ro.calibration_from_dimension(reply["value_mm"], row["span_px"], context["declared_mm_per_px"]))
-        except ValueError as error:
-            problems.append(f"dimension {index}: {error}")
+        if context["declared_mm_per_px"]:
+            try:
+                calibrations.append(ro.calibration_from_dimension(reply["value_mm"], row["span_px"], context["declared_mm_per_px"]))
+            except ValueError as error:
+                problems.append(f"dimension {index}: {error}")
+        elif isinstance(reply["value_mm"], (int, float)) and reply["value_mm"] > 0:
+            calibrations.append({"mm_per_px": reply["value_mm"] / row["span_px"], "status": "agreed", "dimension_value_mm": reply["value_mm"],
+                                 "method": "ai_read_printed_dimension", "scale_difference": None})
     if not calibrations:
         raise SystemExit("No printed dimension agreed with the declared scale; P0 cannot calibrate. " + "; ".join(problems))
+    if not context["declared_mm_per_px"] and len(calibrations) < 2:
+        raise SystemExit("The sheet's scale could not be read, so at least two printed dimensions must agree; only "
+                         f"{len(calibrations)} was read.")
     mm_per_px = sum(row["mm_per_px"] for row in calibrations) / len(calibrations)
     if any(abs(row["mm_per_px"] / mm_per_px - 1) > 0.02 for row in calibrations):
         raise SystemExit("Printed dimensions disagree with each other by more than 2%; not calibrating.")
     calibration = {**calibrations[0], "mm_per_px": mm_per_px, "dimension_count": len(calibrations)}
     wall_ids, rooms = _areas(args, context)
     folder = out / "03_room_names"
-    names, splits = ro.validate_naming_reply(_read(folder / "reply.json"), len(rooms), _room_names(args.review_dir),
-                                             _read(folder / "transform.json"))
-    segments = ro.drawn_segments(context["objects"], [row["style_id"] for row in _read(out / "02_wall_styles" / "summary.json") if not row["hatch"]])
+    names, splits = (ro.validate_naming_reply(_read(folder / "reply.json"), len(rooms), _room_names(args.review_dir),
+                                              _read(folder / "transform.json")) if rooms else ({}, []))
+    summary = _read(out / "02_wall_styles" / "summary.json", [])
+    segments = ro.drawn_segments(context["objects"], [row["style_id"] for row in summary if not row["hatch"]]) if summary else \
+        ro.drawn_segments(context["objects"], sorted({item["style_id"] for item in context["objects"]}))
     outlines = []
     by_room = {}
     for index, name in names.items():

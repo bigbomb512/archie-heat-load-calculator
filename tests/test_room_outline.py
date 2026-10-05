@@ -204,8 +204,46 @@ def simplify_and_run_checks():
           == {index: row["run_index"] for row in ro.wall_runs(split, mm, max_gap_mm=4000) for index in row["edge_indices"]}[6])
 
 
+def raster_checks():
+    from PIL import Image, ImageDraw
+    mm = 10.0  # 1 px = 10 mm
+    image = Image.new("RGB", (900, 700), "white")
+    draw = ImageDraw.Draw(image)
+    # 15 px (150 mm) thick walls around a 6 m x 4 m room, with a 90 px (900 mm) door gap in the bottom wall.
+    for rectangle in [(100, 100, 715, 115), (100, 100, 115, 515), (700, 100, 715, 515), (100, 500, 350, 515), (440, 500, 715, 515)]:
+        draw.rectangle(rectangle, fill="black")
+    # Thin dimension lines and text-like strokes that must not count as walls.
+    draw.line((100, 600, 715, 600), fill="black", width=1)
+    draw.line((300, 300, 500, 300), fill="black", width=2)
+    viewport = (0, 0, 900, 700)
+    walls = ro.raster_wall_geometry(image, viewport, mm, min_wall_mm=60, cell_mm=10)
+    rooms = ro.enclosed_rooms(walls, viewport, mm, door_gap_mm=1000)
+    check("a scanned plan's thick walls enclose the room and thin lines are ignored",
+          len(rooms) == 1 and abs(ro.area_m2(rooms[0], mm) - 5.85 * 3.85) / (5.85 * 3.85) < 0.03)
+
+    class Page:
+        bbox = (0, 0, 360, 280)
+        lines, curves, rects = [], [], []
+        images = [{"x0": 0, "top": 0, "x1": 360, "bottom": 280}]
+    check("a page covered by an image with little drawn line work is raster",
+          ro.page_is_raster(Page(), viewport, 2.5, mm, objects=[]))
+    # Irregularly spaced drawn lines (walls, furniture), not a regular hatch: about 3 m of line per m² of plan.
+    positions, x = [], 3
+    while x < 900:
+        positions.append(x)
+        x += 9 + (x * 7) % 23
+    busy = [line((x, 0), (x, 700), (0.24, 0.0, None)) for x in positions]
+    check("the irregular lines are drawn work, not hatch, and dense enough for a vector plan",
+          ro.hatch_styles(busy) == set() and ro.vector_line_density(busy, viewport, mm) >= ro.RASTER_MAX_LINE_DENSITY)
+    check("a page with an image underneath but full vector line work is not raster",
+          not ro.page_is_raster(Page(), viewport, 2.5, mm, objects=busy))
+    Page.images = []
+    check("a page with no images is never raster", not ro.page_is_raster(Page(), viewport, 2.5, mm, objects=[]))
+
+
 def main():
     page_origin_checks()
+    raster_checks()
     simplify_and_run_checks()
     outline_checks()
     enclosed_room_checks()

@@ -730,3 +730,68 @@ def wall_runs(points, mm_per_px, max_angle_deg=5.0, max_offset_mm=400.0, max_gap
     for number, row in enumerate(result):
         row["run_index"] = number
     return result
+
+
+# --- Raster (scanned) plans ------------------------------------------------------------
+
+RASTER_MAX_LINE_DENSITY = 2.0  # metres of drawn (non-hatch) line per m² of plan
+
+
+def vector_line_density(objects, viewport, mm_per_px):
+    """Metres of drawn, non-hatch line per square metre of plan area."""
+    plan = box(*viewport)
+    hatch = hatch_styles(objects)
+    length = sum(LineString(item["points"]).intersection(plan).length for item in objects if item["style"] not in hatch)
+    area_m2 = plan.area * mm_per_px ** 2 / 1e6
+    return (length * mm_per_px / 1000.0) / area_m2 if area_m2 > 0 else 0.0
+
+
+def page_is_raster(pdf_page, viewport_px, image_px_per_pt, mm_per_px, objects=None, min_cover=0.5):
+    """True when the plan is a scanned image: images cover most of the plan area
+    and there is little drawn line work (vector plans have about 5-6 m/m²; a
+    scanned plan with vector annotations under 1). Pages with background images
+    under a full vector drawing are not raster."""
+    origin_x, origin_y = (float(value) for value in (getattr(pdf_page, "bbox", None) or (0, 0, 0, 0))[:2])
+    plan = box(*viewport_px)
+    tiles = [box((float(image["x0"]) - origin_x) * image_px_per_pt, (float(image["top"]) - origin_y) * image_px_per_pt,
+                 (float(image["x1"]) - origin_x) * image_px_per_pt, (float(image["bottom"]) - origin_y) * image_px_per_pt)
+             for image in getattr(pdf_page, "images", []) or []]
+    if not tiles or plan.area <= 0:
+        return False
+    if unary_union(tiles).intersection(plan).area / plan.area < min_cover:
+        return False
+    objects = objects if objects is not None else extract_page_objects(pdf_page, image_px_per_pt)
+    return vector_line_density(objects, viewport_px, mm_per_px) < RASTER_MAX_LINE_DENSITY
+
+
+def raster_wall_geometry(page_image, viewport, mm_per_px, dark_threshold=180, min_wall_mm=60.0, cell_mm=20.0):
+    """Walls from a rendered plan image: dark areas at least `min_wall_mm` thick.
+
+    Thin lines (dimensions, grid, text, hatching) are removed by an opening of
+    the dark-pixel mask; what remains is turned into rectangles in page pixels,
+    so `enclosed_rooms` can be used exactly as for vector plans.
+    """
+    import numpy as np
+    from scipy import ndimage
+
+    left, top, right, bottom = (int(round(value)) for value in viewport)
+    grey = np.asarray(page_image.convert("L").crop((left, top, right, bottom)))
+    step = max(1, int(cell_mm // mm_per_px))
+    cells = ndimage.minimum_filter(grey, size=step)[::step, ::step] if step > 1 else grey
+    dark = cells < dark_threshold
+    size = max(1, int(round(min_wall_mm / (mm_per_px * step))))
+    walls = ndimage.binary_opening(dark, structure=np.ones((size, size), dtype=bool))
+    rectangles, open_runs = [], {}
+    for row in range(walls.shape[0] + 1):
+        runs = set()
+        if row < walls.shape[0]:
+            line = walls[row]
+            edges = np.flatnonzero(np.diff(np.concatenate(([0], line.astype(np.int8), [0]))))
+            runs = {(int(edges[index]), int(edges[index + 1])) for index in range(0, len(edges), 2)}
+        for run in list(open_runs):
+            if run not in runs:
+                start_row = open_runs.pop(run)
+                rectangles.append(box(left + run[0] * step, top + start_row * step, left + run[1] * step, top + row * step))
+        for run in runs:
+            open_runs.setdefault(run, row)
+    return unary_union(rectangles) if rectangles else None
