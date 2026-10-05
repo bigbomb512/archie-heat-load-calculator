@@ -57,7 +57,7 @@ def main():
     rooms = {item["item"]: item["status"] for item in report["tasks"]["P0_rooms"]}
     check("a wrong area, a missed room and a false room are all scored",
           rooms["Kitchen"] == "wrong" and rooms["Coolroom"] == "missing" and rooms["Counter"] == "wrong")
-    check("rooms whose answer is pending the user are not scored", "Bar" not in rooms and "Shop" not in rooms)
+    check("rooms whose answer is pending the user are not scored", "Shop" not in rooms and "Bar" in rooms)
     check("choosing the consultant's address is wrong", report["tasks"]["P1_site"][0]["status"] == "wrong")
     check("no north applied is missing, not correct", report["tasks"]["P2_north"][0]["status"] == "missing")
     openings = {item["item"]: item for item in report["tasks"]["P4_openings"]}

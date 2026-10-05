@@ -8,9 +8,8 @@
       "rooms": [
         {
           "label": "Bar",
-          "area_m2": 30.78,
-          "status": "pending_user",
-          "note": "Reviewer trace probably drew the wrong area for Bar: sheet 303 ('customised bar', 'bar partition') is called up from the walled central island (about 32.6 m2), not the top-middle area traced. Shop changes with it. Confirm before scoring."
+          "area_m2": 32.56,
+          "note": "Confirmed by the project contact 2026-10-05: the Bar is the walled central island. Area measured to the inside faces of its drawn partitions on the dimension plan (calibrated 11,825 mm dimension), not independently surveyed; it equals the enclosed-walls measurement, so for Bar the score tests naming, not geometry."
         },
         {
           "label": "Kitchen",
@@ -20,7 +19,7 @@
           "label": "Shop",
           "area_m2": 229.06,
           "status": "pending_user",
-          "note": "Reviewer trace probably drew the wrong area for Bar: sheet 303 ('customised bar', 'bar partition') is called up from the walled central island (about 32.6 m2), not the top-middle area traced. Shop changes with it. Confirm before scoring."
+          "note": "Still pending: the walkthrough trace drew Bar in the wrong place, so Shop changes with it. Whether the top-middle buffet stations belong to Shop is not yet confirmed."
         },
         {
           "label": "Coolroom",

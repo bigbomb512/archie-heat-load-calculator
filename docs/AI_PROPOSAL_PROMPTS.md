@@ -102,9 +102,10 @@ from the rendered image instead (dark, thick areas after removing thin
 lines). The GE kiosk is open-plan with no walls on most sides, so it relies on
 printed areas (already read) or AI outlines.
 
-**Answer key status (caseA):** Coolroom, Freezer and Kitchen are keyed. Bar
-and Shop are **pending the user**: the walkthrough trace probably drew the
-wrong area for Bar. Sheet 303 ("customised bar", "bar partition") is called up
+**Answer key status (caseA):** Coolroom, Freezer, Kitchen and Bar are keyed;
+the Bar was confirmed by the user on 2026-10-05 as the walled central island
+(32.56 m²). Shop is **pending the user**: the walkthrough trace drew the wrong
+area for Bar. Sheet 303 ("customised bar", "bar partition") is called up
 from the walled central island (about 32.6 m²), and the top-middle area looks
 like buffet stations (sheet 403).
 
@@ -239,10 +240,12 @@ Inputs:
 > you used. Do not guess from the business type.
 > JSON only: `{"roof": "exposed"|"not_exposed"|"unknown", "evidence": string}`
 
-**Fallback (most likely for the building type):**
-- ground-floor tenancy (unit prefix "G") in a named centre, precinct or
-  mixed-use building → `not_exposed`;
-- a stand-alone single-storey shop or a top-level tenancy → `exposed`.
+**No building-type fallback (user decision 2026-10-05).** Roof exposure is
+applied only from explicit drawing evidence: a section, a level above, a slab
+or roof note, or "apartments/residences" above the tenancy. If the drawings
+don't settle it, **ask the contractor** one plain question ("Is there a floor
+or another tenancy directly above this shop, or is it the roof?") and apply
+their answer as the declaration. This is the one place Card P asks a person.
 
 **Answer key caseA:** not exposed for Bar, Kitchen and Shop (apartments above;
 confirmed by the project contact). The fallback reaches it from "Shop G38" +
@@ -255,7 +258,7 @@ confirmed by the project contact). The fallback reaches it from "Shop G38" +
 | Value | Evidence missing | Applied value | Shown in result |
 |---|---|---|---|
 | Wall beyond a perimeter edge | Nothing drawn or noted | adjacent tenancy (storefront edge: mall or external, per P3) | "Assumed: typical for a tenancy in a centre" |
-| Roof exposure | No section or level note | per P5 rule | "Assumed from building type" |
+| Roof exposure | No section, level or slab note | none: ask the contractor (user decision 2026-10-05) | "Answered by the contractor" |
 | Shopfront sill | Not printed | 0 mm | "Assumed glass to floor" |
 | Shopfront head | Not printed | ceiling height | "Assumed glass to ceiling" |
 | North | No north arrow | none (sun not assessed) | "North not found; façade sun not assessed" |
