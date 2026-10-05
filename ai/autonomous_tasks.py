@@ -11,10 +11,16 @@ import math
 import re
 from pathlib import Path
 
-from ai import reviewer_room_geometry, site_location_resolution
+from ai import reviewer_room_geometry, site_location_resolution, room_outline
 
 
 TASKS = {
+    "P0_dimensions": {"id": "room_geometry_dimensions", "inputs": ["plan_page", "dimension_line_candidates"], "budget_chars": 1500, "media": "image", "prompt_builder": "build_p0_packets", "reply_validator": "validate_dimension_reply", "apply_function": "_apply_p0_dimension", "fallback": None},
+    "P0_wall_styles": {"id": "room_geometry_wall_styles", "inputs": ["plan_page_styles"], "budget_chars": 3000, "media": "image", "prompt_builder": "build_p0_packets", "reply_validator": "validate_wall_style_batch_reply", "apply_function": "_apply_p0_wall_styles", "fallback": None},
+    "P0_room_names": {"id": "room_geometry_room_names", "inputs": ["calibrated_enclosed_areas", "room_registry"], "budget_chars": 4000, "media": "image", "prompt_builder": "build_p0_packets", "reply_validator": "validate_p0_room_names", "apply_function": "_apply_p0_room_names", "fallback": None},
+    "P0_room_outlines": {"id": "room_geometry_outlines", "inputs": ["rooms_without_area", "plan_page"], "budget_chars": 3000, "media": "image", "prompt_builder": "build_p0_packets", "reply_validator": "validate_p0_outlines", "apply_function": "_apply_p0_outlines", "fallback": None},
+    "P3_boundaries": {"id": "boundary_classification", "inputs": ["current_room_trace", "boundary_evidence"], "budget_chars": 1500, "media": "image", "prompt_builder": "build_boundary_packets", "reply_validator": "validate_boundary_reply", "apply_function": "_apply_p3", "fallback": "tenancy_boundary"},
+    "P4_openings": {"id": "storefront_openings", "inputs": ["storefront_elevation", "current_room_trace"], "budget_chars": 2000, "media": "image", "prompt_builder": "build_opening_packets", "reply_validator": "validate_opening_reply", "apply_function": "_apply_p4", "fallback": "opening_dimensions"},
     "P1_site": {"id": "site_identification", "inputs": ["site_location_resolution.infer_pdf_context"],
                 "budget_chars": 4000, "media": "text", "prompt_builder": "build_site_packet",
                 "reply_validator": "validate_site_reply", "apply_function": "_apply_p1", "fallback": None},
@@ -25,6 +31,211 @@ TASKS = {
                 "budget_chars": 2000, "max_crops": 1, "prompt_builder": "roof_prompt",
                 "reply_validator": "validate_roof_reply", "apply_function": "_apply_p5", "fallback": None},
 }
+
+
+def calibration_from_dimensions(dimensions, declared_mm_per_px=None, tolerance=0.02):
+    """Build P0 calibration from printed dimensions, requiring independent agreement."""
+    valid = []
+    for row in dimensions:
+        points = row.get("points_image_px")
+        value = row.get("value_mm")
+        if (not isinstance(points, list) or len(points) != 2 or
+                not all(isinstance(point, list) and len(point) == 2 for point in points) or
+                any(type(coordinate) not in (int,float) or not math.isfinite(coordinate) for point in points for coordinate in point) or
+                type(value) not in (int, float) or not math.isfinite(value) or value <= 0):
+            continue
+        span = math.dist(points[0], points[1])
+        if span > 0:
+            valid.append({"points_image_px": points, "value_mm": float(value), "mm_per_px": float(value) / span,
+                          "printed_text": str(row.get("printed_text", ""))})
+    selected = []
+    if declared_mm_per_px and valid:
+        # Use the same scale check as the standalone room-outline workflow.
+        from ai import room_outline
+        accepted, rejected = [], []
+        for row in valid:
+            try:
+                result = room_outline.calibration_from_dimension(row["value_mm"],
+                    math.dist(*row["points_image_px"]), float(declared_mm_per_px), tolerance)
+                accepted.append({**row, **result})
+            except ValueError:
+                rejected.append(row)
+        if accepted:
+            status, rate = _agree_dimensions(accepted, tolerance) if len(accepted) > 1 else ("agreed", accepted[0]["mm_per_px"])
+            if status == "agreed":
+                selected = accepted
+        elif len(valid) >= 2:
+            status, rate = _agree_dimensions(valid, tolerance)
+            if status == "agreed":
+                status = "declared_scale_rejected"
+                selected = valid
+        else:
+            raise ValueError("The printed dimension does not agree with the declared scale within 2%; another dimension is required.")
+    elif len(valid) >= 2:
+        status, rate = _agree_dimensions(valid, tolerance)
+        if status == "agreed":
+            selected = valid
+    else:
+        raise ValueError("Without a declared scale, at least two printed dimensions agreeing within 2% are required.")
+    if status != "agreed" and status != "declared_scale_rejected":
+        raise ValueError("Printed dimensions disagree by more than 2%; P0 cannot calibrate this page.")
+    selected = selected[:2]
+    return {"source": "ai_read_printed_dimension", "status": status, "mm_per_px": rate,
+            "dimension_points_image_px": deepcopy(selected[0]["points_image_px"]),
+            "dimension_value_mm": selected[0]["value_mm"], "printed_text": selected[0]["printed_text"],
+            "scale_consistency_tolerance": tolerance,
+            **({"second_dimension": deepcopy(selected[1])} if len(selected) > 1 else {})}
+
+
+def _agree_dimensions(rows, tolerance):
+    if len(rows) < 2:
+        return "unresolved", None
+    first, second = rows[:2]
+    difference = abs(first["mm_per_px"] - second["mm_per_px"]) / ((first["mm_per_px"] + second["mm_per_px"]) / 2)
+    if difference > tolerance:
+        return "unresolved", None
+    return "agreed", (first["mm_per_px"] + second["mm_per_px"]) / 2
+
+
+def validate_dimension_reply(packet, reply):
+    value = parse_json_reply(reply)
+    number = value.get("value_mm")
+    if type(number) not in (int, float) or not math.isfinite(number) or number <= 0:
+        raise ValueError("value_mm must be a positive printed dimension in millimetres, or the reply is unreadable.")
+    printed = str(value.get("printed_text", "")).strip()
+    if not printed:
+        raise ValueError("Quote the printed dimension text used to read the value.")
+    printed_digits = re.sub(r"\D", "", printed)
+    value_digits = str(int(number)) if float(number).is_integer() else re.sub(r"\D", "", str(number))
+    if value_digits and value_digits not in printed_digits:
+        raise ValueError("The quoted printed text does not contain the returned dimension value.")
+    return {"value_mm": float(number), "printed_text": printed[:120],
+            "points_image_px": deepcopy(packet["line"]["tick_centres_image_px"])}
+
+
+def validate_p0_room_names(packet, reply):
+    value = parse_json_reply(reply)
+    from ai import room_outline as ro
+    names, splits = ro.validate_naming_reply(value, packet["area_count"], packet["room_names"], packet["transform"])
+    return {"names": names, "splits": splits}
+
+
+def validate_p0_outlines(packet, reply):
+    value = parse_json_reply(reply)
+    return room_outline.validate_outline_reply(value, packet["room_names"], packet["transform"])
+
+
+def validate_wall_style_batch_reply(packet, reply):
+    """Validate one complete legend batch; an explicit empty batch is allowed."""
+    value = parse_json_reply(reply)
+    if not isinstance(value.get("wall_styles"), list):
+        raise ValueError("Wall-style reply must contain a wall_styles list.")
+    if value["wall_styles"]:
+        return {"wall_style_ids": room_outline.validate_wall_style_reply(value, packet.get("summary", [])),
+                "uncertain": value.get("uncertain", [])}
+    uncertain = value.get("uncertain", [])
+    if not isinstance(uncertain, list) or any(type(index) is not int or index < 1 or index > len(packet.get("summary", [])) for index in uncertain):
+        raise ValueError("An empty wall-style batch must have a valid uncertain list.")
+    return {"wall_style_ids": [], "uncertain": uncertain,
+            "notes": str(value.get("notes", "No wall styles in this legend batch."))[:300]}
+
+
+def validate_boundary_reply(packet, reply):
+    value = parse_json_reply(reply)
+    edges = value.get("edges")
+    if not isinstance(edges, list):
+        raise ValueError("Boundary reply must contain an edges list.")
+    allowed = room_outline_boundary_values()
+    expected = {int(row["index"]): row for row in packet.get("edges", [])}
+    result, seen = [], set()
+    for row in edges:
+        if not isinstance(row, dict):
+            raise ValueError("Boundary reply contains an invalid or repeated edge index.")
+        index = row.get("index")
+        if type(row.get("edge_number")) is int:
+            index = row["edge_number"] - 1
+        if type(index) is not int or index not in expected or index in seen:
+            raise ValueError("Boundary reply contains an invalid or repeated edge index.")
+        boundary = row.get("boundary")
+        if boundary not in allowed:
+            raise ValueError("Boundary must be external, mall, adjacent_tenancy, internal or unknown.")
+        evidence = str(row.get("evidence", "")).strip()
+        if boundary != "unknown" and index not in packet.get("shared_edges", []) and not evidence:
+            raise ValueError(f"Edge {index + 1} needs quoted evidence for a non-unknown classification.")
+        if index == packet.get("storefront_edge_index") and boundary in {"adjacent_tenancy", "internal"}:
+            raise ValueError("The edge matching the storefront elevation width cannot be internal or adjacent_tenancy.")
+        result.append({"index": index, "boundary": boundary, "evidence": evidence[:300]})
+        seen.add(index)
+    if seen != set(expected):
+        raise ValueError("Classify every numbered edge, including unknown edges.")
+    return {"edges": result}
+
+
+def room_outline_boundary_values():
+    return {"external", "mall", "adjacent_tenancy", "internal", "unknown"}
+
+
+def validate_opening_reply(packet, reply):
+    value = parse_json_reply(reply)
+    panels = value.get("panels")
+    if not isinstance(panels, list):
+        raise ValueError("Opening reply must contain a panels list.")
+    text_layer = [str(item) for item in packet.get("text_layer", [])]
+    edge_width = float(packet.get("edge_length_mm", 0))
+    total = value.get("total_width_mm")
+    total_text = str(value.get("total_width_text") or "")
+    if type(total) not in (int, float) or total <= 0:
+        raise ValueError("A positive printed shopfront total width is required.")
+    if not total_text and not packet.get("allow_vector_outline_read"):
+        raise ValueError("Quote the printed total width from the elevation text layer.")
+    if total_text and text_layer and not packet.get("allow_vector_outline_read") and not any(total_text.casefold() in text.casefold() for text in text_layer):
+        raise ValueError("The printed total width text is not present in the elevation text layer.")
+    if abs(total - edge_width) / edge_width > .02 if edge_width > 0 else True:
+        raise ValueError("The printed elevation total must match the traced storefront edge within 2%.")
+    result, width_sum = [], 0.0
+    ceiling = float(packet.get("ceiling_height_mm") or 0)
+    excluded = deepcopy(value.get("excluded", []))
+    for index, panel in enumerate(panels):
+        if not isinstance(panel, dict):
+            raise ValueError("Every glazed panel must be an object.")
+        width, sill, head = panel.get("width_mm"), panel.get("sill_mm"), panel.get("head_mm")
+        source = str(panel.get("source", "printed_text"))
+        printed = panel.get("printed_text") if isinstance(panel.get("printed_text"), list) else []
+        if source == "read_from_image":
+            if not packet.get("allow_vector_outline_read"):
+                raise ValueError("Vision-read dimensions are allowed only for drawings with outlined dimension text.")
+        elif not text_layer or not printed or any(not any(str(text).casefold() in line.casefold() for line in text_layer) for text in printed):
+            raise ValueError("Every dimension must quote text found in the elevation text layer or be marked read_from_image.")
+        if width is None:
+            excluded.append({"label": str(panel.get("label", f"Panel {index + 1}")),
+                             "why": "Panel width is not printed; panel was not applied."})
+            continue
+        if type(width) not in (int, float) or width <= 0:
+            raise ValueError("Each applied glazing panel needs a positive printed width.")
+        if sill is None:
+            sill, sill_assumption = 0.0, "Assumed glass to floor"
+        else:
+            sill_assumption = ""
+        if head is None:
+            head, head_assumption = ceiling, "Assumed glass to ceiling"
+        else:
+            head_assumption = ""
+        if type(sill) not in (int, float) or type(head) not in (int, float) or head <= sill or head <= 0:
+            raise ValueError("Glazing head height must be above its sill height.")
+        capped = head > ceiling > 0
+        if capped:
+            head = ceiling
+            head_assumption = "Head above ceiling; capped at ceiling height"
+        result.append({"panel_index": index + 1, "width_mm": float(width), "sill_mm": float(sill),
+                       "head_mm": float(head), "source": source, "printed_text": printed,
+                       "sill_assumption": sill_assumption, "head_assumption": head_assumption})
+        width_sum += float(width)
+    if width_sum > total + 1e-6:
+        raise ValueError("Glazed panel widths cannot exceed the printed total width.")
+    if packet.get("allow_vector_outline_read") and abs(width_sum - total) / total > .02:
+        raise ValueError("Vision-read panel widths must sum to the printed total within 2%.")
+    return {"total_width_mm": float(total), "total_width_text": total_text, "panels": result,
+            "excluded": excluded}
 
 
 def fingerprint(value):
@@ -315,4 +526,3 @@ def validate_roof_reply(packet, reply):
         if not evidence or not any(evidence in source for source in sources) or not explicit:
             raise ValueError("A roof determination needs a quoted drawing fact that explicitly establishes what is above the tenancy.")
     return {"roof": value["roof"], "evidence": evidence[:300]}
-

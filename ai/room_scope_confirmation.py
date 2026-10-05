@@ -74,6 +74,7 @@ def candidates(input_set, room_use=None):
             "key": key, "model_room_id": room["room_id"], "label": name, "level": level,
             "area_m2": round(float(area), 2) if isinstance(area, (int, float)) else None,
             "area_origin": str(ledger_area.get("origin", "")),
+            "area_quality_label": str(ledger_area.get("quality_label", "")),
             "source_pages": _pages(ledger_area.get("evidence", [])),
             "scope": str(scope_rows.get(room["room_id"], {}).get("value", "")),
             "status": "calculated",
@@ -170,7 +171,7 @@ def confirm(input_set, room_use, data, now):
             raise ValueError(f"Trace {row['label']} before including it in the room list.")
         reason = str(decision.get("reason", "")).strip()
         output.append({"key": row["key"], "label": row["label"], "level": row["level"], "area_m2": row["area_m2"],
-                       "area_origin": row["area_origin"], "source_pages": row["source_pages"],
+                       "area_origin": row["area_origin"], "area_quality_label": row.get("area_quality_label", ""), "source_pages": row["source_pages"],
                        "status": row["status"], "include": include,
                        "reason": "" if include else (reason or "Excluded by reviewer")})
     if not any(row["status"] == "calculated" for row in output):
@@ -223,7 +224,7 @@ def apply(input_set, confirmation, room_use=None):
                                      if not (isinstance(row, dict) and row.get("room_id") in removed)]
     result["review_queue"] = [row for row in result.get("review_queue", [])
                               if not (isinstance(row, dict) and row.get("room_id") in removed)]
-    confirmed_rooms = [{key: row[key] for key in ("label", "level", "area_m2", "area_origin", "source_pages")}
+    confirmed_rooms = [{key: row[key] for key in ("label", "level", "area_m2", "area_origin", "area_quality_label", "source_pages")}
                        for row in current["candidates"] if decisions.get(row["key"], {}).get("include")]
     summary = {"reviewer": confirmation.get("reviewer", ""), "confirmed_at": confirmation.get("confirmed_at", ""),
                "candidate_fingerprint": confirmation.get("candidate_fingerprint", "")}

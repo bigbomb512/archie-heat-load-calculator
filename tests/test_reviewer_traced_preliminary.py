@@ -338,6 +338,20 @@ def main():
 
     with tempfile.TemporaryDirectory() as folder:
         root = Path(folder)
+        room_use, proposal, _room_id, trace = write_fixture(root)
+        set_envelope_trace(root, trace, [{"index": 0, "boundary": "mall"},
+                                         {"index": 1, "boundary": "adjacent_tenancy"},
+                                         {"index": 2, "boundary": "mall"},
+                                         {"index": 3, "boundary": "adjacent_tenancy"}], "not_exposed")
+        prepared = prepare(root, room_use, proposal)
+        assembled = ai_preliminary.assemble({"spaces": []}, preliminary_proposal=prepared,
+                                            allow_area_fallbacks=False)
+        check("mall and neighbouring-tenancy boundaries with no exposed roof are envelope-not-applicable",
+              any(row.get("envelope_not_applicable") for row in prepared["envelope_assessments"])
+              and assembled["material"]["hourly_load_model"]["rooms"][0]["cooling_load"]["envelope_not_applicable"])
+
+    with tempfile.TemporaryDirectory() as folder:
+        root = Path(folder)
         room_use, proposal, room_id, trace = write_fixture(root)
         set_envelope_trace(root, trace, [], "exposed")
         ledger = {"thermal_surface_ledger": {"surfaces": [{
@@ -428,6 +442,39 @@ def main():
                       for schedule in assembled_north["material"]["schedule_library"]["schedules"])
               and not any(item.get("component") == "Glazing sun — orientation not assessed"
                           for item in ai_preliminary.calculate(assembled_north)["unresolved_room_inputs"]))
+
+    with tempfile.TemporaryDirectory() as folder:
+        root = Path(folder)
+        room_use, proposal, room_id, base_trace = write_fixture(root)
+        first = {**base_trace, "trace_id": "ai-shop-part-1", "area_m2": 12.0,
+                 "part_index": 1, "part_count": 2, "roof": "exposed",
+                 "edges": [{"index": i, "boundary": "external" if i == 0 else "unknown"} for i in range(4)],
+                 "openings": []}
+        second = {**base_trace, "trace_id": "ai-shop-part-2", "area_m2": 13.0,
+                  "part_index": 2, "part_count": 2, "roof": "exposed",
+                  "points_image_px": [[20, 0], [30, 0], [30, 10], [20, 10], [20, 0]],
+                  "edges": [{"index": i, "boundary": "external" if i == 0 else "unknown"} for i in range(4)],
+                  "openings": [{"opening_id": "part2-storefront", "edge_index": 0, "width_m": 0.05,
+                                "sill_height_m": 0.0, "head_height_m": 1.0, "elevation_page": 26,
+                                "shading_category": "unshaded", "glazing_choice": "retail"}]}
+        aggregate = {**first, "area_m2": 25.0, "part_count": 2,
+                     "supporting_traces": [first, second]}
+        identity = ceiling_volume_resolution.room_identity("Shop", "Level 1")
+        with patch.object(reviewer_room_geometry_service, "current_traced_areas", return_value={room_id: aggregate}), \
+             patch.object(ceiling_volume_resolution, "values_by_room",
+                          return_value={identity: {"ceiling_height_mm": 3000}}):
+            prepared = prepare(root, room_use, proposal)
+        assembled = ai_preliminary.assemble({"spaces": []}, preliminary_proposal=prepared,
+                                            allow_area_fallbacks=False)
+        surfaces = assembled["material"]["hourly_load_model"]["rooms"][0]["cooling_load"]["envelope_surfaces"]
+        roofs = [row for row in surfaces if row.get("kind") == "roof"]
+        part2_wall = next(row for row in surfaces if row.get("reviewer_trace_id") == "ai-shop-part-2"
+                          and row.get("kind") == "opaque_wall")
+        linked_opening = next(row for row in prepared["openings"]
+                              if row.get("host_surface_key") == "reviewer-trace:ai-shop-part-2:wall:0")
+        check("all AI room parts contribute roof and part-two storefront wall and opening",
+              len(roofs) == 2 and abs(part2_wall["area_m2"] - 0.25) < 1e-9
+              and linked_opening["opening_key"] == "part2-storefront")
 
 
 if __name__ == "__main__":

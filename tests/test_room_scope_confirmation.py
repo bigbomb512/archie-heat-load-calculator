@@ -78,6 +78,18 @@ def pure_checks():
     office = next(row for row in rows if row["label"] == "Office")
     check("candidate rows carry area, origin and source pages",
           office["area_m2"] == 9.0 and office["area_origin"] == "pdf_evidence" and office["source_pages"] == [5])
+    ai_data = deepcopy(data)
+    ai_area = next(row for row in ai_data["materialized_fields"] if row.get("room_id") == "r-retail" and row.get("field") == "area_m2")
+    ai_area.update({"origin": "ai_determined", "quality_label": "AI-determined (below accuracy bar)"})
+    ai_candidate = next(row for row in scope.candidates(ai_data) if row["label"] == "Retail space")
+    check("AI-determined area quality label reaches the room confirmation", ai_candidate["area_quality_label"] == "AI-determined (below accuracy bar)")
+    ai_keys = keys(scope.candidates(ai_data))
+    ai_confirmation = scope.confirm(ai_data, None, {"reviewer": "QA", "rows": [
+        {"key": ai_keys["Office"], "include": True}, {"key": ai_keys["Retail space"], "include": True},
+        {"key": ai_keys["Service Counter"], "include": False}]}, "t")
+    _applied, ai_confirmed_rooms, _summary = scope.apply(ai_data, ai_confirmation)
+    check("confirmed AI room keeps the accuracy warning for the draft report",
+          next(row for row in ai_confirmed_rooms if row["label"] == "Retail space")["area_quality_label"] == "AI-determined (below accuracy bar)")
     check("unconfirmed state blocks the calculation", scope.state(data, None)["status"] == scope.NOT_CONFIRMED)
     expect_error("apply without confirmation is refused", lambda: scope.apply(data, None), "Confirm the room list")
 

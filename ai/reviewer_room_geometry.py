@@ -11,7 +11,7 @@ SCHEMA_VERSION = 1
 # Image-coordinate snap radius: this is only a UI convenience, not proof that a
 # candidate is a room boundary. Keep it small on full-resolution plan renders.
 SNAP_TOLERANCE_PX = 8.0
-EDGE_BOUNDARIES = {"external", "adjacent_tenancy", "internal", "unknown"}
+EDGE_BOUNDARIES = {"external", "mall", "adjacent_tenancy", "internal", "unknown"}
 ROOF_EXPOSURES = {"exposed", "not_exposed", "unknown"}
 NORTH_SOURCES = {"reviewer_read_north_arrow", "reviewer_typed_page_up_bearing"}
 DECLARATION_SOURCES = {"reviewer", "ai_determined", "ai_fallback"}
@@ -46,7 +46,7 @@ def validate_envelope_classification(edges, roof, edge_count):
         if index in seen:
             raise ValueError("Envelope edge indices must be unique.")
         if boundary not in EDGE_BOUNDARIES:
-            raise ValueError("Envelope edge boundary must be external, adjacent_tenancy, internal or unknown.")
+            raise ValueError("Envelope edge boundary must be external, mall, adjacent_tenancy, internal or unknown.")
         seen.add(index)
         values[index] = boundary
     roof = str(roof)
@@ -125,8 +125,18 @@ def validate_artifact(raw):
         dim_value = calibration.get("dimension_value_mm")
         if not isinstance(dim_value, (int, float)) or not math.isfinite(dim_value) or dim_value <= 0:
             raise ValueError("Printed calibration dimension must be positive millimetres.")
-        if calibration.get("source") != "reviewer_read_printed_dimension":
-            raise ValueError("Calibration source must be reviewer_read_printed_dimension.")
+        declaration_source = row.get("declaration_source", "reviewer")
+        allowed_calibration_sources = {"reviewer": "reviewer_read_printed_dimension",
+                                       "ai_determined": "ai_read_printed_dimension",
+                                       "ai_fallback": "ai_read_printed_dimension"}
+        if calibration.get("source") != allowed_calibration_sources.get(declaration_source):
+            raise ValueError("Calibration source must match the trace declaration source.")
+        ai_measured_area = row.get("ai_measured_area_m2")
+        if ai_measured_area is not None:
+            if (declaration_source not in {"ai_determined", "ai_fallback"}
+                    or not isinstance(ai_measured_area, (int, float)) or isinstance(ai_measured_area, bool)
+                    or not math.isfinite(ai_measured_area) or ai_measured_area <= 0):
+                raise ValueError("AI-measured room area must be positive and belong to an AI-determined trace.")
         if str(row.get("reviewer", "")).strip() == "":
             raise ValueError("Room geometry trace requires a reviewer name.")
         if not isinstance(row.get("source_fingerprints"), dict):

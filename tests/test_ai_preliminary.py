@@ -42,6 +42,16 @@ def main():
     geometry_room = next(row for row in geometry_model["material"]["hourly_load_model"]["rooms"] if row["name"] == "Retail tenancy")
     geometry_field = next(row for row in geometry_model["materialized_fields"] if row["room_id"] == geometry_room["room_id"] and row["field"] == "area_m2")
     check("normalized AI geometry proof supplies a draft-only room area", geometry_room["area_m2"] == 50.0 and geometry_field["origin"] == "ai_geometry" and geometry_field["geometry_proof_id"] == "geometry-proof-retail")
+    ai_trace = assemble({"spaces": [{"name": "Shop", "level_name": "Ground", "area": "", "evidence": [{"page": 20}]}]},
+        preliminary_proposal={"rooms": [{"kind": "room", "label": "Shop", "level_name": "Ground", "area_m2": 216.1,
+            "preliminary_profile_id": "generic_conditioned_room", "space_scope": "comfort_hvac", "confidence": 0.6,
+            "page": 20, "evidence": [{"page": 20, "excerpt": "Room outline"}], "area_origin": "ai_determined",
+            "reviewer_traced_area": {"ai_quality_label": "AI-determined (below accuracy bar)"}}]},
+        allow_area_fallbacks=False)
+    ai_trace_room = ai_trace["material"]["hourly_load_model"]["rooms"][0]
+    ai_trace_field = next(row for row in ai_trace["materialized_fields"] if row["room_id"] == ai_trace_room["room_id"] and row["field"] == "area_m2")
+    check("AI trace quality label reaches the calculator-draft room ledger",
+          ai_trace_field["origin"] == "ai_determined" and ai_trace_field["quality_label"] == "AI-determined (below accuracy bar)")
     check("generic profile fallback remains available", any(row["profile_id"] == "generic_conditioned_room" for row in direct["materialized_fields"]))
     check("missing geometry falls back only through a visible controlled assumption", any(row["origin"] == "ai_assumption" for row in direct["materialized_fields"]))
     measured_only = assemble({"spaces": [

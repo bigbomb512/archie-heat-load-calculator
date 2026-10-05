@@ -1527,6 +1527,41 @@ function roomScopeState(status = "not_confirmed"){
     ]};
 }
 
+test("AI-determined P0 areas are labelled in room confirmation and the draft report", async ({page}) => {
+  await mockApi(page);
+  const state = roomScopeState();
+  state.candidates = [{key:"room-use:ground:shop", label:"Shop", level:"Ground", area_m2:216.1,
+    area_origin:"ai_determined", area_quality_label:"AI-determined (below accuracy bar)", source_pages:[20],
+    status:"calculated", include:true}];
+  await renderRoomScope(page, state);
+  await expect(page.locator("#roomScopeConfirmation")).toContainText("AI-determined 216.1 m² · below accuracy bar");
+  await page.evaluate(() => drawAiPreliminary({settings:{}, run:{}, room_scope:{}, hourly_ai_preliminary_load_report:{
+    label:"AI preliminary estimate", included_scope_peak:{design_total_kw:33.8},
+    confirmed_rooms:[{label:"Shop",area_m2:216.1,area_origin:"ai_determined",area_quality_label:"AI-determined (below accuracy bar)",source_pages:[20]}]}}));
+  await expect(page.locator("[data-confirmed-rooms]")).toContainText("Shop — AI-determined 216.1 m² · below accuracy bar · p. 20");
+});
+
+test("operator panel exposes bounded P0, P3 and P4 tasks", async ({page}) => {
+  await mockApi(page);
+  const tasks = [
+    {task:"P0_dimensions",target:"page-20-dimension-1",status:"waiting_for_reply",prompt:"Read one dimension",packet:{page:20},images:[{name:"dimension.png",url:"/dimension.png"}]},
+    {task:"P0_wall_styles",target:"page-20",status:"waiting_for_reply",prompt:"Identify wall styles",packet:{page:20},images:[{name:"styles.png",url:"/styles.png"}]},
+    {task:"P0_room_names",target:"page-20",status:"waiting_for_reply",prompt:"Name enclosed areas",packet:{page:20},images:[{name:"areas.png",url:"/areas.png"}]},
+    {task:"P0_room_outlines",target:"page-20",status:"waiting_for_reply",prompt:"Outline open rooms",packet:{page:20},images:[{name:"plan.png",url:"/plan.png"}]},
+    {task:"P3_boundaries",target:"shop-page-20",status:"waiting_for_reply",prompt:"Classify boundaries",packet:{room:"Shop"},images:[{name:"boundary.png",url:"/boundary.png"}]},
+    {task:"P4_openings",target:"shop-edge-1-page-26",status:"waiting_for_reply",prompt:"Read storefront glazing",packet:{room:"Shop"},images:[{name:"elevation.png",url:"/elevation.png"}]},
+  ];
+  await page.route("**/api/autonomous-tasks**", route => route.request().method() === "GET"
+    ? route.fulfill({json:{id:"demo-project",auto_apply_bar:.85,supported_tasks:tasks.map(row=>row.task),tasks}})
+    : route.fulfill({json:{id:"demo-project",tasks}}));
+  await page.goto("/?operator=1");
+  await page.evaluate(() => {DATA={id:"demo-project"};show("vRes");});
+  const panel=page.locator("#autonomousTasksPanel");
+  await expect(panel).toBeVisible();
+  for (const task of ["P0_dimensions","P0_wall_styles","P0_room_names","P0_room_outlines","P3_boundaries","P4_openings"])
+    await expect(panel.locator(`[data-task="${task}"]`)).toBeVisible();
+});
+
 test("project load renders room confirmation from compact preliminary data and keeps actions available", async ({ page }) => {
   await mockApi(page);
   const roomScope = roomScopeState();

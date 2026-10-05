@@ -465,8 +465,12 @@ def dimension_line_candidates(objects, walls, viewport, limit=3, min_length_px=3
         if span <= 0.8 * length:
             continue
         edge_distance = min(abs(y1 - top), abs(bottom - y1)) if horizontal else min(abs(x1 - left), abs(right - x1))
-        candidates.append({"points": [(x1, y1), (x2, y2)], "length_px": length, "span_px": span,
-                           "edge_distance_px": edge_distance})
+        start_points = [point for point in on_line if abs(along(point) - low) <= 20]
+        end_points = [point for point in on_line if abs(along(point) - high) <= 20]
+        centre = lambda points: [sum(point[axis] for point in points) / len(points) for axis in (0, 1)]
+        candidates.append({"points": [(x1, y1), (x2, y2)],
+                           "tick_centres_image_px": [centre(start_points), centre(end_points)],
+                           "length_px": length, "span_px": span, "edge_distance_px": edge_distance})
     candidates.sort(key=lambda row: (-row["span_px"], row["edge_distance_px"]))
     chosen = []
     for row in candidates:
@@ -587,3 +591,142 @@ def choose_area(printed_m2=None, enclosed_m2=None, outline_m2=None, tolerance=0.
     if outline_m2:
         return {"area_m2": outline_m2, "source": "ai_outline_snapped", "conflict": ""}
     return {"area_m2": None, "source": "none", "conflict": ""}
+
+
+# --- Outline simplification and wall runs --------------------------------------------
+
+def _turn_degrees(a, b, c):
+    first = math.atan2(b[1] - a[1], b[0] - a[0])
+    second = math.atan2(c[1] - b[1], c[0] - b[0])
+    return abs((math.degrees(second - first) + 180) % 360 - 180)
+
+
+def _merge_collinear(points, max_turn_deg):
+    """Drop vertices where the outline barely turns (closed ring, first == last)."""
+    ring = list(points[:-1])
+    changed = True
+    while changed and len(ring) > 3:
+        changed = False
+        for index in range(len(ring)):
+            previous, current, following = ring[index - 1], ring[index], ring[(index + 1) % len(ring)]
+            if _turn_degrees(previous, current, following) < max_turn_deg:
+                del ring[index]
+                changed = True
+                break
+    return ring + [ring[0]]
+
+
+def simplify_outline(polygon, mm_per_px, jog_mm=150.0, max_area_change=0.01, max_turn_deg=5.0):
+    """Reduce a measured room outline to the walls a person would trace.
+
+    Removes hairline artefacts of gap closing and wall jogs or piers shallower
+    than `jog_mm`, then merges edges that run on in nearly the same direction.
+    The area may change by at most `max_area_change` (1 %); otherwise the
+    tolerance is halved until it fits, and the original outline is kept if
+    nothing does.
+    """
+    if polygon is None or polygon.is_empty or polygon.area <= 0:
+        raise ValueError("A room outline with a positive area is required.")
+    original_edges = len(polygon.exterior.coords) - 1
+    tolerance = jog_mm / mm_per_px
+    while tolerance >= 0.5:
+        candidate = polygon.simplify(tolerance, preserve_topology=True)
+        if candidate.geom_type == "Polygon" and not candidate.is_empty:
+            points = _merge_collinear(list(candidate.exterior.coords), max_turn_deg)
+            simplified = Polygon(points)
+            change = abs(simplified.area / polygon.area - 1)
+            if simplified.is_valid and len(points) >= 4 and change <= max_area_change:
+                return simplified, {"edges_before": original_edges, "edges_after": len(points) - 1,
+                                    "area_change": round(change, 5), "tolerance_mm": round(tolerance * mm_per_px, 1)}
+        tolerance /= 2
+    return polygon, {"edges_before": original_edges, "edges_after": original_edges, "area_change": 0.0,
+                     "tolerance_mm": 0.0, "note": "No simplification kept the area within the limit."}
+
+
+def wall_runs(points, mm_per_px, max_angle_deg=5.0, max_offset_mm=400.0, max_gap_mm=2000.0, min_edge_mm=500.0):
+    """Group an outline's edges into straight wall runs, by line rather than by order.
+
+    Edges of at least `min_edge_mm` that face the same way (within
+    `max_angle_deg`, so they are on the same side of the room), lie within
+    `max_offset_mm` of one line, and are no more than `max_gap_mm` apart along
+    it form one run: for example a shopfront broken by a pier, or a wall with a
+    shallow recess. Shorter edges (jogs, reveals) join the run of their longer
+    neighbour. Each run reports its edge indices, direction, the summed length
+    of its edges on the line, and its end-to-end span, which is what an
+    elevation's printed overall dimension measures.
+    """
+    ring = list(points)
+    if ring[0] != ring[-1]:
+        ring.append(ring[0])
+    edges = [(index, ring[index], ring[index + 1]) for index in range(len(ring) - 1)]
+    if not edges:
+        return []
+    length_mm = lambda edge: math.dist(edge[1], edge[2]) * mm_per_px
+    heading = lambda edge: math.degrees(math.atan2(edge[2][1] - edge[1][1], edge[2][0] - edge[1][0])) % 360
+
+    def offset_mm(base, point):
+        (x1, y1), (x2, y2) = base[1], base[2]
+        length = math.hypot(x2 - x1, y2 - y1) or 1.0
+        return abs((x2 - x1) * (y1 - point[1]) - (x1 - point[0]) * (y2 - y1)) / length * mm_per_px
+
+    def along(base, point):
+        angle = math.radians(heading(base))
+        return (point[0] * math.cos(angle) + point[1] * math.sin(angle)) * mm_per_px
+
+    long_edges = sorted((edge for edge in edges if length_mm(edge) >= min_edge_mm), key=length_mm, reverse=True)
+    groups = []  # each: {"base": edge, "members": [edges]}
+    for edge in long_edges:
+        placed = False
+        for group in groups:
+            base = group["base"]
+            turn = abs((heading(edge) - heading(base) + 180) % 360 - 180)
+            if turn > max_angle_deg or max(offset_mm(base, edge[1]), offset_mm(base, edge[2])) > max_offset_mm:
+                continue
+            group["members"].append(edge)
+            placed = True
+            break
+        if not placed:
+            groups.append({"base": edge, "members": [edge]})
+    # Split a line group where its pieces are further apart than max_gap_mm.
+    runs = []
+    for group in groups:
+        base = group["base"]
+        members = sorted(group["members"], key=lambda edge: min(along(base, edge[1]), along(base, edge[2])))
+        current, reach = [], None
+        for edge in members:
+            low, high = sorted((along(base, edge[1]), along(base, edge[2])))
+            if current and low - reach > max_gap_mm:
+                runs.append((base, current))
+                current, reach = [], None
+            current.append(edge)
+            reach = high if reach is None else max(reach, high)
+        if current:
+            runs.append((base, current))
+    run_of = {}
+    for number, (_base, members) in enumerate(runs):
+        for edge in members:
+            run_of[edge[0]] = number
+    # Short edges join the run of their longer neighbour (previous or next edge).
+    for edge in edges:
+        if edge[0] in run_of:
+            continue
+        neighbours = [edges[(edge[0] - 1) % len(edges)], edges[(edge[0] + 1) % len(edges)]]
+        owned = [item for item in neighbours if item[0] in run_of]
+        if owned:
+            run_of[edge[0]] = run_of[max(owned, key=length_mm)[0]]
+        else:
+            runs.append((edge, [edge]))
+            run_of[edge[0]] = len(runs) - 1
+    result = []
+    for number, (base, members) in enumerate(runs):
+        indices = sorted(index for index, run in run_of.items() if run == number)
+        positions = [along(base, point) for edge in members for point in (edge[1], edge[2])]
+        result.append({"run_index": number, "edge_indices": indices, "direction_deg": round(heading(base), 1),
+                       "length_m": round(sum(length_mm(edge) for edge in members) / 1000.0, 3),
+                       "span_m": round((max(positions) - min(positions)) / 1000.0, 3),
+                       "start_px": list(min((edge[1] for edge in members), key=lambda point: along(base, point))),
+                       "end_px": list(max((edge[2] for edge in members), key=lambda point: along(base, point)))})
+    result.sort(key=lambda row: min(row["edge_indices"]))
+    for number, row in enumerate(result):
+        row["run_index"] = number
+    return result

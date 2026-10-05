@@ -27,7 +27,7 @@ def perfect():
                      {"label": "Coolroom", "area_m2": 10.7}, {"label": "Freezer", "area_m2": 7.6}],
         "P1_site": {"site_text": "Tenancy MZ01, Central Precinct"},
         "P2_north": [{"page": 20, "plan_up_azimuth_deg": 358}],
-        "P3_boundaries": [{"room": "Shop", "edge_length_m": 11.97, "boundary": "external"}],
+        "P3_boundaries": [{"room": "Shop", "edge_length_m": 11.97, "boundary": "mall"}],
         "P4_openings": [{"page": 26, "glazed_panels": [{"width_mm": 2025, "sill_mm": 1100, "head_mm": 2700}]}],
         "P5_roof": [{"room": "Bar", "roof": "not_exposed"}, {"room": "Kitchen", "roof": "not_exposed", "source": "fallback"},
                     {"room": "Shop", "roof": "not_exposed"}],
@@ -39,7 +39,12 @@ def main():
     statuses = [item["status"] for items in report["tasks"].values() for item in items]
     check("a run matching the answer key scores every scored item correct", statuses and set(statuses) == {"correct"})
     check("north 2° off still counts within the 5° tolerance, across 0°/360°", report["tasks"]["P2_north"][0]["status"] == "correct")
-    check("an answer still pending from the user is not scored", report["tasks"]["P3_boundaries"] == [])
+    check("the storefront facing the enclosed mall is scored", [item["status"] for item in report["tasks"]["P3_boundaries"]] == ["correct"])
+    pending_key = {"case_id": "x", "tasks": {"P3_boundaries": {"edges": [{"room": "Shop", "edge_length_m": 5.0, "boundary": "pending_user"}]}}}
+    check("an answer still pending from the user is not scored",
+          score_case(pending_key, {"P3_boundaries": [{"room": "Shop", "edge_length_m": 5.0, "boundary": "external"}]})["tasks"]["P3_boundaries"] == [])
+    wrong = score_case(KEY, {**perfect(), "P3_boundaries": [{"room": "Shop", "edge_length_m": 11.9, "boundary": "external"}]}, SITE)
+    check("calling the mall storefront external is wrong", wrong["tasks"]["P3_boundaries"][0]["status"] == "wrong")
     summary = summarise([report])
     check("a fallback answer is counted separately", summary["P5_roof"]["from_fallback"] == 1)
     check("every task in a perfect run may auto-apply", all(row["auto_apply"] for row in summary.values()))

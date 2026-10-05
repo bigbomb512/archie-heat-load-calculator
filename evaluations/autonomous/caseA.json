@@ -46,8 +46,8 @@
         {
           "room": "Shop",
           "edge_length_m": 11.97,
-          "boundary": "pending_user",
-          "evidence": "Storefront line; matches the 11,900 mm storefront elevation (p. 26). Whether it faces outdoors or an indoor mall is not yet known."
+          "boundary": "mall",
+          "evidence": "Storefront line; matches the 11,900 mm storefront elevation (p. 26). Confirmed by the project contact 2026-10-05: it faces an enclosed mall/walkway, not outdoors."
         }
       ]
     },

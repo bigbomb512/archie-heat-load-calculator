@@ -68,6 +68,60 @@ def current_records(paths, artifact=None):
     return [resolved for row in active if (resolved := _trace_with_current_room(row, paths, rooms))]
 
 
+def persist_ai_determined_traces(web, project, rows, ai_run_id, quality_label, replace_pages=None):
+    """Replace AI geometry for the rerun plan pages, keeping reviewer traces authoritative."""
+    paths = _paths(project)
+    current_artifact = reviewer_room_geometry.validate_artifact(_read(paths["artifact"], reviewer_room_geometry.empty_artifact()))
+    pdf_fp = _source_pdf_fingerprint(paths)
+    vectors = {row.get("page"): row for row in _vector_pages(paths) if isinstance(row, dict)}
+    room_lookup = {row.get("room_id"): row for row in _rooms(paths)}
+    current = reviewer_room_geometry.active_records(current_artifact, pdf_fp, list(vectors.values()))
+    human_room_ids = {row.get("room_id") for row in current if row.get("declaration_source", "reviewer") == "reviewer"}
+    prepared = []
+    for row in rows:
+        room_id, page, points = row.get("room_id"), row.get("page"), row.get("points_image_px")
+        room = room_lookup.get(room_id)
+        if not room or room_id in human_room_ids:
+            continue
+        if page not in vectors or not isinstance(points, list) or len(points) < 4:
+            raise ValueError("AI room outline does not reference a current room and plan page.")
+        calibration = deepcopy(row.get("calibration") or {})
+        if calibration.get("status") not in {"agreed", "declared_scale_rejected"} or not calibration.get("mm_per_px"):
+            raise ValueError("AI room outline needs a calibrated printed dimension.")
+        prepared.append({"trace_id": str(row.get("trace_id") or "ai_room_trace_" + fingerprint([ai_run_id, room_id, page, row.get("part_index")])[:18]),
+            "room_id": room_id, "room_label": room.get("label"), "level_name": room.get("level_name", ""),
+            "page": page, "points_image_px": points, "snapped_line_ids": row.get("snapped_line_ids", [None] * len(points)),
+            "calibration": calibration, "reviewer": "Archie AI (P0)", "note": row.get("note", ""),
+            "status": "geometry_proposed", "created_at": ai_preliminary.now(),
+            "source_fingerprints": {"source_pdf": pdf_fp, "vector_page": _page_fp(vectors[page])},
+            "declaration_source": "ai_determined", "ai_run_id": ai_run_id,
+            "ai_quality_label": quality_label, "part_index": int(row.get("part_index", 1)),
+            "part_count": int(row.get("part_count", 1)), "method": row.get("method", "ai_outline_snapped"),
+            "evidence": deepcopy(row.get("evidence", [])),
+            **({"ai_measured_area_m2": float(row["ai_measured_area_m2"])}
+               if row.get("ai_measured_area_m2") is not None else {}),
+            **({"printed_area_m2": float(row["printed_area_m2"])} if row.get("printed_area_m2") else {})})
+    previous = current_artifact.get("fingerprint", "")
+    # A reviewer trace for a room wins over all AI parts. New AI runs replace
+    # prior AI outputs as a set, so obsolete room parts cannot linger.
+    pages_to_replace = {int(page) for page in (replace_pages or [row.get("page") for row in rows]) if page is not None}
+    kept = [row for row in current_artifact["records"]
+            if not (row.get("declaration_source") in {"ai_determined", "ai_fallback"}
+                    and (row.get("page") in pages_to_replace or row.get("room_id") in human_room_ids))]
+    new_rooms = {row["room_id"] for row in prepared}
+    kept = [row for row in kept if row.get("room_id") not in new_rooms or row.get("declaration_source", "reviewer") == "reviewer"]
+    validated = reviewer_room_geometry.validate_artifact({"records": [*kept, *prepared],
+        "page_north": current_artifact.get("page_north", {}), "rooms": current_artifact.get("rooms", [])})
+    _atomic_json(paths["artifact"], validated)
+    if prepared:
+        from backend import calculation_extraction_service, productization
+        calculation_extraction_service.post(web, project, {"action": "build"})
+        productization.record_change_if_fingerprint_changed(paths["root"], action="autonomous_p0_traces_applied",
+            target=paths["artifact"].name, previous_fingerprint=previous, new_fingerprint=validated.get("fingerprint", ""),
+            affected_ids=[row["room_id"] for row in prepared])
+    return prepared
+
+
 def current_artifact_input(root):
     paths = _paths({"review_dir": str(root)})
     artifact = reviewer_room_geometry.validate_artifact(_read(paths["artifact"], reviewer_room_geometry.empty_artifact()))
@@ -125,6 +179,11 @@ def current_traced_areas(root):
         calibration = calibration if isinstance(calibration, dict) else {}
         try:
             area = float(proof.get("area_m2"))
+            if (trace.get("declaration_source") in {"ai_determined", "ai_fallback"}
+                    and trace.get("ai_measured_area_m2") is not None):
+                area = float(trace["ai_measured_area_m2"])
+            if trace.get("printed_area_m2") and int(trace.get("part_count", 1)) == 1:
+                area = float(trace["printed_area_m2"])
             mm_per_px = float(calibration.get("mm_per_px"))
         except (TypeError, ValueError):
             continue
@@ -147,14 +206,47 @@ def current_traced_areas(root):
             "roof": str(trace.get("roof", "unknown")),
             "envelope_reviewer": str(trace.get("envelope_reviewer", "")),
             "envelope_declared_at": str(trace.get("envelope_declared_at", "")),
+            "declaration_source": trace.get("declaration_source", "reviewer"),
+            "ai_run_id": trace.get("ai_run_id"), "part_index": trace.get("part_index"),
+            "part_count": trace.get("part_count"),
+            "created_at": trace.get("created_at", ""),
+            "printed_area_m2": trace.get("printed_area_m2"),
+            "ai_quality_label": trace.get("ai_quality_label", ""),
+            "area_source": "printed_on_drawing" if trace.get("printed_area_m2") else (
+                "ai_determined" if trace.get("declaration_source") in {"ai_determined", "ai_fallback"} else "reviewer_traced"),
             "room_label": proof.get("room_label") or room.get("original_label") or room.get("name") or trace.get("room_label", ""),
             "level_name": proof.get("level_name") or room.get("level_name") or trace.get("level_name", ""),
         }
         areas.setdefault(room_id, []).append(candidate)
-    # Multiple eligible traces are safe to use only when they agree within
-    # the comparison allowance already used by calculator-draft tracing.
+    # A single AI run may represent one room as several disjoint parts. Sum
+    # those parts as a unit; an explicit reviewer trace always takes precedence.
     result = {}
     for room_id, candidates in areas.items():
+        reviewer_candidates = [row for row in candidates if row.get("declaration_source") == "reviewer"]
+        if reviewer_candidates:
+            candidates = reviewer_candidates
+        else:
+            by_run = {}
+            for row in candidates:
+                run_id = str(row.get("ai_run_id") or "")
+                if run_id:
+                    by_run.setdefault(run_id, []).append(row)
+            if by_run:
+                latest_run = max(by_run, key=lambda run: (
+                    max(str(item.get("created_at", "")) for item in by_run[run]), run
+                ))
+                parts = by_run[latest_run]
+                if len(parts) > 1 and all(type(row.get("part_index")) is int for row in parts):
+                    selected = deepcopy(sorted(parts, key=lambda row: row["part_index"])[0])
+                    printed = {round(float(row["area_m2"]), 6) for row in parts if row.get("printed_area_m2")}
+                    selected["area_m2"] = next(iter(printed)) if len(printed) == 1 else sum(float(row["area_m2"]) for row in parts)
+                    if len(printed) == 1:
+                        selected["area_source"] = "printed_on_drawing"
+                    selected["part_count"] = len(parts)
+                    selected["supporting_traces"] = deepcopy(parts)
+                    result[room_id] = selected
+                    continue
+                candidates = parts
         candidates.sort(key=lambda row: (row["trace_id"], row["proof_id"]))
         values = [row["area_m2"] for row in candidates]
         spread = (max(values) - min(values)) / ((max(values) + min(values)) / 2.0) if len(values) > 1 else 0.0
@@ -226,7 +318,10 @@ def _room_trace_picker_fields(room, records, traced_areas):
         except (TypeError, ValueError):
             value = 0
         if math.isfinite(value) and value > 0:
-            return {**room, "traced_area_m2": value, "needs_trace": False, "trace_issue": ""}
+            ai_determined = area.get("declaration_source") in {"ai_determined", "ai_fallback"}
+            return {**room, "traced_area_m2": value, "needs_trace": False, "trace_issue": "",
+                    "traced_area_origin": "AI-determined" if ai_determined else "reviewer trace",
+                    "ai_quality_label": area.get("ai_quality_label", "") if ai_determined else ""}
 
     matched = [row for row in records if row.get("room_id") == room_id]
     if not matched:
@@ -667,8 +762,8 @@ def _validated_trace_openings(data, trace, paths, room, calibration_record):
         if not opening_id or opening_id in seen:
             raise ValueError("Each shopfront opening needs a unique ID.")
         seen.add(opening_id)
-        if type(edge_index) is not int or edge_index not in edges or edges[edge_index] != "external":
-            raise ValueError("Shopfront openings can only be placed on an external edge.")
+        if type(edge_index) is not int or edge_index not in edges or edges[edge_index] not in {"external", "mall"}:
+            raise ValueError("Shopfront openings can only be placed on an external edge or enclosed mall boundary.")
         if any(type(value) not in (int, float) or not math.isfinite(value) or value <= 0 for value in (width, head)) or type(sill) not in (int, float) or not math.isfinite(sill) or sill < 0 or head <= sill:
             raise ValueError("Opening width must be positive and head height must be above a non-negative sill height.")
         if head > height_mm / 1000.0:
@@ -687,7 +782,9 @@ def _validated_trace_openings(data, trace, paths, room, calibration_record):
         result.append({"opening_id": opening_id, "edge_index": edge_index, "width_m": float(width),
                        "head_height_m": float(head), "sill_height_m": float(sill),
                        "elevation_page": elevation_page, "glazing_choice": glazing_choice,
-                       "shading_category": shading})
+                       "shading_category": shading,
+                       **({"declaration_source": opening.get("declaration_source"), "ai_run_id": opening.get("ai_run_id")}
+                          if opening.get("declaration_source") in reviewer_room_geometry.DECLARATION_SOURCES else {})})
     return result
 
 
@@ -795,7 +892,10 @@ def post(web, project, data):
         new_edges = {row["index"]: row["boundary"] for row in classification["edges"]}
         old_edge_sources = {str(key): value for key, value in trace.get("edge_sources", {}).items()}
         old_roof_source = trace.get("roof_source")
-        legacy_source = trace.get("declaration_source") or ("reviewer" if trace.get("envelope_reviewer") else "")
+        requested_edge_sources = data.get("edge_sources", {})
+        if not isinstance(requested_edge_sources, dict) or any(not str(key).isdigit() or value not in reviewer_room_geometry.DECLARATION_SOURCES for key,value in requested_edge_sources.items()):
+            raise ValueError("edge_sources must map valid edge indices to reviewer, ai_determined or ai_fallback.")
+        legacy_source = trace.get("declaration_source") or trace.get("envelope_declaration_source") or ("reviewer" if trace.get("envelope_reviewer") else "")
         legacy_default = legacy_source or ("reviewer" if trace.get("envelope_reviewer") else "")
         for index, boundary in old_edges.items():
             if boundary != "unknown" and legacy_default:
@@ -833,7 +933,7 @@ def post(web, project, data):
             elif declaration_source == "reviewer":
                 edge_sources[str(index)] = "reviewer"
             else:
-                edge_sources[str(index)] = declaration_source
+                edge_sources[str(index)] = requested_edge_sources.get(str(index), requested_edge_sources.get(index, declaration_source))
         roof_source = None
         if merged["roof"] != "unknown":
             if trace.get("roof") == merged["roof"] and old_roof_source:
@@ -852,15 +952,20 @@ def post(web, project, data):
         trace_for_openings = {**trace, **merged}
         openings = _validated_trace_openings(data, trace_for_openings, paths, room, calibration)
         trace.update(merged)
+        if isinstance(data.get("boundary_evidence"), list):
+            trace["boundary_evidence"] = deepcopy(data["boundary_evidence"])
         trace["openings"] = openings
         trace["envelope_reviewer"] = reviewer
         trace["envelope_declared_at"] = ai_preliminary.now()
+        # Geometry provenance belongs to the trace itself. Envelope decisions
+        # can be AI-derived even when the polygon was drawn by a reviewer (or
+        # vice versa), so keep the two provenance records separate.
         if declaration_source == "reviewer":
-            trace.pop("declaration_source", None)
-            trace.pop("ai_run_id", None)
+            trace.pop("envelope_declaration_source", None)
+            trace.pop("envelope_ai_run_id", None)
         else:
-            trace["declaration_source"] = declaration_source
-            trace["ai_run_id"] = ai_run_id
+            trace["envelope_declaration_source"] = declaration_source
+            trace["envelope_ai_run_id"] = ai_run_id
         artifact = reviewer_room_geometry.validate_artifact({"records": artifact["records"], "rooms": artifact.get("rooms", []), "page_north": artifact.get("page_north", {})})
     elif action == "add_room":
         artifact = _add_reviewer_room(paths, artifact, data)
@@ -925,7 +1030,9 @@ def post(web, project, data):
             record["fallback_reason"] = page_context.get("fallback_reason", FALLBACK_TRACE_REASON)
         if not record["reviewer"]:
             raise ValueError("Enter your name or initials as the trace reviewer.")
-        new_records = [row for row in artifact["records"] if not (row.get("room_id") == room_id and row.get("page") == page_number)]
+        new_records = [row for row in artifact["records"] if not (
+            row.get("room_id") == room_id and (row.get("page") == page_number or
+            (row.get("declaration_source") in {"ai_determined", "ai_fallback"} and row.get("ai_run_id"))))]
         new_records.append(record)
         artifact = reviewer_room_geometry.validate_artifact({"records": new_records, "rooms": artifact.get("rooms", []), "page_north": artifact.get("page_north", {})})
     else:

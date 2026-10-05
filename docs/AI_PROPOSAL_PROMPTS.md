@@ -96,6 +96,33 @@ reported.
    rooms. Snapping hurts small rooms (9–14 %), which is why enclosed areas are
    preferred.
 
+**Integration interfaces (for the Card P task framework, 2026-10-05):**
+- `room_outline.simplify_outline(polygon, mm_per_px, jog_mm=150, max_area_change=0.01)`
+  returns `(simplified_polygon, report)`.
+  - Removes gap-closing artefacts and jogs or piers shallower than 150 mm,
+    and merges near-collinear edges.
+  - The area changes by at most 1 %; otherwise the original is returned and
+    the report says so.
+  - On Butcher Buffet: Kitchen 247 → 24 edges, Bar 75 → 9, dining 515 → 51,
+    each under 1 % area change.
+  - **Save the simplified outline as the trace shape, but keep the area
+    measured on the original polygon** (`ai_measured_area_m2`).
+- `room_outline.wall_runs(points, mm_per_px)` returns the wall runs of an
+  outline.
+  - **Grouping:** edges facing the same way, within 400 mm of one line and no
+    more than 2 m apart along it, form one run; shorter edges (< 0.5 m) join
+    their longer neighbour.
+  - **Each run reports:** `run_index`, `edge_indices`, `direction_deg`,
+    `length_m` (edges on the line) and `span_m` (end to end, what an
+    elevation's overall dimension measures).
+  - On Butcher Buffet the storefront is one run of 2 edges, span 11.769 m
+    against the printed 11,900 (1.1 %).
+  - **Use in P3:** ask about runs, numbering only runs with `span_m` ≥ 1 m on
+    the crop; shorter runs take the answer of their nearest numbered
+    neighbour, and a run's answer applies to all of its edges.
+  - **Use in P4:** compare the elevation's printed total with the storefront
+    run's `span_m` (2 %).
+
 **Raster plans.** GE's general-arrangement plan is a raster image (21 image
 tiles); the vectors hold only grid, dimensions and tags. Walls can be taken
 from the rendered image instead (dark, thick areas after removing thin
@@ -192,8 +219,8 @@ total width (P4, within 2 %) is the shopfront. It must not be classed
 `mall` if the set shows an enclosed centre, otherwise `external`; other
 unknown perimeter edges are `adjacent_tenancy`.
 
-**Answer key caseA:** Shop storefront edge (11.97 m) — **pending the user**
-(outdoors or indoor mall).
+**Answer key caseA:** Shop storefront edge (11.97 m) → `mall` (confirmed by
+the user 2026-10-05: it faces an enclosed mall/walkway).
 
 Note: `mall` is a new boundary class. The envelope method treats it like
 `adjacent_tenancy` (no conduction in the preliminary method) until a mall

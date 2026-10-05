@@ -174,8 +174,39 @@ def outline_checks():
           and ro.choose_area(outline_m2=11.5)["source"] == "ai_outline_snapped")
 
 
+def simplify_and_run_checks():
+    mm = 10.0  # 100 px = 1 m
+    # 10 m x 6 m room with hairline artefacts on the top wall and a 100 mm deep, 300 mm wide pier on the left wall.
+    ring = [(0, 0)] + [(100 + i * 0.1, 0.05 * (i % 2)) for i in range(20)] + [(1000, 0), (1000, 600), (0, 600),
+            (0, 400), (10, 400), (10, 370), (0, 370)]
+    room = Polygon(ring)
+    simple, report = ro.simplify_outline(room, mm)
+    check("hairline artefacts and a 100 mm pier are removed", report["edges_after"] == 4 and report["edges_before"] > 20)
+    check("simplification changes the area by at most 1%", report["area_change"] <= 0.01 and abs(simple.area - room.area) / room.area <= 0.01)
+    deep = Polygon([(0, 0), (1000, 0), (1000, 600), (0, 600), (0, 400), (60, 400), (60, 300), (0, 300)])
+    kept, _report = ro.simplify_outline(deep, mm)
+    check("a 600 mm deep recess is a real wall and is kept", len(kept.exterior.coords) - 1 == 8)
+    expect_error("an empty outline is refused", lambda: ro.simplify_outline(Polygon(), mm), "positive area")
+
+    # Shopfront along the bottom (y = 600): 7.2 m glazing, a 300 mm pier set 200 mm back, then 4.5 m glazing.
+    shop = [(0, 0), (1200, 0), (1200, 600), (750, 600), (750, 580), (720, 580), (720, 600), (0, 600), (0, 0)]
+    runs = ro.wall_runs(shop, mm)
+    front = [row for row in runs if 3 in row["edge_indices"] or 6 in row["edge_indices"]]
+    check("a shopfront broken by a pier is one wall run spanning its full width",
+          len(front) == 1 and set(front[0]["edge_indices"]) >= {2, 3, 4, 5, 6} and abs(front[0]["span_m"] - 12.0) < 0.01)
+    check("the run's in-line length leaves out the pier's own faces", abs(front[0]["length_m"] - 11.7) < 0.01)
+    check("opposite sides of a room are separate runs even though they are parallel", len(runs) == 4)
+    split = [(0, 0), (1000, 0), (1000, 600), (700, 600), (700, 500), (400, 500), (400, 600), (0, 600), (0, 0)]
+    run_of = {index: row["run_index"] for row in ro.wall_runs(split, mm, max_gap_mm=2000) for index in row["edge_indices"]}
+    check("pieces on one line more than 2 m apart are separate runs", run_of[2] != run_of[6])
+    check("pieces on one line closer than the gap limit are one run",
+          {index: row["run_index"] for row in ro.wall_runs(split, mm, max_gap_mm=4000) for index in row["edge_indices"]}[2]
+          == {index: row["run_index"] for row in ro.wall_runs(split, mm, max_gap_mm=4000) for index in row["edge_indices"]}[6])
+
+
 def main():
     page_origin_checks()
+    simplify_and_run_checks()
     outline_checks()
     enclosed_room_checks()
     wall_style_checks()
