@@ -59,9 +59,12 @@ def style_id(key):
 def extract_page_objects(pdf_page, image_px_per_pt):
     """Vector objects of a pdfplumber page in image pixels, with their style."""
     objects = []
+    # Some PDFs place the page box away from (0, 0); shapes are reported in the
+    # same absolute coordinates, so measure them from the page box origin.
+    origin_x, origin_y = (float(value) for value in (getattr(pdf_page, "bbox", None) or (0, 0, 0, 0))[:2])
     for kind, group in (("line", pdf_page.lines), ("curve", pdf_page.curves), ("rect", pdf_page.rects)):
         for raw in group:
-            points = [(float(x) * image_px_per_pt, float(y) * image_px_per_pt) for x, y in raw.get("pts", [])]
+            points = [((float(x) - origin_x) * image_px_per_pt, (float(y) - origin_y) * image_px_per_pt) for x, y in raw.get("pts", [])]
             points = [point for index, point in enumerate(points) if index == 0 or point != points[index - 1]]
             if len(points) < 2:
                 continue
@@ -261,6 +264,7 @@ def room_naming_prompt(room_names, area_count):
             "island, planter, duct or outside space) say \"not_a_room\". If one numbered area contains **two** of the "
             "rooms with no wall between them, give a split: a line in image pixels drawn along the drawn feature that "
             "separates them (counter edge, floor-finish change, bulkhead), and one point inside each room. "
+            "A room may cover more than one numbered area; give each of them the same name. "
             "Use only the room names given. Reply with JSON only:\n"
             "{\"areas\": [{\"number\": int, \"room\": string}],\n"
             " \"splits\": [{\"number\": int, \"line_px\": [[x, y], ...], \"rooms\": [{\"room\": string, \"point_px\": [x, y]}],"
@@ -310,18 +314,21 @@ def validate_naming_reply(reply, area_count, room_names, transform):
         named = names.pop(split["area_index"], None)
         if named and named != NOT_A_ROOM:
             used[named] -= 1  # the split's two rooms replace the area's single name
-    duplicates = sorted(room for room, count in used.items() if count > 1)
-    if duplicates:
-        raise ValueError("Each room may be given to only one area: " + ", ".join(duplicates) + ".")
+    # A room may span several enclosed areas (partial walls); those areas are
+    # merged. A room may not be both split out of one area and named elsewhere.
+    split_rooms = {item["room"] for split in splits for item in split["rooms"]}
+    clashes = sorted(room for room in split_rooms if room in set(names.values()))
+    if clashes or any(sum(item["room"] == room for split in splits for item in split["rooms"]) > 1 for room in split_rooms):
+        raise ValueError("A room split out of one area cannot also be given to another area: " + ", ".join(clashes or sorted(split_rooms)) + ".")
     return names, splits
 
 
-def snap_polyline(points, segments, max_offset_px):
+def snap_polyline(points, segments, max_offset_px, max_angle_deg=3):
     """Move each polyline segment onto the nearest drawn line running the same way.
 
     A segment is snapped only to a drawn line within `max_offset_px` and within
-    3 degrees of its direction; otherwise it keeps the AI's position and is
-    reported as unsnapped.
+    `max_angle_deg` of its direction; otherwise it keeps the AI's position and
+    is reported as unsnapped.
     """
     snapped_segments, report = [], []
     for start, end in zip(points, points[1:]):
@@ -331,7 +338,7 @@ def snap_polyline(points, segments, max_offset_px):
         for candidate in segments:
             (x1, y1), (x2, y2) = candidate.coords[0], candidate.coords[-1]
             other = math.atan2(y2 - y1, x2 - x1)
-            if abs((angle - other + math.pi / 2) % math.pi - math.pi / 2) > math.radians(3):
+            if abs((angle - other + math.pi / 2) % math.pi - math.pi / 2) > math.radians(max_angle_deg):
                 continue
             distance = candidate.distance(middle)
             if distance <= max_offset_px and (best is None or distance < best[0]):
@@ -488,3 +495,95 @@ def calibration_from_dimension(value_mm, length_px, declared_mm_per_px, toleranc
                          f"scale ({declared_mm_per_px} mm/px) within {tolerance:.0%}.")
     return {"mm_per_px": mm_per_px, "status": "agreed", "dimension_value_mm": value_mm,
             "scale_difference": round(difference, 5), "method": "ai_read_printed_dimension"}
+
+
+# --- Full-room AI outlines (open plans with no enclosing walls) ---------------------
+
+def outline_prompt(room_names):
+    rooms = ", ".join(room_names)
+    return ("The image is one architectural floor plan. Draw the outline of each of these rooms: " + rooms + ". "
+            "Give each outline as the corner points of the room's floor, in image pixels, in order around the room, "
+            "following the inside face of walls where there are walls, and the drawn boundary (tenancy line, "
+            "counter edge, floor-finish change) where there is no wall. Name the drawn feature you followed for any "
+            "side without a wall. If a room is not on this plan, leave it out. Reply with JSON only:\n"
+            "{\"rooms\": [{\"room\": string, \"points_px\": [[x, y], ...], \"open_sides\": string}]}")
+
+
+def validate_outline_reply(reply, room_names, transform):
+    if not isinstance(reply, dict) or not isinstance(reply.get("rooms"), list):
+        raise ValueError("Outline reply must contain a rooms list.")
+    allowed = {name.casefold(): name for name in room_names}
+    outlines, seen = [], set()
+    for row in reply["rooms"]:
+        room = str((row or {}).get("room", "")).strip()
+        if room.casefold() not in allowed:
+            raise ValueError(f"Outline reply uses a room name that is not in the room list: {room!r}.")
+        if room.casefold() in seen:
+            raise ValueError(f"Outline reply gives {room!r} twice.")
+        seen.add(room.casefold())
+        points = row.get("points_px")
+        if not isinstance(points, list) or len(points) < 3:
+            raise ValueError(f"The outline for {room} needs at least three corner points.")
+        page_points = [_to_page(point, transform) for point in points]
+        polygon = Polygon(page_points)
+        if not polygon.is_valid or polygon.area <= 0:
+            raise ValueError(f"The outline for {room} crosses itself or has no area.")
+        outlines.append({"room": allowed[room.casefold()], "points": page_points,
+                         "open_sides": str(row.get("open_sides", ""))[:300]})
+    return outlines
+
+
+def _line_intersection(a1, a2, b1, b2):
+    (x1, y1), (x2, y2), (x3, y3), (x4, y4) = a1, a2, b1, b2
+    denominator = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+    if abs(denominator) < 1e-9:
+        return None
+    t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denominator
+    return (x1 + t * (x2 - x1), y1 + t * (y2 - y1))
+
+
+def snap_polygon(points, segments, max_offset_px, max_angle_deg=8):
+    """Snap each sketched edge to the nearest parallel drawn line, then rebuild the corners.
+
+    Corners are where consecutive snapped edges meet, so a room sketched a little
+    off takes its exact size from the drawing. Edges with no drawn line nearby
+    keep the sketch and are counted as unsnapped.
+    """
+    ring = list(points)
+    if ring[0] != ring[-1]:
+        ring.append(ring[0])
+    edges, report = [], []
+    for start, end in zip(ring, ring[1:]):
+        snapped, row = snap_polyline([start, end], segments, max_offset_px, max_angle_deg)
+        edges.append((snapped[0], snapped[1]))
+        report.append(row[0])
+    corners = []
+    for index, edge in enumerate(edges):
+        previous = edges[index - 1]
+        corner = _line_intersection(previous[0], previous[1], edge[0], edge[1])
+        original = ring[index]
+        if corner is None or math.dist(corner, original) > 4 * max_offset_px:
+            corner = original  # parallel neighbours or a wild intersection: keep the sketch
+        corners.append(corner)
+    polygon = Polygon(corners)
+    if not polygon.is_valid:
+        polygon = polygon.buffer(0)
+    return polygon, {"edges": len(report), "snapped_edges": sum(item["snapped"] for item in report)}
+
+
+def choose_area(printed_m2=None, enclosed_m2=None, outline_m2=None, tolerance=0.05):
+    """Area source in order of trust: printed on the drawing, enclosed by walls, AI outline.
+
+    A computed area that disagrees with a printed one by more than the tolerance
+    is reported; the printed value is used.
+    """
+    if printed_m2:
+        computed = enclosed_m2 or outline_m2
+        conflict = computed is not None and abs(computed / printed_m2 - 1) > tolerance
+        return {"area_m2": printed_m2, "source": "printed_on_drawing",
+                "conflict": (f"Measured {computed:.2f} m² differs from the printed {printed_m2} m²." if conflict else "")}
+    if enclosed_m2:
+        return {"area_m2": enclosed_m2, "source": "enclosed_walls", "conflict": ""}
+    if outline_m2:
+        return {"area_m2": outline_m2, "source": "ai_outline_snapped", "conflict": ""}
+    return {"area_m2": None, "source": "none", "conflict": ""}

@@ -42,32 +42,76 @@ but no areas); north 0/1; storefront glazing 0/1; roof 0/3.
 
 ## P0 `room_geometry`: room outlines, areas and scale
 
-The largest manual step today (tracing took about 19 minutes for the first
-room) and the largest gap in the baseline.
+The largest manual step today and the largest gap in the baseline. Code:
+`ai/room_outline.py`; developer tool for the manual ChatGPT route:
+`tools/run_room_outline.py` (packets → replies → `determinations.json`).
 
-**Method (deterministic first, AI where judgement is needed):**
-1. **Scale:** pick a printed dimension string on the plan and the vector line
-   it annotates. mm/px from the printed value must agree with the declared
-   scale within 2 % (the existing calibration rule; never scale-only).
-2. **Candidate regions:** close the vector wall lines into regions
-   (polygonise), and keep regions that contain one detected room label.
-3. **AI task:** only where geometry is ambiguous: a label in no region, two
-   labels in one region, an open plan without walls between areas, or a
-   raster-only page. One crop of the ambiguous area with candidate outlines
-   numbered. The AI chooses the outline for each label, or splits an open area
-   along a drawn line (bulkhead, floor-finish change, joinery), citing it.
-4. **Area** = calibrated polygon area.
+**Area source, in order of trust:**
+1. a room area printed on the drawing (GE prints "Office 9 m²"; room detection
+   already reads these);
+2. an area fully enclosed by walls;
+3. an AI outline snapped onto the drawing's lines (open plans).
 
-**Cross-checks:**
-- room areas sum to ≤ the tenancy outline area;
-- the area matches any printed room area within 5 %;
-- no room overlaps another.
+A computed area that disagrees with a printed one by more than 5 % is
+reported.
 
-**Fallback:** none for area. A room with no settled outline stays out of the
-total and is listed, as today.
+**Steps (findings from Butcher Buffet and Global Exchange, 2026-10-05):**
+1. **Scale (vision task).** Dimension lines are found geometrically: a long
+   thin line with ticks at both ends, measured between the tick centres (the
+   line overshoots its ticks). The AI reads the printed number on a crop. The
+   resulting mm/px must agree with the declared scale within 2 %; with no
+   declared scale, two printed dimensions must agree with each other.
 
-**Answer key caseA:** Bar 30.78, Kitchen 98.94, Shop 229.06, Coolroom 10.66,
-Freezer 7.67 m² (±5 %).
+   On Butcher Buffet the numbers are drawn as vector outlines (no text
+   layer), so only a vision read works. On GE the text layer has rotated
+   numbers with their digits reversed ("6293" for 3926).
+
+   Result: 11,825 mm → 14.108 mm/px, 0.02 % from 1:100.
+2. **Hatch removal (automatic).** Styles drawn as many long parallel lines at
+   a regular spacing (floor tiles) are dropped. This is what was chopping
+   every room into tiles.
+3. **Wall styles (vision task).** The plan is redrawn with each style in its
+   own colour plus a numbered legend; the AI names the wall styles. Rules by
+   colour or shape failed: one drawing mixes walls and furniture in the same
+   style.
+
+   On Butcher Buffet the answer an AI would naturally give (fills, heavy
+   outlines, dark-grey outlines) separates the rooms. Wrongly choosing the
+   white-fill style (mostly furniture tops) breaks it.
+4. **Enclosed areas (automatic).** Door gaps up to 1 m are closed; areas not
+   touching the plan edge are kept, with furniture islands filled.
+5. **Naming and splits (vision task).** The enclosed areas are numbered on
+   the plan image; the AI names each from what is drawn in it (equipment,
+   tables, cold-room doors), merges areas belonging to one room, marks "not a
+   room", or sketches a split along a drawn feature, which is snapped to the
+   real lines.
+
+   Room names cannot be placed by position: on Butcher Buffet they are in
+   notes and legends, not inside the rooms.
+6. **Outlines for open plans (vision task).** Rooms still without an area are
+   sketched by the AI and each edge is snapped to the nearest parallel drawn
+   line; corners are rebuilt where snapped edges meet.
+
+   Simulated sketches with 10–20 px error come out within 2–4 % on large
+   rooms. Snapping hurts small rooms (9–14 %), which is why enclosed areas are
+   preferred.
+
+**Raster plans.** GE's general-arrangement plan is a raster image (21 image
+tiles); the vectors hold only grid, dimensions and tags. Walls can be taken
+from the rendered image instead (dark, thick areas after removing thin
+lines). The GE kiosk is open-plan with no walls on most sides, so it relies on
+printed areas (already read) or AI outlines.
+
+**Answer key status (caseA):** Coolroom, Freezer and Kitchen are keyed. Bar
+and Shop are **pending the user**: the walkthrough trace probably drew the
+wrong area for Bar. Sheet 303 ("customised bar", "bar partition") is called up
+from the walled central island (about 32.6 m²), and the top-middle area looks
+like buffet stations (sheet 403).
+
+**Stand-in run (Claude's own answers, not a model reply):** Bar 32.56,
+Coolroom 10.76, Freezer 7.88, Kitchen 103.85, Shop 216.1 m². Scored keys 3/3;
+Kitchen is +4.96 %, mostly a 0.8 m servery strip that the trace gave to the
+Shop.
 
 ## P1 `site_identification` (text only, ≤ 4,000 characters)
 

@@ -6,39 +6,105 @@
     "P0_rooms": {
       "area_tolerance_fraction": 0.05,
       "rooms": [
-        {"label": "Bar", "area_m2": 30.78},
-        {"label": "Kitchen", "area_m2": 98.94},
-        {"label": "Shop", "area_m2": 229.06},
-        {"label": "Coolroom", "area_m2": 10.66},
-        {"label": "Freezer", "area_m2": 7.67}
+        {
+          "label": "Bar",
+          "area_m2": 30.78,
+          "status": "pending_user",
+          "note": "Reviewer trace probably drew the wrong area for Bar: sheet 303 ('customised bar', 'bar partition') is called up from the walled central island (about 32.6 m2), not the top-middle area traced. Shop changes with it. Confirm before scoring."
+        },
+        {
+          "label": "Kitchen",
+          "area_m2": 98.94
+        },
+        {
+          "label": "Shop",
+          "area_m2": 229.06,
+          "status": "pending_user",
+          "note": "Reviewer trace probably drew the wrong area for Bar: sheet 303 ('customised bar', 'bar partition') is called up from the walled central island (about 32.6 m2), not the top-middle area traced. Shop changes with it. Confirm before scoring."
+        },
+        {
+          "label": "Coolroom",
+          "area_m2": 10.66
+        },
+        {
+          "label": "Freezer",
+          "area_m2": 7.67
+        }
       ]
     },
     "P2_north": {
       "tolerance_deg": 5,
-      "pages": [{"page": 20, "plan_up_azimuth_deg": 0, "evidence": "Unlabelled north needle in a circle in the title block, pointing up the sheet."}]
+      "pages": [
+        {
+          "page": 20,
+          "plan_up_azimuth_deg": 0,
+          "evidence": "Unlabelled north needle in a circle in the title block, pointing up the sheet."
+        }
+      ]
     },
     "P3_boundaries": {
       "length_tolerance_fraction": 0.03,
       "edges": [
-        {"room": "Shop", "edge_length_m": 11.97, "boundary": "pending_user",
-         "evidence": "Storefront line; matches the 11,900 mm storefront elevation (p. 26). Whether it faces outdoors or an indoor mall is not yet known."}
+        {
+          "room": "Shop",
+          "edge_length_m": 11.97,
+          "boundary": "pending_user",
+          "evidence": "Storefront line; matches the 11,900 mm storefront elevation (p. 26). Whether it faces outdoors or an indoor mall is not yet known."
+        }
       ]
     },
     "P4_openings": {
       "width_tolerance_fraction": 0.02,
       "height_tolerance_mm": 50,
       "elevations": [
-        {"page": 26, "room": "Shop", "total_width_mm": 11900,
-         "glazed_panels": [{"width_mm": 2025, "sill_mm": 1100, "head_mm": 2700,
-                            "note": "Glass continues above the 2,700 mm ceiling; head capped at the ceiling."}],
-         "not_glazing": [{"width_mm": 3250, "why": "Roller-shutter doorway opening"},
-                         {"width_mm": 2950, "why": "Solid signage panel"},
-                         {"width_mm": 2000, "why": "Menu board panel"},
-                         {"width_mm": 1325, "why": "Signage panel"}]}
+        {
+          "page": 26,
+          "room": "Shop",
+          "total_width_mm": 11900,
+          "glazed_panels": [
+            {
+              "width_mm": 2025,
+              "sill_mm": 1100,
+              "head_mm": 2700,
+              "note": "Glass continues above the 2,700 mm ceiling; head capped at the ceiling."
+            }
+          ],
+          "not_glazing": [
+            {
+              "width_mm": 3250,
+              "why": "Roller-shutter doorway opening"
+            },
+            {
+              "width_mm": 2950,
+              "why": "Solid signage panel"
+            },
+            {
+              "width_mm": 2000,
+              "why": "Menu board panel"
+            },
+            {
+              "width_mm": 1325,
+              "why": "Signage panel"
+            }
+          ]
+        }
       ]
     },
     "P5_roof": {
-      "rooms": [{"room": "Bar", "roof": "not_exposed"}, {"room": "Kitchen", "roof": "not_exposed"}, {"room": "Shop", "roof": "not_exposed"}],
+      "rooms": [
+        {
+          "room": "Bar",
+          "roof": "not_exposed"
+        },
+        {
+          "room": "Kitchen",
+          "roof": "not_exposed"
+        },
+        {
+          "room": "Shop",
+          "roof": "not_exposed"
+        }
+      ],
       "evidence": "Confirmed by the project contact 2026-10-04: apartments above the retail precinct. Not determinable from the plans alone."
     }
   }

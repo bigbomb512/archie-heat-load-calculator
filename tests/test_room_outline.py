@@ -114,9 +114,13 @@ def naming_and_split_checks():
                  lambda: ro.validate_naming_reply({"areas": [{"number": 1, "room": "Lounge"}]}, 1, ["Shop"], transform), "not in the room list")
     expect_error("an unknown area number is refused",
                  lambda: ro.validate_naming_reply({"areas": [{"number": 3, "room": "Shop"}]}, 2, ["Shop"], transform), "unknown area")
-    expect_error("a room given to two areas is refused",
-                 lambda: ro.validate_naming_reply({"areas": [{"number": 1, "room": "Shop"}, {"number": 2, "room": "Shop"}]}, 2, ["Shop"], transform),
-                 "only one area")
+    merged, _none = ro.validate_naming_reply({"areas": [{"number": 1, "room": "Shop"}, {"number": 2, "room": "Shop"}]}, 2, ["Shop"], transform)
+    check("one room may cover two enclosed areas", merged == {0: "Shop", 1: "Shop"})
+    expect_error("a room both split out and named for another area is refused",
+                 lambda: ro.validate_naming_reply({"areas": [{"number": 2, "room": "Bar"}],
+                                                   "splits": [{"number": 1, "line_px": [[0, 0], [0, 9]],
+                                                               "rooms": [{"room": "Shop", "point_px": [1, 1]}, {"room": "Bar", "point_px": [2, 2]}]}]},
+                                                  2, ["Shop", "Bar"], transform), "cannot also be given")
 
     area = box(0, 0, 1000, 600)
     counter_edge = LineString([(398, -50), (398, 650)])
@@ -133,7 +137,46 @@ def naming_and_split_checks():
                  "different parts")
 
 
+def page_origin_checks():
+    class Page:
+        bbox = (-595.26, 420.9, 595.26, 1262.7)
+        lines = [{"pts": [(-595.26, 420.9), (-495.26, 420.9)], "linewidth": 0.5, "stroking_color": (0,), "fill": False}]
+        curves, rects = [], []
+    objects = ro.extract_page_objects(Page(), 2.5)
+    check("shapes are measured from the page box origin, not the PDF's absolute coordinates",
+          objects[0]["points"] == [(0.0, 0.0), (250.0, 0.0)])
+
+
+def outline_checks():
+    transform = {"offset_px": [100, 50], "factor": 0.5}
+    outlines = ro.validate_outline_reply({"rooms": [{"room": "Counter", "points_px": [[0, 0], [100, 0], [100, 60], [0, 60]],
+                                                     "open_sides": "tenancy line"}]}, ["Counter"], transform)
+    check("an AI outline is converted back to page pixels", outlines[0]["points"][2] == (300.0, 170.0))
+    expect_error("a self-crossing outline is refused",
+                 lambda: ro.validate_outline_reply({"rooms": [{"room": "Counter", "points_px": [[0, 0], [100, 100], [100, 0], [0, 100]]}]},
+                                                   ["Counter"], transform), "crosses itself")
+    expect_error("a room outlined twice is refused",
+                 lambda: ro.validate_outline_reply({"rooms": [{"room": "Counter", "points_px": [[0, 0], [9, 0], [9, 9]]}] * 2},
+                                                   ["Counter"], transform), "twice")
+    # Drawn room: 600 x 400 px. The AI sketch is off by up to 12 px on each side.
+    drawn = [LineString([(0, 0), (600, 0)]), LineString([(600, 0), (600, 400)]),
+             LineString([(600, 400), (0, 400)]), LineString([(0, 400), (0, 0)])]
+    sketch = [(10, -8), (612, 6), (590, 410), (-7, 395)]
+    polygon, report = ro.snap_polygon(sketch, drawn, max_offset_px=20)
+    check("a rough sketch snaps to the drawn room and takes its exact area",
+          report == {"edges": 4, "snapped_edges": 4} and abs(polygon.area - 600 * 400) < 1)
+    loose, loose_report = ro.snap_polygon([(10, -8), (612, 6), (590, 410), (-7, 395)], drawn[:2], max_offset_px=20)
+    check("edges with no drawn line nearby keep the sketch and are counted", loose_report["snapped_edges"] == 2 and loose.area > 0)
+    check("a printed area is preferred and a disagreeing measurement is reported",
+          ro.choose_area(printed_m2=9.0, enclosed_m2=7.5)["area_m2"] == 9.0 and "differs" in ro.choose_area(printed_m2=9.0, enclosed_m2=7.5)["conflict"])
+    check("without a printed area, an enclosed-walls area beats an AI outline",
+          ro.choose_area(enclosed_m2=10.8, outline_m2=11.5)["source"] == "enclosed_walls"
+          and ro.choose_area(outline_m2=11.5)["source"] == "ai_outline_snapped")
+
+
 def main():
+    page_origin_checks()
+    outline_checks()
     enclosed_room_checks()
     wall_style_checks()
     naming_and_split_checks()

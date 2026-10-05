@@ -38,6 +38,8 @@ def score_rooms(key, applied):
     results = []
     for room in key.get("rooms", []):
         row = by_label.pop(_norm(room["label"]), None)
+        if room.get("status") == PENDING:
+            continue  # answer not settled yet; neither scored nor counted as a false room
         if row is None:
             results.append(_outcome(room["label"], "missing", "room not found"))
         elif _close(row.get("area_m2"), room["area_m2"], tolerance):

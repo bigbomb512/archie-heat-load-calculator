@@ -47,7 +47,7 @@ def main():
 
     bad = perfect()
     bad["P0_rooms"] = bad["P0_rooms"][:3] + [{"label": "Counter", "area_m2": 4}]
-    bad["P0_rooms"][0]["area_m2"] = 40
+    bad["P0_rooms"][1]["area_m2"] = 140
     bad["P1_site"] = {"site_text": "1 Consultant Road, Sydney NSW 2000"}
     bad["P2_north"] = [{"page": 20, "plan_up_azimuth_deg": None}]
     bad["P4_openings"] = [{"page": 26, "glazed_panels": [{"width_mm": 2025, "sill_mm": 950, "head_mm": 2700},
@@ -56,7 +56,8 @@ def main():
     report = score_case(KEY, bad, SITE)
     rooms = {item["item"]: item["status"] for item in report["tasks"]["P0_rooms"]}
     check("a wrong area, a missed room and a false room are all scored",
-          rooms["Bar"] == "wrong" and rooms["Coolroom"] == "missing" and rooms["Counter"] == "wrong")
+          rooms["Kitchen"] == "wrong" and rooms["Coolroom"] == "missing" and rooms["Counter"] == "wrong")
+    check("rooms whose answer is pending the user are not scored", "Bar" not in rooms and "Shop" not in rooms)
     check("choosing the consultant's address is wrong", report["tasks"]["P1_site"][0]["status"] == "wrong")
     check("no north applied is missing, not correct", report["tasks"]["P2_north"][0]["status"] == "missing")
     openings = {item["item"]: item for item in report["tasks"]["P4_openings"]}

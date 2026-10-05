@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """Run Card P0 (automatic room outlines) on one project, with the manual ChatGPT route.
 
-Three steps; each writes a packet folder with images and a prompt.txt to paste into
+Four steps; each writes a packet folder with images and a prompt.txt to paste into
 ChatGPT, and each later step reads the reply saved as reply.json in that folder.
 
     PYTHONPATH=. python3 tools/run_room_outline.py packets REVIEW_DIR --pdf FILE.pdf --page 20 --out OUT
         -> OUT/01_dimensions/  (one crop per dimension line) and OUT/02_wall_styles/
     PYTHONPATH=. python3 tools/run_room_outline.py areas REVIEW_DIR --pdf FILE.pdf --page 20 --out OUT
         -> needs OUT/02_wall_styles/reply.json; writes OUT/03_room_names/
+    PYTHONPATH=. python3 tools/run_room_outline.py outlines REVIEW_DIR --pdf FILE.pdf --page 20 --out OUT
+        -> needs OUT/03_room_names/reply.json; writes OUT/04_room_outlines/ for rooms still without an area
     PYTHONPATH=. python3 tools/run_room_outline.py apply REVIEW_DIR --pdf FILE.pdf --page 20 --out OUT
-        -> needs OUT/01_dimensions/reply_N.json and OUT/03_room_names/reply.json;
+        -> needs OUT/01_dimensions/reply_N.json and OUT/03_room_names/reply.json (and 04 if written);
            writes OUT/determinations.json (scored by tools/evaluate_autonomous_tasks.py)
 
 Nothing is written into the project; the output folder is a scratch area.
@@ -48,12 +50,22 @@ def _context(review_dir, pdf_path, page_number):
     return {"objects": objects, "image": page_image, "viewport": viewport, "declared_mm_per_px": declared}
 
 
-def _room_names(review_dir):
+def _inferred_rooms(review_dir):
     from ai import room_inference
     review = Path(review_dir)
     inferred = room_inference.infer(_read(review / "ai_input.json", {}), _read(review / "drawing_coverage.json"),
                                     _read(review / "spatial_ocr.json"), _read(review / "vector_geometry.json"))
-    return sorted({row["label"] for row in inferred.get("rooms", []) if row.get("label")})
+    return [row for row in inferred.get("rooms", []) if row.get("label")]
+
+
+def _room_names(review_dir):
+    return sorted({row["label"] for row in _inferred_rooms(review_dir)})
+
+
+def _printed_areas(review_dir):
+    """Room areas printed on the drawings, as read by room detection."""
+    return {row["label"]: float(row["area_m2"]) for row in _inferred_rooms(review_dir)
+            if isinstance(row.get("area_m2"), (int, float)) and row["area_m2"] > 0}
 
 
 def packets(args):
@@ -109,6 +121,28 @@ def areas(args):
     print(f"Next: paste {folder / 'prompt.txt'} with areas.png into ChatGPT; save the JSON reply as {folder / 'reply.json'}.")
 
 
+def outlines(args):
+    """Packet asking the AI to outline the rooms that got no area from walls or a split."""
+    context = _context(args.review_dir, args.pdf, args.page)
+    out = Path(args.out)
+    _wall_ids, rooms = _areas(args, context)
+    names, splits = ro.validate_naming_reply(_read(out / "03_room_names" / "reply.json"), len(rooms), _room_names(args.review_dir),
+                                             _read(out / "03_room_names" / "transform.json"))
+    placed = {name for name in names.values() if name != ro.NOT_A_ROOM} | {item["room"] for split in splits for item in split["rooms"]}
+    missing = [name for name in _room_names(args.review_dir) if name not in placed and name not in _printed_areas(args.review_dir)]
+    if not missing:
+        print("Every room already has an area from walls, a split or a printed value; no outline packet needed.")
+        return
+    folder = out / "04_room_outlines"
+    folder.mkdir(parents=True, exist_ok=True)
+    image, transform = ro.render_candidate_areas(context["image"], [], context["viewport"])
+    image.save(folder / "plan.png")
+    (folder / "transform.json").write_text(json.dumps(transform), encoding="utf-8")
+    (folder / "prompt.txt").write_text(ro.outline_prompt(missing), encoding="utf-8")
+    print(f"Rooms to outline: {', '.join(missing)}")
+    print(f"Next: paste {folder / 'prompt.txt'} with plan.png into ChatGPT; save the JSON reply as {folder / 'reply.json'}.")
+
+
 def apply(args):
     context = _context(args.review_dir, args.pdf, args.page)
     out = Path(args.out)
@@ -134,9 +168,13 @@ def apply(args):
                                              _read(folder / "transform.json"))
     segments = ro.drawn_segments(context["objects"], [row["style_id"] for row in _read(out / "02_wall_styles" / "summary.json") if not row["hatch"]])
     outlines = []
+    by_room = {}
     for index, name in names.items():
         if name != ro.NOT_A_ROOM:
-            outlines.append({"label": name, "polygon": rooms[index], "method": "enclosed_walls"})
+            by_room.setdefault(name, []).append(rooms[index])
+    from shapely.ops import unary_union
+    for name, parts in by_room.items():
+        outlines.append({"label": name, "polygon": unary_union(parts), "method": "enclosed_walls", "areas_merged": len(parts)})
     snap_px = 250 / mm_per_px  # snap the AI's split line to a drawn line within 250 mm
     for split in splits:
         line, report = ro.snap_polyline(split["line"], segments, snap_px)
@@ -144,28 +182,41 @@ def apply(args):
         for room, polygon in pieces.items():
             outlines.append({"label": room, "polygon": polygon, "method": "ai_split_snapped",
                              "snapped_segments": sum(item["snapped"] for item in report), "segments": len(report)})
-    determinations = {"P0_rooms": [{"label": row["label"], "area_m2": round(ro.area_m2(row["polygon"], mm_per_px), 2),
-                                    "source": "ai", "method": row["method"]} for row in outlines],
-                      "calibration": calibration, "problems": problems}
+    outline_reply = _read(out / "04_room_outlines" / "reply.json")
+    if outline_reply:
+        for row in ro.validate_outline_reply(outline_reply, _room_names(args.review_dir), _read(out / "04_room_outlines" / "transform.json")):
+            polygon, report = ro.snap_polygon(row["points"], segments, snap_px)
+            outlines.append({"label": row["room"], "polygon": polygon, "method": "ai_outline_snapped", **report})
+    printed = _printed_areas(args.review_dir)
+    rooms_out = []
+    for label in sorted({row["label"] for row in outlines} | set(printed)):
+        measured = {row["method"]: ro.area_m2(row["polygon"], mm_per_px) for row in outlines if row["label"] == label}
+        choice = ro.choose_area(printed.get(label), measured.get("enclosed_walls") or measured.get("ai_split_snapped"),
+                                measured.get("ai_outline_snapped"))
+        if choice["area_m2"] is not None:
+            rooms_out.append({"label": label, "area_m2": round(choice["area_m2"], 2), "source": "ai",
+                              "method": choice["source"], "conflict": choice["conflict"]})
+    determinations = {"P0_rooms": rooms_out, "calibration": calibration, "problems": problems}
     (out / "determinations.json").write_text(json.dumps(determinations, indent=1), encoding="utf-8")
     (out / "outlines.json").write_text(json.dumps([{**{k: v for k, v in row.items() if k != "polygon"},
-                                                     "points_image_px": [list(point) for point in row["polygon"].exterior.coords]}
+                                                     "points_image_px": [list(point) for point in (row["polygon"].exterior.coords if row["polygon"].geom_type == "Polygon" else row["polygon"].convex_hull.exterior.coords)],
+                                                     "parts": len(getattr(row["polygon"], "geoms", [row["polygon"]]))}
                                                     for row in outlines], indent=1), encoding="utf-8")
     for row in determinations["P0_rooms"]:
-        print(f"{row['label']}: {row['area_m2']} m² ({row['method']})")
+        print(f"{row['label']}: {row['area_m2']} m² ({row['method']}){' — ' + row['conflict'] if row['conflict'] else ''}")
     print(f"Calibration {mm_per_px:.4f} mm/px from {len(calibrations)} printed dimension(s); wrote {out / 'determinations.json'}")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Run Card P0 automatic room outlines on one project.")
-    parser.add_argument("step", choices=["packets", "areas", "apply"])
+    parser.add_argument("step", choices=["packets", "areas", "outlines", "apply"])
     parser.add_argument("review_dir")
     parser.add_argument("--pdf", required=True)
     parser.add_argument("--page", type=int, required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--door-gap-mm", type=float, default=ro.DEFAULT_DOOR_GAP_MM)
     args = parser.parse_args()
-    {"packets": packets, "areas": areas, "apply": apply}[args.step](args)
+    {"packets": packets, "areas": areas, "outlines": outlines, "apply": apply}[args.step](args)
 
 
 if __name__ == "__main__":
