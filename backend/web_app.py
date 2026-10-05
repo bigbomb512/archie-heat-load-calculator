@@ -90,7 +90,7 @@ from ai.calculator_draft import DraftConflict
 from backend import draft_service
 from backend import evidence_fusion_service
 from backend import calculation_extraction_service
-from backend import vision_extraction_service, window_scan_service, site_orientation_service, site_location_service, site_design_weather_service, room_use_resolution_service, room_inference_service, reviewer_room_geometry_service, ceiling_volume_resolution_service, internal_gains_resolution_service, thermal_surface_resolution_service, airflow_resolution_service, ahu_resolution_service, plant_resolution_service, safety_factor_resolution_service, ai_preliminary_service, model_input_resolution_service, au_ventilation_rules_service
+from backend import vision_extraction_service, window_scan_service, site_orientation_service, site_location_service, site_design_weather_service, room_use_resolution_service, room_inference_service, reviewer_room_geometry_service, ceiling_volume_resolution_service, internal_gains_resolution_service, thermal_surface_resolution_service, airflow_resolution_service, ahu_resolution_service, plant_resolution_service, safety_factor_resolution_service, ai_preliminary_service, model_input_resolution_service, au_ventilation_rules_service, autonomous_tasks_service
 from backend import productization, test_mode_service, skill_workflow_service
 from backend import security
 from ai.ventilation import calculate_ventilation_report
@@ -359,6 +359,24 @@ class Handler(SimpleHTTPRequestHandler):
                 self._require_api_access()
             except security.SecurityError as error:
                 return self._send_security_error(error, 401)
+        if urlparse(self.path).path == "/api/autonomous-tasks/image":
+            try:
+                project = project_by_id(parse_qs(urlparse(self.path).query).get("project_id", [""])[0])
+                security.require_project_role(project, self._identity(), "editor")
+                query = {key: values[0] for key, values in parse_qs(urlparse(self.path).query).items()}
+                image_data = autonomous_tasks_service.image(sys.modules[__name__], project, query)
+                return self.send_file(Path(image_data["path"]), image_data["content_type"])
+            except security.SecurityError as error:
+                return self._send_security_error(error, 403)
+            except Exception as error:
+                return self.send_json({"error": product_error(error).get("error", "Task image is unavailable.")}, 404)
+        if urlparse(self.path).path == "/api/autonomous-tasks":
+            try:
+                return self.send_json(api_autonomous_tasks(self))
+            except security.SecurityError as error:
+                return self._send_security_error(error, 403)
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
         if self.path.startswith("/api/project-health"):
             try:
                 return self.send_json(api_project_health(self))
@@ -681,6 +699,11 @@ class Handler(SimpleHTTPRequestHandler):
                 self._require_api_access(write=True)
             except security.SecurityError as error:
                 return self._send_security_error(error, 403)
+        if urlparse(self.path).path == "/api/autonomous-tasks":
+            try:
+                return self.send_json(api_save_autonomous_tasks(self))
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
         if re.fullmatch(r"/api/projects/[^/]+/members", urlparse(self.path).path):
             try:
                 return self.send_json(api_save_project_members(self))
@@ -4025,6 +4048,27 @@ def api_site_location_resolution(request):
     project = project_by_id(query.get("project_id", [""])[0])
     ensure_review_dir(project)
     return site_location_service.get(sys.modules[__name__], project)
+
+
+def api_autonomous_tasks(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    ensure_review_dir(project)
+    if query.get("view", [""])[0] == "labels":
+        return autonomous_tasks_service.get_labels(project)
+    security.require_project_role(project, request._identity(), "editor")
+    return autonomous_tasks_service.get(sys.modules[__name__], project)
+
+
+def api_save_autonomous_tasks(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    security.require_project_role(project, request._identity(), "editor")
+    result = autonomous_tasks_service.post(sys.modules[__name__], project, data)
+    if data.get("action") == "answer_roof":
+        return autonomous_tasks_service.get_labels(project)
+    return result
 
 
 def api_au_ventilation_rules(request):

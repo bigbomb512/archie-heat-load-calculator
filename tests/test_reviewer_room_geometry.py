@@ -69,6 +69,90 @@ class ReviewerRoomGeometryTests(unittest.TestCase):
         self.assertEqual(checked["records"][0]["envelope_reviewer"], "")
         self.assertEqual(checked["records"][0]["envelope_declared_at"], "")
 
+    def test_envelope_value_sources_round_trip_without_changing_legacy_fingerprint(self):
+        legacy = reviewer_room_geometry.validate_artifact({"records": [deepcopy(self.trace)]})
+        sourced = deepcopy(legacy)
+        sourced["records"][0].update({"edges": [{"index": 0, "boundary": "external"},
+            *[{"index": index, "boundary": "unknown"} for index in range(1, 4)],
+            ], "roof": "exposed", "envelope_reviewer": "QA", "envelope_declared_at": "now",
+            "roof_source": "ai_determined", "edge_sources": {"0": "reviewer"}})
+        checked = reviewer_room_geometry.validate_artifact(sourced)
+        self.assertEqual(checked["records"][0]["roof_source"], "ai_determined")
+        self.assertEqual(checked["records"][0]["edge_sources"], {"0": "reviewer"})
+        self.assertEqual(reviewer_room_geometry.validate_artifact({"records": [deepcopy(self.trace)]})["fingerprint"],
+                         legacy["fingerprint"])
+
+    def test_ai_envelope_fills_unknown_roof_but_cannot_replace_reviewer_edge(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            vector_page = {"page": 1, "unchanged": True}
+            trace = {**self.trace, "source_fingerprints": {"source_pdf": "pdf-a", "vector_page": fingerprint(vector_page)}}
+            (root / "ai_input.json").write_text(json.dumps({"source_pdf_fingerprint": "pdf-a"}), encoding="utf-8")
+            (root / "vector_geometry.json").write_text(json.dumps({"geometry_key_points": {"pages": [vector_page]}}), encoding="utf-8")
+            (root / "building_evidence.json").write_text(json.dumps({"spaces": [
+                {"id": "room-shop", "name": "Shop", "level_name": "Ground", "evidence": [{"page": 1}]},
+            ]}), encoding="utf-8")
+            artifact_path = root / "reviewer_room_geometry.json"
+            artifact_path.write_text(json.dumps(reviewer_room_geometry.validate_artifact({"records": [trace]})), encoding="utf-8")
+            project = {"id": "value-precedence", "review_dir": str(root)}
+            web = SimpleNamespace(safe_link=lambda _path: "", update_project=lambda _project: None)
+            with patch.object(reviewer_room_geometry_service, "_response", return_value={"ok": True}), \
+                 patch("backend.calculation_extraction_service.post", return_value={}), \
+                 patch("backend.productization.record_change_if_fingerprint_changed"):
+                reviewer_room_geometry_service.post(web, project, {"action": "classify_envelope", "trace_id": trace["trace_id"],
+                    "edges": [{"index": 0, "boundary": "external"}], "roof": "unknown", "reviewer": "Reviewer QA"})
+                before = json.loads(artifact_path.read_text())["records"][0]
+                self.assertEqual(before["edges"][0]["boundary"], "external")
+                self.assertEqual(before["edge_sources"]["0"], "reviewer")
+                reviewer_room_geometry_service.post(web, project, {"action": "classify_envelope", "trace_id": trace["trace_id"],
+                    "edges": [{"index": 0, "boundary": "internal"}], "roof": "exposed", "reviewer": "Archie AI",
+                    "declaration_source": "ai_determined", "ai_run_id": "run-roof"})
+            saved = json.loads(artifact_path.read_text())["records"][0]
+            self.assertEqual(saved["edges"][0]["boundary"], "external")
+            self.assertEqual(saved["edge_sources"]["0"], "reviewer")
+            self.assertEqual(saved["roof"], "exposed")
+            self.assertEqual(saved["roof_source"], "ai_determined")
+
+    def test_saving_unchanged_ai_envelope_keeps_ai_provenance_until_explicit_confirmation(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            vector_page = {"page": 1, "unchanged": True}
+            trace = {**self.trace, "source_fingerprints": {"source_pdf": "pdf-a", "vector_page": fingerprint(vector_page)}}
+            (root / "ai_input.json").write_text(json.dumps({"source_pdf_fingerprint": "pdf-a"}), encoding="utf-8")
+            (root / "vector_geometry.json").write_text(json.dumps({"geometry_key_points": {"pages": [vector_page]}}), encoding="utf-8")
+            (root / "building_evidence.json").write_text(json.dumps({"spaces": [
+                {"id": "room-shop", "name": "Shop", "level_name": "Ground", "evidence": [{"page": 1}]},
+            ]}), encoding="utf-8")
+            artifact_path = root / "reviewer_room_geometry.json"
+            artifact_path.write_text(json.dumps(reviewer_room_geometry.validate_artifact({"records": [trace]})), encoding="utf-8")
+            project = {"id": "provenance-save", "review_dir": str(root)}
+            web = SimpleNamespace(safe_link=lambda _path: "", update_project=lambda _project: None)
+            with patch.object(reviewer_room_geometry_service, "_response", return_value={"ok": True}), \
+                 patch("backend.calculation_extraction_service.post", return_value={}), \
+                 patch("backend.productization.record_change_if_fingerprint_changed"):
+                reviewer_room_geometry_service.post(web, project, {"action": "classify_envelope", "trace_id": trace["trace_id"],
+                    "edges": [{"index": 0, "boundary": "external"}], "roof": "exposed", "reviewer": "Archie AI",
+                    "declaration_source": "ai_determined", "ai_run_id": "run-ai"})
+                legacy_ai = json.loads(artifact_path.read_text())
+                legacy_ai["records"][0].pop("edge_sources", None)
+                legacy_ai["records"][0].pop("roof_source", None)
+                artifact_path.write_text(json.dumps(legacy_ai), encoding="utf-8")
+                reviewer_room_geometry_service.post(web, project, {"action": "classify_envelope", "trace_id": trace["trace_id"],
+                    "edges": [{"index": 0, "boundary": "external"}], "roof": "exposed", "reviewer": "Contractor"})
+                saved = json.loads(artifact_path.read_text())["records"][0]
+                self.assertEqual(saved["edge_sources"]["0"], "ai_determined")
+                self.assertEqual(saved["roof_source"], "ai_determined")
+                reviewer_room_geometry_service.post(web, project, {"action": "classify_envelope", "trace_id": trace["trace_id"],
+                    "edges": [{"index": 0, "boundary": "external"}], "roof": "exposed", "reviewer": "Contractor",
+                    "confirmed_edges": [0], "confirm_roof": True})
+                reviewer_room_geometry_service.post(web, project, {"action": "classify_envelope", "trace_id": trace["trace_id"],
+                    "edges": [{"index": 0, "boundary": "internal"}], "roof": "not_exposed", "reviewer": "Contractor"})
+            saved = json.loads(artifact_path.read_text())["records"][0]
+            self.assertEqual(saved["edge_sources"]["0"], "reviewer")
+            self.assertEqual(saved["roof_source"], "reviewer")
+            self.assertEqual(saved["edges"][0]["boundary"], "internal")
+            self.assertEqual(saved["roof"], "not_exposed")
+
     def test_north_arrow_bearing_and_page_declaration_validation(self):
         self.assertEqual(reviewer_room_geometry.page_up_bearing_from_north_arrow([[10, 20], [10, 5]]), 0)
         self.assertEqual(reviewer_room_geometry.page_up_bearing_from_north_arrow([[10, 20], [10, 35]]), 180)

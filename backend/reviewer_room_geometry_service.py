@@ -725,6 +725,12 @@ def post(web, project, data):
         reviewer = str(data.get("reviewer", "")).strip()
         if not reviewer:
             raise ValueError("Enter a reviewer name for the north declaration.")
+        declaration_source = str(data.get("declaration_source", "reviewer"))
+        if declaration_source not in reviewer_room_geometry.DECLARATION_SOURCES:
+            raise ValueError("North declaration source must be reviewer, ai_determined or ai_fallback.")
+        ai_run_id = str(data.get("ai_run_id", "")).strip()
+        if declaration_source != "reviewer" and not ai_run_id:
+            raise ValueError("AI north declarations need an AI task run ID.")
         points = data.get("north_arrow_points_image_px")
         typed_bearing = data.get("plan_up_azimuth_deg")
         if points is not None:
@@ -741,8 +747,15 @@ def post(web, project, data):
             bearing = float(typed_bearing)
             source = "reviewer_typed_page_up_bearing"
         north = deepcopy(artifact.get("page_north", {}))
+        existing_declaration = north.get(str(page), {})
+        existing_declaration_source = existing_declaration.get("declaration_source", "reviewer" if existing_declaration else "")
+        if existing_declaration_source == "reviewer" and declaration_source != "reviewer":
+            raise ValueError("A reviewer north declaration already exists and takes precedence over AI.")
         declaration = {"page": page, "plan_up_azimuth_deg": bearing, "source": source,
                        "reviewer": reviewer, "declared_at": ai_preliminary.now()}
+        if declaration_source != "reviewer":
+            declaration["declaration_source"] = declaration_source
+            declaration["ai_run_id"] = ai_run_id
         if points is not None:
             declaration["north_arrow_points_image_px"] = points
         north[str(page)] = declaration
@@ -761,19 +774,93 @@ def post(web, project, data):
         reviewer = str(data.get("reviewer", "")).strip()
         if not reviewer:
             raise ValueError("Enter a reviewer name for the envelope classification.")
+        declaration_source = str(data.get("declaration_source", "reviewer"))
+        if declaration_source not in reviewer_room_geometry.DECLARATION_SOURCES:
+            raise ValueError("Envelope declaration source must be reviewer, ai_determined or ai_fallback.")
+        ai_run_id = str(data.get("ai_run_id", "")).strip()
+        if declaration_source != "reviewer" and not ai_run_id:
+            raise ValueError("AI envelope declarations need an AI task run ID.")
         classification = reviewer_room_geometry.validate_envelope_classification(
             data.get("edges"), data.get("roof", "unknown"), len(trace["points_image_px"]) - 1,
         )
+        confirmed_edges = data.get("confirmed_edges", [])
+        if (not isinstance(confirmed_edges, list) or any(type(index) is not int for index in confirmed_edges)
+                or len(set(confirmed_edges)) != len(confirmed_edges)
+                or any(index < 0 or index >= len(trace["points_image_px"]) - 1 for index in confirmed_edges)):
+            raise ValueError("confirmed_edges must contain unique valid edge indices.")
+        confirm_roof = data.get("confirm_roof", False)
+        if type(confirm_roof) is not bool:
+            raise ValueError("confirm_roof must be true or false.")
+        old_edges = {row["index"]: row["boundary"] for row in trace.get("edges", [])}
+        new_edges = {row["index"]: row["boundary"] for row in classification["edges"]}
+        old_edge_sources = {str(key): value for key, value in trace.get("edge_sources", {}).items()}
+        old_roof_source = trace.get("roof_source")
+        legacy_source = trace.get("declaration_source") or ("reviewer" if trace.get("envelope_reviewer") else "")
+        legacy_default = legacy_source or ("reviewer" if trace.get("envelope_reviewer") else "")
+        for index, boundary in old_edges.items():
+            if boundary != "unknown" and legacy_default:
+                old_edge_sources.setdefault(str(index), legacy_default)
+        if trace.get("roof", "unknown") != "unknown" and not old_roof_source:
+            old_roof_source = legacy_default or None
+        if declaration_source != "reviewer":
+            for index, boundary in old_edges.items():
+                if boundary != "unknown" and old_edge_sources.get(str(index)) == "reviewer":
+                    new_edges[index] = boundary
+                elif new_edges[index] == "unknown" and boundary != "unknown":
+                    new_edges[index] = boundary
+            roof = classification["roof"]
+            if old_roof_source == "reviewer" and trace.get("roof") != "unknown":
+                roof = trace["roof"]
+            elif roof == "unknown" and trace.get("roof", "unknown") != "unknown":
+                roof = trace["roof"]
+        else:
+            roof = classification["roof"]
+        merged = reviewer_room_geometry.validate_envelope_classification(
+            [{"index": index, "boundary": value} for index, value in new_edges.items()], roof,
+            len(trace["points_image_px"]) - 1,
+        )
+        edge_sources = {}
+        for index, boundary in new_edges.items():
+            if boundary == "unknown":
+                continue
+            if old_edges.get(index) == boundary and old_edge_sources.get(str(index)):
+                if declaration_source != "reviewer" and old_edge_sources.get(str(index)) == "reviewer":
+                    edge_sources[str(index)] = "reviewer"
+                elif declaration_source == "reviewer" and index in confirmed_edges:
+                    edge_sources[str(index)] = "reviewer"
+                else:
+                    edge_sources[str(index)] = old_edge_sources[str(index)]
+            elif declaration_source == "reviewer":
+                edge_sources[str(index)] = "reviewer"
+            else:
+                edge_sources[str(index)] = declaration_source
+        roof_source = None
+        if merged["roof"] != "unknown":
+            if trace.get("roof") == merged["roof"] and old_roof_source:
+                roof_source = "reviewer" if declaration_source == "reviewer" and confirm_roof else old_roof_source
+            elif declaration_source == "reviewer":
+                roof_source = "reviewer"
+            else:
+                roof_source = declaration_source
+        merged["edge_sources"] = edge_sources
+        if roof_source:
+            merged["roof_source"] = roof_source
         room = _known_room(trace.get("room_id"), paths) or trace
         # Validate openings against the edge classifications being saved in
         # this same request. Reviewers need to be able to classify an edge as
         # external and add its opening together, without an intermediate save.
-        trace_for_openings = {**trace, **classification}
+        trace_for_openings = {**trace, **merged}
         openings = _validated_trace_openings(data, trace_for_openings, paths, room, calibration)
-        trace.update(classification)
+        trace.update(merged)
         trace["openings"] = openings
         trace["envelope_reviewer"] = reviewer
         trace["envelope_declared_at"] = ai_preliminary.now()
+        if declaration_source == "reviewer":
+            trace.pop("declaration_source", None)
+            trace.pop("ai_run_id", None)
+        else:
+            trace["declaration_source"] = declaration_source
+            trace["ai_run_id"] = ai_run_id
         artifact = reviewer_room_geometry.validate_artifact({"records": artifact["records"], "rooms": artifact.get("rooms", []), "page_north": artifact.get("page_north", {})})
     elif action == "add_room":
         artifact = _add_reviewer_room(paths, artifact, data)

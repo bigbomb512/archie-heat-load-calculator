@@ -104,8 +104,10 @@ printed areas (already read) or AI outlines.
 
 **Answer key status (caseA):** Coolroom, Freezer, Kitchen and Bar are keyed;
 the Bar was confirmed by the user on 2026-10-05 as the walled central island
-(32.56 m²). Shop is **pending the user**: the walkthrough trace drew the wrong
-area for Bar. Sheet 303 ("customised bar", "bar partition") is called up
+(32.56 m²), and the Shop as the dining area including the top-middle buffet
+stations (216.1 m², two enclosed areas merged). Both are measured from the
+drawn walls, so for them the score tests naming and merging, not geometry.
+The walkthrough trace had drawn the wrong area for Bar. Sheet 303 ("customised bar", "bar partition") is called up
 from the walled central island (about 32.6 m²), and the top-middle area looks
 like buffet stations (sheet 403).
 

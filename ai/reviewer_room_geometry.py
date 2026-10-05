@@ -14,6 +14,7 @@ SNAP_TOLERANCE_PX = 8.0
 EDGE_BOUNDARIES = {"external", "adjacent_tenancy", "internal", "unknown"}
 ROOF_EXPOSURES = {"exposed", "not_exposed", "unknown"}
 NORTH_SOURCES = {"reviewer_read_north_arrow", "reviewer_typed_page_up_bearing"}
+DECLARATION_SOURCES = {"reviewer", "ai_determined", "ai_fallback"}
 
 
 def fingerprint(value):
@@ -134,6 +135,31 @@ def validate_artifact(raw):
         edge_count = len(points) - 1
         classification = validate_envelope_classification(checked.get("edges", []), checked.get("roof", "unknown"), edge_count)
         checked.update(classification)
+        roof_source = checked.get("roof_source")
+        if roof_source is not None:
+            if roof_source not in DECLARATION_SOURCES or checked["roof"] == "unknown":
+                raise ValueError("A roof source must identify a classified roof value.")
+            checked["roof_source"] = roof_source
+        else:
+            checked.pop("roof_source", None)
+        edge_sources = checked.get("edge_sources")
+        if edge_sources is not None:
+            if not isinstance(edge_sources, dict):
+                raise ValueError("Envelope edge sources must be an object keyed by edge index.")
+            sources = {}
+            boundaries = {edge["index"]: edge["boundary"] for edge in checked["edges"]}
+            for key, source in edge_sources.items():
+                if not str(key).isdigit() or int(key) not in boundaries or boundaries[int(key)] == "unknown":
+                    raise ValueError("An edge source must identify a classified envelope edge.")
+                if source not in DECLARATION_SOURCES:
+                    raise ValueError("Envelope edge source must be reviewer, ai_determined or ai_fallback.")
+                sources[str(int(key))] = source
+            if sources:
+                checked["edge_sources"] = sources
+            else:
+                checked.pop("edge_sources", None)
+        else:
+            checked.pop("edge_sources", None)
         declaration_reviewer = str(checked.get("envelope_reviewer", "")).strip()
         declared_at = str(checked.get("envelope_declared_at", "")).strip()
         has_classification = checked["roof"] != "unknown" or any(edge["boundary"] != "unknown" for edge in checked["edges"])
@@ -141,6 +167,20 @@ def validate_artifact(raw):
             raise ValueError("Envelope classifications require a reviewer and declaration timestamp.")
         checked["envelope_reviewer"] = declaration_reviewer
         checked["envelope_declared_at"] = declared_at
+        declaration_source = checked.get("declaration_source")
+        ai_run_id = checked.get("ai_run_id")
+        if declaration_source is not None and declaration_source not in DECLARATION_SOURCES:
+            raise ValueError("Envelope declaration source must be reviewer, ai_determined or ai_fallback.")
+        if ai_run_id is not None and (not isinstance(ai_run_id, str) or not ai_run_id.strip()):
+            raise ValueError("AI envelope declarations need a non-empty run ID.")
+        if declaration_source is not None:
+            checked["declaration_source"] = declaration_source
+        else:
+            checked.pop("declaration_source", None)
+        if ai_run_id is not None:
+            checked["ai_run_id"] = ai_run_id.strip()
+        else:
+            checked.pop("ai_run_id", None)
         openings = checked.get("openings", [])
         if not isinstance(openings, list):
             raise ValueError("Trace openings must be a list.")
@@ -169,11 +209,22 @@ def validate_artifact(raw):
             raise ValueError("Page north source must be a reviewer-read arrow or typed bearing.")
         if not str(declaration.get("reviewer", "")).strip() or not str(declaration.get("declared_at", "")).strip():
             raise ValueError("Page north declarations need a reviewer and timestamp.")
+        declaration_source = declaration.get("declaration_source")
+        ai_run_id = declaration.get("ai_run_id")
+        if declaration_source is not None and declaration_source not in DECLARATION_SOURCES:
+            raise ValueError("North declaration source must be reviewer, ai_determined or ai_fallback.")
+        if ai_run_id is not None and (not isinstance(ai_run_id, str) or not ai_run_id.strip()):
+            raise ValueError("AI north declarations need a non-empty run ID.")
         arrow = declaration.get("north_arrow_points_image_px")
         if declaration["source"] == "reviewer_read_north_arrow":
             if not isinstance(arrow, list) or len(arrow) != 2 or not all(valid_point(point) for point in arrow) or math.dist(*arrow) <= 0:
                 raise ValueError("North-arrow declarations need two distinct image points.")
-        checked_north[str(page)] = deepcopy(declaration)
+        checked_declaration = deepcopy(declaration)
+        if declaration_source is None:
+            checked_declaration.pop("declaration_source", None)
+        if ai_run_id is None:
+            checked_declaration.pop("ai_run_id", None)
+        checked_north[str(page)] = checked_declaration
     result = {"schema_version": SCHEMA_VERSION, "records": records}
     if checked_north:
         result["page_north"] = checked_north
@@ -194,6 +245,10 @@ def validate_artifact(raw):
             record.pop("envelope_reviewer", None)
         if not record.get("envelope_declared_at"):
             record.pop("envelope_declared_at", None)
+        if not record.get("roof_source"):
+            record.pop("roof_source", None)
+        if not record.get("edge_sources"):
+            record.pop("edge_sources", None)
     result["fingerprint"] = fingerprint(fingerprint_basis)
     return result
 

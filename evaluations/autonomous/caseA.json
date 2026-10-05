@@ -17,9 +17,8 @@
         },
         {
           "label": "Shop",
-          "area_m2": 229.06,
-          "status": "pending_user",
-          "note": "Still pending: the walkthrough trace drew Bar in the wrong place, so Shop changes with it. Whether the top-middle buffet stations belong to Shop is not yet confirmed."
+          "area_m2": 216.1,
+          "note": "Confirmed by the project contact 2026-10-05: Shop is the dining area including the top-middle buffet stations, excluding the walled central Bar island. Area is the sum of the two enclosed areas measured to the inside faces of the drawn walls (calibrated 11,825 mm dimension), not independently surveyed; for Shop the score tests naming and merging."
         },
         {
           "label": "Coolroom",

@@ -215,6 +215,7 @@
             <button class="btn ghost mini" type="button" data-workflow-dev="reset">Reset workflow preview</button>
           </div>
         </section>
+        <section class="review-list" aria-label="Roof exposure questions" aria-live="polite"><div id="contractorRoofQuestions"></div><p id="contractorRoofQuestionStatus" class="fine" role="status" aria-live="polite"></p></section>
 
         <div class="review-panel hide" id="visionPanel">
           <div class="panel-head">
@@ -363,6 +364,13 @@
               <button class="btn ghost mini" id="btnSaveAiPreliminaryProposal" type="button">Save AI proposal</button>
             </details>
             <div class="review-list" id="aiPreliminaryResults"></div>
+            <details class="workflow-advanced-tools" id="autonomousTasksPanel" hidden>
+              <summary>AI task operator tools</summary>
+              <p class="fine">Manual ChatGPT transport. Copy each bounded prompt and attach only the listed images. Paste the JSON reply here; contractors never see this panel.</p>
+              <button class="btn ghost mini" id="autonomousTasksRunAll" type="button">Run all tasks</button>
+              <p class="fine" id="autonomousTasksStatus" role="status" aria-live="polite">Tasks have not been built.</p>
+              <div id="autonomousTasksList" class="review-list"></div>
+            </details>
           </section>
           <section class="calculator-draft-panel" aria-labelledby="windowScanHeading">
             <h4 id="windowScanHeading">All-page window discovery</h4>
@@ -791,5 +799,6 @@
 </div>
 
 <script src="/frontend/js/app.js"></script>
+<script src="/frontend/js/autonomous_tasks.js"></script>
 </body>
 </html>

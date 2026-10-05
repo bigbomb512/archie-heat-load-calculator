@@ -23,7 +23,7 @@ SITE = {"P1_site": {"site_must_contain": ["CENTRAL PRECINCT"], "must_not_choose"
 
 def perfect():
     return {
-        "P0_rooms": [{"label": "Bar", "area_m2": 31.2}, {"label": "Kitchen", "area_m2": 97.0}, {"label": "Shop", "area_m2": 229.0},
+        "P0_rooms": [{"label": "Bar", "area_m2": 31.2}, {"label": "Kitchen", "area_m2": 97.0}, {"label": "Shop", "area_m2": 216.0},
                      {"label": "Coolroom", "area_m2": 10.7}, {"label": "Freezer", "area_m2": 7.6}],
         "P1_site": {"site_text": "Tenancy MZ01, Central Precinct"},
         "P2_north": [{"page": 20, "plan_up_azimuth_deg": 358}],
@@ -57,7 +57,7 @@ def main():
     rooms = {item["item"]: item["status"] for item in report["tasks"]["P0_rooms"]}
     check("a wrong area, a missed room and a false room are all scored",
           rooms["Kitchen"] == "wrong" and rooms["Coolroom"] == "missing" and rooms["Counter"] == "wrong")
-    check("rooms whose answer is pending the user are not scored", "Shop" not in rooms and "Bar" in rooms)
+    check("all caseA rooms are now keyed and scored", "Shop" in rooms and "Bar" in rooms)
     check("choosing the consultant's address is wrong", report["tasks"]["P1_site"][0]["status"] == "wrong")
     check("no north applied is missing, not correct", report["tasks"]["P2_north"][0]["status"] == "missing")
     openings = {item["item"]: item for item in report["tasks"]["P4_openings"]}

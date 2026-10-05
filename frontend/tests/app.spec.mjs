@@ -1133,7 +1133,20 @@ test("reviewer can classify calibrated trace edges and roof, and the picker show
   expect(posts[0].edges).toHaveLength(4);
   expect(posts[0].edges[0]).toEqual({index:0,boundary:"external"});
   await expect(workspace.locator("[data-envelope-saved]")).toContainText("QA-2");
+  await expect(workspace.locator("[data-envelope-saved]")).toContainText("Reviewer");
   await expect(workspace.locator("[data-geometry-room] option:checked")).toContainText("walls: 1 of 4 classified · roof exposed");
+});
+
+test("mixed envelope declarations show provenance separately for each value", async ({page})=>{
+  const {context,trace}=envelopeTraceContext({edges:[{index:0,boundary:"external"},{index:1,boundary:"unknown"},{index:2,boundary:"unknown"},{index:3,boundary:"unknown"}],roof:"exposed"});
+  trace.edge_sources={"0":"reviewer"};trace.roof_source="ai_determined";trace.envelope_reviewer="Archie AI";trace.declaration_source="ai_determined";
+  await page.route("**/api/reviewer-room-geometry?project_id=demo-project",route=>route.fulfill({json:context}));
+  await openTraceWorkspace(page);await page.evaluate(()=>loadReviewerRoomGeometryWorkspace());
+  const workspace=page.locator("#reviewerRoomGeometryWorkspace");
+  await workspace.locator("[data-geometry-room]").selectOption(trace.room_id);
+  await workspace.locator("[data-geometry-page]").selectOption("5");
+  await expect(workspace.locator('[data-envelope-edge-select="0"]')).toContainText("Reviewer");
+  await expect(workspace.locator(".reviewer-envelope-roof")).toContainText("AI-determined");
 });
 
 test("reviewer can declare page north, add a cited shopfront, and see unresolved envelope wording", async ({page})=>{
@@ -1868,4 +1881,113 @@ test("the draft result says which design day, sun values and site it used", asyn
   await expect(basis).toContainText("Generic Australian cooling design day");
   await expect(basis).toContainText("not site-specific; no flat-roof sun");
   await expect(basis).toContainText("Site: Shop G38/22 Lemon Tree Av");
+});
+
+test("AI task operator panel is hidden from contractors and validates manual replies with visible errors", async ({page}) => {
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await mockApi(page);
+  let gets = 0, summaryGets = 0, posts = [];
+  let taskState = {id:"demo-project", auto_apply_bar:.85, supported_tasks:["P1_site","P2_north","P5_roof"], tasks:[{
+    task:"P1_site", target:"project", status:"waiting_for_reply", prompt:"Return JSON only", accuracy:{accuracy:.667,scored:3},
+    packet:{excerpts:[{page:2,text:"TENANCY G12"}]}, images:[], block_reason:"", validation:{}, applied_value:{}, source:"",
+  }]};
+  await page.route("**/api/autonomous-tasks**", async route => {
+    if (route.request().method() === "GET") {
+      if (route.request().url().includes("view=labels")) {
+        summaryGets++;
+        return route.fulfill({json:{id:"demo-project",auto_apply_bar:.85,tasks:[{task:"P1_site",target:"project",status:"below_accuracy_bar",source:"ai_determined",applied_value:{site_text:"TENANCY G12",applied_site_text:"TENANCY G12",applied_source:"ai_determined"}}]}});
+      }
+      gets++; return route.fulfill({json:taskState});
+    }
+    const body = route.request().postDataJSON(); posts.push(body);
+    if (body.reply.includes("not printed")) {
+      taskState = {...taskState, tasks:[{...taskState.tasks[0], block_reason:"Site text must be an exact substring of a supplied excerpt on the cited page.", validation:{valid:false,error:"Site text must be an exact substring of a supplied excerpt on the cited page."}}]};
+    } else {
+      taskState = {...taskState, tasks:[{...taskState.tasks[0], status:"below_accuracy_bar", source:"ai_determined", block_reason:"", applied_value:{site_text:"TENANCY G12",applied_site_text:"TENANCY G12",applied_source:"ai_determined"}, validation:{valid:true}}]};
+    }
+    return route.fulfill({json:taskState});
+  });
+  await page.goto("/");
+  await expect(page.locator("#autonomousTasksPanel")).toBeHidden();
+  await page.evaluate(() => { DATA = {id:"demo-project"}; show("vRes"); });
+  await expect.poll(() => summaryGets).toBeGreaterThan(0);
+  await expect(page.locator("#siteLocationResults")).toContainText("AI-determined (below accuracy bar)");
+  await page.goto("/?operator=1");
+  await page.evaluate(() => { DATA = {id:"demo-project"}; show("vRes"); });
+  const panel = page.locator("#autonomousTasksPanel");
+  await expect(panel).toBeVisible();
+  await expect.poll(() => gets).toBeGreaterThan(0);
+  await panel.getByRole("button", {name:"Copy prompt"}).click();
+  await expect(panel).toContainText("Prompt copied");
+  const card = panel.locator("[data-task-card]");
+  await card.locator("[data-task-reply]").fill('{"site":{"text":"not printed","page":2,"kind":"street_address"},"consultant_addresses":[]}');
+  await card.locator("[data-validate-apply]").click();
+  await expect(card.locator("[role=alert]")).toContainText("exact substring");
+  await card.locator("[data-task-reply]").fill('{"site":{"text":"TENANCY G12","page":2,"kind":"tenancy_in_centre"},"consultant_addresses":[]}');
+  await card.locator("[data-stand-in]").check();
+  await card.locator("[data-validate-apply]").click();
+  await expect(card.locator("[data-task-source]")).toHaveText("AI-determined (below accuracy bar)");
+  expect(posts).toHaveLength(2);
+  expect(posts[1].stand_in).toBe(true);
+});
+
+test("contractor sees the roof exposure question on the normal project screen and can answer it", async ({page}) => {
+  await mockApi(page);
+  const posts=[];
+  await page.route("**/api/autonomous-tasks**", async route => {
+    if (route.request().method() === "GET") {
+      return route.fulfill({json:{id:"demo-project",auto_apply_bar:.85,tasks:[{
+        task:"P5_roof",target:"room-use:ground:shop",status:"needs_contractor_answer",room_label:"Shop",
+        question:"Is there a floor or another tenancy directly above this shop, or is it the roof?"}]}});
+    }
+    const body=route.request().postDataJSON();posts.push(body);
+    return route.fulfill({json:{id:"demo-project",auto_apply_bar:.85,tasks:[{
+      task:"P5_roof",target:body.target,status:"contractor_answered_not_sure",room_label:"Shop",
+      message:"Not sure — roof exposure remains unknown and not assessed."}]}});
+  });
+  await page.goto("/");
+  await page.evaluate(()=>{DATA={id:"demo-project"};show("vRes");});
+  const question=page.locator("#contractorRoofQuestions [data-contractor-roof-question]");
+  await expect(question).toBeVisible();
+  await expect(question).toContainText("Is there a floor or another tenancy directly above this shop, or is it the roof?");
+  await expect(page.locator("#autonomousTasksPanel")).toBeHidden();
+  await question.getByLabel("Not sure").check();
+  await question.getByRole("button",{name:"Save answer"}).click();
+  await expect.poll(()=>posts.length).toBe(1);
+  expect(posts[0]).toEqual(expect.objectContaining({action:"answer_roof",task:"P5_roof",target:"room-use:ground:shop",answer:"not_sure"}));
+  await expect(page.locator("#contractorRoofQuestionStatus")).toHaveText("Saved. Roof exposure remains unknown and is not assessed.");
+  await expect(page.locator("#contractorRoofQuestions [data-roof-not-assessed]")).toContainText("Not sure — roof exposure remains unknown and not assessed.");
+});
+
+test("saving AI envelope values offers explicit reviewer confirmation controls", async ({page}) => {
+  await mockApi(page);
+  const {context,trace}=envelopeTraceContext({edges:[{index:0,boundary:"external"},{index:1,boundary:"unknown"},{index:2,boundary:"unknown"},{index:3,boundary:"unknown"}],roof:"exposed"});
+  trace.edge_sources={"0":"ai_determined"};trace.roof_source="ai_determined";
+  const posts=[];
+  await page.route("**/api/reviewer-room-geometry?project_id=demo-project",route=>route.fulfill({json:context}));
+  await page.route("**/api/reviewer-room-geometry",async route=>{
+    const body=route.request().postDataJSON();posts.push(body);
+    const saved={...trace,envelope_reviewer:body.reviewer,envelope_declared_at:"2026-10-05T00:00:00Z",
+      edge_sources:{"0":body.confirmed_edges.includes(0)?"reviewer":"ai_determined"},
+      roof_source:body.confirm_roof?"reviewer":"ai_determined"};
+    context.reviewer_room_geometry.records=[saved];
+    return route.fulfill({json:context});
+  });
+  await openTraceWorkspace(page);
+  const workspace=page.locator("#reviewerRoomGeometryWorkspace");
+  await workspace.locator("[data-geometry-room]").selectOption(trace.room_id);
+  await workspace.locator("[data-geometry-page]").selectOption("5");
+  await expect(workspace.locator("[data-envelope-confirm-edge='0']")).toBeVisible();
+  await expect(workspace.locator("[data-envelope-confirm-roof]")).toBeVisible();
+  await workspace.locator("[data-envelope-reviewer]").fill("QA");
+  await workspace.locator("[data-envelope-save]").click();
+  await expect.poll(()=>posts.length).toBe(1);
+  expect(posts[0].confirmed_edges).toEqual([]);
+  expect(posts[0].confirm_roof).toBe(false);
+  await workspace.locator("[data-envelope-confirm-edge='0']").check();
+  await workspace.locator("[data-envelope-confirm-roof]").check();
+  await workspace.locator("[data-envelope-save]").click();
+  await expect.poll(()=>posts.length).toBe(2);
+  expect(posts[1].confirmed_edges).toEqual([0]);
+  expect(posts[1].confirm_roof).toBe(true);
 });
