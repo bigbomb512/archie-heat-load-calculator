@@ -11,7 +11,7 @@ import math
 import re
 from pathlib import Path
 
-from ai import reviewer_room_geometry, site_location_resolution, room_outline
+from ai import reviewer_room_geometry, site_location_resolution, room_outline, kitchen_equipment
 
 
 TASKS = {
@@ -30,6 +30,10 @@ TASKS = {
     "P5_roof": {"id": "roof_exposure", "inputs": ["drawing_facts", "P1_site", "current_room_traces"],
                 "budget_chars": 2000, "max_crops": 1, "prompt_builder": "roof_prompt",
                 "reply_validator": "validate_roof_reply", "apply_function": "_apply_p5", "fallback": None},
+    "P6_kitchen": {"id": "kitchen_equipment", "inputs": ["current_kitchen_trace", "kitchen_elevation_pages"],
+                   "budget_chars": kitchen_equipment.BUDGET_CHARS, "max_images": 3,
+                   "prompt_builder": "kitchen_equipment.build_packet", "reply_validator": "kitchen_equipment.validate_reply",
+                   "apply_function": "_apply_p6", "fallback": None},
 }
 
 

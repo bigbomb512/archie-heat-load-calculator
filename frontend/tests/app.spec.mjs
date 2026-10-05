@@ -1973,12 +1973,18 @@ test("contractor sees the roof exposure question on the normal project screen an
     if (route.request().method() === "GET") {
       return route.fulfill({json:{id:"demo-project",auto_apply_bar:.85,tasks:[{
         task:"P5_roof",target:"room-use:ground:shop",status:"needs_contractor_answer",room_label:"Shop",
-        question:"Is there a floor or another tenancy directly above this shop, or is it the roof?"}]}});
+        question:"Is there a floor or another tenancy directly above this shop, or is it the roof?"},
+        {task:"P6_kitchen",target:"kitchen",status:"below_accuracy_bar",source:"ai_determined",applied_value:{
+          label:"Kitchen equipment identified from drawings (heat not yet assessed)",heat_assessed:false,
+          items:[{type:"rangehood_canopy",count:1,page:22}]}}]}});
     }
     const body=route.request().postDataJSON();posts.push(body);
     return route.fulfill({json:{id:"demo-project",auto_apply_bar:.85,tasks:[{
       task:"P5_roof",target:body.target,status:"contractor_answered_not_sure",room_label:"Shop",
-      message:"Not sure — roof exposure remains unknown and not assessed."}]}});
+      message:"Not sure — roof exposure remains unknown and not assessed."},
+      {task:"P6_kitchen",target:"kitchen",status:"below_accuracy_bar",source:"ai_determined",applied_value:{
+        label:"Kitchen equipment identified from drawings (heat not yet assessed)",heat_assessed:false,
+        items:[{type:"rangehood_canopy",count:1,page:22}]}}]}});
   });
   await page.goto("/");
   await page.evaluate(()=>{DATA={id:"demo-project"};show("vRes");});
@@ -1992,6 +1998,10 @@ test("contractor sees the roof exposure question on the normal project screen an
   expect(posts[0]).toEqual(expect.objectContaining({action:"answer_roof",task:"P5_roof",target:"room-use:ground:shop",answer:"not_sure"}));
   await expect(page.locator("#contractorRoofQuestionStatus")).toHaveText("Saved. Roof exposure remains unknown and is not assessed.");
   await expect(page.locator("#contractorRoofQuestions [data-roof-not-assessed]")).toContainText("Not sure — roof exposure remains unknown and not assessed.");
+  const equipment = page.locator("#kitchenEquipmentResults [data-kitchen-equipment-result]");
+  await expect(equipment).toContainText("Kitchen equipment identified from drawings (heat not yet assessed)");
+  await expect(equipment).toContainText("rangehood canopy × 1 · p. 22");
+  await expect(equipment).toContainText("no heat contribution has been calculated");
 });
 
 test("saving AI envelope values offers explicit reviewer confirmation controls", async ({page}) => {

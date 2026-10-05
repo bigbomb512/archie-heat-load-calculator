@@ -16,6 +16,103 @@ from backend import autonomous_tasks_service
 
 
 class AutonomousTaskTests(unittest.TestCase):
+    def test_p6_kitchen_is_registered_and_builds_framework_packet_with_plan_and_elevation(self):
+        from PIL import Image
+        class Rendered:
+            def __init__(self, image):
+                self.original = image
+        class Page:
+            width = 100
+            height = 200
+            def to_image(self, resolution):
+                return Rendered(Image.new("RGB", (250, 500), "white"))
+        class PDF:
+            pages = [Page(), Page()]
+            def __enter__(self):
+                return self
+            def __exit__(self, *_args):
+                return False
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source.pdf"
+            source.write_bytes(b"test pdf placeholder")
+            (root / "room_use_resolution.json").write_text(json.dumps({"records": [
+                {"room_id": "kitchen-id", "space_scope": "comfort_hvac"}]}), encoding="utf-8")
+            trace = {"room_id": "kitchen-id", "room_label": "Kitchen", "page": 1,
+                     "points_image_px": [[60, 60], [170, 60], [170, 160], [60, 160], [60, 60]],
+                     "calibration": {"status": "agreed", "mm_per_px": 10}}
+            ai_input = {"source_pdf": str(source), "drawing_set": {"pages": [
+                {"page": 2, "title": "Kitchen Elevation"}]}}
+            spatial = {"pages": [{"page": 1}, {"page": 2}]}
+            with patch.object(autonomous_tasks_service, "_load_inputs", return_value=(ai_input, spatial, {})), \
+                 patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "current_records", return_value=[trace]), \
+                 patch("pdfplumber.open", return_value=PDF()), \
+                 patch.object(autonomous_tasks_service.kitchen_equipment, "page_labels",
+                              side_effect=lambda _spatial, page, _region=None: [f"labels-{page}"]), \
+                 patch.object(autonomous_tasks_service.kitchen_equipment, "page_words",
+                              side_effect=lambda _spatial, page, _region=None: {f"word-{page}"}):
+                rows = autonomous_tasks_service._p6_kitchen_packets(root)
+            self.assertIn("P6_kitchen", autonomous_tasks.TASKS)
+            task, target, packet, prompt, images, reason = rows[0]
+            self.assertEqual((task, target, reason), ("P6_kitchen", "kitchen", ""))
+            self.assertEqual([row["kind"] for row in packet["images"]], ["plan_crop", "elevation_page"])
+            self.assertEqual(packet["labels_by_page"], {"1": ["labels-1"], "2": ["labels-2"]})
+            self.assertEqual(len(images), 2)
+            self.assertTrue(prompt)
+
+    def test_p6_apply_and_export_are_identification_only(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            items = [{"type": "oven", "count": 2, "page": 22, "quote": "OVEN", "symbol": None,
+                      "under_hood": True, "evidence_kind": "text"}]
+            record = {"accuracy": {"auto_apply": False}, "packet": {"room_label": "Kitchen"}}
+            applied = autonomous_tasks_service._apply_p6(record, items)
+            self.assertEqual(applied["applied_value"]["label"],
+                "Kitchen equipment identified from drawings (heat not yet assessed)")
+            self.assertFalse(applied["applied_value"]["heat_assessed"])
+            self.assertNotIn("heat_kw", applied["applied_value"])
+            current = [{"task": "P6_kitchen", "stand_in": False, "applied_value": applied["applied_value"]}]
+            with patch.object(autonomous_tasks_service, "_all_current", return_value=current):
+                exported = autonomous_tasks_service._export_determinations(root)
+            self.assertEqual(exported["P6_kitchen"], [{"type": "oven", "count": 2, "source": "ai_determined"}])
+
+    def test_p6_reply_uses_task_framework_validation_and_persistence(self):
+        with TemporaryDirectory() as temporary, \
+             patch.object(autonomous_tasks_service, "_accuracy", return_value={
+                 "accuracy": None, "scored": 0, "auto_apply": False, "report": ""}), \
+             patch.object(autonomous_tasks_service.productization, "record_change_if_fingerprint_changed"), \
+             patch.object(autonomous_tasks_service, "_refresh_geometry_tasks"):
+            root = Path(temporary)
+            project = {"id": "p6-test", "review_dir": str(root)}
+            autonomous_tasks_service._create_run(root, "P6_kitchen", "kitchen", {
+                "task": "P6_kitchen", "room_label": "Kitchen",
+                "images": [{"page": 22, "kind": "plan_crop"}],
+                "labels_by_page": {"22": ["OVEN"]}, "words_by_page": {"22": ["oven"]},
+            }, "List equipment.")
+            reply = json.dumps({"items": [{"type": "oven", "count": 1, "page": 22, "quote": "OVEN",
+                                           "symbol": None, "under_hood": True}]})
+            result = autonomous_tasks_service.post(None, project, {
+                "action": "validate_apply", "task": "P6_kitchen", "target": "kitchen", "reply": reply})
+            saved = autonomous_tasks_service._current_task(root, "P6_kitchen", "kitchen")
+            self.assertEqual(saved["status"], "below_accuracy_bar")
+            self.assertEqual(saved["applied_value"]["items"][0]["type"], "oven")
+            self.assertIn("P6_kitchen", result["determinations"])
+
+    def test_p2_no_arrow_applies_null_for_scoring_without_changing_reviewer_north(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "reviewer_room_geometry.json").write_text(json.dumps({"page_north": {}}), encoding="utf-8")
+            record = {"packet": {"page": 5}, "accuracy": {"auto_apply": False}}
+            applied = autonomous_tasks_service._apply_p2(None, {}, root, record, {"found": False})
+            self.assertEqual(applied["applied_value"], {"page": 5, "plan_up_azimuth_deg": None})
+            self.assertEqual(applied["status"], "below_accuracy_bar")
+            (root / "reviewer_room_geometry.json").write_text(json.dumps({"page_north": {
+                "5": {"plan_up_azimuth_deg": 0, "declaration_source": "reviewer"}}}), encoding="utf-8")
+            reviewer_record = {"packet": {"page": 5}, "accuracy": {"auto_apply": True}}
+            preserved = autonomous_tasks_service._apply_p2(None, {}, root, reviewer_record, {"found": False})
+            self.assertEqual(preserved["applied_value"]["plan_up_azimuth_deg"], 0)
+            self.assertEqual(preserved["source"], "reviewer")
+
     def test_p0_dimension_reply_preserves_tick_centres_and_requires_quoted_number(self):
         packet = {"line": {"tick_centres_image_px": [[10, 20], [210, 20]], "span_px": 200}}
         checked = autonomous_tasks.validate_dimension_reply(packet, '{"value_mm":2000,"printed_text":"2,000"}')
@@ -299,7 +396,7 @@ class AutonomousTaskTests(unittest.TestCase):
              patch.object(autonomous_tasks_service, "_create_run",
                           side_effect=lambda _root, task, *_args, **_kwargs: events.append(task)):
             autonomous_tasks_service._refresh_geometry_tasks(Path("/tmp"))
-        self.assertEqual(events, ["P0_room_names", "outline-builder"])
+        self.assertEqual(events, ["P0_room_names", "outline-builder", "P6_kitchen"])
 
     def test_p3_fallback_labels_and_reviewer_boundary_precedence(self):
         with TemporaryDirectory() as temporary:
@@ -336,14 +433,18 @@ class AutonomousTaskTests(unittest.TestCase):
             root = Path(temporary)
             records = [
                 {"task":"P0_room_names","applied_value":{"rooms":[{"label":"Shop","area_m2":216.1,"source":"printed_on_drawing","method":"enclosed_walls"}]}},
+                {"task":"P2_north","applied_value":{"page":5,"plan_up_azimuth_deg":None}},
                 {"task":"P3_boundaries","source":"ai_determined","applied_value":{"room":"Shop","edges":[{"edge_length_m":11.97,"boundary":"mall","source":"ai_fallback"}]}},
                 {"task":"P4_openings","target":"shop-edge","applied_value":{"page":26,"room":"Shop","total_width_mm":11900,
                     "glazed_panels":[{"width_mm":2025,"sill_mm":1100,"head_mm":2700,"source":"ai_determined"}]}},
+                {"task":"P6_kitchen","stand_in":False,"applied_value":{"items":[{"type":"oven","count":1}]}},
             ]
             with patch.object(autonomous_tasks_service, "_all_current", return_value=records):
                 result = autonomous_tasks_service._export_determinations(root)
             self.assertEqual(result["P0_rooms"], [{"label":"Shop","area_m2":216.1,"source":"printed_on_drawing","method":"enclosed_walls"}])
+            self.assertEqual(result["P2_north"], [{"page":5,"plan_up_azimuth_deg":None,"source":"ai_determined"}])
             self.assertEqual(result["P3_boundaries"], [{"room":"Shop","edge_length_m":11.97,"boundary":"mall","source":"ai_fallback"}])
+            self.assertEqual(result["P6_kitchen"], [{"type":"oven","count":1,"source":"ai_determined"}])
             self.assertEqual(result["P4_openings"], [{"page":26,"room":"Shop","total_width_mm":11900,
                 "glazed_panels":[{"width_mm":2025,"sill_mm":1100,"head_mm":2700,"source":"ai_determined"}]}])
             self.assertEqual(json.loads((root/"ai_tasks"/"determinations.json").read_text()), result)

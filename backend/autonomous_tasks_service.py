@@ -11,7 +11,7 @@ from tempfile import TemporaryDirectory
 from urllib.parse import quote
 import uuid
 
-from ai import autonomous_task_scoring, autonomous_tasks, reviewer_room_geometry, room_outline
+from ai import autonomous_task_scoring, autonomous_tasks, reviewer_room_geometry, room_outline, kitchen_equipment
 from backend import productization, reviewer_room_geometry_service, site_location_service, calculation_extraction_service
 from backend.vision_extraction_service import _atomic_json
 
@@ -149,6 +149,71 @@ def _roof_packets(root):
         prompt = autonomous_tasks.roof_prompt(packet)
         result.append((room_id, packet, prompt, []))
     return result
+
+
+def _p6_kitchen_packets(root):
+    """Build a bounded kitchen-equipment packet from current room traces and drawing pages."""
+    import pdfplumber
+    ai_input, spatial, _building = _load_inputs(root)
+    room_use = _read(root / "room_use_resolution.json", {})
+    comfort_ids = {str(row.get("room_id")) for row in room_use.get("records", [])
+                   if isinstance(row, dict) and row.get("room_id")
+                   and row.get("space_scope") in {"comfort_hvac", "comfort_hvac_with_process_exception"}}
+    try:
+        traces = reviewer_room_geometry_service.current_records(
+            reviewer_room_geometry_service._paths({"review_dir": str(root)}))
+    except (OSError, ValueError, TypeError, KeyError):
+        traces = []
+    kitchen_traces = [row for row in traces if str(row.get("room_id")) in comfort_ids
+                      and "kitchen" in str(row.get("room_label", "")).casefold()
+                      and row.get("calibration", {}).get("status") in {"agreed", "declared_scale_rejected"}
+                      and isinstance(row.get("points_image_px"), list) and len(row["points_image_px"]) >= 4]
+    if not kitchen_traces:
+        return [("P6_kitchen", "kitchen", {"task": "P6_kitchen"}, "", [],
+                 "No current calibrated comfort-scope Kitchen outline is available; trace and calibrate the kitchen first.")]
+    trace = kitchen_traces[0]
+    page_number = trace.get("page")
+    source = Path(str(ai_input.get("source_pdf", "")))
+    if not source.is_file():
+        return [("P6_kitchen", "kitchen", {"task": "P6_kitchen", "plan_page": page_number}, "", [],
+                 "The source PDF is unavailable; the kitchen task needs a plan image.")]
+    try:
+        xs = [float(point[0]) for point in trace["points_image_px"]]
+        ys = [float(point[1]) for point in trace["points_image_px"]]
+        if not all(math.isfinite(value) for value in xs + ys):
+            raise ValueError("The Kitchen trace has invalid image coordinates.")
+        elevation_pages = kitchen_equipment.find_kitchen_elevation_pages(ai_input, spatial)[:2]
+        with pdfplumber.open(source) as pdf:
+            if type(page_number) is not int or not 1 <= page_number <= len(pdf.pages):
+                raise ValueError("The Kitchen trace page is outside the source PDF.")
+            plan = pdf.pages[page_number - 1]
+            plan_image = plan.to_image(resolution=180).original.convert("RGB")
+            scale = plan_image.width / float(plan.width)
+            margin = 60
+            bbox = (max(0, min(xs) - margin), max(0, min(ys) - margin),
+                    min(plan_image.width, max(xs) + margin), min(plan_image.height, max(ys) + margin))
+            if bbox[2] <= bbox[0] or bbox[3] <= bbox[1]:
+                raise ValueError("The Kitchen trace does not define a usable plan crop.")
+            region_pt = tuple(value / scale for value in bbox)
+            labels = {page_number: kitchen_equipment.page_labels(spatial, page_number, region_pt)}
+            words = {page_number: kitchen_equipment.page_words(spatial, page_number, region_pt)}
+            for elevation_page in elevation_pages:
+                labels[elevation_page] = kitchen_equipment.page_labels(spatial, elevation_page)
+                words[elevation_page] = kitchen_equipment.page_words(spatial, elevation_page)
+            packet, prompt = kitchen_equipment.build_packet(page_number, bbox, elevation_pages, labels, words)
+            plan_crop = plan_image.crop(tuple(int(value) for value in bbox))
+            plan_crop.thumbnail((kitchen_equipment.MAX_IMAGE_SIDE, kitchen_equipment.MAX_IMAGE_SIDE))
+            images = [_png_bytes(plan_crop)]
+            for elevation_page in elevation_pages:
+                if not 1 <= elevation_page <= len(pdf.pages):
+                    raise ValueError(f"Kitchen elevation page {elevation_page} is outside the source PDF.")
+                elevation = pdf.pages[elevation_page - 1].to_image(resolution=180).original.convert("RGB")
+                elevation.thumbnail((kitchen_equipment.MAX_IMAGE_SIDE, kitchen_equipment.MAX_IMAGE_SIDE))
+                images.append(_png_bytes(elevation))
+        return [("P6_kitchen", "kitchen", packet, prompt, images, "")]
+    except (OSError, ValueError, IndexError, KeyError, TypeError, ZeroDivisionError) as error:
+        return [("P6_kitchen", "kitchen", {"task": "P6_kitchen", "plan_page": page_number}, "", [],
+                 f"Kitchen task packet could not be built: {error}")]
 
 
 def _p0_context(root, page_number):
@@ -841,7 +906,7 @@ def _refresh_geometry_tasks(root):
     # Persist naming tasks before asking whether any rooms still need outlines.
     # If both packet lists are calculated together, the outline builder cannot
     # see the just-created naming tasks and offers an unnecessary second task.
-    for packet_builder in (_p0_followup_packets, _p0_outline_packets, _p3_packets, _p4_packets):
+    for packet_builder in (_p0_followup_packets, _p0_outline_packets, _p3_packets, _p4_packets, _p6_kitchen_packets):
         for task,target,packet,prompt,images,reason in packet_builder(root):
             budget=autonomous_tasks.TASKS[task]["budget_chars"]
             _create_run(root,task,target,packet,prompt,images,reason or
@@ -960,7 +1025,7 @@ def run_all(web, project):
                      if task == "P0_dimensions" and len(prompt) > 1500 else
                      "Prompt exceeds the 3,000-character limit; evidence was not shortened."
                      if task == "P0_wall_styles" and len(prompt) > 3000 else ""))
-    for packet_builder in (_p0_followup_packets, _p0_outline_packets, _p3_packets, _p4_packets):
+    for packet_builder in (_p0_followup_packets, _p0_outline_packets, _p3_packets, _p4_packets, _p6_kitchen_packets):
         for task, target, packet, prompt, images, reason in packet_builder(root):
             budget = autonomous_tasks.TASKS[task]["budget_chars"]
             _create_run(root, task, target, packet, prompt, images,
@@ -991,6 +1056,12 @@ def _export_determinations(root):
                                     "source": {"ai_fallback": "fallback", "reviewer": "reviewer"}.get(record.get("source"), "ai_determined")}
     if roof:
         result["P5_roof"] = [roof[key] for key in sorted(roof)]
+    kitchen_record = next((record for record in _all_current(root)
+                           if record.get("task") == "P6_kitchen" and record.get("applied_value")), None)
+    if kitchen_record:
+        source = "stand_in" if kitchen_record.get("stand_in") else "ai_determined"
+        result["P6_kitchen"] = kitchen_equipment.to_determinations(
+            kitchen_record["applied_value"].get("items", []), source=source)
     rooms = {}
     for task in ("P0_room_names", "P0_room_outlines"):
         for record in (row for row in _all_current(root) if row.get("task") == task and row.get("applied_value")):
@@ -1091,15 +1162,18 @@ def _apply_p1(root, project, record, validated):
 
 
 def _apply_p2(web, project, root, record, validated):
-    if not validated.get("found"):
-        record.update({"status": "blocked", "block_reason": "No north arrow was found; façade sun remains not assessed.", "validation": validated})
-        return record
     page = record["packet"]["page"]
     north_artifact = _read(root / "reviewer_room_geometry.json", {})
     existing_declaration = north_artifact.get("page_north", {}).get(str(page), {})
     existing_source = existing_declaration.get("declaration_source", "reviewer" if existing_declaration else "")
     if existing_source == "reviewer":
         record.update({"status": "applied", "source": "reviewer", "applied_value": {"page": page, "plan_up_azimuth_deg": existing_declaration.get("plan_up_azimuth_deg"), "overrode_by": "reviewer"}, "validation": validated})
+        return record
+    if not validated.get("found"):
+        record.update({"status": _status_for_accuracy("ai_determined", record.get("accuracy", {})),
+                       "source": "ai_determined",
+                       "applied_value": {"page": page, "plan_up_azimuth_deg": None},
+                       "block_reason": "", "validation": validated})
         return record
     candidates_by_page = {}
     completed_pages = set()
@@ -1208,6 +1282,20 @@ def _apply_p5(web, project, root, record, validated):
     return record
 
 
+def _apply_p6(record, validated):
+    """Record identified equipment only; P6 deliberately makes no heat estimate."""
+    items = deepcopy(validated)
+    record.update({"status": _status_for_accuracy("ai_determined", record.get("accuracy", {})),
+                   "source": "ai_determined",
+                   "applied_value": {
+                       "label": "Kitchen equipment identified from drawings (heat not yet assessed)",
+                       "heat_assessed": False, "items": items,
+                       "room": record.get("packet", {}).get("room_label", "Kitchen"),
+                   },
+                   "validation": {"valid": True, "items": items}, "block_reason": ""})
+    return record
+
+
 def _has_explicit_roof_evidence(packet):
     for row in packet.get("facts", []) if isinstance(packet, dict) else []:
         text = str(row.get("text", "")) if isinstance(row, dict) else ""
@@ -1307,6 +1395,9 @@ def post(web, project, data):
         elif task == "P2_north":
             validated = autonomous_tasks.validate_north_reply(record["packet"], reply)
             record = _apply_p2(web, project, root, record, validated)
+        elif task == "P6_kitchen":
+            validated = kitchen_equipment.validate_reply(json.loads(reply), record["packet"])
+            record = _apply_p6(record, validated)
         else:
             validated = autonomous_tasks.validate_roof_reply(record["packet"], reply)
             record = _apply_p5(web, project, root, record, validated)

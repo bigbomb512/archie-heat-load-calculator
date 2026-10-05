@@ -16,6 +16,7 @@
   const status = document.getElementById("autonomousTasksStatus");
   const contractorQuestions = document.getElementById("contractorRoofQuestions");
   const contractorQuestionStatus = document.getElementById("contractorRoofQuestionStatus");
+  const kitchenResults = document.getElementById("kitchenEquipmentResults");
   let activeProject = "";
   let response = null;
 
@@ -33,6 +34,11 @@
       const answered = (data.tasks || []).filter(row => row.task === "P5_roof" && row.status === "contractor_answered_not_sure");
       const applied = (data.tasks || []).filter(row => row.task === "P5_roof" && row.applied_value);
       contractorQuestions.innerHTML = [...questions.map(row => `<article class="panel-card" data-contractor-roof-question data-target="${escapeHtml(row.target)}"><h4>Roof above ${escapeHtml(row.room_label || "this shop")}</h4><p>${escapeHtml(row.question || "Is there a floor or another tenancy directly above this shop, or is it the roof?")}</p><fieldset><legend>Choose one answer</legend><label><input type="radio" name="roof-answer-${escapeHtml(row.target)}" value="floor_tenancy_above"> Floor/tenancy above</label><label><input type="radio" name="roof-answer-${escapeHtml(row.target)}" value="roof_directly_above"> Roof directly above</label><label><input type="radio" name="roof-answer-${escapeHtml(row.target)}" value="not_sure"> Not sure</label></fieldset><button type="button" class="btn key mini" data-submit-roof-answer>Save answer</button><p class="fine" role="status" aria-live="polite" data-roof-answer-status></p></article>`), ...answered.map(row => `<article class="panel-card" data-roof-not-assessed><h4>Roof above ${escapeHtml(row.room_label || "this shop")}</h4><p>${escapeHtml(row.message || "Not sure — roof exposure remains unknown and not assessed.")}</p></article>`), ...applied.map(row => `<article class="panel-card" data-roof-answer-recorded><h4>Roof above ${escapeHtml(row.applied_value.room || row.target)}</h4><p>${row.applied_value.roof === "exposed" ? "Roof directly above" : "Floor/tenancy above"} · ${escapeHtml(row.applied_value.label || "Roof exposure recorded")}</p></article>`)].join("");
+      if (kitchenResults) kitchenResults.innerHTML = (data.tasks || []).filter(row => row.task === "P6_kitchen" && row.applied_value).map(row => {
+        const items = row.applied_value.items || [];
+        const list = items.length ? `<ul>${items.map(item => `<li>${escapeHtml(String(item.type || "").replaceAll("_", " "))} × ${escapeHtml(item.count)} · p. ${escapeHtml(item.page)}</li>`).join("")}</ul>` : "<p>No kitchen equipment was identified.</p>";
+        return `<article class="panel-card" data-kitchen-equipment-result><h4>Kitchen equipment identified from drawings (heat not yet assessed)</h4>${list}<p class="fine">Equipment identification only; no heat contribution has been calculated.</p></article>`;
+      }).join("");
       return;
     }
     const tasks = data.tasks || [];

@@ -83,6 +83,9 @@ def main():
     north = score_case(case_b, {"P2_north": [{"page": 5, "plan_up_azimuth_deg": None}, {"page": 7, "plan_up_azimuth_deg": 90}]})["tasks"]["P2_north"]
     check("on a sheet with no north arrow, applying none is correct and inventing one is wrong",
           [item["status"] for item in north] == ["correct", "wrong", "missing", "missing"])
+    null_export = score_case(case_b, {"P2_north": [{"page": 5, "plan_up_azimuth_deg": None}]})["tasks"]["P2_north"]
+    check("a checked no-arrow page exported with a null bearing scores correct",
+          null_export[0]["status"] == "correct" and null_export[0]["detail"] == "no north arrow, none applied")
     walls = score_case(case_b, {"P3_boundaries": [{"room": "Service Counter", "edge_length_m": 3.1, "boundary": "mall"},
                                                   {"room": "Service Counter", "edge_length_m": 2.0, "boundary": "external"}]})["tasks"]["P3_boundaries"]
     check("room-wide wall rules: mall is right, external is wrong inside the terminal, an unclassified room is missing",
