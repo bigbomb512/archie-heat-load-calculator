@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+"""Card P0: automatic room outlines from a plan's vector drawing (synthetic plans)."""
+
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from shapely.geometry import LineString, Polygon, box
+
+from ai import room_outline as ro
+
+
+def check(name, condition):
+    if not condition:
+        raise AssertionError(name)
+    print("PASS - " + name)
+
+
+def expect_error(name, call, fragment):
+    try:
+        call()
+    except ValueError as error:
+        check(name, fragment in str(error))
+        return
+    raise AssertionError(name + " (no error raised)")
+
+
+MM_PER_PX = 10.0  # 1 px = 10 mm, so 100 px = 1 m
+VIEWPORT = (0, 0, 1400, 1000)
+WALL = (0, 0.67, 0.67)
+FURNITURE = (0.24, 0.0, None)
+TILE = (0.48, 0.78, None)
+
+
+def filled(points, style=WALL):
+    return {"kind": "curve", "style": style, "style_id": ro.style_id(style), "points": points + [points[0]], "filled": True}
+
+
+def line(a, b, style):
+    return {"kind": "line", "style": style, "style_id": ro.style_id(style), "points": [a, b], "filled": False}
+
+
+def two_room_plan():
+    """Two rooms 5 m x 6 m and 4 m x 6 m (inside faces), 150 mm walls, a 900 mm door between them."""
+    t = 15  # wall thickness in px
+    objects = [
+        filled([(100, 100), (1100, 100), (1100, 100 + t), (100, 100 + t)]),          # top
+        filled([(100, 700 - t), (1100, 700 - t), (1100, 700), (100, 700)]),          # bottom
+        filled([(100, 100), (100 + t, 100), (100 + t, 700), (100, 700)]),            # left
+        filled([(1100 - t, 100), (1100, 100), (1100, 700), (1100 - t, 700)]),        # right
+        # partition at x = 615..630 with a 90 px (900 mm) door gap from y 400 to 490
+        filled([(615, 100), (630, 100), (630, 400), (615, 400)]),
+        filled([(615, 490), (630, 490), (630, 700), (615, 700)]),
+        # furniture: a table inside room 1 (must not cut the room)
+        filled([(300, 300), (400, 300), (400, 360), (300, 360)], FURNITURE),
+    ]
+    # floor tiles: a 250 mm grid across the plan (must be removed as hatch)
+    for y in range(120, 690, 25):
+        objects.append(line((130, y), (1080, y), TILE))
+    return objects
+
+
+def enclosed_room_checks():
+    objects = two_room_plan()
+    check("the floor-tile grid is found as hatch", ro.hatch_styles(objects) == {TILE})
+    summary = ro.style_summary(objects, VIEWPORT, MM_PER_PX)
+    check("the style summary flags hatch and lists the other styles", any(row["hatch"] for row in summary) and len(summary) == 3)
+    walls = ro.wall_geometry(objects, [ro.style_id(WALL)], VIEWPORT)
+    rooms = ro.enclosed_rooms(walls, VIEWPORT, MM_PER_PX, door_gap_mm=1000)
+    areas = sorted(round(ro.area_m2(room, MM_PER_PX), 2) for room in rooms)
+    # inside faces: room 1 x 115..615 (5.00 m) by 115..685 (5.70 m); room 2 x 630..1085 (4.55 m)
+    check("closing the 900 mm door gap yields the two rooms", len(rooms) == 2)
+    check("room areas are measured to the inside face of the walls (within 2%)",
+          abs(areas[0] - 4.55 * 5.70) / (4.55 * 5.70) < 0.02 and abs(areas[1] - 5.00 * 5.70) / (5.00 * 5.70) < 0.02)
+    check("furniture inside a room is part of its floor, not a hole", all(len(room.interiors) == 0 for room in rooms))
+    merged = ro.enclosed_rooms(walls, VIEWPORT, MM_PER_PX, door_gap_mm=600)
+    check("a door wider than the closing gap leaves the two rooms joined", len(merged) == 1)
+    with_furniture_as_wall = ro.enclosed_rooms(ro.wall_geometry(objects, [ro.style_id(WALL), ro.style_id(FURNITURE)], VIEWPORT),
+                                               VIEWPORT, MM_PER_PX, door_gap_mm=1000)
+    check("choosing furniture as a wall style still keeps the room (islands are filled)", len(with_furniture_as_wall) == 2)
+    open_walls = ro.wall_geometry([item for item in objects if item["points"][0] != (100, 700 - 15)], [ro.style_id(WALL)], VIEWPORT)
+    check("an area open to the plan edge is not a room", ro.enclosed_rooms(open_walls, VIEWPORT, MM_PER_PX) == [])
+
+    labels = [{"text": "Office", "point": (300, 500)}, {"text": "Store", "point": (800, 300)}, {"text": "Lobby", "point": (1300, 900)}]
+    matched, ambiguous, unmatched = ro.assign_labels(rooms, labels)
+    check("labels inside rooms are matched and a label outside is unmatched",
+          {row["label"] for row in matched} == {"Office", "Store"} and [row["text"] for row in unmatched] == ["Lobby"] and not ambiguous)
+    _matched, ambiguous, _unmatched = ro.assign_labels(merged, labels[:2])
+    check("two labels in one area are reported as ambiguous", ambiguous and set(ambiguous[0]["labels"]) == {"Office", "Store"})
+
+
+def wall_style_checks():
+    summary = ro.style_summary(two_room_plan(), VIEWPORT, MM_PER_PX)
+    numbered = [row for row in summary if not row["hatch"]]
+    wall_number = next(index + 1 for index, row in enumerate(numbered) if row["style_id"] == ro.style_id(WALL))
+    check("the wall-style reply maps legend numbers to style IDs",
+          ro.validate_wall_style_reply({"wall_styles": [wall_number]}, summary) == [ro.style_id(WALL)])
+    expect_error("an unknown legend number is refused", lambda: ro.validate_wall_style_reply({"wall_styles": [9]}, summary), "unknown legend number")
+    expect_error("an empty wall list is refused", lambda: ro.validate_wall_style_reply({"wall_styles": []}, summary), "no wall styles")
+    check("the wall-style prompt lists only non-hatch styles", ro.wall_style_prompt(summary).count("style-") == len(numbered))
+
+
+def naming_and_split_checks():
+    transform = {"offset_px": [0, 0], "factor": 0.5}
+    names, splits = ro.validate_naming_reply({"areas": [{"number": 1, "room": "Shop"}, {"number": 2, "room": "not_a_room"}],
+                                               "splits": [{"number": 1, "line_px": [[100, 0], [100, 300]],
+                                                           "rooms": [{"room": "Shop", "point_px": [50, 100]}, {"room": "Bar", "point_px": [200, 100]}],
+                                                           "feature": "bar counter edge"}]},
+                                              2, ["Shop", "Bar"], transform)
+    check("a split replaces the area's single name and points are scaled back to page pixels",
+          0 not in names and names[1] == ro.NOT_A_ROOM and splits[0]["line"][0] == (200.0, 0.0) and splits[0]["rooms"][1]["point"] == (400.0, 200.0))
+    expect_error("an unknown room name is refused",
+                 lambda: ro.validate_naming_reply({"areas": [{"number": 1, "room": "Lounge"}]}, 1, ["Shop"], transform), "not in the room list")
+    expect_error("an unknown area number is refused",
+                 lambda: ro.validate_naming_reply({"areas": [{"number": 3, "room": "Shop"}]}, 2, ["Shop"], transform), "unknown area")
+    expect_error("a room given to two areas is refused",
+                 lambda: ro.validate_naming_reply({"areas": [{"number": 1, "room": "Shop"}, {"number": 2, "room": "Shop"}]}, 2, ["Shop"], transform),
+                 "only one area")
+
+    area = box(0, 0, 1000, 600)
+    counter_edge = LineString([(398, -50), (398, 650)])
+    snapped, report = ro.snap_polyline([(410, 100), (410, 500)], [counter_edge, LineString([(0, 300), (1000, 300)])], max_offset_px=20)
+    check("a sketched split is snapped onto the nearest drawn line running the same way",
+          report[0]["snapped"] and abs(snapped[0][0] - 398) < 1e-6 and abs(snapped[1][0] - 398) < 1e-6)
+    _unsnapped, far = ro.snap_polyline([(470, 100), (470, 500)], [counter_edge], max_offset_px=20)
+    check("a sketch far from any drawn line is reported as unsnapped", far == [{"snapped": False}])
+    pieces = ro.split_area(area, snapped, [{"room": "Bar", "point": (200, 300)}, {"room": "Shop", "point": (700, 300)}])
+    check("the snapped split cuts the area along the drawn line",
+          abs(pieces["Bar"].area - 398 * 600) < 1 and abs(pieces["Shop"].area - 602 * 600) < 1)
+    expect_error("both room points on one side are refused",
+                 lambda: ro.split_area(area, snapped, [{"room": "Bar", "point": (100, 300)}, {"room": "Shop", "point": (200, 300)}]),
+                 "different parts")
+
+
+def main():
+    enclosed_room_checks()
+    wall_style_checks()
+    naming_and_split_checks()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,11 @@
+{
+  "case_id": "caseC",
+  "description": "Mechanical (air-conditioning) drawing set for the same kiosk as caseB, without an architectural floor plan. Answer key for the autonomous AI tasks (Card P); rooms are not keyed because the set has no room labels.",
+  "private_facts_file": "output/evaluations/private/caseC.json",
+  "tasks": {
+    "P5_roof": {
+      "rooms": [{"room": "Kiosk", "roof": "not_exposed"}],
+      "evidence": "Kiosk on Level 2 inside a terminal building."
+    }
+  }
+}

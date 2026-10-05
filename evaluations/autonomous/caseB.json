@@ -1,0 +1,19 @@
+{
+  "case_id": "caseB",
+  "description": "Small kiosk tenancy inside a terminal building, Level 2; architectural detail-design set with a general arrangement plan (printed room areas and overall area), RCP and joinery. Answer key for the autonomous AI tasks (Card P).",
+  "private_facts_file": "output/evaluations/private/caseB.json",
+  "tasks": {
+    "P0_rooms": {
+      "area_tolerance_fraction": 0.05,
+      "rooms": [
+        {"label": "Office", "area_m2": 9.0},
+        {"label": "Service Counter", "area_m2": 13.0}
+      ],
+      "notes": "Areas as printed on the general arrangement plan (p. 5). The plan also prints the overall kiosk area A = 40.8 m2 and a 1 m2 fire-hose-reel cupboard (not a conditioned room). Whether the remaining open kiosk floor is part of 'Service Counter' is not settled by the drawing, so it is not keyed."
+    },
+    "P5_roof": {
+      "rooms": [{"room": "Office", "roof": "not_exposed"}, {"room": "Service Counter", "roof": "not_exposed"}],
+      "evidence": "Kiosk on Level 2 inside a terminal building; the space above is the terminal, not open sky."
+    }
+  }
+}
