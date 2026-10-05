@@ -15,7 +15,7 @@ answer-key set reaches the auto-apply bar (user decision 2026-10-04: 85 %).
 import math
 
 AUTO_APPLY_BAR = 0.85
-TASKS = ("P0_rooms", "P1_site", "P2_north", "P3_boundaries", "P4_openings", "P5_roof")
+TASKS = ("P0_rooms", "P1_site", "P2_north", "P3_boundaries", "P4_openings", "P5_roof", "P6_kitchen")
 PENDING = "pending_user"
 
 
@@ -73,6 +73,15 @@ def score_north(key, applied):
     for page in key.get("pages", []):
         row = by_page.get(page["page"])
         value = (row or {}).get("plan_up_azimuth_deg")
+        if page.get("plan_up_azimuth_deg") is None:
+            # The sheet has no north arrow: the right answer is to apply none.
+            if row is None:
+                results.append(_outcome(f"page {page['page']}", "missing", "page not checked"))
+            elif value is None:
+                results.append(_outcome(f"page {page['page']}", "correct", "no north arrow, none applied", row.get("source", "")))
+            else:
+                results.append(_outcome(f"page {page['page']}", "wrong", f"applied {value}° but the sheet has no north arrow", row.get("source", "")))
+            continue
         if row is None or value is None:
             results.append(_outcome(f"page {page['page']}", "missing", "no north applied"))
             continue
@@ -86,6 +95,16 @@ def score_boundaries(key, applied):
     tolerance = key.get("length_tolerance_fraction", 0.03)
     applied = [row for row in applied or [] if isinstance(row, dict)]
     results = []
+    for rule in key.get("rooms", []):
+        # Every classified edge of this room must be one of the allowed classes.
+        edges = [row for row in applied if _norm(row.get("room")) == _norm(rule["room"])
+                 and row.get("boundary") not in (None, "", "unknown")]
+        if not edges:
+            results.append(_outcome(f"{rule['room']} walls", "missing", "no wall classified"))
+        for row in edges:
+            status = "correct" if row["boundary"] in rule["allowed"] else "wrong"
+            results.append(_outcome(f"{rule['room']} {row.get('edge_length_m')} m edge", status,
+                                    f"{row['boundary']} (allowed: {', '.join(rule['allowed'])})", row.get("source", "")))
     for edge in key.get("edges", []):
         if edge.get("boundary") == PENDING:
             continue
@@ -144,8 +163,35 @@ def score_roof(key, applied):
     return results
 
 
+KITCHEN_TYPES = {"rangehood_canopy", "range_burners", "wok_burner", "fryer", "griddle", "chargrill", "oven", "combi_oven",
+                 "salamander", "bain_marie", "dishwasher", "refrigerator_upright", "refrigerator_underbench", "freezer_upright",
+                 "display_chiller", "ice_machine", "coffee_machine", "microwave", "other_cooking", "other_refrigeration"}
+
+
+def score_kitchen(key, applied):
+    """Kitchen equipment drawn on the plans: one item per appliance type, scored on its count."""
+    found = {}
+    for row in applied or []:
+        if isinstance(row, dict) and row.get("type"):
+            found[row["type"]] = found.get(row["type"], 0) + int(row.get("count", 1) or 0)
+    results = []
+    keyed = set()
+    for item in key.get("items", []):
+        keyed.add(item["type"])
+        count = found.get(item["type"])
+        if count is None:
+            results.append(_outcome(item["type"], "missing", "not listed"))
+        else:
+            results.append(_outcome(item["type"], "correct" if count == item["count"] else "wrong", f"{count} vs {item['count']}"))
+    for kind, count in found.items():
+        if kind not in keyed and kind not in set(key.get("not_keyed_types", [])):
+            results.append(_outcome(kind, "wrong", f"{count} listed but none keyed"))
+    return results
+
+
 SCORERS = {"P0_rooms": score_rooms, "P1_site": score_site, "P2_north": score_north,
-           "P3_boundaries": score_boundaries, "P4_openings": score_openings, "P5_roof": score_roof}
+           "P3_boundaries": score_boundaries, "P4_openings": score_openings, "P5_roof": score_roof,
+           "P6_kitchen": score_kitchen}
 
 
 def score_case(answer_key, determinations, private_facts=None):

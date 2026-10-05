@@ -4,8 +4,31 @@
   "private_facts_file": "output/evaluations/private/caseC.json",
   "tasks": {
     "P5_roof": {
-      "rooms": [{"room": "Kiosk", "roof": "not_exposed"}],
+      "rooms": [
+        {
+          "room": "Kiosk",
+          "roof": "not_exposed"
+        }
+      ],
       "evidence": "Kiosk on Level 2 inside a terminal building."
+    },
+    "P2_north": {
+      "tolerance_deg": 5,
+      "pages": [
+        {
+          "page": 4,
+          "plan_up_azimuth_deg": null
+        },
+        {
+          "page": 5,
+          "plan_up_azimuth_deg": null
+        },
+        {
+          "page": 6,
+          "plan_up_azimuth_deg": null
+        }
+      ],
+      "evidence": "No north arrow on the mechanical plans or their title blocks (scale 1:50 @ A3), checked 2026-10-05."
     }
   }
 }

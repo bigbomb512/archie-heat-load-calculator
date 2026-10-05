@@ -104,6 +104,42 @@
         }
       ],
       "evidence": "Confirmed by the project contact 2026-10-04: apartments above the retail precinct. Not determinable from the plans alone."
+    },
+    "P6_kitchen": {
+      "items": [
+        {
+          "type": "rangehood_canopy",
+          "count": 1
+        },
+        {
+          "type": "oven",
+          "count": 1
+        },
+        {
+          "type": "refrigerator_upright",
+          "count": 2
+        },
+        {
+          "type": "refrigerator_underbench",
+          "count": 4
+        },
+        {
+          "type": "ice_machine",
+          "count": 1
+        }
+      ],
+      "not_keyed_types": [
+        "range_burners",
+        "wok_burner",
+        "fryer",
+        "griddle",
+        "chargrill",
+        "other_cooking",
+        "combi_oven",
+        "bain_marie",
+        "salamander"
+      ],
+      "evidence": "Keyed only from equipment named in text on the kitchen elevations (p. 30): RANGEHOOD (one island canopy, drawn in both elevations), OVEN, 3 DOOR FRIDGE, 2 DOOR FRIDGE, UB FRIDGE x2 in each elevation, ICE M[achine] (label partly cut off). The cooking island's burners, woks and fryers appear only as plan symbols without text, so they are not keyed. Sinks, hand basins and racks give no heat and are not keyed."
     }
   }
 }

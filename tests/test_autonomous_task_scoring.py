@@ -29,6 +29,8 @@ def perfect():
         "P2_north": [{"page": 20, "plan_up_azimuth_deg": 358}],
         "P3_boundaries": [{"room": "Shop", "edge_length_m": 11.97, "boundary": "mall"}],
         "P4_openings": [{"page": 26, "glazed_panels": [{"width_mm": 2025, "sill_mm": 1100, "head_mm": 2700}]}],
+        "P6_kitchen": [{"type": "rangehood_canopy", "count": 1}, {"type": "oven", "count": 1}, {"type": "refrigerator_upright", "count": 2},
+                       {"type": "refrigerator_underbench", "count": 4}, {"type": "ice_machine", "count": 1}, {"type": "range_burners", "count": 1}],
         "P5_roof": [{"room": "Bar", "roof": "not_exposed"}, {"room": "Kitchen", "roof": "not_exposed", "source": "fallback"},
                     {"room": "Shop", "roof": "not_exposed"}],
     }
@@ -77,6 +79,21 @@ def main():
     check("any one of several accepted site names is enough",
           score_case(any_key, {"P1_site": {"site_text": "Kiosk NAP Level 2"}}, any_site)["tasks"]["P1_site"][0]["status"] == "correct"
           and score_case(any_key, {"P1_site": {"site_text": "Kiosk Level 2"}}, any_site)["tasks"]["P1_site"][0]["status"] == "wrong")
+    case_b = json.loads((ROOT / "evaluations" / "autonomous" / "caseB.json").read_text(encoding="utf-8"))
+    north = score_case(case_b, {"P2_north": [{"page": 5, "plan_up_azimuth_deg": None}, {"page": 7, "plan_up_azimuth_deg": 90}]})["tasks"]["P2_north"]
+    check("on a sheet with no north arrow, applying none is correct and inventing one is wrong",
+          [item["status"] for item in north] == ["correct", "wrong", "missing", "missing"])
+    walls = score_case(case_b, {"P3_boundaries": [{"room": "Service Counter", "edge_length_m": 3.1, "boundary": "mall"},
+                                                  {"room": "Service Counter", "edge_length_m": 2.0, "boundary": "external"}]})["tasks"]["P3_boundaries"]
+    check("room-wide wall rules: mall is right, external is wrong inside the terminal, an unclassified room is missing",
+          [item["status"] for item in walls] == ["missing", "correct", "wrong"])
+    kitchen = score_case(KEY, {"P6_kitchen": [{"type": "rangehood_canopy", "count": 1}, {"type": "oven", "count": 2},
+                                              {"type": "refrigerator_underbench", "count": 4}, {"type": "fryer", "count": 2},
+                                              {"type": "dishwasher", "count": 1}]})["tasks"]["P6_kitchen"]
+    statuses = {item["item"]: item["status"] for item in kitchen}
+    check("kitchen items are scored on their count, unlisted keyed items are missing, unkeyed island items are not penalised, others are wrong",
+          statuses == {"rangehood_canopy": "correct", "oven": "wrong", "refrigerator_upright": "missing", "refrigerator_underbench": "correct",
+                       "ice_machine": "missing", "dishwasher": "wrong"})
     summary = summarise([report])
     check("a task below the 85% bar may not auto-apply", AUTO_APPLY_BAR == 0.85 and not summary["P0_rooms"]["auto_apply"])
 

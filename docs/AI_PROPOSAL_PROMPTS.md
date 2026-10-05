@@ -322,3 +322,41 @@ values came from the fallback; and whether it passes the 85 % bar. With only
 three drawing sets (Butcher Buffet as caseA plus the two Global Exchange
 sets), samples are small. The report flags fewer than 20 scored items per
 task, and a pass on a small sample is not evidence of general accuracy.
+
+---
+
+## P6 `kitchen_equipment` (Card Q, design; source decision pending)
+
+**Goal:** replace the 3.2 kW kitchen default with a load built from the
+equipment drawn on the plans: heat to space by appliance, plus rangehood
+exhaust. It is labelled "Assumed from drawn equipment" until the real
+equipment schedule arrives.
+
+**Task (vision, two crops ≤ 1,536 px + text labels ≤ 2,000 characters):**
+- crops of the kitchen on the plan and the kitchen elevations;
+- the AI lists each appliance as `{type, count, page, quote_or_symbol, under_hood}`,
+  with types from the fixed list in `ai/autonomous_task_scoring.KITCHEN_TYPES`;
+- validators: types from the list only; every item quotes drawing text or
+  names a symbol on a supplied crop.
+
+**Answer key caseA:** keyed only from equipment named in text on p. 30:
+- 1 rangehood canopy, 1 oven, 2 upright fridges, 4 under-bench fridges,
+  1 ice machine;
+- the island's burners, woks and fryers are plan symbols only, so they are
+  "not keyed" (listing them is not penalised).
+
+**Heat-output and exhaust sources (research 2026-10-05):**
+
+| Source | Covers | Access |
+|---|---|---|
+| ASHRAE Handbook – Fundamentals, ch. 18 (tables built on research project RP-1362: 83 appliances, hooded and unhooded, sensible/radiant/latent) | Heat gain to space by appliance type and size | Licensed (purchase) |
+| AIRAH DA09 (4th ed., 2022), Section 8 "Internal and system heat gains" | Internal gains incl. equipment; whether commercial-kitchen tables are included is unconfirmed | Licensed; user plans to obtain |
+| AS 1668.2 (2024) | Australian minimum kitchen hood exhaust rates (prescriptive procedure by hood size, hood type and cooking type) | Licensed (Standards Australia) |
+| EPRI CKV performance reports (1997), OSTI-listed ASHRAE paper (1998) | Single-appliance tests; paper abstract only | Licensed / no free full text |
+| Websites reproducing ASHRAE tables | Copies of the licensed tables | Not authoritative; not used |
+
+No free, authoritative source was found. **Decision needed (user):** which
+licensed source to obtain (ASHRAE Fundamentals ch. 18 and/or AIRAH DA09 for
+heat gains; AS 1668.2 for exhaust), or wait for the client's equipment
+schedule. Until then: build and score the equipment-identification task
+(no heat numbers needed), and keep the kitchen heat at the labelled default.
