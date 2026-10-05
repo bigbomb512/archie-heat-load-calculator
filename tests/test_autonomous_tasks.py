@@ -16,6 +16,12 @@ from backend import autonomous_tasks_service
 
 
 class AutonomousTaskTests(unittest.TestCase):
+    @staticmethod
+    def _p3_applied_lookup(trace):
+        target=f"{trace['room_id']}-page-{trace['page']}-trace-{trace['trace_id']}"
+        record={"task":"P3_boundaries","target":target,"status":"applied"}
+        return lambda _root, task, requested: record if task=="P3_boundaries" and requested==target else None
+
     def test_p6_kitchen_is_registered_and_builds_framework_packet_with_plan_and_elevation(self):
         from PIL import Image
         class Rendered:
@@ -59,6 +65,106 @@ class AutonomousTaskTests(unittest.TestCase):
             self.assertEqual(packet["labels_by_page"], {"1": ["labels-1"], "2": ["labels-2"]})
             self.assertEqual(len(images), 2)
             self.assertTrue(prompt)
+
+    def test_p0_selects_one_dimension_rich_main_plan_per_level_and_skips_detail_scales(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            pages = [
+                {"page": 1, "plan_role": "main_floor_plan", "level_name": "Ground", "title": "GA Plan", "scale": "1:100"},
+                {"page": 2, "plan_role": "primary_geometry_plan", "level_name": "Ground", "title": "Dimension Plan", "scale": "1:100"},
+                {"page": 3, "plan_role": "main_floor_plan", "level_name": "Ground", "title": "Joinery Plan", "scale": "1:10"},
+                {"page": 4, "plan_role": "supporting_geometry_plan", "level_name": "Ground", "title": "RCP", "scale": "1:100"},
+                {"page": 5, "plan_role": "main_floor_plan", "level_name": "Level 1", "title": "Level 1 GA", "scale": "1:100"},
+            ]
+            (root / "ai_input.json").write_text(json.dumps({"drawing_set": {"pages": pages}}), encoding="utf-8")
+            (root / "drawing_coverage.json").write_text(json.dumps({"page_roles": [
+                {"page": row["page"], "proposed_role": row["plan_role"], "level_name": row["level_name"]}
+                for row in pages]}), encoding="utf-8")
+            (root / "vector_geometry.json").write_text(json.dumps({"geometry_key_points": {"pages": [
+                {"page": 1, "dimension_candidates": [{"id": i} for i in range(2)]},
+                {"page": 2, "dimension_candidates": [{"id": i} for i in range(7)]},
+                {"page": 3, "dimension_candidates": [{"id": i} for i in range(20)]},
+                {"page": 4, "dimension_candidates": [{"id": i} for i in range(15)]},
+                {"page": 5, "dimension_candidates": [{"id": 1}]},
+            ]}}), encoding="utf-8")
+            selected = autonomous_tasks_service._p0_main_geometry_pages(root)
+            self.assertEqual([row["page"] for row in selected], [2, 5])
+            skipped = autonomous_tasks_service._p0_page_selection(root)["skipped"]
+            self.assertTrue(any(row["page"] == 1 and "second view" in row["reason"] for row in skipped))
+            self.assertTrue(any(row["page"] == 3 and "scale" in row["reason"] for row in skipped))
+            self.assertTrue(any(row["page"] == 4 and "secondary plan role" in row["reason"] for row in skipped))
+
+    def test_p0_operator_response_includes_page_skip_reasons(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "ai_input.json").write_text(json.dumps({"drawing_set":{"pages":[
+                {"page":1,"type":"floor_plan","plan_role":"main_floor_plan","level_name":"Ground","scale":"1:100"},
+                {"page":2,"type":"floor_plan","plan_role":"main_floor_plan","level_name":"Ground","scale":"1:100"},
+                {"page":3,"type":"joinery_plan","plan_role":"main_floor_plan","level_name":"Ground","scale":"1:10"}]}}), encoding="utf-8")
+            with patch.object(autonomous_tasks_service, "_all_current", return_value=[]):
+                response = autonomous_tasks_service.get(None, {"id":"selection-test","review_dir":str(root)})
+            self.assertEqual([row["page"] for row in response["skipped_pages"]], [2, 3])
+            self.assertTrue(all(row["reason"] for row in response["skipped_pages"]))
+
+    def test_p0_prefers_drawing_coverage_scale_and_reports_disagreement_without_skipping(self):
+        with TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            (root/"ai_input.json").write_text(json.dumps({"drawing_set":{"pages":[
+                {"page":1,"type":"floor_plan","plan_role":"main_floor_plan","level_name":"Ground","scale":"1:2"}]}}),encoding="utf-8")
+            (root/"drawing_coverage.json").write_text(json.dumps({"page_roles":[
+                {"page":1,"proposed_role":"main_floor_plan","level_name":"Ground","main_scale":"1:100"}]}),encoding="utf-8")
+            selection=autonomous_tasks_service._p0_page_selection(root)
+            self.assertEqual([row["page"] for row in selection["selected"]],[1])
+            self.assertEqual(selection["skipped"],[])
+            self.assertIn("drawing coverage 1:100",selection["notes"][0]["reason"])
+            self.assertIn("sheet metadata 1:2",selection["notes"][0]["reason"])
+            self.assertEqual(selection["notes"][0]["status"],"scale_conflict")
+
+    def test_p0_without_readable_scale_waits_for_two_dimensions_and_raster_skips_wall_styles(self):
+        from PIL import Image
+        with patch.object(autonomous_tasks_service, "_p0_dimensions", return_value=[{"value_mm": 1000}]):
+            calibration, reason = autonomous_tasks_service._p0_calibration_ready(Path("/tmp"), 20, {})
+        self.assertIsNone(calibration)
+        self.assertIn("two agreeing printed dimensions", reason)
+        context = {"declared_mm_per_px": .5, "objects": [], "image": Image.new("RGB", (100, 100)),
+                   "viewport": (0, 0, 100, 100), "summary": [{"hatch": False, "style_id": "wall"}]}
+        with patch.object(autonomous_tasks_service, "_p0_main_geometry_pages",
+                          return_value=[{"page": 20}]), \
+             patch.object(autonomous_tasks_service, "_p0_context", return_value=context), \
+             patch.object(autonomous_tasks_service.room_outline, "dimension_line_candidates", return_value=[]), \
+             patch.object(autonomous_tasks_service, "_p0_calibration_ready",
+                          return_value=({"mm_per_px": .5, "status": "agreed", "dimension_count": 2}, "")), \
+             patch.object(autonomous_tasks_service, "_p0_is_raster", return_value=True) as raster_check:
+            packets = autonomous_tasks_service._p0_initial_packets(Path("/tmp"))
+        self.assertTrue(raster_check.called)
+        self.assertFalse(any(row[0] == "P0_wall_styles" for row in packets))
+
+    def test_p0_raster_room_packets_use_raster_wall_geometry_without_wall_style_records(self):
+        from PIL import Image
+        from shapely.geometry import box
+        context = {"declared_mm_per_px": .5, "objects": [], "image": Image.new("RGB", (100, 100)),
+                   "viewport": (0, 0, 100, 100), "summary": []}
+        area = box(20, 20, 70, 70)
+        with patch.object(autonomous_tasks_service, "_p0_main_geometry_pages", return_value=[{"page": 20}]), \
+             patch.object(autonomous_tasks_service, "_current_task", return_value=None), \
+             patch.object(autonomous_tasks_service, "_p0_wall_style_records", return_value=[]), \
+             patch.object(autonomous_tasks_service, "_p0_context", return_value=context), \
+             patch.object(autonomous_tasks_service, "_p0_calibration_ready",
+                          return_value=({"mm_per_px": .5, "status": "agreed"}, "")), \
+             patch.object(autonomous_tasks_service, "_p0_is_raster", return_value=True), \
+             patch.object(autonomous_tasks_service.room_outline, "raster_wall_geometry",
+                          return_value=box(10, 10, 15, 90)) as raster_walls, \
+             patch.object(autonomous_tasks_service.room_outline, "enclosed_rooms", return_value=[area]), \
+             patch.object(autonomous_tasks_service, "_inferred_room_data", return_value=[{"label": "Kitchen"}]), \
+             patch.object(autonomous_tasks_service.room_outline, "render_candidate_areas",
+                          return_value=(Image.new("RGB", (32, 32)), {"offset_px": [0, 0], "factor": 1})), \
+             patch.object(autonomous_tasks_service, "_png_bytes", return_value=b"png"):
+            rows = autonomous_tasks_service._p0_followup_packets(Path("/tmp"))
+        self.assertTrue(raster_walls.called)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][0], "P0_room_names")
+        self.assertTrue(rows[0][2]["raster_mode"])
+        self.assertEqual(rows[0][2]["wall_style_ids"], [])
 
     def test_p6_apply_and_export_are_identification_only(self):
         with TemporaryDirectory() as temporary:
@@ -203,6 +309,7 @@ class AutonomousTaskTests(unittest.TestCase):
             height_key = ceiling_volume_resolution.room_identity("Shop", "Ground")
             with patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "current_records",
                               return_value=[trace]), \
+                 patch.object(autonomous_tasks_service,"_current_task",side_effect=self._p3_applied_lookup(trace)), \
                  patch.object(ceiling_volume_resolution, "values_by_room",
                               return_value={height_key: {"ceiling_height_mm": 2700}}), \
                  patch.object(autonomous_tasks_service, "_p4_elevation_image", return_value=Image.new("RGB", (64, 64))), \
@@ -212,6 +319,242 @@ class AutonomousTaskTests(unittest.TestCase):
             self.assertEqual(len(opening_tasks), 1)
             self.assertEqual(opening_tasks[0][2]["room_label"], "Shop")
             self.assertAlmostEqual(opening_tasks[0][2]["edge_length_mm"], 11970)
+
+    def test_p4_matches_storefront_elevation_to_a_multi_edge_wall_run(self):
+        from PIL import Image
+        from ai import ceiling_volume_resolution
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "room_use_resolution.json").write_text(json.dumps({"records":[{"room_id":"shop","space_scope":"comfort_hvac"}]}), encoding="utf-8")
+            (root / "ai_input.json").write_text(json.dumps({"drawing_set":{"pages":[{"page":26,"title":"Storefront Elevation"}]}}), encoding="utf-8")
+            (root / "spatial_ocr.json").write_text(json.dumps({"pages":[{"page":26,"dimension_candidates":[{"value_mm":11970}]}]}), encoding="utf-8")
+            (root / "ceiling_volume_resolution.json").write_text("{}", encoding="utf-8")
+            trace = {"trace_id":"run-shop","room_id":"shop","room_label":"Shop","level_name":"Ground","page":20,
+                "points_image_px":[[0,0],[600,0],[1197,0],[1197,300],[0,300],[0,0]],
+                "calibration":{"status":"agreed","mm_per_px":10},
+                "edges":[{"index":0,"boundary":"mall"},{"index":1,"boundary":"mall"}]}
+            key=ceiling_volume_resolution.room_identity("Shop","Ground")
+            with patch.object(autonomous_tasks_service.reviewer_room_geometry_service,"current_records",return_value=[trace]), \
+                 patch.object(autonomous_tasks_service,"_current_task",side_effect=self._p3_applied_lookup(trace)), \
+                 patch.object(ceiling_volume_resolution,"values_by_room",return_value={key:{"ceiling_height_mm":2700}}), \
+                 patch.object(autonomous_tasks_service,"_p4_elevation_image",return_value=Image.new("RGB",(32,32))), \
+                 patch.object(autonomous_tasks_service,"_png_bytes",return_value=b"png"):
+                packets=autonomous_tasks_service._p4_packets(root)
+            target=next(row[2] for row in packets if row[0]=="P4_openings" and row[2].get("edge_indices")==[0,1])
+            self.assertAlmostEqual(target["wall_run_span_m"],11.97)
+            self.assertAlmostEqual(target["edge_length_mm"],11970)
+
+    def test_p4_uses_only_shopfront_evidence_and_waits_for_p3(self):
+        from PIL import Image
+        from ai import ceiling_volume_resolution
+        with TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            (root/"room_use_resolution.json").write_text(json.dumps({"records":[
+                {"room_id":"shop","space_scope":"comfort_hvac"}]}),encoding="utf-8")
+            (root/"ai_input.json").write_text(json.dumps({"drawing_set":{"pages":[
+                {"page":26,"title":"Storefront Elevation"},
+                {"page":27,"title":"Internal Elevation"},
+                {"page":28,"title":"Internal Elevation 2"}]}}),encoding="utf-8")
+            (root/"spatial_ocr.json").write_text(json.dumps({"pages":[
+                {"page":26,"dimension_candidates":[]},
+                {"page":27,"dimension_candidates":[{"value_mm":430}]},
+                {"page":28,"dimension_candidates":[{"value_mm":433},{"value_mm":928}]}]}),encoding="utf-8")
+            (root/"ceiling_volume_resolution.json").write_text("{}",encoding="utf-8")
+            trace={"trace_id":"bb-shop","room_id":"shop","room_label":"Shop","level_name":"Ground","page":20,
+                "points_image_px":[[0,0],[1197,0],[1197,300],[0,300],[0,0]],
+                "calibration":{"status":"agreed","mm_per_px":10},
+                "edges":[{"index":0,"boundary":"mall"},{"index":1,"boundary":"internal"},
+                         {"index":2,"boundary":"adjacent_tenancy"},{"index":3,"boundary":"internal"}]}
+            key=ceiling_volume_resolution.room_identity("Shop","Ground")
+            with patch.object(autonomous_tasks_service.reviewer_room_geometry_service,"current_records",return_value=[trace]), \
+                 patch.object(autonomous_tasks_service,"_current_task",return_value=None), \
+                 patch.object(ceiling_volume_resolution,"values_by_room",return_value={key:{"ceiling_height_mm":2700}}), \
+                 patch.object(autonomous_tasks_service,"_p4_elevation_image",return_value=Image.new("RGB",(32,32))), \
+                 patch.object(autonomous_tasks_service,"_png_bytes",return_value=b"png"):
+                self.assertEqual(autonomous_tasks_service._p4_packets(root),[])
+
+            with patch.object(autonomous_tasks_service.reviewer_room_geometry_service,"current_records",return_value=[trace]), \
+                 patch.object(autonomous_tasks_service,"_current_task",side_effect=self._p3_applied_lookup(trace)), \
+                 patch.object(ceiling_volume_resolution,"values_by_room",return_value={key:{"ceiling_height_mm":2700}}), \
+                 patch.object(autonomous_tasks_service,"_p4_elevation_image",return_value=Image.new("RGB",(32,32))), \
+                 patch.object(autonomous_tasks_service,"_png_bytes",return_value=b"png"):
+                packets=[row for row in autonomous_tasks_service._p4_packets(root) if row[0]=="P4_openings"]
+            self.assertEqual(len(packets),1)
+            packet=packets[0][2]
+            self.assertEqual(packet["page"],26)
+            self.assertEqual(packet["edge_indices"],[0])
+            self.assertAlmostEqual(packet["wall_run_span_m"],11.97)
+            self.assertTrue(packet["allow_vector_outline_read"])
+
+    def test_p3_matches_elevation_to_run_after_shared_edge_filter_and_bounds_jagged_questions(self):
+        from PIL import Image
+        with TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            (root/"room_use_resolution.json").write_text(json.dumps({"records":[
+                {"room_id":"shop","space_scope":"comfort_hvac"},
+                {"room_id":"neighbor","space_scope":"comfort_hvac"}]}),encoding="utf-8")
+            (root/"ai_input.json").write_text(json.dumps({"drawing_set":{"pages":[{"page":26,"title":"Storefront Elevation"}]}}),encoding="utf-8")
+            (root/"spatial_ocr.json").write_text(json.dumps({"pages":[{"page":20},{"page":26,"dimension_candidates":[{"value_mm":20000}]}]}),encoding="utf-8")
+            trace={"trace_id":"shared-first","room_id":"shop","room_label":"Shop","page":20,
+                "points_image_px":[[0,0],[200,0],[200,100],[100,100],[0,100],[0,0]],
+                "calibration":{"status":"agreed","mm_per_px":100},
+                "edges":[{"index":index,"boundary":"unknown"} for index in range(5)]}
+            shared_room={"trace_id":"neighbor","room_id":"neighbor","room_label":"Neighbor","page":20,
+                "points_image_px":[[0,1.5],[150,1.5],[150,30],[0,30],[0,1.5]],
+                "calibration":{"status":"agreed","mm_per_px":100}}
+            with patch.object(autonomous_tasks_service.reviewer_room_geometry_service,"current_records",return_value=[trace,shared_room]), \
+                 patch.object(autonomous_tasks_service,"_trace_task_image",return_value=Image.new("RGB",(32,32))), \
+                 patch.object(autonomous_tasks_service,"_png_bytes",return_value=b"png"):
+                packets=autonomous_tasks_service._p3_packets(root)
+            shop=next(row[2] for row in packets if row[2].get("trace_id")=="shared-first")
+            self.assertIn(0,shop["shared_edges"])
+            self.assertIsNotNone(shop["storefront_run_index"])
+            storefront=next(row for row in shop["runs"] if row["run_index"]==shop["storefront_run_index"])
+            self.assertGreater(len(storefront["edge_indices"]),1)
+            self.assertAlmostEqual(shop["storefront_total_width_mm"],20000)
+            validated=autonomous_tasks.validate_boundary_reply(shop,json.dumps({"runs":[
+                {"run_number":row["index"]+1,"boundary":"external","evidence":"external wall shown"}
+                for row in shop["edges"]]}))
+            with patch.object(autonomous_tasks_service,"_current_trace",return_value=trace), \
+                 patch.object(autonomous_tasks_service.reviewer_room_geometry_service,"post"):
+                applied=autonomous_tasks_service._apply_p3(None,{},root,{"packet":shop,"accuracy":{"auto_apply":False},
+                    "run_id":"multi-run","quality_label":"AI-determined"},validated)
+            applied_edges={row["index"]:row["boundary"] for row in applied["applied_value"]["edges"]}
+            self.assertEqual([applied_edges[index] for index in storefront["edge_indices"]], ["external","external"])
+
+            # Forty edge segments around a rectangle collapse to a few straight runs.
+            ring=[]
+            for x in range(10): ring.append([x*10,0])
+            for y in range(10): ring.append([90,y*10])
+            for x in range(10,0,-1): ring.append([x*10,90])
+            for y in range(10,0,-1): ring.append([0,y*10])
+            ring.append(ring[0])
+            jagged={"trace_id":"jagged","room_id":"shop","room_label":"Shop","page":20,"points_image_px":ring,
+                    "calibration":{"status":"agreed","mm_per_px":100}}
+            with patch.object(autonomous_tasks_service.reviewer_room_geometry_service,"current_records",return_value=[jagged]), \
+                 patch.object(autonomous_tasks_service,"_trace_task_image",return_value=Image.new("RGB",(32,32))), \
+                 patch.object(autonomous_tasks_service,"_png_bytes",return_value=b"png"):
+                jagged_packets=autonomous_tasks_service._p3_packets(root)
+            jagged_packet=next(row[2] for row in jagged_packets if row[2].get("trace_id")=="jagged")
+            self.assertLessEqual(len(jagged_packet["edges"]),6)
+
+    def test_elevation_selection_uses_whole_words_and_storefront_match_checks_all_pages(self):
+        from PIL import Image
+        with TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            (root/"room_use_resolution.json").write_text(json.dumps({"records":[{"room_id":"shop","space_scope":"comfort_hvac"}]}),encoding="utf-8")
+            ai_input={"drawing_set":{"pages":[
+                {"page":1,"title":"Relevant Building Code"},
+                {"page":26,"title":"Storefront Elevation"},
+                {"page":27,"title":"Shopfront Elevation"}]}}
+            spatial={"pages":[{"page":1,"dimension_candidates":[{"value_mm":23456}]},
+                      {"page":26,"dimension_candidates":[{"value_mm":10000}]},
+                      {"page":27,"dimension_candidates":[{"value_mm":14142}]}]}
+            self.assertEqual([row["page"] for row in autonomous_tasks_service._elevation_pages(ai_input)],[26,27])
+            (root/"ai_input.json").write_text(json.dumps(ai_input),encoding="utf-8")
+            (root/"spatial_ocr.json").write_text(json.dumps(spatial),encoding="utf-8")
+            trace={"trace_id":"pages-disagree","room_id":"shop","room_label":"Shop","page":20,
+                "points_image_px":[[0,0],[200,0],[200,100],[100,200],[0,0]],
+                "calibration":{"status":"agreed","mm_per_px":100}}
+            with patch.object(autonomous_tasks_service.reviewer_room_geometry_service,"current_records",return_value=[trace]), \
+                 patch.object(autonomous_tasks_service,"_trace_task_image",return_value=Image.new("RGB",(32,32))), \
+                 patch.object(autonomous_tasks_service,"_png_bytes",return_value=b"png"):
+                rows=autonomous_tasks_service._p3_packets(root)
+            packet=next(row[2] for row in rows if row[2].get("trace_id")=="pages-disagree")
+            self.assertIsNone(packet["storefront_run_index"])
+            self.assertIn("multiple wall runs",packet["storefront_match_reason"])
+
+    def test_p3_butcher_buffet_dimension_marks_unique_11_97_m_wall_run(self):
+        from PIL import Image
+        with TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            (root/"room_use_resolution.json").write_text(json.dumps({"records":[{"room_id":"shop","space_scope":"comfort_hvac"}]}),encoding="utf-8")
+            (root/"ai_input.json").write_text(json.dumps({"drawing_set":{"pages":[
+                {"page":1,"title":"Relevant Building Code"},{"page":26,"title":"Storefront Elevation"}]}}),encoding="utf-8")
+            (root/"spatial_ocr.json").write_text(json.dumps({"pages":[
+                {"page":1,"dimension_candidates":[{"value_mm":23456}]},
+                {"page":26,"dimension_candidates":[{"value_mm":11970}]}]}),encoding="utf-8")
+            trace={"trace_id":"bb-like","room_id":"shop","room_label":"Shop","page":20,
+                "points_image_px":[[0,0],[600,0],[1197,0],[1197,200],[0,600],[0,0]],
+                "calibration":{"status":"agreed","mm_per_px":10}}
+            with patch.object(autonomous_tasks_service.reviewer_room_geometry_service,"current_records",return_value=[trace]), \
+                 patch.object(autonomous_tasks_service,"_trace_task_image",return_value=Image.new("RGB",(32,32))), \
+                 patch.object(autonomous_tasks_service,"_png_bytes",return_value=b"png"):
+                rows=autonomous_tasks_service._p3_packets(root)
+            packet=next(row[2] for row in rows if row[2].get("trace_id")=="bb-like")
+            matched=next(run for run in packet["runs"] if run["run_index"]==packet["storefront_run_index"])
+            self.assertAlmostEqual(matched["span_m"],11.97,places=2)
+            self.assertIn("Unique run",packet["storefront_match_reason"])
+
+    def test_p3_short_run_inherits_neighbouring_answer(self):
+        from PIL import Image
+        with TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            (root/"room_use_resolution.json").write_text(json.dumps({"records":[{"room_id":"shop","space_scope":"comfort_hvac"}]}),encoding="utf-8")
+            trace={"trace_id":"short-run","room_id":"shop","room_label":"Shop","page":20,
+                "points_image_px":[[0,0],[200,0],[200,200],[100,200],[100,195],[0,195],[0,0]],
+                "calibration":{"status":"agreed","mm_per_px":10},
+                "edges":[{"index":index,"boundary":"unknown"} for index in range(6)]}
+            mocked_runs=[{"run_index":index,"edge_indices":[index],"span_m":.5 if index==4 else 2.0,
+                          "length_m":.5 if index==4 else 2.0,"direction_deg":0,"start_px":[0,0],"end_px":[1,0]}
+                         for index in range(6)]
+            with patch.object(autonomous_tasks_service.reviewer_room_geometry_service,"current_records",return_value=[trace]), \
+                 patch.object(autonomous_tasks_service.room_outline,"wall_runs",return_value=mocked_runs), \
+                 patch.object(autonomous_tasks_service,"_trace_task_image",return_value=Image.new("RGB",(32,32))), \
+                 patch.object(autonomous_tasks_service,"_png_bytes",return_value=b"png"):
+                packet=next(row[2] for row in autonomous_tasks_service._p3_packets(root) if row[2].get("trace_id")=="short-run")
+            self.assertTrue(packet["short_run_inheritance"])
+            inheritance=packet["short_run_inheritance"]
+            neighbour_id=next(iter(inheritance.values()))
+            reply={"edges":[{"edge_number":row["index"]+1,"boundary":"external","evidence":"external wall note"}
+                             for row in packet["edges"]]}
+            validated=autonomous_tasks.validate_boundary_reply(packet,json.dumps(reply))
+            with patch.object(autonomous_tasks_service,"_current_trace",return_value=trace), \
+                 patch.object(autonomous_tasks_service.reviewer_room_geometry_service,"post"):
+                record={"packet":packet,"accuracy":{"auto_apply":False},"run_id":"short-run-test"}
+                applied=autonomous_tasks_service._apply_p3(None,{},root,record,validated)
+            edge_rows={row["index"]:row for row in applied["applied_value"]["edges"]}
+            for short_run,answer_run in inheritance.items():
+                short_edge=next(iter(next(row["edge_indices"] for row in packet["runs"] if row["run_index"]==int(short_run))))
+                self.assertEqual(edge_rows[short_edge]["boundary"],"external")
+                self.assertIn("Inherited from adjacent wall run",edge_rows[short_edge]["evidence"])
+                self.assertIn(int(answer_run),[row["index"] for row in packet["edges"]])
+
+    def test_run_all_with_current_reviewer_trace_does_not_raise(self):
+        from PIL import Image
+        with TemporaryDirectory() as temporary:
+            root=Path(temporary)
+            (root/"room_use_resolution.json").write_text(json.dumps({"records":[{"room_id":"shop","space_scope":"comfort_hvac"}]}),encoding="utf-8")
+            trace={"trace_id":"run-all-trace","room_id":"shop","room_label":"Shop","page":20,
+                "points_image_px":[[0,0],[200,0],[200,100],[0,100],[0,0]],"calibration":{"status":"agreed","mm_per_px":10}}
+            with patch.object(autonomous_tasks_service,"_site_packet",return_value=({},"",{})), \
+                 patch.object(autonomous_tasks_service,"_north_packets",return_value=[]), \
+                 patch.object(autonomous_tasks_service,"_roof_packets",return_value=[]), \
+                 patch.object(autonomous_tasks_service,"_p0_initial_packets",return_value=[]), \
+                 patch.object(autonomous_tasks_service,"_p0_followup_packets",return_value=[]), \
+                 patch.object(autonomous_tasks_service,"_p0_outline_packets",return_value=[]), \
+                 patch.object(autonomous_tasks_service,"_p4_packets",return_value=[]), \
+                 patch.object(autonomous_tasks_service,"_p6_kitchen_packets",return_value=[]), \
+                 patch.object(autonomous_tasks_service.reviewer_room_geometry_service,"current_records",return_value=[trace]), \
+                 patch.object(autonomous_tasks_service,"_trace_task_image",return_value=Image.new("RGB",(32,32))), \
+                 patch.object(autonomous_tasks_service,"_png_bytes",return_value=b"png"):
+                result=autonomous_tasks_service.run_all(None,{"id":"trace-project","review_dir":str(root)})
+            self.assertIn("tasks",result)
+
+    def test_stand_in_is_recorded_from_post_field_or_json_reply(self):
+        for post_marker, reply_marker, expected in [(False,True,True),(True,False,True),(False,False,False)]:
+            with self.subTest(post_marker=post_marker,reply_marker=reply_marker), TemporaryDirectory() as temporary, \
+                 patch.object(autonomous_tasks_service,"_refresh_geometry_tasks"), \
+                 patch.object(autonomous_tasks_service,"_accuracy",return_value={"accuracy":None,"scored":0,"auto_apply":False,"report":""}):
+                root=Path(temporary)
+                project={"id":"stand-in-test","review_dir":str(root)}
+                autonomous_tasks_service._create_run(root,"P6_kitchen","kitchen",{
+                    "task":"P6_kitchen","room_label":"Kitchen","images":[],"labels_by_page":{},"words_by_page":{}},"List equipment.")
+                reply=json.dumps({"items":[],"stand_in":reply_marker})
+                autonomous_tasks_service.post(None,project,{"action":"validate_apply","task":"P6_kitchen","target":"kitchen",
+                    "reply":reply,"stand_in":post_marker})
+                record=autonomous_tasks_service._current_task(root,"P6_kitchen","kitchen")
+                self.assertEqual(record["stand_in"],expected)
 
     def test_parallel_overlapping_room_edges_within_wall_thickness_are_shared(self):
         first = {"room_id": "shop", "page": 20, "calibration": {"mm_per_px": 10},
@@ -389,6 +732,7 @@ class AutonomousTaskTests(unittest.TestCase):
         name_packet = ("P0_room_names", "page-20", {}, "prompt", [], "")
         with patch.object(autonomous_tasks_service, "_p0_followup_packets",
                           return_value=[name_packet]), \
+             patch.object(autonomous_tasks_service, "_p0_initial_packets", return_value=[]), \
              patch.object(autonomous_tasks_service, "_p0_outline_packets",
                           side_effect=lambda _root: events.append("outline-builder") or []), \
              patch.object(autonomous_tasks_service, "_p3_packets", return_value=[]), \

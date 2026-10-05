@@ -124,6 +124,131 @@ def _north_packets(root):
     return rows
 
 
+def _p0_page_selection(root):
+    """Select one main geometry sheet per level and explain every omitted plan page."""
+    ai_input, spatial, _building = _load_inputs(root)
+    coverage = _read(root / "drawing_coverage.json", {})
+    vector = _read(root / "vector_geometry.json", {})
+    coverage_by_page = {row.get("page"): row for row in coverage.get("page_roles", []) if isinstance(row, dict)}
+    vector_by_page = {row.get("page"): row for row in (vector.get("geometry_key_points") or {}).get("pages", [])
+                      if isinstance(row, dict)}
+    spatial_by_page = {row.get("page"): row for row in spatial.get("pages", []) if isinstance(row, dict)}
+    grouped = {}
+    skipped = []
+    notes = []
+    for page in (ai_input.get("drawing_set", {}) or {}).get("pages", []):
+        if not isinstance(page, dict) or type(page.get("page")) is not int:
+            continue
+        number = page["page"]
+        role_row = coverage_by_page.get(number, {})
+        role = str(role_row.get("proposed_role") or page.get("plan_role") or "").casefold()
+        kind = str(page.get("type") or page.get("sheet_classification") or "").casefold()
+        if "floor_plan" not in kind and role not in {"main_floor_plan", "primary_geometry_plan", "supporting_geometry_plan", "enlarged_plan", "floor_plan"}:
+            continue
+        classification = " ".join(str(page.get(key) or "") for key in
+                                  ("type", "detected_type", "sheet_classification", "title")).casefold()
+        coverage_scale = str(role_row.get("main_scale") or "").strip()
+        page_scale = str(page.get("main_scale") or page.get("scale") or "").strip()
+        scale_text = coverage_scale or page_scale
+        scale_conflict = bool(coverage_scale and page_scale and
+                              " ".join(coverage_scale.casefold().split()) != " ".join(page_scale.casefold().split()))
+        if scale_conflict:
+            notes.append({"page": number, "status": "scale_conflict",
+                "reason": f"Scale sources disagree (drawing coverage {coverage_scale}; sheet metadata {page_scale}); scale alone did not exclude this page."})
+        match = re.search(r"1\s*:\s*(\d+(?:\.\d+)?)", scale_text)
+        skip_reasons=[]
+        if any(term in classification for term in ("joinery", "cabinet", "shop drawing")):
+            skip_reasons.append("joinery/shop-detail drawing")
+        if "detail" in classification:
+            skip_reasons.append("detail view")
+        if match and float(match.group(1)) <= 20 and not scale_conflict:
+            skip_reasons.append(f"large detail scale {match.group(0)}")
+        if skip_reasons:
+            note={"page": number, "status": "skipped", "reason": f"Skipped {' and '.join(skip_reasons)}; room outlines use the main geometry plan."}
+            skipped.append(note)
+            notes.append(note)
+            continue
+        if role not in {"main_floor_plan", "primary_geometry_plan", "floor_plan"}:
+            note={"page": number, "status": "skipped", "reason": f"Skipped secondary plan role: {role or 'not classified as a main geometry plan'}."}
+            skipped.append(note)
+            notes.append(note)
+            continue
+        level = str(role_row.get("level_name") or page.get("level_name") or page.get("floor_label") or "").strip()
+        level_key = " ".join(level.casefold().split()) or "unassigned level"
+        vector_dims = vector_by_page.get(number, {}).get("dimension_candidates", []) or []
+        spatial_dims = spatial_by_page.get(number, {}).get("dimension_candidates", []) or []
+        page_dims = page.get("dimension_candidates", []) or []
+        dimension_count = max(len(vector_dims), len(spatial_dims), len(page_dims))
+        priority = {"main_floor_plan": 0, "primary_geometry_plan": 1, "floor_plan": 2}.get(role, 3)
+        grouped.setdefault(level_key, []).append((dimension_count, priority, number, page))
+    selected = []
+    for level_key, rows in grouped.items():
+        rows.sort(key=lambda row: (-row[0], row[1], row[2]))
+        selected.append(rows[0][3])
+        for _count, _priority, _number, page in rows[1:]:
+            note={"page": page["page"], "status": "skipped", "reason": f"Skipped second view of {level_key}; page {rows[0][2]} was selected as the main geometry plan."}
+            skipped.append(note)
+            notes.append(note)
+    return {"selected": sorted(selected, key=lambda row: row["page"]),
+            "skipped": sorted(skipped, key=lambda row: row["page"]),
+            "notes": sorted(notes, key=lambda row: row["page"])}
+
+
+def _p0_main_geometry_pages(root):
+    return _p0_page_selection(root)["selected"]
+
+
+def _p0_calibration_ready(root, page, context):
+    """Require one dimension with readable scale, otherwise two agreeing dimensions."""
+    dimensions = _p0_dimensions(root, page)
+    if not context.get("declared_mm_per_px") and len(dimensions) < 2:
+        return None, "The sheet scale is unreadable; two agreeing printed dimensions are required before outlining rooms."
+    try:
+        return _p0_calibration(root, page, context), ""
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        return None, str(error)
+
+
+def _p0_is_raster(root, page_number, context, calibration):
+    import pdfplumber
+    ai_input, _spatial, _building = _load_inputs(root)
+    source = Path(str(ai_input.get("source_pdf", "")))
+    if not source.is_file():
+        raise ValueError("The source PDF is unavailable; P0 is blocked without the plan page.")
+    with pdfplumber.open(source) as pdf:
+        page = pdf.pages[page_number - 1]
+        image_scale = context["image"].width / float(page.width)
+        mm_per_px = context.get("declared_mm_per_px") or calibration["mm_per_px"]
+        return room_outline.page_is_raster(page, context["viewport"], image_scale, mm_per_px,
+                                            objects=context["objects"])
+
+
+def _p0_walls_areas(root, page_number, context, calibration, wall_style_ids=None, raster_mode=False):
+    mm_per_px = context.get("declared_mm_per_px") or calibration["mm_per_px"]
+    if raster_mode:
+        walls = room_outline.raster_wall_geometry(context["image"], context["viewport"], mm_per_px)
+    else:
+        walls = room_outline.wall_geometry(context["objects"], wall_style_ids or [], context["viewport"])
+    areas = room_outline.enclosed_rooms(walls, context["viewport"], mm_per_px)
+    if raster_mode:
+        from shapely.geometry import LineString
+        geometries = list(walls.geoms) if walls is not None and hasattr(walls, "geoms") else ([walls] if walls is not None else [])
+        segments = []
+        for geometry in geometries:
+            polygons = list(geometry.geoms) if hasattr(geometry, "geoms") else [geometry]
+            for polygon in polygons:
+                if not hasattr(polygon, "exterior"):
+                    continue
+                for ring in [polygon.exterior, *polygon.interiors]:
+                    segments.extend(LineString([start, end]) for start, end in zip(ring.coords, list(ring.coords)[1:])
+                                    if math.dist(start, end) >= 10)
+    else:
+        objects = context["objects"]
+        selected_styles = wall_style_ids or []
+        segments = room_outline.drawn_segments(objects, selected_styles)
+    return walls, areas, segments
+
+
 def _roof_packets(root):
     ai_input, _spatial, _building = _load_inputs(root)
     site = _latest_site(root)
@@ -243,14 +368,13 @@ def _p0_context(root, page_number):
 
 def _p0_initial_packets(root):
     from PIL import ImageDraw
-    ai_input, _spatial, _building = _load_inputs(root)
     result = []
-    for page in autonomous_tasks.plan_pages(ai_input):
+    for page in _p0_main_geometry_pages(root):
         number = page["page"]
         try:
             context = _p0_context(root, number)
             lines = room_outline.dimension_line_candidates(context["objects"], None,
-                        (0, 0, *context["image"].size), limit=3)
+                        (0, 0, *context["image"].size), limit=2 if not context["declared_mm_per_px"] else 3)
             for index, line in enumerate(lines, start=1):
                 points = line.get("tick_centres_image_px") or line["points"]
                 (x1, y1), (x2, y2) = line["points"]
@@ -267,6 +391,16 @@ def _p0_initial_packets(root):
                                room_outline.dimension_prompt(), [
                                    _png_bytes(crop)
                                ], ""))
+            calibration, calibration_error = _p0_calibration_ready(root, number, context)
+            if not calibration:
+                if len(_p0_dimensions(root, number)) >= (1 if context["declared_mm_per_px"] else 2):
+                    result.append(("P0_room_names", f"page-{number}",
+                        {"task":"P0_room_names", "page":number}, "", [],
+                        f"Room outlining is blocked until scale calibration is valid: {calibration_error}"))
+                continue
+            if _p0_is_raster(root, number, context, calibration):
+                # Raster sheets use the detected wall mask and never require a wall-style judgement task.
+                continue
             all_styles = [row for row in context["summary"] if not row["hatch"]]
             batches = [all_styles[index:index + 14] for index in range(0, len(all_styles), 14)]
             for batch_index, style_rows in enumerate(batches, start=1):
@@ -327,31 +461,35 @@ def _inferred_room_data(root):
 
 
 def _p0_followup_packets(root):
-    from shapely.ops import unary_union
     result = []
-    pages = autonomous_tasks.plan_pages(_read(root / "ai_input.json", {}))
+    pages = _p0_main_geometry_pages(root)
     for page in pages:
         number = page["page"]
         styles = _p0_wall_style_records(root, number)
-        if not styles or any(style.get("status") not in {"applied", "below_accuracy_bar"} for style in styles):
-            continue
         try:
             context = _p0_context(root, number)
-            calibration = _p0_calibration(root, number, context)
-            wall_style_ids = sorted({style_id for style in styles for style_id in style["applied_value"].get("wall_style_ids", [])})
-            if not wall_style_ids:
-                result.append(("P0_room_names", f"page-{number}", {"task":"P0_room_names", "page":number}, "", [],
-                               "No wall styles were identified across the complete legend; enclosed-room naming is unavailable."))
-                continue
-            walls = room_outline.wall_geometry(context["objects"], wall_style_ids, context["viewport"])
-            areas = room_outline.enclosed_rooms(walls, context["viewport"], context["declared_mm_per_px"] or calibration["mm_per_px"])
+            calibration, calibration_error = _p0_calibration_ready(root, number, context)
+            if not calibration:
+                continue  # Dimension tasks remain available; geometry waits for the required calibration.
+            raster_mode = _p0_is_raster(root, number, context, calibration)
+            if raster_mode:
+                wall_style_ids = []
+            else:
+                if not styles or any(style.get("status") not in {"applied", "below_accuracy_bar"} for style in styles):
+                    continue
+                wall_style_ids = sorted({style_id for style in styles for style_id in style["applied_value"].get("wall_style_ids", [])})
+                if not wall_style_ids:
+                    result.append(("P0_room_names", f"page-{number}", {"task":"P0_room_names", "page":number}, "", [],
+                                   "No wall styles were identified across the complete legend; enclosed-room naming is unavailable."))
+                    continue
+            _walls, areas, segments = _p0_walls_areas(root, number, context, calibration, wall_style_ids, raster_mode)
             if not areas:
                 continue
             image, transform = room_outline.render_candidate_areas(context["image"], areas, context["viewport"])
             room_names = sorted({row["label"] for row in _inferred_room_data(root)})
             naming_packet = {"task":"P0_room_names", "page":number, "area_count":len(areas), "room_names":room_names,
                              "transform":transform, "calibration":calibration, "areas_px": [list(poly.exterior.coords) for poly in areas],
-                             "wall_style_ids":wall_style_ids}
+                             "wall_style_ids":wall_style_ids, "raster_mode":raster_mode}
             result.append(("P0_room_names", f"page-{number}", naming_packet,
                            room_outline.room_naming_prompt(room_names, len(areas)), [_png_bytes(image)], ""))
         except (OSError, ValueError, IndexError, KeyError, TypeError) as error:
@@ -384,21 +522,29 @@ def _p0_wall_style_records(root, page):
 
 def _p0_outline_packets(root):
     result = []
-    for page in autonomous_tasks.plan_pages(_read(root / "ai_input.json", {})):
+    for page in _p0_main_geometry_pages(root):
         number = page["page"]
         names_record = _current_task(root, "P0_room_names", f"page-{number}")
         if names_record and names_record.get("status") not in {"applied", "below_accuracy_bar"}: continue
         wall_records = _p0_wall_style_records(root, number)
-        if not wall_records or any(row.get("status") not in {"applied", "below_accuracy_bar"} for row in wall_records):
-            continue
-        wall_style_ids = sorted({style_id for row in wall_records for style_id in row.get("applied_value", {}).get("wall_style_ids", [])})
-        if not wall_style_ids:
-            continue
         try:
             context = _p0_context(root, number)
-            calibration = _p0_calibration(root, number, context)
-            walls = room_outline.wall_geometry(context["objects"], wall_style_ids, context["viewport"])
-            areas = room_outline.enclosed_rooms(walls, context["viewport"], context["declared_mm_per_px"] or calibration["mm_per_px"])
+            calibration, _calibration_error = _p0_calibration_ready(root, number, context)
+            if not calibration:
+                continue
+            raster_mode = _p0_is_raster(root, number, context, calibration)
+            if raster_mode:
+                wall_style_ids = []
+            else:
+                if (not wall_records or
+                        any(row.get("status") not in {"applied", "below_accuracy_bar"} for row in wall_records)):
+                    continue
+                wall_style_ids = sorted({style_id for row in wall_records
+                                         for style_id in row.get("applied_value", {}).get("wall_style_ids", [])})
+                if not wall_style_ids:
+                    continue
+            _walls, areas, _segments = _p0_walls_areas(root, number, context, calibration,
+                                                        wall_style_ids, raster_mode)
             if names_record and areas:
                 names, splits = room_outline.validate_naming_reply(json.loads(names_record["reply"]), len(areas),
                     names_record["packet"]["room_names"], names_record["packet"]["transform"])
@@ -415,7 +561,7 @@ def _p0_outline_packets(root):
             image, transform = room_outline.render_candidate_areas(context["image"], [], context["viewport"])
             prompt = room_outline.outline_prompt(missing)
             packet = {"task":"P0_room_outlines", "page":number, "room_names":missing, "transform":transform,
-                      "calibration":calibration, "wall_style_ids":wall_style_ids}
+                      "calibration":calibration, "wall_style_ids":wall_style_ids, "raster_mode":raster_mode}
             result.append(("P0_room_outlines", f"page-{number}", packet, prompt, [_png_bytes(image)], ""))
         except (OSError, ValueError, IndexError, KeyError, TypeError) as error:
             result.append(("P0_room_outlines", f"page-{number}", {"task":"P0_room_outlines", "page":number}, "", [],
@@ -524,6 +670,81 @@ def _geometrically_shared_edge_indices(trace, other_traces, max_wall_mm=400.0, a
     return matches
 
 
+def _trace_wall_runs(trace):
+    points = trace.get("points_image_px", [])
+    mm_per_px = float(trace.get("calibration", {}).get("mm_per_px") or 0)
+    runs = room_outline.wall_runs(points, mm_per_px)
+    edge_lengths = {index: math.dist(start, end) * mm_per_px / 1000.0
+                    for index, (start, end) in enumerate(zip(points, points[1:]))}
+    return [{**row, "edge_lengths_m": {str(index): edge_lengths[index] for index in row["edge_indices"]}}
+            for row in runs]
+
+
+def _run_neighbour(run, candidates, edge_count):
+    def distance(candidate):
+        return min(min(abs(first - second), edge_count - abs(first - second))
+                   for first in run["edge_indices"] for second in candidate["edge_indices"])
+    return min(candidates, key=lambda candidate: (distance(candidate), candidate["run_index"])) if candidates else None
+
+
+def _elevation_pages(ai_input):
+    """Return actual elevation/storefront sheets, preferring titled shopfront elevations."""
+    pages=(ai_input or {}).get("drawing_set",{}).get("pages",[])
+    matches=[]
+    for row in pages:
+        if not isinstance(row,dict) or type(row.get("page")) is not int:
+            continue
+        title=str(row.get("title") or "")
+        if not re.search(r"\b(?:elevation|shopfront|storefront)\b",title,re.I):
+            continue
+        preferred=bool(re.search(r"\b(?:shopfront|storefront)\b",title,re.I) and re.search(r"\belevation\b",title,re.I))
+        matches.append((0 if preferred else 1,row["page"],row))
+    return [row for _priority,_page,row in sorted(matches,key=lambda item:(item[0],item[1]))]
+
+
+def _storefront_elevation_pages(ai_input):
+    """Keep only elevation sheets that can provide shopfront evidence."""
+    return [row for row in _elevation_pages(ai_input)
+            if re.search(r"\b(?:shopfront|storefront)\b|\bexternal\s+elevation\b",
+                         str(row.get("title") or ""), re.I)]
+
+
+def _match_storefront_run(runs, elevation_pages, spatial):
+    """Pre-mark a storefront only when all dimension evidence identifies one run."""
+    page_rows={row.get("page"):row for row in spatial.get("pages",[]) if isinstance(row,dict)}
+    dimensions=[]
+    for page in elevation_pages:
+        ocr=page_rows.get(page.get("page"),{})
+        for item in ocr.get("dimension_candidates",[]) or []:
+            value=item.get("value_mm") if isinstance(item,dict) else None
+            if isinstance(value,(int,float)) and value>0:
+                dimensions.append({"page":page["page"],"value_mm":float(value)})
+    if not dimensions:
+        return {"run_index":None,"total_mm":None,"pages":[],
+                "reason":"No elevation page has dimension text; no wall run was pre-marked as storefront."}
+    matches=[]
+    for dimension in dimensions:
+        for run in runs:
+            span=float(run.get("span_m") or 0)*1000.0
+            if span>0 and abs(dimension["value_mm"]-span)/span<=.02:
+                matches.append({**dimension,"run_index":run["run_index"]})
+    run_ids={row["run_index"] for row in matches}
+    if len(run_ids)!=1:
+        reason=("No wall run matches the elevation dimension evidence within 2%; no run was pre-marked as storefront."
+                if not run_ids else
+                "Elevation dimension evidence matches multiple wall runs across the selected pages; no run was pre-marked as storefront.")
+        return {"run_index":None,"total_mm":None,"pages":[],"reason":reason}
+    values=[row["value_mm"] for row in matches]
+    mean_value=sum(values)/len(values)
+    if max(values)-min(values)>mean_value*.02:
+        return {"run_index":None,"total_mm":None,"pages":[],
+                "reason":"Elevation pages disagree on the storefront width by more than 2%; no run was pre-marked."}
+    run_index=next(iter(run_ids))
+    return {"run_index":run_index,"total_mm":round(mean_value,1),
+            "pages":list(dict.fromkeys(row["page"] for row in matches)),
+            "reason":f"Unique run {run_index+1} matches elevation dimension evidence within 2%."}
+
+
 def _p3_packets(root):
     result = []
     paths = reviewer_room_geometry_service._paths({"review_dir":str(root)})
@@ -535,8 +756,7 @@ def _p3_packets(root):
                 and row.get("calibration", {}).get("status") in {"agreed", "declared_scale_rejected"}]
     spatial = _read(root / "spatial_ocr.json", {})
     ai_input,_,_=_load_inputs(root)
-    elevation_rows=[row for row in ai_input.get("drawing_set",{}).get("pages",[]) if isinstance(row,dict)
-                    and re.search(r"elev|shopfront|storefront",str(row.get("title","")),re.I)]
+    elevation_rows=_elevation_pages(ai_input)
     all_traces = {row.get("trace_id"): row for row in selected}
     for trace in selected:
         target = f"{trace['room_id']}-page-{trace['page']}-trace-{trace['trace_id']}"
@@ -548,7 +768,20 @@ def _p3_packets(root):
             length = math.dist(start, end) * mm_per_px / 1000
             all_edges.append({"index":index,"length_m":length})
         shared = _geometrically_shared_edge_indices(trace, selected)
-        edges = [row for row in all_edges if row["index"] not in shared]
+        shared_set = set(shared)
+        runs = _trace_wall_runs(trace)
+        ask_runs = [row for row in runs if row["span_m"] >= 1.0 and any(index not in shared_set for index in row["edge_indices"])]
+        short_inheritance = {}
+        unresolved_short = []
+        for run in runs:
+            if run["span_m"] >= 1.0 or all(index in shared_set for index in run["edge_indices"]):
+                continue
+            neighbour = _run_neighbour(run, ask_runs, len(all_edges))
+            if neighbour:
+                short_inheritance[str(run["run_index"])] = neighbour["run_index"]
+            else:
+                unresolved_short.extend(index for index in run["edge_indices"] if index not in shared_set)
+        edges = [row for row in all_edges if row["index"] not in shared_set]
         cues=[]
         page_row=next((row for row in spatial.get("pages",[]) if row.get("page")==trace["page"]),{})
         raw_text=page_row.get("text", page_row.get("plain_text", ""))
@@ -565,37 +798,41 @@ def _p3_packets(root):
                         text=str(item.get("text",item)) if isinstance(item,dict) else str(item)
                         if cue_pattern.search(text): cues.append(text)
         cue_text="\n".join(dict.fromkeys(cues))
-        storefront_index=None; storefront_total=None
-        for elevation in elevation_rows:
-            elevation_ocr=next((row for row in spatial.get("pages",[]) if row.get("page")==elevation.get("page")),{})
-            dimension_values=[]
-            for item in elevation_ocr.get("dimension_candidates",[]) or []:
-                value=item.get("value_mm") if isinstance(item,dict) else None
-                if isinstance(value,(int,float)) and value>0: dimension_values.append(float(value))
-            matches=[edge for edge in edges if any(abs(value-edge["length_m"]*1000)/(edge["length_m"]*1000)<=.02 for value in dimension_values)]
-            if len(matches)==1:
-                storefront_index=matches[0]["index"]
-                storefront_total=next(value for value in dimension_values if abs(value-edges[storefront_index]["length_m"]*1000)/(edges[storefront_index]["length_m"]*1000)<=.02)
-                break
-        prompt=("Classify every numbered edge not listed as geometrically shared: external, mall, adjacent_tenancy, internal or unknown. Quote drawing evidence "
-                "for every non-unknown answer. Geometrically shared edges are classified as internal automatically. The edge matching the supplied "
+        candidate_runs=[run for run in runs if any(index not in shared_set for index in run["edge_indices"])]
+        storefront_match=_match_storefront_run(candidate_runs,elevation_rows,spatial)
+        storefront_run_index=storefront_match["run_index"]
+        storefront_total=storefront_match["total_mm"]
+        storefront_match_reason=storefront_match["reason"]
+        if unresolved_short:
+            result.append(("P3_boundaries",target,{"task":"P3_boundaries","room":trace.get("room_label")},"",[],
+                           "No wall run is at least 1 m; short runs cannot inherit a boundary answer.")); continue
+        question_runs = [{"index":row["run_index"], "length_m":row["span_m"],
+                          "edge_indices":[index for index in row["edge_indices"] if index not in shared_set],
+                          "all_edge_indices":row["edge_indices"]} for row in ask_runs]
+        prompt=("Classify each numbered wall run (one answer applies to every listed edge): external, mall, adjacent_tenancy, internal or unknown. Quote drawing evidence "
+                "for every non-unknown answer. Runs listed as geometrically shared are internal automatically. Runs under 1 m inherit the nearest asked run's answer. The run matching the supplied "
                 "storefront elevation total within 2% is the shopfront; never call it internal or adjacent_tenancy. If the set shows "
                 "an enclosed shopping centre, default an otherwise unknown shopfront to mall; otherwise external. Default other "
-                "unknown perimeter edges to adjacent_tenancy and label each ‘Assumed (typical for a tenancy in a centre)’. "
-                "Return edge_number exactly as shown in the image (starting at 1). JSON only: {\"edges\":[{\"edge_number\":int,\"boundary\":\"external|mall|adjacent_tenancy|internal|unknown\",\"evidence\":string}]}\n\n"
+                "unknown perimeter runs to adjacent_tenancy and label each ‘Assumed (typical for a tenancy in a centre)’. "
+                "Return each run using its run_number (starting at 1). JSON only: {\"runs\":[{\"run_number\":int,\"boundary\":\"external|mall|adjacent_tenancy|internal|unknown\",\"evidence\":string}]}\n\n"
                 + json.dumps({"room":trace.get("room_label"),"page":trace.get("page"),
-                              "edges":[[row["index"] + 1,round(row["length_m"],2)] for row in edges],
+                              "runs":[[row["index"] + 1, round(row["length_m"],2), [index + 1 for index in row["edge_indices"]]] for row in question_runs],
                               "shared_edge_numbers":[index + 1 for index in shared],
-                              "storefront_edge_number":storefront_index + 1 if storefront_index is not None else None,
-                              "storefront_elevation_total_width_mm":storefront_total,"nearby_text":cue_text},ensure_ascii=False,separators=(",",":")))
+                              "shared_only_runs":[row["run_index"] + 1 for row in runs if all(index in shared_set for index in row["edge_indices"])],
+                              "storefront_run_number":storefront_run_index + 1 if storefront_run_index is not None else None,
+                              "storefront_elevation_total_width_mm":storefront_total,
+                              "storefront_match_reason":storefront_match_reason,"nearby_text":cue_text},ensure_ascii=False,separators=(",",":")))
         if len(prompt)>1500:
             result.append(("P3_boundaries",target,{"task":"P3_boundaries","room":trace.get("room_label")},"",[],
                            "Boundary prompt exceeds 1,500 characters; evidence was not shortened.")); continue
         packet={"task":"P3_boundaries","room_id":trace["room_id"],"room_label":trace.get("room_label"),
-                "trace_id":trace["trace_id"],"page":trace["page"],"edges":edges,"shared_edges":shared,
+                "trace_id":trace["trace_id"],"page":trace["page"],"edges":question_runs,"runs":runs,"shared_edges":shared,
                 "shared_edge_lengths":{str(row["index"]):row["length_m"] for row in all_edges if row["index"] in shared},
-                "nearby_text":cue_text,"mm_per_px":mm_per_px,"storefront_edge_index":storefront_index,
-                "storefront_total_width_mm":storefront_total}
+                "short_run_inheritance":short_inheritance,
+                "shared_run_indices":[row["run_index"] for row in runs if all(index in shared_set for index in row["edge_indices"])],
+                "nearby_text":cue_text,"mm_per_px":mm_per_px,
+                "storefront_run_index":storefront_run_index,"storefront_total_width_mm":storefront_total,
+                "storefront_match_reason":storefront_match_reason}
         try: image=_trace_task_image(root,trace,edges,1536)
         except (OSError,ValueError) as error:
             result.append(("P3_boundaries",target,packet,"",[],str(error))); continue
@@ -609,26 +846,55 @@ def _p4_packets(root):
         traces=reviewer_room_geometry_service.current_records(reviewer_room_geometry_service._paths({"review_dir":str(root)}))
     except (OSError,ValueError,TypeError,KeyError): traces=[]
     ai_input,spatial,_building=_load_inputs(root)
-    elevation_pages=[row for row in ai_input.get("drawing_set",{}).get("pages",[]) if isinstance(row,dict)
-                     and re.search(r"elev|shopfront|storefront",str(row.get("title", "")),re.I)]
+    elevation_pages=_storefront_elevation_pages(ai_input)
     if not elevation_pages: return result
     try:
         from ai import ceiling_volume_resolution
         heights=ceiling_volume_resolution.values_by_room(_read(root / "ceiling_volume_resolution.json",{}))
     except (OSError,ValueError,TypeError,KeyError): heights={}
-    uses=_read(root / "room_use_resolution.json",{}); comfort=_comfort_room_ids(root)
-    pack=room_outline  # keep packet code independent of assumptions; the configured glazing choice is added below.
+    comfort=_comfort_room_ids(root)
     assumption=__import__("ai.ai_preliminary",fromlist=["load_pack"]).load_pack()
     glazing="retail"; shading="unshaded"
     for trace in traces:
         if trace.get("room_id") not in comfort or trace.get("calibration",{}).get("status") not in {"agreed","declared_scale_rejected"}: continue
+        p3_target=f"{trace['room_id']}-page-{trace['page']}-trace-{trace['trace_id']}"
+        p3_record=_current_task(root,"P3_boundaries",p3_target)
+        if not p3_record or p3_record.get("status") not in {"applied","below_accuracy_bar"}:
+            # Boundary classification is a prerequisite; don't create a misleading blocked P4 row.
+            continue
         boundaries={row["index"]:row["boundary"] for row in trace.get("edges",[])}
-        for edge_index,boundary in boundaries.items():
-            if boundary not in {"external","mall"}: continue
-            points=trace["points_image_px"]
-            edge_mm=math.dist(points[edge_index],points[edge_index+1])*trace["calibration"]["mm_per_px"]
-            for elevation in elevation_pages:
-                page=int(elevation["page"]); target=f"{trace['room_id']}-edge-{edge_index}-page-{page}-trace-{trace['trace_id']}"
+        wall_runs = _trace_wall_runs(trace)
+        eligible_runs=[run for run in wall_runs if run["edge_indices"] and
+                       all(boundaries.get(index) in {"external","mall"} for index in run["edge_indices"])]
+        storefront_match=_match_storefront_run(eligible_runs,elevation_pages,spatial)
+        if len(eligible_runs)==1:
+            # A sole externally exposed run is unambiguous from the reviewed boundaries.
+            runs_to_process=eligible_runs
+            elevations_to_process=elevation_pages[:1]
+            if storefront_match["run_index"] is not None:
+                matched_pages=set(storefront_match["pages"])
+                elevations_to_process=[page for page in elevation_pages if page["page"] in matched_pages][:1] or elevations_to_process
+            storefront_reason="Only one eligible external/mall wall run remains after P3."
+        elif storefront_match["run_index"] is not None:
+            runs_to_process=[run for run in eligible_runs if run["run_index"]==storefront_match["run_index"]]
+            matched_pages=set(storefront_match["pages"])
+            elevations_to_process=[page for page in elevation_pages if page["page"] in matched_pages][:1]
+            storefront_reason=storefront_match["reason"]
+        else:
+            reason=(storefront_match["reason"] if eligible_runs else
+                    "P3 left no wall runs classified external or mall; no shopfront run is available.")
+            result.append(("P4_openings",f"{trace['room_id']}-storefront-unresolved-trace-{trace['trace_id']}",
+                {"task":"P4_openings","room":trace.get("room_label"),"trace_id":trace["trace_id"],
+                 "storefront_match_reason":reason},"",[],reason))
+            continue
+        points=trace["points_image_px"]
+        for run in runs_to_process:
+            edge_indices = run["edge_indices"]
+            if not edge_indices: continue
+            edge_index=edge_indices[0]
+            edge_mm=run["span_m"]*1000.0
+            for elevation in elevations_to_process:
+                page=int(elevation["page"]); target=f"{trace['room_id']}-run-{run['run_index']}-page-{page}-trace-{trace['trace_id']}"
                 old=_current_task(root,"P4_openings",target)
                 if old and old.get("status") in {"applied","below_accuracy_bar"}: continue
                 from ai import ceiling_volume_resolution
@@ -648,20 +914,24 @@ def _p4_packets(root):
                     raw=page_ocr.get(field,[])
                     if isinstance(raw,str): text_layer.extend(raw.splitlines())
                     elif isinstance(raw,list): text_layer.extend(str(item.get("text",item)) if isinstance(item,dict) else str(item) for item in raw)
-                prompt=("The image is an architectural shopfront elevation. List each glazed panel, excluding signage, solid panels and open doorways. "
+                prompt=("The image is an architectural shopfront elevation for one traced wall run. List each glazed panel, excluding signage, solid panels and open doorways. "
                     "Use only printed dimensions; quote their exact text. Return null for unprinted sill/head/width. Missing sill is assumed 0 (glass to floor); "
                     "missing head is assumed ceiling height. A head above ceiling is capped at the ceiling. Missing width means the panel is excluded. "
                     "Every dimension must quote the elevation text layer, or mark source read_from_image if vector-outline text is visible. For vector-outline text, "
                     "panel widths must sum to the printed total within 2%, and the total must match the traced shopfront edge within 2%, otherwise do not apply. "
                     "JSON only: {\"total_width_mm\":number,\"total_width_text\":string,\"panels\":[{\"label\":string,\"width_mm\":number|null,\"sill_mm\":number|null,\"head_mm\":number|null,\"printed_text\":[string],\"source\":\"printed_text|read_from_image\"}],\"excluded\":[{\"label\":string,\"why\":string}]}\n\n"
-                    + json.dumps({"page":page,"room":trace.get("room_label"),"edge_length_mm":round(edge_mm,1),
+                    + json.dumps({"page":page,"room":trace.get("room_label"),"wall_run_number":run["run_index"]+1,
+                                  "run_edge_numbers":[index+1 for index in edge_indices],"edge_length_mm":round(edge_mm,1),
+                                  "storefront_match_reason":storefront_reason,
                                   "ceiling_height_mm":ceiling,"text_layer":text_layer[:60]},ensure_ascii=False,separators=(",",":")))
                 if len(prompt)>2000:
                     result.append(("P4_openings",target,{"task":"P4_openings","room":trace.get("room_label"),"page":page},"",[],"Opening prompt exceeds 2,000 characters; evidence was not shortened.")); continue
                 has_dimension_text = any(isinstance(item, dict) and isinstance(item.get("value_mm"), (int, float))
                                          for item in (page_ocr.get("dimension_candidates") or []))
                 packet={"task":"P4_openings","room_id":trace["room_id"],"room_label":trace.get("room_label"),"trace_id":trace["trace_id"],
-                    "edge_index":edge_index,"edge_length_mm":edge_mm,"page":page,"ceiling_height_mm":ceiling,"text_layer":text_layer[:60],
+                    "edge_index":edge_index,"edge_indices":edge_indices,"wall_run_index":run["run_index"],
+                    "wall_run_span_m":run["span_m"],"edge_length_mm":edge_mm,"page":page,"ceiling_height_mm":ceiling,"text_layer":text_layer[:60],
+                    "storefront_match_reason":storefront_reason,
                     "allow_vector_outline_read":not has_dimension_text,"glazing_choice":glazing,"shading_category":shading,
                     "glazing_option":f"Preliminary single glazing (pack au-preliminary-v3): U {assumption['profiles'][glazing]['glazing_u_w_m2k']}, SHGC {assumption['profiles'][glazing]['shgc']}",
                     "frame_fraction":assumption.get("preliminary_envelope",{}).get("glazing_frame_fraction"),"evidence":{"page":page}}
@@ -761,10 +1031,9 @@ def _apply_p0_room_names(web, project, root, record, validated):
     from shapely.geometry import Polygon
     packet = record["packet"]
     context = _p0_context(root, packet["page"])
-    walls = room_outline.wall_geometry(context["objects"], packet["wall_style_ids"], context["viewport"])
-    areas = room_outline.enclosed_rooms(walls, context["viewport"], context["declared_mm_per_px"] or packet["calibration"]["mm_per_px"])
+    walls, areas, segments = _p0_walls_areas(root, packet["page"], context, packet["calibration"],
+                                             packet.get("wall_style_ids", []), packet.get("raster_mode", False))
     names, splits = validated["names"], validated["splits"]
-    segments = room_outline.drawn_segments(context["objects"], [row["style_id"] for row in context["summary"] if not row["hatch"]])
     snap_px = 250 / packet["calibration"]["mm_per_px"]
     by_room = {}
     for index, name in names.items():
@@ -789,7 +1058,9 @@ def _apply_p0_room_names(web, project, root, record, validated):
 
 def _apply_p0_outlines(web, project, root, record, validated):
     context = _p0_context(root, record["packet"]["page"])
-    segments = room_outline.drawn_segments(context["objects"], record["packet"]["wall_style_ids"])
+    calibration = record["packet"]["calibration"]
+    _walls, _areas, segments = _p0_walls_areas(root, record["packet"]["page"], context, calibration,
+        record["packet"].get("wall_style_ids", []), record["packet"].get("raster_mode", False))
     snap_px = 250 / record["packet"]["calibration"]["mm_per_px"]
     polygons = []
     for row in validated:
@@ -836,20 +1107,40 @@ def _apply_p3(web, project, root, record, validated):
     trace=_current_trace(root,packet.get("trace_id"))
     if not trace: raise ValueError("The room trace is stale; rebuild the boundary task from current drawing evidence.")
     current={row["index"]:row["boundary"] for row in trace.get("edges",[])}
-    lengths={row["index"]:row["length_m"] for row in packet.get("edges",[])}
-    lengths.update({int(index): float(value) for index, value in packet.get("shared_edge_lengths", {}).items()})
-    shared=set(packet.get("shared_edges",[])); values={row["index"]:row["boundary"] for row in validated["edges"]}
-    evidence={row["index"]:row.get("evidence","") for row in validated["edges"]}
-    sources={}
+    points=trace.get("points_image_px",[])
+    mm_per_px=float(trace.get("calibration",{}).get("mm_per_px") or packet.get("mm_per_px") or 0)
+    lengths={index:math.dist(start,end)*mm_per_px/1000.0 for index,(start,end) in enumerate(zip(points,points[1:]))}
+    shared=set(packet.get("shared_edges",[])); run_values={row["index"]:row["boundary"] for row in validated["edges"]}
+    run_evidence={row["index"]:row.get("evidence","") for row in validated["edges"]}
+    runs=packet.get("runs",[])
+    for run_id, neighbour_id in packet.get("short_run_inheritance",{}).items():
+        if int(neighbour_id) in run_values:
+            run_values[int(run_id)]=run_values[int(neighbour_id)]
+            run_evidence[int(run_id)]=f"Inherited from adjacent wall run {int(neighbour_id)+1}: {run_evidence.get(int(neighbour_id), '')}".strip()
+    values={}; evidence={}
+    for run in runs:
+        run_index=run["run_index"]
+        if run_index not in run_values:
+            continue
+        for edge_index in run["edge_indices"]:
+            if edge_index in shared:
+                continue
+            values[edge_index]=run_values[run_index]
+            evidence[edge_index]=run_evidence.get(run_index,"")
+    if not runs:
+        values.update(run_values)
+        evidence.update(run_evidence)
     for index in shared:
-        values[index] = "internal"
-        evidence[index] = "Parallel room boundary inferred within the 400 mm wall-thickness and 50% overlap limits."
-        sources[index] = "ai_determined"
+        values[index]="internal"
+        evidence[index]="Shared boundary with another traced room in this tenancy."
+    sources={}
     for index in values:
         if index in shared:
             values[index],sources[index],evidence[index]="internal","ai_determined","Shared boundary with another traced room in this tenancy."
         elif values[index]=="unknown":
-            if index==packet.get("storefront_edge_index"):
+            storefront_edges=({edge for row in runs if row["run_index"]==packet.get("storefront_run_index") for edge in row["edge_indices"]}
+                              if runs else {packet.get("storefront_edge_index")})
+            if index in storefront_edges:
                 enclosed=bool(re.search(r"\b(?:enclosed\s+(?:mall|shopping\s+centre)|shopping\s+centre|mall)\b",packet.get("nearby_text","")+" "+str(packet.get("site_name","")),re.I))
                 values[index]="mall" if enclosed else "external"
             else: values[index]="adjacent_tenancy"
@@ -868,7 +1159,7 @@ def _apply_p3(web, project, root, record, validated):
             "evidence":evidence.get(index,""),"label":"Assumed (typical for a tenancy in a centre)" if sources[index]=="ai_fallback" else "AI-determined"}
            for index in sorted(values)]
     record.update({"status":_status_for_accuracy("ai_determined",record["accuracy"]),"source":"ai_determined",
-        "applied_value":{"room":trace.get("room_label",packet.get("room_label")),"edges":edges,"label":record["quality_label"]},
+        "applied_value":{"room":trace.get("room_label",packet.get("room_label")),"edges":edges,"label":record.get("quality_label","AI-determined")},
         "validation":validated,"block_reason":""})
     return record
 
@@ -883,17 +1174,38 @@ def _apply_p4(web, project, root, record, validated):
         raise ValueError("The configured preliminary glazing or shading choice is unavailable.")
     existing=[row for row in trace.get("openings",[]) if row.get("declaration_source","reviewer")=="reviewer"]
     openings=[]
+    points=trace.get("points_image_px",[])
+    mm_per_px=float(trace.get("calibration",{}).get("mm_per_px") or 0)
+    edge_indices=packet.get("edge_indices") or [packet["edge_index"]]
+    remaining={index:math.dist(points[index],points[index+1])*mm_per_px/1000.0 for index in edge_indices}
+    applied_panels=[]
     for panel in validated.get("panels",[]):
-        openings.append({"opening_id":f"ai-{record['run_id']}-{panel['panel_index']}","edge_index":packet["edge_index"],
-            "width_m":panel["width_mm"]/1000,"sill_height_m":panel["sill_mm"]/1000,"head_height_m":panel["head_mm"]/1000,
-            "elevation_page":packet["page"],"glazing_choice":choice,"shading_category":shade,
-            "declaration_source":"ai_determined","ai_run_id":record["run_id"],"evidence":panel.get("printed_text",[]),
-            "assumptions":[item for item in (panel.get("sill_assumption"),panel.get("head_assumption")) if item]})
+        width_remaining=panel["width_mm"]/1000.0
+        panel_edges=[]
+        fragment=0
+        for index in edge_indices:
+            take=min(width_remaining,remaining[index])
+            if take<=1e-9:
+                continue
+            fragment+=1
+            openings.append({"opening_id":f"ai-{record['run_id']}-{panel['panel_index']}-{fragment}","edge_index":index,
+                "width_m":take,"sill_height_m":panel["sill_mm"]/1000,"head_height_m":panel["head_mm"]/1000,
+                "elevation_page":packet["page"],"glazing_choice":choice,"shading_category":shade,
+                "declaration_source":"ai_determined","ai_run_id":record["run_id"],"evidence":panel.get("printed_text",[]),
+                "assumptions":[item for item in (panel.get("sill_assumption"),panel.get("head_assumption")) if item]})
+            panel_edges.append(index)
+            remaining[index]-=take
+            width_remaining-=take
+            if width_remaining<=1e-9:
+                break
+        if width_remaining>1e-6:
+            raise ValueError("The glazing widths exceed the combined lengths of the traced wall-run edges.")
+        applied_panels.append({"width_mm":panel["width_mm"],"sill_mm":panel["sill_mm"],"head_mm":panel["head_mm"],
+            "source":"ai_determined","edge_indices":panel_edges,
+            "sill_assumption":panel.get("sill_assumption"),"head_assumption":panel.get("head_assumption")})
     reviewer_room_geometry_service.post(web,project,{"action":"classify_envelope","trace_id":trace["trace_id"],
         "reviewer":"Archie AI (P4)","edges":trace.get("edges",[]),"roof":trace.get("roof","unknown"),
         "openings":[*existing,*openings],"declaration_source":"ai_determined","ai_run_id":record["run_id"]})
-    applied_panels=[{"width_mm":row["width_mm"],"sill_mm":row["sill_mm"],"head_mm":row["head_mm"],"source":"ai_determined",
-                     "sill_assumption":row.get("sill_assumption"),"head_assumption":row.get("head_assumption")} for row in validated.get("panels",[])]
     record.update({"status":_status_for_accuracy("ai_determined",record["accuracy"]),"source":"ai_determined",
         "applied_value":{"room":trace.get("room_label",packet.get("room_label")),"page":packet["page"],
           "total_width_mm":validated["total_width_mm"],"glazed_panels":applied_panels,"excluded":validated.get("excluded",[]),
@@ -906,7 +1218,8 @@ def _refresh_geometry_tasks(root):
     # Persist naming tasks before asking whether any rooms still need outlines.
     # If both packet lists are calculated together, the outline builder cannot
     # see the just-created naming tasks and offers an unnecessary second task.
-    for packet_builder in (_p0_followup_packets, _p0_outline_packets, _p3_packets, _p4_packets, _p6_kitchen_packets):
+    for packet_builder in (_p0_initial_packets, _p0_followup_packets, _p0_outline_packets,
+                           _p3_packets, _p4_packets, _p6_kitchen_packets):
         for task,target,packet,prompt,images,reason in packet_builder(root):
             budget=autonomous_tasks.TASKS[task]["budget_chars"]
             _create_run(root,task,target,packet,prompt,images,reason or
@@ -976,9 +1289,11 @@ def _site_determination(root):
 
 def get(web, project):
     root = _root(project)
+    page_selection=_p0_page_selection(root)
     return {"id": project["id"], "tasks": _all_current(root, web, project), "auto_apply_bar": autonomous_task_scoring.AUTO_APPLY_BAR,
             "determinations": _site_determination(root), "supported_tasks": list(autonomous_tasks.TASKS),
-            "out_of_scope_tasks": {}}
+            "out_of_scope_tasks": {}, "skipped_pages": page_selection["skipped"],
+            "page_selection_notes": page_selection["notes"]}
 
 
 def get_labels(project):
@@ -1365,7 +1680,13 @@ def post(web, project, data):
     if len(reply.encode("utf-8")) > 64_000:
         raise ValueError("Reply exceeds the 64 KB task limit.")
     model_note = str(data.get("model_note", ""))[:160]
-    record["stand_in"] = data.get("stand_in") is True
+    reply_stand_in = False
+    try:
+        reply_stand_in = autonomous_tasks.parse_json_reply(reply).get("stand_in") is True
+    except ValueError:
+        # Let the task-specific validator report malformed replies below.
+        pass
+    record["stand_in"] = data.get("stand_in") is True or reply_stand_in
     reply_path = _archive_reply(root, record, reply, model_note)
     record["reply"] = reply
     record["reply_hash"] = hashlib.sha256(reply.encode("utf-8")).hexdigest()

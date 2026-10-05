@@ -1551,8 +1551,12 @@ test("operator panel exposes bounded P0, P3 and P4 tasks", async ({page}) => {
     {task:"P3_boundaries",target:"shop-page-20",status:"waiting_for_reply",prompt:"Classify boundaries",packet:{room:"Shop"},images:[{name:"boundary.png",url:"/boundary.png"}]},
     {task:"P4_openings",target:"shop-edge-1-page-26",status:"waiting_for_reply",prompt:"Read storefront glazing",packet:{room:"Shop"},images:[{name:"elevation.png",url:"/elevation.png"}]},
   ];
+  const skipped_pages = [
+    {page:21,reason:"Skipped second view of ground level; page 20 was selected as the main geometry plan."},
+    {page:22,reason:"Skipped joinery/shop-detail drawing and large detail scale 1:10; room outlines use the main geometry plan."},
+  ];
   await page.route("**/api/autonomous-tasks**", route => route.request().method() === "GET"
-    ? route.fulfill({json:{id:"demo-project",auto_apply_bar:.85,supported_tasks:tasks.map(row=>row.task),tasks}})
+    ? route.fulfill({json:{id:"demo-project",auto_apply_bar:.85,supported_tasks:tasks.map(row=>row.task),tasks,skipped_pages}})
     : route.fulfill({json:{id:"demo-project",tasks}}));
   await page.goto("/?operator=1");
   await page.evaluate(() => {DATA={id:"demo-project"};show("vRes");});
@@ -1560,6 +1564,8 @@ test("operator panel exposes bounded P0, P3 and P4 tasks", async ({page}) => {
   await expect(panel).toBeVisible();
   for (const task of ["P0_dimensions","P0_wall_styles","P0_room_names","P0_room_outlines","P3_boundaries","P4_openings"])
     await expect(panel.locator(`[data-task="${task}"]`)).toBeVisible();
+  await expect(panel.locator('[data-page-selection-note][data-page="21"]')).toContainText("second view");
+  await expect(panel.locator('[data-page-selection-note][data-page="22"]')).toContainText("1:10");
 });
 
 test("project load renders room confirmation from compact preliminary data and keeps actions available", async ({ page }) => {

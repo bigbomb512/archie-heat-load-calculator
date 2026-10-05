@@ -146,9 +146,9 @@ def validate_wall_style_batch_reply(packet, reply):
 
 def validate_boundary_reply(packet, reply):
     value = parse_json_reply(reply)
-    edges = value.get("edges")
+    edges = value.get("runs", value.get("edges"))
     if not isinstance(edges, list):
-        raise ValueError("Boundary reply must contain an edges list.")
+        raise ValueError("Boundary reply must contain a runs list.")
     allowed = room_outline_boundary_values()
     expected = {int(row["index"]): row for row in packet.get("edges", [])}
     result, seen = [], set()
@@ -156,18 +156,22 @@ def validate_boundary_reply(packet, reply):
         if not isinstance(row, dict):
             raise ValueError("Boundary reply contains an invalid or repeated edge index.")
         index = row.get("index")
-        if type(row.get("edge_number")) is int:
+        if type(row.get("run_number")) is int:
+            index = row["run_number"] - 1
+        elif type(row.get("edge_number")) is int:
             index = row["edge_number"] - 1
         if type(index) is not int or index not in expected or index in seen:
-            raise ValueError("Boundary reply contains an invalid or repeated edge index.")
+            raise ValueError("Boundary reply contains an invalid or repeated run number.")
         boundary = row.get("boundary")
         if boundary not in allowed:
             raise ValueError("Boundary must be external, mall, adjacent_tenancy, internal or unknown.")
         evidence = str(row.get("evidence", "")).strip()
-        if boundary != "unknown" and index not in packet.get("shared_edges", []) and not evidence:
-            raise ValueError(f"Edge {index + 1} needs quoted evidence for a non-unknown classification.")
-        if index == packet.get("storefront_edge_index") and boundary in {"adjacent_tenancy", "internal"}:
-            raise ValueError("The edge matching the storefront elevation width cannot be internal or adjacent_tenancy.")
+        shared_question_runs = packet.get("shared_run_indices", packet.get("shared_edges", []))
+        if boundary != "unknown" and index not in shared_question_runs and not evidence:
+            raise ValueError(f"Run {index + 1} needs quoted evidence for a non-unknown classification.")
+        storefront_index = packet.get("storefront_run_index", packet.get("storefront_edge_index"))
+        if index == storefront_index and boundary in {"adjacent_tenancy", "internal"}:
+            raise ValueError("The run matching the storefront elevation width cannot be internal or adjacent_tenancy.")
         result.append({"index": index, "boundary": boundary, "evidence": evidence[:300]})
         seen.add(index)
     if seen != set(expected):

@@ -43,7 +43,10 @@
     }
     const tasks = data.tasks || [];
     status.textContent = tasks.length ? `${tasks.filter(row => row.status === "waiting_for_reply").length} waiting for a reply · ${tasks.filter(row => row.status === "blocked").length} blocked · apply bar ${Math.round(data.auto_apply_bar * 100)}%.` : "No tasks are ready. Run all tasks to build bounded packets.";
-    list.innerHTML = tasks.map(row => {
+    const skippedPages = (data.page_selection_notes || data.skipped_pages || []).map(row =>
+      `<article class="panel-card" data-page-selection-note data-page="${escapeHtml(row.page)}"><h5>Room-outline page ${escapeHtml(row.page)} · ${escapeHtml(row.status || "skipped")}</h5><p>${escapeHtml(row.reason)}</p></article>`
+    ).join("");
+    list.innerHTML = skippedPages + tasks.map(row => {
       const displayStatus = row.status === "below_accuracy_bar" ? "Applied · below accuracy bar" :
         row.status === "applied_fallback" ? "Applied · fallback" : row.status.replaceAll("_", " ");
       const images = (row.images || []).map(image => `<li><a href="${escapeHtml(image.url)}" download>${escapeHtml(image.name)}</a></li>`).join("");
