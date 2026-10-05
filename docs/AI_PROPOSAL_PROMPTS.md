@@ -355,8 +355,19 @@ equipment schedule arrives.
 | EPRI CKV performance reports (1997), OSTI-listed ASHRAE paper (1998) | Single-appliance tests; paper abstract only | Licensed / no free full text |
 | Websites reproducing ASHRAE tables | Copies of the licensed tables | Not authoritative; not used |
 
-No free, authoritative source was found. **Decision needed (user):** which
-licensed source to obtain (ASHRAE Fundamentals ch. 18 and/or AIRAH DA09 for
-heat gains; AS 1668.2 for exhaust), or wait for the client's equipment
-schedule. Until then: build and score the equipment-identification task
-(no heat numbers needed), and keep the kitchen heat at the labelled default.
+No free, authoritative source was found. **Decision (user, 2026-10-05):** wait
+for AIRAH DA09 and check whether Section 8 covers commercial-kitchen
+appliances; if not, fall back to ASHRAE Fundamentals ch. 18, plus AS 1668.2
+for exhaust. Until then the kitchen heat stays at the labelled default.
+
+**Identification task — built (2026-10-05):** `ai/kitchen_equipment.py`
+(packet, prompt, validator, determinations) and the developer tool
+`tools/run_kitchen_equipment.py` (packets → reply → `determinations.json`).
+- Labels are the page's text joined into short lines, leaving out long notes,
+  bare numbers and the title block.
+- A quote may wrap over lines: every quoted word must be on the cited page.
+- Sinks, basins, racks and benches are refused as giving no heat.
+- On Butcher Buffet the packet is one plan crop of the kitchen plus the
+  kitchen elevations (p. 30), with a 1,884-character prompt.
+- Wiring it into the Card P task framework is Codex's, using the same pattern
+  as P0.
