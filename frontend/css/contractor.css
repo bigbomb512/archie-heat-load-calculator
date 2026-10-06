@@ -1,0 +1,70 @@
+/* Contractor view (#vJob): the default project screen. Uses the workspace theme tokens. */
+#vJob { max-width: 880px; margin: 0 auto; padding: 8px 0 48px; }
+.job-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+.job-head h2 { margin: 6px 0 0; font-size: 28px; letter-spacing: -.8px; color: var(--text); overflow-wrap: anywhere; }
+
+.job-steps { display: flex; gap: 8px; list-style: none; padding: 0; margin: 0 0 22px; }
+.job-steps li { flex: 1 1 0; display: flex; align-items: center; gap: 10px; padding: 12px 14px; font-size: 13px; color: var(--text-2);
+  border: 1px solid var(--line); border-radius: var(--ui-radius-panel); background: var(--raise-bg); }
+.job-steps span { display: grid; place-items: center; flex: 0 0 24px; height: 24px; border-radius: 50%; border: 1px solid var(--line);
+  font: 11px var(--mono); color: var(--accent); }
+.job-steps .is-current { color: var(--text); border-color: var(--accent); font-weight: 600; }
+.job-steps .is-current span { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.job-steps .is-done span { background: var(--action-wash); }
+
+.job-card { border: 1px solid var(--line); border-radius: var(--ui-radius-panel); background: var(--raise-bg); padding: 22px 24px; margin-bottom: 16px; }
+.job-card h3 { margin: 0 0 6px; font-size: 17px; color: var(--text); }
+.job-card h3:not(:first-child) { margin-top: 24px; }
+.job-hint { margin: 0 0 14px; font-size: 13px; line-height: 1.6; color: var(--text-2); }
+.job-status { min-height: 1.4em; margin: 10px 0 0; font-size: 13px; color: var(--text-2); }
+.job-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+
+.job-progress { display: flex; align-items: flex-start; gap: 18px; }
+.job-progress p { margin: 4px 0 12px; font-size: 14px; line-height: 1.6; color: var(--text-2); max-width: 60ch; }
+.job-spinner { flex: 0 0 22px; height: 22px; margin-top: 2px; border-radius: 50%; border: 3px solid var(--line); border-top-color: var(--accent);
+  animation: job-spin 1s linear infinite; }
+@keyframes job-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .job-spinner { animation: none; border-top-color: var(--line); background: var(--action-wash); } }
+.job-error { border-color: #d9a7a0; background: #fdf6f4; }
+
+.job-question { border: 1px solid var(--line-soft); border-radius: var(--ui-radius-control); padding: 12px 14px; margin: 0 0 10px; }
+.job-question legend { padding: 0 4px; font-size: 14px; font-weight: 600; color: var(--text); }
+.job-question label { display: inline-flex; align-items: center; gap: 6px; margin: 8px 18px 0 0; font-size: 13px; }
+
+.job-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.job-table th, .job-table td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+.job-table thead th { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--text-2); }
+.job-table tbody th { font-weight: 600; color: var(--text); }
+.job-table td:nth-child(n+2) { white-space: nowrap; }
+.job-use { display: block; margin-top: 6px; font-size: 12px; font-weight: 400; color: var(--text-2); }
+.job-use select { display: block; margin-top: 4px; }
+.link-button { background: none; border: 0; padding: 0; color: var(--accent); text-decoration: underline; cursor: pointer; font: inherit; }
+
+.job-confirm { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 14px; margin-top: 20px; }
+.job-confirm label { display: grid; gap: 6px; font-size: 12px; color: var(--text-2); }
+.job-confirm input { min-width: 220px; padding: 10px; border: 1px solid #d4dfe6; border-radius: var(--ui-radius-control); font-size: 14px; }
+
+.job-draft-banner { margin: 0 0 18px; padding: 10px 14px; border-radius: var(--ui-radius-control); background: #fff8e6; border: 1px solid #ecd9a6;
+  font-size: 13px; color: #5b4a17; }
+.job-total { display: flex; align-items: baseline; gap: 12px; }
+.job-total-number { font-family: var(--serif); font-size: 56px; line-height: 1; letter-spacing: -2px; color: var(--text); }
+.job-total-unit { font-size: 16px; color: var(--text-2); }
+.job-list { list-style: none; padding: 0; margin: 0; }
+.job-list li { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line-soft); font-size: 14px; }
+.job-excluded li, .job-basis li { display: list-item; list-style: disc; margin-left: 18px; color: var(--text-2); }
+
+@media (max-width: 640px) {
+  .job-head { flex-direction: column; align-items: flex-start; }
+  .job-steps { gap: 6px; }
+  .job-steps li { flex-direction: column; align-items: flex-start; gap: 4px; padding: 8px; font-size: 11px; line-height: 1.3; }
+  .job-steps span { flex: 0 0 20px; width: 20px; height: 20px; font-size: 10px; }
+  .job-card { padding: 18px 16px; }
+  .job-table td:nth-child(n+2) { white-space: normal; }
+  .job-total-number { font-size: 44px; }
+}
+
+@media print {
+  body.hvac-app .side, body.hvac-app .top, #vJob .job-head .btn, #vJob .job-steps, #vJob .job-no-print, .toast { display: none !important; }
+  body.hvac-app .work, body.hvac-app .stage, #vJob { margin: 0 !important; padding: 0 !important; max-width: none !important; }
+  .job-card { border: 0; padding: 0; }
+}

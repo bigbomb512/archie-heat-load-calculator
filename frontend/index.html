@@ -12,6 +12,7 @@
 <link rel="stylesheet" href="/frontend/css/hvac-identity.css">
 <link rel="stylesheet" href="/frontend/css/design-system.css">
 <link rel="stylesheet" href="/frontend/css/analysis-workspace.css">
+<link rel="stylesheet" href="/frontend/css/contractor.css">
 </head>
 <body class="hvac-app">
 <a class="skip-link" href="#main">Skip to calculator</a>
@@ -51,6 +52,7 @@
             <path d="M12 2.6v2.2M12 19.2v2.2M2.6 12h2.2M19.2 12h2.2M5.4 5.4l1.6 1.6M17 17l1.6 1.6M18.6 5.4 17 7M7 17l-1.6 1.6"/>
           </svg>
         </button>
+        <button class="btn ghost hide" id="btnSimpleView" type="button">Back to the simple view</button>
         <button class="btn ghost hide" id="btnRestart">Start over</button>
         <button class="btn key hide" id="btnAnalyse">Analyse PDF</button>
       </div>
@@ -118,6 +120,20 @@
             <div class="step" id="s4"><span class="bx"></span>Selecting pages relevant to HVAC design</div>
           </div>
         </div>
+      </section>
+
+      <!-- contractor view (default project screen) -->
+      <section id="vJob" class="hide" aria-labelledby="jobTitle">
+        <div class="job-head">
+          <div><div class="eyebrow">Cooling load</div><h2 id="jobTitle">Your job</h2></div>
+          <button class="btn ghost" id="btnJobEngineer" type="button">Engineer tools</button>
+        </div>
+        <ol class="job-steps" aria-label="Progress">
+          <li data-job-step="read"><span>1</span>Reading your drawings</li>
+          <li data-job-step="check"><span>2</span>Check and answer</li>
+          <li data-job-step="result"><span>3</span>Result</li>
+        </ol>
+        <div id="jobBody" aria-live="polite"></div>
       </section>
 
       <!-- results -->
@@ -798,5 +814,6 @@
 
 <script src="/frontend/js/app.js"></script>
 <script src="/frontend/js/autonomous_tasks.js"></script>
+<script src="/frontend/js/contractor.js"></script>
 </body>
 </html>

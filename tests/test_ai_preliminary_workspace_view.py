@@ -39,7 +39,8 @@ class PreliminaryWorkspaceViewTests(unittest.TestCase):
         self.write("ai_preliminary_model.json", {"topology": {"rooms": [room]}, "calculation_records": ["z" * 100_000]})
         self.write("hourly_ai_preliminary_load_report.json", {
             "label": "AI preliminary estimate", "included_scope_peak": {"design_total_kw": 12.3},
-            "scenario_results": [{"rooms": [{"room_id": "room-bar", "name": "Bar", "loads": ["detailed"]}]}],
+            "scenario_results": [{"rooms": [{"room_id": "room-bar", "name": "Bar", "loads": ["detailed"],
+                                             "peak": {"design_total_kw": 4.06, "display_hour": 14, "hours": ["detailed"]}}]}],
             "unresolved_room_inputs": [{"room_id": "room-bar", "room_name": "Bar", "component_type": "envelope",
                                          "component_id": "roof_solar", "component": "Roof sun — not assessed",
                                          "reason": "No cited horizontal solar profile."}],
@@ -68,6 +69,8 @@ class PreliminaryWorkspaceViewTests(unittest.TestCase):
         self.assertNotIn("input_set", compact)
         self.assertNotIn("model", compact)
         self.assertNotIn("scenario_results", compact["hourly_ai_preliminary_load_report"])
+        self.assertEqual(compact["hourly_ai_preliminary_load_report"]["room_peaks"],
+                         [{"room_id": "room-bar", "name": "Bar", "design_total_kw": 4.06, "hour": 14}])
         self.assertLess(len(json.dumps(compact, indent=2).encode("utf-8")), 1_000_000)
 
         full = ai_preliminary_service.get(FakeWeb, self.project)

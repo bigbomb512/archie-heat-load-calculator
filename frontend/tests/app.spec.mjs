@@ -160,7 +160,7 @@ test("confirmation unlocks only after analysis has selected pages", async ({ pag
     model_note:"No AI reply — started without AI evidence", packet_pages:[1], attached_pages:[],
     packet_fingerprint:"a".repeat(64), prompt_fingerprint:"b".repeat(64), result_counts:{},
   }]}}));
-  await page.goto("/");
+  await page.goto("/?engineer=1");
 
   await page.locator("#pdf").setInputFiles({
     name: "test-drawing-set.pdf",
@@ -187,7 +187,7 @@ test("confirmation unlocks only after analysis has selected pages", async ({ pag
 
 test("reopening a no-AI project restores its notice and reviewed-workspace status", async ({ page }) => {
   await mockApi(page);
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   await page.evaluate(project => showResults({...project, has_reasoning_packet:true,
     vision_evidence_source:"none", design_requirements:{zones:[]}}), analysis);
   await expect(page.locator("#visionPanel")).toBeVisible();
@@ -203,7 +203,7 @@ test("confirmation does not show the no-AI notice when a real reply is preserved
   await page.route("**/api/vision-response/no-ai", route => route.fulfill({json:{
     status:"real_reply_preserved", has_reasoning_packet:true,
   }}));
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   await page.locator("#pdf").setInputFiles({
     name:"real-reply-project.pdf", mimeType:"application/pdf", buffer:Buffer.from("%PDF-1.4 test"),
   });
@@ -215,7 +215,7 @@ test("confirmation does not show the no-AI notice when a real reply is preserved
 
 test("analysis gives one clear next action before exposing advanced workflow", async ({ page }) => {
   await mockApi(page);
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   await page.locator("#pdf").setInputFiles({
     name: "workflow-drawing-set.pdf",
     mimeType: "application/pdf",
@@ -253,7 +253,7 @@ test("contractor saves Australian ventilation rules context once and sees safe u
       ruleset_status:"candidate", ventilation_rules_resolution:{status:"needs_review", jurisdiction:"NSW", ncc_edition:"NCC edition unresolved", zone_results:[], conflicts:[]},
     }});
   });
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   await page.evaluate(() => {
     DATA = {id:"demo-project"};
     show("vRes");
@@ -275,7 +275,7 @@ test("contractor saves Australian ventilation rules context once and sees safe u
 });
 
 test("cooling outside-air flow records its own source and review status", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   const result = await page.evaluate(() => {
     const item = addZone({zone_id:"zone_oa", name:"Dining", area_m2:40, occupancy:24});
     item.querySelector(".zone-outside-air").value = "180";
@@ -314,7 +314,7 @@ test("guided resolver reports contractor-friendly skill stages then refreshes co
       ],
     } });
   });
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   await page.locator("#pdf").setInputFiles({
     name: "guided-workflow.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 guided fixture"),
   });
@@ -329,7 +329,7 @@ test("guided resolver reports contractor-friendly skill stages then refreshes co
 });
 
 async function openGuidedResolver(page){
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   await page.locator("#pdf").setInputFiles({
     name: "guided-workflow.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 guided fixture"),
   });
@@ -399,7 +399,7 @@ test("local test workspace runs and resets an isolated draft walkthrough", async
       prompt_url: "/api/test-mode/artifact/test-123?path=workspace%2Fskill_workflow_runs%2Frun%2Fattempts%2Froom_boundaries_areas%2F1%2Fprompt.txt"}],
   }}}));
   await page.route("**/api/test-mode/reset", route => route.fulfill({json: {reset: true, run_id: "test-123"}}));
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   await expect(page.locator("#testWorkspacePanel")).toBeVisible();
   await expect(page.locator("#testWorkspaceFixture")).toContainText("synthetic workflow test");
   await expect(page.locator("#testWorkspaceFixture")).toContainText("real-PDF Codex AI test");
@@ -445,7 +445,7 @@ test("design-input verification controls save with the reasoning packet", async 
     } });
   });
 
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   await page.evaluate(() => { show("vRes"); showDesignRequirements({}, {}, [{ label: "Sales area", area: "30m2", source_page: 1 }]); });
   await page.getByRole("button", {name: "2 Confirm project inputs"}).click();
   await page.locator("#reqOccupancy").fill("18");
@@ -470,7 +470,7 @@ test("design-input verification controls save with the reasoning packet", async 
 
 test("guided contractor workflow reveals only the current stage", async ({ page }) => {
   await mockApi(page);
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   await page.evaluate(requirements => {
     DATA = { id: "demo-project" };
     show("vRes");
@@ -570,7 +570,7 @@ test("hourly cooling workflow displays a labelled partial draft", async ({ page 
     } });
   });
 
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   await page.evaluate(requirements => {
     DATA = { id: "demo-project" };
     show("vRes");
@@ -616,7 +616,7 @@ test("hourly cooling workflow displays a labelled partial draft", async ({ page 
 
 test("heating report exposes psychrometric source and wet-bulb basis", async ({ page }) => {
   await mockApi(page);
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   await page.evaluate(() => drawHeatingLoadReport({
     status: "draft",
     readiness: {status: "draft", issues: []},
@@ -651,7 +651,7 @@ test("heating report exposes psychrometric source and wet-bulb basis", async ({ 
 
 test("AHU peak report exposes outdoor, return, coil, and pressure provenance", async ({ page }) => {
   await mockApi(page);
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   await page.evaluate(() => drawAhuAirside({status: "draft", scenario_results: [{
     scenario_id: "summer_case", status: "draft", included_scope_peak: {design_total_kw: 8.4},
     ahus: [{ahu_id: "ahu_01", name: "Dining AHU", status: "draft", system_type: "single_zone_constant_volume", number_off: 1, peak: {
@@ -712,7 +712,7 @@ test("evidence-to-calculator bridge saves, previews, and applies reviewed propos
     expect(body.preview_token).toBe("preview-1");
     return route.fulfill({json: {calculator_draft: {...draft, revision: 3, decisions: {floor_ground_123: {decision: "accept", reviewer: "ENG-1"}}, apply_summary: {created: [{candidate_id: "floor_ground_123"}], reports_marked_stale: ["hourly_load_report.json"]}}, apply_summary: {created: [{candidate_id: "floor_ground_123"}], reports_marked_stale: ["hourly_load_report.json"]}, changed_artifacts: ["hourly_load_model"]}});
   });
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   await page.evaluate(input => { DATA = {id: "demo-project"}; show("vRes"); requiredElement("designRequirementsPanel").classList.remove("hide"); showCalculatorDraft(input); }, draft);
   const candidate = page.locator(".draft-candidate");
   await candidate.locator("details").evaluate(element => { element.open = true; });
@@ -736,7 +736,7 @@ function cardHDraft(){
 }
 
 async function renderCardHDraft(page, draft = cardHDraft()){
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   await page.evaluate(input => { DATA = {id: "demo-project"}; show("vRes"); requiredElement("designRequirementsPanel").classList.remove("hide"); showCalculatorDraft(input); }, draft);
 }
 
@@ -858,7 +858,7 @@ test("server draft failure remains visible inline with its message", async ({ pa
 test("stale calculator draft explains upgrade and requires rebuilding before review", async ({ page }) => {
   await mockApi(page);
   const draft = {schema_version: 2, revision: 4, status: "review_required", candidates: {floors: [], zones: [], rooms: [], room_inputs: [], schedules: [], envelope: []}, review_items: [], decisions: {}};
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   await page.evaluate(input => {
     show("vRes");
     showCalculatorDraft({...input, artifact_status: "stale", stale_reasons: ["This saved draft predates room and trace freshness tracking. Rebuild after upgrade. Decisions on unchanged candidates are retained; changed or new candidates return to review."]});
@@ -879,7 +879,7 @@ test("background draft rebuild explains revision conflict and reload requirement
   await page.route("**/api/calculator-draft", route => route.fulfill({status: 409, json: {
     error: "The draft changed. Reload and review the latest version.", code: "revision_conflict", conflict: true, action: "reload_review_preview",
   }}));
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   await page.evaluate(input => { DATA = {id: "demo-project"}; show("vRes"); requiredElement("designRequirementsPanel").classList.remove("hide"); showCalculatorDraft(input); }, draft);
   await page.locator(".draft-candidate details").evaluate(element => { element.open = true; });
   await page.locator('.draft-candidate [data-field="reviewer"]').fill("ENG-1");
@@ -913,7 +913,7 @@ test("reviewer can trace, calibrate, save, and reload a proposal-only room bound
   await page.route("**/api/calculation-input-evidence?project_id=demo-project", route => route.fulfill({json:{status:"current",calculation_input_evidence:{fingerprint:"evidence-fixture",candidates:[],geometry_resolution:{entities:[{kind:"room_geometry_proof",geometry_status:"geometry_proposed",label:"Shop",source:{page:1},value:{area_m2:4,calibration:{mm_per_px:10}}}],summary:{active_room_area_count:0},deterministic_proof_diagnostics:{pages:[],rooms:[]}},opening_register:{openings:[]}},summary:{candidate_count:1,status_counts:{proposed:1},category_counts:{}},component_interpretations:{}}}));
   await page.route("**/fake-plan.svg", route => route.fulfill({contentType:"image/svg+xml",body:'<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="800"><rect width="1000" height="800" fill="#eee"/><path d="M100 100h200v200H100z" fill="none" stroke="#222" stroke-width="3"/></svg>'}));
   await page.setViewportSize({width:390,height:844});
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   await page.evaluate(() => { DATA={id:"demo-project"}; show("vRes"); requiredElement("designRequirementsPanel").classList.remove("hide"); showCalculationInputEvidence({fingerprint:"initial",geometry_resolution:{entities:[],review_items:[],summary:{},deterministic_proof_diagnostics:{pages:[],rooms:[]}},candidates:[]}, {}, "current"); });
   await page.locator("[data-geometry-room]").selectOption("room-shop");
   await page.locator("[data-geometry-page]").selectOption("1");
@@ -956,7 +956,7 @@ test("reviewer can trace, calibrate, save, and reload a proposal-only room bound
 });
 
 test("draft offers traced-geometry acceptance only for a linked current proof", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   const markup = await page.evaluate(() => {
     const base = {candidate_id:"room-1",kind:"room",value:{room_id:"room-1",name:"Shop",geometry_status:"geometry_proposed",geometry_reference:"proof-1"},citations:[],dependencies:[],reason:"Review geometry"};
     const current = calculatorDraftCandidateMarkup({...base,reviewer_geometry_proof:{proof_id:"proof-1",trace_id:"trace-1",area_m2:20,reviewer:"QA-1",calibration:{status:"agreed"}}},{});
@@ -1004,7 +1004,7 @@ test("AI input assembly saves one project scope and calculates from an immutable
     expect(body.input_set_fingerprint).toBe("snapshot-abc123");
     return route.fulfill({json: {status: "current", hourly_load_report: {status: "draft", readiness: {status: "draft", issues: []}, scope_summary: {complete_scope: false}, scenario_results: []}}});
   });
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   await page.evaluate(requirements => { DATA = {id: "demo-project"}; show("vRes"); showDesignRequirements(requirements, {}, []); }, coolingRequirements);
   await page.getByRole("button", {name: "4 Calculate cooling"}).click();
   await page.locator("#hourlyScenarioIds").fill("summer_day");
@@ -1043,7 +1043,7 @@ test("ventilation calculation displays outside-air and exhaust evidence", async 
     } });
   });
 
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   await page.evaluate(requirements => {
     DATA = { id: "demo-project" };
     show("vRes");
@@ -1077,7 +1077,7 @@ test("reviewed envelope editor saves a confirmed opaque boundary", async ({ page
     expect(body.envelope_model.surfaces[0]).toEqual(expect.objectContaining({ surface_id: "north-wall", owner_zone_id: "zone_001", boundary_method: "external", construction_id: "wall-a", review_status: "confirmed" }));
     return route.fulfill({ json: { envelope_model: body.envelope_model, readiness: { ...readiness, active_for_calculation: true } } });
   });
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   await page.evaluate(requirements => { DATA = { id: "demo-project" }; show("vRes"); showDesignRequirements(requirements, {}, []); }, coolingRequirements);
   await page.getByRole("button", {name: "3 Complete the building model"}).click();
   await page.locator("#btnAddConstruction").click();
@@ -1263,7 +1263,7 @@ test("analysis reaches results without browser errors", async ({ page }) => {
   });
   await mockApi(page);
 
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   await page.locator("#pdf").setInputFiles({
     name: "demo.pdf",
     mimeType: "application/pdf",
@@ -1283,7 +1283,7 @@ test("saved project opens into results", async ({ page }) => {
   page.on("pageerror", error => errors.push(error.message));
   await mockApi(page);
 
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   await page.locator("[data-open='demo-project']").click();
 
   await expect(page.locator("#summaryTitle")).toHaveText("Ready for the next step.");
@@ -1293,7 +1293,7 @@ test("saved project opens into results", async ({ page }) => {
 
 test("vision reply history is shown in the app after opening the review workflow", async ({ page }) => {
   await mockApi(page);
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   await page.locator("[data-open='demo-project']").click();
   await page.locator("#btnContinue").click();
   await expect(page.locator("#visionPanel")).toBeVisible();
@@ -1305,7 +1305,7 @@ test("vision reply history is shown in the app after opening the review workflow
 
 test("annual report shows monthly subtotals and incomplete-hour counts", async ({ page }) => {
   await mockApi(page);
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   await page.evaluate(() => drawAnnualEnergy({
     status: "draft", scope_summary: {complete_scope: false, included_room_ids: ["room_001"]},
     cooling: {status: "draft", annual_energy_kwh: 2, peak_kw: 1, monthly_kwh: {"1": 2}, monthly_incomplete_hours: {"1": 3}, blocked_reasons: ["Room room_001 has missing cooling hours."]},
@@ -1319,7 +1319,7 @@ test("annual report shows monthly subtotals and incomplete-hour counts", async (
 
 test("selected design weather displays the wet-bulb basis and dew-point derivation", async ({ page }) => {
   await mockApi(page);
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   await page.evaluate(() => drawSiteDesignWeather({status: "draft_ready", site_design_weather_resolution: {
     design_basis: "comfort", cooling: {selection: "contractor_selected", selected: {
       record_id: "weather-cooling", publisher: "AIRAH", station_reference: "Sydney", release_version: "fixture-1",
@@ -1348,7 +1348,7 @@ test('project list failure offers a working inline retry', async ({ page }) => {
       ? route.fulfill({ status: 503, json: { error: 'Unavailable' } })
       : route.fulfill({ json: [{ id: 'retry-project', name: 'Recovered project.pdf', pages: 4, analysed: false }] });
   });
-  await page.goto('/');
+  await page.goto('/?engineer=1');
   await expect(page.getByText('Could not load your projects.', { exact: false })).toBeVisible();
   await page.getByRole('button', { name: 'Retry', exact: true }).click();
   await expect(page.getByRole('button', { name: /Recovered project.pdf/ })).toBeVisible();
@@ -1361,7 +1361,7 @@ test('project list distinguishes records with otherwise identical labels', async
     { id: 'drawing-set-12345678', name: 'Same drawings.pdf', pages: 4, analysed: true, relevant: 3, revision: 'rev-v7', updated_at: '2026-09-01' },
     { id: 'drawing-set-87654321', name: 'Same drawings.pdf', pages: 4, analysed: true, relevant: 3, revision: 'rev-v7', updated_at: '2026-09-01' },
   ] }));
-  await page.goto('/');
+  await page.goto('/?engineer=1');
 
   await expect(page.locator('#projects [data-open="drawing-set-12345678"]')).toContainText('ID 12345678');
   await expect(page.locator('#projects [data-open="drawing-set-87654321"]')).toContainText('ID 87654321');
@@ -1369,7 +1369,7 @@ test('project list distinguishes records with otherwise identical labels', async
 
 test('current project navigation returns keyboard focus to the workspace', async ({ page }) => {
   await page.route('**/api/projects', route => route.fulfill({ json: [] }));
-  await page.goto('/');
+  await page.goto('/?engineer=1');
   await page.getByRole('button', { name: 'Current project', exact: true }).click();
   await expect(page.locator('#main')).toBeFocused();
 });
@@ -1402,7 +1402,7 @@ test('room-input panels show stale state and accept overrides after re-resolutio
       }]},
     }});
   });
-  await page.goto('/');
+  await page.goto('/?engineer=1');
   await page.locator("[data-open='demo-project']").click();
   await page.getByRole('button', {name: 'Confirm selected drawings'}).click();
   await page.waitForLoadState('networkidle');
@@ -1461,7 +1461,7 @@ test('room-input panels show stale state and accept overrides after re-resolutio
 });
 
 test("AI preliminary result shows unassessed components beneath the total", async ({ page }) => {
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   await page.evaluate(() => {
     drawValueResolution = () => {};
     drawAiPreliminary({
@@ -1610,7 +1610,7 @@ test("project load renders room confirmation from compact preliminary data and k
   ])}));
   await page.route("**/fake-plan.svg", route => route.fulfill({contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="800"><rect width="1000" height="800" fill="#eee"/></svg>'}));
 
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   await page.evaluate(() => { DATA = {id: "demo-project"}; show("vRes");
     requiredElement("workflowSkeleton").classList.remove("hide");
     requiredElement("visionPanel").classList.remove("hide");
@@ -1654,7 +1654,7 @@ test("freshness check failure re-enables confirmed room-scope actions and explai
       ? freshnessGate.then(()=>route.fulfill({status:503,json:{error:"temporary database error"}}))
       : route.fulfill({json:compact});
   });
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   await page.evaluate(() => { DATA={id:"demo-project"}; show("vRes"); loadAiPreliminary(); });
   const block=page.locator("#roomScopeConfirmation");
   await expect(block.locator("[data-room-scope-confirm]")).toBeDisabled();
@@ -1686,7 +1686,7 @@ test("guided area blocker names untraced rooms and opens the first trace target"
     summary:{candidate_count:0,status_counts:{},category_counts:{}},component_interpretations:{}}}));
   await page.route("**/api/reviewer-room-geometry?project_id=demo-project", route => route.fulfill({json:traceContext}));
   await page.route("**/fake-plan.svg", route => route.fulfill({contentType:"image/svg+xml",body:'<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="800"><rect width="1000" height="800" fill="#eee"/></svg>'}));
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   await page.evaluate(() => {DATA={id:"demo-project"};show("vRes");requiredElement("visionPanel").classList.remove("hide");requiredElement("designRequirementsPanel").classList.remove("hide");requiredElement("workflowSkeleton").classList.remove("hide");});
   await page.locator("#btnGuidedResolveModelInputs").click();
   const status=page.locator("#guidedModelInputsStatus");
@@ -1699,7 +1699,7 @@ test("guided area blocker names untraced rooms and opens the first trace target"
 });
 
 async function renderRoomScope(page, state){
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   await page.evaluate(input => {
     DATA = {id: "demo-project"}; show("vRes"); requiredElement("workflowSkeleton").classList.remove("hide");
     requiredElement("visionPanel").classList.remove("hide");
@@ -1783,7 +1783,7 @@ async function openTraceWorkspace(page){
   await page.route("**/api/calculation-input-evidence?project_id=demo-project", route => route.fulfill({json: {status: "current", calculation_input_evidence: {fingerprint: "e", candidates: [], geometry_resolution: {entities: [], summary: {}, deterministic_proof_diagnostics: {pages: [], rooms: []}}, opening_register: {openings: []}}, summary: {candidate_count: 0, status_counts: {}, category_counts: {}}, component_interpretations: {}}}));
   await page.route("**/api/plan-snap?project_id=demo-project&page=5", route => route.fulfill({json: {lines: [], endpoints: [], intersections: [], snap_tolerance_px: 8, source_pdf_fingerprint: "pdf-fixture", vector_page_fingerprint: "vector-fixture"}}));
   await page.route("**/fake-plan.svg", route => route.fulfill({contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="800"><rect width="1000" height="800" fill="#eee"/></svg>'}));
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   await page.evaluate(() => { DATA = {id: "demo-project"}; show("vRes"); requiredElement("designRequirementsPanel").classList.remove("hide"); showCalculationInputEvidence({fingerprint: "initial", geometry_resolution: {entities: [], review_items: [], summary: {}, deterministic_proof_diagnostics: {pages: [], rooms: []}}, candidates: []}, {}, "current"); });
 }
 
@@ -1870,7 +1870,7 @@ test("room confirmation lists untraced rooms as not in the total and cannot incl
 });
 
 async function showSiteLocationPanel(page, data){
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   await page.evaluate(input => {
     DATA = {id: "demo-project"}; show("vRes");
     let node = requiredElement("siteLocationSection");
@@ -1952,7 +1952,7 @@ test("AI task operator panel is hidden from contractors and validates manual rep
     }
     return route.fulfill({json:taskState});
   });
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   await expect(page.locator("#autonomousTasksPanel")).toBeHidden();
   await page.evaluate(() => { DATA = {id:"demo-project"}; show("vRes"); });
   await expect.poll(() => summaryGets).toBeGreaterThan(0);
@@ -1998,7 +1998,7 @@ test("contractor sees the roof exposure question on the normal project screen an
         label:"Kitchen equipment identified from drawings (heat not yet assessed)",heat_assessed:false,
         items:[{type:"rangehood_canopy",count:1,page:22}]}}]}});
   });
-  await page.goto("/");
+  await page.goto("/?engineer=1");
   await page.evaluate(()=>{DATA={id:"demo-project"};show("vRes");});
   const question=page.locator("#contractorRoofQuestions [data-contractor-roof-question]");
   await expect(question).toBeVisible();

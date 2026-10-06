@@ -913,6 +913,7 @@ def _workspace_report(report):
         "unresolved_room_inputs": rows.get("unresolved_room_inputs", []),
         "known_exclusions": rows.get("known_exclusions", []),
         "room_names": [{"room_id": room_id, "name": name} for room_id, name in sorted(names.items())],
+        "room_peaks": _room_peaks(report),
         "preliminary_surface_summary": report.get("preliminary_surface_summary", {}),
         "design_conditions_basis": report.get("design_conditions_basis", {}),
         "refrigeration_process_exclusions": [{key: item.get(key) for key in ("room_name", "reason") if item.get(key) is not None}
@@ -922,6 +923,19 @@ def _workspace_report(report):
         "room_scope_confirmation": {key: confirmation.get(key) for key in ("reviewer", "confirmed_at")
                                      if isinstance(confirmation, dict) and confirmation.get(key)},
     }
+
+
+def _room_peaks(report):
+    """Per-room design peak (kW) for the compact view: the contractor result lists cooling by room."""
+    peaks = []
+    for scenario in report.get("scenario_results", []) if isinstance(report.get("scenario_results"), list) else []:
+        for room in scenario.get("rooms", []) if isinstance(scenario, dict) and isinstance(scenario.get("rooms"), list) else []:
+            peak = room.get("peak") if isinstance(room, dict) else None
+            if isinstance(peak, dict) and room.get("room_id") and isinstance(peak.get("design_total_kw"), (int, float)):
+                peaks.append({"room_id": str(room["room_id"]), "name": str(room.get("name", "")),
+                              "design_total_kw": peak["design_total_kw"], "hour": peak.get("display_hour", peak.get("hour"))})
+        break  # the included-scope peak comes from the first (design) scenario
+    return peaks
 
 
 def _response(web, project, response_view="full", check_freshness=None):
