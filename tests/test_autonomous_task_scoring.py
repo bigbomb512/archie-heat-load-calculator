@@ -26,8 +26,9 @@ def perfect():
         "P0_rooms": [{"label": "Bar", "area_m2": 31.2}, {"label": "Kitchen", "area_m2": 97.0}, {"label": "Shop", "area_m2": 216.0},
                      {"label": "Coolroom", "area_m2": 10.7}, {"label": "Freezer", "area_m2": 7.6}],
         "P1_site": {"site_text": "Tenancy MZ01, Central Precinct"},
-        "P2_north": [{"page": 20, "plan_up_azimuth_deg": 358}],
-        "P3_boundaries": [{"room": "Shop", "edge_length_m": 11.97, "boundary": "mall"}],
+        "P2_north": [{"page": 20, "plan_up_azimuth_deg": 358}] + [{"page": page, "plan_up_azimuth_deg": 0} for page in range(21, 26)],
+        "P3_boundaries": [{"room": "Shop", "edge_length_m": 11.97, "boundary": "mall"},
+                          {"room": "Bar", "edge_length_m": 7.47, "boundary": "internal"}, {"room": "Bar", "edge_length_m": 4.36, "boundary": "internal"}],
         "P4_openings": [{"page": 26, "glazed_panels": [{"width_mm": 2025, "sill_mm": 1100, "head_mm": 2700}]}],
         "P6_kitchen": [{"type": "rangehood_canopy", "count": 1}, {"type": "oven", "count": 1}, {"type": "refrigerator_upright", "count": 2},
                        {"type": "refrigerator_underbench", "count": 4}, {"type": "ice_machine", "count": 1}, {"type": "range_burners", "count": 1}],
@@ -41,12 +42,17 @@ def main():
     statuses = [item["status"] for items in report["tasks"].values() for item in items]
     check("a run matching the answer key scores every scored item correct", statuses and set(statuses) == {"correct"})
     check("north 2° off still counts within the 5° tolerance, across 0°/360°", report["tasks"]["P2_north"][0]["status"] == "correct")
-    check("the storefront facing the enclosed mall is scored", [item["status"] for item in report["tasks"]["P3_boundaries"]] == ["correct"])
+    check("the storefront facing the enclosed mall and the internal Bar walls are scored",
+          [item["status"] for item in report["tasks"]["P3_boundaries"]] == ["correct"] * 3)
+    bar_outside = score_case(KEY, {**perfect(), "P3_boundaries": [{"room": "Bar", "edge_length_m": 7.47, "boundary": "adjacent_tenancy"}]}, SITE)
+    check("a Bar wall classed as anything but internal is wrong",
+          [item["status"] for item in bar_outside["tasks"]["P3_boundaries"] if item["item"].startswith("Bar")] == ["wrong"])
     pending_key = {"case_id": "x", "tasks": {"P3_boundaries": {"edges": [{"room": "Shop", "edge_length_m": 5.0, "boundary": "pending_user"}]}}}
     check("an answer still pending from the user is not scored",
           score_case(pending_key, {"P3_boundaries": [{"room": "Shop", "edge_length_m": 5.0, "boundary": "external"}]})["tasks"]["P3_boundaries"] == [])
     wrong = score_case(KEY, {**perfect(), "P3_boundaries": [{"room": "Shop", "edge_length_m": 11.9, "boundary": "external"}]}, SITE)
-    check("calling the mall storefront external is wrong", wrong["tasks"]["P3_boundaries"][0]["status"] == "wrong")
+    check("calling the mall storefront external is wrong",
+          [item["status"] for item in wrong["tasks"]["P3_boundaries"] if item["item"].startswith("Shop")] == ["wrong"])
     summary = summarise([report])
     check("a fallback answer is counted separately", summary["P5_roof"]["from_fallback"] == 1)
     check("every task in a perfect run may auto-apply", all(row["auto_apply"] for row in summary.values()))

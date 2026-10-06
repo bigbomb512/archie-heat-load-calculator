@@ -81,6 +81,16 @@ def enclosed_room_checks():
     check("choosing furniture as a wall style still keeps the room (islands are filled)", len(with_furniture_as_wall) == 2)
     open_walls = ro.wall_geometry([item for item in objects if item["points"][0] != (100, 700 - 15)], [ro.style_id(WALL)], VIEWPORT)
     check("an area open to the plan edge is not a room", ro.enclosed_rooms(open_walls, VIEWPORT, MM_PER_PX) == [])
+    # a 20 mm single-line partition jutting 2 m into room 1 from the top wall, and a 400 mm pier jutting 1 m
+    jut = objects + [filled([(300, 115), (302, 115), (302, 315), (300, 315)])]
+    jut_rooms = ro.enclosed_rooms(ro.wall_geometry(jut, [ro.style_id(WALL)], VIEWPORT), VIEWPORT, MM_PER_PX, door_gap_mm=1000)
+    room_1 = max(jut_rooms, key=lambda room: room.bounds[0] < 300)
+    check("a thin partition jutting into a room leaves no notch in its outline (still four corners, area within 1%)",
+          len(room_1.exterior.coords) == 5 and abs(ro.area_m2(room_1, MM_PER_PX) - 5.00 * 5.70) / (5.00 * 5.70) < 0.01)
+    pier = objects + [filled([(300, 115), (340, 115), (340, 215), (300, 215)])]
+    pier_rooms = ro.enclosed_rooms(ro.wall_geometry(pier, [ro.style_id(WALL)], VIEWPORT), VIEWPORT, MM_PER_PX, door_gap_mm=1000)
+    room_1 = max(pier_rooms, key=lambda room: room.bounds[0] < 300)
+    check("a 400 mm pier is a real recess and stays in the outline", len(room_1.exterior.coords) > 5)
 
     labels = [{"text": "Office", "point": (300, 500)}, {"text": "Store", "point": (800, 300)}, {"text": "Lobby", "point": (1300, 900)}]
     matched, ambiguous, unmatched = ro.assign_labels(rooms, labels)

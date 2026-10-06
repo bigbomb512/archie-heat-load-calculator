@@ -14,10 +14,15 @@ range before or during the session).
 
 ## 1. Before the session
 
-Status (updated 2026-10-04): **both session-blocking problems are fixed**, and
-so is the slow project-open (D7). The full dry run has **not yet been re-run**
-on the fixed code — do that (all three comfort rooms traced) before
-scheduling. Use commit `dcca237` or later.
+Status (updated 2026-10-06): the session flow has changed. Since Card P, the
+AI outlines the rooms and the participant **no longer traces**. The
+facilitator runs the AI tasks in the operator panel (`?operator=1`) between
+"Confirm drawings" and "Resolve model inputs"; the participant only answers
+the roof question. An AI-only dry run on `a6f0fc3` reached a labelled draft
+of 33.76 kW with no tracing (section 9), but it found three problems that
+should be fixed before scheduling (section 9, C1–C3).
+
+Earlier status (2026-10-04, tracing flow): D3, D5 and D7 below are fixed.
 
 ### Fixed
 
@@ -194,3 +199,63 @@ next cards.
   Shop listed as not traced.
 - Next: a fresh dry run on `dcca237` or later with Bar, Kitchen and Shop all
   traced (pending).
+
+## 9. AI-only dry run (Claude, 2026-10-06, commit `a6f0fc3`)
+
+Fresh upload of Butcher Buffet in an isolated copy of `a6f0fc3` (own server
+and `output/`). No room was traced. Every AI reply was written by Claude from
+the task images and pasted through the operator panel with the stand-in box
+ticked; these are **stand-ins, not model replies**, so they say nothing about
+model accuracy. The roof question was answered in the contractor view
+("Floor/tenancy above", as confirmed by the project contact).
+
+### Timings
+
+| Stage | Time | Notes |
+|---|---|---|
+| Upload + analysis (38 pages) | ~50 s | upload via `/api/upload` (the browser pane cannot attach files) |
+| Confirm selected drawings | ~2 min 40 s | similar to before |
+| Operator: Run all tasks | 26 s | builds dimensions, site, north, kitchen (blocked until rooms exist) |
+| Operator: each reply validated | 0.5–28 s | room naming 28 s (writes the AI outlines); most 8–15 s |
+| Contractor: roof answer | ~15 s per room | three rooms |
+| Guided "Resolve model inputs" | ~100 s | |
+| Confirm room list | 12 s | |
+| Calculate draft load | 12 s | |
+
+Operator time (reading images, pasting replies) was ~12 min for 14 tasks;
+with a hosted model this step disappears.
+
+### Result
+
+**33.76 kW** AI preliminary estimate (Bar 32.55 m², Kitchen 103.82 m², Shop
+215.1 m², all "AI-determined · below accuracy bar"), with no tracing. For
+comparison: AI-only 33.79 kW on 2026-10-05; manually traced 35.20 kW; the
+engineer's reference is ~39.6 kW (do not tell the participant). Kitchen
+equipment heat, infiltration, kitchen exhaust and site design weather are
+still excluded (they wait for AIRAH DA09), which explains most of the gap.
+
+Stand-in answers against the answer key (caseA): room areas 5/5 within 5 %
+(Kitchen +4.9 %, the closest); north 0° on p. 20/21; site text correct;
+kitchen equipment 5/5 keyed items. Again: stand-ins, not accuracy evidence.
+
+### Problems found
+
+| # | Problem | Effect |
+|---|---|---|
+| C1 (high) | The wall-boundary task for the main Shop part is **blocked** ("prompt exceeds 1,500 characters"). The AI outline has 44 edges, including thin slivers around free-standing partitions inside the dining area, giving 30 wall runs ≥ 1 m (9 with the reviewer's trace). | Shop walls stay unclassified; the result lists "Walls — boundary not classified — Shop" and "Envelope — Shop". |
+| C2 (high) | The shopfront is split across the two AI parts of Shop (9.3 m + 2.5 m). The window task was built for the 2.52 m part only, so a faithful reply (11,825 mm elevation) can never match it within 2 %. | Shopfront glazing cannot be applied. |
+| C3 (high) | The roof question is only built by "Run all tasks"; it did not appear until the operator pressed it a second time after the rooms existed. The contractor's answer was then applied to the first Shop part only. | The result lists "Roof — not checked — Shop". |
+| C4 | Boundary exclusions in the model from AI wall answers are labelled "Answered by the contractor". | Wrong provenance shown. |
+| C5 | Stand-in replies are labelled "AI-determined" in the panel; the panel status says "Reply validated" even when the card shows a validation error. | Operator confusion. |
+| C6 | Rooms with no shopfront (Bar, Kitchen) get a red "blocked" window task. | Noise in the operator list. |
+| C7 | After reopening the project, the next-action button is "Confirm selected drawings" again although they were confirmed. | A participant may re-run a 2½-minute step. |
+| C8 | The kitchen task's blocked message says "trace and calibrate the kitchen first" before the AI outlines exist. | Misleading in the AI-only flow. |
+| C9 ✅ | The kitchen check refused "3 DOOR" (a fridge label split over two lines) as "gives no heat". | Fixed 2026-10-06 in `ai/kitchen_equipment.py`, with a test. |
+
+Recommended fix for C1–C2: ask the wall-boundary question once per tenancy
+perimeter (the outer boundary of all room outlines on the plan) instead of
+once per room part; edges not on the perimeter are internal automatically,
+and the shopfront is matched against the perimeter run.
+
+Dry-run project: `dryrun2-butcher-buffet-_not-for-design_-1791243530` in the
+scratchpad copy (not in your `output/`).

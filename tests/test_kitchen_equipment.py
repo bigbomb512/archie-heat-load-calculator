@@ -72,6 +72,8 @@ def main():
         {"type": "range_burners", "count": 1, "page": 20, "quote": None, "symbol": "six burner grates on the island, plan crop", "under_hood": True}]}
     items = kitchen.validate_reply(reply, built)
     check("a quote that wraps over two lines is accepted", any(item["quote"] == "3 DOOR FRIDGE" for item in items))
+    split = kitchen.validate_reply({"items": [{"type": "refrigerator_upright", "count": 1, "page": 30, "quote": "3 DOOR"}]}, built)
+    check("a fridge quoted by the first line of its label (\"3 DOOR\") is accepted", split[0]["quote"] == "3 DOOR")
     check("an unlabelled appliance is accepted with a described symbol", items[-1]["evidence_kind"] == "symbol")
     check("determinations total each type for scoring",
           kitchen.to_determinations(items) == [{"type": "oven", "count": 1, "source": "ai_determined"},

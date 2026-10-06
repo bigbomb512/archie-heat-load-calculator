@@ -37,6 +37,31 @@
           "page": 20,
           "plan_up_azimuth_deg": 0,
           "evidence": "Unlabelled north needle in a circle in the title block, pointing up the sheet."
+        },
+        {
+          "page": 21,
+          "plan_up_azimuth_deg": 0,
+          "evidence": "Same unlabelled north needle in the title block as p. 20, pointing up the sheet (dimensioned top view plan); checked 2026-10-06."
+        },
+        {
+          "page": 22,
+          "plan_up_azimuth_deg": 0,
+          "evidence": "Same unlabelled north needle in the title block as p. 20, pointing up the sheet (reflected ceiling plan); checked 2026-10-06."
+        },
+        {
+          "page": 23,
+          "plan_up_azimuth_deg": 0,
+          "evidence": "Same unlabelled north needle in the title block as p. 20, pointing up the sheet (lighting services plan); checked 2026-10-06."
+        },
+        {
+          "page": 24,
+          "plan_up_azimuth_deg": 0,
+          "evidence": "Same unlabelled north needle in the title block as p. 20, pointing up the sheet (electrical services plan); checked 2026-10-06."
+        },
+        {
+          "page": 25,
+          "plan_up_azimuth_deg": 0,
+          "evidence": "Same unlabelled north needle in the title block as p. 20, pointing up the sheet (hydraulic services plan); checked 2026-10-06."
         }
       ]
     },
@@ -48,6 +73,15 @@
           "edge_length_m": 11.97,
           "boundary": "mall",
           "evidence": "Storefront line; matches the 11,900 mm storefront elevation (p. 26). Confirmed by the project contact 2026-10-05: it faces an enclosed mall/walkway, not outdoors."
+        }
+      ],
+      "rooms": [
+        {
+          "room": "Bar",
+          "allowed": [
+            "internal"
+          ],
+          "evidence": "The Bar is the walled central island (confirmed by the project contact 2026-10-05); on the dimension plan (p. 20) it is surrounded by the dining area and the kitchen, so every Bar wall is internal."
         }
       ]
     },

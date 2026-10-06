@@ -32,6 +32,7 @@ from shapely.ops import unary_union
 
 MIN_ROOM_M2 = 1.0
 DEFAULT_DOOR_GAP_MM = 1000.0
+DEFAULT_NOTCH_MM = 250.0  # partitions jutting into a room leave notches thinner than this
 HATCH_MIN_LINES = 20
 HATCH_MIN_GAPS = 8
 HATCH_REGULARITY = 0.5
@@ -143,11 +144,26 @@ def wall_geometry(objects, wall_style_ids, viewport=None, line_half_width_px=1.0
     return unary_union(parts) if parts else None
 
 
-def enclosed_rooms(walls, viewport, mm_per_px, door_gap_mm=DEFAULT_DOOR_GAP_MM, min_room_m2=MIN_ROOM_M2):
+def _fill_notches(polygon, radius_px):
+    """Fill inward notches narrower than 2 × radius; corners stay square (mitre joins)."""
+    if radius_px <= 0:
+        return polygon
+    closed = polygon.buffer(radius_px, join_style=2).buffer(-radius_px, join_style=2)
+    if closed.geom_type != "Polygon" or closed.is_empty or not closed.contains(polygon.representative_point()):
+        return polygon
+    return Polygon(closed.exterior)
+
+
+def enclosed_rooms(walls, viewport, mm_per_px, door_gap_mm=DEFAULT_DOOR_GAP_MM, min_room_m2=MIN_ROOM_M2,
+                   notch_mm=DEFAULT_NOTCH_MM):
     """Open areas fully enclosed by walls once door-sized gaps are closed.
 
     `mm_per_px` only sizes the gap closing and the minimum area here; reported
     areas are recomputed by the caller from a printed-dimension calibration.
+
+    A partition that juts into a room from its wall cuts a thin notch into the
+    outline; notches narrower than `notch_mm` are filled (the floor continues
+    on both sides of the partition), so they don't become extra wall edges.
     """
     if walls is None or walls.is_empty:
         return []
@@ -161,6 +177,7 @@ def enclosed_rooms(walls, viewport, mm_per_px, door_gap_mm=DEFAULT_DOOR_GAP_MM, 
         if part.is_empty or part.intersects(edge):
             continue
         outline = Polygon(part.exterior)  # furniture and fixtures inside are part of the floor
+        outline = _fill_notches(outline, notch_mm / mm_per_px / 2.0)
         if outline.area * mm_per_px ** 2 / 1e6 < min_room_m2:
             continue
         rooms.append(outline)

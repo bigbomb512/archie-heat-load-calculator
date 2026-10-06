@@ -18,7 +18,8 @@ from ai.autonomous_task_scoring import KITCHEN_TYPES
 BUDGET_CHARS = 2000
 MAX_IMAGE_SIDE = 1536
 MAX_LABEL_CHARS = 30
-NOT_HEAT_SOURCES = re.compile(r"\b(sink|basin|rack|shelv|bench|bin|trolley|door|wall|tile|skirting|grout|gpo|partition)\b", re.I)
+# "door" is not listed: fridge labels are often split over lines ("3 DOOR" / "FRIDGE").
+NOT_HEAT_SOURCES = re.compile(r"\b(sink|basin|rack|shelv|bench|bin|trolley|wall|tile|skirting|grout|gpo|partition)\b", re.I)
 
 
 def _norm(text):
