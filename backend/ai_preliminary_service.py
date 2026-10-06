@@ -231,12 +231,15 @@ def _airflow_sources(paths):
 
 
 def _resolve_ceiling_volumes(paths, persist=False):
+    from backend import job_service
     existing = _read(paths["ceiling_volume"], ceiling_volume_resolution.empty_ceiling_volume_resolution())
     proposal = _proposal_for_resolution(paths)
-    artifact = ceiling_volume_resolution.resolve(
+    # Heights typed in the job workspace enter as contractor overrides (they beat drawing and default heights).
+    artifact = job_service.drop_typed_height_stubs(ceiling_volume_resolution.resolve(
         _read(paths["building"], {}), _read(paths["vision"], {}), proposal if isinstance(proposal, dict) else {"rooms": []},
-        _preliminary_geometry(paths), ai_preliminary.load_pack(), _ceiling_sources(paths), existing,
-    )
+        _preliminary_geometry(paths), ai_preliminary.load_pack(), _ceiling_sources(paths),
+        job_service.with_typed_heights(existing, paths["root"]),
+    ))
     if persist:
         _write(paths["ceiling_volume"], artifact)
         productization.record_change_if_fingerprint_changed(
@@ -552,14 +555,17 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
             existing_area = ai_preliminary._number(room.get("area_m2"))
             existing_origin = str(room.get("area_origin", ""))
             trace_area_is_printed = traced_area.get("area_source") in {"printed_on_drawing", "printed (read from image)"}
-            if (trace_area_is_printed or existing_area is None or existing_area <= 0
+            trace_area_is_edited = traced_area.get("area_source") == "edited"
+            if (trace_area_is_printed or trace_area_is_edited or existing_area is None or existing_area <= 0
                     or existing_origin in {"", "ai_geometry", "ai_assumption"}):
                 page = traced_area.get("page")
                 trace_id = str(traced_area.get("trace_id", ""))
                 proof_id = str(traced_area.get("proof_id", ""))
                 room["area_m2"] = traced_area["area_m2"]
-                ai_determined = traced_area.get("declaration_source") in {"ai_determined", "ai_fallback"} and not trace_area_is_printed
-                room["area_origin"] = ("printed (read from image)" if traced_area.get("area_only") else
+                ai_determined = (traced_area.get("declaration_source") in {"ai_determined", "ai_fallback"}
+                                 and not trace_area_is_printed and not trace_area_is_edited)
+                room["area_origin"] = ("edited" if trace_area_is_edited else
+                                       "printed (read from image)" if traced_area.get("area_only") else
                                        "pdf_evidence" if trace_area_is_printed else
                                        "ai_determined" if ai_determined else "reviewer_traced")
                 room["area_verification_status"] = "provisional"
@@ -567,8 +573,11 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                 room["geometry_proof_id"] = proof_id if not traced_area.get("area_only") else ""
                 room["reviewer_traced_area"] = deepcopy(traced_area)
                 trace_citation = {"page": page,
-                                  "reference": "Printed room area read from image" if traced_area.get("area_only") else f"Room trace {trace_id}",
-                                  "excerpt": (f"Printed room area read from image: {traced_area.get('printed_text') or room.get('label', '')}."
+                                  "reference": ("Room area entered by a person" if trace_area_is_edited else
+                                                "Printed room area read from image" if traced_area.get("area_only") else f"Room trace {trace_id}"),
+                                  "excerpt": (f"Room area typed in by {traced_area.get('edited_by') or 'the contractor'}: {traced_area.get('area_m2')} m²."
+                                              if trace_area_is_edited else
+                                              f"Printed room area read from image: {traced_area.get('printed_text') or room.get('label', '')}."
                                               if traced_area.get("area_only") else
                                               f"AI-determined room outline; {traced_area.get('ai_quality_label') or 'below accuracy bar'}; "
                                               f"calibration status {traced_area.get('calibration_status')}." if ai_determined else

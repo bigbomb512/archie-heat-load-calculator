@@ -289,6 +289,33 @@ def current_traced_areas(root):
                 "declaration_source": "ai_determined", "ai_run_id": record.get("run_id"),
                 "ai_quality_label": area.get("quality_label") or record.get("quality_label", "AI-determined"),
                 "printed_text": area.get("printed_text", ""), "calibration_status": "not_required"}
+    from backend.job_service import area_overrides
+    return apply_area_overrides(result, area_overrides(paths["root"]))
+
+
+def apply_area_overrides(result, overrides):
+    """Areas typed by a person ("Edited by you") beat AI, printed and traced areas.
+
+    A traced room keeps its outline, so its walls and roof stay assessed; only the
+    area changes. A room with no outline becomes an area-only record.
+    """
+    result = dict(result)
+    for row in overrides:
+        room_id = str(row["room_id"])
+        area = row.get("area_m2")
+        if type(area) not in (int, float) or area <= 0:
+            continue
+        existing = result.get(room_id)
+        edited = {"area_m2": float(area), "area_source": "edited", "conflict": False,
+                  "edited_by": row.get("edited_by", ""), "edited_at": row.get("edited_at", "")}
+        if existing and not existing.get("area_only"):
+            result[room_id] = {**deepcopy(existing), **edited}
+            continue
+        result[room_id] = {"room_id": room_id, "room_label": row.get("room_label") or (existing or {}).get("room_label", ""),
+            "level_name": row.get("level_name") or (existing or {}).get("level_name", "Unassigned level"),
+            "source": "edited", "page": None, "source_pages": [], "area_only": True, "outline": None,
+            "trace_id": "", "proof_id": "", "points_image_px": [], "edges": [], "openings": [], "roof": "unknown",
+            "declaration_source": "reviewer", "calibration_status": "not_required", **edited}
     return result
 
 

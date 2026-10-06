@@ -524,7 +524,7 @@ def validate_manual_placeholder_entities(raw):
             "ceiling_datum_operands": deepcopy(item.get("ceiling_datum_operands", {})) if isinstance(item.get("ceiling_datum_operands", {}), dict) else {},
             "ceiling_conflicts": list(ceiling_conflicts),
             "geometry": deepcopy(item.get("geometry", {})) if isinstance(item.get("geometry", {}), dict) else {},
-            "area_origin": str(item.get("area_origin", "")) if str(item.get("area_origin", "")) in {"pdf_evidence", "printed (read from image)", "reviewer_traced", "ai_geometry", "ai_determined"} else "",
+            "area_origin": str(item.get("area_origin", "")) if str(item.get("area_origin", "")) in {"pdf_evidence", "printed (read from image)", "edited", "reviewer_traced", "ai_geometry", "ai_determined"} else "",
             "area_verification_status": "provisional",
             "area_quality_label": str(((item.get("reviewer_traced_area") or {}).get("ai_quality_label") if isinstance(item.get("reviewer_traced_area"), dict) else "") or item.get("area_quality_label", "")),
             "reviewer_trace_id": str(item.get("reviewer_trace_id", "")),

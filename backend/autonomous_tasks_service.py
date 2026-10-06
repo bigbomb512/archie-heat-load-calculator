@@ -12,7 +12,7 @@ from urllib.parse import quote
 import uuid
 
 from ai import autonomous_task_scoring, autonomous_tasks, reviewer_room_geometry, room_outline, kitchen_equipment
-from backend import productization, reviewer_room_geometry_service, site_location_service, calculation_extraction_service
+from backend import productization, reviewer_room_geometry_service, site_location_service, calculation_extraction_service, page_analysis_cache
 from backend.vision_extraction_service import _atomic_json
 
 ACCURACY_PATH = Path(__file__).resolve().parents[1] / "evaluations" / "autonomous" / "accuracy.json"
@@ -276,17 +276,14 @@ def _apply_s3_transcription(record, lines):
 
 
 def _p0_is_raster(root, page_number, context, calibration):
-    import pdfplumber
-    ai_input, _spatial, _building = _load_inputs(root)
-    source = Path(str(ai_input.get("source_pdf", "")))
-    if not source.is_file():
-        raise ValueError("The source PDF is unavailable; P0 is blocked without the plan page.")
-    with pdfplumber.open(source) as pdf:
-        page = pdf.pages[page_number - 1]
-        image_scale = context["image"].width / float(page.width)
-        mm_per_px = context.get("declared_mm_per_px") or calibration["mm_per_px"]
-        return room_outline.page_is_raster(page, context["viewport"], image_scale, mm_per_px,
-                                            objects=context["objects"])
+    from types import SimpleNamespace
+    if "page_bbox" not in context or "pdf_images" not in context:
+        raise ValueError("The cached page context is incomplete; rebuild the page context before outlining rooms.")
+    page = SimpleNamespace(bbox=context["page_bbox"], images=context["pdf_images"])
+    image_scale = float(context["image_scale"])
+    mm_per_px = context.get("declared_mm_per_px") or calibration["mm_per_px"]
+    return room_outline.page_is_raster(page, context["viewport"], image_scale, mm_per_px,
+                                       objects=context["objects"])
 
 
 def _p0_walls_areas(root, page_number, context, calibration, wall_style_ids=None, raster_mode=False):
@@ -422,6 +419,11 @@ def _p6_kitchen_packets(root):
 
 def _p0_context(root, page_number):
     """Load the same page/vector context used by the standalone P0 tool."""
+    return page_analysis_cache.get_context(root, page_number, lambda: _build_p0_context(root, page_number))
+
+
+def _build_p0_context(root, page_number):
+    """Parse and render a plan page once for the project page-analysis cache."""
     import pdfplumber
     ai_input, spatial, _building = _load_inputs(root)
     source = Path(str(ai_input.get("source_pdf", "")))
@@ -436,13 +438,27 @@ def _p0_context(root, page_number):
         scale = image_system.get("image_width", pdf_page.width * 2.5) / float(pdf_page.width)
         objects = room_outline.extract_page_objects(pdf_page, scale)
         image = pdf_page.to_image(resolution=72 * scale).original
+        page_bbox = tuple(pdf_page.bbox)
+        image_bounds = ("x0", "top", "x1", "bottom")
+        pdf_images = [{key: image_row[key] for key in image_bounds if key in image_row}
+                      for image_row in (getattr(pdf_page, "images", None) or [])]
+        chars = pdf_page.chars
     viewport = tuple((page_meta.get("plan_viewport") or {}).get("bbox_px") or (0, 0, image.size[0], image.size[1]))
     page_ocr = next((row for row in spatial.get("pages", []) if row.get("page") == page_number), {})
     from ai.dimension_wall_matcher import page_mm_per_px
     declared_scale = page_mm_per_px(page_ocr.get("scale_candidates", []), render_dpi=72 * scale)
     summary = room_outline.style_summary(objects, viewport, declared_scale)
+    left, top, right, bottom = viewport
+    origin_x, origin_y = page_bbox[:2]
+    chars_in_viewport = any(
+        left <= (float(char.get("x0", -1)) - origin_x) * scale <= right and
+        top <= (float(char.get("top", -1)) - origin_y) * scale <= bottom
+        for char in chars
+    )
     return {"objects": objects, "image": image, "viewport": viewport, "image_scale": scale,
-            "page_origin": tuple(pdf_page.bbox[:2]), "render_dpi": 72 * scale,
+            "page_origin": tuple(page_bbox[:2]), "page_bbox": page_bbox, "pdf_images": pdf_images,
+            "pdf_chars_in_viewport": chars_in_viewport,
+            "render_dpi": 72 * scale,
             "declared_mm_per_px": declared_scale,
             "summary": summary, "page_meta": page_meta}
 
@@ -471,6 +487,8 @@ def _page_has_text_layer(root, page_number, context=None):
                 y0, y1 = (float(y0) - origin_y) * scale, (float(y1) - origin_y) * scale
                 if x1 >= left and x0 <= right and y1 >= top and y0 <= bottom:
                     return True
+    if context is not None and "pdf_chars_in_viewport" in context:
+        return bool(context["pdf_chars_in_viewport"])
     source = Path(str(ai_input.get("source_pdf", "")))
     if source.is_file():
         with pdfplumber.open(source) as pdf:
@@ -487,19 +505,14 @@ def _page_has_text_layer(root, page_number, context=None):
 
 
 def _page_is_raster_for_scan(root, page_number, context):
-    import pdfplumber
-    ai_input, _spatial, _building = _load_inputs(root)
-    source = Path(str(ai_input.get("source_pdf", "")))
-    if not source.is_file():
-        return False
     try:
-        with pdfplumber.open(source) as pdf:
-            pdf_page = pdf.pages[page_number - 1]
-            image_scale = context["image"].width / float(pdf_page.width)
-            dpi = 72 * image_scale
-            mm_per_px = context.get("declared_mm_per_px") or 25.4 * 100 / dpi
-            return room_outline.page_is_raster(pdf_page, context["viewport"], image_scale, mm_per_px,
-                                                objects=context["objects"])
+        from types import SimpleNamespace
+        page_proxy = SimpleNamespace(bbox=context["page_bbox"], images=context["pdf_images"])
+        image_scale = float(context["image_scale"])
+        dpi = 72 * image_scale
+        mm_per_px = context.get("declared_mm_per_px") or 25.4 * 100 / dpi
+        return room_outline.page_is_raster(page_proxy, context["viewport"], image_scale, mm_per_px,
+                                           objects=context["objects"])
     except (OSError, ValueError, IndexError, KeyError, TypeError, ZeroDivisionError):
         return False
 
@@ -1817,11 +1830,28 @@ def get_labels(project):
             else:
                 row["message"] = "Not sure — roof exposure remains unknown and not assessed."
             rows.append(row)
-    return {"id": project["id"], "tasks": rows, "auto_apply_bar": autonomous_task_scoring.AUTO_APPLY_BAR}
+    return {"id": project["id"], "tasks": rows, "auto_apply_bar": autonomous_task_scoring.AUTO_APPLY_BAR,
+            "progress": _task_progress(root)}
+
+
+def _task_progress(root):
+    """Counts over every current task (not only the ones with results), for the contractor progress screen."""
+    records = [record for record in _all_current(root) if record.get("task")]
+    marker = hashlib.sha256("|".join(sorted(f"{record.get('task')}:{record.get('target')}:{record.get('status')}"
+                                            for record in records)).encode("utf-8")).hexdigest()[:16]
+    return {"total": len(records),
+            "waiting": sum(1 for record in records if record.get("status") == "waiting_for_reply"),
+            "blocked": sum(1 for record in records if record.get("status") == "blocked"),
+            "marker": marker}
 
 
 def run_all(web, project):
     root = _root(project)
+    with page_analysis_cache.operation(root):
+        return _run_all(web, project, root)
+
+
+def _run_all(web, project, root):
     _refresh_site_tasks(root)
     for target, packet, prompt, images, *error in _north_packets(root):
         reason = error[0] if error else ""
@@ -2189,6 +2219,11 @@ def _answer_roof(web, project, root, data):
 
 
 def post(web, project, data):
+    with page_analysis_cache.operation(_root(project)):
+        return _post(web, project, data)
+
+
+def _post(web, project, data):
     root = _root(project)
     action = data.get("action", "")
     if action in {"run_all", "build"}:

@@ -90,7 +90,7 @@ from ai.calculator_draft import DraftConflict
 from backend import draft_service
 from backend import evidence_fusion_service
 from backend import calculation_extraction_service
-from backend import vision_extraction_service, window_scan_service, site_orientation_service, site_location_service, site_design_weather_service, room_use_resolution_service, room_inference_service, reviewer_room_geometry_service, ceiling_volume_resolution_service, internal_gains_resolution_service, thermal_surface_resolution_service, airflow_resolution_service, ahu_resolution_service, plant_resolution_service, safety_factor_resolution_service, ai_preliminary_service, model_input_resolution_service, au_ventilation_rules_service, autonomous_tasks_service
+from backend import vision_extraction_service, window_scan_service, site_orientation_service, site_location_service, site_design_weather_service, room_use_resolution_service, room_inference_service, reviewer_room_geometry_service, ceiling_volume_resolution_service, internal_gains_resolution_service, thermal_surface_resolution_service, airflow_resolution_service, ahu_resolution_service, plant_resolution_service, safety_factor_resolution_service, ai_preliminary_service, model_input_resolution_service, au_ventilation_rules_service, autonomous_tasks_service, job_service
 from backend import productization, test_mode_service, skill_workflow_service
 from backend import security
 from ai.ventilation import calculate_ventilation_report
@@ -370,6 +370,13 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._send_security_error(error, 403)
             except Exception as error:
                 return self.send_json({"error": product_error(error).get("error", "Task image is unavailable.")}, 404)
+        if urlparse(self.path).path == "/api/job-status":
+            try:
+                return self.send_json(api_job_status(self))
+            except security.SecurityError as error:
+                return self._send_security_error(error, 403)
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
         if urlparse(self.path).path == "/api/autonomous-tasks":
             try:
                 return self.send_json(api_autonomous_tasks(self))
@@ -699,6 +706,13 @@ class Handler(SimpleHTTPRequestHandler):
                 self._require_api_access(write=True)
             except security.SecurityError as error:
                 return self._send_security_error(error, 403)
+        if urlparse(self.path).path in {"/api/job-setup", "/api/room-area-override", "/api/room-height-override"}:
+            try:
+                return self.send_json(api_save_job(self))
+            except security.SecurityError as error:
+                return self._send_security_error(error, 403)
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
         if urlparse(self.path).path == "/api/autonomous-tasks":
             try:
                 return self.send_json(api_save_autonomous_tasks(self))
@@ -1572,9 +1586,9 @@ def _rebuild_evidence_chain(project):
             "component_interpretations": interpretations}
 
 
-def analyse_project(project):
+def analyse_project(project, review_dir=None, *, app=None, persist_project=True):
     pdf_path = Path(project["pdf"])
-    review_dir = WEB_REVIEW / project["id"]
+    review_dir = Path(review_dir) if review_dir is not None else WEB_REVIEW / project["id"]
     result = create_review_packet(pdf_path, review_dir, include_structure=True)
 
     packet = load_json(result["packet"])
@@ -1604,8 +1618,10 @@ def analyse_project(project):
     _rebuild_evidence_chain(project)
     # The reviewed workflow remains unchanged. This only records an isolated
     # preliminary provider state when the project has explicitly opted in.
-    ai_preliminary_service.after_pdf_analysis(sys.modules[__name__], project)
-    update_project(project)
+    app = app or sys.modules[__name__]
+    ai_preliminary_service.after_pdf_analysis(app, project)
+    if persist_project:
+        app.update_project(project)
     return project
 
 
@@ -4058,6 +4074,29 @@ def api_autonomous_tasks(request):
         return autonomous_tasks_service.get_labels(project)
     security.require_project_role(project, request._identity(), "editor")
     return autonomous_tasks_service.get(sys.modules[__name__], project)
+
+
+def api_job_status(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    ensure_review_dir(project)
+    return job_service.status(sys.modules[__name__], project)
+
+
+def api_save_job(request):
+    """Job setup (name, address, building type, what's above), typed room areas and ceiling heights."""
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    security.require_project_role(project, request._identity(), "editor")
+    if urlparse(request.path).path == "/api/job-setup":
+        job_service.save_job_setup(project, data)
+        job_service.apply_roof_answer(sys.modules[__name__], project)
+    elif urlparse(request.path).path == "/api/room-height-override":
+        job_service.save_height_override(project, data)
+    else:
+        job_service.save_area_override(project, data)
+    return job_service.status(sys.modules[__name__], project)
 
 
 def api_save_autonomous_tasks(request):

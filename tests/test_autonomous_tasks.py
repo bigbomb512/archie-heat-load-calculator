@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 from ai import autonomous_tasks, reviewer_room_geometry, room_outline
 from backend import autonomous_tasks_service
+from backend import page_analysis_cache
 
 
 class AutonomousTaskTests(unittest.TestCase):
@@ -1595,6 +1596,128 @@ class AutonomousTaskTests(unittest.TestCase):
             reviewer_room_geometry.validate_artifact({"records": [], "page_north": {"1": {
                 **north["1"], "ai_run_id": ""}}})
 
+
+    def test_labels_view_reports_progress_over_unfinished_checks_without_prompts(self):
+        records = [{"task": "P0_dimensions", "target": "d1", "status": "applied", "applied_value": {"value_mm": 11825},
+                    "prompt": "secret prompt"},
+                   {"task": "P0_wall_styles", "target": "b1", "status": "waiting_for_reply", "prompt": "secret prompt"},
+                   {"task": "P1_site", "target": "project", "status": "blocked", "prompt": ""}]
+        with patch.object(autonomous_tasks_service, "_all_current", return_value=records):
+            labels = autonomous_tasks_service.get_labels({"id": "p", "review_dir": "/tmp/none"})
+            changed = [dict(records[0]), dict(records[1], status="applied", applied_value={"wall_style_ids": []}), records[2]]
+        with patch.object(autonomous_tasks_service, "_all_current", return_value=changed):
+            later = autonomous_tasks_service.get_labels({"id": "p", "review_dir": "/tmp/none"})
+        self.assertEqual([row["task"] for row in labels["tasks"]], ["P0_dimensions"])
+        self.assertEqual({key: labels["progress"][key] for key in ("total", "waiting", "blocked")},
+                         {"total": 3, "waiting": 1, "blocked": 1})
+        self.assertNotIn("secret prompt", json.dumps(labels))
+        self.assertNotEqual(labels["progress"]["marker"], later["progress"]["marker"])
+        self.assertEqual(later["progress"]["waiting"], 0)
+
+    def test_page_analysis_cache_reuses_context_and_preserves_render(self):
+        from PIL import Image, ImageChops
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source.pdf"
+            source.write_bytes(b"synthetic-pdf-content")
+            (root / "ai_input.json").write_text(json.dumps({"source_pdf": str(source)}), encoding="utf-8")
+            (root / "spatial_ocr.json").write_text(json.dumps({"pages": []}), encoding="utf-8")
+            (root / "vector_geometry.json").write_text(json.dumps({"geometry_key_points": {"pages": []}}), encoding="utf-8")
+            calls = []
+
+            def build():
+                calls.append("built")
+                return {"objects": [{"kind": "line", "style": (1.0, 0.5, None), "style_id": "s1",
+                                      "points": [(1.0, 2.0), (3.0, 4.0)], "filled": False}],
+                        "image": Image.new("RGB", (20, 12), (10, 20, 30)),
+                        "viewport": (0, 0, 20, 12), "image_scale": 2.5, "page_meta": {"page": 3}}
+
+            with page_analysis_cache.operation(root) as cache:
+                cold = page_analysis_cache.get_context(root, 3, build)
+                self.assertEqual(cache.stats["page_renders"], {"3": 1})
+                self.assertEqual(cache.stats["page_object_extractions"], {"3": 1})
+                memory = page_analysis_cache.get_context(root, 3, build)
+                self.assertIs(cold, memory)
+            self.assertEqual(calls, ["built"])
+
+            with page_analysis_cache.operation(root) as cache:
+                warm = page_analysis_cache.get_context(root, 3, build)
+                self.assertEqual(cache.stats["cache_hits"], {"3": 1})
+                self.assertEqual(cache.stats["page_renders"], {})
+            self.assertEqual(warm["image"].size, cold["image"].size)
+            self.assertEqual(ImageChops.difference(warm["image"], cold["image"]).getbbox(), None)
+            self.assertEqual(warm["objects"], cold["objects"])
+            self.assertEqual(warm["page_meta"], cold["page_meta"])
+            self.assertEqual(calls, ["built"])
+
+    def test_page_analysis_cache_invalidates_changed_inputs_and_version(self):
+        from PIL import Image
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source.pdf"
+            source.write_bytes(b"pdf-v1")
+            (root / "ai_input.json").write_text(json.dumps({"source_pdf": str(source)}), encoding="utf-8")
+            spatial = root / "spatial_ocr.json"
+            vector = root / "vector_geometry.json"
+            spatial.write_text('{"version":1}', encoding="utf-8")
+            vector.write_text('{"version":1}', encoding="utf-8")
+            builds = []
+
+            def build():
+                builds.append(1)
+                return {"objects": [], "image": Image.new("RGB", (4, 4), "white"), "page_meta": {}}
+
+            def populate():
+                with page_analysis_cache.operation(root):
+                    page_analysis_cache.get_context(root, 1, build)
+
+            populate()  # Initial cold build.
+            source.write_bytes(b"pdf-v2")
+            populate()  # Source PDF changed.
+            spatial.write_text('{"version":2}', encoding="utf-8")
+            populate()  # Spatial OCR changed.
+            vector.write_text('{"version":2}', encoding="utf-8")
+            populate()  # Vector metadata changed.
+            with patch.object(page_analysis_cache, "CACHE_VERSION", page_analysis_cache.CACHE_VERSION + 1):
+                populate()  # Cache schema/render implementation changed.
+            self.assertEqual(len(builds), 5)
+            generations = [path for path in (root / "page_analysis_cache").iterdir() if path.is_dir()]
+            self.assertEqual(len(generations), 1)
+
+    def test_page_analysis_cache_keeps_scanned_task_packet_identical(self):
+        from PIL import Image
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source.pdf"
+            source.write_bytes(b"synthetic-pdf-content")
+            (root / "ai_input.json").write_text(json.dumps({"source_pdf": str(source)}), encoding="utf-8")
+            (root / "spatial_ocr.json").write_text(json.dumps({"pages": []}), encoding="utf-8")
+            (root / "vector_geometry.json").write_text(json.dumps({"geometry_key_points": {"pages": []}}), encoding="utf-8")
+            builds = []
+
+            def build():
+                builds.append(1)
+                return {"objects": [], "image": Image.new("RGB", (400, 400), "white"),
+                        "viewport": (0, 0, 400, 400), "image_scale": 1.0, "page_origin": (0, 0),
+                        "page_bbox": (0, 0, 400, 400), "pdf_images": [], "pdf_has_chars": False,
+                        "pdf_chars_in_viewport": False, "render_dpi": 72.0,
+                        "declared_mm_per_px": None, "summary": [], "page_meta": {"page": 4}}
+
+            def make_packet():
+                with page_analysis_cache.operation(root):
+                    with patch.object(autonomous_tasks_service, "_p0_main_geometry_pages", return_value=[{"page": 4}]), \
+                            patch.object(autonomous_tasks_service, "_p0_context",
+                                         side_effect=lambda cache_root, page: page_analysis_cache.get_context(cache_root, page, build)), \
+                            patch.object(autonomous_tasks_service, "_page_has_text_layer", return_value=False), \
+                            patch.object(autonomous_tasks_service, "_page_dimension_candidates", return_value=[]):
+                        return autonomous_tasks_service._s1_packets(root)
+
+            cold = make_packet()
+            warm = make_packet()
+            self.assertEqual(cold, warm)
+            self.assertEqual(len(builds), 1)
+            self.assertEqual(cold[0][0:4], warm[0][0:4])
+            self.assertEqual(cold[0][4], warm[0][4])
 
 if __name__ == "__main__":
     unittest.main()

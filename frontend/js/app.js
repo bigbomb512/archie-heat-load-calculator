@@ -570,12 +570,12 @@ function showResults(data){
   FILTER = "rel";
   DEBUG = false;
   requiredElement("btnDebug").setAttribute("aria-expanded", "false");
-  if (window.ContractorFlow?.takesOver?.()) {
+  if (window.JobWorkspace?.takesOver?.()) {
     // The contractor view opens instead; the engineer screen loads only when "Engineer tools" is opened.
     requiredElement("btnContinue").textContent = data.has_reasoning_packet ? "Drawings confirmed" : "Confirm selected drawings";
     requiredElement("btnContinue").disabled = Boolean(data.has_reasoning_packet);
     loadProjects();
-    window.ContractorFlow.onProjectShown(data);
+    window.JobWorkspace.onProjectShown(data);
     return;
   }
   show("vRes");
@@ -610,7 +610,7 @@ function showResults(data){
     requiredElement("nextActionText").textContent = "Use the single guided resolver first; advanced AI and window controls remain available below for recovery and testing.";
     requiredElement("noAiEvidenceNotice").classList.toggle("hide", data.vision_evidence_source !== "none");
   }
-  window.ContractorFlow?.onProjectShown?.(data);
+  window.JobWorkspace?.onProjectShown?.(data);
 }
 
 requiredElement("fRel").addEventListener("click", () => { FILTER = "rel"; requiredElement("fRel").classList.add("on"); requiredElement("fAll").classList.remove("on"); drawGrid(); });
@@ -5807,14 +5807,14 @@ async function openProject(id){
 /* ---------------- utils ---------------- */
 function show(id){
   ["vUpload","vFile","vRun","vRes","vJob"].forEach(v => requiredElement(v).classList.toggle("hide", v !== id));
-  if (id !== "vJob") window.ContractorFlow?.onProjectLeft?.();
+  if (id !== "vJob") window.JobWorkspace?.onProjectLeft?.();
 }
 function esc(v){
   return String(v ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 }
 function toast(title, body){
   // The contractor view shows its own plain status; engineer-screen messages stay quiet there.
-  if (window.ContractorFlow?.isActive?.()) return;
+  if (window.JobWorkspace?.isActive?.()) return;
   document.querySelector(".toast")?.remove();
   const el = document.createElement("div");
   el.className = "toast";
