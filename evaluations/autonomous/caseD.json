@@ -1,0 +1,145 @@
+{
+  "case_id": "caseD",
+  "description": "Single-storey stand-alone government building (US; mini-split installation in one room), scanned drawing set: pages 1-5 are images with no text layer. Room areas are printed in square feet on the HVAC zones plan. Location and weather are outside Archie's Australian scope, so this case tests drawing reading only (rooms, north, walls, roof, site text). Answer key for the autonomous AI tasks (Card P). Use permitted by the project contact 2026-10-06.",
+  "private_facts_file": "output/evaluations/private/caseD.json",
+  "tasks": {
+    "P0_rooms": {
+      "area_tolerance_fraction": 0.05,
+      "rooms": [
+        {
+          "label": "Equipment Rm",
+          "area_m2": 117.62,
+          "aliases": [
+            "Equipment Room"
+          ],
+          "note": "Printed 1266 SF on the HVAC zones plan (p. 4)."
+        },
+        {
+          "label": "Office",
+          "area_m2": 46.45,
+          "aliases": [],
+          "note": "Printed 500 SF on the HVAC zones plan (p. 4)."
+        },
+        {
+          "label": "Mechanical Rm",
+          "area_m2": 12.08,
+          "aliases": [
+            "Mechanical Room"
+          ],
+          "note": "Printed 130 SF on the HVAC zones plan (p. 4)."
+        },
+        {
+          "label": "Shower Room",
+          "area_m2": 10.41,
+          "aliases": [
+            "Shower Rm"
+          ],
+          "note": "Printed 112 SF on the HVAC zones plan (p. 4)."
+        },
+        {
+          "label": "Bathroom",
+          "area_m2": 5.57,
+          "aliases": [],
+          "note": "Printed 60 SF on the HVAC zones plan (p. 4)."
+        },
+        {
+          "label": "Electrical Rm",
+          "aliases": [
+            "Electrical Room"
+          ],
+          "status": "pending_user",
+          "note": "No area printed; not keyed (an AI room with this name is neither scored nor counted as false)."
+        },
+        {
+          "label": "Storage",
+          "status": "pending_user",
+          "note": "No area printed; not keyed."
+        }
+      ],
+      "notes": "Square feet converted at 0.0929 m2/SF. The plan is a scan at 1/8 in = 1 ft; the printed areas are rounded to whole square feet, so the 5% tolerance also covers the rounding (largest effect on the 60 SF Bathroom: about 1%)."
+    },
+    "P2_north": {
+      "tolerance_deg": 5,
+      "pages": [
+        {
+          "page": 2,
+          "plan_up_azimuth_deg": null
+        },
+        {
+          "page": 4,
+          "plan_up_azimuth_deg": null
+        },
+        {
+          "page": 5,
+          "plan_up_azimuth_deg": null
+        }
+      ],
+      "evidence": "No north arrow on the life-safety plan (p. 2), the HVAC zones and mechanical plans (p. 4) or the electrical floor plan (p. 5), or in their title blocks (checked 2026-10-06). The site map on the cover (p. 1) is not a floor plan."
+    },
+    "P3_boundaries": {
+      "rooms": [
+        {
+          "room": "Equipment Rm",
+          "allowed": [
+            "external",
+            "internal"
+          ]
+        },
+        {
+          "room": "Office",
+          "allowed": [
+            "external",
+            "internal"
+          ]
+        },
+        {
+          "room": "Mechanical Rm",
+          "allowed": [
+            "external",
+            "internal"
+          ]
+        },
+        {
+          "room": "Shower Room",
+          "allowed": [
+            "external",
+            "internal"
+          ]
+        },
+        {
+          "room": "Bathroom",
+          "allowed": [
+            "external",
+            "internal"
+          ]
+        }
+      ],
+      "evidence": "Stand-alone single-storey building (site photos, p. 4: west and east sides); the outer walls are uninsulated exterior CMU walls (note on p. 4). No wall faces a mall or another tenancy, so 'mall' and 'adjacent_tenancy' are always wrong."
+    },
+    "P5_roof": {
+      "rooms": [
+        {
+          "room": "Equipment Rm",
+          "roof": "exposed"
+        },
+        {
+          "room": "Office",
+          "roof": "exposed"
+        },
+        {
+          "room": "Mechanical Rm",
+          "roof": "exposed"
+        },
+        {
+          "room": "Shower Room",
+          "roof": "exposed"
+        },
+        {
+          "room": "Bathroom",
+          "roof": "exposed"
+        }
+      ],
+      "evidence": "Single-storey stand-alone building (site photos, p. 4); the mechanical room note reads '14ft high to roof deck' and 'roof has 5\" of rigid insulation'."
+    }
+  }
+}

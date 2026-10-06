@@ -23,7 +23,7 @@ SITE = {"P1_site": {"site_must_contain": ["CENTRAL PRECINCT"], "must_not_choose"
 
 def perfect():
     return {
-        "P0_rooms": [{"label": "Bar", "area_m2": 31.2}, {"label": "Kitchen", "area_m2": 97.0}, {"label": "Shop", "area_m2": 216.0},
+        "P0_rooms": [{"label": "Bar", "area_m2": 31.2}, {"label": "Kitchen", "area_m2": 104.0}, {"label": "Shop", "area_m2": 216.0},
                      {"label": "Coolroom", "area_m2": 10.7}, {"label": "Freezer", "area_m2": 7.6}],
         "P1_site": {"site_text": "Tenancy MZ01, Central Precinct"},
         "P2_north": [{"page": 20, "plan_up_azimuth_deg": 358}] + [{"page": page, "plan_up_azimuth_deg": 0} for page in range(21, 26)],
@@ -121,5 +121,26 @@ def main():
     check("a task below the 85% bar may not auto-apply", AUTO_APPLY_BAR == 0.85 and not summary["P0_rooms"]["auto_apply"])
 
 
+
+def scanned_case_checks():
+    case_d = json.loads((ROOT / "evaluations" / "autonomous" / "caseD.json").read_text(encoding="utf-8"))
+    rooms = [{"label": "EQUIPMENT ROOM", "area_m2": 116.0}, {"label": "Office", "area_m2": 47.0}, {"label": "Mechanical Rm", "area_m2": 12.3},
+             {"label": "Shower Room", "area_m2": 10.2}, {"label": "Bathroom", "area_m2": 5.5}, {"label": "Electrical Rm", "area_m2": 30.0},
+             {"label": "Storage", "area_m2": 8.0}]
+    walls = [{"room": room, "edge_length_m": 5.0, "boundary": boundary}
+             for room in ("Equipment Rm", "Office", "Mechanical Rm", "Shower Room", "Bathroom") for boundary in ("external", "internal")]
+    report = score_case(case_d, {"P0_rooms": rooms, "P3_boundaries": walls,
+                                 "P2_north": [{"page": page, "plan_up_azimuth_deg": None} for page in (2, 4, 5)],
+                                 "P5_roof": [{"room": room, "roof": "exposed"} for room in ("Equipment Rm", "Office", "Mechanical Rm", "Shower Room", "Bathroom")]})
+    statuses = {task: [item["status"] for item in items] for task, items in report["tasks"].items()}
+    check("scanned case: abbreviated room names match their aliases, and rooms with no printed area are neither scored nor false",
+          statuses["P0_rooms"] == ["correct"] * 5)
+    check("scanned case: a full correct run scores every keyed item correct",
+          all(set(values) == {"correct"} for values in statuses.values()) and len(statuses["P3_boundaries"]) == 5)
+    tenancy = score_case(case_d, {"P3_boundaries": [{"room": "Office", "edge_length_m": 5.0, "boundary": "adjacent_tenancy"}]})
+    check("scanned case: a stand-alone building has no adjacent tenancy",
+          [item["status"] for item in tenancy["tasks"]["P3_boundaries"] if item["item"] == "Office walls"] == ["wrong"])
+
 if __name__ == "__main__":
     main()
+    scanned_case_checks()

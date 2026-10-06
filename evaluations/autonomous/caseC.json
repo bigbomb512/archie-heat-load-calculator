@@ -29,6 +29,19 @@
         }
       ],
       "evidence": "No north arrow on the mechanical plans or their title blocks (scale 1:50 @ A3), checked 2026-10-05."
+    },
+    "P3_boundaries": {
+      "rooms": [
+        {
+          "room": "Kiosk",
+          "allowed": [
+            "mall",
+            "internal",
+            "adjacent_tenancy"
+          ]
+        }
+      ],
+      "evidence": "Kiosk on Level 2 inside the terminal building (level confirmed by the project contact 2026-10-01): no wall faces outdoors, so 'external' is always wrong."
     }
   }
 }

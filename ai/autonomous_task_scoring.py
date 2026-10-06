@@ -37,7 +37,9 @@ def score_rooms(key, applied):
     by_label = {_norm(row.get("label")): row for row in applied}
     results = []
     for room in key.get("rooms", []):
-        row = by_label.pop(_norm(room["label"]), None)
+        row = None
+        for name in [room["label"], *room.get("aliases", [])]:  # drawings abbreviate ("Equipment Rm")
+            row = row or by_label.pop(_norm(name), None)
         if room.get("status") == PENDING:
             continue  # answer not settled yet; neither scored nor counted as a false room
         if row is None:
