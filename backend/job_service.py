@@ -205,12 +205,43 @@ def _tab(state, detail=""):
     return {"state": state, "detail": detail}
 
 
+def traced_rooms(root):
+    """Area of each room traced on a plan, from the saved outline and its printed-dimension scale.
+
+    Cheap enough for the status call (no evidence rebuild); the calculation itself uses the
+    geometry proofs, which are rebuilt when a trace is saved.
+    """
+    data = _read(Path(root) / "reviewer_room_geometry.json", {})
+    rooms = {}
+    for row in data.get("records", []) if isinstance(data, dict) else []:
+        if not isinstance(row, dict) or not row.get("room_id"):
+            continue
+        calibration = row.get("calibration") if isinstance(row.get("calibration"), dict) else {}
+        points = row.get("points_image_px") or []
+        scale = calibration.get("mm_per_px")
+        if calibration.get("status") not in {"agreed", "declared_scale_rejected"} or not isinstance(scale, (int, float)) or len(points) < 4:
+            continue
+        try:
+            twice = sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(points, points[1:]))
+        except (TypeError, IndexError):
+            continue
+        area = abs(twice) / 2 * scale * scale / 1e6
+        if area <= 0:
+            continue
+        room = rooms.setdefault(row["room_id"], {"area_m2": 0.0, "pages": [], "source": "traced"})
+        room["area_m2"] = round(room["area_m2"] + area, 2)
+        room["pages"].append(row.get("page"))
+        if row.get("declaration_source") in {"ai_determined", "ai_fallback"}:
+            room["source"] = "ai_determined"
+    return rooms
+
+
 def _typed_since_result(root):
-    """True when a typed area or height was saved after the last result (the next Calculate uses it)."""
+    """True when a typed area or height, or a room trace, was saved after the last result (the next Calculate uses it)."""
     report = root / "hourly_ai_preliminary_load_report.json"
     if not report.exists():
         return False
-    typed = [root / "room_area_overrides.json", root / "room_height_overrides.json"]
+    typed = [root / "room_area_overrides.json", root / "room_height_overrides.json", root / "reviewer_room_geometry.json"]
     return any(path.exists() and path.stat().st_mtime > report.stat().st_mtime for path in typed)
 
 
@@ -250,8 +281,12 @@ def status(web, project):
     overrides = area_overrides(root)
     typed = {row["room_id"]: row for row in overrides}
     # Typed areas count straight away; the draft model picks them up when Calculate rebuilds it.
+    traced = traced_rooms(root)
     candidates = [dict(row, area_m2=typed[row.get("key")]["area_m2"], area_origin="edited", include=True)
-                  if row.get("key") in typed else row for row in (scope.get("candidates") or [])]
+                  if row.get("key") in typed else
+                  dict(row, area_m2=traced[row.get("key")]["area_m2"], area_origin="reviewer_traced"
+                       if traced[row.get("key")]["source"] == "traced" else "ai_determined", include=True)
+                  if row.get("key") in traced else row for row in (scope.get("candidates") or [])]
     known = {row.get("key") for row in candidates}
     # Rooms added in the workspace have a typed area before the next Calculate rebuilds the model.
     candidates += [{"key": row["room_id"], "label": row.get("room_label", ""), "level": row.get("level_name", ""), "area_m2": row["area_m2"],
@@ -306,6 +341,7 @@ def status(web, project):
         "drawings_confirmed": confirmed, "checks": progress,
         "rooms": {"total": len(candidates), "included": len(included), "with_area": len(with_area)},
         "area_overrides": overrides, "height_overrides": heights, "room_heights": room_heights,
+        "traced_rooms": traced,
         "tabs": {"project": project_tab, "drawings": drawings_tab, "rooms": rooms_tab, "results": results_tab},
         "pages": analysis.get("pages_analysed"),
     }

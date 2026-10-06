@@ -21,7 +21,8 @@ const report = {
   known_exclusions: [{room_id: "r-k", component_type: "extract_air", component: "Extract air"},
                      {room_id: "r-s", component_id: "boundary_edge_2", component: "Internal boundary"}],
   unresolved_room_inputs: [{room_id: "r-k", component_type: "infiltration"}, {room_id: "r-s", component_type: "infiltration"},
-                           {room_id: "r-k", component_id: "area_only_walls", component_type: "envelope"}, {room_id: "r-k", component_type: "envelope"}],
+                           {room_id: "r-k", component_id: "area_only_walls", component_type: "envelope"}, {room_id: "r-k", component_type: "envelope"},
+                           {room_id: "r-s", component_id: "unclassified_wall_boundaries", component_type: "envelope"}, {room_id: "r-s", component_type: "envelope"}],
   refrigeration_process_exclusions: [{room_name: "Coolroom"}, {room_name: "Freezer", level: "Unassigned level"}, {room_name: "Freezer", level: "Unassigned level"}],
   design_conditions_basis: {design_day: {label: "Generic"}},
 };
@@ -42,7 +43,23 @@ const scope = {status: "not_confirmed", candidate_fingerprint: "fp", uses: {offi
 
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64");
 
-async function mockJob(page, {status, model = () => ({room_scope: scope}), onPost = () => null, tasks = () => []}) {
+// A 1000 × 700 px plan at 1:100 with 2.5 px per point: 14.11 mm per px. Walls: a 400 × 300 px box from (100, 100).
+const PLAN_PAGE = {page: 20, title: "Dimension Plan", proposed_role: "main_floor_plan", image_width_px: 1000, image_height_px: 700,
+  preview_url: "/api/artifact?plan.png", preview_matches_vector_coordinates: true, scale_denominator: 100, image_px_per_pt: 2.5, declared_scale: "1:100"};
+const SNAP = {page: PLAN_PAGE, snap_tolerance_px: 8, source_pdf_fingerprint: "pdf-fp", vector_page_fingerprint: "page-fp",
+  lines: [{line_id: "top", start_px: [100, 100], end_px: [500, 100]}, {line_id: "right", start_px: [500, 100], end_px: [500, 400]},
+          {line_id: "bottom", start_px: [500, 400], end_px: [100, 400]}, {line_id: "left", start_px: [100, 400], end_px: [100, 100]}],
+  endpoints: [[100, 100, "top"], [500, 100, "right"], [500, 400, "bottom"], [100, 400, "left"]].map(([x, y, id]) => ({point_px: [x, y], line_id: id})),
+  intersections: []};
+const MM_PER_PX = 100 * 25.4 / 72 / 2.5;
+function geometryContext(records = []) {
+  return {source_pdf_fingerprint: "pdf-fp", pages: [PLAN_PAGE, {...PLAN_PAGE, page: 21, title: "Ceiling Plan", proposed_role: "reflected_ceiling_plan"}],
+          rooms: [{room_id: "room-use:unassigned-level:kitchen", label: "Kitchen", level_name: "Unassigned level", source_pages: [21]},
+                  {room_id: "room-use:unassigned-level:shop", label: "Shop", level_name: "Unassigned level", source_pages: [20]}],
+          reviewer_room_geometry: {records}};
+}
+
+async function mockJob(page, {status, model = () => ({room_scope: scope}), onPost = () => null, tasks = () => [], geometry = () => geometryContext()}) {
   const posts = [];
   await page.route("**/api/test-mode/status", route => route.fulfill({json: {enabled: false}}));
   await page.route("**/api/projects", route => route.fulfill({json: [{id: "job-1", name: analysis.name, pages: 38, relevant: 3, analysed: true}]}));
@@ -57,7 +74,8 @@ async function mockJob(page, {status, model = () => ({room_scope: scope}), onPos
   await page.route("**/api/job-setup", record("setup"));
   await page.route("**/api/room-area-override", record("area"));
   await page.route("**/api/room-height-override", record("height"));
-  await page.route("**/api/reviewer-room-geometry", record("geometry"));
+  await page.route("**/api/reviewer-room-geometry**", route => route.request().method() === "GET"
+    ? route.fulfill({json: geometry()}) : record("geometry")(route));
   await page.route("**/api/autonomous-tasks**", async route => {
     const url = route.request().url();
     if (url.includes("/api/autonomous-tasks/image")) return route.fulfill({contentType: "image/png", body: PNG});
@@ -65,6 +83,8 @@ async function mockJob(page, {status, model = () => ({room_scope: scope}), onPos
     return record("tasks")(route);
   });
   await page.route("**/api/decisions", record("decisions"));
+  await page.route("**/api/plan-snap**", route => route.fulfill({json: SNAP}));
+  await page.route("**/api/artifact**", route => route.fulfill({contentType: "image/png", body: PNG}));
   await page.route("**/api/vision-response/no-ai", route => route.fulfill({json: {status: "already_started_without_ai", has_reasoning_packet: true}}));
   await page.route("**/api/ai-preliminary-model**", route => route.request().method() === "POST" ? record("model")(route) : route.fulfill({json: model()}));
   return posts;
@@ -359,6 +379,7 @@ test("Calculate rebuilds the model, confirms the cooled rooms and opens the plai
   await expect(excluded).toContainText("Coolroom — refrigeration, sized separately");
   await expect(excluded.locator("li", {hasText: "Freezer — refrigeration"})).toHaveCount(1);
   await expect(excluded).toContainText("Walls (no outline: area only) — Kitchen");
+  await expect(excluded).toContainText("Walls (not classified yet) — Shop");
   await expect(excluded.locator("li", {hasText: /^Walls, roof and glazing/})).toHaveCount(0);
 });
 
@@ -413,4 +434,99 @@ test("AI step fits a phone: the prompt wraps and the images shrink", async ({ pa
   await page.locator("[data-ws-op-task] summary").click();
   await expect(page.locator("[data-ws-prompt]")).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
+});
+
+// Clicks a point given in plan image pixels, through the real SVG transform.
+async function clickPlan(page, x, y) {
+  const box = await page.locator("[data-ws-plan-svg]").evaluate((svg, [px, py]) => {
+    const point = svg.createSVGPoint(); point.x = px; point.y = py;
+    const screen = point.matrixTransform(svg.getScreenCTM());
+    return [screen.x, screen.y];
+  }, [x, y]);
+  await page.mouse.click(box[0], box[1]);
+}
+
+test("Measure a room: corners snap to the walls, a printed dimension sets the scale, and the saved area replaces a typed one", async ({ page }) => {
+  let records = [];
+  let overrides = [{room_id: "room-use:unassigned-level:kitchen", room_label: "Kitchen", area_m2: 105}];
+  await page.setViewportSize({width: 1280, height: 1500});   // the whole plan on screen, so every click reaches it
+  const posts = await mockJob(page, {
+    status: () => baseStatus({area_overrides: overrides, traced_rooms: Object.fromEntries(records.map(row => [row.room_id, {area_m2: 23.9, source: "traced", pages: [20]}]))}),
+    geometry: () => geometryContext(records),
+    onPost: (kind, body) => {
+      if (kind === "area") overrides = body.area_m2 == null ? [] : overrides;
+      if (kind !== "geometry") return null;
+      records = [{room_id: body.room_id, room_label: "Kitchen", page: body.page, points_image_px: body.points_image_px,
+                  calibration: {status: "agreed", mm_per_px: body.dimension_value_mm / Math.abs(body.dimension_points_image_px[1][0] - body.dimension_points_image_px[0][0]),
+                                dimension_points_image_px: body.dimension_points_image_px, dimension_value_mm: body.dimension_value_mm}}];
+      return {reviewer_room_geometry: {records}};
+    },
+  });
+  await page.goto("/#/job/job-1/rooms");
+  await page.locator("[data-ws-room='room-use:unassigned-level:kitchen'] [data-ws-trace]").click();
+  await expect(page.locator("[data-ws-measure] h2")).toHaveText("Measure Kitchen");
+  await expect(page.locator("[data-ws-measure-page]")).toHaveValue("20");             // the main plan, not the page with the name
+  await expect(page.locator("[data-ws-name-pages]")).toContainText("Kitchen's name is printed on page 21");
+  const top = async () => (await page.locator("[data-ws-plan-svg]").boundingBox()).y;
+  const top0 = await top();
+  // Corners: each click within the snap tolerance lands on the wall corner.
+  await clickPlan(page, 103, 97);
+  await clickPlan(page, 497, 104);
+  await clickPlan(page, 504, 396);
+  await expect(page.locator("[data-ws-close]")).toBeVisible();
+  expect(await top()).toBe(top0);                                                       // the plan doesn't move as the steps change
+  await clickPlan(page, 300, 250);                                                      // a stray click, then Undo
+  await page.locator("[data-ws-undo]").click();
+  await clickPlan(page, 96, 402);
+  await clickPlan(page, 101, 101);                                                      // the first corner again closes the outline
+  await expect(page.locator("[data-ws-step]")).toHaveAttribute("data-ws-step", "scale");
+  await expect(page.locator(".ws-measure-progress li").first()).toHaveClass(/is-done/);
+  // Scale: a dimension that disagrees with 1:100 is refused and a second one is asked for.
+  await clickPlan(page, 100, 600);
+  await clickPlan(page, 500, 600);
+  await page.locator("[data-ws-dim-mm]").fill("6000");
+  await page.locator("[data-ws-dim-mm]").press("Tab");
+  await expect(page.locator("[data-ws-step] .ws-banner.is-warn")).toContainText("off the 1:100 scale");
+  await expect(page.locator("[data-ws-measure-save]")).toHaveCount(0);
+  await page.locator("[data-ws-dim-clear='dim']").click();
+  await clickPlan(page, 100, 600);
+  await clickPlan(page, 500, 600);
+  await page.locator("[data-ws-dim-mm]").fill(String(Math.round(400 * MM_PER_PX)));
+  await page.locator("[data-ws-dim-mm]").press("Tab");
+  await expect(page.locator("[data-ws-step]")).toHaveAttribute("data-ws-step", "save");
+  await expect(page.locator("[data-ws-measure-area] span")).toHaveText((400 * 300 * MM_PER_PX ** 2 / 1e6).toFixed(1));
+  await expect(page.locator("[data-ws-step]")).toContainText("This replaces the 105 m² you typed.");
+  await page.locator("[data-ws-measure-name]").fill("");
+  await page.locator("[data-ws-measure-save]").click();
+  await expect(page.locator("[data-ws-measure-error]")).toContainText("Type your name");
+  await page.locator("[data-ws-measure-name]").fill("Sam");
+  await page.locator("[data-ws-measure-save]").click();
+  await expect(page.locator("[data-ws-rooms]")).toBeVisible();
+  await expect(page.locator("[data-ws-rooms-status]")).toContainText("Kitchen measured:");
+  await expect(page.locator("[data-ws-rooms-status]")).toContainText("(replaces the 105 m² you typed)");
+  const saved = posts.find(([kind, body]) => kind === "geometry" && body.action === "save")[1];
+  expect(saved).toMatchObject({project_id: "job-1", room_id: "room-use:unassigned-level:kitchen", page: 20, reviewer: "Sam",
+    snapped_line_ids: ["top", "right", "bottom", "left", "top"], source_pdf_fingerprint: "pdf-fp", vector_page_fingerprint: "page-fp",
+    dimension_value_mm: Math.round(400 * MM_PER_PX)});
+  expect(saved.points_image_px).toEqual([[100, 100], [500, 100], [500, 400], [100, 400], [100, 100]]);
+  expect(posts.find(([kind]) => kind === "area")[1]).toMatchObject({room_id: "room-use:unassigned-level:kitchen", area_m2: null});
+  await expect(page.locator("[data-ws-room='room-use:unassigned-level:kitchen'] .ws-chip")).toHaveText("Measured on the plan");
+});
+
+test("Measure a room: a scale set on the page for another room can be reused, and Back returns to the list", async ({ page }) => {
+  const other = {room_id: "room-use:unassigned-level:shop", room_label: "Shop", page: 20, points_image_px: [[100, 100], [500, 100], [500, 400], [100, 400], [100, 100]],
+                 calibration: {status: "agreed", mm_per_px: MM_PER_PX, dimension_points_image_px: [[100, 600], [500, 600]], dimension_value_mm: 400 * MM_PER_PX}};
+  await page.setViewportSize({width: 1280, height: 1500});
+  const posts = await mockJob(page, {status: () => baseStatus(), geometry: () => geometryContext([other])});
+  await page.goto("/#/job/job-1/rooms");
+  await page.locator("[data-ws-room='room-use:unassigned-level:kitchen'] [data-ws-trace]").click();
+  for (const [x, y] of [[100, 100], [500, 100], [500, 400], [100, 400]]) await clickPlan(page, x, y);
+  await page.locator("[data-ws-close]").click();
+  await expect(page.locator("[data-ws-step]")).toContainText("when Shop was measured");
+  await page.getByRole("button", {name: "Use it"}).click();
+  await expect(page.locator("[data-ws-step]")).toHaveAttribute("data-ws-step", "save");
+  await expect(page.locator("[data-ws-step]")).toContainText("set when Shop was measured");
+  await page.locator("[data-ws-measure-back]").click();
+  await expect(page.locator("[data-ws-rooms]")).toBeVisible();
+  expect(posts.filter(([kind]) => kind === "geometry")).toHaveLength(0);
 });

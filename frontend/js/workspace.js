@@ -399,7 +399,7 @@
     if (origin === "edited") return "Edited by you";
     if (origin === "ai_determined") return "Measured by AI";
     if (origin.startsWith("printed") || origin === "pdf_evidence") return "Printed on the drawings";
-    if (origin === "reviewer_traced") return "Traced";
+    if (origin === "reviewer_traced") return "Measured on the plan";
     return "From the drawings";
   }
 
@@ -417,14 +417,369 @@
   // Rows = rooms found on the drawings, with typed areas applied at once (the draft model is rebuilt on Calculate).
   function roomRowsWithTyped(model) {
     const typed = new Map((state.status?.area_overrides || []).map(row => [row.room_id, row]));
+    const traced = state.status?.traced_rooms || {};
     const rows = (model.room_scope?.candidates || []).map(row => typed.has(row.key)
-      ? {...row, area_m2: typed.get(row.key).area_m2, area_origin: "edited"} : row);
+      ? {...row, area_m2: typed.get(row.key).area_m2, area_origin: "edited"}
+      : traced[row.key] ? {...row, area_m2: traced[row.key].area_m2, area_origin: traced[row.key].source === "traced" ? "reviewer_traced" : "ai_determined"}
+      : row);
     const known = new Set(rows.map(row => row.key));
     for (const row of typed.values()) {  // added in the workspace; in the model after the next Calculate
       if (!known.has(row.room_id)) rows.push({key: row.room_id, label: row.room_label, level: row.level_name,
                                               area_m2: row.area_m2, area_origin: "edited", include: true, status: "added"});
     }
     return rows;
+  }
+
+  // ------------------------------------------------------------------ Rooms: measure a room on the plan
+  // Guided: 1 click the room's corners (they snap to the wall lines), 2 set the scale from a printed
+  // dimension (never from the page scale alone), 3 save. Uses the same trace API as Engineer review.
+  const SCALE_TOLERANCE = 0.02;  // the server's rule: a dimension must agree with the stated page scale within 2%
+  const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+  const shoelace = points => Math.abs(points.slice(0, -1).reduce((sum, a, i) => sum + a[0] * points[i + 1][1] - points[i + 1][0] * a[1], 0)) / 2;
+  const SCALE_OK = new Set(["agreed", "declared_scale_rejected"]);
+
+  async function renderMeasure() {
+    const m = state.measure, projectId = state.projectId;
+    if (!m.ctx) {
+      progress(`Opening the plan for ${m.label}`, "Loading the plan pages and the wall lines to snap to.");
+      m.ctx = await getJson(`/api/reviewer-room-geometry?project_id=${encodeURIComponent(projectId)}`);
+      if (state.measure !== m || !live(projectId, "rooms")) return;
+      const pages = measurePages(m.ctx);
+      if (!pages.length) throw new Error("No plan page with a full-resolution image is ready for measuring. Engineer review shows the page status.");
+      const room = (m.ctx.rooms || []).find(row => row.room_id === m.key);
+      const existing = (m.ctx.reviewer_room_geometry?.records || []).find(row => row.room_id === m.key && pages.some(page => page.page === row.page));
+      // The main plan carries the printed dimensions the scale needs; room names are often on another sheet.
+      m.namePages = (room?.source_pages || []).filter(page => pages.some(row => row.page === page));
+      m.page = existing?.page || pages.find(row => row.proposed_role === "main_floor_plan")?.page || m.namePages[0] || pages[0].page;
+    }
+    if (!(m.ctx.rooms || []).some(row => row.room_id === m.key)) {
+      throw new Error(`${m.label} isn't in the plan's room list yet. Press Calculate once (it refreshes the room list), then measure it.`);
+    }
+    if (!m.snap || m.snap.page?.page !== m.page) {
+      progress(`Opening page ${m.page}`, "Loading the wall lines to snap to.");
+      m.snap = await getJson(`/api/plan-snap?project_id=${encodeURIComponent(projectId)}&page=${m.page}`);
+      if (state.measure !== m || !live(projectId, "rooms")) return;
+      Object.assign(m, {points: [], snapped: [], closed: false, dim: [], dimMm: "", dim2: [], dim2Mm: "", reuse: null, step: "corners",
+                        view: null, error: "", hover: null});
+      const reuse = pageCalibration(m);
+      if (reuse) m.reuse = reuse;
+    }
+    const page = measurePages(m.ctx).find(row => row.page === m.page);
+    const pageOptions = measurePages(m.ctx).map(row => `<option value="${row.page}" ${row.page === m.page ? "selected" : ""}>Page ${row.page}${row.title ? ` — ${esc(row.title)}` : ""}${row.proposed_role === "main_floor_plan" ? " (main plan)" : ""}</option>`).join("");
+    const W = Number(page.image_width_px), H = Number(page.image_height_px);
+    m.view = m.view || {x: 0, y: 0, w: W, h: H};
+    const lines = (m.snap.lines || []).map(line => `<line x1="${line.start_px[0]}" y1="${line.start_px[1]}" x2="${line.end_px[0]}" y2="${line.end_px[1]}"/>`).join("");
+    body.innerHTML = `<div class="ws-card ws-measure" data-ws-measure>
+      <div class="ws-measure-head">
+        <button class="link-button" type="button" data-ws-measure-back>← Rooms</button>
+        <h2>Measure ${esc(m.label)}</h2>
+        <label class="ws-measure-page"><span class="visually-hidden">Plan page</span><select data-ws-measure-page>${pageOptions}</select></label>
+      </div>
+      <div class="ws-measure-body">
+        <aside class="ws-measure-steps" data-ws-measure-steps aria-live="polite"></aside>
+        <div class="ws-plan" data-ws-plan>
+          <svg data-ws-plan-svg role="application" tabindex="0" viewBox="${m.view.x} ${m.view.y} ${m.view.w} ${m.view.h}"
+               aria-label="Plan page ${m.page}. Click to add a point; arrow keys move the cursor, Enter adds a point, Backspace removes the last one.">
+            <image href="${esc(page.preview_url)}" width="${W}" height="${H}" preserveAspectRatio="none"/>
+            <g class="ws-plan-lines">${lines}</g>
+            <g data-ws-plan-overlay></g>
+          </svg>
+          <div class="ws-plan-tools" role="toolbar" aria-label="Plan view">
+            <button class="btn ghost" type="button" data-ws-zoom="in" aria-label="Zoom in">+</button>
+            <button class="btn ghost" type="button" data-ws-zoom="out" aria-label="Zoom out">−</button>
+            <button class="btn ghost" type="button" data-ws-zoom="fit" aria-label="Show the whole page">⤢</button>
+          </div>
+          <p class="ws-plan-hint">Scroll to zoom, drag to move.</p>
+        </div>
+      </div></div>`;
+    wireMeasure(page);
+    fitPlan();
+    drawMeasure();
+    requestAnimationFrame(() => { if (state.measure === m) { fitPlan(); drawMeasure(); } });
+  }
+
+  // The steps and the whole plan on one screen: the plan takes the height left below the steps.
+  function fitPlan() {
+    const svg = body.querySelector("[data-ws-plan-svg]");
+    if (!svg) return;
+    svg.style.maxHeight = `${Math.max(320, Math.floor(window.innerHeight - svg.getBoundingClientRect().top - 12))}px`;
+  }
+  window.addEventListener("resize", () => { if (state.measure && body.querySelector("[data-ws-plan-svg]")) { fitPlan(); drawMeasure(); } });
+
+  function measurePages(ctx) {
+    return (ctx.pages || []).filter(row => Number(row.image_width_px) > 0 && Number(row.image_height_px) > 0 && row.preview_url
+                                       && row.preview_matches_vector_coordinates !== false);
+  }
+
+  // A scale already set from a printed dimension on this page (when another room was measured) can be reused.
+  function pageCalibration(m) {
+    const rows = (m.ctx.reviewer_room_geometry?.records || []).filter(row => row.page === m.page && SCALE_OK.has(row.calibration?.status)
+      && (row.calibration?.dimension_points_image_px || []).length === 2 && row.calibration?.dimension_value_mm > 0);
+    const row = rows.find(item => item.room_id === m.key) || rows[0];
+    if (!row) return null;
+    const c = row.calibration;
+    return {from: row.room_label || row.room_id, points: c.dimension_points_image_px, mm: c.dimension_value_mm,
+            second: c.second_dimension ? {points: c.second_dimension.points_image_px, mm: c.second_dimension.value_mm} : null,
+            mmPerPx: c.mm_per_px};
+  }
+
+  function declaredMmPerPx(page) {
+    const denominator = Number(page.scale_denominator), pxPerPt = Number(page.image_px_per_pt);
+    return denominator > 0 && pxPerPt > 0 ? denominator * (25.4 / 72) / pxPerPt : null;
+  }
+
+  // Mirrors ai/reviewer_room_geometry.calibration, so Save is offered only when the server will accept the scale.
+  function measureScale(m, page) {
+    if (m.useReuse && m.reuse) return {ok: true, mmPerPx: m.reuse.mmPerPx, text: `Scale from the printed ${Number(m.reuse.mm).toLocaleString()} mm dimension (set when ${m.reuse.from} was measured).`};
+    const mm = Number(m.dimMm);
+    if (m.dim.length < 2 || !(mm > 0)) return {ok: false};
+    const measured = mm / dist(m.dim[0], m.dim[1]);
+    const declared = declaredMmPerPx(page);
+    const scaleText = page.declared_scale || (page.scale_denominator ? `1:${page.scale_denominator}` : "the page scale");
+    if (!declared) return {ok: false, warn: "This page has no stated scale to check the dimension against. Use a page with a scale (for example 1:100)."};
+    const diff = Math.abs(measured - declared) / declared;
+    if (diff <= SCALE_TOLERANCE) return {ok: true, mmPerPx: measured, text: `The dimension agrees with the ${scaleText} scale (${(diff * 100).toFixed(1)}% difference).`};
+    const mm2 = Number(m.dim2Mm);
+    if (m.dim2.length === 2 && mm2 > 0) {
+      const second = mm2 / dist(m.dim2[0], m.dim2[1]);
+      const cross = Math.abs(measured - second) / ((measured + second) / 2);
+      if (cross <= SCALE_TOLERANCE) return {ok: true, mmPerPx: (measured + second) / 2, text: `Two printed dimensions agree with each other (${(cross * 100).toFixed(1)}%), so they set the scale instead of ${scaleText}.`};
+      return {ok: false, needSecond: true, warn: `The two dimensions disagree by ${(cross * 100).toFixed(1)}%. Check you clicked the ends of each dimension line and typed the printed numbers.`};
+    }
+    return {ok: false, needSecond: true, warn: `This dimension is ${(diff * 100).toFixed(1)}% off the ${scaleText} scale. Check you clicked the two ends of the dimension line and typed its number. If it's right, measure a second printed dimension to confirm.`};
+  }
+
+  function drawMeasure() {
+    const m = state.measure, page = measurePages(m.ctx).find(row => row.page === m.page);
+    const svg = body.querySelector("[data-ws-plan-svg]"), overlay = body.querySelector("[data-ws-plan-overlay]"), steps = body.querySelector("[data-ws-measure-steps]");
+    if (!svg || !overlay || !steps) return;
+    svg.setAttribute("viewBox", `${m.view.x} ${m.view.y} ${m.view.w} ${m.view.h}`);
+    const unit = m.view.w / Math.max(1, svg.getBoundingClientRect().width || 800);  // image px per screen px
+    const r = 6 * unit;
+    const saved = (m.ctx.reviewer_room_geometry?.records || []).find(row => row.room_id === m.key && row.page === m.page);
+    const poly = points => points.map(point => point.join(",")).join(" ");
+    const dimLine = (points, cls) => points.length ? `<polyline class="${cls}" points="${poly(points)}" style="stroke-width:${3 * unit}px"/>${points.map(point => `<circle class="${cls}" cx="${point[0]}" cy="${point[1]}" r="${r}"/>`).join("")}` : "";
+    const scale = measureScale(m, page);
+    const areaM2 = m.closed && scale.ok ? shoelace(m.points) * scale.mmPerPx * scale.mmPerPx / 1e6 : null;
+    overlay.innerHTML = `${saved && !m.points.length ? `<polygon class="ws-saved-outline" points="${poly(saved.points_image_px || [])}" style="stroke-width:${3 * unit}px"/>` : ""}
+      ${m.points.length ? `<${m.closed ? "polygon" : "polyline"} class="ws-outline" points="${poly(m.closed ? m.points.slice(0, -1) : m.points)}" style="stroke-width:${3 * unit}px"/>` : ""}
+      ${m.points.slice(0, m.closed ? -1 : undefined).map((point, index) => `<circle class="ws-corner${index === 0 ? " is-first" : ""}" cx="${point[0]}" cy="${point[1]}" r="${index === 0 && !m.closed && m.points.length > 2 ? r * 1.8 : r}"/>`).join("")}
+      ${dimLine(m.dim, "ws-dim")}${dimLine(m.dim2, "ws-dim2")}
+      ${m.hover ? `<circle class="ws-hover${m.hover.snapped ? " is-snapped" : ""}" cx="${m.hover.point[0]}" cy="${m.hover.point[1]}" r="${r * 1.4}"/>` : ""}`;
+    const done = {corners: m.closed, scale: m.closed && scale.ok, save: false};
+    const current = !m.closed ? "corners" : !scale.ok ? "scale" : "save";
+    const pill = (id, text) => `<li class="${current === id ? "is-current" : ""}${done[id] ? " is-done" : ""}">${text}</li>`;
+    const scaleBody = m.reuse && m.useReuse !== false && !m.dim.length
+      ? `<p>The scale on this page was already set from a printed dimension (${Number(m.reuse.mm).toLocaleString()} mm, when ${esc(m.reuse.from)} was measured).
+           <button class="btn ghost" type="button" data-ws-reuse>Use it</button> <button class="link-button" type="button" data-ws-rescale>Set it again</button></p>`
+      : `<p>Click both ends of a printed dimension line (the longer the better), then type the number printed on it.</p>
+         <div class="ws-measure-row"><label>Printed dimension (mm) <input type="number" inputmode="numeric" min="1" step="1" data-ws-dim-mm value="${esc(m.dimMm)}" placeholder="e.g. 11825"></label>
+           <span class="ws-fine">${m.dim.length}/2 ends clicked${m.dim.length ? ` · <button class="link-button" type="button" data-ws-dim-clear="dim">Clear</button>` : ""}</span></div>
+         ${scale.needSecond || m.dim2.length ? `<div class="ws-measure-row ws-second"><b>Second dimension</b>
+           <label>Printed dimension (mm) <input type="number" inputmode="numeric" min="1" step="1" data-ws-dim2-mm value="${esc(m.dim2Mm)}"></label>
+           <span class="ws-fine">${m.dim2.length}/2 ends clicked${m.dim2.length ? ` · <button class="link-button" type="button" data-ws-dim-clear="dim2">Clear</button>` : ""}</span></div>` : ""}
+         ${scale.warn ? `<p class="ws-banner is-warn">${esc(scale.warn)}</p>` : ""}`;
+    const bodies = {
+      corners: `<p>Click each corner of ${esc(m.label)}, going round the room. Corners snap to the wall lines (blue). Click the first corner again to finish.</p>
+        <div class="ws-measure-row"><span class="ws-fine">${m.points.length} corner${m.points.length === 1 ? "" : "s"}</span>
+          ${m.points.length >= 3 ? `<button class="btn ghost" type="button" data-ws-close>Finish outline</button>` : ""}
+          ${m.points.length ? `<button class="link-button" type="button" data-ws-undo>Undo last corner</button><button class="link-button" type="button" data-ws-restart>Start again</button>` : ""}</div>`,
+      scale: `${scaleBody}<div class="ws-measure-row"><button class="link-button" type="button" data-ws-undo>Undo</button><button class="link-button" type="button" data-ws-restart>Start again</button></div>`,
+      save: `<div class="ws-measure-row"><p class="ws-measure-area" data-ws-measure-area><span>${areaM2?.toFixed(1)}</span> m²</p>
+          <span class="ws-ok">${esc(scale.text || "")}</span></div>
+        ${m.typedArea != null ? `<p class="ws-fine">This replaces the ${esc(m.typedArea)} m² you typed.</p>` : ""}
+        <div class="ws-measure-row"><label>Your name <input data-ws-measure-name value="${esc(userName())}" autocomplete="name"></label>
+          <button class="btn key" type="button" data-ws-measure-save ${m.saving ? "disabled" : ""}>${m.saving ? "Saving… (about 15 s)" : `Save ${esc(m.label)}`}</button>
+          <button class="link-button" type="button" data-ws-undo>Undo</button><button class="link-button" type="button" data-ws-restart>Start again</button></div>`,
+    };
+    steps.innerHTML = `
+      <div class="ws-measure-progress-row"><ol class="ws-measure-progress">${pill("corners", "Outline the room")}${pill("scale", "Set the scale from a printed dimension")}${pill("save", "Save")}</ol>
+        ${m.namePages?.length && !m.namePages.includes(m.page) ? `<span class="ws-fine" data-ws-name-pages>${esc(m.label)}'s name is printed on page ${m.namePages.join(", ")}.</span>` : ""}</div>
+      <div class="ws-measure-current" data-ws-step="${current}">
+        ${saved && !m.points.length ? `<p class="ws-banner">Already measured on this page${saved.calibration?.mm_per_px ? `: ${(shoelace(saved.points_image_px) * saved.calibration.mm_per_px ** 2 / 1e6).toFixed(1)} m² (dashed green)` : ""}. Measuring again replaces it.</p>` : ""}
+        ${bodies[current]}
+        ${m.error ? `<p class="ws-banner is-warn" role="alert" data-ws-measure-error>${esc(m.error)}</p>` : ""}
+      </div>`;
+    wireMeasureSteps(page);
+  }
+
+  function snapPoint(m, point, unit) {
+    const snap = m.snap || {};
+    const tolerance = Math.max(Number(snap.snap_tolerance_px) || 8, 0);
+    let best = null;
+    for (const row of snap.endpoints || []) {
+      const d = dist(point, row.point_px);
+      if (d <= tolerance && (!best || d < best.d)) best = {point: row.point_px, lineId: row.line_id, d};
+    }
+    for (const row of snap.intersections || []) {
+      const d = dist(point, row.point_px);
+      if (d <= tolerance && (!best || d < best.d)) best = {point: row.point_px, lineId: row.line_ids[0], d};
+    }
+    return best ? {point: [...best.point], lineId: best.lineId, snapped: true} : {point: point.map(value => Math.round(value * 10) / 10), lineId: null, snapped: false};
+  }
+
+  function addMeasurePoint(point, page) {
+    const m = state.measure, svg = body.querySelector("[data-ws-plan-svg]");
+    const unit = m.view.w / Math.max(1, svg.getBoundingClientRect().width || 800);
+    const W = Number(page.image_width_px), H = Number(page.image_height_px);
+    point = [Math.max(0, Math.min(W, point[0])), Math.max(0, Math.min(H, point[1]))];
+    m.error = "";
+    if (!m.closed) {
+      if (m.points.length >= 3 && dist(point, m.points[0]) <= 12 * unit) return closeOutline();
+      const snapped = snapPoint(m, point, unit);
+      m.points.push(snapped.point);
+      m.snapped.push(snapped.lineId);
+    } else if (!(m.useReuse && m.reuse)) {
+      m.step = "scale";
+      const scale = measureScale(m, page);
+      const key = m.dim.length < 2 ? "dim" : (scale.needSecond || m.dim2.length) && m.dim2.length < 2 ? "dim2" : "dim";
+      if (key === "dim" && m.dim.length >= 2) m.dim = [];
+      m[key].push(point);
+    }
+    drawMeasure();
+  }
+
+  function closeOutline() {
+    const m = state.measure;
+    if (m.points.length < 3) return;
+    m.points.push([...m.points[0]]);
+    m.snapped.push(m.snapped[0]);
+    m.closed = true;
+    m.step = "scale";
+    drawMeasure();
+  }
+
+  function wireMeasure(page) {
+    const m = state.measure, svg = body.querySelector("[data-ws-plan-svg]");
+    const W = Number(page.image_width_px), H = Number(page.image_height_px);
+    const toImage = event => {
+      const point = svg.createSVGPoint();
+      point.x = event.clientX; point.y = event.clientY;
+      const result = point.matrixTransform(svg.getScreenCTM().inverse());
+      return [result.x, result.y];
+    };
+    const clampView = view => {
+      view.w = Math.max(W / 40, Math.min(W, view.w)); view.h = view.w * H / W;
+      view.x = Math.max(0, Math.min(W - view.w, view.x)); view.y = Math.max(0, Math.min(H - view.h, view.y));
+      return view;
+    };
+    const zoomAt = (factor, centre) => {
+      const v = m.view, nw = Math.max(W / 40, Math.min(W, v.w * factor));
+      const fx = (centre[0] - v.x) / v.w, fy = (centre[1] - v.y) / v.h;
+      m.view = clampView({x: centre[0] - fx * nw, y: centre[1] - fy * nw * H / W, w: nw, h: nw * H / W});
+      drawMeasure();
+    };
+    body.querySelector("[data-ws-measure-back]").addEventListener("click", () => { state.measure = null; renderRooms().catch(showTabError); });
+    body.querySelector("[data-ws-measure-page]").addEventListener("change", event => { m.page = Number(event.target.value); m.snap = null; m.useReuse = undefined; renderMeasure().catch(showTabError); });
+    body.querySelectorAll("[data-ws-zoom]").forEach(button => button.addEventListener("click", () => {
+      const v = m.view, centre = [v.x + v.w / 2, v.y + v.h / 2];
+      if (button.dataset.wsZoom === "fit") { m.view = {x: 0, y: 0, w: W, h: H}; drawMeasure(); }
+      else zoomAt(button.dataset.wsZoom === "in" ? 0.6 : 1 / 0.6, centre);
+    }));
+    svg.addEventListener("wheel", event => { event.preventDefault(); zoomAt(event.deltaY < 0 ? 0.8 : 1.25, toImage(event)); }, {passive: false});
+    let drag = null;
+    svg.addEventListener("pointerdown", event => { drag = {x: event.clientX, y: event.clientY, view: {...m.view}, moved: false}; svg.setPointerCapture?.(event.pointerId); });
+    svg.addEventListener("pointermove", event => {
+      if (drag) {
+        const dx = event.clientX - drag.x, dy = event.clientY - drag.y;
+        if (Math.hypot(dx, dy) > 4) drag.moved = true;
+        if (drag.moved) {
+          const unit = drag.view.w / Math.max(1, svg.getBoundingClientRect().width);
+          m.view = clampView({...drag.view, x: drag.view.x - dx * unit, y: drag.view.y - dy * unit});
+          drawMeasure();
+          return;
+        }
+      }
+      if (!m.closed) {
+        const unit = m.view.w / Math.max(1, svg.getBoundingClientRect().width);
+        m.hover = snapPoint(m, toImage(event), unit);
+        const hover = body.querySelector(".ws-hover");
+        if (hover) { hover.setAttribute("cx", m.hover.point[0]); hover.setAttribute("cy", m.hover.point[1]); hover.classList.toggle("is-snapped", m.hover.snapped); }
+        else drawMeasure();
+      }
+    });
+    svg.addEventListener("pointerup", event => {
+      const wasDrag = drag?.moved;
+      drag = null;
+      if (!wasDrag && event.button === 0) addMeasurePoint(toImage(event), page);
+    });
+    svg.addEventListener("pointerleave", () => { if (m.hover) { m.hover = null; drawMeasure(); } });
+    svg.addEventListener("keydown", event => {
+      const step = (event.shiftKey ? 1 : 10) * m.view.w / Math.max(1, svg.getBoundingClientRect().width);
+      const cursor = m.cursor || [m.view.x + m.view.w / 2, m.view.y + m.view.h / 2];
+      const moves = {ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step]};
+      if (moves[event.key]) {
+        event.preventDefault();
+        m.cursor = [cursor[0] + moves[event.key][0], cursor[1] + moves[event.key][1]];
+        m.hover = m.closed ? {point: m.cursor, snapped: false} : snapPoint(m, m.cursor, 1);
+        drawMeasure();
+      } else if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        addMeasurePoint(cursor, page);
+      } else if (event.key === "Backspace") {
+        event.preventDefault();
+        undoMeasure();
+      }
+    });
+  }
+
+  function undoMeasure() {
+    const m = state.measure;
+    if (m.dim2.length) m.dim2.pop();
+    else if (m.dim.length) m.dim.pop();
+    else if (m.closed) { m.points.pop(); m.snapped.pop(); m.closed = false; m.step = "corners"; }
+    else { m.points.pop(); m.snapped.pop(); }
+    drawMeasure();
+  }
+
+  function wireMeasureSteps(page) {
+    const m = state.measure, steps = body.querySelector("[data-ws-measure-steps]");
+    steps.querySelector("[data-ws-close]")?.addEventListener("click", closeOutline);
+    steps.querySelector("[data-ws-undo]")?.addEventListener("click", undoMeasure);
+    steps.querySelector("[data-ws-restart]")?.addEventListener("click", () => {
+      Object.assign(m, {points: [], snapped: [], closed: false, dim: [], dimMm: "", dim2: [], dim2Mm: "", step: "corners", error: "", useReuse: undefined});
+      drawMeasure();
+    });
+    steps.querySelector("[data-ws-reuse]")?.addEventListener("click", () => { m.useReuse = true; drawMeasure(); });
+    steps.querySelector("[data-ws-rescale]")?.addEventListener("click", () => { m.useReuse = false; m.reuse = null; drawMeasure(); });
+    steps.querySelectorAll("[data-ws-dim-clear]").forEach(button => button.addEventListener("click", () => { m[button.dataset.wsDimClear] = []; drawMeasure(); }));
+    for (const [selector, key] of [["[data-ws-dim-mm]", "dimMm"], ["[data-ws-dim2-mm]", "dim2Mm"]]) {
+      steps.querySelector(selector)?.addEventListener("change", event => { m[key] = event.target.value.trim(); drawMeasure(); });
+    }
+    steps.querySelector("[data-ws-measure-save]")?.addEventListener("click", () => saveMeasure(page));
+  }
+
+  async function saveMeasure(page) {
+    const m = state.measure, projectId = state.projectId;
+    const name = body.querySelector("[data-ws-measure-name]")?.value.trim() || "";
+    if (!name) { m.error = "Type your name or initials: every measurement records who made it."; return drawMeasure(); }
+    storage.set("toki.workspace.name", name);
+    const reuse = m.useReuse && m.reuse;
+    const dims = reuse ? {points: m.reuse.points, mm: Number(m.reuse.mm), second: m.reuse.second} : {points: m.dim, mm: Number(m.dimMm),
+      second: m.dim2.length === 2 && Number(m.dim2Mm) > 0 ? {points: m.dim2, mm: Number(m.dim2Mm)} : null};
+    m.saving = true; m.error = "";
+    drawMeasure();
+    try {
+      const data = await sendJson("/api/reviewer-room-geometry", {action: "save", project_id: projectId, room_id: m.key, page: m.page,
+        points_image_px: m.points, snapped_line_ids: m.snapped, dimension_points_image_px: dims.points, dimension_value_mm: dims.mm,
+        second_dimension_points_image_px: dims.second?.points || [], second_dimension_value_mm: dims.second?.mm || null,
+        reviewer: name, note: "Measured in the job workspace.", source_pdf_fingerprint: m.ctx.source_pdf_fingerprint,
+        vector_page_fingerprint: m.snap.vector_page_fingerprint});
+      const record = (data.reviewer_room_geometry?.records || []).find(row => row.room_id === m.key && row.page === m.page);
+      if (!SCALE_OK.has(record?.calibration?.status)) throw new Error("The scale wasn't accepted; check the printed dimension and try again.");
+      const area = shoelace(record.points_image_px) * record.calibration.mm_per_px ** 2 / 1e6;
+      // The person just measured the room: the measurement replaces an area they typed earlier.
+      if (m.typedArea != null) await sendJson("/api/room-area-override", {project_id: projectId, room_id: m.key, label: m.label, area_m2: null, edited_by: name});
+      state.measure = null;
+      state.message = `${m.label} measured: ${area.toFixed(1)} m²${m.typedArea != null ? ` (replaces the ${m.typedArea} m² you typed)` : ""}. Calculate to update the result.`;
+      await loadStatus();
+      if (live(projectId, "rooms")) await renderRooms();
+    } catch (error) {
+      if (state.measure !== m) return;
+      m.saving = false;
+      m.error = `Could not save: ${error.message}`;
+      if (live(projectId, "rooms")) drawMeasure();
+    }
   }
 
   // Ceiling height: typed (shown as the value) or the current drawing/default height (shown greyed as the hint).
@@ -451,6 +806,7 @@
 
   async function renderRooms() {
     const projectId = state.projectId;
+    if (state.measure?.projectId === projectId) return renderMeasure();
     if (!DATA?.has_reasoning_packet) {
       body.innerHTML = `<div class="ws-card"><h2>Rooms</h2><p>The drawing pages are being prepared first.</p>
         <button class="btn key" type="button" data-ws-go="drawings">Go to Drawings</button></div>`;
@@ -481,7 +837,7 @@
                  value="${row.area_m2 != null ? Number(row.area_m2).toFixed(1) : ""}" placeholder="Type area"></td>
             <td><span class="ws-chip is-${esc(String(row.area_origin || "none").replace(/[^a-z_]/gi, "_"))}">${esc(areaSource(row))}</span></td>
             <td>${heightCell(row)}</td>
-            <td><button class="link-button" type="button" data-ws-trace>Trace on the plan</button></td></tr>`;
+            <td><button class="link-button" type="button" data-ws-trace>Measure on the plan</button></td></tr>`;
         }).join("") || `<tr><td colspan="7">No rooms were found on the drawings yet. They appear here once the drawing check has read the room names; Engineer review can trace them meanwhile.</td></tr>`}</tbody></table></div>
       <form class="ws-add" data-ws-add><b>Add a room the drawings missed</b>
         <label>Name<input name="label" required autocomplete="off"></label>
@@ -541,7 +897,10 @@
           await after(`Use saved for ${label}.`);
         } catch (error) { status.textContent = `Could not save the use: ${error.message}`; }
       });
-      row.querySelector("[data-ws-trace]").addEventListener("click", () => { leave(); openRoomForTracing(key); });
+      row.querySelector("[data-ws-trace]").addEventListener("click", () => {
+        state.measure = {projectId, key, label, typedArea: (state.status?.area_overrides || []).find(item => item.room_id === key)?.area_m2 ?? null};
+        renderRooms().catch(showTabError);
+      });
     });
     body.querySelector("[data-ws-add]").addEventListener("submit", async event => {
       event.preventDefault();
@@ -642,10 +1001,11 @@
       const room = names.get(item.room_id) || item.room_name;
       if (room) grouped.get(label).add(room);
     }
-    // The specific "no outline" walls and roof lines already say why the envelope is missing for those rooms.
+    // The specific walls and roof lines already say why the envelope is missing for those rooms.
     const envelope = grouped.get(groups.envelope);
     if (envelope) {
-      const covered = new Set([...(grouped.get(prefixes.area_only_walls) || []), ...(grouped.get(prefixes.area_only_roof) || [])]);
+      const specific = [prefixes.area_only_walls, prefixes.area_only_roof, prefixes.unclassified_wall_boundaries, prefixes.roof_exposure];
+      const covered = new Set(specific.flatMap(label => [...(grouped.get(label) || [])]));
       if ((covered.size && [...envelope].every(room => covered.has(room))) || (!envelope.size && covered.size)) grouped.delete(groups.envelope);
     }
     return [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([label, rooms]) =>

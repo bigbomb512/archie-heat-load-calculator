@@ -246,6 +246,34 @@ Nothing is deleted; it is just out of the contractor's way.
 - **Preparing pages is driven from the browser** (save decisions, then rebuild the prepared drawings). If the page is closed mid-way, the job is left half-prepared until the Drawings tab is opened again, which then prepares it automatically. A single server-side action would remove this.
 - **Speed:** a page change takes about 6–7 min on the 38-page set.
 
+### Phase 3 status (2026-10-06)
+**Built (Rooms tab, "Measure on the plan"):**
+- **A guided measuring view inside the Rooms tab** (no Engineer review). It opens on the main plan; when the room's name is printed on another page, it says which page. Its three steps:
+  - **Outline the room.** Corners snap to the vector wall lines, and clicking the first corner again closes the outline. Undo and Start again are available.
+  - **Set the scale from a printed dimension.** Click both ends, then type the printed number. This mirrors the server rule: the dimension must agree with the stated scale within 2%, or two dimensions must agree with each other. A scale already set on the page for another room can be reused.
+  - **Save.** It shows the live area and needs the person's name.
+- **Navigation:** zoom (wheel or buttons), drag to move, and keyboard input (arrows, Enter, Backspace). The step bar has a fixed height, so the plan never moves under the cursor, and the plan is sized to fit under the steps on one screen.
+- **After saving:**
+  - the room shows "Measured on the plan" straight away (`traced_rooms` in `/api/job-status`, computed from the saved outline and scale);
+  - a measurement replaces an area the person typed earlier (the typed value is cleared, and the message says so);
+  - Results is marked out of date until the next Calculate.
+
+**Verified:**
+- `npm test` passes (Python suites plus 83 Playwright tests, 2 new for measuring).
+- Real clicks in the browser on the Butcher Buffet walkthrough copy, page 20:
+  - **Kitchen:** 14 corners plus the printed 23,265 mm dimension (0.3% off 1:100), giving **104.4 m²** against the answer key's 104.9 m² (−0.5%). The save took 11 s. After Calculate, Results showed Kitchen 104.4 m² "Measured on the plan", total 34.4 kW (Calculate took about 2 min).
+  - **Bar:** reused the Kitchen scale, giving 32.3 m². The save took 16 s.
+- Phone width (375 px): no page-wide scroll.
+
+**Open items:**
+- **First-room time for a real person is not measured yet.** The scripted run (clicks computed from a known outline) took 67 s, which says nothing about a contractor finding the corners. The contractor session (phase 7) measures it against the 5-minute target.
+- **Measuring doesn't yet bring walls and roof into the number.** A new trace's walls are "not classified yet", and its roof is "not checked yet":
+  - the P3 wall check for a new trace only appears when the drawing checks are rebuilt;
+  - the job-level "what's above" answer only settles open AI roof questions, not a hand-measured room's roof.
+
+  Both belong to phase 4 (Walls & roof).
+- **Phone:** the plan is small at 375 px and there's no pinch-to-zoom (zoom buttons only).
+
 ## Testing
 - **Playwright, per tab:** loads its data, edits round-trip, status badges change.
 - **Plus:**

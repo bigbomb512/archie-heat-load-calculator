@@ -171,6 +171,28 @@ class JobServiceTests(unittest.TestCase):
         (self.root / "reviewed_decisions.json").write_text("{broken")
         self.assertIsNone(web_app.selected_pages(self.project))
 
+    def test_traced_rooms_give_their_area_at_once_and_a_typed_area_still_wins(self):
+        square = [[0, 0], [1000, 0], [1000, 500], [0, 500], [0, 0]]  # 1000 × 500 px at 10 mm/px = 50 m²
+        (self.root / "reviewer_room_geometry.json").write_text(json.dumps({"records": [
+            {"room_id": "k", "page": 20, "points_image_px": square, "calibration": {"status": "agreed", "mm_per_px": 10}},
+            {"room_id": "s", "page": 20, "points_image_px": square, "calibration": {"status": "unresolved", "mm_per_px": None}},
+            {"room_id": "b", "page": 20, "points_image_px": square[:3], "calibration": {"status": "agreed", "mm_per_px": 10}},
+            {"room_id": "o", "page": 21, "points_image_px": square, "calibration": {"status": "declared_scale_rejected", "mm_per_px": 10},
+             "declaration_source": "ai_determined"}]}))
+        traced = job_service.traced_rooms(self.root)
+        self.assertEqual(traced, {"k": {"area_m2": 50.0, "pages": [20], "source": "traced"},
+                                  "o": {"area_m2": 50.0, "pages": [21], "source": "ai_determined"}})
+        model = {"room_scope": {"status": "confirmed", "candidates": [
+            {"key": "k", "label": "Kitchen", "area_m2": None, "include": False},
+            {"key": "o", "label": "Office", "area_m2": None, "include": False}]}}
+        from backend import ai_preliminary_service, autonomous_tasks_service
+        with patch.object(autonomous_tasks_service, "_all_current", return_value=[]), \
+             patch.object(ai_preliminary_service, "get", return_value=model):
+            job_service.save_area_override(self.project, {"room_id": "o", "label": "Office", "area_m2": 12})
+            status = job_service.status(SimpleNamespace(), self.project)
+        self.assertEqual(status["rooms"], {"total": 2, "included": 2, "with_area": 2})
+        self.assertEqual(status["traced_rooms"]["k"]["area_m2"], 50.0)
+
     def test_status_before_the_drawings_are_prepared(self):
         project = {**self.project, "reasoning_packet": ""}
         from backend import autonomous_tasks_service
