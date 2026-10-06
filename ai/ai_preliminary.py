@@ -1305,7 +1305,8 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                                    "reason": item.get("reason", "This boundary is not part of the room's external envelope."),
                                    "page": item.get("page", assessment.get("page")),
                                    "reviewer_trace_id": assessment.get("trace_id", ""),
-                                   "reviewer": assessment.get("reviewer", ""), "envelope_exclusion": True})
+                                   "reviewer": item.get("reviewer", assessment.get("reviewer", "")),
+                                   "source": item.get("boundary_source", ""), "envelope_exclusion": True})
     surface_summary["excluded"] = surface_summary["discovered"] - surface_summary["included"] - surface_summary["blocked"]
     model["updated_at"] = now()
     model["source_requirements_updated_at"] = requirements["updated_at"]
@@ -1392,7 +1393,8 @@ def calculate(input_set, safety_factor_policy=None):
                 "room_id": item["room_id"], "component_id": item.get("component_id", "envelope"),
                 "component": item.get("component", "Envelope boundary"),
                 "component_type": "envelope", "reason": item.get("reason", "Envelope item is outside the preliminary method scope."),
-                "source": "Reviewer-declared boundary", "reviewer_trace_id": item.get("reviewer_trace_id", ""),
+                "source": item.get("reviewer") or "Reviewer-declared boundary",
+                "reviewer_trace_id": item.get("reviewer_trace_id", ""),
             })
     warning = "Envelope and listed air-side loads were not assessed; the total excludes them and understates the load."
     if report.get("unresolved_room_inputs") and warning not in report["warnings"]:

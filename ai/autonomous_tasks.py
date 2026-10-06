@@ -183,6 +183,13 @@ def room_outline_boundary_values():
     return {"external", "mall", "adjacent_tenancy", "internal", "unknown"}
 
 
+def storefront_width_matches(total_mm, span_mm):
+    """Compare overall elevation width with an inside-face traced span."""
+    return (math.isfinite(total_mm) and math.isfinite(span_mm) and span_mm > 0
+            and total_mm > 0 and (0 <= total_mm - span_mm <= 600
+                                 or abs(total_mm - span_mm) / span_mm <= .02))
+
+
 def validate_opening_reply(packet, reply):
     value = parse_json_reply(reply)
     panels = value.get("panels")
@@ -198,11 +205,23 @@ def validate_opening_reply(packet, reply):
         raise ValueError("Quote the printed total width from the elevation text layer.")
     if total_text and text_layer and not packet.get("allow_vector_outline_read") and not any(total_text.casefold() in text.casefold() for text in text_layer):
         raise ValueError("The printed total width text is not present in the elevation text layer.")
-    if abs(total - edge_width) / edge_width > .02 if edge_width > 0 else True:
-        raise ValueError("The printed elevation total must match the traced storefront edge within 2%.")
+    if not storefront_width_matches(total, edge_width):
+        raise ValueError("The printed elevation total must match the traced storefront edge within 2% or exceed it by no more than 600 mm.")
     result, width_sum = [], 0.0
     ceiling = float(packet.get("ceiling_height_mm") or 0)
     excluded = deepcopy(value.get("excluded", []))
+    if not isinstance(excluded, list) or any(not isinstance(item, dict) for item in excluded):
+        raise ValueError("excluded must be a list of objects.")
+    excluded_width_sum = 0.0
+    has_unmeasured_excluded = False
+    for item in excluded:
+        width = item.get("width_mm")
+        if width is None:
+            has_unmeasured_excluded = True
+        elif type(width) not in (int, float) or not math.isfinite(width) or width <= 0:
+            raise ValueError("Each stated excluded width must be a positive number of millimetres.")
+        else:
+            excluded_width_sum += float(width)
     for index, panel in enumerate(panels):
         if not isinstance(panel, dict):
             raise ValueError("Every glazed panel must be an object.")
@@ -217,6 +236,7 @@ def validate_opening_reply(packet, reply):
         if width is None:
             excluded.append({"label": str(panel.get("label", f"Panel {index + 1}")),
                              "why": "Panel width is not printed; panel was not applied."})
+            has_unmeasured_excluded = True
             continue
         if type(width) not in (int, float) or width <= 0:
             raise ValueError("Each applied glazing panel needs a positive printed width.")
@@ -240,10 +260,14 @@ def validate_opening_reply(packet, reply):
         width_sum += float(width)
     if width_sum > total + 1e-6:
         raise ValueError("Glazed panel widths cannot exceed the printed total width.")
-    if packet.get("allow_vector_outline_read") and abs(width_sum - total) / total > .02:
-        raise ValueError("Vision-read panel widths must sum to the printed total within 2%.")
+    notes = []
+    if packet.get("allow_vector_outline_read"):
+        if has_unmeasured_excluded:
+            notes.append("Vision-read width sum check skipped because an excluded item has no width.")
+        elif abs(width_sum + excluded_width_sum - total) / total > .05:
+            raise ValueError("Vision-read glazed and excluded widths must sum to the printed total within 5%.")
     return {"total_width_mm": float(total), "total_width_text": total_text, "panels": result,
-            "excluded": excluded}
+            "excluded": excluded, "notes": notes}
 
 
 def fingerprint(value):
@@ -344,7 +368,13 @@ def plan_pages(ai_input):
             continue
         role = str(row.get("plan_role", "")).casefold()
         kind = str(row.get("type", row.get("sheet_classification", ""))).casefold()
-        if "floor_plan" in kind or role in {"main_floor_plan", "primary_geometry_plan", "supporting_geometry_plan", "enlarged_plan"}:
+        plan_roles = {"main_floor_plan", "primary_geometry_plan", "supporting_geometry_plan", "enlarged_plan",
+                      "floor_plan", "reflected_ceiling_plan", "reflected_ceiling_or_service_plan",
+                      "services_or_lighting_plan", "services_plan", "existing_hvac_plan",
+                      "existing_hvac_or_services_plan", "architect_lighting_plan", "architect_electrical_plan"}
+        title = str(row.get("title", "")).casefold()
+        if (kind in plan_roles or role in plan_roles or "floor_plan" in kind
+                or re.search(r"\b(?:floor|reflected ceiling|rcp|services?|mechanical|electrical|lighting|hydraulic)\s+plans?\b", title)):
             selected.append(row)
     return sorted({row.get("page"): row for row in selected if type(row.get("page")) is int}.values(), key=lambda row: row["page"])
 

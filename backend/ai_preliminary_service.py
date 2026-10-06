@@ -597,6 +597,8 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                                 "reviewer_trace_id": part.get("trace_id", ""), "reviewer": declaration_reviewer}
                     room["evidence"] = ai_preliminary._combined_evidence(room, {"evidence": [citation]})
                     edges = part.get("edges", [])
+                    edge_evidence = {int(row["index"]): row for row in part.get("boundary_evidence", [])
+                                     if isinstance(row, dict) and type(row.get("index")) is int}
                     roof = part.get("roof", "unknown")
                     area = ai_preliminary._number(part.get("area_m2"))
                     calibration = part.get("calibration", {})
@@ -636,11 +638,13 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                             part_unknown_edges.append(index)
                             continue
                         if boundary in {"adjacent_tenancy", "internal", "mall"}:
+                            boundary_label = str(edge_evidence.get(index, {}).get("label") or declaration_reviewer)
                             assessment["excluded"].append({"component_id": f"boundary_edge_{index}{part_component_suffix}",
                                 "component": ("Faces an enclosed mall/walkway" if boundary == "mall" else
                                                "Adjacent tenancy boundary" if boundary == "adjacent_tenancy" else "Internal boundary"),
                                 "reason": "Adjacent-tenancy and internal boundary conduction is outside this preliminary envelope method.",
-                                "page": part.get("page")})
+                                "page": part.get("page"), "reviewer": boundary_label,
+                                "boundary_source": edge_evidence.get(index, {}).get("source", "")})
                             continue
                         if boundary != "external":
                             continue

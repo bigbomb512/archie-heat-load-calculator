@@ -21,7 +21,8 @@
   let response = null;
 
   const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]));
-  const labelFor = row => row.applied_value?.applied_source === "reviewer" || row.source === "reviewer" ? "Reviewer"
+  const labelFor = row => row.stand_in ? "Stand-in (test)"
+    : row.applied_value?.applied_source === "reviewer" || row.source === "reviewer" ? "Reviewer"
     : row.status === "below_accuracy_bar" || row.status === "below_accuracy"
     ? "AI-determined (below accuracy bar)"
     : row.status === "applied_fallback" ? (row.applied_value?.label || (row.task === "P1_site" ? "Assumed (rule-based site fallback)" : "Assumed (typical for the building type)"))
@@ -51,11 +52,12 @@
         row.status === "applied_fallback" ? "Applied · fallback" : row.status.replaceAll("_", " ");
       const images = (row.images || []).map(image => `<li><a href="${escapeHtml(image.url)}" download>${escapeHtml(image.name)}</a></li>`).join("");
       const result = row.applied_value && Object.keys(row.applied_value).length ? `<p data-task-value>${escapeHtml(JSON.stringify(row.applied_value))}</p><p class="fine" data-task-source>${escapeHtml(labelFor(row))}</p>` : "";
+      const standInLabel = !result && row.stand_in ? `<p class="fine" data-task-source>Stand-in (test)</p>` : "";
       const error = row.block_reason && row.validation?.valid !== false ? `<p class="error" role="alert" data-task-error>${escapeHtml(row.block_reason)}</p>` : "";
       const validationError = row.validation?.valid === false ? `<p class="error" role="alert">${escapeHtml(row.validation.error || row.block_reason)}</p>` : "";
       const crossCheck = row.cross_check?.status ? `<p class="fine" data-task-cross-check>Rule-based cross-check: ${escapeHtml(row.cross_check.status)}${row.cross_check.status === "disagrees" ? ` · ${escapeHtml(row.cross_check.rule_based_candidate?.text || "candidate unavailable")}` : ""}.</p>` : "";
       const awaiting = ["waiting_for_reply", "blocked"].includes(row.status);
-      return `<article class="panel-card" data-task-card data-task="${escapeHtml(row.task)}" data-target="${escapeHtml(row.target)}"><h5>${escapeHtml(row.task)} · ${escapeHtml(row.target)}</h5><p data-task-status>${escapeHtml(displayStatus)}</p>${row.accuracy?.accuracy == null ? `<p class="fine">Accuracy: not scored yet.</p>` : `<p class="fine">Answer-key accuracy: ${(row.accuracy.accuracy * 100).toFixed(1)}% (${row.accuracy.scored} cases).</p>`}${result}${error}${validationError}${crossCheck}<label>Prompt<textarea data-task-prompt rows="5" readonly>${escapeHtml(row.prompt || "No prompt: this task is blocked.")}</textarea></label><button class="btn ghost mini" type="button" data-copy-prompt ${row.prompt ? "" : "disabled"}>Copy prompt</button>${images ? `<p>Images to attach:</p><ul>${images}</ul>` : ""}${awaiting && row.prompt ? `<label>Paste JSON reply<textarea data-task-reply rows="4" spellcheck="false"></textarea></label><label>Model note<input data-model-note maxlength="160" placeholder="Model/version used"></label><label><input data-stand-in type="checkbox"> This reply is a stand-in/test result</label><button class="btn key mini" type="button" data-validate-apply>Validate &amp; apply</button>` : ""}</article>`;
+      return `<article class="panel-card" data-task-card data-task="${escapeHtml(row.task)}" data-target="${escapeHtml(row.target)}"><h5>${escapeHtml(row.task)} · ${escapeHtml(row.target)}</h5><p data-task-status>${escapeHtml(displayStatus)}</p>${row.accuracy?.accuracy == null ? `<p class="fine">Accuracy: not scored yet.</p>` : `<p class="fine">Answer-key accuracy: ${(row.accuracy.accuracy * 100).toFixed(1)}% (${row.accuracy.scored} cases).</p>`}${result}${standInLabel}${error}${validationError}${crossCheck}<label>Prompt<textarea data-task-prompt rows="5" readonly>${escapeHtml(row.prompt || "No prompt: this task is blocked.")}</textarea></label><button class="btn ghost mini" type="button" data-copy-prompt ${row.prompt ? "" : "disabled"}>Copy prompt</button>${images ? `<p>Images to attach:</p><ul>${images}</ul>` : ""}${awaiting && row.prompt ? `<label>Paste JSON reply<textarea data-task-reply rows="4" spellcheck="false"></textarea></label><label>Model note<input data-model-note maxlength="160" placeholder="Model/version used"></label><label><input data-stand-in type="checkbox"> This reply is a stand-in/test result</label><button class="btn key mini" type="button" data-validate-apply>Validate &amp; apply</button>` : ""}</article>`;
     }).join("");
   }
 
@@ -68,6 +70,7 @@
     const data = await response.json();
     if (!response.ok || data.error) throw new Error(data.error || "AI task request failed.");
     render(data);
+    return data;
   }
 
   document.getElementById("autonomousTasksRunAll").addEventListener("click", async () => {
@@ -84,10 +87,14 @@
       const button = event.target.closest("[data-validate-apply]");
       button.disabled = true;
       try {
-        await request("POST", {action:"validate_apply", task:card.dataset.task, target:card.dataset.target,
+        const data = await request("POST", {action:"validate_apply", task:card.dataset.task, target:card.dataset.target,
           reply:card.querySelector("[data-task-reply]").value, model_note:card.querySelector("[data-model-note]").value,
           stand_in:card.querySelector("[data-stand-in]").checked});
-        status.textContent = "Reply validated; applied values and source labels are updated.";
+        const record = (data.tasks || []).find(row => row.task === card.dataset.task && row.target === card.dataset.target);
+        if (record?.validation?.valid === false) status.textContent = `Validation failed: ${record.validation.error || record.block_reason || "Check the reply and try again."}`;
+        else status.textContent = record?.stand_in
+          ? "Stand-in (test) reply validated; it is not a model result."
+          : "Reply validated; applied values and source labels are updated.";
       } catch (error) { status.textContent = error.message; button.disabled = false; }
     }
   });

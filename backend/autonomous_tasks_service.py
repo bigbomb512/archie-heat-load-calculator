@@ -264,16 +264,29 @@ def _roof_packets(root):
     for trace in traces:
         if (trace.get("room_id") in comfort_ids
                 and trace.get("calibration", {}).get("status") in {"agreed", "declared_scale_rejected"}):
-            selected.setdefault(trace["room_id"], trace)
+            selected.setdefault(trace["room_id"], []).append(trace)
     result = []
-    for room_id, trace in selected.items():
+    for room_id, parts in selected.items():
+        trace=parts[0]
         packet = autonomous_tasks.build_roof_facts(ai_input, site, {
             "room_id": room_id, "room_label": trace.get("room_label"),
             "level_name": trace.get("level_name"), "page": trace.get("page"),
         })
+        packet["trace_ids"]=[part.get("trace_id") for part in parts if part.get("trace_id")]
+        packet["part_count"]=len(parts)
+        packet["pages"]=sorted({part.get("page") for part in parts if part.get("page") is not None})
         prompt = autonomous_tasks.roof_prompt(packet)
         result.append((room_id, packet, prompt, []))
     return result
+
+
+def _refresh_roof_tasks(root):
+    for target,packet,prompt,images in _roof_packets(root):
+        record=_create_run(root,"P5_roof",target,packet,prompt,images,
+            "Prompt exceeds the 2,000-character limit; evidence was not shortened." if len(prompt)>2000 else "")
+        if record.get("status")=="waiting_for_reply" and not _has_explicit_roof_evidence(packet):
+            record.update({"status":"needs_contractor_answer","block_reason":ROOF_CONTRACTOR_QUESTION})
+            _update_record(root,record)
 
 
 def _p6_kitchen_packets(root):
@@ -295,7 +308,7 @@ def _p6_kitchen_packets(root):
                       and isinstance(row.get("points_image_px"), list) and len(row["points_image_px"]) >= 4]
     if not kitchen_traces:
         return [("P6_kitchen", "kitchen", {"task": "P6_kitchen"}, "", [],
-                 "No current calibrated comfort-scope Kitchen outline is available; trace and calibrate the kitchen first.")]
+                 "Waiting for room outlines (P0).")]
     trace = kitchen_traces[0]
     page_number = trace.get("page")
     source = Path(str(ai_input.get("source_pdf", "")))
@@ -596,6 +609,44 @@ def _trace_task_image(root, trace, edge_rows=None, max_side=1536):
     return image
 
 
+def _perimeter_task_image(root, traces, perimeter, asked, max_side=1536):
+    """Draw the complete page union and numbered questions in one shared crop."""
+    from PIL import Image, ImageDraw
+    source = autonomous_tasks._page_screenshot(root, traces[0]["page"])
+    if not source:
+        raise ValueError(f"No rendered plan is available for page {traces[0]['page']}.")
+    points = [point for trace in traces for point in trace["points_image_px"]]
+    points += [point for segments in perimeter["run_segments"].values() for segment in segments for point in segment]
+    with Image.open(source) as original:
+        box = (max(0, math.floor(min(p[0] for p in points) - 120)),
+               max(0, math.floor(min(p[1] for p in points) - 120)),
+               min(original.width, math.ceil(max(p[0] for p in points) + 120)),
+               min(original.height, math.ceil(max(p[1] for p in points) + 120)))
+        image = original.convert("RGB").crop(box)
+    source_size = image.size
+    image.thumbnail((max_side, max_side))
+    sx, sy = image.width / source_size[0], image.height / source_size[1]
+    def position(point):
+        return ((point[0] - box[0]) * sx, (point[1] - box[1]) * sy)
+    draw = ImageDraw.Draw(image)
+    for trace in traces:
+        draw.line([position(p) for p in trace["points_image_px"]], fill=(40, 110, 210), width=1)
+    for segments in perimeter["run_segments"].values():
+        for segment in segments:
+            draw.line([position(p) for p in segment], fill=(220, 35, 50), width=4)
+    runs = {row["run_index"]: row for row in perimeter["runs"]}
+    markers = []
+    for row in asked:
+        run = runs[row["index"]]
+        midpoint = [(a + b) / 2 for a, b in zip(run["start_px"], run["end_px"])]
+        x, y = position(midpoint)
+        number = row["index"] + 1
+        draw.ellipse((x-14, y-14, x+14, y+14), fill="white", outline="black", width=2)
+        draw.text((x, y), str(number), fill="black", anchor="mm")
+        markers.append({"run_number": number, "page_px": midpoint, "image_px": [x, y]})
+    return image, {"page_bbox": list(box), "width_px": image.width, "height_px": image.height, "markers": markers}
+
+
 def _p4_elevation_image(root, page_number):
     """Render one bounded elevation view, excluding the sheet title block/details."""
     from PIL import Image
@@ -680,6 +731,101 @@ def _trace_wall_runs(trace):
             for row in runs]
 
 
+def _page_perimeter_data(traces, buffer_mm=300.0):
+    """Union buffered room parts and describe the tenancy's outside perimeter."""
+    from shapely.geometry import LineString, Polygon
+    from shapely.ops import unary_union
+
+    valid=[]
+    for trace in traces:
+        points=trace.get("points_image_px")
+        try: mm_per_px=float(trace.get("calibration",{}).get("mm_per_px"))
+        except (TypeError,ValueError): continue
+        if mm_per_px<=0 or not math.isfinite(mm_per_px) or not isinstance(points,list) or len(points)<4:
+            continue
+        polygon=Polygon(points)
+        if polygon.is_valid and polygon.area>0:
+            valid.append((trace,polygon,mm_per_px))
+    if not valid:
+        return {"mm_per_px":None,"runs":[],"run_segments":{},"trace_edges":{},"error":"No valid calibrated room outlines."}
+    scale=valid[0][2]
+    if any(abs(value[2]-scale)/scale>.005 for value in valid):
+        return {"mm_per_px":scale,"runs":[],"run_segments":{},"trace_edges":{},"error":"Room parts on this page have conflicting calibration scales."}
+    gap_buffer=buffer_mm/scale
+    # Morphological closing joins room-part gaps up to one wall thickness while
+    # shrinking the outside edge back to the traced tenancy footprint.
+    raw_union=unary_union([polygon for _trace,polygon,_scale in valid])
+    union=raw_union.buffer(gap_buffer, join_style="mitre").buffer(-gap_buffer, join_style="mitre")
+    if union.is_empty:
+        union=raw_union
+    polygons=list(union.geoms) if hasattr(union,"geoms") else [union]
+    runs=[]; run_segments={}; offset=0
+    for polygon in polygons:
+        if not hasattr(polygon,"exterior") or polygon.is_empty: continue
+        points=[[float(x),float(y)] for x,y in polygon.exterior.coords]
+        local=room_outline.wall_runs(points,scale)
+        for row in local:
+            edge_ids=[offset+index for index in row["edge_indices"]]
+            global_index=len(runs)
+            row={**row,"run_index":global_index,"edge_indices":edge_ids,
+                 "start_px":list(row["start_px"]),"end_px":list(row["end_px"])}
+            runs.append(row)
+        for index,(start,end) in enumerate(zip(points,points[1:])):
+            run=next((row["run_index"] for row in local if index in row["edge_indices"]),None)
+            if run is not None: run_segments.setdefault(len(runs)-len(local)+run,[]).append((start,end))
+        offset+=len(points)-1
+    trace_edges={}
+    tolerance_px=400.0/scale
+    for trace,_polygon,_scale in valid:
+        mappings=[]
+        points=trace["points_image_px"]
+        for edge_index,(start,end) in enumerate(zip(points,points[1:])):
+            edge=LineString([start,end]); edge_len=edge.length
+            best=None
+            if edge_len>0:
+                ex,ey=(end[0]-start[0])/edge_len,(end[1]-start[1])/edge_len
+                for run_index,segments in run_segments.items():
+                    overlap_total=0.0; nearest=float("inf"); max_angle=0.0
+                    for a,b in segments:
+                        segment=LineString([a,b])
+                        seg_len=segment.length
+                        if seg_len<=0: continue
+                        sx,sy=(b[0]-a[0])/seg_len,(b[1]-a[1])/seg_len
+                        angle=math.degrees(math.acos(min(1.0,abs(ex*sx+ey*sy))))
+                        if angle>5.0: continue
+                        nearest=min(nearest,edge.distance(segment))
+                        projections=[(point[0]-start[0])*ex+(point[1]-start[1])*ey for point in (a,b)]
+                        overlap_total+=max(0.0,min(edge_len,max(projections))-max(0.0,min(projections)))
+                    fraction=min(1.0,overlap_total/edge_len)
+                    if nearest<=tolerance_px and fraction>=.5:
+                        score=(fraction,-nearest)
+                        if best is None or score>best[0]: best=(score,run_index)
+            mappings.append({"edge_index":edge_index,"perimeter_run_index":best[1] if best else None,
+                             "length_m":edge_len*scale/1000.0})
+        trace_edges[trace["trace_id"]]=mappings
+    return {"mm_per_px":scale,"runs":runs,"run_segments":run_segments,"trace_edges":trace_edges,"error":""}
+
+
+def _short_perimeter_run_inheritance(runs, run_segments):
+    """Map sub-metre perimeter jogs to the nearest asked wall run."""
+    from shapely.geometry import LineString
+    asked=[row for row in runs if float(row.get("span_m") or 0)>=1.0]
+    inheritance={}
+    for row in runs:
+        if row in asked:
+            continue
+        segments=run_segments.get(row["run_index"],[])
+        geometry=LineString(segments[0]) if len(segments)==1 else __import__("shapely.geometry",fromlist=["MultiLineString"]).MultiLineString(segments)
+        candidates=[]
+        for candidate in asked:
+            other_segments=run_segments.get(candidate["run_index"],[])
+            other=LineString(other_segments[0]) if len(other_segments)==1 else __import__("shapely.geometry",fromlist=["MultiLineString"]).MultiLineString(other_segments)
+            candidates.append((geometry.distance(other),candidate["run_index"]))
+        if candidates:
+            inheritance[str(row["run_index"])]=min(candidates)[1]
+    return inheritance
+
+
 def _run_neighbour(run, candidates, edge_count):
     def distance(candidate):
         return min(min(abs(first - second), edge_count - abs(first - second))
@@ -726,11 +872,11 @@ def _match_storefront_run(runs, elevation_pages, spatial):
     for dimension in dimensions:
         for run in runs:
             span=float(run.get("span_m") or 0)*1000.0
-            if span>0 and abs(dimension["value_mm"]-span)/span<=.02:
+            if autonomous_tasks.storefront_width_matches(dimension["value_mm"],span):
                 matches.append({**dimension,"run_index":run["run_index"]})
     run_ids={row["run_index"] for row in matches}
     if len(run_ids)!=1:
-        reason=("No wall run matches the elevation dimension evidence within 2%; no run was pre-marked as storefront."
+        reason=("No wall run matches the elevation dimensions (2% or up to 600 mm wider); no run was pre-marked as storefront."
                 if not run_ids else
                 "Elevation dimension evidence matches multiple wall runs across the selected pages; no run was pre-marked as storefront.")
         return {"run_index":None,"total_mm":None,"pages":[],"reason":reason}
@@ -742,98 +888,77 @@ def _match_storefront_run(runs, elevation_pages, spatial):
     run_index=next(iter(run_ids))
     return {"run_index":run_index,"total_mm":round(mean_value,1),
             "pages":list(dict.fromkeys(row["page"] for row in matches)),
-            "reason":f"Unique run {run_index+1} matches elevation dimension evidence within 2%."}
+            "reason":f"Unique run {run_index+1} matches elevation dimensions (2% or up to 600 mm wider)."}
 
 
 def _p3_packets(root):
-    result = []
-    paths = reviewer_room_geometry_service._paths({"review_dir":str(root)})
-    try:
-        traces = reviewer_room_geometry_service.current_records(paths)
-    except (OSError, ValueError, TypeError, KeyError):
-        traces = []
-    selected = [row for row in traces if row.get("room_id") in _comfort_room_ids(root)
-                and row.get("calibration", {}).get("status") in {"agreed", "declared_scale_rejected"}]
-    spatial = _read(root / "spatial_ocr.json", {})
-    ai_input,_,_=_load_inputs(root)
-    elevation_rows=_elevation_pages(ai_input)
-    all_traces = {row.get("trace_id"): row for row in selected}
-    for trace in selected:
-        target = f"{trace['room_id']}-page-{trace['page']}-trace-{trace['trace_id']}"
-        if _current_task(root,"P3_boundaries",target) and _current_task(root,"P3_boundaries",target).get("status") in {"applied","below_accuracy_bar"}:
+    result=[]
+    try: traces=reviewer_room_geometry_service.current_records(reviewer_room_geometry_service._paths({"review_dir":str(root)}))
+    except (OSError,ValueError,TypeError,KeyError): traces=[]
+    comfort=_comfort_room_ids(root)
+    selected=[row for row in traces if row.get("calibration",{}).get("status") in {"agreed","declared_scale_rejected"}]
+    grouped={}
+    for trace in selected: grouped.setdefault(trace.get("page"),[]).append(trace)
+    ai_input,spatial,_building=_load_inputs(root)
+    elevation_rows=_storefront_elevation_pages(ai_input)
+    for page,traces_on_page in sorted(grouped.items()):
+        comfort_traces=[row for row in traces_on_page if row.get("room_id") in comfort]
+        if not comfort_traces: continue
+        target=f"page-{page}"
+        current=_current_task(root,"P3_boundaries",target)
+        if current and current.get("status") in {"applied","below_accuracy_bar"}: continue
+        perimeter=_page_perimeter_data(traces_on_page)
+        if perimeter["error"]:
+            result.append(("P3_boundaries",target,{"task":"P3_boundaries","page":page},"",[],perimeter["error"]))
             continue
-        points, mm_per_px = trace["points_image_px"], trace["calibration"]["mm_per_px"]
-        all_edges = []
-        for index,(start,end) in enumerate(zip(points,points[1:])):
-            length = math.dist(start, end) * mm_per_px / 1000
-            all_edges.append({"index":index,"length_m":length})
-        shared = _geometrically_shared_edge_indices(trace, selected)
-        shared_set = set(shared)
-        runs = _trace_wall_runs(trace)
-        ask_runs = [row for row in runs if row["span_m"] >= 1.0 and any(index not in shared_set for index in row["edge_indices"])]
-        short_inheritance = {}
-        unresolved_short = []
-        for run in runs:
-            if run["span_m"] >= 1.0 or all(index in shared_set for index in run["edge_indices"]):
-                continue
-            neighbour = _run_neighbour(run, ask_runs, len(all_edges))
-            if neighbour:
-                short_inheritance[str(run["run_index"])] = neighbour["run_index"]
-            else:
-                unresolved_short.extend(index for index in run["edge_indices"] if index not in shared_set)
-        edges = [row for row in all_edges if row["index"] not in shared_set]
+        runs=perimeter["runs"]
+        room_edges=[]
+        for trace in comfort_traces:
+            for mapping in perimeter["trace_edges"].get(trace["trace_id"],[]):
+                room_edges.append({"trace_id":trace["trace_id"],"room_id":trace["room_id"],
+                    "room_label":trace.get("room_label"),"edge_index":mapping["edge_index"],
+                    "length_m":round(mapping["length_m"],4),"perimeter_run_index":mapping["perimeter_run_index"]})
+        storefront_match=_match_storefront_run(runs,elevation_rows,spatial)
         cues=[]
-        page_row=next((row for row in spatial.get("pages",[]) if row.get("page")==trace["page"]),{})
-        raw_text=page_row.get("text", page_row.get("plain_text", ""))
-        cue_pattern = re.compile(r"\b(?:shopfront|storefront|street frontage|external wall|party wall|boundary line|"
-                                 r"adjacent tenancy|enclosed mall walkway)\b", re.I)
-        if isinstance(raw_text,str):
-            for line in raw_text.splitlines():
-                if cue_pattern.search(line): cues.append(line.strip())
-        if not cues:
-            for field in ("word_samples","standalone_text_items"):
-                items=page_row.get(field,[])
-                if isinstance(items,list):
-                    for item in items:
-                        text=str(item.get("text",item)) if isinstance(item,dict) else str(item)
-                        if cue_pattern.search(text): cues.append(text)
+        page_row=next((row for row in spatial.get("pages",[]) if row.get("page")==page),{})
+        cue_pattern=re.compile(r"\b(?:shopfront|storefront|street frontage|external wall|party wall|boundary line|adjacent tenancy|enclosed mall walkway)\b",re.I)
+        raw_text=page_row.get("text",page_row.get("plain_text",""))
+        if isinstance(raw_text,str): cues.extend(line.strip() for line in raw_text.splitlines() if cue_pattern.search(line))
         cue_text="\n".join(dict.fromkeys(cues))
-        candidate_runs=[run for run in runs if any(index not in shared_set for index in run["edge_indices"])]
-        storefront_match=_match_storefront_run(candidate_runs,elevation_rows,spatial)
-        storefront_run_index=storefront_match["run_index"]
-        storefront_total=storefront_match["total_mm"]
-        storefront_match_reason=storefront_match["reason"]
-        if unresolved_short:
-            result.append(("P3_boundaries",target,{"task":"P3_boundaries","room":trace.get("room_label")},"",[],
-                           "No wall run is at least 1 m; short runs cannot inherit a boundary answer.")); continue
-        question_runs = [{"index":row["run_index"], "length_m":row["span_m"],
-                          "edge_indices":[index for index in row["edge_indices"] if index not in shared_set],
-                          "all_edge_indices":row["edge_indices"]} for row in ask_runs]
-        prompt=("Classify each numbered wall run (one answer applies to every listed edge): external, mall, adjacent_tenancy, internal or unknown. Quote drawing evidence "
-                "for every non-unknown answer. Runs listed as geometrically shared are internal automatically. Runs under 1 m inherit the nearest asked run's answer. The run matching the supplied "
-                "storefront elevation total within 2% is the shopfront; never call it internal or adjacent_tenancy. If the set shows "
-                "an enclosed shopping centre, default an otherwise unknown shopfront to mall; otherwise external. Default other "
-                "unknown perimeter runs to adjacent_tenancy and label each ‘Assumed (typical for a tenancy in a centre)’. "
-                "Return each run using its run_number (starting at 1). JSON only: {\"runs\":[{\"run_number\":int,\"boundary\":\"external|mall|adjacent_tenancy|internal|unknown\",\"evidence\":string}]}\n\n"
-                + json.dumps({"room":trace.get("room_label"),"page":trace.get("page"),
-                              "runs":[[row["index"] + 1, round(row["length_m"],2), [index + 1 for index in row["edge_indices"]]] for row in question_runs],
-                              "shared_edge_numbers":[index + 1 for index in shared],
-                              "shared_only_runs":[row["run_index"] + 1 for row in runs if all(index in shared_set for index in row["edge_indices"])],
-                              "storefront_run_number":storefront_run_index + 1 if storefront_run_index is not None else None,
-                              "storefront_elevation_total_width_mm":storefront_total,
-                              "storefront_match_reason":storefront_match_reason,"nearby_text":cue_text},ensure_ascii=False,separators=(",",":")))
+        comfort_runs={row["perimeter_run_index"] for row in room_edges}
+        relevant_runs=[row for row in runs if row["run_index"] in comfort_runs]
+        short_inheritance=_short_perimeter_run_inheritance(relevant_runs,perimeter["run_segments"])
+        asked=[{"index":row["run_index"],"length_m":row["span_m"],"edge_indices":row["edge_indices"]}
+               for row in relevant_runs if row["span_m"]>=1.0]
+        if runs and not asked:
+            result.append(("P3_boundaries",target,{"task":"P3_boundaries","page":page},"",[],
+                "No perimeter wall run is at least 1 m; short runs cannot inherit a boundary answer."))
+            continue
+        prompt=("Classify each numbered run on the outside perimeter of the union of the traced tenancy rooms: external, mall, adjacent_tenancy, internal or unknown. "
+                "Do not classify interior partition edges; unmapped room edges become internal automatically. Quote drawing evidence for each non-unknown answer. "
+                "Runs under 1 m inherit the nearest numbered run's classification. "
+                "Storefront totals may exceed inside-face spans by 0–600 mm or differ by <=2%; never classify a matched run internal/adjacent_tenancy. "
+                "JSON only: {\"runs\":[{\"run_number\":int,\"boundary\":\"external|mall|adjacent_tenancy|internal|unknown\",\"evidence\":string}]}\n\n"
+                +json.dumps({"page":page,"room_parts":[row.get("room_label") for row in traces_on_page],
+                    "perimeter_runs":[[row["index"]+1,round(row["length_m"],2)] for row in asked],
+                    "short_run_inheritance":{str(int(key)+1):value+1 for key,value in short_inheritance.items()},
+                    "storefront_run_number":storefront_match["run_index"]+1 if storefront_match["run_index"] is not None else None,
+                    "storefront_elevation_total_width_mm":storefront_match["total_mm"],
+                    "storefront_match_reason":storefront_match["reason"],"nearby_text":cue_text},
+                    ensure_ascii=False,separators=(",",":")))
+        packet={"task":"P3_boundaries","page":page,"trace_ids":[row["trace_id"] for row in comfort_traces],
+            "trace_id":comfort_traces[0]["trace_id"] if len(comfort_traces)==1 else None,
+            "room_id":comfort_traces[0].get("room_id"),"room_label":comfort_traces[0].get("room_label"),
+            "mm_per_px":perimeter["mm_per_px"],"edges":asked,"runs":runs,"room_edges":room_edges,
+            "short_run_inheritance":short_inheritance,
+            "storefront_run_index":storefront_match["run_index"],
+            "storefront_total_width_mm":storefront_match["total_mm"],
+            "storefront_match_reason":storefront_match["reason"],"nearby_text":cue_text}
         if len(prompt)>1500:
-            result.append(("P3_boundaries",target,{"task":"P3_boundaries","room":trace.get("room_label")},"",[],
-                           "Boundary prompt exceeds 1,500 characters; evidence was not shortened.")); continue
-        packet={"task":"P3_boundaries","room_id":trace["room_id"],"room_label":trace.get("room_label"),
-                "trace_id":trace["trace_id"],"page":trace["page"],"edges":question_runs,"runs":runs,"shared_edges":shared,
-                "shared_edge_lengths":{str(row["index"]):row["length_m"] for row in all_edges if row["index"] in shared},
-                "short_run_inheritance":short_inheritance,
-                "shared_run_indices":[row["run_index"] for row in runs if all(index in shared_set for index in row["edge_indices"])],
-                "nearby_text":cue_text,"mm_per_px":mm_per_px,
-                "storefront_run_index":storefront_run_index,"storefront_total_width_mm":storefront_total,
-                "storefront_match_reason":storefront_match_reason}
-        try: image=_trace_task_image(root,trace,edges,1536)
+            result.append(("P3_boundaries",target,packet,"",[],"Boundary prompt exceeds 1,500 characters; evidence was not shortened."))
+            continue
+        try:
+            image,packet["image_transform"]=_perimeter_task_image(root,traces_on_page,perimeter,asked)
         except (OSError,ValueError) as error:
             result.append(("P3_boundaries",target,packet,"",[],str(error))); continue
         result.append(("P3_boundaries",target,packet,prompt,[_png_bytes(image)],""))
@@ -842,100 +967,107 @@ def _p3_packets(root):
 
 def _p4_packets(root):
     result=[]
-    try:
-        traces=reviewer_room_geometry_service.current_records(reviewer_room_geometry_service._paths({"review_dir":str(root)}))
+    try: traces=reviewer_room_geometry_service.current_records(reviewer_room_geometry_service._paths({"review_dir":str(root)}))
     except (OSError,ValueError,TypeError,KeyError): traces=[]
     ai_input,spatial,_building=_load_inputs(root)
     elevation_pages=_storefront_elevation_pages(ai_input)
     if not elevation_pages: return result
     try:
         from ai import ceiling_volume_resolution
-        heights=ceiling_volume_resolution.values_by_room(_read(root / "ceiling_volume_resolution.json",{}))
+        heights=ceiling_volume_resolution.values_by_room(_read(root/"ceiling_volume_resolution.json",{}))
     except (OSError,ValueError,TypeError,KeyError): heights={}
     comfort=_comfort_room_ids(root)
     assumption=__import__("ai.ai_preliminary",fromlist=["load_pack"]).load_pack()
     glazing="retail"; shading="unshaded"
-    for trace in traces:
-        if trace.get("room_id") not in comfort or trace.get("calibration",{}).get("status") not in {"agreed","declared_scale_rejected"}: continue
-        p3_target=f"{trace['room_id']}-page-{trace['page']}-trace-{trace['trace_id']}"
-        p3_record=_current_task(root,"P3_boundaries",p3_target)
-        if not p3_record or p3_record.get("status") not in {"applied","below_accuracy_bar"}:
-            # Boundary classification is a prerequisite; don't create a misleading blocked P4 row.
-            continue
-        boundaries={row["index"]:row["boundary"] for row in trace.get("edges",[])}
-        wall_runs = _trace_wall_runs(trace)
-        eligible_runs=[run for run in wall_runs if run["edge_indices"] and
-                       all(boundaries.get(index) in {"external","mall"} for index in run["edge_indices"])]
-        storefront_match=_match_storefront_run(eligible_runs,elevation_pages,spatial)
-        if len(eligible_runs)==1:
-            # A sole externally exposed run is unambiguous from the reviewed boundaries.
-            runs_to_process=eligible_runs
-            elevations_to_process=elevation_pages[:1]
-            if storefront_match["run_index"] is not None:
+    selected=[trace for trace in traces if trace.get("calibration",{}).get("status") in {"agreed","declared_scale_rejected"}]
+    by_page={}
+    for trace in selected: by_page.setdefault(trace.get("page"),[]).append(trace)
+    for plan_page,page_traces in sorted(by_page.items()):
+        p3_record=_current_task(root,"P3_boundaries",f"page-{plan_page}")
+        if not p3_record or p3_record.get("status") not in {"applied","below_accuracy_bar"}: continue
+        page_perimeter=_page_perimeter_data(page_traces)
+        if page_perimeter["error"]: continue
+        run_geometry={row["run_index"]:row for row in page_perimeter["runs"]}
+        p3_runs={row.get("index"):row.get("boundary") for row in p3_record.get("applied_value",{}).get("runs",[])}
+        page_by_room={}
+        for trace in page_traces:
+            if trace.get("room_id") in comfort:
+                page_by_room.setdefault(trace.get("room_id"),[]).append(trace)
+        for room_id,room_traces in page_by_room.items():
+            mappings=[{"trace_id":trace["trace_id"],**edge}
+                      for trace in room_traces
+                      for edge in page_perimeter["trace_edges"].get(trace["trace_id"],[])
+                      if edge.get("perimeter_run_index") is not None]
+            room_run_indices={row["perimeter_run_index"] for row in mappings}
+            eligible_indices=sorted(index for index in room_run_indices if p3_runs.get(index) in {"external","mall"})
+            if not eligible_indices:
+                # Internal rooms have no shopfront task; don't create a red blocked card.
+                continue
+            eligible_runs=[{**run_geometry[index],"run_index":index} for index in eligible_indices]
+            storefront_match=_match_storefront_run(eligible_runs,elevation_pages,spatial)
+            if len(eligible_runs)==1:
+                chosen=eligible_runs[0]
                 matched_pages=set(storefront_match["pages"])
-                elevations_to_process=[page for page in elevation_pages if page["page"] in matched_pages][:1] or elevations_to_process
-            storefront_reason="Only one eligible external/mall wall run remains after P3."
-        elif storefront_match["run_index"] is not None:
-            runs_to_process=[run for run in eligible_runs if run["run_index"]==storefront_match["run_index"]]
-            matched_pages=set(storefront_match["pages"])
-            elevations_to_process=[page for page in elevation_pages if page["page"] in matched_pages][:1]
-            storefront_reason=storefront_match["reason"]
-        else:
-            reason=(storefront_match["reason"] if eligible_runs else
-                    "P3 left no wall runs classified external or mall; no shopfront run is available.")
-            result.append(("P4_openings",f"{trace['room_id']}-storefront-unresolved-trace-{trace['trace_id']}",
-                {"task":"P4_openings","room":trace.get("room_label"),"trace_id":trace["trace_id"],
-                 "storefront_match_reason":reason},"",[],reason))
-            continue
-        points=trace["points_image_px"]
-        for run in runs_to_process:
-            edge_indices = run["edge_indices"]
-            if not edge_indices: continue
-            edge_index=edge_indices[0]
-            edge_mm=run["span_m"]*1000.0
-            for elevation in elevations_to_process:
-                page=int(elevation["page"]); target=f"{trace['room_id']}-run-{run['run_index']}-page-{page}-trace-{trace['trace_id']}"
-                old=_current_task(root,"P4_openings",target)
-                if old and old.get("status") in {"applied","below_accuracy_bar"}: continue
-                from ai import ceiling_volume_resolution
-                identity=ceiling_volume_resolution.room_identity(trace.get("room_label",""),trace.get("level_name",""))
-                values=heights.get(trace["room_id"]) or heights.get(identity) or {}
-                ceiling=values.get("ceiling_height_mm")
-                if not isinstance(ceiling,(int,float)) or ceiling<=0:
-                    result.append(("P4_openings",target,{"task":"P4_openings","room":trace.get("room_label"),"page":page},"",[],
-                                   "Resolve ceiling height before applying elevation glazing; no head-height fallback is available.")); continue
-                try:
-                    image = _p4_elevation_image(root, page)
-                except (OSError, ValueError, IndexError) as error:
-                    result.append(("P4_openings",target,{"task":"P4_openings","room":trace.get("room_label"),"page":page},"",[],str(error))); continue
-                page_ocr=next((row for row in spatial.get("pages",[]) if row.get("page")==page),{})
-                text_layer=[]
-                for field in ("text","plain_text","word_samples","dimension_candidates","standalone_text_items","title_blocks"):
-                    raw=page_ocr.get(field,[])
-                    if isinstance(raw,str): text_layer.extend(raw.splitlines())
-                    elif isinstance(raw,list): text_layer.extend(str(item.get("text",item)) if isinstance(item,dict) else str(item) for item in raw)
-                prompt=("The image is an architectural shopfront elevation for one traced wall run. List each glazed panel, excluding signage, solid panels and open doorways. "
-                    "Use only printed dimensions; quote their exact text. Return null for unprinted sill/head/width. Missing sill is assumed 0 (glass to floor); "
-                    "missing head is assumed ceiling height. A head above ceiling is capped at the ceiling. Missing width means the panel is excluded. "
-                    "Every dimension must quote the elevation text layer, or mark source read_from_image if vector-outline text is visible. For vector-outline text, "
-                    "panel widths must sum to the printed total within 2%, and the total must match the traced shopfront edge within 2%, otherwise do not apply. "
-                    "JSON only: {\"total_width_mm\":number,\"total_width_text\":string,\"panels\":[{\"label\":string,\"width_mm\":number|null,\"sill_mm\":number|null,\"head_mm\":number|null,\"printed_text\":[string],\"source\":\"printed_text|read_from_image\"}],\"excluded\":[{\"label\":string,\"why\":string}]}\n\n"
-                    + json.dumps({"page":page,"room":trace.get("room_label"),"wall_run_number":run["run_index"]+1,
-                                  "run_edge_numbers":[index+1 for index in edge_indices],"edge_length_mm":round(edge_mm,1),
-                                  "storefront_match_reason":storefront_reason,
-                                  "ceiling_height_mm":ceiling,"text_layer":text_layer[:60]},ensure_ascii=False,separators=(",",":")))
-                if len(prompt)>2000:
-                    result.append(("P4_openings",target,{"task":"P4_openings","room":trace.get("room_label"),"page":page},"",[],"Opening prompt exceeds 2,000 characters; evidence was not shortened.")); continue
-                has_dimension_text = any(isinstance(item, dict) and isinstance(item.get("value_mm"), (int, float))
-                                         for item in (page_ocr.get("dimension_candidates") or []))
-                packet={"task":"P4_openings","room_id":trace["room_id"],"room_label":trace.get("room_label"),"trace_id":trace["trace_id"],
-                    "edge_index":edge_index,"edge_indices":edge_indices,"wall_run_index":run["run_index"],
-                    "wall_run_span_m":run["span_m"],"edge_length_mm":edge_mm,"page":page,"ceiling_height_mm":ceiling,"text_layer":text_layer[:60],
-                    "storefront_match_reason":storefront_reason,
-                    "allow_vector_outline_read":not has_dimension_text,"glazing_choice":glazing,"shading_category":shading,
-                    "glazing_option":f"Preliminary single glazing (pack au-preliminary-v3): U {assumption['profiles'][glazing]['glazing_u_w_m2k']}, SHGC {assumption['profiles'][glazing]['shgc']}",
-                    "frame_fraction":assumption.get("preliminary_envelope",{}).get("glazing_frame_fraction"),"evidence":{"page":page}}
-                result.append(("P4_openings",target,packet,prompt,[_png_bytes(image)],""))
+                elevation=(next((page for page in elevation_pages if page["page"] in matched_pages),None)
+                           or elevation_pages[0])
+                storefront_reason="Only one eligible external/mall wall run remains for this room after P3."
+            elif storefront_match["run_index"] is not None:
+                chosen=next(run for run in eligible_runs if run["run_index"]==storefront_match["run_index"])
+                elevation=next(page for page in elevation_pages if page["page"] in set(storefront_match["pages"]))
+                storefront_reason=storefront_match["reason"]
+            else:
+                result.append(("P4_openings",f"{room_id}-storefront-unresolved-page-{plan_page}",
+                    {"task":"P4_openings","room":room_traces[0].get("room_label"),"trace_ids":[t["trace_id"] for t in room_traces],
+                     "storefront_match_reason":storefront_match["reason"]},"",[],storefront_match["reason"]))
+                continue
+            run_index=chosen["run_index"]
+            part_edges=[{key:row[key] for key in ("trace_id","edge_index","length_m")}
+                        for row in mappings if row["perimeter_run_index"]==run_index]
+            if not part_edges: continue
+            trace=room_traces[0]
+            target=f"{room_id}-run-{run_index}-page-{elevation['page']}-trace-{trace['trace_id']}"
+            old=_current_task(root,"P4_openings",target)
+            if old and old.get("status") in {"applied","below_accuracy_bar"}: continue
+            identity=ceiling_volume_resolution.room_identity(trace.get("room_label",""),trace.get("level_name",""))
+            values=heights.get(room_id) or heights.get(identity) or {}
+            ceiling=values.get("ceiling_height_mm")
+            if not isinstance(ceiling,(int,float)) or ceiling<=0:
+                result.append(("P4_openings",target,{"task":"P4_openings","room":trace.get("room_label"),"page":elevation["page"]},"",[],
+                    "Resolve ceiling height before applying elevation glazing; no head-height fallback is available.")); continue
+            page=int(elevation["page"])
+            try: image=_p4_elevation_image(root,page)
+            except (OSError,ValueError,IndexError) as error:
+                result.append(("P4_openings",target,{"task":"P4_openings","room":trace.get("room_label"),"page":page},"",[],str(error))); continue
+            page_ocr=next((row for row in spatial.get("pages",[]) if row.get("page")==page),{})
+            text_layer=[]
+            for field in ("text","plain_text","word_samples","dimension_candidates","standalone_text_items","title_blocks"):
+                raw=page_ocr.get(field,[])
+                if isinstance(raw,str): text_layer.extend(raw.splitlines())
+                elif isinstance(raw,list): text_layer.extend(str(item.get("text",item)) if isinstance(item,dict) else str(item) for item in raw)
+            has_dimension_text=any(isinstance(item,dict) and isinstance(item.get("value_mm"),(int,float))
+                                  for item in (page_ocr.get("dimension_candidates") or []))
+            run_span=float(chosen["span_m"])
+            prompt=("The image is a shopfront/external elevation for the selected outside wall run. List each glazed panel, excluding signage, solid panels and open doorways. "
+                "Use printed dimensions only; quote exact text. Return null for unprinted sill/head/width. Missing sill is assumed 0 (glass to floor); missing head is assumed ceiling height. "
+                "For vector-outline text, list each glazed panel and each excluded solid part (roller shutter, signage, or door), with width_mm when readable. Glazed widths must not exceed the total. Glazed plus stated excluded widths must sum to the read total within 5%; if any excluded width is unreadable, leave it null and the sum check will be skipped with a note. Outlines use inside faces; elevations give overall widths. Accept 0 <= total_mm - span_mm <= 600 (two wall thicknesses) OR |total-span|/span <= 2%. "
+                "JSON only: {\"total_width_mm\":number,\"total_width_text\":string,\"panels\":[{\"label\":string,\"width_mm\":number|null,\"sill_mm\":number|null,\"head_mm\":number|null,\"printed_text\":[string],\"source\":\"printed_text|read_from_image\"}],\"excluded\":[{\"label\":string,\"width_mm\":number|null,\"why\":string}]}\n\n"
+                +json.dumps({"page":page,"room":trace.get("room_label"),"perimeter_run_number":run_index+1,
+                    "room_part_edges":part_edges,"perimeter_run_span_m":run_span,"ceiling_height_mm":ceiling,
+                    "text_layer":text_layer[:60]},ensure_ascii=False,separators=(",",":")))
+            if len(prompt)>2000:
+                result.append(("P4_openings",target,{"task":"P4_openings","room":trace.get("room_label"),"page":page},"",[],
+                    "Opening prompt exceeds 2,000 characters; evidence was not shortened.")); continue
+            packet={"task":"P4_openings","room_id":room_id,"room_label":trace.get("room_label"),
+                "trace_id":trace["trace_id"],"trace_ids":[t["trace_id"] for t in room_traces],
+                "part_edges":part_edges,"edge_index":part_edges[0]["edge_index"],
+                "edge_indices":list(dict.fromkeys(row["edge_index"] for row in part_edges)),
+                "wall_run_index":run_index,"wall_run_span_m":run_span,"edge_length_mm":run_span*1000,
+                "page":page,"ceiling_height_mm":ceiling,"text_layer":text_layer[:60],
+                "storefront_match_reason":storefront_reason,"allow_vector_outline_read":not has_dimension_text,
+                "glazing_choice":glazing,"shading_category":shading,
+                "glazing_option":f"Preliminary single glazing (pack au-preliminary-v3): U {assumption['profiles'][glazing]['glazing_u_w_m2k']}, SHGC {assumption['profiles'][glazing]['shgc']}",
+                "frame_fraction":assumption.get("preliminary_envelope",{}).get("glazing_frame_fraction"),"evidence":{"page":page}}
+            result.append(("P4_openings",target,packet,prompt,[_png_bytes(image)],""))
     return result
 
 
@@ -1104,6 +1236,58 @@ def _current_trace(root, trace_id):
 
 def _apply_p3(web, project, root, record, validated):
     packet=record["packet"]
+    if packet.get("room_edges"):
+        traces={trace_id:_current_trace(root,trace_id) for trace_id in packet.get("trace_ids",[])}
+        if any(trace is None for trace in traces.values()):
+            raise ValueError("A room trace is stale; rebuild the page boundary task from current drawing evidence.")
+        run_values={row["index"]:row["boundary"] for row in validated.get("edges",[])}
+        run_evidence={row["index"]:row.get("evidence","") for row in validated.get("edges",[])}
+        for short_index,source_index in packet.get("short_run_inheritance",{}).items():
+            if int(source_index) in run_values:
+                run_values[int(short_index)]=run_values[int(source_index)]
+                run_evidence[int(short_index)]=(
+                    f"Inherited from nearest perimeter run {int(source_index)+1}: "
+                    f"{run_evidence.get(int(source_index), '')}"
+                ).strip()
+        results=[]
+        p3_label="Stand-in (test)" if record.get("stand_in") else record.get("quality_label","AI-determined")
+        for trace_id,trace in traces.items():
+            mapping={row["edge_index"]:row for row in packet["room_edges"] if row["trace_id"]==trace_id}
+            current={row["index"]:row["boundary"] for row in trace.get("edges",[])}
+            values={}; sources={}; evidence={}
+            for index in range(len(trace.get("points_image_px",[]))-1):
+                mapped=mapping.get(index,{}).get("perimeter_run_index")
+                if mapped is None:
+                    boundary="internal"; source="ai_determined"; reason="Room edge does not lie on the tenancy perimeter; classified internal automatically."
+                else:
+                    boundary=run_values.get(mapped,"unknown"); source="ai_determined"; reason=run_evidence.get(mapped,"")
+                    if boundary=="unknown":
+                        boundary=("mall" if mapped==packet.get("storefront_run_index") and
+                                  re.search(r"\b(?:enclosed\s+(?:mall|shopping\s+centre)|shopping\s+centre|mall)\b",
+                                      packet.get("nearby_text", ""),re.I) else
+                                  "external" if mapped==packet.get("storefront_run_index") else "adjacent_tenancy")
+                        source="ai_fallback"; reason="Assumed (typical for a tenancy in a centre)."
+                old_source=trace.get("edge_sources",{}).get(str(index),trace.get("declaration_source","reviewer"))
+                if current.get(index)!="unknown" and old_source=="reviewer":
+                    boundary=current[index]; source="reviewer"; reason="Reviewer-declared boundary."
+                values[index]=boundary; sources[index]=source; evidence[index]=reason
+            request_edges=[{"index":index,"boundary":boundary} for index,boundary in sorted(values.items())]
+            reviewer_room_geometry_service.post(web,project,{"action":"classify_envelope","trace_id":trace_id,
+                "reviewer":"Archie AI (P3)","edges":request_edges,"roof":trace.get("roof","unknown"),
+                "openings":trace.get("openings",[]),"declaration_source":"ai_determined","ai_run_id":record["run_id"],
+                "edge_sources":{str(index):source for index,source in sources.items()},
+                "boundary_evidence":[{"index":index,"text":evidence[index],"source":sources[index],"label":p3_label}
+                                     for index in values]})
+            results.append({"trace_id":trace_id,"room_id":trace.get("room_id"),"room":trace.get("room_label"),
+                "edges":[{"index":index,"edge_length_m":mapping.get(index,{}).get("length_m"),
+                    "boundary":values[index],"source":sources[index],"evidence":evidence[index],"label":p3_label}
+                    for index in sorted(values)]})
+        record.update({"status":_status_for_accuracy("ai_determined",record["accuracy"]),"source":"ai_determined",
+            "applied_value":{"page":packet.get("page"),"rooms":results,
+                "runs":[{"index":index,"boundary":boundary,"evidence":run_evidence.get(index,"")}
+                        for index,boundary in sorted(run_values.items())],"label":p3_label},
+            "validation":validated,"block_reason":""})
+        return record
     trace=_current_trace(root,packet.get("trace_id"))
     if not trace: raise ValueError("The room trace is stale; rebuild the boundary task from current drawing evidence.")
     current={row["index"]:row["boundary"] for row in trace.get("edges",[])}
@@ -1172,6 +1356,54 @@ def _apply_p4(web, project, root, record, validated):
     choice=packet.get("glazing_choice","retail"); shade=packet.get("shading_category","unshaded")
     if choice not in pack.get("profiles",{}) or shade not in pack.get("preliminary_envelope",{}).get("shading_categories",{}):
         raise ValueError("The configured preliminary glazing or shading choice is unavailable.")
+    if packet.get("part_edges"):
+        trace_by_id={trace_id:_current_trace(root,trace_id) for trace_id in packet.get("trace_ids",[])}
+        if any(row is None for row in trace_by_id.values()):
+            raise ValueError("A room part trace is stale; rebuild the opening task.")
+        part_edges=packet["part_edges"]
+        total_length=sum(float(row.get("length_m") or 0) for row in part_edges)
+        if total_length<=0:
+            raise ValueError("The selected storefront run has no room-part edge length.")
+        existing={trace_id:[row for row in trace.get("openings",[]) if row.get("declaration_source","reviewer")=="reviewer"]
+                  for trace_id,trace in trace_by_id.items()}
+        openings_by_trace={trace_id:[] for trace_id in trace_by_id}
+        applied_panels=[]
+        for panel in validated.get("panels",[]):
+            panel_width=panel["width_mm"]/1000.0
+            fragments=[]
+            for part in part_edges:
+                share=panel_width*float(part["length_m"])/total_length
+                if share<=1e-9: continue
+                trace=trace_by_id[part["trace_id"]]
+                edge_index=part["edge_index"]
+                points=trace.get("points_image_px",[])
+                mm_per_px=float(trace.get("calibration",{}).get("mm_per_px") or 0)
+                edge_length=math.dist(points[edge_index],points[edge_index+1])*mm_per_px/1000.0
+                if share>edge_length+1e-6:
+                    raise ValueError("A proportional glazing share exceeds its traced room-part edge.")
+                opening={"opening_id":f"ai-{record['run_id']}-{panel['panel_index']}-{part['trace_id']}-{edge_index}",
+                    "edge_index":edge_index,"width_m":share,"sill_height_m":panel["sill_mm"]/1000,
+                    "head_height_m":panel["head_mm"]/1000,"elevation_page":packet["page"],
+                    "glazing_choice":choice,"shading_category":shade,"declaration_source":"ai_determined",
+                    "ai_run_id":record["run_id"],"evidence":panel.get("printed_text",[]),
+                    "assumptions":[item for item in (panel.get("sill_assumption"),panel.get("head_assumption")) if item]}
+                openings_by_trace[part["trace_id"]].append(opening)
+                fragments.append({"trace_id":part["trace_id"],"edge_index":edge_index,"width_m":share})
+            applied_panels.append({"width_mm":panel["width_mm"],"sill_mm":panel["sill_mm"],"head_mm":panel["head_mm"],
+                "source":"ai_determined","parts":fragments,
+                "sill_assumption":panel.get("sill_assumption"),"head_assumption":panel.get("head_assumption")})
+        for trace_id,part_trace in trace_by_id.items():
+            reviewer_room_geometry_service.post(web,project,{"action":"classify_envelope","trace_id":trace_id,
+                "reviewer":"Archie AI (P4)","edges":part_trace.get("edges",[]),"roof":part_trace.get("roof","unknown"),
+                "openings":[*existing[trace_id],*openings_by_trace[trace_id]],
+                "declaration_source":"ai_determined","ai_run_id":record["run_id"]})
+        record.update({"status":_status_for_accuracy("ai_determined",record["accuracy"]),"source":"ai_determined",
+            "applied_value":{"room":trace.get("room_label",packet.get("room_label")),"page":packet["page"],
+                "total_width_mm":validated["total_width_mm"],"glazed_panels":applied_panels,
+                "trace_ids":list(trace_by_id),"excluded":validated.get("excluded",[]),
+                "glazing_option":packet.get("glazing_option"),"label":record["quality_label"]},
+            "validation":validated,"block_reason":""})
+        return record
     existing=[row for row in trace.get("openings",[]) if row.get("declaration_source","reviewer")=="reviewer"]
     openings=[]
     points=trace.get("points_image_px",[])
@@ -1218,8 +1450,13 @@ def _refresh_geometry_tasks(root):
     # Persist naming tasks before asking whether any rooms still need outlines.
     # If both packet lists are calculated together, the outline builder cannot
     # see the just-created naming tasks and offers an unnecessary second task.
-    for packet_builder in (_p0_initial_packets, _p0_followup_packets, _p0_outline_packets,
-                           _p3_packets, _p4_packets, _p6_kitchen_packets):
+    for packet_builder in (_p0_initial_packets, _p0_followup_packets, _p0_outline_packets):
+        for task,target,packet,prompt,images,reason in packet_builder(root):
+            budget=autonomous_tasks.TASKS[task]["budget_chars"]
+            _create_run(root,task,target,packet,prompt,images,reason or
+                        (f"Prompt exceeds the {budget:,}-character limit; evidence was not shortened." if len(prompt)>budget else ""))
+    _refresh_roof_tasks(root)
+    for packet_builder in (_p3_packets,_p4_packets,_p6_kitchen_packets):
         for task,target,packet,prompt,images,reason in packet_builder(root):
             budget=autonomous_tasks.TASKS[task]["budget_chars"]
             _create_run(root,task,target,packet,prompt,images,reason or
@@ -1328,12 +1565,7 @@ def run_all(web, project):
         if not reason and any(max(crop["width_px"], crop["height_px"]) > 1024 for crop in packet.get("crops", [])):
             reason = "A north-arrow crop exceeds 1,024 px."
         _create_run(root, "P2_north", target, packet, prompt, images, reason)
-    for target, packet, prompt, images in _roof_packets(root):
-        record = _create_run(root, "P5_roof", target, packet, prompt, images,
-                             "Prompt exceeds the 2,000-character limit; evidence was not shortened." if len(prompt) > 2000 else "")
-        if record.get("status") == "waiting_for_reply" and not _has_explicit_roof_evidence(packet):
-            record.update({"status": "needs_contractor_answer", "block_reason": ROOF_CONTRACTOR_QUESTION})
-            _update_record(root, record)
+    _refresh_roof_tasks(root)
     for task, target, packet, prompt, images, reason in _p0_initial_packets(root):
         _create_run(root, task, target, packet, prompt, images, reason or
                     ("Prompt exceeds the 1,500-character limit; evidence was not shortened."
@@ -1387,13 +1619,18 @@ def _export_determinations(root):
     if rooms:
         result["P0_rooms"] = [rooms[key] for key in sorted(rooms)]
     boundary_rows, opening_rows = {}, {}
-    for record in _all_current(root):
+    for record_index, record in enumerate(_all_current(root)):
         value = record.get("applied_value", {})
         if record.get("task") == "P3_boundaries" and value:
-            for edge in value.get("edges", []):
-                boundary_rows[(str(value.get("room", "")).casefold(), round(float(edge.get("edge_length_m",0)),3))] = {
-                    "room":value.get("room"),"edge_length_m":edge.get("edge_length_m"),
-                    "boundary":edge.get("boundary"),"source":edge.get("source", record.get("source", "ai_determined"))}
+            # Page packets contain one room entry per trace; retain legacy single-trace packets.
+            for part_index, room in enumerate(value.get("rooms", [value])):
+                trace_id = room.get("trace_id") or record.get("packet", {}).get("trace_id")
+                identity = trace_id or ("legacy", record.get("target", record_index), part_index)
+                for edge_index, edge in enumerate(room.get("edges", [])):
+                    boundary_rows[(identity, edge.get("index", edge_index))] = {
+                        "room": room.get("room"), "edge_length_m": edge.get("edge_length_m"),
+                        "boundary": edge.get("boundary"),
+                        "source": edge.get("source", record.get("source", "ai_determined"))}
         if record.get("task") == "P4_openings" and value:
             opening_rows[record["target"]] = {"page":value.get("page"),"room":value.get("room"),
                 "total_width_mm":value.get("total_width_mm"),"glazed_panels":deepcopy(value.get("glazed_panels", []))}
@@ -1565,16 +1802,9 @@ def _apply_p5(web, project, root, record, validated):
     room_id = record["target"]
     paths = reviewer_room_geometry_service._paths(project)
     artifact = _read(paths["artifact"], reviewer_room_geometry.empty_artifact())
-    trace = next((row for row in artifact.get("records", []) if row.get("room_id") == room_id), None)
-    if trace is None:
+    traces = [row for row in artifact.get("records", []) if row.get("room_id") == room_id]
+    if not traces:
         record.update({"status": "blocked", "block_reason": "The current traced room no longer exists.", "validation": validated})
-        return record
-    existing_roof_source = trace.get("roof_source") or (
-        "reviewer" if trace.get("envelope_reviewer") and trace.get("roof") != "unknown"
-        else trace.get("declaration_source", "")
-    )
-    if existing_roof_source == "reviewer":
-        record.update({"status": "applied", "source": "reviewer", "applied_value": {"room": trace.get("room_label"), "roof": trace.get("roof"), "overrode_by": "reviewer"}, "validation": validated})
         return record
     selected = validated["roof"]
     source = "ai_determined"
@@ -1582,15 +1812,29 @@ def _apply_p5(web, project, root, record, validated):
         record.update({"status": "needs_contractor_answer", "block_reason": ROOF_CONTRACTOR_QUESTION,
                        "validation": validated, "applied_value": {}, "source": ""})
         return record
-    edges = deepcopy(trace.get("edges", []))
-    reviewer = str(trace.get("envelope_reviewer") or "Archie AI")
-    reviewer_room_geometry_service.post(web, project, {
-        "action": "classify_envelope", "trace_id": trace["trace_id"], "reviewer": reviewer,
-        "edges": edges, "roof": selected, "openings": trace.get("openings", []),
-        "declaration_source": source, "ai_run_id": record["run_id"],
-    })
+    applied=[]; reviewer_kept=[]
+    for trace in traces:
+        existing_roof_source = trace.get("roof_source") or (
+            "reviewer" if trace.get("envelope_reviewer") and trace.get("roof") != "unknown"
+            else trace.get("declaration_source", "")
+        )
+        if existing_roof_source == "reviewer":
+            reviewer_kept.append(trace)
+            continue
+        reviewer_room_geometry_service.post(web, project, {
+            "action": "classify_envelope", "trace_id": trace["trace_id"], "reviewer": "Archie AI (P5)",
+            "edges": deepcopy(trace.get("edges", [])), "roof": selected, "openings": deepcopy(trace.get("openings", [])),
+            "declaration_source": source, "ai_run_id": record["run_id"],
+        })
+        applied.append(trace)
+    representative=reviewer_kept[0] if reviewer_kept and not applied else traces[0]
+    if not applied and reviewer_kept:
+        record.update({"status":"applied","source":"reviewer","applied_value":{"room":representative.get("room_label"),
+            "roof":representative.get("roof"),"overrode_by":"reviewer","part_count":len(traces)},"validation":validated})
+        return record
     record.update({"status": _status_for_accuracy(source, record["accuracy"]), "source": source,
-                   "applied_value": {"room": trace.get("room_label", room_id), "roof": selected,
+                   "applied_value": {"room": representative.get("room_label", room_id), "roof": selected,
+                                     "part_count":len(traces),
                                      "source": source, "ai_run_id": record["run_id"], "evidence": validated.get("evidence", ""),
                                      "label": record["quality_label"]},
                    "validation": validated, "block_reason": ""})
@@ -1634,15 +1878,16 @@ def _answer_roof(web, project, root, data):
         raise ValueError("Choose floor/tenancy above, roof directly above, or not sure.")
     paths = reviewer_room_geometry_service._paths(project)
     artifact = _read(paths["artifact"], reviewer_room_geometry.empty_artifact())
-    trace = next((row for row in artifact.get("records", []) if row.get("room_id") == target), None)
-    if not trace:
+    traces = [row for row in artifact.get("records", []) if row.get("room_id") == target]
+    if not traces:
         raise ValueError("The current room trace was not found; refresh the project and try again.")
-    reviewer_room_geometry_service.post(web, project, {
-        "action": "classify_envelope", "trace_id": trace["trace_id"],
-        "reviewer": "Answered by the contractor", "edges": deepcopy(trace.get("edges", [])),
-        "roof": answer_roof[answer], "openings": deepcopy(trace.get("openings", [])),
-        "confirm_roof": answer != "not_sure",
-    })
+    for trace in traces:
+        reviewer_room_geometry_service.post(web, project, {
+            "action": "classify_envelope", "trace_id": trace["trace_id"],
+            "reviewer": "Answered by the contractor", "edges": deepcopy(trace.get("edges", [])),
+            "roof": answer_roof[answer], "openings": deepcopy(trace.get("openings", [])),
+            "confirm_roof": answer != "not_sure",
+        })
     if answer == "not_sure":
         record.update({"status": "contractor_answered_not_sure", "source": "reviewer",
                        "applied_value": {}, "contractor_answer": answer,
@@ -1650,8 +1895,8 @@ def _answer_roof(web, project, root, data):
                        "block_reason": "Roof exposure remains unknown and not assessed."})
     else:
         record.update({"status": "applied", "source": "reviewer",
-                       "applied_value": {"room": trace.get("room_label", target), "roof": answer_roof[answer],
-                                         "source": "reviewer", "label": "Answered by the contractor"},
+                       "applied_value": {"room": traces[0].get("room_label", target), "roof": answer_roof[answer],
+                                         "source": "reviewer", "label": "Answered by the contractor","part_count":len(traces)},
                        "contractor_answer": answer, "contractor_answered_by": "Answered by the contractor",
                        "block_reason": ""})
     _update_record(root, record)

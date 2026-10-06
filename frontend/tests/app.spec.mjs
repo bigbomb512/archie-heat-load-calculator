@@ -194,6 +194,8 @@ test("reopening a no-AI project restores its notice and reviewed-workspace statu
   await expect(page.locator("#noAiEvidenceNotice")).toBeVisible();
   await expect(page.locator("#statusText")).toHaveText("Reviewed workspace ready");
   await expect(page.locator("#summaryTitle")).toHaveText("Reviewed workspace ready");
+  await expect(page.locator("#btnContinue")).toHaveText("Drawings confirmed");
+  await expect(page.locator("#btnContinue")).toBeDisabled();
 });
 
 test("confirmation does not show the no-AI notice when a real reply is preserved", async ({ page }) => {
@@ -1944,7 +1946,8 @@ test("AI task operator panel is hidden from contractors and validates manual rep
     if (body.reply.includes("not printed")) {
       taskState = {...taskState, tasks:[{...taskState.tasks[0], block_reason:"Site text must be an exact substring of a supplied excerpt on the cited page.", validation:{valid:false,error:"Site text must be an exact substring of a supplied excerpt on the cited page."}}]};
     } else {
-      taskState = {...taskState, tasks:[{...taskState.tasks[0], status:"below_accuracy_bar", source:"ai_determined", block_reason:"", applied_value:{site_text:"TENANCY G12",applied_site_text:"TENANCY G12",applied_source:"ai_determined"}, validation:{valid:true}}]};
+      taskState = {...taskState, tasks:[{...taskState.tasks[0], status:"below_accuracy_bar", source:"ai_determined", stand_in:body.stand_in,
+        block_reason:"", applied_value:{site_text:"TENANCY G12",applied_site_text:"TENANCY G12",applied_source:"ai_determined"}, validation:{valid:true}}]};
     }
     return route.fulfill({json:taskState});
   });
@@ -1964,10 +1967,12 @@ test("AI task operator panel is hidden from contractors and validates manual rep
   await card.locator("[data-task-reply]").fill('{"site":{"text":"not printed","page":2,"kind":"street_address"},"consultant_addresses":[]}');
   await card.locator("[data-validate-apply]").click();
   await expect(card.locator("[role=alert]")).toContainText("exact substring");
+  await expect(panel.locator("#autonomousTasksStatus")).toContainText("Validation failed");
   await card.locator("[data-task-reply]").fill('{"site":{"text":"TENANCY G12","page":2,"kind":"tenancy_in_centre"},"consultant_addresses":[]}');
   await card.locator("[data-stand-in]").check();
   await card.locator("[data-validate-apply]").click();
-  await expect(card.locator("[data-task-source]")).toHaveText("AI-determined (below accuracy bar)");
+  await expect(card.locator("[data-task-source]")).toHaveText("Stand-in (test)");
+  await expect(panel.locator("#autonomousTasksStatus")).toContainText("Stand-in (test)");
   expect(posts).toHaveLength(2);
   expect(posts[1].stand_in).toBe(true);
 });

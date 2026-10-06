@@ -583,8 +583,9 @@ function showResults(data){
   requiredElement("visionStatus").textContent = "Waiting for vision JSON";
   requiredElement("btnDebug").textContent = "Open debug view";
   requiredElement("fRel").classList.add("on"); requiredElement("fAll").classList.remove("on");
-  requiredElement("btnContinue").textContent = "Confirm selected drawings";
-  requiredElement("btnContinue").disabled = false;
+  const drawingsAlreadyConfirmed = Boolean(data.has_reasoning_packet);
+  requiredElement("btnContinue").textContent = drawingsAlreadyConfirmed ? "Drawings confirmed" : "Confirm selected drawings";
+  requiredElement("btnContinue").disabled = drawingsAlreadyConfirmed;
   initWorkflowSkeleton(data);
   requiredElement("workflowSkeleton").classList.toggle("hide", !data.has_reasoning_packet);
   loadRoomInference(true);
