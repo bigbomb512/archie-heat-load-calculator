@@ -23,12 +23,17 @@ def page_scale_denominator(scale_candidates):
     (1:40 plan alongside 1:5 joint details). Taking the first or the most common value
     picks a detail callout instead.
     """
+    from ai.scan_reading import parse_scale
     best = 0
     for item in scale_candidates or []:
-        text = item.get("text", "") if isinstance(item, dict) else item
-        match = re.search(r"1\s*[:/]\s*(\d+)", str(text or ""))
-        if match:
-            best = max(best, int(match.group(1)))
+        text = str((item.get("text", "") if isinstance(item, dict) else item) or "")
+        # Imperial scales ('1/8" = 1'-0"' is 1:96) must not be read as '1/8' = 1:8.
+        value = parse_scale(text)
+        if value is None:
+            match = re.fullmatch(r"\s*1\s*/\s*(\d+)\s*", text)
+            value = int(match.group(1)) if match else None
+        if value:
+            best = max(best, value)
     return best or None
 
 

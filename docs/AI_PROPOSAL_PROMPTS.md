@@ -371,3 +371,46 @@ for exhaust. Until then the kitchen heat stays at the labelled default.
   kitchen elevations (p. 30), with a 1,884-character prompt.
 - Wiring it into the Card P task framework is Codex's, using the same pattern
   as P0.
+
+## Card S: scanned drawing sets (pages that are images with no text layer)
+
+Before Card S, a scanned set produced almost nothing. On caseD (mini-split set,
+pages 1–5 are images), "Run all tasks" built only the north task for p. 4: no room
+task (and no message saying why), and the site task was blocked ("No cited site
+excerpts"). There is no OCR in the project, so the AI's vision is the reader.
+Module `ai/scan_reading.py`, tool `tools/run_scan_reading.py` (manual ChatGPT
+route), tests `tests/test_scan_reading.py`. Not yet wired into the operator panel.
+
+- **S1 printed room areas.** The plan (sheet minus the right title strip) is sent as
+  four overlapping tiles. The AI lists each room with a printed area: tile, name,
+  number, value, unit (m2 or sf), the printed text and the name's position in the
+  tile, plus the printed scale. Checks without a text layer: unit is m2 or sf (sf is
+  converted at 0.0929); the printed text shows the value; 0.5–5,000 m²; the tile was
+  sent and the position is inside it; a room listed on two tiles must have the same
+  value on both, or the reading is refused. Printed areas need no calibration and
+  rank first in the area source order.
+- **Area calibration** (user decision 2026-10-06). A room with a printed area and its
+  own outline implies mm/px = √(area / outline pixels). At least two rooms must agree
+  within 2% of their median; one room alone never calibrates; an outline holding two
+  labels does not count. The declared scale, if printed, is reported alongside.
+- **S2 imperial scales and dimensions.** `parse_scale`: 1:100 → 100, 1/8" = 1'-0" → 96,
+  1" = 10' → 120, NTS → none. `parse_dimension_mm`: 12'-6" → 3,810 mm. The shared
+  `dimension_wall_matcher.page_scale_denominator` now uses it, so an imperial scale is
+  no longer read as 1:8.
+- **S3 site from a scanned title block.** The AI first copies every line of the
+  title-block crops (right strip and bottom band of each page); address-like lines
+  are grouped into excerpts of up to four lines; the existing site prompt and
+  `validate_site_reply` then choose from those excerpts (every quote must be an exact
+  substring of one).
+
+Run on caseD (2026-10-06, Claude's stand-in readings from the tile images, not a
+model): rooms 5/5 within 5% and site 1/1 against the caseD key; north 0/3, walls 0/5,
+roof 0/5 still missing. Area calibration was correctly blocked: the scan wall finder
+found only 2 fragments on this sheet. Its walls are double thin lines with a masonry
+zigzag between them (no solid fill), which the thickness filter removes; closing the
+gaps first turns text into blobs and the 1 m door-gap rule leaves the large rooms open
+(probe only, not kept). Outlines for scans therefore need another method (for example
+the AI outline task on the scan), which is the next step for walls and roof on
+scanned sets. The cover sheet's address block (top left of p. 1) is outside the two
+title-block crops; on this set the title strips carried the site, but a set whose
+site appears only on the cover would be missed.

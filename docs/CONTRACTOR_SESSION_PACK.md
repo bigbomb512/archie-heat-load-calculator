@@ -20,7 +20,9 @@ facilitator runs the AI tasks in the operator panel (`?operator=1`) between
 "Confirm drawings" and "Resolve model inputs"; the participant only answers
 the roof question. An AI-only dry run on `a6f0fc3` reached a labelled draft
 of 33.76 kW with no tracing (section 9), but it found three problems that
-should be fixed before scheduling (section 9, C1–C3).
+should be fixed before scheduling (section 9, C1–C3). A second AI-only dry run
+on `13a05b1` (section 10) confirmed C1–C8 fixed and every task completing
+except north on the services plans (D3-1).
 
 Earlier status (2026-10-04, tracing flow): D3, D5 and D7 below are fixed.
 
@@ -259,3 +261,51 @@ and the shopfront is matched against the perimeter run.
 
 Dry-run project: `dryrun2-butcher-buffet-_not-for-design_-1791243530` in the
 scratchpad copy (not in your `output/`).
+
+## 10. AI-only dry run 3 (Claude, 2026-10-06, commit `13a05b1`)
+
+Fresh upload in an isolated copy of `13a05b1`. No room was traced. Operator
+replies were written by Claude from the task images and sent through the same
+API the operator panel uses (`/api/autonomous-tasks`), all marked stand-in;
+the contractor steps (roof question, resolve, confirm, calculate) ran in the
+browser.
+
+| Stage | Time |
+|---|---|
+| Upload + analysis | 58 s |
+| Confirm selected drawings | 2 min 44 s |
+| Run all tasks | 43 s |
+| Dimensions, wall styles, site, north, kitchen (each) | 8–14 s |
+| Room naming (writes the AI outlines) | 30 s |
+| Wall boundaries (one task for the page, 13 runs) | 79 s |
+| Shopfront window | 46 s |
+| Roof answer (contractor) | 15–29 s per room |
+| Guided "Resolve model inputs" | ~100 s |
+| Confirm room list / calculate | ~13 s / 13 s |
+
+**Result: 34.14 kW** (Bar 32.55, Kitchen 104.10, Shop 217.33 m², all
+"AI-determined · below accuracy bar"). Walls and roof are now classified, so
+the result no longer lists "Walls — boundary not classified" or "Roof — not
+checked". The envelope still adds 0 kW: every wall faces the mall, another
+tenancy or another room, and the roof is not exposed (user decision 2026-10-04).
+
+Scored against caseA (stand-ins, so this measures the pipeline, not a model):
+rooms 5/5, site 1/1, walls 2/2, shopfront window 1/1, roof 3/3, kitchen 5/5,
+north 2/6.
+
+Checked fixed: C1–C2 (one wall task per perimeter with a numbered image; the
+11.44 m shopfront is one run across both Shop parts), C3 (roof questions appear
+as soon as rooms exist; one answer covers both Shop parts), C5, C6, C7
+("Drawings confirmed" after reopening), C8, C9 (the quote "3 DOOR" accepted),
+and the shopfront window (2,025 mm, sill 1,100, head capped at 2,700) applied
+for the first time.
+
+| # | Problem | Effect |
+|---|---|---|
+| D3-1 (high) | North is asked on p. 22–25, but `reviewer_room_geometry_service` only accepts north for its own plan-page list, which excludes p. 25 ("Choose a supported plan page"). The cross-page agreement waits for every page, so p. 22–24 never apply either. | North applies on p. 20–21 only (2/6 keyed pages). |
+| D3-2 (medium) | Roof results answered by the contractor are exported and scored like AI results. | Would inflate P5 accuracy in the recorded check. |
+| D3-3 (low) | The shopfront window faces the enclosed mall, so it adds no load, but the result says "No resolved reviewed/AI opening geometry…" instead. | Misleading reason. |
+| D3-4 (low) | The wall task took 79 s to validate and apply, the slowest step. | Operator wait. |
+
+Dry-run project: `dryrun3-butcher-buffet-_not-for-design_-1791252951` in the
+scratchpad copy.
