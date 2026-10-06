@@ -524,9 +524,9 @@ def validate_manual_placeholder_entities(raw):
             "ceiling_datum_operands": deepcopy(item.get("ceiling_datum_operands", {})) if isinstance(item.get("ceiling_datum_operands", {}), dict) else {},
             "ceiling_conflicts": list(ceiling_conflicts),
             "geometry": deepcopy(item.get("geometry", {})) if isinstance(item.get("geometry", {}), dict) else {},
-            "area_origin": str(item.get("area_origin", "")) if str(item.get("area_origin", "")) in {"pdf_evidence", "reviewer_traced", "ai_geometry", "ai_determined"} else "",
+            "area_origin": str(item.get("area_origin", "")) if str(item.get("area_origin", "")) in {"pdf_evidence", "printed (read from image)", "reviewer_traced", "ai_geometry", "ai_determined"} else "",
             "area_verification_status": "provisional",
-            "area_quality_label": str((item.get("reviewer_traced_area") or {}).get("ai_quality_label", "")) if isinstance(item.get("reviewer_traced_area"), dict) else "",
+            "area_quality_label": str(((item.get("reviewer_traced_area") or {}).get("ai_quality_label") if isinstance(item.get("reviewer_traced_area"), dict) else "") or item.get("area_quality_label", "")),
             "reviewer_trace_id": str(item.get("reviewer_trace_id", "")),
             "geometry_proof_id": str(item.get("geometry_proof_id", "")),
             "reviewer_traced_area": deepcopy(item.get("reviewer_traced_area", {})) if isinstance(item.get("reviewer_traced_area", {}), dict) else {},
@@ -1288,8 +1288,10 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
             target["room"].setdefault("cooling_load", {})["envelope_not_applicable"] = True
             exclusions[:] = [item for item in exclusions if not (
                 item.get("room_id") == room_id
-                and item.get("component") == "opaque envelope"
-                and "No structurally valid surface geometry" in item.get("reason", "")
+                and ((item.get("component") == "opaque envelope"
+                      and "No structurally valid surface geometry" in item.get("reason", ""))
+                     or (item.get("component") == "glazing and façade solar"
+                         and "No resolved reviewed/AI opening geometry" in item.get("reason", "")))
             )]
         for item in assessment.get("not_assessed", []):
             if isinstance(item, dict):

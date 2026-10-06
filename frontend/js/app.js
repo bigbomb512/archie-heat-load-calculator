@@ -2152,7 +2152,7 @@ async function valueResolutionAction(action){
 }
 
 function roomScopeOriginLabel(origin){
-  return {pdf_evidence: "printed on drawing", reviewer_traced: "reviewer trace", ai_geometry: "AI estimate", ai_determined: "AI-determined"}[origin] || (origin ? origin.replaceAll("_", " ") : "source not recorded");
+  return {pdf_evidence: "printed on drawing", "printed (read from image)": "printed (read from image)", reviewer_traced: "reviewer trace", ai_geometry: "AI estimate", ai_determined: "AI-determined"}[origin] || (origin ? origin.replaceAll("_", " ") : "source not recorded");
 }
 
 function aiAreaQualityLabel(label){

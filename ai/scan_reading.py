@@ -275,15 +275,15 @@ def title_block_crops(page_width, page_height):
 def transcription_prompt():
     return ("The image is the title block of one drawing sheet. Copy every line of text in it exactly as printed, top "
             "to bottom, one entry per printed line. Do not correct spelling, expand abbreviations or add anything "
-            "that is not printed. Reply with JSON only: {\"lines\": [string]}")
+            "that is not printed. If the image has no text, return an empty list. Reply with JSON only: {\"lines\": [string]}")
 
 
 def validate_transcription(reply):
     if isinstance(reply, str):
         reply = json.loads(reply)
     lines = reply.get("lines") if isinstance(reply, dict) else None
-    if not isinstance(lines, list) or not lines:
-        raise ValueError("The transcription must contain a non-empty lines list.")
+    if not isinstance(lines, list):
+        raise ValueError("The transcription must contain a lines list (empty when the crop has no text).")
     if len(lines) > MAX_TITLE_LINES:
         raise ValueError(f"A title block has at most {MAX_TITLE_LINES} lines; the reply has {len(lines)}.")
     cleaned = []
@@ -320,7 +320,10 @@ def site_packet_from_transcriptions(pages, max_block_lines=4):
             if block:
                 excerpts.append({"page": int(page), "text": "\n".join(block), "clue_type": "read_from_image"})
             block = [line] if line and ADDRESS_HINT.search(line) else []
-    unique = {(row["page"], row["text"]): row for row in excerpts}
+    # Title blocks repeat on every sheet: keep each text once, on the first page it appears.
+    unique = {}
+    for row in sorted(excerpts, key=lambda row: row["page"]):
+        unique.setdefault(row["text"], row)
     excerpts = sorted(unique.values(), key=lambda row: (row["page"], row["text"]))
     packet = {"task": "P1_site", "excerpts": excerpts, "rule_based_top_candidate": None, "read_from_image": True}
     prompt = ("Here are excerpts copied from the title blocks of one scanned drawing set, each with its page number. "

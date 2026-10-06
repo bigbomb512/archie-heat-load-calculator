@@ -8,7 +8,7 @@ from functools import lru_cache
 from copy import deepcopy
 from pathlib import Path
 
-from ai import ai_preliminary, reviewer_room_geometry
+from ai import ai_preliminary, autonomous_tasks, reviewer_room_geometry
 from ai.room_use_resolution import room_identity
 from ai.drawing_coverage import has_current_level_classification
 from ai.geometry_resolution import fingerprint
@@ -257,6 +257,38 @@ def current_traced_areas(root):
             selected["area_m2"] = sum(values) / len(values)
             selected["supporting_traces"] = candidates
         result[room_id] = selected
+    # S1 reads a printed value without claiming an outline. Keep it in the
+    # shared area interface so room confirmation and draft assembly use the
+    # same room identity as room-use resolution.
+    from ai.room_use_resolution import room_identity
+    rooms_by_identity = {room_identity(row.get("label", ""), row.get("level_name") or "Unassigned level"): row
+                         for row in artifact_input.get("rooms", []) if isinstance(row, dict)}
+    for pointer in (paths["root"] / "ai_tasks" / "S1_printed_areas").glob("*/current.json"):
+        current = _read(pointer, {})
+        record = _read(pointer.parent / current.get("run_path", "") / "record.json", {})
+        if record.get("status") not in {"applied", "below_accuracy_bar"}:
+            continue
+        page = record.get("packet", {}).get("page")
+        for area in record.get("applied_value", {}).get("rooms", []):
+            if not isinstance(area, dict) or not area.get("label"):
+                continue
+            label = str(area["label"]).strip()
+            level = str(area.get("level_name") or "Unassigned level")
+            identity = room_identity(label, level)
+            room = rooms_by_identity.get(identity, {})
+            room_id = str(room.get("room_id") or identity)
+            previous = result.get(room_id)
+            if previous and previous.get("declaration_source") == "reviewer":
+                continue
+            result[room_id] = {"room_id": room_id, "room_label": room.get("label") or label,
+                "level_name": room.get("level_name") or level, "area_m2": area.get("area_m2"),
+                "area_source": "printed (read from image)", "source": "printed (read from image)",
+                "page": page, "source_pages": [page] if type(page) is int else [],
+                "area_only": True, "outline": None, "trace_id": "", "proof_id": "",
+                "points_image_px": [], "edges": [], "openings": [], "roof": "unknown",
+                "declaration_source": "ai_determined", "ai_run_id": record.get("run_id"),
+                "ai_quality_label": area.get("quality_label") or record.get("quality_label", "AI-determined"),
+                "printed_text": area.get("printed_text", ""), "calibration_status": "not_required"}
     return result
 
 
@@ -804,7 +836,7 @@ def _known_room(room_id, paths):
     return next((row for row in _rooms(paths) if row.get("room_id") == room_id), None)
 
 
-def post(web, project, data):
+def post(web, project, data, _validated_current_records=None, _defer_evidence_rebuild=False):
     paths = _paths(project)
     action = str(data.get("action", ""))
     artifact = reviewer_room_geometry.validate_artifact(_read(paths["artifact"], reviewer_room_geometry.empty_artifact()))
@@ -817,8 +849,9 @@ def post(web, project, data):
         artifact = reviewer_room_geometry.validate_artifact({"records": kept, "rooms": artifact.get("rooms", []), "page_north": artifact.get("page_north", {})})
     elif action == "declare_north":
         page = data.get("page")
-        if type(page) is not int or page not in {row.get("page") for row in _page_context(paths, web)}:
-            raise ValueError("Choose a supported plan page before declaring north.")
+        north_pages = {row.get("page") for row in autonomous_tasks.plan_pages(_read(paths["ai_input"], {}))}
+        if type(page) is not int or page not in north_pages:
+            raise ValueError("Choose a supported floor, reflected ceiling, or services plan page before declaring north.")
         reviewer = str(data.get("reviewer", "")).strip()
         if not reviewer:
             raise ValueError("Enter a reviewer name for the north declaration.")
@@ -862,7 +895,9 @@ def post(web, project, data):
         trace = next((row for row in artifact["records"] if row.get("trace_id") == trace_id), None)
         if not trace:
             raise ValueError("Room geometry trace was not found.")
-        current = next((row for row in current_records(paths, artifact) if row.get("trace_id") == trace_id), None)
+        current_rows = (_validated_current_records if _validated_current_records is not None
+                        else current_records(paths, artifact))
+        current = next((row for row in current_rows if row.get("trace_id") == trace_id), None)
         if not current:
             raise ValueError("Envelope can only be classified on a current room trace.")
         calibration = current.get("calibration", {})
@@ -1049,6 +1084,8 @@ def post(web, project, data):
     project["reviewer_room_geometry"] = str(paths["artifact"])
     project["updated_at"] = ai_preliminary.now()
     web.update_project(project)
+    if _defer_evidence_rebuild:
+        return {"reviewer_room_geometry": artifact}
     evidence_result = calculation_extraction_service.post(web, project, {"action": "build"})
     result = _response(web, project)
     result["calculation_input_evidence"] = evidence_result.get("calculation_input_evidence", {})

@@ -127,6 +127,9 @@ def title_block_checks():
           any("JOINT BASE CAPE COD" in text and "SANDWICH, MA" in text for text in texts)
           and any("55 BROADWAY CENTER" in text for text in texts) and "read from" not in prompt.casefold()
           and all(row["clue_type"] == "read_from_image" for row in packet["excerpts"]))
+    repeated, _prompt = scan.site_packet_from_transcriptions({4: lines, 5: lines, 2: lines})
+    check("a title block repeated on several sheets is listed once, on its first page",
+          len(repeated["excerpts"]) == len(packet["excerpts"]) and {row["page"] for row in repeated["excerpts"]} == {2})
     site_text = next(text for text in texts if "CAPE COD" in text)
     validated = autonomous_tasks.validate_site_reply(packet, json.dumps({
         "site": {"text": "JOINT BASE CAPE COD", "page": 4, "kind": "street_address"},
@@ -137,7 +140,9 @@ def title_block_checks():
                  lambda: autonomous_tasks.validate_site_reply(packet, json.dumps({"site": {"text": "HANSCOM AFB", "page": 4,
                                                                                            "kind": "street_address"}, "consultant_addresses": []})),
                  "exact substring")
-    expect_error("an empty transcription is refused", lambda: scan.validate_transcription({"lines": []}), "non-empty")
+    check("a crop with no text is transcribed as an empty list (so it cannot block the site task)",
+          scan.validate_transcription({"lines": []}) == [] and "empty list" in scan.transcription_prompt())
+    expect_error("a reply without a lines list is refused", lambda: scan.validate_transcription({"text": "x"}), "lines list")
     expect_error("an over-long line is refused", lambda: scan.validate_transcription({"lines": ["X" * 200]}), "longer than")
 
 

@@ -143,7 +143,7 @@ def _p0_page_selection(root):
         role_row = coverage_by_page.get(number, {})
         role = str(role_row.get("proposed_role") or page.get("plan_role") or "").casefold()
         kind = str(page.get("type") or page.get("sheet_classification") or "").casefold()
-        if "floor_plan" not in kind and role not in {"main_floor_plan", "primary_geometry_plan", "supporting_geometry_plan", "enlarged_plan", "floor_plan"}:
+        if "floor_plan" not in kind and role not in {"main_floor_plan", "primary_geometry_plan", "supporting_geometry_plan", "uncertain_top_down_context", "enlarged_plan", "floor_plan"}:
             continue
         classification = " ".join(str(page.get(key) or "") for key in
                                   ("type", "detected_type", "sheet_classification", "title")).casefold()
@@ -168,25 +168,37 @@ def _p0_page_selection(root):
             skipped.append(note)
             notes.append(note)
             continue
-        if role not in {"main_floor_plan", "primary_geometry_plan", "floor_plan"}:
+        if role not in {"main_floor_plan", "primary_geometry_plan", "floor_plan", "supporting_geometry_plan", "uncertain_top_down_context"} and "floor_plan" not in kind:
             note={"page": number, "status": "skipped", "reason": f"Skipped secondary plan role: {role or 'not classified as a main geometry plan'}."}
             skipped.append(note)
             notes.append(note)
             continue
+        if role not in {"main_floor_plan", "primary_geometry_plan", "floor_plan", "supporting_geometry_plan", "uncertain_top_down_context"}:
+            role = "floor_plan"
         level = str(role_row.get("level_name") or page.get("level_name") or page.get("floor_label") or "").strip()
         level_key = " ".join(level.casefold().split()) or "unassigned level"
         vector_dims = vector_by_page.get(number, {}).get("dimension_candidates", []) or []
         spatial_dims = spatial_by_page.get(number, {}).get("dimension_candidates", []) or []
         page_dims = page.get("dimension_candidates", []) or []
         dimension_count = max(len(vector_dims), len(spatial_dims), len(page_dims))
-        priority = {"main_floor_plan": 0, "primary_geometry_plan": 1, "floor_plan": 2}.get(role, 3)
-        grouped.setdefault(level_key, []).append((dimension_count, priority, number, page))
+        priority = {"main_floor_plan": 0, "primary_geometry_plan": 1, "floor_plan": 2,
+                    "supporting_geometry_plan": 3, "uncertain_top_down_context": 4}.get(role, 4)
+        grouped.setdefault(level_key, []).append((dimension_count, priority, number, page, role))
     selected = []
     for level_key, rows in grouped.items():
         rows.sort(key=lambda row: (-row[0], row[1], row[2]))
-        selected.append(rows[0][3])
-        for _count, _priority, _number, page in rows[1:]:
-            note={"page": page["page"], "status": "skipped", "reason": f"Skipped second view of {level_key}; page {rows[0][2]} was selected as the main geometry plan."}
+        main_rows = [row for row in rows if row[4] in {"main_floor_plan", "primary_geometry_plan"}]
+        eligible_rows = ([row for row in rows if row[4] in {"main_floor_plan", "primary_geometry_plan", "floor_plan"}]
+                         if main_rows else rows)
+        winner = eligible_rows[0]
+        selected.append(winner[3])
+        if not main_rows:
+            notes.append({"page": winner[2], "status": "selected_supporting_plan",
+                          "reason": "Selected supporting plan: no main plan on this level."})
+        for _count, _priority, _number, page, _role in rows:
+            if page["page"] == winner[2]:
+                continue
+            note={"page": page["page"], "status": "skipped", "reason": f"Skipped second view of {level_key}; page {winner[2]} was selected as the main geometry plan."}
             skipped.append(note)
             notes.append(note)
     return {"selected": sorted(selected, key=lambda row: row["page"]),
@@ -200,6 +212,9 @@ def _p0_main_geometry_pages(root):
 
 def _p0_calibration_ready(root, page, context):
     """Require one dimension with readable scale, otherwise two agreeing dimensions."""
+    printed = _s1_calibration(root, page)
+    if printed:
+        return printed, ""
     dimensions = _p0_dimensions(root, page)
     if not context.get("declared_mm_per_px") and len(dimensions) < 2:
         return None, "The sheet scale is unreadable; two agreeing printed dimensions are required before outlining rooms."
@@ -207,6 +222,57 @@ def _p0_calibration_ready(root, page, context):
         return _p0_calibration(root, page, context), ""
     except (OSError, ValueError, KeyError, TypeError) as error:
         return None, str(error)
+
+
+def _s1_calibration(root, page):
+    pointer = _task_dir(root, "S1_printed_areas", f"page-{page}") / "current.json"
+    record = _read(pointer.parent / _read(pointer, {}).get("run_path", "") / "record.json", {})
+    calibration = record.get("calibration")
+    return deepcopy(calibration) if record.get("status") in {"applied", "below_accuracy_bar"} and calibration and calibration.get("status") == "agreed" else None
+
+
+def _apply_s1_areas(web, project, root, record, reply):
+    from ai import scan_reading
+    packet = record["packet"]
+    page = packet["page"]
+    context = _p0_context(root, page)
+    working_scale = scan_reading.mm_per_px_from_scale(packet.get("working_scale_denominator", 100), packet.get("render_dpi", 180))
+    outlines = _scan_outlines(context, working_scale)
+    first_pass = scan_reading.validate_area_reply(reply, packet["tiles"], packet["factors"], outlines)
+    declared_scale = scan_reading.mm_per_px_from_scale(first_pass.get("scale_denominator"), packet.get("render_dpi", 180))
+    if declared_scale:
+        outlines = _scan_outlines(context, declared_scale)
+    validated = scan_reading.validate_area_reply(reply, packet["tiles"], packet["factors"], outlines)
+    if not validated["rooms"]:
+        record.update({"status": "blocked", "source": "ai_determined", "applied_value": {},
+                       "validation": validated,
+                       "block_reason": "Scanned plan with no printed areas or dimensions; room areas need the contractor."})
+        return record
+    try:
+        calibration = scan_reading.calibration_from_areas(validated["rooms"], outlines,
+                                                           declared_mm_per_px=declared_scale)
+        calibration_error = ""
+    except ValueError as error:
+        calibration, calibration_error = None, str(error)
+    page_context = next((row for row in _p0_main_geometry_pages(root) if row.get("page") == page), {})
+    level = str(page_context.get("level_name") or page_context.get("floor_label") or "Unassigned level")
+    rooms = [{"label": row["label"], "area_m2": row["area_m2"],
+              "source": "printed (read from image)", "method": "printed_read_from_image",
+              "printed_text": row["printed_text"], "page": page, "level_name": level,
+              "outline": None, "quality_label": record.get("quality_label", "AI-determined")}
+             for row in validated["rooms"]]
+    record.update({"status": _status_for_accuracy("ai_determined", record["accuracy"]), "source": "ai_determined",
+                   "applied_value": {"rooms": rooms, "label": record["quality_label"]},
+                   "validation": validated, "calibration": calibration,
+                   "calibration_reason": calibration_error, "block_reason": ""})
+    return record
+
+
+def _apply_s3_transcription(record, lines):
+    record.update({"status": _status_for_accuracy("ai_determined", record["accuracy"]),
+                   "source": "ai_determined", "applied_value": {"lines": lines,
+                       "label": record["quality_label"]}, "validation": {"lines": lines}, "block_reason": ""})
+    return record
 
 
 def _p0_is_raster(root, page_number, context, calibration):
@@ -375,8 +441,197 @@ def _p0_context(root, page_number):
     from ai.dimension_wall_matcher import page_mm_per_px
     declared_scale = page_mm_per_px(page_ocr.get("scale_candidates", []), render_dpi=72 * scale)
     summary = room_outline.style_summary(objects, viewport, declared_scale)
-    return {"objects": objects, "image": image, "viewport": viewport, "declared_mm_per_px": declared_scale,
+    return {"objects": objects, "image": image, "viewport": viewport, "image_scale": scale,
+            "page_origin": tuple(pdf_page.bbox[:2]), "render_dpi": 72 * scale,
+            "declared_mm_per_px": declared_scale,
             "summary": summary, "page_meta": page_meta}
+
+
+def _page_has_text_layer(root, page_number, context=None):
+    """Text in vector/OCR metadata or PDF character objects means the page is not image-only."""
+    import pdfplumber
+    ai_input, spatial, _building = _load_inputs(root)
+    page_ocr = next((row for row in spatial.get("pages", []) if row.get("page") == page_number), {})
+    for field in ("text", "plain_text"):
+        raw = page_ocr.get(field)
+        if isinstance(raw, str) and raw.strip():
+            return True
+    if context:
+        left, top, right, bottom = context["viewport"]
+        scale = float(context.get("image_scale", 2.5))
+        origin_x, origin_y = context.get("page_origin", (0, 0))
+        for field in ("word_samples", "standalone_text_items", "title_blocks"):
+            for item in page_ocr.get(field, []) or []:
+                if not isinstance(item, dict) or not isinstance(item.get("bbox"), list) or len(item["bbox"]) != 4:
+                    if str(item).strip():
+                        return True
+                    continue
+                x0, y0, x1, y1 = item["bbox"]
+                x0, x1 = (float(x0) - origin_x) * scale, (float(x1) - origin_x) * scale
+                y0, y1 = (float(y0) - origin_y) * scale, (float(y1) - origin_y) * scale
+                if x1 >= left and x0 <= right and y1 >= top and y0 <= bottom:
+                    return True
+    source = Path(str(ai_input.get("source_pdf", "")))
+    if source.is_file():
+        with pdfplumber.open(source) as pdf:
+            pdf_page = pdf.pages[page_number - 1]
+            chars = pdf_page.chars
+            if context:
+                left, top, right, bottom = context["viewport"]
+                scale = float(context.get("image_scale", 2.5))
+                origin_x, origin_y = context.get("page_origin", pdf_page.bbox[:2])
+                return any(left <= (float(char.get("x0", -1)) - origin_x) * scale <= right and
+                           top <= (float(char.get("top", -1)) - origin_y) * scale <= bottom for char in chars)
+            return bool(chars)
+    return False
+
+
+def _page_is_raster_for_scan(root, page_number, context):
+    import pdfplumber
+    ai_input, _spatial, _building = _load_inputs(root)
+    source = Path(str(ai_input.get("source_pdf", "")))
+    if not source.is_file():
+        return False
+    try:
+        with pdfplumber.open(source) as pdf:
+            pdf_page = pdf.pages[page_number - 1]
+            image_scale = context["image"].width / float(pdf_page.width)
+            dpi = 72 * image_scale
+            mm_per_px = context.get("declared_mm_per_px") or 25.4 * 100 / dpi
+            return room_outline.page_is_raster(pdf_page, context["viewport"], image_scale, mm_per_px,
+                                                objects=context["objects"])
+    except (OSError, ValueError, IndexError, KeyError, TypeError, ZeroDivisionError):
+        return False
+
+
+def _page_dimension_candidates(root, page_number, context):
+    _ai_input, spatial, _building = _load_inputs(root)
+    vector = _read(root / "vector_geometry.json", {})
+    page_ocr = next((row for row in spatial.get("pages", []) if row.get("page") == page_number), {})
+    vector_page = next((row for row in (vector.get("geometry_key_points") or {}).get("pages", [])
+                        if row.get("page") == page_number), {})
+    return (page_ocr.get("dimension_candidates") or []
+            or vector_page.get("dimension_candidates") or context.get("page_meta", {}).get("dimension_candidates") or [])
+
+
+def _scan_outlines(context, mm_per_px):
+    """Return raster wall outlines in page-pixel coordinates for S1 label mapping."""
+    walls = room_outline.raster_wall_geometry(context["image"], context["viewport"], mm_per_px)
+    areas = room_outline.enclosed_rooms(walls, context["viewport"], mm_per_px)
+    return areas
+
+
+def _s1_packets(root):
+    from ai import scan_reading
+    result = []
+    ai_input, _spatial, _building = _load_inputs(root)
+    for page in _p0_main_geometry_pages(root):
+        number = page["page"]
+        try:
+            context = _p0_context(root, number)
+            has_raster_plan = _page_is_raster_for_scan(root, number, context)
+            has_plan_text = _page_has_text_layer(root, number, context)
+            if not (has_raster_plan or not has_plan_text) or _page_dimension_candidates(root, number, context):
+                continue
+            viewport = context["viewport"]
+            tiles = scan_reading.area_tiles(viewport)
+            factors = [scan_reading.tile_factor(tile) for tile in tiles]
+            images = []
+            for tile, factor in zip(tiles, factors):
+                crop = context["image"].convert("RGB").crop(tuple(int(value) for value in tile))
+                if factor < 1:
+                    crop = crop.resize((max(1, round(crop.width * factor)), max(1, round(crop.height * factor))))
+                images.append(_png_bytes(crop))
+            packet = {"task": "S1_printed_areas", "page": number, "tiles": [list(tile) for tile in tiles],
+                      "factors": factors, "viewport": list(viewport), "render_dpi": context["render_dpi"],
+                      "working_scale_denominator": 100}
+            result.append(("S1_printed_areas", f"page-{number}", packet,
+                           scan_reading.area_prompt(len(tiles)), images, ""))
+        except (OSError, ValueError, IndexError, KeyError, TypeError) as error:
+            result.append(("S1_printed_areas", f"page-{number}", {"task": "S1_printed_areas", "page": number},
+                           "", [], f"Scanned-area packet could not be built: {error}"))
+    return result
+
+
+def _image_only_pages(root):
+    import pdfplumber
+    ai_input, _spatial, _building = _load_inputs(root)
+    source = Path(str(ai_input.get("source_pdf", "")))
+    if not source.is_file():
+        return []
+    page_rows = (ai_input.get("drawing_set", {}) or {}).get("pages", [])
+    if page_rows and all(isinstance(row, dict) and isinstance(row.get("structured_content"), dict)
+                         and isinstance(row["structured_content"].get("word_count"), int)
+                         for row in page_rows):
+        return sorted({row["page"] for row in page_rows
+                       if type(row.get("page")) is int and row["structured_content"]["word_count"] == 0})
+    with pdfplumber.open(source) as pdf:
+        return [index + 1 for index, page in enumerate(pdf.pages) if not page.chars]
+
+
+def _s3_packets(root, image_pages=None):
+    from ai import scan_reading
+    import pdfplumber
+    ai_input, _spatial, _building = _load_inputs(root)
+    source = Path(str(ai_input.get("source_pdf", "")))
+    if not source.is_file():
+        return []
+    result = []
+    with pdfplumber.open(source) as pdf:
+        for number in (_image_only_pages(root) if image_pages is None else image_pages):
+            page = pdf.pages[number - 1]
+            image = page.to_image(resolution=180).original.convert("RGB")
+            for crop_info in scan_reading.title_block_crops(*image.size):
+                bbox = tuple(int(value) for value in crop_info["bbox"])
+                crop = image.crop(bbox)
+                crop.thumbnail((1536, 1536))
+                packet = {"task": "S3_title_transcription", "page": number, "region": crop_info["region"],
+                          "page_bbox": list(bbox)}
+                target = f"page-{number}-{crop_info['region']}"
+                result.append(("S3_title_transcription", target, packet,
+                               scan_reading.transcription_prompt(), [_png_bytes(crop)], ""))
+    return result
+
+
+def _s3_site_packet(root):
+    from ai import scan_reading
+    transcriptions = {}
+    for pointer in (root / "ai_tasks" / "S3_title_transcription").glob("*/current.json"):
+        record = _read(pointer.parent / _read(pointer, {}).get("run_path", "") / "record.json", {})
+        if record.get("status") not in {"applied", "below_accuracy_bar"}:
+            continue
+        page = record.get("packet", {}).get("page")
+        lines = record.get("applied_value", {}).get("lines")
+        if type(page) is int and isinstance(lines, list):
+            transcriptions.setdefault(page, []).extend(lines)
+    return scan_reading.site_packet_from_transcriptions(transcriptions) if transcriptions else None
+
+
+def _refresh_site_tasks(root):
+    ai_input, _spatial, _building = _load_inputs(root)
+    if not Path(str(ai_input.get("source_pdf", ""))).is_file():
+        return
+    site_packet, site_prompt, _ = _site_packet(root)
+    image_pages = _image_only_pages(root)
+    if not image_pages or site_packet.get("excerpts"):
+        _create_run(root, "P1_site", "project", site_packet, site_prompt,
+                    blocked_reason="No cited site excerpts were found." if not site_packet.get("excerpts") else
+                    "Prompt exceeds the 4,000-character limit." if len(site_prompt) > 4000 else "")
+        return
+    for task, target, packet, prompt, images, reason in _s3_packets(root, image_pages):
+        _create_run(root, task, target, packet, prompt, images, reason or
+                    ("Prompt exceeds the 1,000-character limit; evidence was not shortened."
+                     if len(prompt) > 1000 else ""))
+    expected = [f"page-{page}-{region}" for page in image_pages
+                for region in ("right_strip", "bottom_band")]
+    records = [_current_task(root, "S3_title_transcription", target) for target in expected]
+    if records and all(row and row.get("status") in {"applied", "below_accuracy_bar"} for row in records):
+        scanned = _s3_site_packet(root)
+        if scanned:
+            packet, prompt = scanned
+            _create_run(root, "P1_site", "project", packet, prompt,
+                        blocked_reason="No cited site excerpts were found." if not packet.get("excerpts") else
+                        "Prompt exceeds the 4,000-character limit." if len(prompt) > 4000 else "")
 
 
 def _p0_initial_packets(root):
@@ -1229,6 +1484,14 @@ def _p0_result_rooms(prepared):
     return output
 
 
+def _current_traces(root, trace_ids):
+    """Resolve a batch of current traces with one geometry/freshness pass."""
+    paths = reviewer_room_geometry_service._paths({"review_dir": str(root)})
+    wanted = set(trace_ids)
+    return {row.get("trace_id"): row for row in reviewer_room_geometry_service.current_records(paths)
+            if row.get("trace_id") in wanted}
+
+
 def _current_trace(root, trace_id):
     paths=reviewer_room_geometry_service._paths({"review_dir":str(root)})
     return next((row for row in reviewer_room_geometry_service.current_records(paths) if row.get("trace_id")==trace_id),None)
@@ -1237,8 +1500,9 @@ def _current_trace(root, trace_id):
 def _apply_p3(web, project, root, record, validated):
     packet=record["packet"]
     if packet.get("room_edges"):
-        traces={trace_id:_current_trace(root,trace_id) for trace_id in packet.get("trace_ids",[])}
-        if any(trace is None for trace in traces.values()):
+        trace_ids=packet.get("trace_ids",[])
+        traces=_current_traces(root,trace_ids)
+        if set(traces)!=set(trace_ids):
             raise ValueError("A room trace is stale; rebuild the page boundary task from current drawing evidence.")
         run_values={row["index"]:row["boundary"] for row in validated.get("edges",[])}
         run_evidence={row["index"]:row.get("evidence","") for row in validated.get("edges",[])}
@@ -1277,11 +1541,14 @@ def _apply_p3(web, project, root, record, validated):
                 "openings":trace.get("openings",[]),"declaration_source":"ai_determined","ai_run_id":record["run_id"],
                 "edge_sources":{str(index):source for index,source in sources.items()},
                 "boundary_evidence":[{"index":index,"text":evidence[index],"source":sources[index],"label":p3_label}
-                                     for index in values]})
+                                     for index in values]}, _validated_current_records=tuple(traces.values()),
+                _defer_evidence_rebuild=True)
             results.append({"trace_id":trace_id,"room_id":trace.get("room_id"),"room":trace.get("room_label"),
                 "edges":[{"index":index,"edge_length_m":mapping.get(index,{}).get("length_m"),
                     "boundary":values[index],"source":sources[index],"evidence":evidence[index],"label":p3_label}
                     for index in sorted(values)]})
+        if web is not None and project:
+            calculation_extraction_service.post(web, project, {"action": "build"})
         record.update({"status":_status_for_accuracy("ai_determined",record["accuracy"]),"source":"ai_determined",
             "applied_value":{"page":packet.get("page"),"rooms":results,
                 "runs":[{"index":index,"boundary":boundary,"evidence":run_evidence.get(index,"")}
@@ -1450,7 +1717,8 @@ def _refresh_geometry_tasks(root):
     # Persist naming tasks before asking whether any rooms still need outlines.
     # If both packet lists are calculated together, the outline builder cannot
     # see the just-created naming tasks and offers an unnecessary second task.
-    for packet_builder in (_p0_initial_packets, _p0_followup_packets, _p0_outline_packets):
+    _refresh_site_tasks(root)
+    for packet_builder in (_p0_initial_packets, _p0_followup_packets, _p0_outline_packets, _s1_packets):
         for task,target,packet,prompt,images,reason in packet_builder(root):
             budget=autonomous_tasks.TASKS[task]["budget_chars"]
             _create_run(root,task,target,packet,prompt,images,reason or
@@ -1554,10 +1822,7 @@ def get_labels(project):
 
 def run_all(web, project):
     root = _root(project)
-    site_packet, site_prompt, _ = _site_packet(root)
-    _create_run(root, "P1_site", "project", site_packet, site_prompt,
-                blocked_reason="No cited site excerpts were found." if not site_packet.get("excerpts") else
-                "Prompt exceeds the 4,000-character limit." if len(site_prompt) > 4000 else "")
+    _refresh_site_tasks(root)
     for target, packet, prompt, images, *error in _north_packets(root):
         reason = error[0] if error else ""
         if not reason and len(packet.get("crops", [])) > 3:
@@ -1572,7 +1837,7 @@ def run_all(web, project):
                      if task == "P0_dimensions" and len(prompt) > 1500 else
                      "Prompt exceeds the 3,000-character limit; evidence was not shortened."
                      if task == "P0_wall_styles" and len(prompt) > 3000 else ""))
-    for packet_builder in (_p0_followup_packets, _p0_outline_packets, _p3_packets, _p4_packets, _p6_kitchen_packets):
+    for packet_builder in (_p0_followup_packets, _p0_outline_packets, _s1_packets, _p3_packets, _p4_packets, _p6_kitchen_packets):
         for task, target, packet, prompt, images, reason in packet_builder(root):
             budget = autonomous_tasks.TASKS[task]["budget_chars"]
             _create_run(root, task, target, packet, prompt, images,
@@ -1610,7 +1875,7 @@ def _export_determinations(root):
         result["P6_kitchen"] = kitchen_equipment.to_determinations(
             kitchen_record["applied_value"].get("items", []), source=source)
     rooms = {}
-    for task in ("P0_room_names", "P0_room_outlines"):
+    for task in ("S1_printed_areas", "P0_room_names", "P0_room_outlines"):
         for record in (row for row in _all_current(root) if row.get("task") == task and row.get("applied_value")):
             for row in record["applied_value"].get("rooms", []):
                 key = str(row.get("label", "")).casefold()
@@ -1751,6 +2016,7 @@ def _apply_p2(web, project, root, record, validated):
             other_records[other_page] = other
     candidates_by_page[page] = float(validated["plan_up_azimuth_deg"])
     completed_pages.add(page)
+    # Use the same complete plan-view list as the north packet builder and declare_north.
     plan_page_numbers = [row["page"] for row in autonomous_tasks.plan_pages(_read(root / "ai_input.json", {}))]
     missing_pages = [number for number in plan_page_numbers if number not in completed_pages]
     if missing_pages:
@@ -1772,6 +2038,7 @@ def _apply_p2(web, project, root, record, validated):
     declaration_source = "ai_determined"
     reviewer = "Archie AI"
     task_records = {**other_records, page: record}
+    primary_apply_failed = False
     for north_page in plan_page_numbers:
         declaration = _read(root / "reviewer_room_geometry.json", {}).get("page_north", {}).get(str(north_page), {})
         if declaration.get("declaration_source", "reviewer" if declaration else "") == "reviewer":
@@ -1779,11 +2046,21 @@ def _apply_p2(web, project, root, record, validated):
         north_record = task_records.get(north_page)
         if not north_record:
             continue
-        reviewer_room_geometry_service.post(web, project, {
-            "action": "declare_north", "page": north_page, "reviewer": reviewer,
-            "plan_up_azimuth_deg": applied_angle, "declaration_source": declaration_source,
-            "ai_run_id": north_record["run_id"],
-        })
+        try:
+            reviewer_room_geometry_service.post(web, project, {
+                "action": "declare_north", "page": north_page, "reviewer": reviewer,
+                "plan_up_azimuth_deg": applied_angle, "declaration_source": declaration_source,
+                "ai_run_id": north_record["run_id"],
+            }, _defer_evidence_rebuild=True)
+        except (ValueError, OSError, KeyError) as error:
+            north_record.update({"status": "blocked", "source": "", "applied_value": {},
+                                 "block_reason": f"North agreement succeeded but page {north_page} could not be applied: {error}",
+                                 "cross_check": consensus})
+            if north_record is record:
+                primary_apply_failed = True
+            else:
+                _update_record(root, north_record)
+            continue
         north_record.update({"status": _status_for_accuracy("ai_determined", north_record["accuracy"]),
                              "source": "ai_determined", "applied_value": {"page": north_page,
                              "plan_up_azimuth_deg": applied_angle, "source": declaration_source,
@@ -1791,6 +2068,13 @@ def _apply_p2(web, project, root, record, validated):
                              "ai_run_id": north_record["run_id"]}, "cross_check": consensus, "block_reason": ""})
         if north_record is not record:
             _update_record(root, north_record)
+    if primary_apply_failed:
+        record.update({"status": "blocked", "source": "", "applied_value": {},
+                       "validation": validated, "cross_check": consensus,
+                       "block_reason": f"North agreement succeeded, but page {page} could not be applied."})
+        return record
+    if task_records and web is not None:
+        calculation_extraction_service.post(web, project, {"action": "build"})
     record.update({"status": _status_for_accuracy("ai_determined", record["accuracy"]), "source": "ai_determined",
                    "applied_value": {"page": page, "plan_up_azimuth_deg": applied_angle, "source": declaration_source,
                                      "evidence": validated.get("description", "North arrow in source crop"), "ai_run_id": record["run_id"]},
@@ -1949,6 +2233,11 @@ def post(web, project, data):
         elif task == "P0_room_outlines":
             validated = autonomous_tasks.validate_p0_outlines(record["packet"], reply)
             record = _apply_p0_outlines(web, project, root, record, validated)
+        elif task == "S1_printed_areas":
+            record = _apply_s1_areas(web, project, root, record, reply)
+        elif task == "S3_title_transcription":
+            lines = __import__("ai.scan_reading", fromlist=["validate_transcription"]).validate_transcription(reply)
+            record = _apply_s3_transcription(record, lines)
         elif task == "P3_boundaries":
             validated = autonomous_tasks.validate_boundary_reply(record["packet"], reply)
             record = _apply_p3(web, project, root, record, validated)
@@ -1984,6 +2273,9 @@ def post(web, project, data):
     record["reply_attempts"][-1].update({"outcome": archived["outcome"], "reason": archived["reason"]})
     record["validation"] = {"valid": True, "result": record.get("validation", {})}
     _update_record(root, record)
+    if task == "S1_printed_areas" and record.get("applied_value") and web is not None:
+        from backend import room_use_resolution_service
+        room_use_resolution_service.post(web, project, {"action": "resolve"})
     _export_determinations(root)
     productization.record_change_if_fingerprint_changed(
         root, action="autonomous_task_applied", target=f"{task}/{target}",

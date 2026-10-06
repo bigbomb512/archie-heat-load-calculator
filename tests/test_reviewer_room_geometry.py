@@ -382,10 +382,11 @@ class ReviewerRoomGeometryTests(unittest.TestCase):
             root = Path(temporary)
             path = root / "reviewer_room_geometry.json"
             path.write_text(json.dumps(reviewer_room_geometry.empty_artifact()), encoding="utf-8")
+            (root / "ai_input.json").write_text(json.dumps({"drawing_set": {"pages": [
+                {"page": 3, "type": "floor_plan"}]}}), encoding="utf-8")
             project = {"id": "north-test", "review_dir": str(root)}
             web = SimpleNamespace(safe_link=lambda _path: "", update_project=lambda _project: None)
-            with patch.object(reviewer_room_geometry_service, "_page_context", return_value=[{"page": 3}]), \
-                 patch.object(reviewer_room_geometry_service, "_response", return_value={"ok": True}), \
+            with patch.object(reviewer_room_geometry_service, "_response", return_value={"ok": True}), \
                  patch("backend.calculation_extraction_service.post", return_value={}), \
                  patch("backend.productization.record_change_if_fingerprint_changed"):
                 reviewer_room_geometry_service.post(web, project, {

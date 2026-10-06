@@ -322,6 +322,28 @@ def main():
 
     with tempfile.TemporaryDirectory() as folder:
         root = Path(folder)
+        room_use, proposal, room_id, _trace = write_fixture(root)
+        area_only = {"room_id": room_id, "area_m2": 24.5, "area_source": "printed (read from image)",
+                     "source": "printed (read from image)", "area_only": True, "outline": None,
+                     "page": 4, "printed_text": "24.5 m²", "declaration_source": "ai_determined",
+                     "calibration_status": "not_required", "trace_id": "", "proof_id": "",
+                     "points_image_px": [], "edges": [], "openings": [], "roof": "unknown"}
+        with patch.object(reviewer_room_geometry_service, "current_traced_areas", return_value={room_id: area_only}):
+            prepared = prepare(root, room_use, proposal)
+        assembled = ai_preliminary.assemble({"spaces": []}, preliminary_proposal=prepared,
+                                            allow_area_fallbacks=False)
+        room = prepared["rooms"][0]
+        assessment = prepared["envelope_assessments"][0]
+        check("printed scanned area is attached without an outline trace",
+              room["area_m2"] == 24.5 and room["area_origin"] == "printed (read from image)"
+              and not room.get("reviewer_trace_id"))
+        check("scanned area leaves walls and roof explicitly unassessed",
+              {item["component"] for item in assessment["not_assessed"]} >= {"Walls — not assessed", "Roof — not assessed"})
+        check("draft exclusions list unassessed scanned-room walls and roof",
+              {item.get("component") for item in assembled["exclusions"]} >= {"Walls — not assessed", "Roof — not assessed"})
+
+    with tempfile.TemporaryDirectory() as folder:
+        root = Path(folder)
         room_use, proposal, _room_id, trace = write_fixture(root)
         set_envelope_trace(root, trace, [{"index": index, "boundary": "internal"} for index in range(4)], "not_exposed")
         prepared = prepare(root, room_use, proposal)
@@ -343,12 +365,21 @@ def main():
                                          {"index": 1, "boundary": "adjacent_tenancy"},
                                          {"index": 2, "boundary": "mall"},
                                          {"index": 3, "boundary": "adjacent_tenancy"}], "not_exposed")
+        artifact_path = root / "reviewer_room_geometry.json"
+        artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+        artifact["records"][0]["openings"] = [{"opening_id": "mall-glazing", "edge_index": 0,
+            "width_m": 2.025, "sill_height_m": 1.1, "head_height_m": 2.7,
+            "declaration_source": "ai_determined"}]
+        artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
         prepared = prepare(root, room_use, proposal)
         assembled = ai_preliminary.assemble({"spaces": []}, preliminary_proposal=prepared,
                                             allow_area_fallbacks=False)
         check("mall and neighbouring-tenancy boundaries with no exposed roof are envelope-not-applicable",
               any(row.get("envelope_not_applicable") for row in prepared["envelope_assessments"])
               and assembled["material"]["hourly_load_model"]["rooms"][0]["cooling_load"]["envelope_not_applicable"])
+        check("mall shopfront glazing gets the explicit no-sun/no-conduction reason",
+              any(row.get("reason") == "Shopfront glazing faces an enclosed mall — no sun or conduction in this method"
+                  for row in assembled["exclusions"]))
 
     with tempfile.TemporaryDirectory() as folder:
         root = Path(folder)

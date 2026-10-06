@@ -551,7 +551,7 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
             room["reviewer_traced_area"] = deepcopy(traced_area)
             existing_area = ai_preliminary._number(room.get("area_m2"))
             existing_origin = str(room.get("area_origin", ""))
-            trace_area_is_printed = traced_area.get("area_source") == "printed_on_drawing"
+            trace_area_is_printed = traced_area.get("area_source") in {"printed_on_drawing", "printed (read from image)"}
             if (trace_area_is_printed or existing_area is None or existing_area <= 0
                     or existing_origin in {"", "ai_geometry", "ai_assumption"}):
                 page = traced_area.get("page")
@@ -559,19 +559,24 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                 proof_id = str(traced_area.get("proof_id", ""))
                 room["area_m2"] = traced_area["area_m2"]
                 ai_determined = traced_area.get("declaration_source") in {"ai_determined", "ai_fallback"} and not trace_area_is_printed
-                room["area_origin"] = "pdf_evidence" if trace_area_is_printed else ("ai_determined" if ai_determined else "reviewer_traced")
+                room["area_origin"] = ("printed (read from image)" if traced_area.get("area_only") else
+                                       "pdf_evidence" if trace_area_is_printed else
+                                       "ai_determined" if ai_determined else "reviewer_traced")
                 room["area_verification_status"] = "provisional"
-                room["reviewer_trace_id"] = trace_id
-                room["geometry_proof_id"] = proof_id
+                room["reviewer_trace_id"] = trace_id if not traced_area.get("area_only") else ""
+                room["geometry_proof_id"] = proof_id if not traced_area.get("area_only") else ""
                 room["reviewer_traced_area"] = deepcopy(traced_area)
-                trace_citation = {"page": page, "reference": f"Room trace {trace_id}",
-                                  "excerpt": (f"AI-determined room outline; {traced_area.get('ai_quality_label') or 'below accuracy bar'}; "
+                trace_citation = {"page": page,
+                                  "reference": "Printed room area read from image" if traced_area.get("area_only") else f"Room trace {trace_id}",
+                                  "excerpt": (f"Printed room area read from image: {traced_area.get('printed_text') or room.get('label', '')}."
+                                              if traced_area.get("area_only") else
+                                              f"AI-determined room outline; {traced_area.get('ai_quality_label') or 'below accuracy bar'}; "
                                               f"calibration status {traced_area.get('calibration_status')}." if ai_determined else
                                               f"Reviewer-traced room boundary; calibration status {traced_area.get('calibration_status')}."),
-                                  "reviewer_trace_id": trace_id, "geometry_proof_id": proof_id}
+                                  **({} if traced_area.get("area_only") else {"reviewer_trace_id": trace_id, "geometry_proof_id": proof_id})}
                 room["evidence"] = ai_preliminary._combined_evidence(room, {"evidence": [trace_citation]})
             if str(room.get("space_scope", "")).startswith("comfort_hvac"):
-                trace_parts = traced_area.get("supporting_traces") or [traced_area]
+                trace_parts = [] if traced_area.get("area_only") else (traced_area.get("supporting_traces") or [traced_area])
                 assessment = {"owner_room_label": room.get("label", ""),
                               "owner_level_name": room.get("level_name", ""),
                               "trace_id": traced_area.get("trace_id", ""),
@@ -589,6 +594,15 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                     geometry, room_use_id, room.get("label", ""), room.get("level_name", ""), "wall",
                 )
                 fully_internal_parts = []
+                if traced_area.get("area_only"):
+                    assessment["not_assessed"].extend([
+                        {"component_id": "area_only_walls", "component": "Walls — not assessed",
+                         "reason": "No room outline is available; wall boundaries and areas were not assessed.",
+                         "page": traced_area.get("page")},
+                        {"component_id": "area_only_roof", "component": "Roof — not assessed",
+                         "reason": "No room outline or roof declaration is available; roof exposure and gains were not assessed.",
+                         "page": traced_area.get("page")},
+                    ])
                 for part in trace_parts:
                     part_component_suffix = f"_{part.get('trace_id')}" if len(trace_parts) > 1 else ""
                     declaration_reviewer = str(part.get("envelope_reviewer", ""))
@@ -645,6 +659,13 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                                 "reason": "Adjacent-tenancy and internal boundary conduction is outside this preliminary envelope method.",
                                 "page": part.get("page"), "reviewer": boundary_label,
                                 "boundary_source": edge_evidence.get(index, {}).get("source", "")})
+                            if boundary == "mall" and any(row.get("edge_index") == index for row in part.get("openings", [])):
+                                assessment["excluded"].append({
+                                    "component_id": f"mall_shopfront_glazing_{index}{part_component_suffix}",
+                                    "component": "glazing and façade solar",
+                                    "reason": "Shopfront glazing faces an enclosed mall — no sun or conduction in this method",
+                                    "page": part.get("page"), "reviewer": boundary_label,
+                                    "boundary_source": edge_evidence.get(index, {}).get("source", "")})
                             continue
                         if boundary != "external":
                             continue

@@ -48,6 +48,85 @@ class AutonomousTaskTests(unittest.TestCase):
         selected = autonomous_tasks.plan_pages({"drawing_set": {"pages": pages}})
         self.assertEqual([row["page"] for row in selected], [1, 4, 5, 6, 7, 16, 22, 23, 24, 25])
 
+    def test_scanned_plan_builds_area_packet_and_applies_printed_areas_with_calibration(self):
+        from PIL import Image
+        from shapely.geometry import Polygon
+        from ai import scan_reading
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "ai_input.json").write_text(json.dumps({"source_pdf": "missing.pdf"}))
+            (root / "spatial_ocr.json").write_text(json.dumps({"pages": []}))
+            context = {"image": Image.new("RGB", (400, 400), "white"), "viewport": (0, 0, 400, 400),
+                       "render_dpi": 180}
+            with patch.object(autonomous_tasks_service, "_p0_main_geometry_pages", return_value=[{"page": 4}]), \
+                    patch.object(autonomous_tasks_service, "_p0_context", return_value=context), \
+                    patch.object(autonomous_tasks_service, "_page_has_text_layer", return_value=False), \
+                    patch.object(autonomous_tasks_service, "_page_dimension_candidates", return_value=[]):
+                rows = autonomous_tasks_service._s1_packets(root)
+            self.assertEqual(len(rows), 1)
+            task, target, packet, prompt, images, reason = rows[0]
+            self.assertEqual((task, target, len(images), reason), ("S1_printed_areas", "page-4", 4, ""))
+            self.assertIn("overlapping tiles", prompt)
+            tiles = packet["tiles"]
+            reply = json.dumps({"scale_text": None, "rooms": [
+                {"tile": 1, "name": "Office", "number": None, "area_value": 1, "unit": "m2",
+                 "printed_text": "1 m2", "label_px": [100, 100]},
+                {"tile": 1, "name": "Store", "number": None, "area_value": 1, "unit": "m2",
+                 "printed_text": "1 m2", "label_px": [200, 200]},
+            ]})
+            polygons = [Polygon([(50,50), (150,50), (150,150), (50,150)]),
+                        Polygon([(150,150), (250,150), (250,250), (150,250)])]
+            record = {"packet": packet, "run_id": "synthetic", "accuracy": {"auto_apply": True},
+                      "quality_label": "AI-determined", "task": task, "target": target}
+            with patch.object(autonomous_task_service := autonomous_tasks_service, "_p0_context", return_value=context), \
+                    patch.object(autonomous_task_service, "_scan_outlines", return_value=polygons), \
+                    patch.object(autonomous_task_service.reviewer_room_geometry_service, "_rooms", return_value=[]), \
+                    patch.object(autonomous_task_service.reviewer_room_geometry_service, "persist_ai_determined_traces", return_value=[]):
+                applied = autonomous_task_service._apply_s1_areas(None, {}, root, record, reply)
+            self.assertEqual(applied["status"], "applied")
+            self.assertEqual(applied["calibration"]["status"], "agreed")
+            self.assertEqual(applied["calibration"]["source"], "printed_room_areas")
+            self.assertEqual([row["source"] for row in applied["applied_value"]["rooms"]],
+                             ["printed (read from image)"] * 2)
+            empty = json.dumps({"scale_text": None, "rooms": []})
+            with patch.object(autonomous_task_service, "_p0_context", return_value=context), \
+                    patch.object(autonomous_task_service, "_scan_outlines", return_value=polygons):
+                blocked = autonomous_task_service._apply_s1_areas(None, {}, root, record, empty)
+            self.assertEqual(blocked["status"], "blocked")
+            self.assertEqual(blocked["block_reason"],
+                             "Scanned plan with no printed areas or dimensions; room areas need the contractor.")
+
+    def test_s3_image_only_pages_create_transcription_and_site_packets(self):
+        from ai import scan_reading
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fake_pdf = root / "source.pdf"
+            fake_pdf.touch()
+            (root / "ai_input.json").write_text(json.dumps({"source_pdf": str(fake_pdf)}))
+            with patch.object(autonomous_tasks_service, "_image_only_pages", return_value=[2]), \
+                    patch("pdfplumber.open") as open_pdf:
+                from PIL import Image
+                page = SimpleNamespace(to_image=lambda resolution: SimpleNamespace(original=Image.new("RGB", (400, 300), "white")))
+                open_pdf.return_value.__enter__.return_value.pages = [None, page]
+                rows = autonomous_tasks_service._s3_packets(root)
+            self.assertEqual([row[1] for row in rows], ["page-2-right_strip", "page-2-bottom_band"])
+            self.assertTrue(all(row[4] for row in rows))
+            self.assertEqual(scan_reading.validate_transcription({"lines": ["123 Main Street"]}), ["123 Main Street"])
+            packet, _prompt = scan_reading.site_packet_from_transcriptions({2: ["123 Main Street", "Suite 2"]})
+            self.assertEqual(packet["excerpts"][0]["text"], "123 Main Street\nSuite 2")
+
+    def test_image_only_page_detection_uses_existing_structured_page_metadata(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source.pdf"
+            source.touch()
+            (root / "ai_input.json").write_text(json.dumps({"source_pdf": str(source), "drawing_set": {"pages": [
+                {"page": 1, "structured_content": {"word_count": 4}},
+                {"page": 2, "structured_content": {"word_count": 0, "needs_ocr": True}},
+            ]}}))
+            with patch("pdfplumber.open", side_effect=AssertionError("PDF text parsing should be avoided")):
+                self.assertEqual(autonomous_tasks_service._image_only_pages(root), [2])
+
     def test_p3_whole_page_image_and_refrigeration_union(self):
         from PIL import Image
         def trace(name, room, box):
@@ -99,8 +178,8 @@ class AutonomousTaskTests(unittest.TestCase):
             record = {"packet": packet, "run_id": "round6", "accuracy": {"auto_apply": True}}
             validated = {"edges": [{"index": row["index"], "boundary": "external", "evidence": "external wall"}
                                     for row in packet["edges"]]}
-            with patch.object(autonomous_tasks_service, "_current_trace", side_effect=lambda _root, tid: next(t for t in traces if t["trace_id"] == tid)), patch.object(
-                    autonomous_tasks_service.reviewer_room_geometry_service, "post", side_effect=lambda _web, _project, body: calls.append(body)):
+            with patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "current_records", return_value=traces), patch.object(
+                    autonomous_tasks_service.reviewer_room_geometry_service, "post", side_effect=lambda _web, _project, body, **_kwargs: calls.append(body)):
                 autonomous_tasks_service._apply_p3(None, {}, root, record, validated)
             self.assertEqual({row["trace_id"] for row in calls}, {"shop-1", "shop-2", "kitchen"})
             kitchen = next(row for row in calls if row["trace_id"] == "kitchen")
@@ -192,8 +271,63 @@ class AutonomousTaskTests(unittest.TestCase):
             skipped = autonomous_tasks_service._p0_page_selection(root)["skipped"]
             self.assertTrue(any(row["page"] == 1 and "second view" in row["reason"] for row in skipped))
             self.assertTrue(any(row["page"] == 3 and "scale" in row["reason"] for row in skipped))
-            self.assertTrue(any(row["page"] == 4 and "secondary plan role" in row["reason"] for row in skipped))
+            self.assertTrue(any(row["page"] == 4 and "second view" in row["reason"] for row in skipped))
 
+    def test_p0_uses_supporting_plan_when_level_has_no_main_plan(self):
+        from PIL import Image
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            page = {"page": 9, "plan_role": "supporting_geometry_plan", "level_name": "Ground", "title": "Ground Floor Plan"}
+            (root / "ai_input.json").write_text(json.dumps({"drawing_set": {"pages": [page]}}))
+            (root / "drawing_coverage.json").write_text(json.dumps({"page_roles": [
+                {"page": 9, "proposed_role": "supporting_geometry_plan", "level_name": "Ground"}]}))
+            selected = autonomous_tasks_service._p0_page_selection(root)
+            self.assertEqual([row["page"] for row in selected["selected"]], [9])
+            self.assertTrue(any(row["reason"] == "Selected supporting plan: no main plan on this level."
+                                for row in selected["notes"]))
+            context = {"image": Image.new("RGB", (400, 400), "white"), "viewport": (0, 0, 400, 400),
+                       "render_dpi": 180}
+            with patch.object(autonomous_tasks_service, "_p0_context", return_value=context), \
+                 patch.object(autonomous_tasks_service, "_page_is_raster_for_scan", return_value=True), \
+                 patch.object(autonomous_tasks_service, "_page_has_text_layer", return_value=False), \
+                 patch.object(autonomous_tasks_service, "_page_dimension_candidates", return_value=[]):
+                self.assertEqual([row[1] for row in autonomous_tasks_service._s1_packets(root)], ["page-9"])
+
+    def test_s1_printed_areas_become_area_only_rooms_for_confirmation(self):
+        from backend import room_proposal
+        from backend import reviewer_room_geometry_service
+        from ai import room_scope_confirmation
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root / "ai_tasks" / "S1_printed_areas" / "page-4"
+            run = target / "runs" / "scan-run"
+            run.mkdir(parents=True)
+            labels = ["Shop", "Kitchen", "Bar", "Coolroom", "Store"]
+            rows = [{"label": label, "area_m2": index + 10, "source": "printed (read from image)",
+                     "printed_text": f"{index + 10} m²", "level_name": "Ground", "outline": None}
+                    for index, label in enumerate(labels)]
+            (target / "current.json").write_text(json.dumps({"run_path": "runs/scan-run"}))
+            (run / "record.json").write_text(json.dumps({"task": "S1_printed_areas", "target": "page-4",
+                "status": "applied", "run_id": "scan-run", "packet": {"page": 4}, "applied_value": {"rooms": rows}}))
+            proposal = room_proposal.room_proposal({}, root)
+            self.assertEqual([row["label"] for row in proposal["rooms"]], labels)
+            self.assertTrue(all(row["area_origin"] == "printed (read from image)" for row in proposal["rooms"]))
+            with patch.object(reviewer_room_geometry_service, "current_artifact_input", return_value={
+                    "records": [], "rooms": [{"room_id": row["room_id"], "label": row["label"], "level_name": "Ground"}
+                                              for row in proposal["rooms"]]}):
+                areas = reviewer_room_geometry_service.current_traced_areas(root)
+            self.assertEqual(len(areas), 5)
+            self.assertTrue(all(row["area_only"] and row["outline"] is None and
+                                row["source"] == "printed (read from image)" for row in areas.values()))
+            confirmation_input = {"material": {"hourly_load_model": {"floors": [], "zones": [],
+                "rooms": [{"room_id": row["room_id"], "name": row["label"], "zone_id": "z",
+                           "area_m2": row["area_m2"]} for row in proposal["rooms"]]}},
+                "materialized_fields": [{"room_id": row["room_id"], "field": "area_m2", "value": row["area_m2"],
+                    "origin": "printed (read from image)", "evidence": [{"page": 4}]} for row in proposal["rooms"]],
+                "review_queue": [], "exclusions": [], "excluded_spaces": []}
+            candidates = room_scope_confirmation.candidates(confirmation_input)
+            self.assertEqual(sorted((row["label"], row["area_m2"]) for row in candidates),
+                             sorted(zip(labels, [10, 11, 12, 13, 14])))
     def test_p0_operator_response_includes_page_skip_reasons(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1005,6 +1139,50 @@ class AutonomousTaskTests(unittest.TestCase):
             self.assertEqual(shop["status"], "correct")
             self.assertIn("11.07 m mall", shop["detail"])
 
+    def test_contractor_roof_export_is_skipped_from_ai_score(self):
+        import importlib.util
+        tool_path = Path(__file__).resolve().parents[1] / "tools" / "evaluate_autonomous_tasks.py"
+        spec = importlib.util.spec_from_file_location("evaluate_autonomous_tasks_contractor_test", tool_path)
+        evaluator = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(evaluator)
+        root = Path(__file__).resolve().parents[1]
+        key = {"case_id": "contractor", "tasks": {"P5_roof": {"rooms": [{"room": "Shop", "roof": "not_exposed"}]}}}
+        determinations = {"P5_roof": [{"room": "Shop", "roof": "not_exposed", "source": "reviewer"}]}
+        report = evaluator.evaluate_case_excluding_contractor_answers(key, determinations)
+        self.assertNotIn("P5_roof", report["tasks"])
+        self.assertEqual(report["not_ai_determined"]["P5_roof"], ["Shop"])
+        markdown = evaluator.render_markdown([report], {}, .85)
+        self.assertIn("contractor/reviewer answer(s): Shop (not AI-determined)", markdown)
+        self.assertIn("not applicable for AI coverage", markdown)
+        self.assertNotIn("P5_roof", report["tasks"])
+
+        mixed_key = {"case_id": "mixed", "tasks": {"P5_roof": {"rooms": [
+            {"room": "Shop", "roof": "not_exposed"}, {"room": "Kitchen", "roof": "not_exposed"}]}}}
+        mixed = evaluator.evaluate_case_excluding_contractor_answers(mixed_key, {"P5_roof": [
+            {"room": "Shop", "roof": "not_exposed", "source": "contractor"},
+            {"room": "Kitchen", "roof": "not_exposed", "source": "ai_determined"}]})
+        self.assertEqual([row["item"] for row in mixed["tasks"]["P5_roof"]], ["Kitchen"])
+        self.assertNotIn("not_applicable", mixed)
+
+    def test_p3_batch_resolves_current_geometry_once(self):
+        traces = [{"trace_id": f"part-{i}", "room_id": "shop", "room_label": "Shop",
+                   "points_image_px": [[0,0],[100,0]], "edges": [{"index": 0, "boundary": "unknown"}]}
+                  for i in range(6)]
+        packet = {"trace_ids": [row["trace_id"] for row in traces], "room_edges": [
+            {"trace_id": row["trace_id"], "edge_index": 0, "length_m": 1.0,
+             "perimeter_run_index": 0} for row in traces], "edges": [{"index": 0}], "runs": [],
+            "storefront_run_index": 0, "nearby_text": "", "short_run_inheritance": {}}
+        record = {"packet": packet, "accuracy": {"auto_apply": True}, "run_id": "p3-profile"}
+        with patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "current_records", return_value=traces) as current_records, \
+             patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "post") as classify, \
+             patch.object(autonomous_tasks_service.calculation_extraction_service, "post") as rebuild:
+            autonomous_tasks_service._apply_p3(SimpleNamespace(), {"id": "profile"}, Path("."), record,
+                {"edges": [{"index": 0, "boundary": "external", "evidence": "external wall"}]})
+        self.assertEqual(current_records.call_count, 1)
+        self.assertEqual(classify.call_count, 6)
+        self.assertTrue(all(call.kwargs["_defer_evidence_rebuild"] for call in classify.call_args_list))
+        self.assertEqual(rebuild.call_count, 1)
+
     def test_site_cross_check_ignores_page_and_folds_case_and_whitespace(self):
         packet = {"rule_based_top_candidate": {"text": "TENANCY MZ01, M38, MELROSE CENTRAL", "page": 20}}
         reply = {"site": {"text": "tenancy   mz01, m38, melrose central", "page": 1}}
@@ -1064,6 +1242,80 @@ class AutonomousTaskTests(unittest.TestCase):
             self.assertEqual(fallback["source"], "ai_fallback")
             self.assertEqual(fallback["status"], "applied_fallback")
             self.assertEqual(fallback["applied_value"]["site_text"], candidate["text"])
+
+    def test_declare_north_accepts_services_plan_page_outside_trace_page_context(self):
+        from backend import reviewer_room_geometry_service
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "ai_input.json").write_text(json.dumps({"drawing_set": {"pages": [
+                {"page": number, "type": "services_or_lighting_plan"} for number in range(20, 26)]}}))
+            project = {"id": "north-test", "review_dir": temporary}
+            web = SimpleNamespace(update_project=lambda _project: None)
+            from backend import calculation_extraction_service, productization
+            with patch.object(calculation_extraction_service, "post", return_value={}), \
+                 patch.object(reviewer_room_geometry_service, "_response", return_value={}), \
+                 patch.object(productization, "record_change_if_fingerprint_changed"):
+                reviewer_room_geometry_service.post(web, project, {"action": "declare_north", "page": 25,
+                    "reviewer": "Archie AI", "plan_up_azimuth_deg": 0.0,
+                    "declaration_source": "ai_determined", "ai_run_id": "north-run"})
+            saved = json.loads((root / "reviewer_room_geometry.json").read_text())
+            self.assertEqual(saved["page_north"]["25"]["plan_up_azimuth_deg"], 0.0)
+
+    def test_p2_applies_agreement_across_floor_rcp_and_services_pages(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            pages = [{"page": number, "type": ("floor_plan" if number < 22 else
+                      "reflected_ceiling_plan" if number < 25 else "services_or_lighting_plan")}
+                     for number in range(20, 26)]
+            (root / "ai_input.json").write_text(json.dumps({"drawing_set": {"pages": pages}}))
+            records = {}
+            for number in range(20, 26):
+                record = autonomous_tasks_service._create_run(root, "P2_north", f"page-{number}",
+                    {"task": "P2_north", "page": number}, "north")
+                record.update({"status": "waiting_for_reply", "validation": {"found": True,
+                    "plan_up_azimuth_deg": 0.0, "description": "arrow up"},
+                    "accuracy": {"auto_apply": True}, "source": "ai_determined"})
+                autonomous_tasks_service._update_record(root, record)
+                records[number] = record
+            current = records[20]
+            applied = []
+            def declare(_web, _project, body, **kwargs):
+                applied.append((body["page"], kwargs.get("_defer_evidence_rebuild")))
+            with patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "post", side_effect=declare), \
+                 patch.object(autonomous_tasks_service.calculation_extraction_service, "post", return_value={}) as rebuild:
+                result = autonomous_tasks_service._apply_p2(object(), {"id": "bb", "review_dir": str(root)},
+                    root, current, {"found": True, "plan_up_azimuth_deg": 0.0, "description": "arrow up"})
+            self.assertEqual(applied, [(number, True) for number in range(20, 26)])
+            self.assertEqual(rebuild.call_count, 1)
+            self.assertEqual(result["status"], "applied")
+            self.assertEqual(result["applied_value"]["plan_up_azimuth_deg"], 0.0)
+
+    def test_p2_rejected_page_does_not_block_other_north_applications(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            pages = [{"page": number, "type": "floor_plan"} for number in range(20, 23)]
+            (root / "ai_input.json").write_text(json.dumps({"drawing_set": {"pages": pages}}))
+            records = {}
+            for number in range(20, 23):
+                record = autonomous_tasks_service._create_run(root, "P2_north", f"page-{number}",
+                    {"task": "P2_north", "page": number}, "north")
+                record.update({"status": "waiting_for_reply", "validation": {"found": True,
+                    "plan_up_azimuth_deg": 0.0}, "accuracy": {"auto_apply": True}})
+                autonomous_tasks_service._update_record(root, record)
+                records[number] = record
+            applied = []
+            def declare(_web, _project, body, **kwargs):
+                if body["page"] == 21:
+                    raise ValueError("page unavailable")
+                applied.append(body["page"])
+            with patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "post", side_effect=declare):
+                result = autonomous_tasks_service._apply_p2(None, {"id": "bb", "review_dir": str(root)}, root,
+                    records[20], {"found": True, "plan_up_azimuth_deg": 0.0})
+            self.assertEqual(applied, [20, 22])
+            self.assertEqual(result["status"], "applied")
+            rejected = autonomous_tasks_service._current_task(root, "P2_north", "page-21")
+            self.assertEqual(rejected["status"], "blocked")
+            self.assertIn("could not be applied", rejected["block_reason"])
 
     def test_north_reply_maps_crop_coordinates_to_page_and_computes_bearing(self):
         packet = {"page": 4, "crops": [{"crop_index": 0, "width_px": 100, "height_px": 100,
@@ -1140,7 +1392,7 @@ class AutonomousTaskTests(unittest.TestCase):
             autonomous_tasks_service._update_record(root, record)
             calls = []
             with patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "_paths", return_value={"artifact": artifact}), \
-                 patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "post", side_effect=lambda _w, _p, body: calls.append(body)):
+                 patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "post", side_effect=lambda _w, _p, body, **_kwargs: calls.append(body)):
                 result = autonomous_tasks_service._answer_roof(web, project, root, {"task": "P5_roof", "target": "shop", "answer": "not_sure"})
                 self.assertEqual(calls[-1]["roof"], "unknown")
                 self.assertEqual(calls[-1]["reviewer"], "Answered by the contractor")
@@ -1165,7 +1417,7 @@ class AutonomousTaskTests(unittest.TestCase):
             autonomous_tasks_service._update_record(root, record)
             calls = []
             with patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "_paths", return_value={"artifact": artifact}), \
-                 patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "post", side_effect=lambda _w, _p, body: calls.append(body)):
+                 patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "post", side_effect=lambda _w, _p, body, **_kwargs: calls.append(body)):
                 autonomous_tasks_service._answer_roof(SimpleNamespace(), project, root, {
                     "task": "P5_roof", "target": "shop", "answer": "floor_tenancy_above"})
             self.assertEqual(len(calls), 2)
@@ -1211,8 +1463,8 @@ class AutonomousTaskTests(unittest.TestCase):
             record={"packet":packet,"run_id":"p3-stand-in","accuracy":{"accuracy":0.5},
                 "quality_label":"AI-determined (below accuracy bar)","stand_in":True}
             calls=[]
-            with patch.object(autonomous_tasks_service,"_current_trace",return_value=trace), \
-                 patch.object(autonomous_tasks_service.reviewer_room_geometry_service,"post",side_effect=lambda _w,_p,body:calls.append(body)):
+            with patch.object(autonomous_tasks_service.reviewer_room_geometry_service,"current_records",return_value=[trace]), \
+                 patch.object(autonomous_tasks_service.reviewer_room_geometry_service,"post",side_effect=lambda _w,_p,body,**_kwargs:calls.append(body)):
                 autonomous_tasks_service._apply_p3(None,{"id":"stand-in-p3"},root,record,
                     {"edges":[{"index":0,"boundary":"adjacent_tenancy","evidence":"quoted note"}]})
             evidence=calls[0]["boundary_evidence"][0]
@@ -1251,16 +1503,25 @@ class AutonomousTaskTests(unittest.TestCase):
             keys.mkdir(parents=True)
             for number in range(10):
                 (keys / f"case{number}.json").write_text(json.dumps({"case_id": f"case{number}",
-                    "tasks": {"P1_site": {"site_must_contain": ["site"]}}}))
+                    "tasks": {"P1_site": {"site_must_contain": ["site"]},
+                              "P5_roof": {"rooms": [{"room": "Shop", "roof": "not_exposed"}]}}}))
             evaluator.ROOT = root
-            summary = {"P1_site": {"correct": 10, "wrong": 0, "missing": 0, "scored": 10}}
-            complete = [{"case_id": f"case{number}", "tasks": {"P1_site": [{"status": "correct"}]}}
+            summary = {"P1_site": {"correct": 10, "wrong": 0, "missing": 0, "scored": 10},
+                       "P5_roof": {"correct": 10, "wrong": 0, "missing": 0, "scored": 10}}
+            complete = [{"case_id": f"case{number}", "tasks": {"P1_site": [{"status": "correct"}],
+                        "P5_roof": [{"status": "correct"}]}}
                         for number in range(10)]
             self.assertTrue(evaluator._recordable_accuracy(complete, summary, .85)["tasks"]["P1_site"]["auto_apply"])
             with self.assertRaisesRegex(ValueError, "case9"):
                 evaluator._recordable_accuracy(complete[:-1], summary, .85)
             with self.assertRaisesRegex(ValueError, "at least 10"):
                 evaluator._recordable_accuracy(complete, {"P1_site": {**summary["P1_site"], "scored": 9}}, .85)
+            record_reports = [*complete[:-1], {"case_id": "case9", "tasks": {"P1_site": [{"status": "correct"}]},
+                              "not_applicable": {"P5_roof": ["Shop"]}}]
+            record_summary = {"P1_site": summary["P1_site"],
+                              "P5_roof": {"correct": 10, "wrong": 0, "missing": 0, "scored": 10}}
+            recorded = evaluator._recordable_accuracy(record_reports, record_summary, .85)
+            self.assertEqual(recorded["tasks"]["P5_roof"]["case_ids"], [f"case{i}" for i in range(9)])
 
     def test_record_cli_refuses_stand_in_marker(self):
         tool_path = Path(__file__).resolve().parents[1] / "tools" / "evaluate_autonomous_tasks.py"

@@ -28,12 +28,18 @@ def _read(path):
 def render_markdown(case_reports, summary, bar):
     lines = ["# Autonomous AI task scorecard", "", f"Auto-apply bar: {bar:.0%} correct per task.", "",
              "| Task | Correct | Wrong | Missing | Accuracy | From fallback | Auto-apply |", "|---|---|---|---|---|---|---|"]
+    if any(report.get("not_applicable", {}).get("P5_roof") for report in case_reports):
+        lines += ["", "P5 coverage excludes cases where every answer-key room was answered by the contractor/reviewer; those cases are not applicable to AI coverage."]
     for task, row in summary.items():
         note = " (small sample)" if row["small_sample"] else ""
         lines.append(f"| {task} | {row['correct']} | {row['wrong']} | {row['missing']} | {row['accuracy']:.0%}{note} | "
                      f"{row['from_fallback']} | {'yes' if row['auto_apply'] else 'no'} |")
     for report in case_reports:
         lines += ["", f"## {report['case_id']}"]
+        for task, rooms in report.get("not_ai_determined", {}).items():
+            lines.append(f"- {task} skipped for contractor/reviewer answer(s): {', '.join(rooms)} (not AI-determined).")
+        for task, rooms in report.get("not_applicable", {}).items():
+            lines.append(f"- {task} not applicable for AI coverage: all answer-key rooms have contractor/reviewer answers ({', '.join(rooms)}).")
         for task, items in report["tasks"].items():
             for item in items:
                 lines.append(f"- {task} · {item['item']}: **{item['status']}**{' (fallback)' if item['fallback'] else ''} — {item['detail']}")
@@ -65,6 +71,10 @@ def _recordable_accuracy(reports, summary, bar):
     for path in sorted((ROOT / "evaluations" / "autonomous").glob("case*.json")):
         key = _read(path)
         for task in key.get("tasks", {}):
+            if task == "P5_roof" and any(report.get("case_id") == key.get("case_id", path.stem)
+                                         and report.get("not_applicable", {}).get("P5_roof")
+                                         for report in reports):
+                continue
             expected.setdefault(task, set()).add(key.get("case_id", path.stem))
 
     scored_cases = {}
@@ -93,6 +103,38 @@ def _recordable_accuracy(reports, summary, bar):
             "bar": bar, "tasks": rows}
 
 
+def evaluate_case_excluding_contractor_answers(key, determinations, private=None):
+    """Score P5 only when its applied roof values were AI-determined."""
+    scoring_key = key
+    ai_determinations = determinations
+    excluded_rooms = []
+    all_contractor_answered = False
+    if key.get("tasks", {}).get("P5_roof") and isinstance(determinations.get("P5_roof"), list):
+        contractor_rows = [row for row in determinations["P5_roof"]
+                           if isinstance(row, dict) and str(row.get("source", "")).casefold() in {"reviewer", "contractor"}]
+        if contractor_rows:
+            contractor_rooms = {" ".join(str(row.get("room", "")).casefold().split()) for row in contractor_rows}
+            ai_roofs = [row for row in determinations["P5_roof"] if row not in contractor_rows]
+            ai_determinations = {**determinations, "P5_roof": ai_roofs}
+            roof_key = key["tasks"]["P5_roof"]
+            expected_rooms = roof_key.get("rooms", [])
+            excluded_rooms = [room.get("room", "unknown room") for room in contractor_rows]
+            remaining_rooms = [room for room in expected_rooms
+                               if " ".join(str(room.get("room", "")).casefold().split()) not in contractor_rooms]
+            all_contractor_answered = bool(expected_rooms) and not remaining_rooms
+            if all_contractor_answered:
+                scoring_key = {**key, "tasks": {task: task_key for task, task_key in key.get("tasks", {}).items()
+                                                 if task != "P5_roof"}}
+            else:
+                scoring_key = {**key, "tasks": {**key["tasks"], "P5_roof": {**roof_key, "rooms": remaining_rooms}}}
+    report = score_case(scoring_key, ai_determinations, private)
+    if excluded_rooms:
+        report["not_ai_determined"] = {"P5_roof": excluded_rooms}
+    if all_contractor_answered:
+        report["not_applicable"] = {"P5_roof": excluded_rooms}
+    return report
+
+
 def main():
     parser = argparse.ArgumentParser(description="Score autonomous AI task results against answer keys.")
     parser.add_argument("pairs", nargs="+", help="answer_key.json=determinations.json")
@@ -119,7 +161,7 @@ def main():
             parser.error(f"Refusing --record: {key.get('case_id')} must use its checked-in canonical answer key.")
         private_path = ROOT / key["private_facts_file"] if key.get("private_facts_file") else None
         private = _read(private_path) if private_path and private_path.exists() else None
-        reports.append(score_case(key, determinations, private))
+        reports.append(evaluate_case_excluding_contractor_answers(key, determinations, private))
     summary = summarise(reports, args.bar)
     if args.record:
         try:
