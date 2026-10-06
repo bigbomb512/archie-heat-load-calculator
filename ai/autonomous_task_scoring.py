@@ -95,16 +95,35 @@ def score_boundaries(key, applied):
     tolerance = key.get("length_tolerance_fraction", 0.03)
     applied = [row for row in applied or [] if isinstance(row, dict)]
     results = []
+    def classified(room):
+        return [row for row in applied if _norm(row.get("room")) == _norm(room)
+                and row.get("boundary") not in (None, "", "unknown")]
+
     for rule in key.get("rooms", []):
-        # Every classified edge of this room must be one of the allowed classes.
-        edges = [row for row in applied if _norm(row.get("room")) == _norm(rule["room"])
-                 and row.get("boundary") not in (None, "", "unknown")]
+        # One item per room (not per edge, whose count depends on how the outline was drawn):
+        # every classified wall of the room must be one of the allowed classes.
+        edges = classified(rule["room"])
+        name = f"{rule['room']} walls"
         if not edges:
-            results.append(_outcome(f"{rule['room']} walls", "missing", "no wall classified"))
-        for row in edges:
-            status = "correct" if row["boundary"] in rule["allowed"] else "wrong"
-            results.append(_outcome(f"{rule['room']} {row.get('edge_length_m')} m edge", status,
-                                    f"{row['boundary']} (allowed: {', '.join(rule['allowed'])})", row.get("source", "")))
+            results.append(_outcome(name, "missing", "no wall classified"))
+            continue
+        bad = [row for row in edges if row["boundary"] not in rule["allowed"]]
+        detail = (f"all {len(edges)} classified walls are {', '.join(rule['allowed'])}" if not bad else
+                  "; ".join(f"{row.get('edge_length_m')} m {row['boundary']}" for row in bad)
+                  + f" (allowed: {', '.join(rule['allowed'])})")
+        results.append(_outcome(name, "wrong" if bad else "correct", detail, edges[0].get("source", "")))
+    for rule in key.get("lengths", []):
+        # A wall split over several room edges or room parts (a shopfront across two outlines)
+        # is scored on the total length the room gives that class.
+        edges = classified(rule["room"])
+        name = f"{rule['room']} {rule['boundary']} length"
+        if not edges:
+            results.append(_outcome(name, "missing", "no wall classified"))
+            continue
+        total = sum(float(row.get("edge_length_m") or 0) for row in edges if row["boundary"] == rule["boundary"])
+        status = "correct" if rule["min_length_m"] <= total <= rule["max_length_m"] else "wrong"
+        results.append(_outcome(name, status, f"{total:.2f} m {rule['boundary']} "
+                                f"(expected {rule['min_length_m']}–{rule['max_length_m']} m)", edges[0].get("source", "")))
     for edge in key.get("edges", []):
         if edge.get("boundary") == PENDING:
             continue

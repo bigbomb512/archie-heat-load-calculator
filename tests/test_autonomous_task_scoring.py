@@ -27,7 +27,8 @@ def perfect():
                      {"label": "Coolroom", "area_m2": 10.7}, {"label": "Freezer", "area_m2": 7.6}],
         "P1_site": {"site_text": "Tenancy MZ01, Central Precinct"},
         "P2_north": [{"page": 20, "plan_up_azimuth_deg": 358}] + [{"page": page, "plan_up_azimuth_deg": 0} for page in range(21, 26)],
-        "P3_boundaries": [{"room": "Shop", "edge_length_m": 11.97, "boundary": "mall"},
+        "P3_boundaries": [{"room": "Shop", "edge_length_m": 4.67, "boundary": "mall"}, {"room": "Shop", "edge_length_m": 3.88, "boundary": "mall"},
+                          {"room": "Shop", "edge_length_m": 2.52, "boundary": "mall"}, {"room": "Shop", "edge_length_m": 23.3, "boundary": "adjacent_tenancy"},
                           {"room": "Bar", "edge_length_m": 7.47, "boundary": "internal"}, {"room": "Bar", "edge_length_m": 4.36, "boundary": "internal"}],
         "P4_openings": [{"page": 26, "glazed_panels": [{"width_mm": 2025, "sill_mm": 1100, "head_mm": 2700}]}],
         "P6_kitchen": [{"type": "rangehood_canopy", "count": 1}, {"type": "oven", "count": 1}, {"type": "refrigerator_upright", "count": 2},
@@ -42,8 +43,15 @@ def main():
     statuses = [item["status"] for items in report["tasks"].values() for item in items]
     check("a run matching the answer key scores every scored item correct", statuses and set(statuses) == {"correct"})
     check("north 2° off still counts within the 5° tolerance, across 0°/360°", report["tasks"]["P2_north"][0]["status"] == "correct")
-    check("the storefront facing the enclosed mall and the internal Bar walls are scored",
-          [item["status"] for item in report["tasks"]["P3_boundaries"]] == ["correct"] * 3)
+    check("the storefront split over three room edges and the internal Bar are scored as one item each",
+          [(item["item"], item["status"]) for item in report["tasks"]["P3_boundaries"]]
+          == [("Bar walls", "correct"), ("Shop mall length", "correct")])
+    shop_rows = [row for row in perfect()["P3_boundaries"] if row["room"] == "Shop"]
+    partial = score_case(KEY, {"P3_boundaries": [row for row in shop_rows if row["edge_length_m"] != 2.52]}, SITE)
+    back_wall = score_case(KEY, {"P3_boundaries": shop_rows + [{"room": "Shop", "edge_length_m": 11.77, "boundary": "mall"}]}, SITE)
+    check("classing only part of the frontage as mall, or the back wall as well, is wrong",
+          [item["status"] for item in partial["tasks"]["P3_boundaries"] if item["item"] == "Shop mall length"] == ["wrong"]
+          and [item["status"] for item in back_wall["tasks"]["P3_boundaries"] if item["item"] == "Shop mall length"] == ["wrong"])
     bar_outside = score_case(KEY, {**perfect(), "P3_boundaries": [{"room": "Bar", "edge_length_m": 7.47, "boundary": "adjacent_tenancy"}]}, SITE)
     check("a Bar wall classed as anything but internal is wrong",
           [item["status"] for item in bar_outside["tasks"]["P3_boundaries"] if item["item"].startswith("Bar")] == ["wrong"])
@@ -53,6 +61,8 @@ def main():
     wrong = score_case(KEY, {**perfect(), "P3_boundaries": [{"room": "Shop", "edge_length_m": 11.9, "boundary": "external"}]}, SITE)
     check("calling the mall storefront external is wrong",
           [item["status"] for item in wrong["tasks"]["P3_boundaries"] if item["item"].startswith("Shop")] == ["wrong"])
+    check("a classified room with no wall in the keyed class scores wrong, not missing",
+          wrong["tasks"]["P3_boundaries"][-1]["detail"].startswith("0.00 m mall"))
     summary = summarise([report])
     check("a fallback answer is counted separately", summary["P5_roof"]["from_fallback"] == 1)
     check("every task in a perfect run may auto-apply", all(row["auto_apply"] for row in summary.values()))
@@ -94,8 +104,12 @@ def main():
           null_export[0]["status"] == "correct" and null_export[0]["detail"] == "no north arrow, none applied")
     walls = score_case(case_b, {"P3_boundaries": [{"room": "Service Counter", "edge_length_m": 3.1, "boundary": "mall"},
                                                   {"room": "Service Counter", "edge_length_m": 2.0, "boundary": "external"}]})["tasks"]["P3_boundaries"]
-    check("room-wide wall rules: mall is right, external is wrong inside the terminal, an unclassified room is missing",
-          [item["status"] for item in walls] == ["missing", "correct", "wrong"])
+    check("room-wide wall rules: an unclassified room is missing, and a room with any wall outside its allowed classes (external inside the terminal) is wrong",
+          [item["status"] for item in walls] == ["missing", "wrong"])
+    counter_ok = score_case(case_b, {"P3_boundaries": [{"room": "Service Counter", "edge_length_m": 3.1, "boundary": "mall"},
+                                                       {"room": "Service Counter", "edge_length_m": 2.0, "boundary": "internal"}]})
+    check("a room-wide rule is one item per room, however many edges the outline has",
+          [item["status"] for item in counter_ok["tasks"]["P3_boundaries"]] == ["missing", "correct"])
     kitchen = score_case(KEY, {"P6_kitchen": [{"type": "rangehood_canopy", "count": 1}, {"type": "oven", "count": 2},
                                               {"type": "refrigerator_underbench", "count": 4}, {"type": "fryer", "count": 2},
                                               {"type": "dishwasher", "count": 1}]})["tasks"]["P6_kitchen"]

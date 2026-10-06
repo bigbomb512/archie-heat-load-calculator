@@ -67,14 +67,6 @@
     },
     "P3_boundaries": {
       "length_tolerance_fraction": 0.03,
-      "edges": [
-        {
-          "room": "Shop",
-          "edge_length_m": 11.97,
-          "boundary": "mall",
-          "evidence": "Storefront line; matches the 11,900 mm storefront elevation (p. 26). Confirmed by the project contact 2026-10-05: it faces an enclosed mall/walkway, not outdoors."
-        }
-      ],
       "rooms": [
         {
           "room": "Bar",
@@ -82,6 +74,15 @@
             "internal"
           ],
           "evidence": "The Bar is the walled central island (confirmed by the project contact 2026-10-05); on the dimension plan (p. 20) it is surrounded by the dining area and the kitchen, so every Bar wall is internal."
+        }
+      ],
+      "lengths": [
+        {
+          "room": "Shop",
+          "boundary": "mall",
+          "min_length_m": 10.8,
+          "max_length_m": 12.0,
+          "evidence": "Storefront line: 11,825 mm overall on the dimension plan (p. 20) and 11,900 mm on the storefront elevation (p. 26). Confirmed by the project contact 2026-10-05: it faces an enclosed mall/walkway, not outdoors. Room outlines stop at the inside faces of the side walls and of the partition between the dining area and the buffet stations, so the Shop's mall edges total less than the printed width (AI outline 2026-10-06: 4.67 + 3.88 + 2.52 = 11.07 m). Window 10.8–12.0 m: classing only part of the frontage, or the 11.8 m back wall as well, falls outside it."
         }
       ]
     },
