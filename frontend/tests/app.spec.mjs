@@ -1272,7 +1272,7 @@ test("analysis reaches results without browser errors", async ({ page }) => {
   await expect(page.locator("#btnAnalyse")).toBeVisible();
   await page.locator("#btnAnalyse").click();
 
-  await expect(page.locator("#summaryTitle")).toHaveText("Ready for ChatGPT packet");
+  await expect(page.locator("#summaryTitle")).toHaveText("Ready for the next step.");
   await expect(page.locator("#btnConfirm, #btnConfirmTop")).toHaveCount(0);
   await expect(page.locator("#btnContinue")).toBeEnabled();
   expect(errors).toEqual([]);
@@ -1286,7 +1286,7 @@ test("saved project opens into results", async ({ page }) => {
   await page.goto("/");
   await page.locator("[data-open='demo-project']").click();
 
-  await expect(page.locator("#summaryTitle")).toHaveText("Ready for ChatGPT packet");
+  await expect(page.locator("#summaryTitle")).toHaveText("Ready for the next step.");
   await expect(page.locator("#btnContinue")).toBeEnabled();
   expect(errors).toEqual([]);
 });
@@ -1409,6 +1409,7 @@ test('room-input panels show stale state and accept overrides after re-resolutio
   await page.evaluate(() => {
     setContractorWorkflowStage('calculate', {focus: false});
     document.querySelector('details.workflow-advanced-tools').open = true;
+    document.querySelector('#preliminaryTool').open = true;
     loadAiPreliminary = async () => {};
   });
   await expect(page.locator('#internalGainsResolutionStatus')).toContainText('Resolve internal gains');
