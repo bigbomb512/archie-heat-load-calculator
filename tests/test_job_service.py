@@ -161,6 +161,16 @@ class JobServiceTests(unittest.TestCase):
         self.assertEqual(second["tabs"]["results"]["state"], "check")
         self.assertEqual(second["room_heights"]["room-use:unassigned-level:kitchen"], {"ceiling_height_mm": 3200, "origin": "edited"})
 
+    def test_the_saved_page_selection_is_returned_so_unticked_pages_stay_unticked(self):
+        from backend import web_app
+        self.assertIsNone(web_app.selected_pages(self.project))
+        (self.root / "reviewed_decisions.json").write_text(json.dumps({"pages": [
+            {"page": 21, "decision": "Confirm as detected"}, {"page": 20, "decision": "Confirm as floor plan"},
+            {"page": "x"}, "bad", {"page": 20}]}))
+        self.assertEqual(web_app.selected_pages(self.project), [20, 21])
+        (self.root / "reviewed_decisions.json").write_text("{broken")
+        self.assertIsNone(web_app.selected_pages(self.project))
+
     def test_status_before_the_drawings_are_prepared(self):
         project = {**self.project, "reasoning_packet": ""}
         from backend import autonomous_tasks_service

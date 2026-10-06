@@ -3,11 +3,12 @@
 // A left rail of tabs (Project, Drawings, Rooms, Results) with a status per tab,
 // one focused page per tab, and Calculate always visible. Each tab loads only
 // its own data; the rail comes from one call (/api/job-status). The engineer
-// screen stays available as "Engineer review" (or with ?engineer=1 / ?operator=1).
+// screen stays available as "Engineer review" (or with ?engineer=1). ?operator=1 opens the
+// Drawings tab with the AI step (one check at a time) for the Toki team.
 // Addresses: #/job/<project id>/<tab>.
 (() => {
   const params = new URLSearchParams(location.search);
-  const enabled = params.get("engineer") !== "1" && params.get("operator") !== "1";
+  const enabled = params.get("engineer") !== "1";
   const root = document.getElementById("vJob");
   const body = document.getElementById("jobBody");
   const rail = document.getElementById("wsTabs");
@@ -105,12 +106,14 @@
     body.innerHTML = "";
     const tab = state.tab;
     const render = {project: renderProject, drawings: renderDrawings, rooms: renderRooms, results: renderResults}[tab] || renderProject;
-    render().catch(error => {
-      if (state.tab === tab) body.innerHTML = `<div class="ws-card ws-error" role="alert"><h3>Something went wrong</h3><p>${esc(error.message)}</p>
-        <button class="btn ghost" type="button" data-ws-retry>Try again</button></div>`;
-      body.querySelector("[data-ws-retry]")?.addEventListener("click", renderTab);
-    });
+    render().catch(error => { if (state.tab === tab) showTabError(error); });
     document.querySelector(".work")?.scrollTo?.(0, 0);
+  }
+
+  function showTabError(error) {
+    body.innerHTML = `<div class="ws-card ws-error" role="alert"><h3>Something went wrong</h3><p>${esc(error.message)}</p>
+      <button class="btn ghost" type="button" data-ws-retry>Try again</button></div>`;
+    body.querySelector("[data-ws-retry]")?.addEventListener("click", renderTab);
   }
 
   // ------------------------------------------------------------------ Project
@@ -158,17 +161,31 @@
   }
 
   // ------------------------------------------------------------------ Drawings
+  // Preparing the pages runs once per job at a time; a re-render (tab switch, refresh) waits for the same run.
+  function preparePages(projectId, title, rebuildChecks) {
+    if (state.preparing?.projectId !== projectId) {
+      clearTimeout(state.poll);
+      const promise = (async () => {
+        await confirmSelection();
+        if (requiredElement("btnContinue").textContent !== "Drawings confirmed") {
+          throw new Error("The drawing pages could not be prepared. Engineer review shows which pages are included.");
+        }
+        DATA.has_reasoning_packet = true;
+        if (state.analysis) state.analysis.has_reasoning_packet = true;
+        if (rebuildChecks) await sendJson("/api/autonomous-tasks", {project_id: projectId, action: "run_all"});
+      })().finally(() => { if (state.preparing?.promise === promise) state.preparing = null; });
+      state.preparing = {projectId, title, promise};
+    }
+    return state.preparing;
+  }
+
   async function renderDrawings() {
     const projectId = state.projectId;
-    if (!DATA?.has_reasoning_packet) {
-      progress("Preparing your drawing pages", "Finding the floor plans and getting the pages ready. This takes about three minutes; you can stay on this page.");
-      await confirmSelection();
-      if (!live(projectId)) return;
-      if (requiredElement("btnContinue").textContent !== "Drawings confirmed") {
-        throw new Error("The drawing pages could not be prepared. Engineer review shows which pages are included.");
-      }
-      DATA.has_reasoning_packet = true;
-      if (state.analysis) state.analysis.has_reasoning_packet = true;
+    if (state.preparing?.projectId === projectId || !DATA?.has_reasoning_packet) {
+      const run = state.preparing?.projectId === projectId ? state.preparing : preparePages(projectId, "Preparing your drawing pages", false);
+      progress(run.title, "Getting the drawing pages ready. This can take five to seven minutes on a large set; keep this page open until it finishes.");
+      await run.promise;
+      if (!live(projectId, "drawings")) return;
     }
     let status = await loadStatus();
     if (!live(projectId, "drawings")) return;
@@ -178,24 +195,201 @@
       status = await loadStatus();
       if (!live(projectId, "drawings")) return;
     }
+    const tasks = operatorMode() ? (await getJson(`/api/autonomous-tasks?project_id=${encodeURIComponent(projectId)}`)).tasks || [] : null;
+    if (!live(projectId, "drawings")) return;
     const checks = status.checks || {total: 0, waiting: 0, blocked: 0};
-    const done = checks.total - checks.waiting;
+    const done = checks.total - checks.waiting - checks.blocked;
     const pct = checks.total ? Math.round((done / checks.total) * 100) : 0;
-    const pages = state.analysis?.pages_analysed;
-    const used = state.analysis?.selected_count ?? state.analysis?.relevant_count;
+    const blockedNote = checks.blocked ? ` ${checks.blocked} more start${checks.blocked === 1 ? "s" : ""} when earlier checks are answered.` : "";
     body.innerHTML = `<div class="ws-card" data-ws-drawings>
       <h2>Drawings</h2>
-      <p class="ws-hint">${pages ? `${esc(used ?? "")} of ${esc(pages)} pages are used for the calculation (floor plans, ceiling plans and elevations).` : ""}</p>
       <h3>Drawing check</h3>
-      <div class="ws-meter" role="progressbar" aria-valuemin="0" aria-valuemax="${checks.total}" aria-valuenow="${done}"><span style="width:${pct}%"></span></div>
+      <div class="ws-meter" role="progressbar" aria-label="Drawing check" aria-valuemin="0" aria-valuemax="${checks.total}" aria-valuenow="${done}"><span style="width:${pct}%"></span></div>
       <p data-ws-checks><b>${done} of ${checks.total} checks done.</b>
-        ${checks.waiting ? "Toki is reading rooms, walls, windows and equipment from the drawings. For now the Toki team completes this step; this page updates by itself."
+        ${checks.waiting ? (operatorMode() ? `Answer them below, one at a time.${blockedNote}`
+            : `Toki is reading rooms, walls, windows and equipment from the drawings. For now the Toki team completes this step; this page updates by itself.${blockedNote}`)
           : checks.blocked ? `${checks.blocked} check${checks.blocked === 1 ? "" : "s"} couldn't run; Engineer review has the details.` : "All checks are done."}</p>
-      ${checks.waiting ? `<p class="ws-fine">You don't have to wait: if you know the room areas, type them on the Rooms tab.
-        <a href="/?operator=1#/job/${encodeURIComponent(projectId)}" target="_blank" rel="noopener" data-ws-operator>Toki team: answer the checks</a></p>` : ""}
+      ${checks.waiting && !operatorMode() ? `<p class="ws-fine">You don't have to wait: if you know the room areas, type them on the Rooms tab.
+        <button class="link-button" type="button" data-ws-operator-on>Toki team: answer the checks here</button></p>` : ""}
+      ${tasks ? operatorMarkup(tasks) : ""}
+      ${pagesMarkup()}
       ${nextButton("drawings")}</div>`;
     wireCommon();
-    if (checks.waiting) state.poll = setTimeout(() => { if (live(projectId, "drawings")) renderDrawings().catch(() => {}); }, POLL_MS);
+    wirePages(projectId);
+    body.querySelector("[data-ws-operator-on]")?.addEventListener("click", () => { setOperatorMode(true); renderDrawings().catch(showTabError); });
+    if (tasks) wireOperator(projectId, tasks);
+    // The contractor's view refreshes itself; the operator's doesn't, so a half-pasted reply is never wiped.
+    if (checks.waiting && !operatorMode()) state.poll = setTimeout(() => { if (live(projectId, "drawings")) renderDrawings().catch(() => {}); }, POLL_MS);
+  }
+
+  // ------------------------------------------------------------------ Drawings: pages used
+  function pagesMarkup() {
+    const sheets = DATA?.sheets || [];
+    if (!sheets.length || typeof PICK === "undefined") return "";
+    const main = sheets.filter(sheet => sheet.relevant && PICK.has(sheet.page));
+    const shown = state.showAllPages ? sheets : sheets.filter(sheet => PICK.has(sheet.page) || state.pagePick?.has(sheet.page));
+    const picked = state.pagePick || PICK;
+    const changed = state.pagePick && (state.pagePick.size !== PICK.size || [...state.pagePick].some(page => !PICK.has(page)));
+    const title = sheet => (sheet.title && !/^including amendments/i.test(sheet.title) ? sheet.title : String(sheet.type || "Drawing").replaceAll("_", " "));
+    return `<h3>Pages used</h3>
+      <p class="ws-hint">${PICK.size} of ${sheets.length} pages are used. The main plans (${main.map(sheet => sheet.page).join(", ") || "none"}) are measured; the rest are read for reference. Untick a page that isn't part of this job.</p>
+      <ul class="ws-pages" data-ws-pages>${shown.map(sheet => `<li class="${sheet.relevant ? "is-main" : ""}">
+        <label><input type="checkbox" data-ws-page="${esc(sheet.page)}" ${picked.has(sheet.page) ? "checked" : ""}>
+          ${sheet.thumbnail ? `<img src="${esc(sheet.thumbnail)}" alt="" loading="lazy">` : `<span class="ws-page-blank" aria-hidden="true"></span>`}
+          <span><b>Page ${esc(sheet.page)}</b>${sheet.relevant ? " · main plan" : ""}<small>${esc(title(sheet))}</small></span></label></li>`).join("")}</ul>
+      <div class="ws-actions">
+        <button class="link-button" type="button" data-ws-all-pages>${state.showAllPages ? "Show only the pages used" : `Show all ${sheets.length} pages`}</button>
+        ${changed ? `<button class="btn key" type="button" data-ws-use-pages>Use these pages</button><span class="ws-fine">Takes five to seven minutes; the drawing check is rebuilt for the new pages, and answered checks are kept where the pages didn't change.</span>` : ""}
+        <span class="ws-status" role="status" data-ws-pages-status></span>
+      </div>`;
+  }
+
+  function wirePages(projectId) {
+    body.querySelector("[data-ws-all-pages]")?.addEventListener("click", () => { state.showAllPages = !state.showAllPages; renderDrawings().catch(showTabError); });
+    body.querySelectorAll("[data-ws-page]").forEach(box => box.addEventListener("change", () => {
+      state.pagePick = state.pagePick || new Set(PICK);
+      const page = Number(box.dataset.wsPage);
+      box.checked ? state.pagePick.add(page) : state.pagePick.delete(page);
+      renderDrawings().catch(showTabError);
+    }));
+    body.querySelector("[data-ws-use-pages]")?.addEventListener("click", async () => {
+      if (!state.pagePick?.size) { body.querySelector("[data-ws-pages-status]").textContent = "Keep at least one page."; return; }
+      PICK = new Set(state.pagePick);
+      state.pagePick = null;
+      preparePages(projectId, "Updating the drawing pages", true);
+      await renderDrawings();
+    });
+  }
+
+  // ------------------------------------------------------------------ Drawings: the AI step (Toki team)
+  // One check at a time: copy the prompt, attach the images, paste ChatGPT's reply, check and apply.
+  const TASK_ORDER = ["P1_site", "S3_title_transcription", "P2_north", "P0_dimensions", "P0_wall_styles", "P0_room_names",
+                      "P0_room_outlines", "S1_printed_areas", "P3_boundaries", "P4_openings", "P5_roof", "P6_kitchen"];
+  const TASK_NAME = {
+    P1_site: "Find the site address", S3_title_transcription: "Read the title block", P2_north: "Read the north arrow",
+    P0_dimensions: "Read a printed dimension (sets the scale)", P0_wall_styles: "Pick out the wall line styles",
+    P0_room_names: "Name the rooms", P0_room_outlines: "Outline the rooms that have no walls drawn",
+    S1_printed_areas: "Read the printed room areas", P3_boundaries: "Say what each wall faces",
+    P4_openings: "Measure the shopfront glazing", P5_roof: "What's above the rooms", P6_kitchen: "List the kitchen equipment",
+  };
+  const operatorMode = () => params.get("operator") === "1" || storage.get("toki.workspace.operator") === "1";
+  function setOperatorMode(on) { storage.set("toki.workspace.operator", on ? "1" : ""); }
+  const taskKey = row => `${row.task}:${row.target}`;
+  function taskTitle(row) {
+    const room = row.packet?.room?.room_label || row.room_label;
+    const page = String(row.target).match(/^page-(\d+)(?:-dimension-(\d+))?/);
+    const where = room ? room : page ? `page ${page[1]}${page[2] ? `, dimension ${page[2]}` : ""}` : row.target === "project" ? "" : String(row.target).replaceAll("-", " ");
+    return `${TASK_NAME[row.task] || row.task}${where ? ` — ${where}` : ""}`;
+  }
+  const minutes = seconds => seconds >= 90 ? `${Math.round(seconds / 60)} min` : `${Math.round(seconds)} s`;
+  const timeOf = row => (row.reply_attempts || []).reduce((sum, attempt) => sum + (Number(attempt.operator_seconds) || 0), 0);
+  function sortTasks(tasks) {
+    const rank = row => (TASK_ORDER.indexOf(row.task) + 1 || 99);
+    return [...tasks].sort((a, b) => rank(a) - rank(b) || String(a.target).localeCompare(String(b.target), undefined, {numeric: true}));
+  }
+  function currentTask(tasks) {
+    const waiting = sortTasks(tasks).filter(row => row.status === "waiting_for_reply");
+    state.opSkip = state.opSkip || new Set();
+    let next = waiting.find(row => !state.opSkip.has(taskKey(row)));
+    if (!next && waiting.length) { state.opSkip.clear(); next = waiting[0]; }
+    return next || null;
+  }
+
+  function operatorMarkup(tasks) {
+    const row = currentTask(tasks);
+    const waiting = tasks.filter(item => item.status === "waiting_for_reply");
+    const blocked = sortTasks(tasks).filter(item => item.status === "blocked");
+    const asked = tasks.filter(item => item.status === "needs_contractor_answer");
+    const finished = sortTasks(tasks).filter(item => !["waiting_for_reply", "blocked", "needs_contractor_answer"].includes(item.status));
+    const timed = tasks.filter(item => timeOf(item) > 0);
+    const total = timed.reduce((sum, item) => sum + timeOf(item), 0);
+    if (row && !state.opShownAt?.[taskKey(row)]) state.opShownAt = {...(state.opShownAt || {}), [taskKey(row)]: Date.now()};
+    const images = row?.images || [];
+    const error = row?.validation?.valid === false ? (row.validation.error || row.block_reason) : row?.block_reason;
+    const card = row ? `<section class="ws-op-task" data-ws-op-task data-task="${esc(row.task)}" data-target="${esc(row.target)}" aria-labelledby="wsOpTitle">
+        <p class="ws-op-count">Check ${sortTasks(waiting).findIndex(item => taskKey(item) === taskKey(row)) + 1} of ${waiting.length} to answer</p>
+        <h3 id="wsOpTitle">${esc(taskTitle(row))}</h3>
+        ${row.accuracy?.accuracy == null ? "" : `<p class="ws-fine">This check scored ${(row.accuracy.accuracy * 100).toFixed(0)}% on the answer keys (${esc(row.accuracy.scored)} cases).</p>`}
+        <ol class="ws-steps">
+          <li><b>Copy the prompt</b> and paste it into a new ChatGPT chat.
+            <div class="ws-actions"><button class="btn ghost" type="button" data-ws-copy-prompt>Copy prompt</button>
+            <details><summary>Show the prompt</summary><pre class="ws-prompt" data-ws-prompt>${esc(row.prompt)}</pre></details></div></li>
+          ${images.length ? `<li><b>Attach ${images.length === 1 ? "the image" : `all ${images.length} images`}</b> to the same message (copy, download, or drag them in).
+            <ul class="ws-op-images">${images.map((image, index) => `<li><img src="${esc(image.url)}" alt="Image ${index + 1} for this check" data-ws-op-image>
+              <span><button class="link-button" type="button" data-ws-copy-image="${esc(image.url)}">Copy</button> ·
+              <a href="${esc(image.url)}" download="${esc(`${row.task}-${row.target}-${image.name}`)}">Download</a></span></li>`).join("")}</ul></li>` : ""}
+          <li><b>Paste ChatGPT's reply</b> here, then press Check and apply.
+            <textarea class="ws-reply" data-ws-reply rows="7" spellcheck="false" aria-label="ChatGPT's reply">${esc(state.opDraft?.[taskKey(row)] || "")}</textarea></li>
+        </ol>
+        <div class="ws-op-meta">
+          <label>Model used <input data-ws-model value="${esc(storage.get("toki.workspace.model"))}" maxlength="160" placeholder="e.g. GPT-5 Thinking"></label>
+          <label class="ws-check"><input type="checkbox" data-ws-stand-in> This reply is a test stand-in, not a real model reply</label>
+        </div>
+        ${error ? `<p class="ws-banner is-warn" role="alert" data-ws-op-error>${esc(error)}</p>` : ""}
+        <div class="ws-actions"><button class="btn key" type="button" data-ws-apply>Check and apply</button>
+          ${waiting.length > 1 ? `<button class="btn ghost" type="button" data-ws-skip>Skip for now</button>` : ""}
+          <span class="ws-status" role="status" data-ws-op-status>${esc(state.opMessage || "")}</span></div>
+      </section>` : `<p class="ws-banner" data-ws-op-done>${esc(state.opMessage || "")} No checks are waiting for a reply.</p>`;
+    state.opMessage = "";
+    return `<div class="ws-op" data-ws-operator-panel>
+      <div class="ws-op-head"><h3>AI step <small>(Toki team)</small></h3>
+        <span class="ws-fine" data-ws-op-time>${timed.length ? `${minutes(total)} spent on ${timed.length} check${timed.length === 1 ? "" : "s"} · about ${minutes(total / timed.length)} each` : ""}</span>
+        ${params.get("operator") === "1" ? "" : `<button class="link-button" type="button" data-ws-operator-off>Hide the AI step</button>`}</div>
+      ${card}
+      ${blocked.length ? `<h4>Waiting on earlier checks</h4><ul class="ws-list ws-bullets" data-ws-op-blocked>${blocked.map(item => `<li>${esc(taskTitle(item))} — ${esc(item.block_reason || "waiting")}</li>`).join("")}</ul>` : ""}
+      ${asked.length ? `<p class="ws-fine" data-ws-op-asked>${asked.length} roof question${asked.length === 1 ? " is" : "s are"} answered by the contractor on the Project tab ("What's above the tenancy").</p>` : ""}
+      ${finished.length ? `<details class="ws-op-finished"><summary>Done (${finished.length})</summary><ul class="ws-list" data-ws-op-finished>${finished.map(item => `<li><span>${esc(taskTitle(item))}</span>
+        <span class="ws-fine">${esc(item.stand_in ? "Stand-in (test)" : item.quality_label || item.status.replaceAll("_", " "))}${timeOf(item) ? ` · ${minutes(timeOf(item))}` : ""}</span></li>`).join("")}</ul></details>` : ""}
+    </div>`;
+  }
+
+  function wireOperator(projectId, tasks) {
+    const card = body.querySelector("[data-ws-op-task]");
+    body.querySelector("[data-ws-operator-off]")?.addEventListener("click", () => { setOperatorMode(false); renderDrawings().catch(showTabError); });
+    if (!card) return;
+    const key = `${card.dataset.task}:${card.dataset.target}`;
+    const row = tasks.find(item => taskKey(item) === key);
+    const line = card.querySelector("[data-ws-op-status]");
+    const reply = card.querySelector("[data-ws-reply]");
+    reply.addEventListener("input", () => { state.opDraft = {...(state.opDraft || {}), [key]: reply.value}; });
+    card.querySelector("[data-ws-model]").addEventListener("change", event => storage.set("toki.workspace.model", event.target.value.trim()));
+    card.querySelector("[data-ws-copy-prompt]").addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(row.prompt || ""); line.textContent = "Prompt copied."; }
+      catch (_) { card.querySelector("details").open = true; line.textContent = "The browser blocked copying: select the prompt text and copy it."; }
+    });
+    card.querySelectorAll("[data-ws-copy-image]").forEach(button => button.addEventListener("click", async () => {
+      try {
+        const blob = await (await fetch(button.dataset.wsCopyImage)).blob();
+        await navigator.clipboard.write([new ClipboardItem({[blob.type || "image/png"]: blob})]);
+        line.textContent = "Image copied: paste it into the ChatGPT message.";
+      } catch (_) { line.textContent = "The browser blocked copying the image: use Download, or drag the image into ChatGPT."; }
+    }));
+    card.querySelector("[data-ws-skip]")?.addEventListener("click", () => {
+      state.opSkip.add(key);
+      renderDrawings().catch(showTabError);
+    });
+    card.querySelector("[data-ws-apply]").addEventListener("click", async event => {
+      const text = reply.value.trim();
+      if (!text) { line.textContent = "Paste ChatGPT's reply first."; reply.focus(); return; }
+      event.target.disabled = true;
+      line.textContent = "Checking the reply…";
+      const seconds = Math.round((Date.now() - (state.opShownAt?.[key] || Date.now())) / 1000);
+      try {
+        const data = await sendJson("/api/autonomous-tasks", {project_id: projectId, action: "validate_apply", task: row.task, target: row.target,
+          reply: text, model_note: card.querySelector("[data-ws-model]").value.trim(), stand_in: card.querySelector("[data-ws-stand-in]").checked,
+          operator_seconds: seconds});
+        const after = (data.tasks || []).find(item => taskKey(item) === key);
+        if (after?.validation?.valid === false || after?.status === "waiting_for_reply") {
+          state.opMessage = "The reply didn't pass the check; see the reason, fix or re-ask, and paste again.";
+        } else {
+          delete state.opDraft?.[key];
+          delete state.opShownAt?.[key];
+          state.opMessage = `Applied: ${taskTitle(row)}${after?.stand_in ? " (stand-in, test only)" : ""}.`;
+        }
+        await loadStatus();
+        if (live(projectId, "drawings")) await renderDrawings();
+      } catch (error) { line.textContent = `Could not apply the reply: ${error.message}`; event.target.disabled = false; }
+    });
   }
 
   // ------------------------------------------------------------------ Rooms
@@ -537,6 +731,7 @@
 
   function defaultTab() {
     const tabs = state.status?.tabs || {};
+    if (params.get("operator") === "1") return "drawings";
     if (tabs.results?.state === "done") return "results";
     return TABS.find(tab => ["needed", "working"].includes(tabs[tab.id]?.state) && tab.id !== "project")?.id || "rooms";
   }
@@ -588,6 +783,9 @@
     if (TABS.some(row => row.id === route.tab) && route.tab !== state.tab) { state.tab = route.tab; renderTab(); }
     else if (route.tab === state.tab && !body.firstElementChild) renderTab();
   });
+
+  // Leaving while pages are prepared would stop the browser from finishing the preparation.
+  window.addEventListener("beforeunload", event => { if (state.preparing) { event.preventDefault(); event.returnValue = ""; } });
 
   document.getElementById("wsCalculate")?.addEventListener("click", calculate);
   document.getElementById("wsSectionSelect")?.addEventListener("change", event => go(event.target.value));

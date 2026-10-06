@@ -1597,6 +1597,21 @@ class AutonomousTaskTests(unittest.TestCase):
                 **north["1"], "ai_run_id": ""}}})
 
 
+    def test_operator_time_is_stored_with_the_reply_attempt_and_bounded(self):
+        from backend import autonomous_tasks_service as service
+        self.assertEqual(service._operator_seconds(95), 95.0)
+        for bad in (-1, 90000, "95", True, None):
+            self.assertIsNone(service._operator_seconds(bad))
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            record = {"task": "P1_site", "target": "project", "run_id": "r1"}
+            (root / "ai_tasks" / "P1_site" / "project" / "runs" / "r1").mkdir(parents=True)
+            path = service._archive_reply(root, record, "{}", "GPT", 61.5)
+            self.assertEqual(json.loads(path.read_text())["operator_seconds"], 61.5)
+            self.assertEqual(record["reply_attempts"][-1]["operator_seconds"], 61.5)
+            service._archive_reply(root, record, "{}", "GPT")
+            self.assertNotIn("operator_seconds", record["reply_attempts"][-1])
+
     def test_labels_view_reports_progress_over_unfinished_checks_without_prompts(self):
         records = [{"task": "P0_dimensions", "target": "d1", "status": "applied", "applied_value": {"value_mm": 11825},
                     "prompt": "secret prompt"},
@@ -1718,6 +1733,25 @@ class AutonomousTaskTests(unittest.TestCase):
             self.assertEqual(len(builds), 1)
             self.assertEqual(cold[0][0:4], warm[0][0:4])
             self.assertEqual(cold[0][4], warm[0][4])
+
+    def test_raster_detection_uses_actual_cached_render_scale(self):
+        from PIL import Image
+        context = {"image": Image.new("RGB", (401, 300), "white"), "image_scale": 1.0,
+                   "pdf_page_width": 400.0, "page_bbox": (0, 0, 400, 300), "pdf_images": [],
+                   "viewport": (0, 0, 401, 300), "objects": [], "declared_mm_per_px": None}
+        observed = []
+
+        def classify(_page, _viewport, scale, mm_per_px, objects=None):
+            observed.append((scale, mm_per_px, objects))
+            return True
+
+        with patch.object(room_outline, "page_is_raster", side_effect=classify):
+            self.assertTrue(autonomous_tasks_service._page_is_raster_for_scan(Path("."), 1, context))
+            self.assertTrue(autonomous_tasks_service._p0_is_raster(Path("."), 1, context, {"mm_per_px": 4.0}))
+        actual_scale = 401 / 400
+        self.assertEqual([row[0] for row in observed], [actual_scale, actual_scale])
+        self.assertEqual(observed[0][1], 25.4 * 100 / (72 * actual_scale))
+        self.assertEqual(observed[1][1], 4.0)
 
 if __name__ == "__main__":
     unittest.main()

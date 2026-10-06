@@ -217,6 +217,35 @@ Nothing is deleted; it is just out of the contractor's way.
 - **Speed:** Calculate takes about 80 s; the first resolver run takes up to about 3 min; adding a room takes about 15 s.
 - **Typed-area rooms have no outline**, so their walls and roof are not assessed (envelope 0 kW). On that job a typed height changes nothing, because only the envelope uses height. The Results "not included" list says so; tracing (phase 3) fixes it.
 
+### Phase 2 status (2026-10-06)
+**Built (Drawings tab):**
+- **Drawing check progress.** Checks that wait on earlier checks are no longer counted as done.
+- **Pages used:** thumbnails with tickboxes, main plans marked, "Show all pages", and "Use these pages". That last button prepares the pages again and rebuilds the checks.
+  - The saved page selection is now returned as `selected_pages` and restored on reload, on the engineer screen too. Before this, unticked pages came back after a reload.
+  - A re-render or tab switch during preparation waits for the same run, and leaving the page asks for confirmation.
+- **AI step for the Toki team.** It opens with `?operator=1`, or with "Toki team: answer the checks here", which is remembered per browser. It shows one check at a time, in dependency order:
+  - copy the prompt;
+  - copy, download or drag the images;
+  - paste the reply;
+  - press Check and apply.
+
+  A rejected reply stays in the box with the reason. "Skip for now" moves on. Below the current check are lists of blocked checks, roof questions left to the contractor, and finished checks.
+- **Timing.** The time per check is sent as `operator_seconds` with each reply, stored with the reply attempt, and summed in the panel ("about N min each").
+
+**Verified:**
+- `npm test` passes (Python suites plus 81 Playwright tests, 16 of them in `workspace.spec.mjs`).
+- Real-data browser check on the Butcher Buffet walkthrough copy:
+  - a rejected reply, then an accepted stand-in reply (marked as a test) for the site check;
+  - the north-arrow check advanced with its 3 images (1024 × 724);
+  - Skip;
+  - unticking and re-ticking a page end to end: 391 s, and the answered site check was kept;
+  - phone width (375 px) with the prompt open.
+
+**Open items:**
+- **Time per check with real ChatGPT replies is not measured yet.** The timing is built in, but only stand-in replies have been run. The next real Butcher Buffet run through this tab gives the numbers.
+- **Preparing pages is driven from the browser** (save decisions, then rebuild the prepared drawings). If the page is closed mid-way, the job is left half-prepared until the Drawings tab is opened again, which then prepares it automatically. A single server-side action would remove this.
+- **Speed:** a page change takes about 6–7 min on the 38-page set.
+
 ## Testing
 - **Playwright, per tab:** loads its data, edits round-trip, status badges change.
 - **Plus:**

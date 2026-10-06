@@ -280,7 +280,7 @@ def _p0_is_raster(root, page_number, context, calibration):
     if "page_bbox" not in context or "pdf_images" not in context:
         raise ValueError("The cached page context is incomplete; rebuild the page context before outlining rooms.")
     page = SimpleNamespace(bbox=context["page_bbox"], images=context["pdf_images"])
-    image_scale = float(context["image_scale"])
+    image_scale = context["image"].width / float(context["pdf_page_width"])
     mm_per_px = context.get("declared_mm_per_px") or calibration["mm_per_px"]
     return room_outline.page_is_raster(page, context["viewport"], image_scale, mm_per_px,
                                        objects=context["objects"])
@@ -456,6 +456,7 @@ def _build_p0_context(root, page_number):
         for char in chars
     )
     return {"objects": objects, "image": image, "viewport": viewport, "image_scale": scale,
+            "pdf_page_width": float(pdf_page.width),
             "page_origin": tuple(page_bbox[:2]), "page_bbox": page_bbox, "pdf_images": pdf_images,
             "pdf_chars_in_viewport": chars_in_viewport,
             "render_dpi": 72 * scale,
@@ -508,7 +509,7 @@ def _page_is_raster_for_scan(root, page_number, context):
     try:
         from types import SimpleNamespace
         page_proxy = SimpleNamespace(bbox=context["page_bbox"], images=context["pdf_images"])
-        image_scale = float(context["image_scale"])
+        image_scale = context["image"].width / float(context["pdf_page_width"])
         dpi = 72 * image_scale
         mm_per_px = context.get("declared_mm_per_px") or 25.4 * 100 / dpi
         return room_outline.page_is_raster(page_proxy, context["viewport"], image_scale, mm_per_px,
@@ -1944,7 +1945,14 @@ def _update_record(root, record):
     return record
 
 
-def _archive_reply(root, record, reply, model_note):
+def _operator_seconds(value):
+    """Time the operator spent on this check (from showing the task to pasting the reply), for timing the AI step."""
+    if type(value) not in (int, float) or not 0 <= value <= 24 * 3600:
+        return None
+    return round(float(value), 1)
+
+
+def _archive_reply(root, record, reply, model_note, operator_seconds=None):
     run_dir = _record_file(root, record).parent
     attempts_dir = run_dir / "reply_attempts"
     attempts_dir.mkdir(parents=True, exist_ok=True)
@@ -1953,9 +1961,12 @@ def _archive_reply(root, record, reply, model_note):
     reply_hash = hashlib.sha256(reply.encode("utf-8")).hexdigest()
     entry = {"attempt_id": attempt_id, "created_at": _now(), "reply_hash": reply_hash,
              "model_note": model_note, "outcome": "validating", "raw_reply": reply}
+    if operator_seconds is not None:
+        entry["operator_seconds"] = operator_seconds
     _write(path, entry)
     record.setdefault("reply_attempts", []).append({key: entry[key] for key in
-                                                    ("attempt_id", "created_at", "reply_hash", "model_note", "outcome")})
+                                                    ("attempt_id", "created_at", "reply_hash", "model_note", "outcome",
+                                                     "operator_seconds") if key in entry})
     return path
 
 
@@ -2251,7 +2262,7 @@ def _post(web, project, data):
         # Let the task-specific validator report malformed replies below.
         pass
     record["stand_in"] = data.get("stand_in") is True or reply_stand_in
-    reply_path = _archive_reply(root, record, reply, model_note)
+    reply_path = _archive_reply(root, record, reply, model_note, _operator_seconds(data.get("operator_seconds")))
     record["reply"] = reply
     record["reply_hash"] = hashlib.sha256(reply.encode("utf-8")).hexdigest()
     record["model_note"] = model_note

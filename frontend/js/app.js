@@ -566,7 +566,9 @@ function showResults(data){
   DATA = Object.assign({}, DATA, data);
   CALCULATOR_INPUTS_AVAILABLE = false;
   PACKET = data.chatgpt_packet || null;
-  PICK = new Set(data.sheets.filter(s => s.selected_by_default || s.relevant).map(s => s.page));
+  // A saved page selection wins over the analysis defaults, so pages a person unticked stay unticked.
+  PICK = new Set(Array.isArray(data.selected_pages) && data.selected_pages.length ? data.selected_pages
+    : data.sheets.filter(s => s.selected_by_default || s.relevant).map(s => s.page));
   FILTER = "rel";
   DEBUG = false;
   requiredElement("btnDebug").setAttribute("aria-expanded", "false");

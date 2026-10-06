@@ -237,7 +237,9 @@ def status(web, project):
     if not confirmed:
         drawings_tab = _tab("needed", "The drawing pages haven't been prepared yet.")
     elif progress["waiting"]:
-        drawings_tab = _tab("working", f"{progress['total'] - progress['waiting']} of {progress['total']} checks done")
+        # Blocked checks wait on earlier ones; they are not done.
+        done = progress["total"] - progress["waiting"] - progress["blocked"]
+        drawings_tab = _tab("working", f"{done} of {progress['total']} checks done")
     elif progress["blocked"]:
         drawings_tab = _tab("check", f"{progress['blocked']} check{'s' if progress['blocked'] != 1 else ''} couldn't run")
     else:

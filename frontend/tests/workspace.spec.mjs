@@ -5,7 +5,11 @@ const analysis = {
   id: "job-1", name: "Corner cafe.pdf", pages_analysed: 38, relevant_count: 3, selected_count: 3, warnings: [],
   has_reasoning_packet: true,
   sheets: [{page: 20, type: "floor_plan", title: "Dimension Plan", relevant: true, selected_by_default: true, plan_role: "main_floor_plan",
-            confidence: 0.9, reason: "", review_bucket: "primary", scale: "1:100", visual: {}, thumbnail: ""}],
+            confidence: 0.9, reason: "", review_bucket: "primary", scale: "1:100", visual: {}, thumbnail: ""},
+           {page: 27, type: "elevation", title: "Internal Elevation", relevant: false, selected_by_default: true, plan_role: "reference_context",
+            confidence: 0.7, reason: "", review_bucket: "reference", scale: "1:50", visual: {}, thumbnail: ""},
+           {page: 31, type: "section", title: "including amendments of the relevant Building Code", relevant: false, selected_by_default: false,
+            plan_role: "", confidence: 0.3, reason: "", review_bucket: "other", scale: "", visual: {}, thumbnail: ""}],
 };
 
 const report = {
@@ -36,7 +40,9 @@ const scope = {status: "not_confirmed", candidate_fingerprint: "fp", uses: {offi
   candidates: [{key: "room-use:unassigned-level:kitchen", label: "Kitchen", level: "Unassigned level", area_m2: null, area_origin: "", include: false, status: "no_area", source_pages: [20]},
                {key: "room-use:unassigned-level:shop", label: "Shop", level: "Unassigned level", area_m2: 216.1, area_origin: "ai_determined", include: true, status: "calculated", source_pages: [20]}]};
 
-async function mockJob(page, {status, model = () => ({room_scope: scope}), onPost = () => null}) {
+const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64");
+
+async function mockJob(page, {status, model = () => ({room_scope: scope}), onPost = () => null, tasks = () => []}) {
   const posts = [];
   await page.route("**/api/test-mode/status", route => route.fulfill({json: {enabled: false}}));
   await page.route("**/api/projects", route => route.fulfill({json: [{id: "job-1", name: analysis.name, pages: 38, relevant: 3, analysed: true}]}));
@@ -52,7 +58,14 @@ async function mockJob(page, {status, model = () => ({room_scope: scope}), onPos
   await page.route("**/api/room-area-override", record("area"));
   await page.route("**/api/room-height-override", record("height"));
   await page.route("**/api/reviewer-room-geometry", record("geometry"));
-  await page.route("**/api/autonomous-tasks", record("tasks"));
+  await page.route("**/api/autonomous-tasks**", async route => {
+    const url = route.request().url();
+    if (url.includes("/api/autonomous-tasks/image")) return route.fulfill({contentType: "image/png", body: PNG});
+    if (route.request().method() === "GET") return route.fulfill({json: {tasks: tasks()}});
+    return record("tasks")(route);
+  });
+  await page.route("**/api/decisions", record("decisions"));
+  await page.route("**/api/vision-response/no-ai", route => route.fulfill({json: {status: "already_started_without_ai", has_reasoning_packet: true}}));
   await page.route("**/api/ai-preliminary-model**", route => route.request().method() === "POST" ? record("model")(route) : route.fulfill({json: model()}));
   return posts;
 }
@@ -102,14 +115,147 @@ test("Project: the job details are saved once and the rail updates", async ({ pa
   await expect(page.locator("#jobAddress")).toHaveText("1 Main St, Ryde NSW 2112");
 });
 
-test("Drawings: progress of the drawing check and a link for the Toki team to answer it", async ({ page }) => {
-  await mockJob(page, {status: () => baseStatus({checks: {total: 11, waiting: 10, blocked: 0, marker: "m"},
-                                                  tabs: {...baseStatus().tabs, drawings: tab("working", "1 of 11 checks done")}})});
+test("Drawings: progress of the drawing check, the pages used, and a switch for the Toki team", async ({ page }) => {
+  await mockJob(page, {status: () => baseStatus({checks: {total: 11, waiting: 9, blocked: 1, marker: "m"},
+                                                  tabs: {...baseStatus().tabs, drawings: tab("working", "1 of 11 checks done")}}),
+                       tasks: () => [{task: "P1_site", target: "project", status: "waiting_for_reply", prompt: "Find the site.", images: []}]});
   await page.goto("/#/job/job-1/drawings");
   await expect(page.locator("[data-ws-checks]")).toContainText("1 of 11 checks done.");
   await expect(page.locator("[data-ws-checks]")).toContainText("the Toki team completes this step");
-  await expect(page.locator("[data-ws-operator]")).toHaveAttribute("href", "/?operator=1#/job/job-1");
+  await expect(page.locator("[data-ws-checks]")).toContainText("1 more starts when earlier checks are answered.");
   await expect(page.locator("[data-ws-tab='drawings'] .ws-tab-icon")).toHaveText("◌");
+  await expect(page.locator("[data-ws-operator-panel]")).toHaveCount(0);
+  // Pages used: the confirmed pages, main plans marked; the rest on request.
+  await expect(page.locator("[data-ws-pages] li")).toHaveCount(2);
+  await expect(page.locator("[data-ws-pages] li.is-main")).toContainText("Page 20 · main plan");
+  await page.getByRole("button", {name: "Show all 3 pages"}).click();
+  await expect(page.locator("[data-ws-pages] li")).toHaveCount(3);
+  await expect(page.locator("[data-ws-pages] li").nth(2)).toContainText("section");  // boilerplate titles fall back to the sheet type
+  await page.getByRole("button", {name: "Toki team: answer the checks here"}).click();
+  await expect(page.locator("[data-ws-operator-panel]")).toBeVisible();
+  await expect(page.locator("#wsOpTitle")).toHaveText("Find the site address");
+  await page.getByRole("button", {name: "Hide the AI step"}).click();
+  await expect(page.locator("[data-ws-operator-panel]")).toHaveCount(0);
+});
+
+test("Drawings: a saved page selection is shown after reopening the job", async ({ page }) => {
+  await mockJob(page, {status: () => baseStatus()});
+  await page.route("**/api/analysis?id=job-1", route => route.fulfill({json: {...analysis, selected_pages: [20]}}));
+  await page.goto("/#/job/job-1/drawings");
+  await expect(page.locator("[data-ws-pages] li")).toHaveCount(1);
+  await expect(page.locator("[data-ws-pages]")).toContainText("Page 20");
+  await page.getByRole("button", {name: "Show all 3 pages"}).click();
+  await expect(page.locator("[data-ws-page='27']")).not.toBeChecked();
+});
+
+test("Drawings: changing the pages used prepares them again and rebuilds the checks", async ({ page }) => {
+  const posts = await mockJob(page, {status: () => baseStatus()});
+  await page.goto("/#/job/job-1/drawings");
+  await expect(page.locator("[data-ws-use-pages]")).toHaveCount(0);
+  await page.locator("[data-ws-page='27']").uncheck();
+  await expect(page.locator("[data-ws-use-pages]")).toBeVisible();
+  await page.locator("[data-ws-page='27']").check();
+  await expect(page.locator("[data-ws-use-pages]")).toHaveCount(0);   // back to the confirmed pages: nothing to do
+  await page.locator("[data-ws-page='27']").uncheck();
+  let release;
+  const slow = new Promise(resolve => { release = resolve; });
+  await page.route("**/api/decisions", async route => { posts.push(["decisions", route.request().postDataJSON()]); await slow; return route.fulfill({json: {}}); });
+  await page.locator("[data-ws-use-pages]").click();
+  await expect(page.locator("[data-ws-progress]")).toContainText("Updating the drawing pages");
+  // Switching away and back while the pages are prepared waits for the same run instead of starting another.
+  await page.locator("[data-ws-tab='project']").click();
+  await expect(page.locator("[data-ws-project]")).toBeVisible();
+  await page.locator("[data-ws-tab='drawings']").click();
+  await expect(page.locator("[data-ws-progress]")).toContainText("Updating the drawing pages");
+  release();
+  await expect.poll(() => posts.filter(([kind]) => kind === "tasks").length).toBe(1);
+  expect(posts.filter(([kind]) => kind === "decisions")).toHaveLength(1);
+  const decisions = posts.find(([kind]) => kind === "decisions")[1];
+  expect(decisions.pages.map(row => row.page)).toEqual([20]);
+  expect(posts.find(([kind]) => kind === "tasks")[1]).toMatchObject({project_id: "job-1", action: "run_all"});
+  await expect(page.locator("[data-ws-drawings]")).toBeVisible();
+});
+
+test("AI step: ?operator=1 opens the checks one at a time, in order; a bad reply is kept with the reason, a good one moves on", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  const records = {
+    "P2_north:page-20": {task: "P2_north", target: "page-20", status: "waiting_for_reply", prompt: "Which way is north?",
+                         images: [{name: "image-1.png", url: "/api/autonomous-tasks/image?project_id=job-1&task=P2_north&target=page-20&run_id=r&name=image-1.png"},
+                                  {name: "image-2.png", url: "/api/autonomous-tasks/image?project_id=job-1&task=P2_north&target=page-20&run_id=r&name=image-2.png"}]},
+    "P1_site:project": {task: "P1_site", target: "project", status: "waiting_for_reply", prompt: "Which excerpt names the site?", images: [],
+                        accuracy: {accuracy: 0.9, scored: 4}},
+    "P6_kitchen:kitchen": {task: "P6_kitchen", target: "kitchen", status: "blocked", block_reason: "Waiting for room outlines (P0).", packet: {room: {room_label: "Kitchen"}}},
+    "P5_roof:shop": {task: "P5_roof", target: "shop", status: "needs_contractor_answer"},
+  };
+  let attempts = 0;
+  const posts = await mockJob(page, {
+    status: () => baseStatus({checks: {total: 4, waiting: Object.values(records).filter(row => row.status === "waiting_for_reply").length, blocked: 1, marker: "m"}}),
+    tasks: () => Object.values(records),
+    onPost: (kind, body) => {
+      if (kind !== "tasks" || body.action !== "validate_apply") return null;
+      attempts += 1;
+      const row = records[`${body.task}:${body.target}`];
+      if (attempts === 1) Object.assign(row, {validation: {valid: false, error: "Reply must be valid JSON."}, block_reason: "Reply must be valid JSON."});
+      else Object.assign(row, {status: "applied", validation: {valid: true}, block_reason: "", quality_label: "AI-determined", stand_in: body.stand_in,
+                               reply_attempts: [{operator_seconds: 30}, {operator_seconds: 95}]});
+      return {tasks: Object.values(records)};
+    },
+  });
+  await page.goto("/?operator=1#/job/job-1");
+  await expect(page).toHaveURL(/#\/job\/job-1\/drawings$/);
+  await expect(page.locator("#vJob")).toBeVisible();
+  await expect(page.locator("[data-ws-operator-off]")).toHaveCount(0);   // always on with ?operator=1
+  const task = page.locator("[data-ws-op-task]");
+  await expect(page.locator("#wsOpTitle")).toHaveText("Find the site address");   // site before north, whatever the list order
+  await expect(task.locator(".ws-op-count")).toHaveText("Check 1 of 2 to answer");
+  await expect(task).toContainText("scored 90% on the answer keys (4 cases)");
+  await expect(page.locator("[data-ws-op-blocked]")).toHaveText("List the kitchen equipment — Kitchen — Waiting for room outlines (P0).");
+  await expect(page.locator("[data-ws-op-asked]")).toContainText("1 roof question is answered by the contractor on the Project tab");
+  await page.getByRole("button", {name: "Copy prompt"}).click();
+  await expect(task.locator("[data-ws-op-status]")).toHaveText("Prompt copied.");
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("Which excerpt names the site?");
+  await task.locator("[data-ws-model]").fill("GPT-test");
+  await task.locator("[data-ws-model]").press("Tab");
+  await page.getByRole("button", {name: "Check and apply"}).click();
+  await expect(task.locator("[data-ws-op-status]")).toHaveText("Paste ChatGPT's reply first.");
+  await task.locator("[data-ws-reply]").fill("{not json");
+  await page.getByRole("button", {name: "Check and apply"}).click();
+  await expect(page.locator("[data-ws-op-error]")).toHaveText("Reply must be valid JSON.");
+  await expect(page.locator("#wsOpTitle")).toHaveText("Find the site address");
+  await expect(page.locator("[data-ws-reply]")).toHaveValue("{not json");           // the pasted reply is kept
+  await page.locator("[data-ws-reply]").fill('{"site": null, "consultant_addresses": []}');
+  await page.locator("[data-ws-stand-in]").check();
+  await page.getByRole("button", {name: "Check and apply"}).click();
+  await expect(page.locator("#wsOpTitle")).toHaveText("Read the north arrow — page 20");
+  await expect(page.locator("[data-ws-op-status]")).toHaveText("Applied: Find the site address (stand-in, test only).");
+  const applied = posts.filter(([kind, body]) => kind === "tasks" && body.action === "validate_apply").map(([, body]) => body);
+  expect(applied).toHaveLength(2);
+  expect(applied[1]).toMatchObject({project_id: "job-1", task: "P1_site", target: "project", reply: '{"site": null, "consultant_addresses": []}',
+                                    model_note: "GPT-test", stand_in: true});
+  expect(typeof applied[1].operator_seconds).toBe("number");
+  await expect(page.locator("[data-ws-op-task] [data-ws-model]")).toHaveValue("GPT-test");   // remembered for the next check
+  await expect(page.locator("[data-ws-op-image]")).toHaveCount(2);
+  await expect(page.locator("[data-ws-op-task] a[download]").first()).toHaveAttribute("download", "P2_north-page-20-image-1.png");
+  await page.locator("[data-ws-copy-image]").first().click();
+  await expect(page.locator("[data-ws-op-status]")).toHaveText(/Image copied|blocked copying the image/);
+  await expect(page.locator("[data-ws-op-time]")).toHaveText("2 min spent on 1 check · about 2 min each");
+  await page.locator(".ws-op-finished summary").click();
+  await expect(page.locator("[data-ws-op-finished]")).toContainText("Find the site address");
+  await expect(page.locator("[data-ws-op-finished]")).toContainText("Stand-in (test) · 2 min");
+});
+
+test("AI step: Skip for now moves to the next check and comes back round", async ({ page }) => {
+  const tasks = ["page-20", "page-21"].map(target => ({task: "P2_north", target, status: "waiting_for_reply", prompt: `North on ${target}?`, images: []}));
+  await mockJob(page, {status: () => baseStatus(), tasks: () => tasks});
+  await page.goto("/?operator=1#/job/job-1/drawings");
+  await expect(page.locator("#wsOpTitle")).toHaveText("Read the north arrow — page 20");
+  await page.locator("[data-ws-reply]").fill("draft for page 20");
+  await page.getByRole("button", {name: "Skip for now"}).click();
+  await expect(page.locator("#wsOpTitle")).toHaveText("Read the north arrow — page 21");
+  await expect(page.locator(".ws-op-count")).toHaveText("Check 2 of 2 to answer");
+  await page.getByRole("button", {name: "Skip for now"}).click();
+  await expect(page.locator("#wsOpTitle")).toHaveText("Read the north arrow — page 20");
+  await expect(page.locator("[data-ws-reply]")).toHaveValue("draft for page 20");
 });
 
 test("Rooms: a typed area is saved at once, shown as Edited by you, and nothing is rebuilt until Calculate", async ({ page }) => {
@@ -255,5 +401,16 @@ test("on a phone the rail becomes a section menu and Calculate stays at hand", a
   await page.locator("#wsSectionSelect").selectOption("project");
   await expect(page).toHaveURL(/#\/job\/job-1\/project$/);
   await expect(page.locator("#wsCalculate")).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
+});
+
+test("AI step fits a phone: the prompt wraps and the images shrink", async ({ page }) => {
+  await page.setViewportSize({width: 375, height: 812});
+  const long = JSON.stringify(Array.from({length: 40}, (_, index) => ({page: index, text: "TENANCY_MZ01_M38_MELROSE_CENTRAL_" + "X".repeat(60)})));
+  await mockJob(page, {status: () => baseStatus(), tasks: () => [{task: "P2_north", target: "page-20", status: "waiting_for_reply", prompt: long,
+    images: [{name: "image-1.png", url: "/api/autonomous-tasks/image?name=image-1.png"}]}]});
+  await page.goto("/?operator=1#/job/job-1/drawings");
+  await page.locator("[data-ws-op-task] summary").click();
+  await expect(page.locator("[data-ws-prompt]")).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
 });

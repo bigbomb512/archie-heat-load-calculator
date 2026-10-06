@@ -1625,6 +1625,18 @@ def analyse_project(project, review_dir=None, *, app=None, persist_project=True)
     return project
 
 
+def selected_pages(project):
+    """Pages in the saved page selection (reviewed_decisions.json), or None before any selection is saved."""
+    path = Path(project.get("review_dir") or "") / "reviewed_decisions.json"
+    if not project.get("review_dir") or not path.exists():
+        return None
+    try:
+        rows = json.loads(path.read_text(encoding="utf-8")).get("pages", [])
+    except (OSError, ValueError, AttributeError):
+        return None
+    return sorted({row["page"] for row in rows if isinstance(row, dict) and isinstance(row.get("page"), int)})
+
+
 def api_save_decisions(request):
     data = read_json_body(request)
     project = project_by_id(data.get("id", ""))
@@ -5080,6 +5092,7 @@ def analysis_response(project):
         "room_inference": room_inference,
         "required_artifacts": required_artifacts,
         "sheets": sheets,
+        "selected_pages": selected_pages(project),
         "warnings": analysis_warnings(packet),
         "review_url": optional_link(project.get("html")),
         "packet_url": optional_link(project.get("packet")),

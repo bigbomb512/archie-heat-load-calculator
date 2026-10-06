@@ -70,6 +70,38 @@ body.ws-open .stage { max-width: none; padding: 0; }
 .ws-meter { height: 10px; border-radius: 6px; background: var(--line-soft); overflow: hidden; margin: 8px 0 10px; }
 .ws-meter span { display: block; height: 100%; background: var(--accent); }
 
+/* Drawings: pages used */
+.ws-pages { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.ws-pages label { display: grid; gap: 6px; padding: 8px; border: 1px solid var(--line-soft); border-radius: var(--ui-radius-control); cursor: pointer; font-size: 13px; position: relative; }
+.ws-pages li.is-main label { border-color: var(--accent); }
+.ws-pages input { position: absolute; top: 12px; left: 12px; }
+.ws-pages img, .ws-page-blank { width: 100%; aspect-ratio: 1.41; object-fit: contain; background: var(--ui-white); border: 1px solid var(--line-soft); border-radius: 4px; }
+.ws-pages small { display: block; color: var(--text-2); font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
+
+/* Drawings: the AI step, one check at a time */
+.ws-op { margin: 22px 0 8px; padding: 18px; border: 1px solid var(--accent); border-radius: var(--ui-radius-panel); background: var(--action-wash); }
+.ws-op-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
+.ws-op-head h3 { margin: 0; }
+.ws-op-head small { font-weight: 400; color: var(--text-2); }
+.ws-op-head .link-button { margin-left: auto; font-size: 12px; }
+.ws-op-task { margin-top: 14px; padding: 16px 18px; background: var(--raise-bg); border: 1px solid var(--line); border-radius: var(--ui-radius-control); }
+.ws-op-task h3 { margin: 2px 0 6px; }
+.ws-op-count { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-2); }
+.ws-steps { margin: 12px 0 0; padding-left: 20px; display: grid; gap: 14px; font-size: 14px; line-height: 1.5; }
+.ws-steps .ws-actions { margin-top: 8px; }
+.ws-steps > li, .ws-steps details { min-width: 0; }
+.ws-steps details { flex-basis: 100%; }
+.ws-prompt { max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; padding: 10px; background: var(--ui-white); border: 1px solid var(--line-soft); border-radius: var(--ui-radius-control); }
+.ws-op-images { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 10px; }
+.ws-op-images li { display: grid; gap: 4px; font-size: 12px; }
+.ws-op-images img { width: 140px; height: 140px; object-fit: contain; background: var(--ui-white); border: 1px solid var(--line-soft); border-radius: 4px; }
+.ws-reply { display: block; width: 100%; box-sizing: border-box; margin-top: 8px; padding: 10px; font: 12px/1.5 ui-monospace, Menlo, monospace; border: 1px solid #d4dfe6; border-radius: var(--ui-radius-control); }
+.ws-op-meta { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; margin-top: 12px; font-size: 12px; color: var(--text-2); }
+.ws-op-meta input:not([type]) { margin-left: 4px; padding: 6px 8px; border: 1px solid #d4dfe6; border-radius: var(--ui-radius-control); font-size: 13px; }
+.ws-check { display: inline-flex; gap: 6px; align-items: center; }
+.ws-op h4 { margin: 16px 0 4px; font-size: 13px; }
+.ws-op-finished { margin-top: 14px; font-size: 13px; }
+
 .ws-table-wrap { position: relative; overflow-x: auto; }
 .ws-table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .ws-table th, .ws-table td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
@@ -110,6 +142,10 @@ body.ws-open .stage { max-width: none; padding: 0; }
   .ws-calc-note { grid-column: 1 / -1; }
   .ws-main { padding: 16px; }
   .ws-card { padding: 18px 16px; }
+  .ws-op { padding: 12px; }
+  .ws-op-task { padding: 12px; }
+  .ws-op-images img { width: 120px; height: 120px; }
+  .ws-pages { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ws-total-big span:first-child { font-size: 44px; }
 }
 
