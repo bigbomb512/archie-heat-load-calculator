@@ -1,0 +1,51 @@
+{
+  "case_id": "caseP13",
+  "confirmed": false,
+  "drafted_by": "Claude from page thumbnails, 2026-10-07",
+  "description": "73-page two-level restaurant (ground + level 01): drawing list, notes, photos, many schedules, existing/demolition, layout, dimension and RCP plans per level, services, finishes, shopfront elevation, sections, joinery.",
+  "pages": {
+    "geometry": [
+      20,
+      21,
+      22,
+      23
+    ],
+    "rcp": [
+      24,
+      25
+    ],
+    "must_keep": [
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      33,
+      34
+    ],
+    "not_geometry": [
+      1,
+      2,
+      5,
+      6,
+      7,
+      8,
+      10,
+      11,
+      12,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19
+    ]
+  },
+  "notes": [
+    "Two levels: p20/p22/p24 ground, p21/p23/p25 level 01.",
+    "p6-17 are finishes, furniture, equipment, fittings and lighting schedules (tables).",
+    "p18-19 are existing & demolition plans.",
+    "p33 is the shopfront elevation; p34-37 sections."
+  ]
+}
