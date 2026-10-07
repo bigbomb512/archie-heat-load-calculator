@@ -948,56 +948,64 @@
   }
 
   // ------------------------------------------------------------------ Calculate
+  // Calculate runs on the server as one job (apply answers, rebuild the model, confirm the cooled rooms,
+  // calculate; prepare the inputs first when they're missing). The page starts and watches it, so closing
+  // or reloading the page doesn't stop it, and reopening the job shows the progress again.
+  const CALC_POLL_MS = 2000;
   async function calculate() {
     const projectId = state.projectId;
-    const button = document.getElementById("wsCalculate");
     const note = document.getElementById("wsCalcNote");
     if (!state.status?.rooms?.with_area) {
       note.textContent = "Add room areas first.";
       go("rooms");
       return;
     }
-    button.disabled = true;
-    const reviewer = userName() || "Contractor";
-    const confirmAndCalculate = async () => {
-      // Rebuild the draft model so typed areas and added rooms are in it.
-      const model = await sendJson("/api/ai-preliminary-model", {project_id: projectId, action: "assemble", settings: aiPreliminarySettings(), response_view: "workspace"});
-      state.roomsModel = model;
-      const rows = (model.room_scope?.candidates || []).map(row => {
-        const include = (state.include.has(row.key) ? state.include.get(row.key) : (row.include || row.area_m2 != null)) && row.area_m2 != null;
-        return {key: row.key, include, reason: include ? "" : "Not cooled"};
-      });
-      await sendJson("/api/ai-preliminary-model", {project_id: projectId, action: "confirm_room_scope", reviewer, response_view: "workspace",
-        candidate_fingerprint: model.room_scope?.candidate_fingerprint || "", rows, settings: aiPreliminarySettings()});
-      return sendJson("/api/ai-preliminary-model", {project_id: projectId, action: "calculate", settings: aiPreliminarySettings(), response_view: "workspace"});
-    };
     try {
-      if (state.status.above) await sendJson("/api/job-setup", {project_id: projectId});  // answers any new roof questions
-      note.textContent = "Calculating… this can take a minute.";
-      let result;
-      try {
-        result = await confirmAndCalculate();
-      } catch (error) {
-        if (!/missing required|out of date|resolve model inputs|stale/i.test(error.message)) throw error;
-        note.textContent = "Preparing the calculation: room uses, heights, people and equipment. About two to three minutes the first time.";
-        await guidedResolveModelInputs();
-        if (!/Coverage hydrated/.test(requiredElement("guidedModelInputsStatus").textContent)) {
-          throw new Error("The inputs couldn't be prepared. Check that every room you want cooled has an area.");
-        }
-        note.textContent = "Calculating…";
-        result = await confirmAndCalculate();
-      }
-      if (typeof drawAiPreliminary === "function") drawAiPreliminary(result);
-      note.textContent = "";
-      await loadStatus();
-      if (state.projectId === projectId) {
-        state.lastResult = result;
-        if (state.tab === "results") renderTab(); else go("results");
-      }
+      const job = await sendJson("/api/job-calculation", {project_id: projectId, reviewer: userName() || "Contractor",
+                                                          include: Object.fromEntries(state.include)});
+      await watchCalculation(projectId, job);
     } catch (error) {
-      note.textContent = `Could not calculate: ${error.message}`;
+      if (state.projectId === projectId) note.textContent = `Could not calculate: ${error.message}`;
+    }
+  }
+
+  async function watchCalculation(projectId, job) {
+    if (state.calculating === projectId) return;
+    state.calculating = projectId;
+    const button = document.getElementById("wsCalculate");
+    const note = document.getElementById("wsCalcNote");
+    const started = Date.now();
+    button.disabled = true;
+    try {
+      while (job.status === "running" || job.status === "queued") {
+        if (state.projectId !== projectId) return;
+        const seconds = Math.round((Date.now() - started) / 1000);
+        note.textContent = `${job.step_label || "Calculating"}…${seconds >= 5 ? ` (${seconds} s)` : ""} You can leave this page; it carries on.`;
+        await new Promise(resolve => setTimeout(resolve, CALC_POLL_MS));
+        job = await getJson(`/api/job-calculation?project_id=${encodeURIComponent(projectId)}`);
+      }
+      if (job.status !== "done") throw new Error(job.error || "The calculation didn't finish.");
+      if (state.projectId !== projectId) return;
+      note.textContent = "";
+      state.roomsModel = null;  // the model was rebuilt
+      await loadStatus();
+      if (state.tab === "results") renderTab(); else go("results");
+    } catch (error) {
+      if (state.projectId === projectId) note.textContent = `Could not calculate: ${error.message}`;
     } finally {
-      button.disabled = false;
+      if (state.calculating === projectId) state.calculating = null;
+      if (state.projectId === projectId) button.disabled = false;
+    }
+  }
+
+  // Reopening a job while its calculation still runs on the server shows the progress again.
+  async function resumeCalculation(projectId) {
+    const job = await getJson(`/api/job-calculation?project_id=${encodeURIComponent(projectId)}`).catch(() => ({}));
+    if (state.projectId !== projectId) return;
+    if (job.status === "running" || job.status === "queued") watchCalculation(projectId, job);
+    else if (job.status === "interrupted" || job.status === "failed") {
+      const note = document.getElementById("wsCalcNote");
+      if (note && !note.textContent) note.textContent = `The last calculation didn't finish: ${job.error || "press Calculate again."}`;
     }
   }
 
@@ -1131,6 +1139,8 @@
       clearTimeout(state.poll);
       body.innerHTML = "";
       Object.assign(state, {projectId, status: null, tab: "", include: new Map(), message: "", lastResult: null, roomsModel: null});
+      const note = document.getElementById("wsCalcNote");
+      if (note) note.textContent = "";
     }
     if (data?.sheets) state.analysis = data;
     state.active = true;
@@ -1143,6 +1153,7 @@
     renderRail();
     try { await loadStatus(); } catch (_) { /* the tab shows its own error */ }
     if (state.projectId !== projectId) return;
+    resumeCalculation(projectId);
     const route = parseHash();
     const tab = route?.projectId === projectId && TABS.some(row => row.id === route.tab) ? route.tab : defaultTab();
     if (route?.projectId === projectId && route.tab === tab) { state.tab = tab; renderTab(); }

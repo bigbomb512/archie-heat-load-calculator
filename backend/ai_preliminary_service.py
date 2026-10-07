@@ -1,6 +1,7 @@
 """Project-local orchestration for the draft-only AI preliminary cooling path."""
 
 import json
+import threading
 import math
 import os
 import re
@@ -122,7 +123,56 @@ def _sources(paths):
     }
 
 
+# Every file the draft geometry is built from (directly, or through room_proposal,
+# _room_geometry_skill_proposals and reviewer_room_geometry_service.current_artifact_input).
+_GEOMETRY_INPUT_FILES = ("ai_preliminary_run.json", "ai_input.json", "drawing_coverage.json", "building_evidence.json",
+                         "spatial_ocr.json", "vector_geometry.json", "dimension_wall_matches.json",
+                         "geometry_confirmation.json", "vision_response.json", "reviewer_room_geometry.json",
+                         "room_use_resolution.json", "room_area_overrides.json", "skill_workflow_run.json")
+_GEOMETRY_MEMO = {}
+_GEOMETRY_MEMO_LOCK = threading.Lock()
+_GEOMETRY_MEMO_LIMIT = 4
+
+
+def _geometry_input_signature(paths):
+    """Size and modification time of every geometry input; any write to an input changes it."""
+    root = Path(paths["root"])
+    files = [root / name for name in _GEOMETRY_INPUT_FILES] + [Path(paths["vision"]), Path(paths["building"]), Path(paths["run"])]
+    files += sorted(root.glob("skill_workflow_runs/*/proposals/room_boundaries_areas.json"))
+    files += sorted((root / "ai_tasks" / "S1_printed_areas").rglob("*.json"))
+    signature = []
+    for path in files:
+        try:
+            stat = path.stat()
+            signature.append((str(path), stat.st_mtime_ns, stat.st_size, getattr(stat, "st_ino", 0)))
+        except OSError:
+            signature.append((str(path), None))
+    return tuple(signature)
+
+
 def _preliminary_geometry(paths):
+    """Draft geometry for the current inputs, built once per set of inputs.
+
+    One Calculate asks for it about ten times (source fingerprints, ceiling heights, freshness checks,
+    each response); building it took several seconds each time on a 38-page set. The cached value is
+    reused only while every input file is unchanged, and callers always get their own copy.
+    """
+    key = str(Path(paths["root"]).resolve())
+    signature = _geometry_input_signature(paths)
+    with _GEOMETRY_MEMO_LOCK:
+        hit = _GEOMETRY_MEMO.get(key)
+        if hit and hit[0] == signature:
+            return deepcopy(hit[1])
+    result = _build_preliminary_geometry(paths)
+    with _GEOMETRY_MEMO_LOCK:
+        _GEOMETRY_MEMO.pop(key, None)
+        _GEOMETRY_MEMO[key] = (signature, deepcopy(result))
+        while len(_GEOMETRY_MEMO) > _GEOMETRY_MEMO_LIMIT:
+            _GEOMETRY_MEMO.pop(next(iter(_GEOMETRY_MEMO)))
+    return result
+
+
+def _build_preliminary_geometry(paths):
     """Rebuild current draft geometry in memory without mutating reviewed artifacts."""
     run = _read(paths["run"], {})
     proposal = room_proposal(run, paths["root"])

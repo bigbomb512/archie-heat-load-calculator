@@ -60,7 +60,7 @@ function geometryContext(records = []) {
 }
 
 async function mockJob(page, {status, model = () => ({room_scope: scope}), onPost = () => null, tasks = () => [], geometry = () => geometryContext(),
-                               prepare = () => ({status: "none"})}) {
+                               prepare = () => ({status: "none"}), calculation = () => ({status: "none"})}) {
   const posts = [];
   await page.route("**/api/test-mode/status", route => route.fulfill({json: {enabled: false}}));
   await page.route("**/api/projects", route => route.fulfill({json: [{id: "job-1", name: analysis.name, pages: 38, relevant: 3, analysed: true}]}));
@@ -84,6 +84,11 @@ async function mockJob(page, {status, model = () => ({room_scope: scope}), onPos
     return record("tasks")(route);
   });
   await page.route("**/api/decisions", record("decisions"));
+  // Server-side Calculate: POST starts it, GET reports it.
+  await page.route("**/api/job-calculation**", async route => {
+    if (route.request().method() === "POST") { posts.push(["calculation", route.request().postDataJSON()]); return route.fulfill({json: calculation("start")}); }
+    return route.fulfill({json: calculation("status")});
+  });
   // Server-side page preparation: POST starts it, GET reports it. Tests replace prepareJob to script a run.
   await page.route("**/api/prepare-pages**", async route => {
     if (route.request().method() === "POST") { posts.push(["prepare", route.request().postDataJSON()]); return route.fulfill({json: prepare("start")}); }
@@ -390,26 +395,35 @@ test("Rooms: a room the drawings missed is added with its use, on the plan page,
   expect(posts.find(([kind]) => kind === "area")[1]).toMatchObject({room_id: "room-use:unassigned-level:office", area_m2: 10});
 });
 
-test("Calculate rebuilds the model, confirms the cooled rooms and opens the plain result", async ({ page }) => {
+test("Calculate runs one server job with the person's room choices, shows its steps, and opens the plain result", async ({ page }) => {
   let calculated = false;
+  let job = {status: "none"};
+  let polls = 0;
   const posts = await mockJob(page, {
     status: () => calculated ? baseStatus({total_kw: 34.1354, tabs: {...baseStatus().tabs, results: tab("done")}}) : baseStatus(),
     model: () => calculated ? {room_scope: {...scope, status: "confirmed"}, hourly_ai_preliminary_load_report: report} : {room_scope: scope},
-    onPost: (kind, body) => { if (kind === "model" && body.action === "calculate") { calculated = true; return {room_scope: scope, hourly_ai_preliminary_load_report: report}; } return null; },
+    calculation: kind => {
+      if (kind === "start") job = {status: "running", step: "model", step_label: "Building the model from your rooms"};
+      else if (job.status === "running" && ++polls >= 2) { job = {status: "done", total_kw: 34.1354}; calculated = true; }
+      return job;
+    },
   });
   await page.goto("/#/job/job-1/rooms");
   await page.locator("[data-ws-room='room-use:unassigned-level:shop'] [data-ws-include]").uncheck();
   await page.locator("[data-ws-room='room-use:unassigned-level:shop'] [data-ws-include]").check();
   await page.locator("#wsCalculate").click();
-  await expect(page).toHaveURL(/#\/job\/job-1\/results$/);
+  await expect(page.locator("#wsCalcNote")).toContainText("Building the model from your rooms…");
+  await expect(page.locator("#wsCalcNote")).toContainText("You can leave this page; it carries on.");
+  await expect(page.locator("#wsCalculate")).toBeDisabled();
+  await expect(page).toHaveURL(/#\/job\/job-1\/results$/, {timeout: 15000});
+  await expect(page.locator("#wsCalculate")).toBeEnabled();
   await expect(page.locator("[data-ws-total]")).toHaveText("34.1");
   await expect(page.locator("#wsTotal")).toHaveText("34.1");
-  const actions = posts.filter(([kind]) => kind === "model").map(([, body]) => body.action);
-  expect(actions).toEqual(["assemble", "confirm_room_scope", "calculate"]);
-  const confirm = posts.find(([kind, body]) => kind === "model" && body.action === "confirm_room_scope")[1];
-  expect(confirm).toMatchObject({reviewer: "Contractor", candidate_fingerprint: "fp", rows: [
-    {key: "room-use:unassigned-level:kitchen", include: false, reason: "Not cooled"},
-    {key: "room-use:unassigned-level:shop", include: true, reason: ""}]});
+  const starts = posts.filter(([kind]) => kind === "calculation");
+  expect(starts).toHaveLength(1);
+  expect(starts[0][1]).toEqual({project_id: "job-1", reviewer: "Contractor",
+    include: {"room-use:unassigned-level:shop": true}});
+  expect(posts.filter(([kind]) => kind === "model")).toHaveLength(0);   // the browser no longer drives the steps
   await expect(page.locator("[data-ws-room-loads]")).toContainText("Kitchen");
   await expect(page.locator("[data-ws-room-loads]")).toContainText("12.7 kW");
   const excluded = page.locator("[data-ws-excluded]");
@@ -423,13 +437,25 @@ test("Calculate rebuilds the model, confirms the cooled rooms and opens the plai
   await expect(excluded.locator("li", {hasText: /^Walls, roof and glazing/})).toHaveCount(0);
 });
 
+test("Calculate: reopening a job mid-calculation shows the progress; a failure shows its reason", async ({ page }) => {
+  let job = {status: "running", step: "inputs", step_label: "Preparing the inputs (room uses, heights, people and equipment)"};
+  const posts = await mockJob(page, {status: () => baseStatus(), calculation: () => job});
+  await page.goto("/#/job/job-1/project");
+  await expect(page.locator("#wsCalcNote")).toContainText("Preparing the inputs (room uses, heights, people and equipment)…");
+  await expect(page.locator("#wsCalculate")).toBeDisabled();
+  job = {status: "failed", step: "rooms", error: "No room has an area yet. Add room areas on the Rooms tab, then calculate."};
+  await expect(page.locator("#wsCalcNote")).toHaveText("Could not calculate: No room has an area yet. Add room areas on the Rooms tab, then calculate.", {timeout: 10000});
+  await expect(page.locator("#wsCalculate")).toBeEnabled();
+  expect(posts.filter(([kind]) => kind === "calculation")).toHaveLength(0);
+});
+
 test("Calculate without any room area sends the contractor to Rooms instead of failing", async ({ page }) => {
   const posts = await mockJob(page, {status: () => baseStatus({rooms: {total: 2, included: 0, with_area: 0}, tabs: {...baseStatus().tabs, rooms: tab("needed", "No room has an area yet.")}})});
   await page.goto("/#/job/job-1/project");
   await page.locator("#wsCalculate").click();
   await expect(page.locator("#wsCalcNote")).toHaveText("Add room areas first.");
   await expect(page).toHaveURL(/#\/job\/job-1\/rooms$/);
-  expect(posts.filter(([kind]) => kind === "model")).toHaveLength(0);
+  expect(posts.filter(([kind]) => kind === "model" || kind === "calculation")).toHaveLength(0);
 });
 
 test("Engineer review opens the full screen; Back to the job returns", async ({ page }) => {

@@ -35,24 +35,49 @@ def _page_identity(page):
     return identity.get("selected_drawing_number") or page.get("drawing_number", "")
 
 
+def _canonical_json(value):
+    """JSON text of a value with dict keys sorted and every list sorted by its items' JSON text.
+
+    Built bottom-up in one pass, so each item is serialised once. It produces exactly the text that
+    json.dumps(sort_keys=True, separators=(",", ":"), allow_nan=False) gives for the structure the
+    previous recursive canonical() built (which re-serialised every subtree at every nesting level).
+    """
+    if isinstance(value, dict):
+        if not all(isinstance(key, str) for key in value):
+            raise TypeError("non-string key")
+        return "{" + ",".join(json.dumps(key) + ":" + _canonical_json(value[key]) for key in sorted(value)) + "}"
+    if isinstance(value, list):
+        return "[" + ",".join(sorted(_canonical_json(item) for item in value)) + "]"
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return json.dumps(value, allow_nan=False)
+    raise TypeError(f"unsupported value {type(value).__name__}")
+
+
+def _canonical(value):
+    """The previous recursive form; still used for inputs _canonical_json can't take (non-string keys, tuples)."""
+    if isinstance(value, dict):
+        return {key: _canonical(value[key]) for key in sorted(value)}
+    if isinstance(value, list):
+        rows = [_canonical(item) for item in value]
+        return sorted(rows, key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")))
+    return value
+
+
 def _evidence_fingerprint(ai_input, coverage, spatial_ocr, vector_geometry, dimension_matches,
                            geometry_confirmation, vision_response, building, reviewer_room_geometry=None):
-    def canonical(value):
-        if isinstance(value, dict):
-            return {key: canonical(value[key]) for key in sorted(value)}
-        if isinstance(value, list):
-            rows = [canonical(item) for item in value]
-            return sorted(rows, key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")))
-        return value
-
-    return fingerprint({
-        "ai_input": canonical(ai_input or {}), "coverage": canonical(coverage or {}),
-        "spatial_ocr": canonical(spatial_ocr or {}), "vector_geometry": canonical(vector_geometry or {}),
-        "dimension_matches": canonical(dimension_matches or {}),
-        "geometry_confirmation": canonical(geometry_confirmation or {}),
-        "vision_response": canonical(vision_response or {}), "building": canonical(building or {}),
-        "reviewer_room_geometry": canonical(reviewer_room_geometry or {}),
-    })
+    evidence = {
+        "ai_input": ai_input or {}, "coverage": coverage or {},
+        "spatial_ocr": spatial_ocr or {}, "vector_geometry": vector_geometry or {},
+        "dimension_matches": dimension_matches or {},
+        "geometry_confirmation": geometry_confirmation or {},
+        "vision_response": vision_response or {}, "building": building or {},
+        "reviewer_room_geometry": reviewer_room_geometry or {},
+    }
+    try:
+        text = _canonical_json(evidence)
+    except TypeError:
+        return fingerprint({key: _canonical(value) for key, value in evidence.items()})
+    return hashlib.sha256(text.encode()).hexdigest()
 
 
 def stable_witness_id(source_fingerprint, page, drawing_number, label, kind, location=""):

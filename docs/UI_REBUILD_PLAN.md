@@ -214,7 +214,13 @@ Nothing is deleted; it is just out of the contractor's way.
 
 **Open items:**
 - **The "fresh upload" walkthrough is not timed yet** (it was checked on an earlier upload's copy).
-- **Speed:** Calculate takes about 80 s; the first resolver run takes up to about 3 min; adding a room takes about 15 s.
+- **Speed:** ~~Calculate takes about 80 s~~. **Updated 2026-10-07:**
+  - **Calculate is now one server job** (`backend/calculation_service.py`, `/api/job-calculation`, on the shared `backend/job_runner.py`). It applies the answers, rebuilds the model, confirms the rooms and calculates, preparing the inputs first when they're missing. It survives a reload, shows its current step, and reports interrupted and failed runs.
+  - **The draft geometry is cached by its input files** (it was rebuilt about 10 times per Calculate), and its evidence fingerprint is built in one pass (identical value).
+  - **Butcher Buffet copy, server steps from the same snapshot:** 84 s → 27.6 s, with the same total (34.3995 kW) and identical materialised inputs.
+  - **In the browser:** a repeat Calculate takes 27 s (was 77–120 s). The first Calculate after measuring rooms took 54 s, because answering the new roof questions rebuilds the evidence once.
+  - **Still slow:** the first resolver run (up to about 3 min, untimed since) and adding a room (about 15 s).
+  - **Found while checking:** the geometry fingerprint differs between two runs of the same code from the same inputs, likely iteration order that changes per Python process. It predates this change. To check: whether a server restart then marks results out of date.
 - **Typed-area rooms have no outline**, so their walls and roof are not assessed (envelope 0 kW). On that job a typed height changes nothing, because only the envelope uses height. The Results "not included" list says so; tracing (phase 3) fixes it.
 
 ### Phase 2 status (2026-10-06)

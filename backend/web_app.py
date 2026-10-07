@@ -90,7 +90,7 @@ from ai.calculator_draft import DraftConflict
 from backend import draft_service
 from backend import evidence_fusion_service
 from backend import calculation_extraction_service
-from backend import vision_extraction_service, window_scan_service, site_orientation_service, site_location_service, site_design_weather_service, room_use_resolution_service, room_inference_service, reviewer_room_geometry_service, ceiling_volume_resolution_service, internal_gains_resolution_service, thermal_surface_resolution_service, airflow_resolution_service, ahu_resolution_service, plant_resolution_service, safety_factor_resolution_service, ai_preliminary_service, model_input_resolution_service, au_ventilation_rules_service, autonomous_tasks_service, job_service, page_preparation_service
+from backend import vision_extraction_service, window_scan_service, site_orientation_service, site_location_service, site_design_weather_service, room_use_resolution_service, room_inference_service, reviewer_room_geometry_service, ceiling_volume_resolution_service, internal_gains_resolution_service, thermal_surface_resolution_service, airflow_resolution_service, ahu_resolution_service, plant_resolution_service, safety_factor_resolution_service, ai_preliminary_service, model_input_resolution_service, au_ventilation_rules_service, autonomous_tasks_service, job_service, page_preparation_service, calculation_service
 from backend import productization, test_mode_service, skill_workflow_service
 from backend import security
 from ai.ventilation import calculate_ventilation_report
@@ -370,6 +370,13 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._send_security_error(error, 403)
             except Exception as error:
                 return self.send_json({"error": product_error(error).get("error", "Task image is unavailable.")}, 404)
+        if urlparse(self.path).path == "/api/job-calculation":
+            try:
+                return self.send_json(api_calculation_status(self))
+            except security.SecurityError as error:
+                return self._send_security_error(error, 403)
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
         if urlparse(self.path).path == "/api/prepare-pages":
             try:
                 return self.send_json(api_page_preparation_status(self))
@@ -713,6 +720,13 @@ class Handler(SimpleHTTPRequestHandler):
                 self._require_api_access(write=True)
             except security.SecurityError as error:
                 return self._send_security_error(error, 403)
+        if urlparse(self.path).path == "/api/job-calculation":
+            try:
+                return self.send_json(api_start_calculation(self))
+            except security.SecurityError as error:
+                return self._send_security_error(error, 403)
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
         if urlparse(self.path).path == "/api/prepare-pages":
             try:
                 return self.send_json(api_start_page_preparation(self))
@@ -4107,6 +4121,22 @@ def api_autonomous_tasks(request):
         return autonomous_tasks_service.get_labels(project)
     security.require_project_role(project, request._identity(), "editor")
     return autonomous_tasks_service.get(sys.modules[__name__], project)
+
+
+def api_calculation_status(request):
+    query = parse_qs(urlparse(request.path).query)
+    return calculation_service.status(sys.modules[__name__], project_by_id(query.get("project_id", [""])[0]))
+
+
+def api_start_calculation(request):
+    """Rebuild the draft model, confirm the cooled rooms and calculate, as one server-side job."""
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    security.require_project_role(project, request._identity(), "editor")
+    if not project.get("reasoning_packet"):
+        raise ValueError("Prepare the drawing pages before calculating.")
+    return calculation_service.start(sys.modules[__name__], project, data)
 
 
 def api_page_preparation_status(request):

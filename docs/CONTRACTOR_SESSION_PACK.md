@@ -72,7 +72,7 @@ measure the facilitator, not the tool.
 
 | # | What | What the participant sees |
 |---|---|---|
-| W1 | **Calculate takes about 1.5–2 minutes** (the first time on a job up to about 3 minutes) | "Preparing the calculation: room uses, heights, people and equipment…" under the button |
+| W1 | **Calculate takes about 30 s** (about 1 min after measuring rooms; the first time on a job up to about 3–4 minutes) | The current step under the button ("Building the model from your rooms… (12 s)"), and "You can leave this page; it carries on" |
 | W2 | **Saving a measured room takes 11–16 s**; adding a room about 15 s | "Saving… (about 15 s)" |
 | W3 | Typed and measured areas count straight away, but the total only changes after Calculate | The rail says "Out of date — calculate again" |
 | W4 | Measuring: room names are often on a different page from the dimensions | "Kitchen's name is printed on page 21" above the plan |
@@ -89,7 +89,7 @@ measure the facilitator, not the tool.
 | Open a job → rail and tab | < 2 s | |
 | Type a room area | instant | saved per field |
 | Measure a room (scripted clicks) | 52–67 s + 11–16 s save | **not a human time**: clicks were computed from a known outline. The session measures the real first-room time (target: under 5 min) |
-| Calculate | 77–120 s | |
+| Calculate | 27 s repeat; 54 s after measuring rooms | server job since 2026-10-07 (was 77–120 s) |
 
 Expected session length: **35–50 min** for the main task, plus 5 min upload
 task, plus 10 min of questions. Stop at 60 min of task time regardless.
@@ -172,7 +172,7 @@ question, wrong click or error message (with the exact wording).
 | Measure on the plan, room 1: which room, which page, which dimension? Time to the first corner; time to save | | | |
 | Measure on the plan, room 2 (did they reuse the scale?) | | | |
 | Walls & roof / Windows (only if Card W has landed) | | | |
-| Calculate: did the 1.5–2 min wait worry them? | | | |
+| Calculate: did the wait (about 30 s to 1 min) worry them? Did they read the step text? | | | |
 | Results: did they read "Not included yet" and the draft warning? Print or CSV? | | | |
 | Upload task: what did they think the page preparation was doing? | | | |
 
