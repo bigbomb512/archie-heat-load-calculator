@@ -314,7 +314,7 @@ def _p0_walls_areas(root, page_number, context, calibration, wall_style_ids=None
     return walls, areas, segments
 
 
-def _roof_packets(root):
+def _roof_packets(root, room_id=None):
     ai_input, _spatial, _building = _load_inputs(root)
     site = _latest_site(root)
     try:
@@ -327,7 +327,7 @@ def _roof_packets(root):
                    if isinstance(row, dict) and row.get("room_id") and row.get("space_scope") in comfort_scopes}
     selected = {}
     for trace in traces:
-        if (trace.get("room_id") in comfort_ids
+        if (trace.get("room_id") in comfort_ids and (room_id is None or trace.get("room_id") == room_id)
                 and trace.get("calibration", {}).get("status") in {"agreed", "declared_scale_rejected"}):
             selected.setdefault(trace["room_id"], []).append(trace)
     result = []
@@ -345,8 +345,8 @@ def _roof_packets(root):
     return result
 
 
-def _refresh_roof_tasks(root):
-    for target,packet,prompt,images in _roof_packets(root):
+def _refresh_roof_tasks(root, room_id=None):
+    for target,packet,prompt,images in _roof_packets(root, room_id=room_id):
         record=_create_run(root,"P5_roof",target,packet,prompt,images,
             "Prompt exceeds the 2,000-character limit; evidence was not shortened." if len(prompt)>2000 else "")
         if record.get("status")=="waiting_for_reply" and not _has_explicit_roof_evidence(packet):
@@ -354,7 +354,7 @@ def _refresh_roof_tasks(root):
             _update_record(root,record)
 
 
-def _p6_kitchen_packets(root):
+def _p6_kitchen_packets(root, room_id=None):
     """Build a bounded kitchen-equipment packet from current room traces and drawing pages."""
     import pdfplumber
     ai_input, spatial, _building = _load_inputs(root)
@@ -371,6 +371,8 @@ def _p6_kitchen_packets(root):
                       and "kitchen" in str(row.get("room_label", "")).casefold()
                       and row.get("calibration", {}).get("status") in {"agreed", "declared_scale_rejected"}
                       and isinstance(row.get("points_image_px"), list) and len(row["points_image_px"]) >= 4]
+    if room_id is not None and str(room_id) not in {str(row.get("room_id")) for row in kitchen_traces}:
+        return []
     if not kitchen_traces:
         return [("P6_kitchen", "kitchen", {"task": "P6_kitchen"}, "", [],
                  "Waiting for room outlines (P0).")]
@@ -1179,22 +1181,26 @@ def _match_storefront_run(runs, elevation_pages, spatial):
             "reason":f"Unique run {run_index+1} matches elevation dimensions (2% or up to 600 mm wider)."}
 
 
-def _p3_packets(root):
+def _p3_packets(root, room_id=None, page_number=None):
     result=[]
     try: traces=reviewer_room_geometry_service.current_records(reviewer_room_geometry_service._paths({"review_dir":str(root)}))
     except (OSError,ValueError,TypeError,KeyError): traces=[]
     comfort=_comfort_room_ids(root)
     selected=[row for row in traces if row.get("calibration",{}).get("status") in {"agreed","declared_scale_rejected"}]
+    affected_pages = ({page_number} if page_number is not None else
+                      {row.get("page") for row in selected if row.get("room_id") == room_id}
+                      if room_id is not None else None)
     grouped={}
     for trace in selected: grouped.setdefault(trace.get("page"),[]).append(trace)
     ai_input,spatial,_building=_load_inputs(root)
     elevation_rows=_storefront_elevation_pages(ai_input)
     for page,traces_on_page in sorted(grouped.items()):
+        if affected_pages is not None and page not in affected_pages: continue
         comfort_traces=[row for row in traces_on_page if row.get("room_id") in comfort]
         if not comfort_traces: continue
         target=f"page-{page}"
         current=_current_task(root,"P3_boundaries",target)
-        if current and current.get("status") in {"applied","below_accuracy_bar"}: continue
+        if room_id is None and current and current.get("status") in {"applied","below_accuracy_bar"}: continue
         perimeter=_page_perimeter_data(traces_on_page)
         if perimeter["error"]:
             result.append(("P3_boundaries",target,{"task":"P3_boundaries","page":page},"",[],perimeter["error"]))
@@ -1253,7 +1259,7 @@ def _p3_packets(root):
     return result
 
 
-def _p4_packets(root):
+def _p4_packets(root, only_room_id=None):
     result=[]
     try: traces=reviewer_room_geometry_service.current_records(reviewer_room_geometry_service._paths({"review_dir":str(root)}))
     except (OSError,ValueError,TypeError,KeyError): traces=[]
@@ -1282,6 +1288,7 @@ def _p4_packets(root):
             if trace.get("room_id") in comfort:
                 page_by_room.setdefault(trace.get("room_id"),[]).append(trace)
         for room_id,room_traces in page_by_room.items():
+            if only_room_id is not None and str(room_id) != str(only_room_id): continue
             mappings=[{"trace_id":trace["trace_id"],**edge}
                       for trace in room_traces
                       for edge in page_perimeter["trace_edges"].get(trace["trace_id"],[])
@@ -1315,7 +1322,7 @@ def _p4_packets(root):
             trace=room_traces[0]
             target=f"{room_id}-run-{run_index}-page-{elevation['page']}-trace-{trace['trace_id']}"
             old=_current_task(root,"P4_openings",target)
-            if old and old.get("status") in {"applied","below_accuracy_bar"}: continue
+            if only_room_id is None and old and old.get("status") in {"applied","below_accuracy_bar"}: continue
             identity=ceiling_volume_resolution.room_identity(trace.get("room_label",""),trace.get("level_name",""))
             values=heights.get(room_id) or heights.get(identity) or {}
             ceiling=values.get("ceiling_height_mm")
@@ -1746,7 +1753,21 @@ def _apply_p4(web, project, root, record, validated):
     return record
 
 
-def _refresh_geometry_tasks(root):
+def _refresh_geometry_tasks(root, room_id=None, page_number=None):
+    if room_id is not None or page_number is not None:
+        # A trace edit only needs geometry tasks for that room. P3 is page-scoped,
+        # so its packet includes every current room part on the affected page.
+        builders = (
+            lambda: _p3_packets(root, room_id=room_id, page_number=page_number),
+            lambda: _p4_packets(root, only_room_id=room_id),
+            lambda: _p6_kitchen_packets(root, room_id=room_id),
+        )
+        for task, target, packet, prompt, images, reason in (row for builder in builders for row in builder()):
+            budget = autonomous_tasks.TASKS[task]["budget_chars"]
+            _create_run(root, task, target, packet, prompt, images, reason or
+                        (f"Prompt exceeds the {budget:,}-character limit; evidence was not shortened." if len(prompt) > budget else ""))
+        _refresh_roof_tasks(root, room_id=room_id)
+        return
     # Persist naming tasks before asking whether any rooms still need outlines.
     # If both packet lists are calculated together, the outline builder cannot
     # see the just-created naming tasks and offers an unnecessary second task.
@@ -2209,7 +2230,7 @@ def _has_explicit_roof_evidence(packet):
     return False
 
 
-def _answer_roof(web, project, root, data):
+def _answer_roof(web, project, root, data, *, defer_evidence_rebuild=False):
     if data.get("task") != "P5_roof":
         raise ValueError("Contractor answer is only supported for roof exposure.")
     target = str(data.get("target", ""))
@@ -2231,7 +2252,7 @@ def _answer_roof(web, project, root, data):
             "reviewer": "Answered by the contractor", "edges": deepcopy(trace.get("edges", [])),
             "roof": answer_roof[answer], "openings": deepcopy(trace.get("openings", [])),
             "confirm_roof": answer != "not_sure",
-        })
+        }, _defer_evidence_rebuild=True)
     if answer == "not_sure":
         record.update({"status": "contractor_answered_not_sure", "source": "reviewer",
                        "applied_value": {}, "contractor_answer": answer,
@@ -2245,21 +2266,24 @@ def _answer_roof(web, project, root, data):
                        "block_reason": ""})
     _update_record(root, record)
     _export_determinations(root)
+    if answer != "not_sure" and not defer_evidence_rebuild:
+        from backend import calculation_extraction_service
+        calculation_extraction_service.post(web, project, {"action": "build"})
     return get(web, project)
 
 
-def post(web, project, data):
+def post(web, project, data, *, defer_evidence_rebuild=False):
     with page_analysis_cache.operation(_root(project), code_fingerprint=_page_analysis_code_fingerprint()):
-        return _post(web, project, data)
+        return _post(web, project, data, defer_evidence_rebuild=defer_evidence_rebuild)
 
 
-def _post(web, project, data):
+def _post(web, project, data, *, defer_evidence_rebuild=False):
     root = _root(project)
     action = data.get("action", "")
     if action in {"run_all", "build"}:
         return run_all(web, project)
     if action == "answer_roof":
-        return _answer_roof(web, project, root, data)
+        return _answer_roof(web, project, root, data, defer_evidence_rebuild=defer_evidence_rebuild)
     task, target = str(data.get("task", "")), str(data.get("target", ""))
     if task not in autonomous_tasks.TASKS or not target:
         raise ValueError("Choose a supported task and target.")

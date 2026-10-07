@@ -15,6 +15,7 @@ does not load every artifact:
 """
 
 from datetime import datetime, timezone
+import math
 import json
 from pathlib import Path
 
@@ -80,18 +81,49 @@ def save_job_setup(project, data):
     return updated
 
 
-def apply_roof_answer(web, project):
+def apply_roof_answer(web, project, *, defer_evidence_rebuild=False):
     """Answer every open roof question with the job-level answer (one answer per tenancy, not per room)."""
     from backend import autonomous_tasks_service
-    answer = ROOF_ANSWER.get(job_setup(project).get("above", ""))
+    above = job_setup(project).get("above", "")
+    answer = ROOF_ANSWER.get(above)
     if not answer:
         return 0
     answered = 0
+    changed_envelope = False
     for record in autonomous_tasks_service._all_current(_root(project)):
         if record.get("task") == "P5_roof" and record.get("status") == "needs_contractor_answer":
             autonomous_tasks_service.post(web, project, {"action": "answer_roof", "task": "P5_roof",
-                                                         "target": record.get("target"), "answer": answer})
+                                                         "target": record.get("target"), "answer": answer},
+                                           defer_evidence_rebuild=True)
             answered += 1
+            changed_envelope = changed_envelope or above != "not_sure"
+    # P5 applies the same job-level answer to rooms waiting on a contractor.
+    # Also complete current hand traces, without replacing any reviewer decision.
+    if above in {"roof", "floor"}:
+        from backend import reviewer_room_geometry_service
+        root = _root(project)
+        artifact = _read(root / "reviewer_room_geometry.json", {})
+        records = artifact.get("records", []) if isinstance(artifact, dict) else []
+        for trace in reviewer_room_geometry_service.current_records(
+                reviewer_room_geometry_service._paths(project), artifact):
+            if trace.get("roof", "unknown") != "unknown":
+                continue
+            if trace.get("roof_source") == "reviewer":
+                continue
+            reviewer_room_geometry_service.post(web, project, {
+                "action": "classify_envelope", "trace_id": trace["trace_id"],
+                "edges": trace.get("edges", []), "roof": "exposed" if above == "roof" else "not_exposed",
+                "openings": trace.get("openings", []),
+                "openings_none_edges": trace.get("openings_none_edges", []),
+                "reviewer": "Answered on the Project tab", "confirm_roof": True,
+            }, _defer_evidence_rebuild=True)
+            answered += 1
+            changed_envelope = True
+    if changed_envelope and not defer_evidence_rebuild:
+        # The answer can update several parts. Rebuild shared geometry evidence once
+        # after every trace has the new roof value.
+        from backend import calculation_extraction_service
+        calculation_extraction_service.post(web, project, {"action": "build"})
     return answered
 
 
@@ -201,8 +233,11 @@ def drop_typed_height_stubs(artifact):
 
 
 # ---------------------------------------------------------------- status for the rail
-def _tab(state, detail=""):
-    return {"state": state, "detail": detail}
+def _tab(state, detail="", count=None):
+    result = {"state": state, "detail": detail}
+    if count is not None:
+        result["count"] = count
+    return result
 
 
 def traced_rooms(root):
@@ -236,6 +271,60 @@ def traced_rooms(root):
     return rooms
 
 
+def envelope_rooms(root):
+    """Read current envelope decisions directly from the geometry artifact."""
+    artifact = _read(Path(root) / "reviewer_room_geometry.json", {})
+    current = artifact.get("records", []) if isinstance(artifact, dict) else []
+    rooms = {}
+    for row in current:
+        room_id = row.get("room_id")
+        if not room_id:
+            continue
+        calibration = row.get("calibration") if isinstance(row.get("calibration"), dict) else {}
+        scale = calibration.get("mm_per_px")
+        points = row.get("points_image_px") or []
+        edges = []
+        for edge in row.get("edges", []):
+            index = edge.get("index")
+            if type(index) is not int or index + 1 >= len(points):
+                continue
+            try:
+                length = math.hypot(points[index + 1][0] - points[index][0],
+                                    points[index + 1][1] - points[index][1]) * float(scale) / 1000
+            except (TypeError, ValueError, IndexError):
+                length = None
+            source = (row.get("edge_sources", {}).get(str(index)) or row.get("envelope_declaration_source")
+                      or row.get("declaration_source") or "")
+            edges.append({"trace_id": row.get("trace_id"), "page": row.get("page"), "index": index,
+                          "boundary": edge.get("boundary", "unknown"),
+                          "length_m": round(length, 3) if length is not None else None, "source": source})
+        source = row.get("roof_source") or row.get("envelope_declaration_source") or row.get("declaration_source") or ""
+        room = rooms.setdefault(room_id, {"traces": [], "edges": [], "openings": [], "no_glazing_edges": [],
+                                           "roof": "unknown", "roof_source": ""})
+        room["traces"].append({"trace_id": row.get("trace_id"), "page": row.get("page"),
+                               "ai_quality_label": row.get("ai_quality_label", ""),
+                               "edge_sources": row.get("edge_sources", {}),
+                               "roof_source": row.get("roof_source", "")})
+        room["edges"].extend(edges)
+        room["openings"].extend([{**opening, "trace_id": row.get("trace_id"), "page": row.get("page"),
+                                  "source": opening.get("source") or row.get("envelope_declaration_source")
+                                  or row.get("declaration_source", "")}
+                                 for opening in row.get("openings", [])])
+        room["no_glazing_edges"].extend({"trace_id": row.get("trace_id"), "index": index}
+                                        for index in row.get("openings_none_edges", []))
+        if row.get("roof", "unknown") != "unknown":
+            room["roof"], room["roof_source"] = row["roof"], source
+    for room in rooms.values():
+        room["has_outline"] = bool(room["traces"])
+        room["window_count"] = len(room["openings"])
+        room["below_accuracy_bar"] = any(
+            "below accuracy bar" in str(trace.get("ai_quality_label", "")).lower()
+            or any(source == "ai_fallback" for source in trace.get("edge_sources", {}).values())
+            or trace.get("roof_source") == "ai_fallback"
+            for trace in room["traces"])
+    return rooms
+
+
 def _typed_since_result(root):
     """True when a typed area or height, or a room trace, was saved after the last result (the next Calculate uses it)."""
     report = root / "hourly_ai_preliminary_load_report.json"
@@ -246,7 +335,7 @@ def _typed_since_result(root):
 
 
 def status(web, project):
-    """Header facts and one state per tab: done / check / needed / working."""
+    """Header facts and tab states: done / check / needed / working / todo."""
     from backend import ai_preliminary_service, autonomous_tasks_service
     root = _root(project)
     setup = job_setup(project)
@@ -268,11 +357,9 @@ def status(web, project):
     if not confirmed:
         drawings_tab = _tab("needed", "The drawing pages haven't been prepared yet.")
     elif progress["waiting"]:
-        # Blocked checks wait on earlier ones; they are not done.
-        done = progress["total"] - progress["waiting"] - progress["blocked"]
-        drawings_tab = _tab("working", f"{done} of {progress['total']} checks done")
+        drawings_tab = _tab("working", "Toki is reviewing the drawings.")
     elif progress["blocked"]:
-        drawings_tab = _tab("check", f"{progress['blocked']} check{'s' if progress['blocked'] != 1 else ''} couldn't run")
+        drawings_tab = _tab("check", "Some drawing checks need attention.")
     else:
         drawings_tab = _tab("done")
 
@@ -304,6 +391,113 @@ def status(web, project):
         rooms_tab = _tab("check", f"{len(uncertain)} room{'s' if len(uncertain) != 1 else ''} to check")
     else:
         rooms_tab = _tab("done", f"{len(with_area)} rooms")
+
+    envelope = envelope_rooms(root)
+    outlined_included = [row for row in included if envelope.get(row.get("key"), {}).get("has_outline")]
+    missing_outline = [row for row in included if not envelope.get(row.get("key"), {}).get("has_outline")]
+    if missing_outline or not included:
+        walls_detail = ("Select a room to cool on the Rooms tab." if not included
+                        else f"Add outlines for {len(missing_outline)} cooled room(s).")
+        walls_tab = _tab("needed", walls_detail)
+    elif any(room.get("below_accuracy_bar") or room.get("roof") == "unknown"
+             or any(edge.get("boundary") == "unknown" for edge in room.get("edges", []))
+             for room in (envelope.get(row.get("key"), {}) for row in outlined_included)):
+        walls_tab = _tab("check", "Check wall and roof boundaries")
+    else:
+        walls_tab = _tab("done")
+
+    # Child-tab summaries give the workspace enough context to show calm,
+    # specific guidance without changing calculation readiness rules.
+    # Job name, address, and building type are useful context, not new
+    # calculation requirements. Only ask for review when the drawings found
+    # a specific site clue that could be accepted.
+    site_state = "check" if found_site and not address else "done"
+    site_detail = ("Review the address found on the drawings." if found_site and not address else
+                   "Address saved." if address else "Optional job and site details.")
+    tenancy_state = ("check" if setup.get("above") == "not_sure" or roof_open else "done" if setup.get("above") else "needed")
+    tenancy_detail = ("Check the roof information." if roof_open else "Review the tenancy context." if setup.get("above") == "not_sure"
+                      else "Tell us what is above the tenancy." if not setup.get("above") else "Tenancy context saved.")
+    room_detail_rows = [row for row in included if row.get("status") == "needs_use"]
+    if not candidates and not confirmed and progress["waiting"]:
+        room_details_tab = _tab("working", "Preparing the room list.", 0)
+    elif not candidates and not confirmed:
+        room_details_tab = _tab("todo", "Rooms appear after the drawings are read.", 0)
+    elif not candidates:
+        room_details_tab = _tab("needed", "Check the drawings or add a room.", 1)
+    elif room_detail_rows:
+        room_details_tab = _tab("check", f"Choose a use for {len(room_detail_rows)} room(s).", len(room_detail_rows))
+    else:
+        room_details_tab = _tab("done", "Room details are ready.", 0)
+
+    if not candidates and not confirmed and progress["waiting"]:
+        measurements_tab = _tab("working", "Preparing room measurements.", 0)
+    elif not candidates:
+        measurements_tab = _tab("todo", "Measurements appear when rooms are listed.", 0)
+    elif not included:
+        measurements_tab = _tab("needed", "Choose which rooms are cooled.", 1)
+    elif len(with_area) < len(included):
+        measurements_tab = _tab("needed", f"Add areas for {len(included) - len(with_area)} room(s).", len(included) - len(with_area))
+    else:
+        below_area_bar = [row for row in with_area
+                          if "below accuracy bar" in str(row.get("area_quality_label") or "").lower()]
+        measurements_tab = (_tab("check", f"Review the area for {len(below_area_bar)} room(s).", len(below_area_bar))
+                            if below_area_bar else _tab("done", "Room measurements are ready.", 0))
+
+    if not candidates and not confirmed and progress["waiting"]:
+        walls_subtab = _tab("working", "Preparing rooms before wall review.", 0)
+        roof_subtab = _tab("working", "Preparing rooms before roof review.", 0)
+    elif not candidates:
+        walls_subtab = _tab("todo", "Walls can be reviewed after rooms are listed.", 0)
+        roof_subtab = _tab("todo", "Roof details appear after rooms are listed.", 0)
+    elif not included:
+        walls_subtab = _tab("needed", "Choose which rooms are cooled on the Rooms tab.", 1)
+        roof_subtab = _tab("todo", "Choose cooled rooms before roof review.", 0)
+    elif missing_outline:
+        detail = f"Add outlines for {len(missing_outline)} cooled room(s)."
+        walls_subtab = _tab("needed", detail, len(missing_outline))
+        roof_subtab = _tab("todo", "Add room outlines before roof review.", 0)
+    else:
+        unknown_walls = sum(edge.get("boundary") == "unknown"
+                            for row in outlined_included for edge in envelope.get(row.get("key"), {}).get("edges", []))
+        unknown_roofs = sum(envelope.get(row.get("key"), {}).get("roof", "unknown") == "unknown"
+                            for row in outlined_included)
+        wall_review_edges = sum(
+            1 for row in outlined_included
+            for edge in envelope.get(row.get("key"), {}).get("edges", [])
+            if str(edge.get("source") or "").startswith("ai")
+        )
+        wall_review_edges += sum(
+            1 for row in outlined_included
+            if any("below accuracy bar" in str(trace.get("ai_quality_label") or "").lower()
+                   for trace in envelope.get(row.get("key"), {}).get("traces", []))
+            and not any(str(edge.get("source") or "").startswith("ai")
+                        for edge in envelope.get(row.get("key"), {}).get("edges", []))
+        )
+        roof_review_rooms = sum(
+            1 for row in outlined_included
+            if str(envelope.get(row.get("key"), {}).get("roof_source") or "").startswith("ai")
+        )
+        walls_subtab = (_tab("needed", f"Classify {unknown_walls} wall(s).", unknown_walls) if unknown_walls else
+                        _tab("check", f"Review {wall_review_edges} AI wall decision(s).", wall_review_edges) if wall_review_edges else
+                        _tab("done", "Wall boundaries are ready.", 0))
+        roof_subtab = (_tab("needed", f"Choose what is above {unknown_roofs} room(s).", unknown_roofs) if unknown_roofs else
+                       _tab("check", f"Review AI roof decisions in {roof_review_rooms} room(s).", roof_review_rooms) if roof_review_rooms else
+                       _tab("done", "Roof details are ready.", 0))
+    if not outlined_included:
+        windows_tab = _tab("todo", "No outlined rooms yet.")
+    elif any(any(edge.get("boundary") == "unknown" for edge in envelope.get(row.get("key"), {}).get("edges", []))
+             for row in outlined_included):
+        windows_tab = _tab("todo", "Classify the walls first")
+    elif any(edge.get("boundary") in {"external", "mall"}
+             and not any(opening.get("trace_id") == edge.get("trace_id")
+                         and opening.get("edge_index") == edge.get("index")
+                         for opening in envelope.get(row.get("key"), {}).get("openings", []))
+             and not any(mark.get("trace_id") == edge.get("trace_id") and mark.get("index") == edge.get("index")
+                         for mark in envelope.get(row.get("key"), {}).get("no_glazing_edges", []))
+             for row in outlined_included for edge in envelope.get(row.get("key"), {}).get("edges", [])):
+        windows_tab = _tab("check", "Check glazing or confirm no glazing on each outside or mall wall")
+    else:
+        windows_tab = _tab("done")
 
     report = model.get("hourly_ai_preliminary_load_report") or {}
     peak = report.get("included_scope_peak") or {}
@@ -342,6 +536,14 @@ def status(web, project):
         "rooms": {"total": len(candidates), "included": len(included), "with_area": len(with_area)},
         "area_overrides": overrides, "height_overrides": heights, "room_heights": room_heights,
         "traced_rooms": traced,
-        "tabs": {"project": project_tab, "drawings": drawings_tab, "rooms": rooms_tab, "results": results_tab},
+        "envelope": envelope,
+        "subtabs": {
+            "project": {"job_site": _tab(site_state, site_detail, 0 if site_state == "done" else 1),
+                        "tenancy_context": _tab(tenancy_state, tenancy_detail, 0 if tenancy_state == "done" else 1)},
+            "rooms": {"room_details": room_details_tab, "measurements": measurements_tab},
+            "walls": {"walls": walls_subtab, "roof": roof_subtab},
+        },
+        "tabs": {"project": project_tab, "drawings": drawings_tab, "rooms": rooms_tab,
+                 "walls": walls_tab, "windows": windows_tab, "results": results_tab},
         "pages": analysis.get("pages_analysed"),
     }

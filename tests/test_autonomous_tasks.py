@@ -1055,6 +1055,20 @@ class AutonomousTaskTests(unittest.TestCase):
             autonomous_tasks_service._refresh_geometry_tasks(Path("/tmp"))
         self.assertEqual(events, ["P0_room_names", "outline-builder", "P5_roof", "P6_kitchen"])
 
+    def test_trace_refresh_is_limited_to_the_affected_geometry_room_and_page(self):
+        root = Path(".")
+        with patch.object(autonomous_tasks_service, "_p3_packets", return_value=[]) as p3, \
+             patch.object(autonomous_tasks_service, "_p4_packets", return_value=[]) as p4, \
+             patch.object(autonomous_tasks_service, "_p6_kitchen_packets", return_value=[]) as p6, \
+             patch.object(autonomous_tasks_service, "_refresh_roof_tasks") as roof, \
+             patch.object(autonomous_tasks_service, "_p0_initial_packets") as p0:
+            autonomous_tasks_service._refresh_geometry_tasks(root, room_id="shop", page_number=20)
+        p3.assert_called_once_with(root, room_id="shop", page_number=20)
+        p4.assert_called_once_with(root, only_room_id="shop")
+        p6.assert_called_once_with(root, room_id="shop")
+        roof.assert_called_once_with(root, room_id="shop")
+        p0.assert_not_called()
+
     def test_p3_fallback_labels_and_reviewer_boundary_precedence(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1417,16 +1431,23 @@ class AutonomousTaskTests(unittest.TestCase):
             record["status"] = "needs_contractor_answer"
             autonomous_tasks_service._update_record(root, record)
             calls = []
+            from backend import calculation_extraction_service
+            from contextlib import nullcontext
             with patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "_paths", return_value={"artifact": artifact}), \
-                 patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "post", side_effect=lambda _w, _p, body, **_kwargs: calls.append(body)):
-                autonomous_tasks_service._answer_roof(SimpleNamespace(), project, root, {
-                    "task": "P5_roof", "target": "shop", "answer": "floor_tenancy_above"})
+                 patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "post", side_effect=lambda _w, _p, body, **_kwargs: calls.append(body)), \
+                 patch.object(calculation_extraction_service, "post") as rebuild, \
+                 patch.object(autonomous_tasks_service.page_analysis_cache, "operation",
+                              side_effect=lambda *_args, **_kwargs: nullcontext()):
+                autonomous_tasks_service.post(SimpleNamespace(), project, {
+                    "action": "answer_roof", "task": "P5_roof", "target": "shop",
+                    "answer": "floor_tenancy_above", "_defer_evidence_rebuild": True})
             self.assertEqual(len(calls), 2)
             self.assertEqual({call["trace_id"] for call in calls},{"trace-shop","trace-shop-part-2"})
             self.assertTrue(all(call["action"]=="classify_envelope" for call in calls))
             self.assertTrue(all(call["roof"]=="not_exposed" for call in calls))
             self.assertTrue(all(call["reviewer"]=="Answered by the contractor" for call in calls))
             self.assertTrue(all(call["confirm_roof"] for call in calls))
+            rebuild.assert_called_once()
             saved = autonomous_tasks_service._current_task(root, "P5_roof", "shop")
             self.assertEqual(saved["status"], "applied")
             self.assertEqual(saved["applied_value"]["label"], "Answered by the contractor")

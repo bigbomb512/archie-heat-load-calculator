@@ -30,7 +30,7 @@ class FakeWeb:
 
 def finish(project, seconds=5):
     deadline = time.monotonic() + seconds
-    while project["id"] in service._RUNNING and time.monotonic() < deadline:
+    while service._JOB.key(project) in service._RUNNING and time.monotonic() < deadline:
         time.sleep(0.01)
     return service.status(None, project)
 
@@ -44,7 +44,7 @@ class CalculationJobTests(unittest.TestCase):
         self.calls = []
 
     def tearDown(self):
-        service._RUNNING.discard("job")
+        service._RUNNING.clear()
         self.temp.cleanup()
 
     def patches(self, assemble_errors=()):
@@ -109,6 +109,27 @@ class CalculationJobTests(unittest.TestCase):
         self.assertEqual(failed["status"], "failed")
         self.assertIn("No room has an area", failed["error"])
         self.assertNotIn("calculate", self.calls)
+
+    def test_two_project_entries_on_one_folder_share_one_run(self):
+        import threading
+        gate = threading.Event()
+        twin = {**self.web.project, "id": "job-copy"}            # a second entry pointing at the same folder
+        active = self.patches()
+        for item in active:
+            item.start()
+        try:
+            with patch.object(job_service, "apply_roof_answer", side_effect=lambda web, project: gate.wait(5)):
+                job_service.save_job_setup(self.web.project, {"above": "floor"})
+                first = service.start(self.web, self.web.project, {})
+                second = service.start(self.web, twin, {})
+                gate.set()
+                done = finish(self.web.project)
+        finally:
+            for item in active:
+                item.stop()
+        self.assertTrue(second["deduplicated"])
+        self.assertEqual(second["job_id"], first["job_id"])
+        self.assertEqual(done["status"], "done")
 
     def test_a_run_owned_by_another_live_server_process_is_joined_not_replaced(self):
         import os

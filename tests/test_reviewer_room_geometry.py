@@ -409,6 +409,57 @@ class ReviewerRoomGeometryTests(unittest.TestCase):
             self.assertEqual(saved["edges"][0]["boundary"], "internal")
             self.assertNotIn("openings_none_edges", saved)
 
+    def test_classify_envelope_accepts_and_persists_explicit_no_glazing_edges(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            vector_page = {"page": 1, "unchanged": True}
+            trace = {**self.trace, "source_fingerprints": {"source_pdf": "pdf-a", "vector_page": fingerprint(vector_page)}}
+            (root / "ai_input.json").write_text(json.dumps({"source_pdf_fingerprint": "pdf-a"}), encoding="utf-8")
+            (root / "vector_geometry.json").write_text(json.dumps({"geometry_key_points": {"pages": [vector_page]}}), encoding="utf-8")
+            (root / "building_evidence.json").write_text(json.dumps({"spaces": [
+                {"id": "room-shop", "name": "Shop", "level_name": "Ground", "evidence": [{"page": 1}]},
+            ]}), encoding="utf-8")
+            path = root / "reviewer_room_geometry.json"
+            path.write_text(json.dumps(reviewer_room_geometry.validate_artifact({"records": [trace]})), encoding="utf-8")
+            project = {"id": "none-glazing-explicit", "review_dir": str(root)}
+            web = SimpleNamespace(safe_link=lambda _path: "", update_project=lambda _project: None)
+            with patch.object(reviewer_room_geometry_service, "_response", return_value={"ok": True}), \
+                 patch("backend.calculation_extraction_service.post", return_value={}), \
+                 patch("backend.productization.record_change_if_fingerprint_changed"):
+                payload = {"action": "classify_envelope", "trace_id": trace["trace_id"],
+                    "edges": [{"index": 0, "boundary": "external"}], "roof": "unknown", "reviewer": "QA",
+                    "openings": [], "openings_none_edges": [0]}
+                reviewer_room_geometry_service.post(web, project, payload)
+                saved = json.loads(path.read_text(encoding="utf-8"))["records"][0]
+                self.assertEqual(saved["openings_none_edges"], [0])
+                with self.assertRaisesRegex(ValueError, "unique valid"):
+                    reviewer_room_geometry_service.post(web, project, {**payload, "openings_none_edges": [0, 0]})
+                with self.assertRaisesRegex(ValueError, "only be set on external or mall"):
+                    reviewer_room_geometry_service.post(web, project, {**payload,
+                        "edges": [{"index": 0, "boundary": "external"}, {"index": 1, "boundary": "internal"}],
+                        "openings_none_edges": [1]})
+                with patch("ai.ceiling_volume_resolution.values_by_room",
+                           return_value={"room-shop": {"ceiling_height_mm": 3000}}):
+                    reviewer_room_geometry_service.post(web, project, {**payload,
+                        "openings": [{"opening_id": "front", "edge_index": 0, "width_m": 1.0,
+                            "head_height_m": 2.1, "sill_height_m": 0.9, "elevation_page": 26,
+                            "glazing_choice": "retail", "shading_category": "unshaded"}]})
+                saved = json.loads(path.read_text(encoding="utf-8"))["records"][0]
+                self.assertEqual(saved["openings"][0]["opening_id"], "front")
+                self.assertEqual(saved["openings"][0]["declaration_source"], "reviewer")
+                self.assertNotIn("openings_none_edges", saved)
+                ai_opening = {"opening_id": "front", "edge_index": 0, "width_m": 1.0,
+                    "head_height_m": 2.1, "sill_height_m": 0.9, "elevation_page": 26,
+                    "glazing_choice": "retail", "shading_category": "unshaded"}
+                with patch("ai.ceiling_volume_resolution.values_by_room",
+                           return_value={"room-shop": {"ceiling_height_mm": 3000}}):
+                    reviewer_room_geometry_service.post(web, project,
+                        {**payload, "declaration_source": "ai_determined", "ai_run_id": "P4-run",
+                         "openings": [ai_opening], "openings_none_edges": []})
+                saved = json.loads(path.read_text(encoding="utf-8"))["records"][0]
+                self.assertEqual(saved["openings"][0]["declaration_source"], "reviewer")
+                self.assertNotIn("ai_run_id", saved["openings"][0])
+
     def test_p3_apply_drops_no_glazing_mark_when_ai_classifies_wall_internal(self):
         from backend import autonomous_tasks_service
         with TemporaryDirectory() as temporary:
@@ -512,10 +563,21 @@ class ReviewerRoomGeometryTests(unittest.TestCase):
                                                                                          "preview_matches_vector_coordinates": False}]):
                 with self.assertRaisesRegex(ValueError, "matching full-resolution plan image"):
                     reviewer_room_geometry_service.post(web, project, payload)
+            from backend import autonomous_tasks_service, job_service
+            job_service.save_job_setup(project, {"above": "floor"})
+            from backend import calculation_extraction_service
             with patch.object(reviewer_room_geometry_service, "_page_context", return_value=[page_context]), \
                     patch("ai.ceiling_volume_resolution.values_by_room",
-                          return_value={"room-shop": {"ceiling_height_mm": 3750}}):
+                          return_value={"room-shop": {"ceiling_height_mm": 3750}}), \
+                    patch.object(autonomous_tasks_service, "_refresh_geometry_tasks") as refresh_tasks, \
+                    patch.object(job_service, "apply_roof_answer", return_value=0) as apply_project_roof, \
+                    patch.object(calculation_extraction_service, "post", wraps=calculation_extraction_service.post) as evidence_build:
                 saved = reviewer_room_geometry_service.post(web, project, payload)
+                self.assertEqual(refresh_tasks.call_count, 1)
+                self.assertEqual(refresh_tasks.call_args.kwargs, {"room_id": "room-shop", "page_number": 1})
+                apply_project_roof.assert_called_once_with(web, project, defer_evidence_rebuild=True)
+                evidence_build.assert_called_once_with(web, project, {"action": "build"})
+                self.assertNotIn("task_refresh_error", saved)
                 candidates = saved["calculation_input_evidence"]["candidates"]
                 area = next(row for row in candidates if row["target"] == "room.Shop.area_m2")
                 self.assertEqual(area["status"], "proposed")
@@ -565,8 +627,15 @@ class ReviewerRoomGeometryTests(unittest.TestCase):
                 self.assertEqual(shortened["trace_save_update"]["dropped_openings"][0]["opening_id"], "front-window")
                 self.assertIn("cannot exceed", shortened["trace_save_update"]["dropped_openings"][0]["reason"])
                 deleted = reviewer_room_geometry_service.post(web, project, {"action": "delete", "trace_id": "room_trace_" + reviewer_room_geometry_service.fingerprint(["room-shop", 1])[:20]})
+                self.assertEqual(refresh_tasks.call_count, 4)
+                self.assertEqual(apply_project_roof.call_count, 4)
                 self.assertFalse(any(row.get("target") == "room.Shop.area_m2" for row in deleted["calculation_input_evidence"]["candidates"]))
                 self.assertFalse(any(row.get("kind") == "room_geometry_proof" for row in deleted["geometry_resolution"]["entities"]))
+                refresh_tasks.side_effect = RuntimeError("refresh failed")
+                with self.assertLogs("backend.reviewer_room_geometry_service", level="ERROR"):
+                    saved_despite_refresh_error = reviewer_room_geometry_service.post(web, project, payload)
+                self.assertEqual(saved_despite_refresh_error["task_refresh_error"], "refresh failed")
+                self.assertEqual(len(json.loads(artifact_path.read_text(encoding="utf-8"))["records"]), 1)
 
     def test_page_context_serves_only_full_resolution_render_matching_vector_coordinates(self):
         from PIL import Image

@@ -12,21 +12,35 @@
   const root = document.getElementById("vJob");
   const body = document.getElementById("jobBody");
   const rail = document.getElementById("wsTabs");
+  const subtabNav = document.getElementById("wsSubtabs");
   if (!root || !body || !rail) return;
 
   const TABS = [
-    {id: "project", label: "Project"},
+    {id: "project", label: "Project", subtabs: [
+      {id: "job-site", key: "job_site", label: "Job & site"},
+      {id: "tenancy-context", key: "tenancy_context", label: "Tenancy context"},
+    ]},
     {id: "drawings", label: "Drawings"},
-    {id: "rooms", label: "Rooms"},
+    {id: "rooms", label: "Rooms", subtabs: [
+      {id: "room-details", key: "room_details", label: "Room details"},
+      {id: "measurements", key: "measurements", label: "Measurements"},
+    ]},
+    {id: "walls", label: "Walls & roof", subtabs: [
+      {id: "walls", key: "walls", label: "Walls"},
+      {id: "roof", key: "roof", label: "Roof"},
+    ]},
+    {id: "windows", label: "Windows"},
     {id: "results", label: "Results"},
   ];
-  const STATE_TEXT = {done: "Done", check: "Check", needed: "Needed", working: "Working", todo: "Not yet"};
-  const STATE_ICON = {done: "✓", check: "●", needed: "!", working: "◌", todo: "○"};
+  const STATE_TEXT = {done: "Complete", check: "Review", needed: "To do", working: "In progress", todo: "Not yet", error: "Error"};
+  const STATE_ICON = {done: "✓", check: "●", needed: "●", working: "◌", todo: "○", error: "!"};
   const BUILDING_TYPES = [["", "Choose…"], ["food_tenancy", "Food tenancy (café, restaurant)"], ["retail", "Retail shop"],
                           ["office", "Office"], ["medical", "Medical / consulting"], ["other", "Other"]];
   const POLL_MS = 15000;
-  const state = {projectId: null, analysis: null, status: null, tab: "project", active: false, engineer: false,
-                 include: new Map(), poll: null, busy: new Set(), message: ""};
+  const state = {projectId: null, analysis: null, status: null, tab: "project", subtab: "", active: false, engineer: false,
+                 include: new Map(), poll: null, busy: new Set(), message: "", pageReviewOpen: false, envelopeCtx: null,
+                 wallsRoomId: "", wallsTraceId: "", windowsRoomId: "", windowsTraceId: "",
+                 projectDraft: null, envelopeDrafts: {}};
 
   const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
   const kw = value => (value == null || !isFinite(value)) ? "—" : Number(value).toFixed(1);
@@ -66,23 +80,75 @@
     document.getElementById("jobTitle").textContent = status.name || state.analysis?.name || "Your job";
     document.getElementById("jobAddress").textContent = status.address || status.found_site || "Address not added yet";
     rail.innerHTML = TABS.map(tab => {
-      const info = status.tabs?.[tab.id] || {state: "todo"};
+      const info = railStatus(tab, status);
       const current = tab.id === state.tab;
-      return `<li><a href="#/job/${encodeURIComponent(state.projectId)}/${tab.id}" class="ws-tab is-${esc(info.state)}${current ? " is-current" : ""}"
+      const child = current && tab.subtabs?.find(row => row.id === state.subtab)?.id;
+      const destination = `#/job/${encodeURIComponent(state.projectId)}/${tab.id}${child ? `/${child}` : ""}`;
+      return `<li><a href="${destination}" class="ws-tab is-${esc(info.state)}${current ? " is-current" : ""}"
         data-ws-tab="${tab.id}" ${current ? 'aria-current="page"' : ""}>
         <span class="ws-tab-icon" aria-hidden="true">${STATE_ICON[info.state] || "○"}</span>
         <span class="ws-tab-text"><b>${esc(tab.label)}</b><small>${esc(info.detail || STATE_TEXT[info.state] || "")}</small></span>
-        ${info.detail ? `<span class="visually-hidden">${esc(STATE_TEXT[info.state] || "")}</span>` : ""}</a></li>`;
+        <span class="visually-hidden">${esc(STATE_TEXT[info.state] || "")}</span></a></li>`;
     }).join("");
     const select = document.getElementById("wsSectionSelect");
-    select.innerHTML = TABS.map(tab => `<option value="${tab.id}" ${tab.id === state.tab ? "selected" : ""}>${esc(tab.label)} — ${esc(STATE_TEXT[status.tabs?.[tab.id]?.state] || "Not yet")}</option>`).join("");
+    select.innerHTML = TABS.map(tab => { const info = railStatus(tab, status); return `<option value="${tab.id}" ${tab.id === state.tab ? "selected" : ""}>${esc(tab.label)} — ${esc(STATE_TEXT[info.state] || "Not yet")}</option>`; }).join("");
     document.getElementById("wsTotal").textContent = kw(status.total_kw);
     document.getElementById("wsTotalNote").textContent = status.total_kw == null ? "Not calculated yet"
       : status.result_stale ? "Out of date — calculate again" : "Draft total cooling";
+    renderSubtabs();
+  }
+
+  function railStatus(tab, status = state.status || {}) {
+    const raw = status.tabs?.[tab.id] || {state: "todo"};
+    const children = tab.subtabs?.map(child => status.subtabs?.[tab.id]?.[child.key]).filter(Boolean) || [];
+    if (!children.length) {
+      if (raw.state === "todo" || (raw.state === "check" && ["windows", "results"].includes(tab.id)))
+        return {...raw, state: "needed"};
+      return raw;
+    }
+    const needed = children.filter(row => row.state === "needed");
+    const review = children.filter(row => row.state === "check");
+    const working = children.filter(row => row.state === "working");
+    if (needed.length) {
+      const addCount = needed.reduce((sum, row) => sum + (Number(row.count) || 1), 0);
+      const reviewCount = review.reduce((sum, row) => sum + (Number(row.count) || 1), 0);
+      return {state: "needed", detail: `${addCount} item${addCount === 1 ? "" : "s"} to add${reviewCount ? ` · ${reviewCount} to review` : ""}`};
+    }
+    if (review.length) {
+      const count = review.reduce((sum, row) => sum + (Number(row.count) || 1), 0);
+      return {state: "check", detail: `${count} item${count === 1 ? "" : "s"} to review`};
+    }
+    if (working.length || raw.state === "working") return {state: "working", detail: raw.detail || "In progress"};
+    if (children.every(row => row.state === "done")) return {state: "done", detail: "All sections complete"};
+    return raw;
+  }
+
+  function renderSubtabs() {
+    const main = TABS.find(row => row.id === state.tab);
+    if (!subtabNav || !main?.subtabs) { if (subtabNav) { subtabNav.hidden = true; subtabNav.innerHTML = ""; } return; }
+    const childStatuses = state.status?.subtabs?.[main.id] || {};
+    subtabNav.hidden = false;
+    subtabNav.innerHTML = main.subtabs.map(child => {
+      const info = childStatuses[child.key] || {state: "todo"};
+      const current = child.id === state.subtab;
+      return `<a class="ws-subtab is-${esc(info.state)}" href="#/job/${encodeURIComponent(state.projectId)}/${main.id}/${child.id}"
+        aria-label="${esc(child.label)}, ${esc(STATE_TEXT[info.state] || "Not yet")}" ${current ? 'aria-current="page"' : ""}><span class="ws-subtab-status" aria-hidden="true"></span>${esc(child.label)}
+        <small class="ws-subtab-state">${esc(STATE_TEXT[info.state] || "Not yet")}</small></a>`;
+    }).join("");
   }
 
   function go(tab) {
     location.hash = `#/job/${encodeURIComponent(state.projectId)}/${tab}`;
+  }
+
+  function defaultSubtab(tab, requested = "") {
+    const main = TABS.find(row => row.id === tab);
+    if (!main?.subtabs?.length) return "";
+    return main.subtabs.some(row => row.id === requested) ? requested : main.subtabs[0].id;
+  }
+
+  function goSubtab(tab, child) {
+    location.hash = `#/job/${encodeURIComponent(state.projectId)}/${tab}/${child}`;
   }
 
   function nextButton(tab) {
@@ -105,7 +171,8 @@
     renderRail();
     body.innerHTML = "";
     const tab = state.tab;
-    const render = {project: renderProject, drawings: renderDrawings, rooms: renderRooms, results: renderResults}[tab] || renderProject;
+    const render = {project: renderProject, drawings: renderDrawings, rooms: renderRooms, walls: renderWalls,
+                    windows: renderWindows, results: renderResults}[tab] || renderProject;
     render().catch(error => { if (state.tab === tab) showTabError(error); });
     document.querySelector(".work")?.scrollTo?.(0, 0);
   }
@@ -121,41 +188,48 @@
     const projectId = state.projectId;
     const status = state.status || await loadStatus();
     if (!live(projectId, "project")) return;
+    state.projectDraft = state.projectDraft || {name: status.name || "", address: status.address || "",
+      building_type: status.building_type || "", above: status.above || "", person: userName()};
+    const draft = state.projectDraft;
     const found = status.found_site;
+    const jobSite = state.subtab !== "tenancy-context";
     body.innerHTML = `<div class="ws-card" data-ws-project>
-      <h2>Project</h2>
+      <h2>${jobSite ? "Job &amp; site" : "Tenancy context"}</h2>
       <p class="ws-hint">Tell us what you know about the job. Anything you leave blank, Toki works out from the drawings where it can.</p>
       <form class="ws-form" data-ws-project-form>
-        <label>Job name<input name="name" autocomplete="off" value="${esc(status.name)}"></label>
-        <label>Site address<input name="address" autocomplete="street-address" placeholder="Street, suburb, state" value="${esc(status.address)}"></label>
-        ${found && !status.address ? `<p class="ws-found">Found on the drawings: <b>${esc(found)}</b> <button class="link-button" type="button" data-ws-use-found>Use this</button></p>` : ""}
-        <label>Building type<select name="building_type">${BUILDING_TYPES.map(([value, label]) => `<option value="${value}" ${status.building_type === value ? "selected" : ""}>${esc(label)}</option>`).join("")}</select></label>
-        <fieldset><legend>What's above this tenancy?</legend>
-          ${[["roof", "The roof"], ["floor", "Another floor or tenancy"], ["not_sure", "Not sure"]].map(([value, label]) =>
-            `<label class="ws-radio"><input type="radio" name="above" value="${value}" ${status.above === value ? "checked" : ""}> ${label}</label>`).join("")}
-        </fieldset>
-        <label>Your name <small>(optional; recorded with your changes)</small><input name="person" autocomplete="name" value="${esc(userName())}"></label>
+        ${jobSite ? `<label>Job name<input name="name" autocomplete="off" value="${esc(draft.name)}"></label>
+          <label>Site address<input name="address" autocomplete="street-address" placeholder="Street, suburb, state" value="${esc(draft.address)}"></label>
+          ${found && !draft.address ? `<p class="ws-found">Found on the drawings: <b>${esc(found)}</b> <button class="link-button" type="button" data-ws-use-found>Use this</button></p>` : ""}
+          <label>Building type<select name="building_type">${BUILDING_TYPES.map(([value, label]) => `<option value="${value}" ${draft.building_type === value ? "selected" : ""}>${esc(label)}</option>`).join("")}</select></label>
+          <p class="ws-fine">Weather and sun: a generic Australian design day for now. Site-specific weather needs the AIRAH design data, which isn't connected yet.</p>`
+          : `<fieldset><legend>What's above this tenancy?</legend>
+            ${[["roof", "The roof"], ["floor", "Another floor or tenancy"], ["not_sure", "Not sure"]].map(([value, label]) =>
+              `<label class="ws-radio"><input type="radio" name="above" value="${value}" ${draft.above === value ? "checked" : ""}> ${label}</label>`).join("")}
+          </fieldset>`}
+        <label>Your name <small>(optional; recorded with your changes)</small><input name="person" autocomplete="name" value="${esc(draft.person)}"></label>
         <div class="ws-actions"><button class="btn key" type="submit">Save</button><span class="ws-status" role="status" data-ws-project-status>${esc(state.message)}</span></div>
       </form>
-      <p class="ws-fine">Weather and sun: a generic Australian design day for now. Site-specific weather needs the AIRAH design data, which isn't connected yet.</p>
       ${nextButton("project")}</div>`;
     state.message = "";
     const form = body.querySelector("[data-ws-project-form]");
-    body.querySelector("[data-ws-use-found]")?.addEventListener("click", () => { form.elements.address.value = found; });
+    form.addEventListener("input", event => {
+      const field = event.target;
+      if (field.name && field.name in draft) draft[field.name] = field.type === "radio" ? (field.checked ? field.value : draft[field.name]) : field.value;
+    });
+    body.querySelector("[data-ws-use-found]")?.addEventListener("click", () => {
+      form.elements.address.value = found; draft.address = found;
+    });
     form.addEventListener("submit", async event => {
       event.preventDefault();
       const line = body.querySelector("[data-ws-project-status]");
-      storage.set("toki.workspace.name", form.elements.person.value.trim());
+      storage.set("toki.workspace.name", draft.person.trim());
       line.textContent = "Saving…";
       try {
-        state.status = await sendJson("/api/job-setup", {project_id: projectId, name: form.elements.name.value,
-          address: form.elements.address.value, building_type: form.elements.building_type.value,
-          above: form.elements.above.value || "", edited_by: userName()});
+        state.status = await sendJson("/api/job-setup", {project_id: projectId, name: draft.name,
+          address: draft.address, building_type: draft.building_type, above: draft.above, edited_by: userName()});
         renderRail();
         line.textContent = "Saved.";
-      } catch (error) {
-        line.textContent = `Could not save: ${error.message}`;
-      }
+      } catch (error) { line.textContent = `Could not save: ${error.message}`; line.classList.add("is-error"); line.setAttribute("role", "alert"); }
     });
     wireCommon();
   }
@@ -226,18 +300,18 @@
     if (!live(projectId, "drawings")) return;
     const checks = status.checks || {total: 0, waiting: 0, blocked: 0};
     const done = checks.total - checks.waiting - checks.blocked;
-    const pct = checks.total ? Math.round((done / checks.total) * 100) : 0;
-    const blockedNote = checks.blocked ? ` ${checks.blocked} more start${checks.blocked === 1 ? "s" : ""} when earlier checks are answered.` : "";
+    const pendingReview = checks.waiting > 0 || checks.blocked > 0;
+    const drawingMessage = checks.waiting
+      ? "The Toki team is reviewing drawing details. You can continue with the rooms and measurements below."
+      : checks.blocked
+        ? "Some drawing checks need attention from the Toki team. Review the available room information while they are resolved."
+        : "Drawing analysis is complete. Review any items marked To do or Review in Rooms, Walls & roof, and Windows.";
     body.innerHTML = `<div class="ws-card" data-ws-drawings>
-      <h2>Drawings</h2>
-      <h3>Drawing check</h3>
-      <div class="ws-meter" role="progressbar" aria-label="Drawing check" aria-valuemin="0" aria-valuemax="${checks.total}" aria-valuenow="${done}"><span style="width:${pct}%"></span></div>
-      <p data-ws-checks><b>${done} of ${checks.total} checks done.</b>
-        ${checks.waiting ? (operatorMode() ? `Answer them below, one at a time.${blockedNote}`
-            : `Toki is reading rooms, walls, windows and equipment from the drawings. For now the Toki team completes this step; this page updates by itself.${blockedNote}`)
-          : checks.blocked ? `${checks.blocked} check${checks.blocked === 1 ? "" : "s"} couldn't run; Engineer review has the details.` : "All checks are done."}</p>
-      ${checks.waiting && !operatorMode() ? `<p class="ws-fine">You don't have to wait: if you know the room areas, type them on the Rooms tab.
-        <button class="link-button" type="button" data-ws-operator-on>Toki team: answer the checks here</button></p>` : ""}
+      <h2>Drawing analysis</h2>
+      <p class="ws-hint">Toki selects likely plan pages and reads the information needed for this job. Check the room, wall and window tabs for details that need your review.</p>
+      <p data-ws-checks role="status">${esc(operatorMode() && pendingReview ? `${done} of ${checks.total} checks resolved. Answer the remaining Toki checks below.` : drawingMessage)}</p>
+      ${pendingReview && !operatorMode() ? `<p class="ws-fine">You can continue with the information already available. The Toki team will resolve the remaining drawing checks.
+        <button class="link-button" type="button" data-ws-operator-on>Open Toki team review</button></p>` : ""}
       ${tasks ? operatorMarkup(tasks) : ""}
       ${pagesMarkup()}
       ${nextButton("drawings")}</div>`;
@@ -246,7 +320,7 @@
     body.querySelector("[data-ws-operator-on]")?.addEventListener("click", () => { setOperatorMode(true); renderDrawings().catch(showTabError); });
     if (tasks) wireOperator(projectId, tasks);
     // The contractor's view refreshes itself; the operator's doesn't, so a half-pasted reply is never wiped.
-    if (checks.waiting && !operatorMode()) state.poll = setTimeout(() => { if (live(projectId, "drawings")) renderDrawings().catch(() => {}); }, POLL_MS);
+    if (pendingReview && !operatorMode()) state.poll = setTimeout(() => { if (live(projectId, "drawings")) renderDrawings().catch(() => {}); }, POLL_MS);
   }
 
   // ------------------------------------------------------------------ Drawings: pages used
@@ -258,22 +332,30 @@
     const picked = state.pagePick || PICK;
     const changed = state.pagePick && (state.pagePick.size !== PICK.size || [...state.pagePick].some(page => !PICK.has(page)));
     const title = sheet => (sheet.title && !/^including amendments/i.test(sheet.title) ? sheet.title : String(sheet.type || "Drawing").replaceAll("_", " "));
-    return `<h3>Pages used</h3>
-      <p class="ws-hint">${PICK.size} of ${sheets.length} pages are used. The main plans (${main.map(sheet => sheet.page).join(", ") || "none"}) are measured; the rest are read for reference. Untick a page that isn't part of this job.</p>
-      <ul class="ws-pages" data-ws-pages>${shown.map(sheet => `<li class="${sheet.relevant ? "is-main" : ""}">
-        <label><input type="checkbox" data-ws-page="${esc(sheet.page)}" ${picked.has(sheet.page) ? "checked" : ""}>
-          ${sheet.thumbnail ? `<img src="${esc(sheet.thumbnail)}" alt="" loading="lazy">` : `<span class="ws-page-blank" aria-hidden="true"></span>`}
-          <span><b>Page ${esc(sheet.page)}</b>${sheet.relevant ? " · main plan" : ""}<small>${esc(title(sheet))}</small></span></label></li>`).join("")}</ul>
-      <div class="ws-actions">
-        <button class="link-button" type="button" data-ws-all-pages>${state.showAllPages ? "Show only the pages used" : `Show all ${sheets.length} pages`}</button>
-        ${changed ? `<button class="btn key" type="button" data-ws-use-pages>Use these pages</button><span class="ws-fine">Takes five to seven minutes; the drawing check is rebuilt for the new pages, and answered checks are kept where the pages didn't change.</span>` : ""}
-        <span class="ws-status" role="status" data-ws-pages-status></span>
-      </div>`;
+    return `<section class="ws-page-review" aria-label="Drawing pages">
+      <h3>Pages Toki selected</h3>
+      <p class="ws-hint">Using ${PICK.size} of ${sheets.length} pages. Main plans (${main.map(sheet => sheet.page).join(", ") || "none"}) are measured; other selected pages provide reference information.</p>
+      <details class="ws-page-controls" ${state.pageReviewOpen ? "open" : ""}>
+        <summary>Review or change selected pages</summary>
+        <p class="ws-fine">Only change this if a relevant plan is missing or an unrelated page is included.</p>
+        <ul class="ws-pages" data-ws-pages>${shown.map(sheet => `<li class="${sheet.relevant ? "is-main" : ""}">
+          <label><input type="checkbox" data-ws-page="${esc(sheet.page)}" ${picked.has(sheet.page) ? "checked" : ""}>
+            ${sheet.thumbnail ? `<img src="${esc(sheet.thumbnail)}" alt="" loading="lazy">` : `<span class="ws-page-blank" aria-hidden="true"></span>`}
+            <span><b>Page ${esc(sheet.page)}</b>${sheet.relevant ? " · main plan" : ""}<small>${esc(title(sheet))}</small></span></label></li>`).join("")}</ul>
+        <div class="ws-actions">
+          <button class="link-button" type="button" data-ws-all-pages>${state.showAllPages ? "Show only the pages used" : `Show all ${sheets.length} pages`}</button>
+          ${changed ? `<button class="btn key" type="button" data-ws-use-pages>Use these pages</button><span class="ws-fine">The drawing analysis will be rebuilt for the new selection.</span>` : ""}
+          <span class="ws-status" role="status" data-ws-pages-status></span>
+        </div>
+      </details>
+    </section>`;
   }
 
   function wirePages(projectId) {
+    body.querySelector(".ws-page-controls")?.addEventListener("toggle", event => { state.pageReviewOpen = event.target.open; });
     body.querySelector("[data-ws-all-pages]")?.addEventListener("click", () => { state.showAllPages = !state.showAllPages; renderDrawings().catch(showTabError); });
     body.querySelectorAll("[data-ws-page]").forEach(box => box.addEventListener("change", () => {
+      state.pageReviewOpen = true;
       state.pagePick = state.pagePick || new Set(PICK);
       const page = Number(box.dataset.wsPage);
       box.checked ? state.pagePick.add(page) : state.pagePick.delete(page);
@@ -798,7 +880,13 @@
       // The person just measured the room: the measurement replaces an area they typed earlier.
       if (m.typedArea != null) await sendJson("/api/room-area-override", {project_id: projectId, room_id: m.key, label: m.label, area_m2: null, edited_by: name});
       state.measure = null;
-      state.message = `${m.label} measured: ${area.toFixed(1)} m²${m.typedArea != null ? ` (replaces the ${m.typedArea} m² you typed)` : ""}. Calculate to update the result.`;
+      const update = data.trace_save_update || {};
+      const retained = update.kept_walls?.length || 0, reset = update.reset_edge_indices?.length || 0;
+      const dropped = update.dropped_openings?.length || 0;
+      const details = update.kept_walls || update.dropped_openings || reset
+        ? ` ${retained} wall decision${retained === 1 ? "" : "s"} kept, ${reset} reset${dropped ? `, ${dropped} opening${dropped === 1 ? "" : "s"} dropped` : ""}.` : "";
+      state.message = `${m.label} measured: ${area.toFixed(1)} m²${m.typedArea != null ? ` (replaces the ${m.typedArea} m² you typed)` : ""}.${details} Calculate to update the result.`
+        + (data.task_refresh_error ? ` Drawing checks could not refresh: ${data.task_refresh_error}` : "");
       await loadStatus();
       if (live(projectId, "rooms")) await renderRooms();
     } catch (error) {
@@ -848,9 +936,14 @@
     const uses = Object.entries(model.room_scope?.uses || {}).filter(([id]) => id !== "not_a_room");
     const levelOf = row => /^unassigned level$/i.test(row.level || "") ? "" : (row.level || "");
     const noLevels = rows.every(row => !levelOf(row));
-    body.innerHTML = `<div class="ws-card" data-ws-rooms>
-      <h2>Rooms</h2>
-      <p class="ws-hint">Check the area of each room. Type an area or ceiling height to change it (it's marked "Edited by you"), clear it to go back to the drawing value, and untick rooms that aren't cooled.</p>
+    const detailsTab = state.subtab !== "measurements";
+    const roomTabClass = detailsTab ? "ws-room-details" : "ws-room-measurements";
+    const roomTabTitle = detailsTab ? "Room details" : "Measurements";
+    const roomTabHint = detailsTab ? "Check the rooms found on the drawings, choose what each is used for, and select the rooms that are cooled."
+      : "Review each room's area and ceiling height. Type a value to change it, or clear it to return to the drawing value.";
+    body.innerHTML = `<div class="ws-card ${roomTabClass}" data-ws-rooms>
+      <h2>${roomTabTitle}</h2>
+      <p class="ws-hint">${roomTabHint}</p>
       <div class="ws-table-wrap"><table class="ws-table${noLevels ? " ws-no-levels" : ""}">
         <thead><tr><th scope="col">Cool</th><th scope="col">Room</th><th scope="col" class="ws-col-level">Level</th><th scope="col">Area (m²)</th><th scope="col">Where the area came from</th><th scope="col">Ceiling height (m)</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
         <tbody>${rows.map(row => {
@@ -869,8 +962,8 @@
       <form class="ws-add" data-ws-add><b>Add a room the drawings missed</b>
         <label>Name<input name="label" required autocomplete="off"></label>
         <label>Used as<select name="use" required><option value="">Choose…</option>${uses.map(([id, label]) => `<option value="${esc(id)}">${esc(label)}</option>`).join("")}</select></label>
-        <label>Area (m²)<input name="area" type="number" min="0.1" step="0.1" required></label>
-        <button class="btn ghost" type="submit">Add</button></form>
+        <label>Starting area (m²)<input name="area" type="number" min="0.1" step="0.1" required></label>
+        <button class="btn ghost" type="submit">Add room</button></form>
       <p class="ws-status" role="status" data-ws-rooms-status>${esc(state.message)}</p>
       ${nextButton("rooms")}</div>`;
     state.message = "";
@@ -887,11 +980,11 @@
     };
     body.querySelectorAll("[data-ws-room]").forEach(row => {
       const key = row.dataset.wsRoom, label = row.dataset.label;
-      row.querySelector("[data-ws-include]").addEventListener("change", event => {
+      row.querySelector("[data-ws-include]")?.addEventListener("change", event => {
         state.include.set(key, event.target.checked);
         status.textContent = event.target.checked ? `${label} will be cooled.` : `${label} won't be included.`;
       });
-      row.querySelector("[data-ws-area]").addEventListener("change", async event => {
+      row.querySelector("[data-ws-area]")?.addEventListener("change", async event => {
         const raw = event.target.value.trim();
         const area = raw === "" ? null : Number(raw);
         if (area !== null && !(area > 0)) { status.textContent = "Type the area as a number of m², or clear it."; return; }
@@ -901,9 +994,9 @@
                                                                    area_m2: area, edited_by: userName()});
           if (area !== null) state.include.set(key, true);
           await after(area === null ? `${label}: back to the drawing value.` : `${label}: ${area} m² saved.`, saved);
-        } catch (error) { status.textContent = `Could not save ${label}: ${error.message}`; }
+        } catch (error) { status.textContent = `Could not save ${label}: ${error.message}`; status.classList.add("is-error"); status.setAttribute("role", "alert"); }
       });
-      row.querySelector("[data-ws-height]").addEventListener("change", async event => {
+      row.querySelector("[data-ws-height]")?.addEventListener("change", async event => {
         const raw = event.target.value.trim();
         const metres = raw === "" ? null : Number(raw);
         if (metres !== null && !(metres >= 1.8 && metres <= 15)) { status.textContent = "Type the ceiling height in metres (1.8 to 15), or clear it."; return; }
@@ -912,7 +1005,7 @@
           const saved = await sendJson("/api/room-height-override", {project_id: projectId, room_key: key, label, level_name: row.dataset.level,
                                                                      ceiling_height_mm: metres === null ? null : Math.round(metres * 1000), edited_by: userName()});
           await after(metres === null ? `${label}: ceiling height back to the drawing value.` : `${label}: ceiling height ${metres} m saved.`, saved);
-        } catch (error) { status.textContent = `Could not save ${label}: ${error.message}`; }
+        } catch (error) { status.textContent = `Could not save ${label}: ${error.message}`; status.classList.add("is-error"); status.setAttribute("role", "alert"); }
       });
       row.querySelector("[data-ws-use]")?.addEventListener("change", async event => {
         if (!event.target.value) return;
@@ -922,14 +1015,14 @@
             taxonomy_id: event.target.value, reviewer: userName() || "Contractor", note: "Use chosen in the job workspace."});
           state.roomsModel = null;
           await after(`Use saved for ${label}.`);
-        } catch (error) { status.textContent = `Could not save the use: ${error.message}`; }
+        } catch (error) { status.textContent = `Could not save the use: ${error.message}`; status.classList.add("is-error"); status.setAttribute("role", "alert"); }
       });
-      row.querySelector("[data-ws-trace]").addEventListener("click", () => {
+      row.querySelector("[data-ws-trace]")?.addEventListener("click", () => {
         state.measure = {projectId, key, label, typedArea: (state.status?.area_overrides || []).find(item => item.room_id === key)?.area_m2 ?? null};
         renderRooms().catch(showTabError);
       });
     });
-    body.querySelector("[data-ws-add]").addEventListener("submit", async event => {
+    body.querySelector("[data-ws-add]")?.addEventListener("submit", async event => {
       event.preventDefault();
       const form = event.target, label = form.elements.label.value.trim(), use = form.elements.use.value, area = Number(form.elements.area.value);
       if (!label || !use || !(area > 0)) { status.textContent = "Give the room a name, what it's used as, and an area in m²."; return; }
@@ -943,7 +1036,7 @@
                                                                  area_m2: area, edited_by: userName()});
         state.include.set(saved.room_id || room?.room_id, true);
         await after(`${label} added.`, saved);
-      } catch (error) { status.textContent = `Could not add the room: ${error.message}`; }
+      } catch (error) { status.textContent = `Could not add the room: ${error.message}`; status.classList.add("is-error"); status.setAttribute("role", "alert"); }
     });
   }
 
@@ -1118,10 +1211,225 @@
     setTimeout(() => { URL.revokeObjectURL(link.href); link.remove(); }, 0);
   }
 
+  // ------------------------------------------------------------------ Walls and windows
+  async function loadEnvelopeContext() {
+    const data = await getJson(`/api/reviewer-room-geometry?project_id=${encodeURIComponent(state.projectId)}`);
+    state.envelopeCtx = data;
+    return data;
+  }
+
+  function envelopeRooms() { return state.envelopeCtx?.rooms || []; }
+  function envelopeRecords(roomId) {
+    return (state.envelopeCtx?.reviewer_room_geometry?.records || [])
+      .filter(row => row.room_id === roomId && row.freshness === "current");
+  }
+  function selectedEnvelopeTrace(roomId, traceId) {
+    const rows = envelopeRecords(roomId);
+    return rows.find(row => row.trace_id === traceId) || rows[0] || null;
+  }
+  const BOUNDARY_LABEL = {external: "Outside", mall: "Enclosed mall", adjacent_tenancy: "Neighbouring tenancy", internal: "Internal", unknown: "Not set"};
+  const ROOF_LABEL = {exposed: "Exposed to the roof", not_exposed: "Another tenancy above", unknown: "Not set"};
+  function sourceLabel(value) {
+    return value === "reviewer" ? "Edited by you" : value === "ai_determined" ? "AI-determined"
+      : value === "ai_fallback" ? "AI-determined (below accuracy bar)" : "Not set";
+  }
+  function sourceChip(value) { return `<span class="ws-chip is-${value === "reviewer" ? "edited" : value ? "ai" : "none"}">${esc(sourceLabel(value))}</span>`; }
+  function measureRoom(room) {
+    state.measure = {projectId: state.projectId, key: room.room_id, label: room.label,
+      typedArea: (state.status?.area_overrides || []).find(item => item.room_id === room.room_id)?.area_m2 ?? null};
+    goSubtab("rooms", "measurements");
+  }
+  function classifyPayload(trace, reviewer, changes = {}) {
+    return {action: "classify_envelope", project_id: state.projectId, trace_id: trace.trace_id,
+      reviewer, declaration_source: "reviewer", edges: changes.edges || trace.edges || [],
+      roof: changes.roof || trace.roof || "unknown", openings: changes.openings || trace.openings || [],
+      openings_none_edges: changes.openings_none_edges ?? trace.openings_none_edges ?? [],
+      confirm_roof: changes.confirm_roof ?? false, confirmed_edges: changes.confirmed_edges || []};
+  }
+  async function refreshEnvelopeUi(tab) {
+    await loadStatus();
+    await loadEnvelopeContext();
+    if (live(state.projectId, tab)) await (tab === "walls" ? renderWalls() : renderWindows());
+  }
+  async function renderWalls() {
+    const projectId = state.projectId;
+    const ctx = state.envelopeCtx || await loadEnvelopeContext();
+    if (!live(projectId, "walls")) return;
+    const rooms = ctx.rooms || [];
+    const outlinedRooms = rooms.filter(row => envelopeRecords(row.room_id).length);
+    if (!state.wallsRoomId || !outlinedRooms.some(row => row.room_id === state.wallsRoomId))
+      state.wallsRoomId = outlinedRooms[0]?.room_id || "";
+    let selectedRoom = outlinedRooms.find(row => row.room_id === state.wallsRoomId);
+    let traces = selectedRoom ? envelopeRecords(selectedRoom.room_id) : [];
+    if (!state.wallsTraceId || !traces.some(row => row.trace_id === state.wallsTraceId)) state.wallsTraceId = traces[0]?.trace_id || "";
+    const trace = selectedEnvelopeTrace(state.wallsRoomId, state.wallsTraceId);
+    if (trace && !selectedRoom) selectedRoom = rooms.find(row => row.room_id === trace.room_id);
+    const summaryEdges = state.status?.envelope?.[state.wallsRoomId]?.edges || [];
+    const page = trace && (ctx.pages || []).find(row => row.page === trace.page);
+    const areaOnly = rooms.filter(row => !envelopeRecords(row.room_id).length);
+    const selectedEdges = trace?.edges || [];
+    const roofTab = state.subtab === "roof";
+    if (trace && !state.envelopeDrafts[trace.trace_id]) {
+      state.envelopeDrafts[trace.trace_id] = {edges: selectedEdges.map(edge => ({index: edge.index, boundary: edge.boundary})),
+        roof: trace.roof || "unknown", accepted_edges: []};
+    }
+    const draft = trace ? state.envelopeDrafts[trace.trace_id] : {edges: [], roof: "unknown"};
+    const draftBoundary = index => draft.edges.find(edge => edge.index === index)?.boundary || "unknown";
+    const colors = {external: "#d44", mall: "#8e44ad", adjacent_tenancy: "#e67e22", internal: "#3976a8", unknown: "#777"};
+    const outline = trace && page ? `<div class="ws-envelope-plan"><img src="${esc(page.preview_url)}" alt="Plan page ${trace.page}">
+      <svg viewBox="0 0 ${page.image_width_px} ${page.image_height_px}" role="img" aria-label="${esc(selectedRoom?.label)} wall outline on page ${trace.page}">
+      ${trace.points_image_px.slice(0, -1).map((point, i) => { const end = trace.points_image_px[i + 1];
+        return `<line data-wall-edge="${i}" x1="${point[0]}" y1="${point[1]}" x2="${end[0]}" y2="${end[1]}" stroke="${colors[draftBoundary(i)] || colors.unknown}" class="${i === Number(state.selectedWallEdge) ? "is-selected" : ""}"/>`;}).join("")}</svg></div>` : "";
+    body.innerHTML = `<div class="ws-card" data-ws-walls><h2>${roofTab ? "Roof" : "Walls"}</h2>
+      <p class="ws-hint">${roofTab ? "For each room, record whether another tenancy or the roof is directly above it." : "Classify what each traced room wall faces. Area-only rooms stay unassessed until they are measured."}</p>
+      ${outlinedRooms.length ? `<label>Room <select data-ws-wall-room>${outlinedRooms.map(room => `<option value="${esc(room.room_id)}" ${room.room_id === state.wallsRoomId ? "selected" : ""}>${esc(room.label)}${room.level_name ? ` — ${esc(room.level_name)}` : ""}</option>`).join("")}</select></label>` : `<p>${roofTab ? "Add a room outline on the Walls tab before recording what is above it." : "Add room outlines on the Rooms tab to review walls and roof."}</p>`}
+      ${traces.length > 1 ? `<label>Outline <select data-ws-wall-trace>${traces.map((row, i) => `<option value="${esc(row.trace_id)}" ${row.trace_id === trace?.trace_id ? "selected" : ""}>Page ${row.page} — part ${i + 1}</option>`).join("")}</select></label>` : ""}
+      ${!roofTab && areaOnly.length ? `<section class="ws-area-only"><h3>Rooms without an outline</h3><p>Walls and roof aren't assessed until each room is measured.</p>${areaOnly.map(room => `<div>${esc(room.label)} — ${state.status?.traced_rooms?.[room.room_id]?.area_m2 ?? "Area only"} <button class="link-button" type="button" data-ws-measure-room="${esc(room.room_id)}">Measure on the plan</button></div>`).join("")}</section>` : ""}
+      ${trace ? `${roofTab ? "" : outline}${roofTab ? "" : `<div class="ws-envelope-legend" aria-label="Wall boundary colours"><span><i style="--wall:#d44"></i>Outside</span><span><i style="--wall:#8e44ad"></i>Enclosed mall</span><span><i style="--wall:#e67e22"></i>Neighbouring tenancy</span><span><i style="--wall:#3976a8"></i>Internal</span><span><i style="--wall:#777"></i>Not set</span></div><div class="ws-table-wrap"><table class="ws-table"><thead><tr><th>Wall</th><th>Length</th><th>Boundary</th><th>Source</th><th></th></tr></thead><tbody>
+        ${selectedEdges.map(edge => { const source = trace.edge_sources?.[String(edge.index)] || trace.envelope_declaration_source || trace.declaration_source || "";
+          const length = summaryEdges.find(row => row.trace_id === trace.trace_id && row.index === edge.index)?.length_m ?? edge.length_m;
+          const accepted = draft.accepted_edges?.includes(edge.index);
+          return `<tr data-wall-row="${edge.index}"><th scope="row">Wall ${edge.index + 1}</th><td>${length != null ? `${Number(length).toFixed(2)} m` : "—"}</td><td><select data-ws-boundary="${edge.index}" aria-label="What wall ${edge.index + 1} of ${esc(selectedRoom?.label)} faces">${Object.entries(BOUNDARY_LABEL).map(([value,label]) => `<option value="${value}" ${draftBoundary(edge.index) === value ? "selected" : ""}>${label}</option>`).join("")}</select></td><td>${sourceChip(source)}</td><td>${source.startsWith("ai") ? `<button class="link-button" type="button" data-ws-accept-wall="${edge.index}" ${accepted ? "disabled" : ""}>${accepted ? "Accepted" : "Accept AI"}</button>` : ""}</td></tr>`;}).join("")}
+        </tbody></table></div>
+        <div class="ws-envelope-tools"><label>Set all not-set walls to <select data-ws-all-boundary>${Object.entries(BOUNDARY_LABEL).filter(([v]) => v !== "unknown").map(([v,l]) => `<option value="${v}">${l}</option>`).join("")}</select></label><button class="btn ghost" type="button" data-ws-set-all>Apply</button></div>
+        <p class="ws-hint">Mall: an enclosed shopping-centre walkway — a boundary, but no sun</p>`}${roofTab ? `<label>What is above this room? <select data-ws-roof>${Object.entries(ROOF_LABEL).map(([value,label]) => `<option value="${value}" ${draft.roof === value ? "selected" : ""}>${label}</option>`).join("")}</select> ${sourceChip(trace.roof_source || trace.envelope_declaration_source)}</label>` : ""}
+        <label>Your name or initials <input data-ws-envelope-reviewer autocomplete="name" value="${esc(userName())}" required></label>
+        <div class="ws-actions"><button class="btn key" type="button" data-ws-save-walls>Save walls &amp; roof</button><span role="status" data-ws-envelope-status>${esc(state.message)}</span></div>` : ""}
+      ${nextButton("walls")}</div>`;
+    state.message = "";
+    body.querySelector("[data-ws-wall-room]")?.addEventListener("change", event => { state.wallsRoomId = event.target.value; state.wallsTraceId = ""; renderWalls(); });
+    body.querySelector("[data-ws-wall-trace]")?.addEventListener("change", event => { state.wallsTraceId = event.target.value; renderWalls(); });
+    body.querySelectorAll("[data-ws-measure-room]").forEach(button => button.addEventListener("click", () => measureRoom(rooms.find(row => row.room_id === button.dataset.wsMeasureRoom))));
+    body.querySelectorAll("[data-ws-boundary]").forEach(select => select.addEventListener("change", () => {
+      const index = Number(select.dataset.wsBoundary);
+      draft.edges = draft.edges.map(edge => edge.index === index ? {...edge, boundary: select.value} : edge);
+      body.querySelector(`[data-wall-edge="${index}"]`)?.setAttribute("stroke", colors[select.value] || colors.unknown);
+    }));
+    body.querySelector("[data-ws-roof]")?.addEventListener("change", event => { draft.roof = event.target.value; });
+    body.querySelectorAll("[data-wall-edge]").forEach(line => line.addEventListener("click", () => {
+      state.selectedWallEdge = Number(line.dataset.wallEdge);
+      body.querySelectorAll("[data-wall-row]").forEach(row => row.classList.toggle("is-selected", Number(row.dataset.wallRow) === state.selectedWallEdge));
+      body.querySelector(`[data-ws-boundary="${state.selectedWallEdge}"]`)?.focus();
+    }));
+    body.querySelectorAll("[data-ws-accept-wall]").forEach(button => button.addEventListener("click", () => {
+      const select = body.querySelector(`[data-ws-boundary="${button.dataset.wsAcceptWall}"]`); select.dataset.accepted = "true";
+      const index = Number(button.dataset.wsAcceptWall);
+      if (!draft.accepted_edges.includes(index)) draft.accepted_edges.push(index);
+      button.textContent = "Accepted"; button.disabled = true;
+    }));
+    body.querySelector("[data-ws-set-all]")?.addEventListener("click", () => {
+      const value = body.querySelector("[data-ws-all-boundary]").value;
+      body.querySelectorAll("[data-ws-boundary]").forEach(select => { if (select.value === "unknown") select.value = value; });
+      draft.edges = selectedEdges.map(edge => ({index: edge.index, boundary: body.querySelector(`[data-ws-boundary="${edge.index}"]`).value}));
+    });
+    body.querySelector("[data-ws-save-walls]")?.addEventListener("click", async () => {
+      const reviewer = body.querySelector("[data-ws-envelope-reviewer]").value.trim();
+      const note = body.querySelector("[data-ws-envelope-status]");
+      if (!reviewer) { note.textContent = "Enter your name or initials to save these decisions."; return; }
+      storage.set("toki.workspace.name", reviewer);
+      if (!roofTab) draft.edges = selectedEdges.map(edge => ({index: edge.index, boundary: body.querySelector(`[data-ws-boundary="${edge.index}"]`).value}));
+      if (roofTab) draft.roof = body.querySelector("[data-ws-roof]").value;
+      const edges = draft.edges;
+      const roof = draft.roof;
+      const confirmed = [...new Set([...(draft.accepted_edges || []), ...[...body.querySelectorAll("[data-ws-boundary][data-accepted='true']")].map(select => Number(select.dataset.wsBoundary))])];
+      note.textContent = "Saving…";
+      try {
+        await sendJson("/api/reviewer-room-geometry", classifyPayload(trace, reviewer, {edges, roof,
+          confirm_roof: roof !== trace.roof, confirmed_edges: confirmed}));
+        delete state.envelopeDrafts[trace.trace_id];
+        state.message = "Saved. Calculate to update the result.";
+        await refreshEnvelopeUi("walls");
+      } catch (error) { note.textContent = error.message; note.classList.add("is-error"); note.setAttribute("role", "alert"); }
+    });
+    wireCommon();
+  }
+
+  function openingSource(opening) { return sourceChip(opening.declaration_source || opening.source); }
+  async function renderWindows() {
+    const projectId = state.projectId;
+    const ctx = state.envelopeCtx || await loadEnvelopeContext();
+    if (!live(projectId, "windows")) return;
+    const rooms = (ctx.rooms || []).filter(room => envelopeRecords(room.room_id).length);
+    if (!state.windowsRoomId || !rooms.some(row => row.room_id === state.windowsRoomId)) state.windowsRoomId = rooms[0]?.room_id || "";
+    const room = rooms.find(row => row.room_id === state.windowsRoomId);
+    const traces = room ? envelopeRecords(room.room_id) : [];
+    if (!state.windowsTraceId || !traces.some(row => row.trace_id === state.windowsTraceId)) state.windowsTraceId = traces[0]?.trace_id || "";
+    const trace = selectedEnvelopeTrace(state.windowsRoomId, state.windowsTraceId);
+    const page = trace && (ctx.pages || []).find(row => row.page === trace.page);
+    const outsideEdges = (trace?.edges || []).filter(edge => ["external", "mall"].includes(edge.boundary));
+    const choices = ctx.glazing_choices || {}, shading = ctx.shading_categories || {};
+    const openings = trace?.openings || [];
+    const rows = openings.map((opening, i) => `<fieldset class="ws-opening" data-ws-opening="${i}"><legend>${esc(opening.opening_id || `Opening ${i + 1}`)} ${openingSource(opening)}</legend>
+      <label>Wall<select data-opening-field="edge_index" data-index="${i}">${outsideEdges.map(edge => `<option value="${edge.index}" ${opening.edge_index === edge.index ? "selected" : ""}>Wall ${edge.index + 1} (${BOUNDARY_LABEL[edge.boundary]})</option>`).join("")}</select></label>
+      <label>Width (m)<input type="number" min="0.05" step="0.01" value="${esc(opening.width_m)}" data-opening-field="width_m" data-index="${i}"></label>
+      <label>Sill (m)<input type="number" min="0" step="0.01" value="${esc(opening.sill_height_m)}" data-opening-field="sill_height_m" data-index="${i}"></label>
+      <label>Head (m)<input type="number" min="0.05" step="0.01" value="${esc(opening.head_height_m)}" data-opening-field="head_height_m" data-index="${i}"></label>
+      <label>Elevation page<input type="number" min="1" step="1" value="${esc(opening.elevation_page || "")}" data-opening-field="elevation_page" data-index="${i}"></label>
+      <label>Glazing<select data-opening-field="glazing_choice" data-index="${i}">${Object.entries(choices).map(([id,item]) => `<option value="${id}" ${opening.glazing_choice === id ? "selected" : ""}>${esc(item.label || id)}</option>`).join("")}</select></label>
+      <label>Shading<select data-opening-field="shading_category" data-index="${i}">${Object.entries(shading).map(([id,item]) => `<option value="${id}" ${opening.shading_category === id ? "selected" : ""}>${esc(item.label || id)}</option>`).join("")}</select></label>
+      <button class="link-button" type="button" data-ws-remove-opening="${i}">Remove opening</button></fieldset>`).join("");
+    const noGlazing = trace?.openings_none_edges || [];
+    const outline = trace && page ? `<div class="ws-envelope-plan"><img src="${esc(page.preview_url)}" alt="Plan page ${trace.page}"><svg viewBox="0 0 ${page.image_width_px} ${page.image_height_px}" aria-hidden="true">
+      ${trace.points_image_px.slice(0, -1).map((point,i) => { const end=trace.points_image_px[i+1]; return `<line x1="${point[0]}" y1="${point[1]}" x2="${end[0]}" y2="${end[1]}" stroke="${["external","mall"].includes(trace.edges?.[i]?.boundary) ? "#8e44ad" : "#777"}"/>`;}).join("")}</svg></div>` : "";
+    body.innerHTML = `<div class="ws-card" data-ws-windows><h2>Windows</h2><p class="ws-hint">Record glazing on outside and enclosed-mall walls. If a wall has no glazing, mark it explicitly.</p>
+      ${rooms.length ? `<label>Room <select data-ws-window-room>${rooms.map(row => `<option value="${esc(row.room_id)}" ${row.room_id === state.windowsRoomId ? "selected" : ""}>${esc(row.label)}</option>`).join("")}</select></label>` : `<p>No outlined rooms yet. Measure rooms on the Rooms tab first.</p>`}
+      ${traces.length > 1 ? `<label>Outline <select data-ws-window-trace>${traces.map((row,i) => `<option value="${esc(row.trace_id)}" ${row.trace_id === trace?.trace_id ? "selected" : ""}>Page ${row.page} — part ${i+1}</option>`).join("")}</select></label>` : ""}
+      ${trace ? `${outline}<h3>Outside and mall walls</h3>${outsideEdges.map(edge => `<label class="ws-check"><input type="checkbox" data-ws-no-glazing="${edge.index}" ${noGlazing.includes(edge.index) ? "checked" : ""}> Wall ${edge.index + 1}: no glazing</label>`).join("") || `<p>No walls are currently classified as outside or enclosed mall. Set them on Walls &amp; roof.</p>`}
+        <h3>Openings</h3>${rows}<button class="btn ghost" type="button" data-ws-add-opening ${outsideEdges.length ? "" : "disabled"}>Add opening</button>
+        <p class="ws-hint">If a ceiling height is missing, set it on <button class="link-button" type="button" data-ws-go="rooms">Rooms</button>.</p>
+        <label>Your name or initials <input data-ws-window-reviewer autocomplete="name" value="${esc(userName())}" required></label>
+        <div class="ws-actions"><button class="btn key" type="button" data-ws-save-windows>Save windows</button><span role="status" data-ws-window-status>${esc(state.message)}</span></div>` : ""}${nextButton("windows")}</div>`;
+    state.message = "";
+    const setRoom = value => { state.windowsRoomId = value; state.windowsTraceId = ""; renderWindows(); };
+    body.querySelector("[data-ws-window-room]")?.addEventListener("change", event => setRoom(event.target.value));
+    body.querySelector("[data-ws-window-trace]")?.addEventListener("change", event => { state.windowsTraceId = event.target.value; renderWindows(); });
+    body.querySelectorAll("[data-opening-field]").forEach(input => input.addEventListener("change", () => {
+      const opening = openings[Number(input.dataset.index)];
+      opening[input.dataset.openingField] = ["edge_index", "elevation_page"].includes(input.dataset.openingField) ? Number(input.value) :
+        ["width_m", "sill_height_m", "head_height_m"].includes(input.dataset.openingField) ? Number(input.value) : input.value;
+    }));
+    body.querySelectorAll("[data-ws-no-glazing]").forEach(input => input.addEventListener("change", () => {
+      const index = Number(input.dataset.wsNoGlazing);
+      trace.openings_none_edges = [...new Set([...(trace.openings_none_edges || []).filter(value => value !== index), ...(input.checked ? [index] : [])])];
+      if (input.checked) trace.openings = (trace.openings || []).filter(row => row.edge_index !== index);
+    }));
+    body.querySelectorAll("[data-ws-remove-opening]").forEach(button => button.addEventListener("click", () => {
+      trace.openings.splice(Number(button.dataset.wsRemoveOpening), 1); renderWindows();
+    }));
+    body.querySelector("[data-ws-add-opening]")?.addEventListener("click", () => {
+      const existingIds = new Set((trace.openings || []).map(opening => opening.opening_id));
+      let nextNumber = 1;
+      while (existingIds.has(`Opening ${nextNumber}`)) nextNumber += 1;
+      const nextOpenings = [...(trace.openings || []), {opening_id: `Opening ${nextNumber}`, edge_index: outsideEdges[0].index,
+        width_m: "", sill_height_m: "", head_height_m: "", elevation_page: "", glazing_choice: Object.keys(choices)[0] || "retail",
+        shading_category: Object.keys(shading)[0] || "unshaded"}];
+      trace.openings = nextOpenings;
+      trace.openings_none_edges = (trace.openings_none_edges || []).filter(index => index !== outsideEdges[0].index);
+      renderWindows().catch(showTabError);
+    });
+    body.querySelector("[data-ws-save-windows]")?.addEventListener("click", async () => {
+      const reviewer = body.querySelector("[data-ws-window-reviewer]").value.trim();
+      const note = body.querySelector("[data-ws-window-status]");
+      if (!reviewer) { note.textContent = "Enter your name or initials to save these decisions."; return; }
+      storage.set("toki.workspace.name", reviewer); note.textContent = "Saving…";
+      try {
+        await sendJson("/api/reviewer-room-geometry", classifyPayload(trace, reviewer, {openings: trace.openings || [],
+          openings_none_edges: trace.openings_none_edges || []}));
+        state.message = "Saved. Calculate to update the result.";
+        await refreshEnvelopeUi("windows");
+      } catch (error) {
+        note.textContent = error.message;
+        note.insertAdjacentHTML("afterend", `<p class="ws-error" role="alert">${esc(error.message)}</p>${/ceiling height/i.test(error.message) ? '<button class="link-button" type="button" data-ws-go="rooms">Set ceiling height on Rooms</button>' : ""}`);
+        wireCommon();
+      }
+    });
+    wireCommon();
+  }
+
   // ------------------------------------------------------------------ routing, enter and leave
   function parseHash() {
-    const match = location.hash.match(/^#\/job\/([^/]+)(?:\/([a-z]+))?/);
-    return match ? {projectId: decodeURIComponent(match[1]), tab: match[2] || ""} : null;
+    const match = location.hash.match(/^#\/job\/([^/]+)(?:\/([a-z]+))?(?:\/([a-z-]+))?\/?$/);
+    return match ? {projectId: decodeURIComponent(match[1]), tab: match[2] || "", subtab: match[3] || ""} : null;
   }
 
   function defaultTab() {
@@ -1138,7 +1446,8 @@
     if (state.projectId !== projectId) {
       clearTimeout(state.poll);
       body.innerHTML = "";
-      Object.assign(state, {projectId, status: null, tab: "", include: new Map(), message: "", lastResult: null, roomsModel: null});
+      Object.assign(state, {projectId, status: null, tab: "", subtab: "", include: new Map(), message: "", lastResult: null, roomsModel: null,
+        projectDraft: null, envelopeDrafts: {}});
       const note = document.getElementById("wsCalcNote");
       if (note) note.textContent = "";
     }
@@ -1156,8 +1465,10 @@
     resumeCalculation(projectId);
     const route = parseHash();
     const tab = route?.projectId === projectId && TABS.some(row => row.id === route.tab) ? route.tab : defaultTab();
-    if (route?.projectId === projectId && route.tab === tab) { state.tab = tab; renderTab(); }
-    else location.replace(`#/job/${encodeURIComponent(projectId)}/${tab}`);
+    const subtab = defaultSubtab(tab, route?.subtab || "");
+    if (route?.projectId === projectId && route.tab === tab && route.subtab === subtab) {
+      state.tab = tab; state.subtab = subtab; renderTab();
+    } else location.replace(`#/job/${encodeURIComponent(projectId)}/${tab}${subtab ? `/${subtab}` : ""}`);
   }
 
   function leave() {
@@ -1178,8 +1489,18 @@
       if (typeof openProject === "function") openProject(route.projectId);
       return;
     }
-    if (TABS.some(row => row.id === route.tab) && route.tab !== state.tab) { state.tab = route.tab; renderTab(); }
-    else if (route.tab === state.tab && !body.firstElementChild) renderTab();
+    if (TABS.some(row => row.id === route.tab)) {
+      const nextSubtab = defaultSubtab(route.tab, route.subtab || "");
+      if (route.subtab !== nextSubtab && TABS.find(row => row.id === route.tab)?.subtabs?.length) {
+        location.replace(`#/job/${encodeURIComponent(state.projectId)}/${route.tab}/${nextSubtab}`);
+        return;
+      }
+      if (route.tab !== state.tab || nextSubtab !== state.subtab) {
+        state.tab = route.tab;
+        state.subtab = nextSubtab;
+        renderTab();
+      } else if (!body.firstElementChild) renderTab();
+    }
   });
 
   document.getElementById("wsCalculate")?.addEventListener("click", calculate);

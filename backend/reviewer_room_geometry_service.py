@@ -3,6 +3,7 @@
 import hashlib
 import json
 import math
+import logging
 import re
 from functools import lru_cache
 from copy import deepcopy
@@ -15,6 +16,7 @@ from ai.geometry_resolution import fingerprint
 from backend.vision_extraction_service import _atomic_json
 
 INTERSECTION_CAP = 8000
+logger = logging.getLogger(__name__)
 
 
 def _read(path, default):
@@ -810,6 +812,8 @@ def _validated_trace_openings(data, trace, paths, room, calibration_record):
     profile_ids = set(pack.get("profiles", {}))
     shading_ids = set(pack.get("preliminary_envelope", {}).get("shading_categories", {}))
     width_by_edge, area_by_edge, result, seen = {}, {}, [], set()
+    prior_openings = {str(row.get("opening_id", "")): row for row in trace.get("openings", [])
+                      if isinstance(row, dict) and row.get("opening_id")}
     for opening in openings:
         if not isinstance(opening, dict):
             raise ValueError("Each shopfront opening must be an object.")
@@ -838,12 +842,24 @@ def _validated_trace_openings(data, trace, paths, room, calibration_record):
             raise ValueError("Total opening width cannot exceed the traced external edge length.")
         if area_by_edge[edge_index] > edge_length * height_mm / 1000.0 + 1e-8:
             raise ValueError("Opening area cannot exceed the derived wall area.")
+        prior = prior_openings.get(opening_id, {})
+        prior_source = prior.get("declaration_source") or prior.get("source")
+        requested_source = opening.get("declaration_source") or opening.get("source")
+        if prior_source == "reviewer":
+            opening_source = "reviewer"
+        elif requested_source in reviewer_room_geometry.DECLARATION_SOURCES:
+            opening_source = requested_source
+        elif prior_source in reviewer_room_geometry.DECLARATION_SOURCES:
+            opening_source = prior_source
+        else:
+            opening_source = "reviewer"
+        ai_run_id = (opening.get("ai_run_id") or prior.get("ai_run_id") or data.get("ai_run_id"))
         result.append({"opening_id": opening_id, "edge_index": edge_index, "width_m": float(width),
                        "head_height_m": float(head), "sill_height_m": float(sill),
                        "elevation_page": elevation_page, "glazing_choice": glazing_choice,
-                       "shading_category": shading,
-                       **({"declaration_source": opening.get("declaration_source"), "ai_run_id": opening.get("ai_run_id")}
-                          if opening.get("declaration_source") in reviewer_room_geometry.DECLARATION_SOURCES else {})})
+                       "shading_category": shading, "declaration_source": opening_source,
+                       **({"ai_run_id": ai_run_id}
+                          if opening_source in {"ai_determined", "ai_fallback"} and ai_run_id else {})})
     return result
 
 
@@ -911,8 +927,13 @@ def post(web, project, data, _validated_current_records=None, _defer_evidence_re
     artifact = reviewer_room_geometry.validate_artifact(_read(paths["artifact"], reviewer_room_geometry.empty_artifact()))
     previous_fingerprint = artifact.get("fingerprint", "")
     trace_save_update = None
+    affected_room_id = str(data.get("room_id", "")).strip() or None
+    affected_page = data.get("page") if type(data.get("page")) is int else None
     if action == "delete":
         trace_id = str(data.get("trace_id", ""))
+        deleted = next((row for row in artifact["records"] if row.get("trace_id") == trace_id), None)
+        if deleted:
+            affected_room_id, affected_page = deleted.get("room_id"), deleted.get("page")
         kept = [row for row in artifact["records"] if row.get("trace_id") != trace_id]
         if len(kept) == len(artifact["records"]):
             raise ValueError("Room geometry trace was not found.")
@@ -1056,6 +1077,7 @@ def post(web, project, data, _validated_current_records=None, _defer_evidence_re
         # external and add its opening together, without an intermediate save.
         trace_for_openings = {**trace, **merged}
         openings = _validated_trace_openings(data, trace_for_openings, paths, room, calibration)
+        previously_marked_none = set(trace.get("openings_none_edges", []))
         trace.update(merged)
         # A prior "no glazing" declaration is meaningful only while that edge
         # remains an external or enclosed-mall boundary. Drop stale marks
@@ -1063,8 +1085,24 @@ def post(web, project, data, _validated_current_records=None, _defer_evidence_re
         valid_no_glazing = {row["index"] for row in trace.get("edges", [])
                             if row.get("boundary") in {"external", "mall"}}
         opening_edges = {row["edge_index"] for row in openings}
-        no_glazing = [index for index in trace.get("openings_none_edges", [])
+        requested_none = data.get("openings_none_edges", trace.get("openings_none_edges", []))
+        if not isinstance(requested_none, list):
+            raise ValueError("openings_none_edges must be a list of unique valid edge indices.")
+        if any(type(index) is not int or index < 0 or index >= len(trace["points_image_px"]) - 1 for index in requested_none):
+            raise ValueError("openings_none_edges must contain unique valid edge indices.")
+        if len(set(requested_none)) != len(requested_none):
+            raise ValueError("openings_none_edges must contain unique valid edge indices.")
+        no_glazing = [index for index in requested_none
                       if index in valid_no_glazing and index not in opening_edges]
+        if "openings_none_edges" in data:
+            invalid_new_marks = [index for index in requested_none
+                                 if index not in valid_no_glazing and index not in previously_marked_none]
+            if invalid_new_marks:
+                raise ValueError("No-glazing marks can only be set on external or mall walls.")
+            opening_conflicts = [index for index in requested_none
+                                 if index in opening_edges and index not in previously_marked_none]
+            if opening_conflicts:
+                raise ValueError("A wall with a window cannot also be marked as having no glazing.")
         if no_glazing:
             trace["openings_none_edges"] = no_glazing
         else:
@@ -1232,10 +1270,24 @@ def post(web, project, data, _validated_current_records=None, _defer_evidence_re
     web.update_project(project)
     if _defer_evidence_rebuild:
         return {"reviewer_room_geometry": artifact}
+    task_refresh_error = None
+    if action in {"save", "delete"}:
+        try:
+            from backend import autonomous_tasks_service, job_service, page_analysis_cache
+            with page_analysis_cache.operation(paths["root"],
+                    code_fingerprint=autonomous_tasks_service._page_analysis_code_fingerprint()):
+                autonomous_tasks_service._refresh_geometry_tasks(paths["root"], room_id=affected_room_id,
+                                                                  page_number=affected_page)
+                job_service.apply_roof_answer(web, project, defer_evidence_rebuild=True)
+        except Exception as error:  # task refresh is best-effort after a valid trace write
+            logger.exception("Could not refresh geometry tasks after trace %s", action)
+            task_refresh_error = str(error)
     evidence_result = calculation_extraction_service.post(web, project, {"action": "build"})
     result = _response(web, project)
     result["calculation_input_evidence"] = evidence_result.get("calculation_input_evidence", {})
     result["geometry_resolution"] = evidence_result.get("geometry_resolution", {})
     if action == "save" and trace_save_update is not None:
         result["trace_save_update"] = trace_save_update
+    if task_refresh_error is not None:
+        result["task_refresh_error"] = task_refresh_error
     return result

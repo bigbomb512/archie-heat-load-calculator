@@ -62,11 +62,16 @@ class BackgroundJob:
     def path(self, project):
         return Path(project["review_dir"]) / self.file_name
 
+    def key(self, project):
+        """Runs are tracked per job file (the project folder), not per project ID: two project
+        entries can point at the same folder, and must not start two runs over one job file."""
+        return str(self.path(project).resolve())
+
     def status(self, project):
         job = read_json(self.path(project))
         if not job:
             return {"id": project["id"], "status": "none"}
-        if (job.get("status") in {"queued", "running"} and project["id"] not in self.running
+        if (job.get("status") in {"queued", "running"} and self.key(project) not in self.running
                 and not (job.get("pid") != os.getpid() and _process_alive(job.get("pid")))):
             # The server stopped while the job ran (restart or crash). Say so; the workspace offers to start again.
             job = {**job, "status": "interrupted", "error": self.interrupted_message}
@@ -81,14 +86,14 @@ class BackgroundJob:
             current = read_json(self.path(project))
             # Join a run in this process, or one still owned by another live server process on the same folder.
             if current.get("status") in {"queued", "running"} and (
-                    project["id"] in self.running
+                    self.key(project) in self.running
                     or (current.get("pid") != os.getpid() and _process_alive(current.get("pid")))):
                 return {**self.status(project), "deduplicated": True}
             first = self.steps[0][0]
             job = {"schema_version": 1, "job_id": uuid.uuid4().hex, "status": "running", "step": first,
                    "step_label": self.labels[first], "started_at": now(), "pid": os.getpid(), **fields}
             write_json(self.path(project), job)
-            self.running.add(project["id"])
+            self.running.add(self.key(project))
         threading.Thread(target=self._run, args=(web, project, job["job_id"], work),
                          daemon=True, name=self.thread_name).start()
         return self.status(project)
@@ -120,4 +125,4 @@ class BackgroundJob:
                 write_json(path, job)
         finally:
             with self.lock:
-                self.running.discard(project["id"])
+                self.running.discard(self.key(project))

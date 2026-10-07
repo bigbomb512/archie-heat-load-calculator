@@ -41,7 +41,7 @@ class FakeWeb:
 
 def wait_until_finished(project, seconds=5):
     deadline = time.monotonic() + seconds
-    while project["id"] in service._RUNNING and time.monotonic() < deadline:
+    while service._JOB.key(project) in service._RUNNING and time.monotonic() < deadline:
         time.sleep(0.01)
     return service.status(None, project)
 
@@ -52,7 +52,7 @@ class PagePreparationTests(unittest.TestCase):
         self.root = Path(self.temp.name)
 
     def tearDown(self):
-        service._RUNNING.discard("job")
+        service._RUNNING.clear()
         self.temp.cleanup()
 
     def test_all_steps_run_on_the_server_in_order_and_the_job_reports_done(self):

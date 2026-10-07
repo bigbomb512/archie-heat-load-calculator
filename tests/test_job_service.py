@@ -39,12 +39,54 @@ class JobServiceTests(unittest.TestCase):
                    {"task": "P5_roof", "target": "bar", "status": "needs_contractor_answer"},
                    {"task": "P5_roof", "target": "kitchen", "status": "applied"}]
         posts = []
-        from backend import autonomous_tasks_service
+        from backend import autonomous_tasks_service, calculation_extraction_service
         with patch.object(autonomous_tasks_service, "_all_current", return_value=records), \
-             patch.object(autonomous_tasks_service, "post", side_effect=lambda web, project, data: posts.append(data)):
+             patch.object(autonomous_tasks_service, "post", side_effect=lambda web, project, data, **_kwargs: posts.append(data)), \
+             patch.object(calculation_extraction_service, "post"):
             answered = job_service.apply_roof_answer(SimpleNamespace(), self.project)
         self.assertEqual(answered, 2)
         self.assertEqual([(row["target"], row["answer"]) for row in posts], [("shop", "roof_directly_above"), ("bar", "roof_directly_above")])
+
+    def test_project_roof_answer_updates_only_unknown_hand_trace_roofs_and_preserves_edges(self):
+        job_service.save_job_setup(self.project, {"above": "floor"})
+        hand = {"trace_id": "hand", "room_id": "shop", "declaration_source": "reviewer", "roof": "unknown",
+                "edges": [{"index": 0, "boundary": "mall"}], "openings": [{"opening_id": "w", "edge_index": 0}],
+                "openings_none_edges": [1]}
+        already_answered = {**hand, "trace_id": "answered", "roof": "exposed", "roof_source": "reviewer"}
+        ai_trace = {**hand, "trace_id": "ai", "declaration_source": "ai_determined"}
+        calls = []
+        from backend import autonomous_tasks_service, calculation_extraction_service
+        with patch.object(autonomous_tasks_service, "_all_current", return_value=[]), \
+             patch.object(reviewer_room_geometry_service, "current_records", return_value=[hand, already_answered, ai_trace]), \
+             patch.object(reviewer_room_geometry_service, "post", side_effect=lambda _web, _project, payload, **_kwargs: calls.append(payload)), \
+             patch.object(calculation_extraction_service, "post") as rebuild:
+            answered = job_service.apply_roof_answer(SimpleNamespace(), self.project)
+            rebuild.assert_called_once()
+            rebuild.reset_mock()
+            job_service.apply_roof_answer(SimpleNamespace(), self.project, defer_evidence_rebuild=True)
+            rebuild.assert_not_called()
+        self.assertEqual(answered, 2)
+        self.assertEqual(calls[0]["roof"], "not_exposed")
+        self.assertEqual(calls[0]["reviewer"], "Answered on the Project tab")
+        self.assertTrue(calls[0]["confirm_roof"])
+        self.assertEqual(calls[0]["edges"], hand["edges"])
+        self.assertEqual(calls[0]["openings"], hand["openings"])
+        self.assertEqual(calls[0]["openings_none_edges"], [1])
+        self.assertEqual({row["trace_id"] for row in calls}, {"hand", "ai"})
+
+    def test_project_not_sure_keeps_p5_behavior_but_does_not_change_trace(self):
+        job_service.save_job_setup(self.project, {"above": "not_sure"})
+        from backend import autonomous_tasks_service
+        posts = []
+        with patch.object(autonomous_tasks_service, "_all_current", return_value=[
+                {"task": "P5_roof", "target": "shop", "status": "needs_contractor_answer"}]), \
+             patch.object(autonomous_tasks_service, "post", side_effect=lambda _web, _project, payload, **_kwargs: posts.append(payload)), \
+             patch.object(reviewer_room_geometry_service, "current_records", return_value=[
+                 {"trace_id": "hand", "room_id": "shop", "roof": "unknown", "edges": [], "openings": []}]), \
+             patch.object(reviewer_room_geometry_service, "post") as classify:
+            self.assertEqual(job_service.apply_roof_answer(SimpleNamespace(), self.project), 1)
+        self.assertEqual(posts[0]["answer"], "not_sure")  # existing P5 behavior remains
+        classify.assert_not_called()
 
     def test_typed_areas_are_set_cleared_and_checked(self):
         job_service.save_area_override(self.project, {"room_id": "room-use:unassigned-level:kitchen", "label": "Kitchen",
@@ -98,13 +140,70 @@ class JobServiceTests(unittest.TestCase):
             second = job_service.status(SimpleNamespace(), self.project)
         self.assertEqual(first["found_site"], "TENANCY 7, CENTRAL MALL")
         self.assertEqual({tab: row["state"] for tab, row in first["tabs"].items()},
-                         {"project": "check", "drawings": "working", "rooms": "check", "results": "done"})
+                         {"project": "check", "drawings": "working", "rooms": "check", "walls": "needed",
+                          "windows": "todo", "results": "done"})
         self.assertEqual(first["checks"]["waiting"], 1)
         self.assertEqual(first["rooms"], {"total": 2, "included": 1, "with_area": 1})
         self.assertEqual(second["rooms"], {"total": 2, "included": 2, "with_area": 2})
         self.assertEqual(second["tabs"]["project"]["state"], "done")
         self.assertEqual(second["total_kw"], 34.1)
         self.assertEqual(second["area_overrides"][0]["area_m2"], 104.9)
+
+    def test_status_adds_walls_and_windows_states_from_saved_envelope_records(self):
+        shop = "room-use:unassigned-level:shop"
+        model = {"room_scope": {"status": "confirmed", "candidates": [
+            {"key": shop, "label": "Shop", "level": "Ground", "area_m2": 20, "include": True, "status": "calculated"}]},
+            "hourly_ai_preliminary_load_report": {"included_scope_peak": {"final_design_total_kw": 20}}}
+        complete = {shop: {"has_outline": True, "below_accuracy_bar": False, "roof": "not_exposed", "roof_source": "reviewer",
+                           "edges": [{"trace_id": "t", "index": 0, "boundary": "external"}],
+                           "openings": [], "no_glazing_edges": [{"trace_id": "t", "index": 0}], "window_count": 0}}
+        incomplete = {shop: {**complete[shop], "roof": "unknown", "edges": [{"trace_id": "t", "index": 0, "boundary": "unknown"}], "no_glazing_edges": []}}
+        from backend import ai_preliminary_service, autonomous_tasks_service
+        with patch.object(autonomous_tasks_service, "_all_current", return_value=[]), \
+             patch.object(ai_preliminary_service, "get", return_value=model), \
+             patch.object(job_service, "envelope_rooms", side_effect=[{}, complete, incomplete]):
+            missing = job_service.status(SimpleNamespace(), self.project)
+            done = job_service.status(SimpleNamespace(), self.project)
+            check = job_service.status(SimpleNamespace(), self.project)
+        self.assertEqual((missing["tabs"]["walls"]["state"], missing["tabs"]["windows"]["state"]), ("needed", "todo"))
+        self.assertEqual((done["tabs"]["walls"]["state"], done["tabs"]["windows"]["state"]), ("done", "done"))
+        self.assertEqual((check["tabs"]["walls"]["state"], check["tabs"]["windows"]["state"]), ("check", "todo"))
+        self.assertEqual(check["tabs"]["windows"]["detail"], "Classify the walls first")
+        self.assertEqual(done["envelope"][shop]["window_count"], 0)
+
+    def test_subtab_statuses_cover_missing_review_complete_empty_and_in_progress(self):
+        shop = "room-use:unassigned-level:shop"
+        complete_model = {"room_scope": {"status": "confirmed", "candidates": [
+            {"key": shop, "label": "Shop", "level": "Ground", "area_m2": 20, "include": True,
+             "status": "calculated", "area_quality_label": "AI-determined"}]}}
+        review_model = {"room_scope": {"status": "confirmed", "candidates": [
+            {**complete_model["room_scope"]["candidates"][0], "status": "needs_use",
+             "area_quality_label": "AI-determined (below accuracy bar)"}]}}
+        complete_envelope = {shop: {"has_outline": True, "roof": "not_exposed", "roof_source": "reviewer",
+                                    "edges": [{"trace_id": "t", "index": 0, "boundary": "external", "source": "reviewer"}]}}
+        review_envelope = {shop: {"has_outline": True, "roof": "not_exposed", "roof_source": "ai_fallback",
+                                  "edges": [{"trace_id": "t", "index": 0, "boundary": "external", "source": "ai_fallback"}]}}
+        from backend import ai_preliminary_service, autonomous_tasks_service
+        with patch.object(autonomous_tasks_service, "_all_current", return_value=[]), \
+             patch.object(ai_preliminary_service, "get", side_effect=[complete_model, review_model, {}]), \
+             patch.object(job_service, "envelope_rooms", side_effect=[complete_envelope, review_envelope, {}, {}]):
+            complete = job_service.status(SimpleNamespace(), self.project)
+            review = job_service.status(SimpleNamespace(), self.project)
+            empty = job_service.status(SimpleNamespace(), self.project)
+            working_project = {**self.project, "reasoning_packet": ""}
+            with patch.object(autonomous_tasks_service, "_task_progress", return_value={"total": 2, "waiting": 1, "blocked": 0}):
+                working = job_service.status(SimpleNamespace(), working_project)
+        self.assertEqual(complete["subtabs"]["walls"]["walls"]["state"], "done")
+        self.assertEqual(complete["subtabs"]["walls"]["roof"]["state"], "done")
+        self.assertEqual(complete["subtabs"]["project"]["job_site"]["state"], "done")  # address and building type remain optional
+        self.assertEqual(review["subtabs"]["rooms"]["room_details"]["state"], "check")
+        self.assertEqual(review["subtabs"]["rooms"]["measurements"]["state"], "check")
+        self.assertEqual(review["subtabs"]["walls"]["roof"]["state"], "check")
+        self.assertEqual((empty["subtabs"]["rooms"]["room_details"]["state"],
+                          empty["subtabs"]["rooms"]["measurements"]["state"]), ("needed", "todo"))
+        self.assertEqual((working["subtabs"]["rooms"]["room_details"]["state"],
+                          working["subtabs"]["walls"]["walls"]["state"]), ("working", "working"))
+        self.assertEqual(empty["tabs"]["walls"]["state"], "needed")  # no new calculation gate
 
     def test_typed_heights_are_saved_by_the_ceiling_identity_and_checked(self):
         saved = job_service.save_height_override(self.project, {"room_key": "room-use:unassigned-level:kitchen", "label": "Kitchen",
@@ -193,13 +292,56 @@ class JobServiceTests(unittest.TestCase):
         self.assertEqual(status["rooms"], {"total": 2, "included": 2, "with_area": 2})
         self.assertEqual(status["traced_rooms"]["k"]["area_m2"], 50.0)
 
+    def test_envelope_summary_reads_wall_lengths_sources_roof_and_no_glazing_directly(self):
+        points = [[0, 0], [400, 0], [400, 500], [0, 500], [0, 0]]
+        (self.root / "reviewer_room_geometry.json").write_text(json.dumps({"records": [{
+            "trace_id": "t", "room_id": "shop", "page": 20, "points_image_px": points,
+            "calibration": {"status": "agreed", "mm_per_px": 10},
+            "edges": [{"index": 0, "boundary": "mall"}], "edge_sources": {"0": "ai_determined"},
+            "roof": "not_exposed", "roof_source": "reviewer", "openings": [{"edge_index": 0}],
+            "openings_none_edges": [1],
+        }]}))
+        room = job_service.envelope_rooms(self.root)["shop"]
+        self.assertEqual(room["edges"][0], {"trace_id": "t", "page": 20, "index": 0, "boundary": "mall",
+                                             "length_m": 4.0, "source": "ai_determined"})
+        self.assertEqual((room["roof"], room["roof_source"], room["window_count"], room["no_glazing_edges"]),
+                         ("not_exposed", "reviewer", 1, [{"trace_id": "t", "index": 1}]))
+
+    def test_below_accuracy_bar_is_scoped_to_each_rooms_own_trace_sources(self):
+        square = [[0, 0], [400, 0], [400, 500], [0, 500], [0, 0]]
+        (self.root / "reviewer_room_geometry.json").write_text(json.dumps({"records": [
+            {"trace_id": "shop-trace", "room_id": "shop", "points_image_px": square,
+             "calibration": {"mm_per_px": 10}, "edges": [{"index": 0, "boundary": "external"}],
+             "edge_sources": {"0": "ai_fallback"}, "roof": "unknown"},
+            {"trace_id": "kitchen-trace", "room_id": "kitchen", "points_image_px": square,
+             "calibration": {"mm_per_px": 10}, "edges": [{"index": 0, "boundary": "external"}],
+             "edge_sources": {"0": "reviewer"}, "roof": "not_exposed", "roof_source": "reviewer"},
+        ]}))
+        rooms = job_service.envelope_rooms(self.root)
+        self.assertTrue(rooms["shop"]["below_accuracy_bar"])
+        self.assertFalse(rooms["kitchen"]["below_accuracy_bar"])
+
+    def test_windows_waits_for_unknown_walls_to_be_classified(self):
+        shop = "room-use:unassigned-level:shop"
+        model = {"room_scope": {"status": "confirmed", "candidates": [
+            {"key": shop, "label": "Shop", "level": "Ground", "area_m2": 20, "include": True, "status": "calculated"}]}}
+        unknown = {shop: {"has_outline": True, "roof": "unknown", "edges": [
+            {"trace_id": "t", "index": 0, "boundary": "unknown"}], "openings": [], "no_glazing_edges": []}}
+        from backend import ai_preliminary_service, autonomous_tasks_service
+        with patch.object(autonomous_tasks_service, "_all_current", return_value=[]), \
+             patch.object(ai_preliminary_service, "get", return_value=model), \
+             patch.object(job_service, "envelope_rooms", return_value=unknown):
+            status = job_service.status(SimpleNamespace(), self.project)
+        self.assertEqual(status["tabs"]["windows"], {"state": "todo", "detail": "Classify the walls first"})
+
     def test_status_before_the_drawings_are_prepared(self):
         project = {**self.project, "reasoning_packet": ""}
         from backend import autonomous_tasks_service
         with patch.object(autonomous_tasks_service, "_all_current", return_value=[]):
             status = job_service.status(SimpleNamespace(), project)
         self.assertEqual({tab: row["state"] for tab, row in status["tabs"].items()},
-                         {"project": "needed", "drawings": "needed", "rooms": "needed", "results": "todo"})
+                         {"project": "needed", "drawings": "needed", "rooms": "needed", "walls": "needed",
+                          "windows": "todo", "results": "todo"})
         self.assertIsNone(status["total_kw"])
 
 

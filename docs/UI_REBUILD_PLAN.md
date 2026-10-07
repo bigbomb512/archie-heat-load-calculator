@@ -72,8 +72,8 @@ Each tab lists what it shows, where the data comes from today (existing endpoint
 
 ### 2. Drawings
 - **Shows:**
-  - the pages used (thumbnails, with an include toggle);
-  - the drawing check's progress ("6 of 14 checks done");
+  - a plain-language analysis state that points to rooms, walls, and windows needing review;
+  - the automatically selected pages, with thumbnails and include toggles under an optional page-review disclosure;
   - for the operator, **one task at a time**: prompt, image downloads, reply box, then the next task.
 - **Data:** `/api/analysis`, `/api/decisions` (page choice), `/api/autonomous-tasks` (`run_all`,
   `validate_apply`, labels progress).
@@ -220,12 +220,13 @@ Nothing is deleted; it is just out of the contractor's way.
   - **Butcher Buffet copy, server steps from the same snapshot:** 84 s → 27.6 s, with the same total (34.3995 kW) and identical materialised inputs.
   - **In the browser:** a repeat Calculate takes 27 s (was 77–120 s). The first Calculate after measuring rooms took 54 s, because answering the new roof questions rebuilds the evidence once.
   - **Still slow:** the first resolver run (up to about 3 min, untimed since) and adding a room (about 15 s).
-  - **Found while checking:** the geometry fingerprint differs between two runs of the same code from the same inputs, likely iteration order that changes per Python process. It predates this change. To check: whether a server restart then marks results out of date.
+  - **Checked 2026-10-07: not a bug.** The geometry fingerprint is identical across processes (same inputs, PYTHONHASHSEED 1 and 2 give the same value). The run-to-run differences came from the inputs: each Calculate re-resolves room uses and rewrites room_use_resolution.json with fresh timestamps, and that file's fingerprint feeds the geometry evidence fingerprint. A server restart doesn't change it.
 - **Typed-area rooms have no outline**, so their walls and roof are not assessed (envelope 0 kW). On that job a typed height changes nothing, because only the envelope uses height. The Results "not included" list says so; tracing (phase 3) fixes it.
 
 ### Phase 2 status (2026-10-06)
 **Built (Drawings tab):**
-- **Drawing check progress.** Checks that wait on earlier checks are no longer counted as done.
+- Contractor view summarizes drawing analysis and directs review to Rooms, Walls & roof, and Windows instead of exposing a raw “N of M checks done” count. Page thumbnails and selection controls are available under “Review or change selected pages.” The Toki-team reply queue remains an explicit internal/manual review path; drawing extraction is not yet fully autonomous.
+- **Analysis state.** The contractor sees a plain-language in-progress/complete message; internal status still tracks waiting and blocked tasks.
 - **Pages used:** thumbnails with tickboxes, main plans marked, "Show all pages", and "Use these pages". That last button prepares the pages again and rebuilds the checks.
   - The saved page selection is now returned as `selected_pages` and restored on reload, on the engineer screen too. Before this, unticked pages came back after a reload.
   - A re-render or tab switch during preparation waits for the same run, and leaving the page asks for confirmation.
@@ -282,6 +283,40 @@ Nothing is deleted; it is just out of the contractor's way.
 
   Both belong to phase 4 (Walls & roof).
 - **Phone:** the plan is small at 375 px and there's no pinch-to-zoom (zoom buttons only).
+
+### Phase 4 status (2026-10-07)
+**Built (Walls & roof and Windows tabs):**
+- The tab rail and phone section picker now follow Project → Drawings → Rooms → Walls & roof → Windows → Results.
+- Walls & roof shows each current room outline over its plan page, computed edge lengths and boundary/source per edge, per-wall AI acceptance, bulk classification for unset walls, and a per-room roof choice. Lengths come from the job-status envelope summary, matched by trace ID and edge index. Area-only rooms are listed separately with a link to Measure on the plan.
+- Windows shows current room parts and classified outside/mall edges, per-opening width, sill, head, elevation page, glazing, shading and source. Reviewers can add/remove openings and mark an outside/mall edge as having no glazing. Saves use the existing envelope classification endpoint; server validation errors are shown as returned.
+- Windows remains “Classify the walls first” while any outlined cooled room has an unknown wall. Opening IDs use the next free number. Re-sent openings retain their prior declaration source, and AI wall classification does not relabel reviewer-entered windows.
+- Saving a trace or deleting one refreshes geometry tasks inside the page-analysis cache operation and applies the Project tab roof answer before rebuilding evidence once. A task-refresh failure is reported in the response without undoing the saved trace. The Project answer applies to unknown-roof hand traces and preserves their edges and openings.
+- `/api/job-status` reads the saved geometry artifact for envelope state and returns wall lengths, source, roof, opening count and no-glazing marks; it does not rebuild geometry evidence for this summary. Results are refreshed after edits and remain stale until Calculate.
+- Room-level “below accuracy bar” state is computed from each room's own trace sources. The public roof-answer request cannot skip the evidence rebuild; deferral is available only to internal callers.
+- The default tab remains the first pending tab in the existing rail order (after Project); the “Rooms before Drawings” override was reverted.
+
+**Verification:**
+- Backend checks cover trace refresh, Project roof-answer precedence, envelope tab states, computed metres, per-room accuracy, source preservation, and public roof-answer evidence rebuilding.
+- Workspace Playwright checks cover real wall length text, unique opening IDs after remove/add/save, tab history, wall edits/AI acceptance, no-glazing and opening saves, and phone-width overflow.
+- A Butcher Buffet trace-save timing on disposable copies was 32.98 s for the old order (15.29 s save plus 17.69 s task/roof refresh; two evidence builds) and 20.24 s after the change (one evidence build), a 38.6% reduction in the measured workflow.
+- On a disposable Butcher Buffet copy, Kitchen, Shop and Bar wall decisions, the Project-tab “Another floor or tenancy” answer, and the page 26 shopfront opening were applied through the workspace. A backend calculation completed in 21.2 s at 34.8764 kW total, including 0.9525 kW for walls, roof and glazing. Per-room totals were Bar 3.7076 kW, Kitchen 12.7684 kW and Shop 15.2350 kW. The pre-change report was 33.8286 kW total and 0.0000 kW envelope.
+- The remaining report exclusions include adjacent-tenancy/internal boundary conduction, solar gain where façade orientation was not assessed, infiltration and outside/process air, and other room latent/process gains. The result is 4.7236 kW below the engineer reference of about 39.6 kW and 0.1236 kW below the stated 35–50 kW acceptable band; one job is not validation.
+- Five direct `/api/job-status` reads took 58.9–83.6 ms (median 67.1 ms). The 375 px Playwright check found no page-wide horizontal scroll. Browser console had no errors during the tab walkthrough.
+- A browser-triggered Calculate on a disposable copy still fails with `A newer run replaced this one.` One browser POST produced the job below while only one Python server process listened on `127.0.0.1:8123` (PID 62361); no second server process was present. Browser console errors: none. This remains unresolved.
+
+```json
+{
+  "schema_version": 1,
+  "job_id": "71ca24fdeb1a4b74b01bb0a81c3f7d44",
+  "status": "running",
+  "step": "model",
+  "step_label": "Building the model from your rooms",
+  "started_at": "2026-10-07T19:09:28+11:00",
+  "pid": 62361,
+  "requested_by": "Contractor"
+}
+```
+- The exact requested backend command passed: 136 tests. `cd frontend && npm test` passed after correcting the browser-history assertion: 93 Playwright tests plus the bundled Python regression and frontend contract checks.
 
 ## Testing
 - **Playwright, per tab:** loads its data, edits round-trip, status badges change.

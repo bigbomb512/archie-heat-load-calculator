@@ -27,14 +27,18 @@ const report = {
   design_conditions_basis: {design_day: {label: "Generic"}},
 };
 
-function tab(state, detail = "") { return {state, detail}; }
+function tab(state, detail = "", count = undefined) { return {state, detail, ...(count === undefined ? {} : {count})}; }
 
 function baseStatus(over = {}) {
   return {id: "job-1", name: "Corner cafe", address: "", found_site: "TENANCY 7, CENTRAL MALL", building_type: "", above: "",
           total_kw: null, result_stale: false, drawings_confirmed: true, checks: {total: 11, waiting: 0, blocked: 0, marker: "m1"},
           rooms: {total: 2, included: 1, with_area: 1}, area_overrides: [],
           tabs: {project: tab("needed", "Add the site address and what's above the tenancy."), drawings: tab("done"),
-                 rooms: tab("check", "1 of 2 rooms have an area"), results: tab("todo", "Not calculated yet.")}, ...over};
+                 rooms: tab("check", "1 of 2 rooms have an area"), walls: tab("needed"), windows: tab("todo"),
+                 results: tab("todo", "Not calculated yet.")},
+          subtabs: {project: {job_site: tab("check", "Review the address found on the drawings", 1), tenancy_context: tab("needed", "Tell us what's above", 1)},
+                    rooms: {room_details: tab("check", "Review room use", 1), measurements: tab("needed", "Add an area", 1)},
+                    walls: {walls: tab("needed", "Classify walls", 2), roof: tab("check", "Review the roof", 1)}}, ...over};
 }
 
 const scope = {status: "not_confirmed", candidate_fingerprint: "fp", uses: {office: "Office", kitchen: "Kitchen"},
@@ -70,6 +74,7 @@ async function mockJob(page, {status, model = () => ({room_scope: scope}), onPos
     const body = route.request().postDataJSON();
     posts.push([kind, body]);
     const reply = onPost(kind, body);
+    if (reply?.httpStatus) return route.fulfill({status: reply.httpStatus, json: reply.json || {message: reply.message}});
     return route.fulfill({json: reply || (kind === "model" ? model() : status())});
   };
   await page.route("**/api/job-setup", record("setup"));
@@ -112,23 +117,31 @@ test("a job opens in the workspace: rail with a status per tab, the projects lis
   await expect(page.locator("#vJob")).toBeVisible();
   await expect(page.locator("#vRes")).toBeHidden();
   await expect(page.locator("aside.side")).toBeHidden();
-  await expect(page.locator(".ws-tab")).toHaveText([/Project.*Add the site address/s, /Drawings/, /Rooms.*1 of 2 rooms have an area/s, /Results.*Not calculated yet/s]);
-  await expect(page.locator("[data-ws-tab='project'] .ws-tab-icon")).toHaveText("!");
+  await expect(page.locator(".ws-tab")).toHaveText([/Project.*1 item to add · 1 to review/s, /Drawings/, /Rooms.*1 item to add · 1 to review/s,
+    /Walls & roof/, /Windows/, /Results.*Not calculated yet/s]);
+  await expect(page.locator("[data-ws-tab='project'] .ws-tab-icon")).toHaveText("●");
+  await expect(page.locator("[data-ws-tab='project']")).toHaveClass(/is-needed/);
+  await expect(page.locator("[data-ws-tab='project']")).not.toHaveClass(/is-error/);
   await expect(page.locator("#jobTitle")).toHaveText("Corner cafe");
   await expect(page.locator("#jobAddress")).toHaveText("TENANCY 7, CENTRAL MALL");
   await expect(page.locator("#wsTotal")).toHaveText("—");
-  await expect(page).toHaveURL(/#\/job\/job-1\/rooms$/);   // first tab that needs something, after Project
-  await expect(page.locator("[data-ws-tab='rooms']")).toHaveAttribute("aria-current", "page");
+  await expect(page).toHaveURL(/#\/job\/job-1\/walls\/walls$/);   // first pending tab in the ordered rail, after Project
+  await expect(page.locator("[data-ws-tab='walls']")).toHaveAttribute("aria-current", "page");
+  await expect(page.locator("#wsSubtabs")).toContainText("Walls");
+  await expect(page.locator("#wsSubtabs")).toContainText("To do");
+  await expect(page.locator("#wsSubtabs")).toContainText("Roof");
+  await expect(page.locator("#wsSubtabs")).toContainText("Review");
   await page.locator("[data-ws-tab='project']").click();
-  await expect(page).toHaveURL(/#\/job\/job-1\/project$/);
+  await expect(page).toHaveURL(/#\/job\/job-1\/project\/job-site$/);
   await expect(page.locator("[data-ws-project]")).toBeVisible();
   await page.goBack();
-  await expect(page.locator("[data-ws-rooms]")).toBeVisible();
+  await expect(page.locator("[data-ws-walls]")).toBeVisible();
 });
 
 test("Project: the job details are saved once and the rail updates", async ({ page }) => {
   let saved = false;
-  const posts = await mockJob(page, {status: () => saved ? baseStatus({address: "1 Main St, Ryde NSW 2112", above: "floor", tabs: {...baseStatus().tabs, project: tab("done")}}) : baseStatus(),
+  const posts = await mockJob(page, {status: () => saved ? baseStatus({address: "1 Main St, Ryde NSW 2112", above: "floor", tabs: {...baseStatus().tabs, project: tab("done")},
+    subtabs: {...baseStatus().subtabs, project: {job_site: tab("done", "Saved", 0), tenancy_context: tab("done", "Saved", 0)}}}) : baseStatus(),
                                      onPost: kind => { if (kind === "setup") saved = true; return null; }});
   await page.goto("/#/job/job-1/project");
   await expect(page.locator("[data-ws-project]")).toBeVisible();
@@ -136,6 +149,7 @@ test("Project: the job details are saved once and the rail updates", async ({ pa
   await expect(page.locator("[name=address]")).toHaveValue("TENANCY 7, CENTRAL MALL");
   await page.locator("[name=address]").fill("1 Main St, Ryde NSW 2112");
   await page.locator("[name=building_type]").selectOption("food_tenancy");
+  await page.getByRole("link", {name: /Tenancy context/}).click();
   await page.getByLabel("Another floor or tenancy").check();
   await page.locator("[name=person]").fill("Sam");
   await page.getByRole("button", {name: "Save"}).click();
@@ -146,26 +160,81 @@ test("Project: the job details are saved once and the rail updates", async ({ pa
   await expect(page.locator("#jobAddress")).toHaveText("1 Main St, Ryde NSW 2112");
 });
 
-test("Drawings: progress of the drawing check, the pages used, and a switch for the Toki team", async ({ page }) => {
+test("sub-tab links support direct links, fallback, and browser back and forward", async ({page}) => {
+  await mockJob(page, {status: () => baseStatus()});
+  await page.goto("/#/job/job-1/rooms/measurements");
+  await expect(page.locator("[data-ws-rooms]")).toHaveClass(/ws-room-measurements/);
+  await page.locator(".ws-subtab").filter({hasText: "Room details"}).click();
+  await expect(page).toHaveURL(/#\/job\/job-1\/rooms\/room-details$/);
+  await expect(page.locator("[data-ws-rooms]")).toHaveClass(/ws-room-details/);
+  await page.goBack();
+  await expect(page.locator("[data-ws-rooms]")).toHaveClass(/ws-room-measurements/);
+  await page.goForward();
+  await expect(page.locator("[data-ws-rooms]")).toHaveClass(/ws-room-details/);
+  await page.goto("/#/job/job-1/rooms/not-a-subtab");
+  await expect(page).toHaveURL(/#\/job\/job-1\/rooms\/room-details$/);
+});
+
+test("Rooms sub-tabs group room details separately from measurements", async ({page}) => {
+  const model = {...scope, candidates: scope.candidates.map(row => row.label === "Kitchen" ? {...row, include: true, status: "needs_use"} : row)};
+  await mockJob(page, {status: () => baseStatus(), model: () => ({room_scope: model})});
+  await page.goto("/#/job/job-1/rooms/room-details");
+  const kitchen = page.locator("[data-ws-room='room-use:unassigned-level:kitchen']");
+  await expect(kitchen.locator("[data-ws-include]")).toBeVisible();
+  await expect(kitchen.locator("[data-ws-use]")).toBeVisible();
+  await expect(kitchen.locator("[data-ws-area]")).toBeHidden();
+  await expect(kitchen.locator(".ws-chip")).toHaveCSS("background-color", "rgb(225, 236, 245)");
+  await page.locator(".ws-subtab").filter({hasText: "Measurements"}).click();
+  await expect(kitchen.locator("[data-ws-area]")).toBeVisible();
+  await expect(kitchen.locator("[data-ws-height]")).toBeVisible();
+  await expect(kitchen.locator("[data-ws-trace]")).toBeVisible();
+  await expect(kitchen.locator("[data-ws-include]")).toBeHidden();
+});
+
+test("Project save failures remain red and actionable", async ({page}) => {
+  await mockJob(page, {status: () => baseStatus(), onPost: kind => kind === "setup"
+    ? {httpStatus: 400, message: "Address could not be saved."} : null});
+  await page.goto("/#/job/job-1/project/job-site");
+  await page.locator("[name=address]").fill("1 Main Street");
+  await page.getByRole("button", {name: "Save"}).click();
+  const error = page.locator("[data-ws-project-status]");
+  await expect(error).toHaveAttribute("role", "alert");
+  await expect(error).toHaveClass(/is-error/);
+  await expect(error).toContainText("Could not save");
+});
+
+test("Drawings: shows analysis status, keeps page changes available on request, and has a Toki-team override", async ({ page }) => {
   await mockJob(page, {status: () => baseStatus({checks: {total: 11, waiting: 9, blocked: 1, marker: "m"},
-                                                  tabs: {...baseStatus().tabs, drawings: tab("working", "1 of 11 checks done")}}),
+                                                  tabs: {...baseStatus().tabs, drawings: tab("working", "Toki is reviewing the drawings.")}}),
                        tasks: () => [{task: "P1_site", target: "project", status: "waiting_for_reply", prompt: "Find the site.", images: []}]});
   await page.goto("/#/job/job-1/drawings");
-  await expect(page.locator("[data-ws-checks]")).toContainText("1 of 11 checks done.");
-  await expect(page.locator("[data-ws-checks]")).toContainText("the Toki team completes this step");
-  await expect(page.locator("[data-ws-checks]")).toContainText("1 more starts when earlier checks are answered.");
+  await expect(page.locator("[data-ws-checks]")).toContainText("The Toki team is reviewing drawing details");
+  await expect(page.locator("[data-ws-checks]")).not.toContainText("of 11 checks done");
+  await expect(page.locator("[data-ws-checks]")).toContainText("continue with the rooms and measurements");
   await expect(page.locator("[data-ws-tab='drawings'] .ws-tab-icon")).toHaveText("◌");
   await expect(page.locator("[data-ws-operator-panel]")).toHaveCount(0);
-  // Pages used: the confirmed pages, main plans marked; the rest on request.
+  await expect(page.locator("[data-ws-drawings]")).toContainText("Pages Toki selected");
+  await expect(page.locator("[data-ws-drawings]")).toContainText("Using 2 of 3 pages");
+  await expect(page.locator("[data-ws-pages]")).not.toBeVisible();
+  await page.locator(".ws-page-controls summary").click();
   await expect(page.locator("[data-ws-pages] li")).toHaveCount(2);
   await expect(page.locator("[data-ws-pages] li.is-main")).toContainText("Page 20 · main plan");
   await page.getByRole("button", {name: "Show all 3 pages"}).click();
   await expect(page.locator("[data-ws-pages] li")).toHaveCount(3);
   await expect(page.locator("[data-ws-pages] li").nth(2)).toContainText("section");  // boilerplate titles fall back to the sheet type
-  await page.getByRole("button", {name: "Toki team: answer the checks here"}).click();
+  await page.getByRole("button", {name: "Open Toki team review"}).click();
   await expect(page.locator("[data-ws-operator-panel]")).toBeVisible();
   await expect(page.locator("#wsOpTitle")).toHaveText("Find the site address");
   await page.getByRole("button", {name: "Hide the AI step"}).click();
+  await expect(page.locator("[data-ws-operator-panel]")).toHaveCount(0);
+});
+
+test("Drawings: completed analysis points contractors to review items instead of a check count", async ({page}) => {
+  await mockJob(page, {status: () => baseStatus({checks: {total: 11, waiting: 0, blocked: 0, marker: "done"}})});
+  await page.goto("/#/job/job-1/drawings");
+  await expect(page.locator("[data-ws-checks]")).toContainText("Drawing analysis is complete");
+  await expect(page.locator("[data-ws-checks]")).toContainText("Review");
+  await expect(page.locator("[data-ws-checks]")).not.toContainText("11 checks");
   await expect(page.locator("[data-ws-operator-panel]")).toHaveCount(0);
 });
 
@@ -173,6 +242,7 @@ test("Drawings: a saved page selection is shown after reopening the job", async 
   await mockJob(page, {status: () => baseStatus()});
   await page.route("**/api/analysis?id=job-1", route => route.fulfill({json: {...analysis, selected_pages: [20]}}));
   await page.goto("/#/job/job-1/drawings");
+  await page.locator(".ws-page-controls summary").click();
   await expect(page.locator("[data-ws-pages] li")).toHaveCount(1);
   await expect(page.locator("[data-ws-pages]")).toContainText("Page 20");
   await page.getByRole("button", {name: "Show all 3 pages"}).click();
@@ -188,6 +258,7 @@ test("Drawings: changing the pages used runs one server job, and switching tabs 
     return job;
   }});
   await page.goto("/#/job/job-1/drawings");
+  await page.locator(".ws-page-controls summary").click();
   await expect(page.locator("[data-ws-use-pages]")).toHaveCount(0);
   await page.locator("[data-ws-page='27']").uncheck();
   await expect(page.locator("[data-ws-use-pages]")).toBeVisible();
@@ -329,7 +400,7 @@ test("Rooms: a typed area is saved at once, shown as Edited by you, and nothing 
     status: () => baseStatus({area_overrides: overrides, rooms: {total: 2, included: overrides.length + 1, with_area: overrides.length + 1}}),
     onPost: (kind, body) => { if (kind === "area") overrides = body.area_m2 == null ? [] : [{room_id: body.room_id, room_label: body.label, area_m2: body.area_m2}]; return null; },
   });
-  await page.goto("/#/job/job-1/rooms");
+  await page.goto("/#/job/job-1/rooms/measurements");
   const kitchen = page.locator("[data-ws-room='room-use:unassigned-level:kitchen']");
   await expect(kitchen.locator(".ws-chip")).toHaveText("No area yet");
   await expect(kitchen.locator("td").nth(1)).toHaveText("");  // "Unassigned level" is not shown
@@ -353,7 +424,7 @@ test("Rooms: a typed ceiling height is saved in millimetres, shown as Edited by 
       room_heights: {"room-use:unassigned-level:shop": typed ? {ceiling_height_mm: typed, origin: "edited"} : {ceiling_height_mm: 2700, origin: "preliminary_fallback"}}}),
     onPost: (kind, body) => { if (kind === "height") typed = body.ceiling_height_mm; return null; },
   });
-  await page.goto("/#/job/job-1/rooms");
+  await page.goto("/#/job/job-1/rooms/measurements");
   const shop = page.locator("[data-ws-room='room-use:unassigned-level:shop']");
   await expect(shop.locator("[data-ws-height]")).toHaveValue("");
   await expect(shop.locator("[data-ws-height]")).toHaveAttribute("placeholder", "2.70");
@@ -486,7 +557,7 @@ test("on a phone the rail becomes a section menu and Calculate stays at hand", a
   await expect(page.locator("#wsTabs")).toBeHidden();
   await expect(page.locator("#wsSectionSelect")).toBeVisible();
   await page.locator("#wsSectionSelect").selectOption("project");
-  await expect(page).toHaveURL(/#\/job\/job-1\/project$/);
+  await expect(page).toHaveURL(/#\/job\/job-1\/project\/job-site$/);
   await expect(page.locator("#wsCalculate")).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
 });
@@ -528,7 +599,7 @@ test("Measure a room: corners snap to the walls, a printed dimension sets the sc
       return {reviewer_room_geometry: {records}};
     },
   });
-  await page.goto("/#/job/job-1/rooms");
+  await page.goto("/#/job/job-1/rooms/measurements");
   await page.locator("[data-ws-room='room-use:unassigned-level:kitchen'] [data-ws-trace]").click();
   await expect(page.locator("[data-ws-measure] h2")).toHaveText("Measure Kitchen");
   await expect(page.locator("[data-ws-measure-page]")).toHaveValue("20");             // the main plan, not the page with the name
@@ -584,7 +655,7 @@ test("Measure a room: a scale set on the page for another room can be reused, an
                  calibration: {status: "agreed", mm_per_px: MM_PER_PX, dimension_points_image_px: [[100, 600], [500, 600]], dimension_value_mm: 400 * MM_PER_PX}};
   await page.setViewportSize({width: 1280, height: 1500});
   const posts = await mockJob(page, {status: () => baseStatus(), geometry: () => geometryContext([other])});
-  await page.goto("/#/job/job-1/rooms");
+  await page.goto("/#/job/job-1/rooms/measurements");
   await page.locator("[data-ws-room='room-use:unassigned-level:kitchen'] [data-ws-trace]").click();
   for (const [x, y] of [[100, 100], [500, 100], [500, 400], [100, 400]]) await clickPlan(page, x, y);
   await page.locator("[data-ws-close]").click();
@@ -595,4 +666,172 @@ test("Measure a room: a scale set on the page for another room can be reused, an
   await page.locator("[data-ws-measure-back]").click();
   await expect(page.locator("[data-ws-rooms]")).toBeVisible();
   expect(posts.filter(([kind]) => kind === "geometry")).toHaveLength(0);
+});
+
+function envelopeFixture() {
+  const roomId = "room-use:unassigned-level:shop";
+  const trace = {trace_id: "shop-trace", room_id: roomId, room_label: "Shop", page: 20, freshness: "current",
+    points_image_px: [[100,100],[500,100],[500,400],[100,400],[100,100]],
+    calibration: {status: "agreed", mm_per_px: MM_PER_PX},
+    edges: [{index: 0, boundary: "external"}, {index: 1, boundary: "unknown"}, {index: 2, boundary: "internal"}, {index: 3, boundary: "unknown"}],
+    edge_sources: {"0": "ai_determined"}, roof: "unknown", roof_source: "", openings: [], openings_none_edges: []};
+  const context = geometryContext([trace]);
+  context.pages = [{...PLAN_PAGE, preview_url: "/api/artifact?plan.png"}];
+  context.glazing_choices = {retail: {label: "Preliminary single glazing"}};
+  context.shading_categories = {unshaded: {label: "No external shade"}};
+  return {roomId, trace, context};
+}
+
+test("Walls & roof: show the plan, accept an AI wall, edit boundaries and save the roof decision", async ({page}) => {
+  const {context} = envelopeFixture();
+  const posts = await mockJob(page, {status: () => baseStatus({envelope: {
+    [context.rooms[1].room_id]: {edges: [{trace_id: "shop-trace", index: 0, length_m: 4.0}]},
+  }}), geometry: () => context});
+  await page.goto("/#/job/job-1/walls");
+  await expect(page.locator("[data-ws-walls]")).toBeVisible();
+  await expect(page.locator(".ws-envelope-plan img")).toBeVisible();
+  await expect(page.getByRole("row", {name: /Wall 1/})).toContainText("AI-determined");
+  await expect(page.getByRole("row", {name: /Wall 1/})).toContainText("4.00 m");
+  await page.getByRole("button", {name: "Accept AI"}).click();
+  await page.locator('[data-ws-boundary="1"]').selectOption("adjacent_tenancy");
+  await page.locator(".ws-subtab").filter({hasText: "Roof"}).click();
+  await expect(page.locator("[data-ws-wall-room]")).toHaveValue(context.rooms[1].room_id);
+  await page.locator("[data-ws-roof]").selectOption("not_exposed");
+  await page.locator("[data-ws-envelope-reviewer]").fill("Sam");
+  await page.getByRole("button", {name: "Save walls & roof"}).click();
+  await expect.poll(() => posts.some(([kind, body]) => kind === "geometry" && body.action === "classify_envelope")).toBeTruthy();
+  const body = posts.find(([kind, row]) => kind === "geometry" && row.action === "classify_envelope")[1];
+  expect(body).toMatchObject({trace_id: "shop-trace", reviewer: "Sam", roof: "not_exposed", confirm_roof: true,
+    confirmed_edges: [0], openings: [], openings_none_edges: []});
+  expect(body.edges).toContainEqual({index: 1, boundary: "adjacent_tenancy"});
+  // The backend keeps unchanged wall sources and marks only changed boundaries as reviewer decisions.
+  expect(body.edges).toEqual([{index: 0, boundary: "external"}, {index: 1, boundary: "adjacent_tenancy"},
+    {index: 2, boundary: "internal"}, {index: 3, boundary: "unknown"}]);
+  await page.setViewportSize({width: 375, height: 812});
+  await expect(page.locator("#wsSectionSelect")).toBeVisible();
+  await expect(page.locator('#wsSectionSelect option[value="walls"]')).toContainText("Walls & roof");
+  const widths = await page.evaluate(() => ({body: document.body.scrollWidth, viewport: window.innerWidth}));
+  expect(widths.body).toBeLessThanOrEqual(widths.viewport);
+});
+
+test("Walls & roof: area-only rooms open the existing measure view", async ({page}) => {
+  const {context} = envelopeFixture();
+  const posts = await mockJob(page, {status: () => baseStatus(), geometry: () => context});
+  await page.goto("/#/job/job-1/walls");
+  await expect(page.locator(".ws-area-only")).toContainText("Kitchen");
+  await page.getByRole("button", {name: "Measure on the plan"}).click();
+  await expect(page.locator("[data-ws-measure]")).toBeVisible();
+  await expect(page.locator("[data-ws-measure]")).toContainText("Kitchen");
+  expect(posts.filter(([kind]) => kind === "geometry")).toHaveLength(0);
+});
+
+test("Windows: mark a wall no-glazing and add an opening through classify_envelope", async ({page}) => {
+  const {context, trace} = envelopeFixture();
+  trace.edges[1].boundary = "mall";
+  const posts = await mockJob(page, {status: () => baseStatus(), geometry: () => context});
+  await page.goto("/#/job/job-1/windows");
+  await expect(page.locator("[data-ws-windows]")).toBeVisible();
+  await page.locator('[data-ws-no-glazing="1"]').check();
+  await page.getByRole("button", {name: "Add opening"}).click();
+  await page.locator('[data-opening-field="width_m"]').fill("2.4");
+  await page.locator('[data-opening-field="sill_height_m"]').fill("0.9");
+  await page.locator('[data-opening-field="head_height_m"]').fill("2.1");
+  await page.locator('[data-opening-field="elevation_page"]').fill("26");
+  await page.locator("[data-ws-window-reviewer]").fill("Sam");
+  await page.getByRole("button", {name: "Save windows"}).click();
+  await expect.poll(() => posts.some(([kind, body]) => kind === "geometry" && body.action === "classify_envelope")).toBeTruthy();
+  const body = posts.find(([kind, row]) => kind === "geometry" && row.action === "classify_envelope")[1];
+  expect(body.openings_none_edges).toEqual([1]);
+  expect(body.openings[0]).toMatchObject({edge_index: 0, width_m: 2.4, sill_height_m: 0.9, head_height_m: 2.1, elevation_page: 26});
+  expect(body.edges).toEqual(trace.edges);
+});
+
+test("Windows: removing one opening then adding another uses a free ID", async ({page}) => {
+  const {context, trace} = envelopeFixture();
+  trace.edges[1].boundary = "mall";
+  trace.openings = [
+    {opening_id: "Opening 1", edge_index: 0, width_m: 1, sill_height_m: 0, head_height_m: 1,
+      elevation_page: 26, glazing_choice: "retail", shading_category: "unshaded"},
+    {opening_id: "Opening 2", edge_index: 1, width_m: 1, sill_height_m: 0, head_height_m: 1,
+      elevation_page: 26, glazing_choice: "retail", shading_category: "unshaded"},
+  ];
+  const posts = await mockJob(page, {status: () => baseStatus(), geometry: () => context});
+  await page.goto("/#/job/job-1/windows");
+  await page.getByRole("button", {name: "Remove opening"}).nth(1).click();
+  await page.getByRole("button", {name: "Add opening"}).click();
+  await expect(page.locator(".ws-opening legend").nth(1)).toContainText("Opening 2");
+  await page.locator('[data-opening-field="width_m"][data-index="1"]').fill("1.2");
+  await page.locator('[data-opening-field="sill_height_m"][data-index="1"]').fill("0");
+  await page.locator('[data-opening-field="head_height_m"][data-index="1"]').fill("1.2");
+  await page.locator('[data-opening-field="elevation_page"][data-index="1"]').fill("26");
+  await page.locator("[data-ws-window-reviewer]").fill("Sam");
+  await page.getByRole("button", {name: "Save windows"}).click();
+  await expect.poll(() => posts.some(([kind]) => kind === "geometry")).toBeTruthy();
+  const openings = posts.find(([kind]) => kind === "geometry")[1].openings;
+  expect(openings.map(row => row.opening_id)).toEqual(["Opening 1", "Opening 2"]);
+  expect(new Set(openings.map(row => row.opening_id)).size).toBe(2);
+});
+
+test("Windows: edit and remove existing openings, preserve the unchanged wall and roof decisions", async ({page}) => {
+  const {context, trace} = envelopeFixture();
+  trace.edges[1].boundary = "mall";
+  trace.roof = "not_exposed";
+  trace.roof_source = "reviewer";
+  trace.openings = [{opening_id: "shopfront", edge_index: 0, width_m: 2.1, sill_height_m: 0.9, head_height_m: 2.4,
+    elevation_page: 26, glazing_choice: "retail", shading_category: "unshaded", declaration_source: "ai_determined"},
+    {opening_id: "remove-me", edge_index: 1, width_m: 1.2, sill_height_m: 0, head_height_m: 2.1,
+    elevation_page: 26, glazing_choice: "retail", shading_category: "unshaded", declaration_source: "reviewer"}];
+  const posts = await mockJob(page, {status: () => baseStatus(), geometry: () => context});
+  await page.goto("/#/job/job-1/windows");
+  await page.locator('[data-opening-field="width_m"][data-index="0"]').fill("2.25");
+  await page.locator('[data-opening-field="head_height_m"][data-index="0"]').fill("2.5");
+  await page.getByRole("button", {name: "Remove opening"}).nth(1).click();
+  await page.locator("[data-ws-window-reviewer]").fill("Sam");
+  await page.getByRole("button", {name: "Save windows"}).click();
+  await expect.poll(() => posts.some(([kind]) => kind === "geometry")).toBeTruthy();
+  const body = posts.find(([kind]) => kind === "geometry")[1];
+  expect(body.openings).toHaveLength(1);
+  expect(body.openings[0]).toMatchObject({opening_id: "shopfront", width_m: 2.25, head_height_m: 2.5});
+  expect(body).toMatchObject({roof: "not_exposed", edges: trace.edges, openings_none_edges: []});
+});
+
+test("Windows: server validation text is shown verbatim with a Rooms link for missing ceiling height", async ({page}) => {
+  const {context, trace} = envelopeFixture();
+  trace.edges[1].boundary = "mall";
+  trace.openings = [{opening_id: "shopfront", edge_index: 0, width_m: 2, sill_height_m: 0.9, head_height_m: 2.4,
+    elevation_page: 26, glazing_choice: "retail", shading_category: "unshaded"}];
+  const posts = await mockJob(page, {status: () => baseStatus(), geometry: () => context,
+    onPost: kind => kind === "geometry" ? {httpStatus: 400, message: "Missing ceiling height for Shop."} : null});
+  await page.goto("/#/job/job-1/windows");
+  await page.locator("[data-ws-window-reviewer]").fill("Sam");
+  await page.getByRole("button", {name: "Save windows"}).click();
+  await expect(page.getByRole("alert")).toContainText("Missing ceiling height for Shop.");
+  await page.getByRole("button", {name: "Set ceiling height on Rooms"}).click();
+  await expect(page.locator("[data-ws-rooms]")).toBeVisible();
+  expect(posts.filter(([kind]) => kind === "geometry")).toHaveLength(1);
+});
+
+test("Workspace: after an envelope save, tab badges refresh and the previous result is marked stale", async ({page}) => {
+  const {context} = envelopeFixture();
+  const trace = context.reviewer_room_geometry.records[0];
+  let saved = false;
+  const posts = await mockJob(page, {status: () => baseStatus({result_stale: saved, total_kw: 34.1,
+    tabs: {...baseStatus().tabs, walls: tab(saved ? "done" : "needed"), windows: tab(saved ? "check" : "todo"),
+      results: tab("done", saved ? "Out of date — calculate again." : "")},
+    subtabs: {...baseStatus().subtabs, walls: {walls: tab(saved ? "done" : "needed", "", saved ? 0 : 2),
+      roof: tab(saved ? "done" : "needed", "", saved ? 0 : 1)}}}), geometry: () => context,
+    model: () => ({room_scope: {...scope, status: "confirmed"}, hourly_ai_preliminary_load_report: report}),
+    onPost: kind => { if (kind === "geometry") {
+      saved = true;
+      trace.edges.forEach(edge => { if (edge.boundary === "unknown") edge.boundary = "internal"; });
+      trace.roof = "not_exposed"; trace.roof_source = "reviewer";
+    } return null; }});
+  await page.goto("/#/job/job-1/walls");
+  await page.locator("[data-ws-envelope-reviewer]").fill("Sam");
+  await page.getByRole("button", {name: "Save walls & roof"}).click();
+  await expect(page.locator("[data-ws-tab='walls'] .ws-tab-icon")).toHaveText("✓");
+  await expect(page.locator("[data-ws-tab='windows'] .ws-tab-icon")).toHaveText("●");
+  await page.locator("[data-ws-tab='results']").click();
+  await expect(page.locator("[data-ws-results]")).toContainText("Inputs changed since this result");
+  expect(posts.filter(([kind]) => kind === "geometry")).toHaveLength(1);
 });
