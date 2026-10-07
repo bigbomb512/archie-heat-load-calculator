@@ -110,6 +110,18 @@ class CalculationJobTests(unittest.TestCase):
         self.assertIn("No room has an area", failed["error"])
         self.assertNotIn("calculate", self.calls)
 
+    def test_a_run_owned_by_another_live_server_process_is_joined_not_replaced(self):
+        import os
+        from backend import job_runner
+        (self.root / service.JOB_FILE).write_text(json.dumps({"job_id": "other", "status": "running", "step": "model", "pid": os.getpid() + 100000}))
+        with patch.object(job_runner, "_process_alive", side_effect=lambda pid: pid == os.getpid() + 100000):
+            self.assertEqual(service.status(None, self.web.project)["status"], "running")
+            joined = service.start(self.web, self.web.project, {})
+        self.assertTrue(joined["deduplicated"])
+        self.assertEqual(joined["job_id"], "other")
+        with patch.object(job_runner, "_process_alive", return_value=False):
+            self.assertEqual(service.status(None, self.web.project)["status"], "interrupted")
+
     def test_bad_room_choices_are_refused_and_a_restart_shows_interrupted(self):
         with self.assertRaisesRegex(ValueError, "true or false"):
             service.start(self.web, self.web.project, {"include": {"shop": "no"}})

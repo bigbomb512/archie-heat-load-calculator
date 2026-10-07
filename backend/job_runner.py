@@ -34,6 +34,19 @@ def write_json(path, value):
     os.replace(stage, path)
 
 
+def _process_alive(pid):
+    """True when a process with this id is running (another server process may own a job)."""
+    if type(pid) is not int or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 class BackgroundJob:
     """One job file per project; at most one run per project at a time (per server process)."""
 
@@ -53,7 +66,8 @@ class BackgroundJob:
         job = read_json(self.path(project))
         if not job:
             return {"id": project["id"], "status": "none"}
-        if job.get("status") in {"queued", "running"} and project["id"] not in self.running:
+        if (job.get("status") in {"queued", "running"} and project["id"] not in self.running
+                and not (job.get("pid") != os.getpid() and _process_alive(job.get("pid")))):
             # The server stopped while the job ran (restart or crash). Say so; the workspace offers to start again.
             job = {**job, "status": "interrupted", "error": self.interrupted_message}
         return {"id": project["id"], **job}
@@ -65,11 +79,14 @@ class BackgroundJob:
         """
         with self.lock:
             current = read_json(self.path(project))
-            if current.get("status") in {"queued", "running"} and project["id"] in self.running:
+            # Join a run in this process, or one still owned by another live server process on the same folder.
+            if current.get("status") in {"queued", "running"} and (
+                    project["id"] in self.running
+                    or (current.get("pid") != os.getpid() and _process_alive(current.get("pid")))):
                 return {**self.status(project), "deduplicated": True}
             first = self.steps[0][0]
             job = {"schema_version": 1, "job_id": uuid.uuid4().hex, "status": "running", "step": first,
-                   "step_label": self.labels[first], "started_at": now(), **fields}
+                   "step_label": self.labels[first], "started_at": now(), "pid": os.getpid(), **fields}
             write_json(self.path(project), job)
             self.running.add(project["id"])
         threading.Thread(target=self._run, args=(web, project, job["job_id"], work),
