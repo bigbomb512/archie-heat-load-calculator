@@ -470,6 +470,197 @@ def side_detail_text_score(raw_text):
     return min(1, score)
 
 
+# ---------------------------------------------------------------- view titles
+# The printed view title ("1  DIMENSION PLAN  SCALE 1:100", "PP  PROPOSED PLAN") says what a
+# sheet is more reliably than words found anywhere on it (legends, notes and schedules mention
+# "furniture", "section" or "schedule" on plan sheets). Kinds are checked in this order on each
+# line, because "existing floor plan" also contains "floor plan".
+VIEW_TITLE_KINDS = [
+    ("rcp", r"(?:reflected|reflective)\s+ceiling(?:\s+set\s*-?\s*out)?\s+plan|ceiling\s+(?:set\s*-?\s*out\s+)?plan|rcp"),
+    ("existing_plan", r"(?:existing|demolition)(?:\s*(?:&|and)\s*demolition)?\s+(?:floor\s+|layout\s+)?plan"),
+    ("context_plan", r"(?:outdoor|site|location|locality|key|context|lease|core\s+hole\s+location)\s+(?:floor\s+)?plan"),
+    ("support_plan", r"(?:loose\s+)?furniture(?:\s+layout)?\s+plan|(?:wall\s*(?:&|and)\s*)?floor\s+finish(?:es)?\s+plan|"
+                     r"wall\s+finish(?:es)?\s+plan|finish(?:es)?\s+plan|partition(?:\s*(?:&|and)\s*finish(?:es)?)?\s+plan|"
+                     r"equipment(?:\s+layout)?\s+plan|elevation\s+(?:index|guide|key)\s+plan"),
+    # A plan named after one room or counter is an enlarged part plan, not the tenancy plan.
+    ("part_plan", r"(?:bar|kitchen|toilets?|wc|amenit\w*|(?:front\s+|side\s+|bar\s+|training\s+)?counter|servery|"
+                  r"f\s*&\s*b|reception|office|cool\s*room|freezer|store\s*room)(?:\s+(?:layout|floor|setout|set\s*-?\s*out))?\s+plan"),
+    ("services_plan", r"(?:electrical|power(?:\s*(?:&|and)\s*data)?|power\s+points?\s+service\s+layout|lighting|hydraulics?|"
+                      r"switch|data|signage|services?|fire|plumbing|drainage)\s+(?:layout\s+)?plan"),
+    ("main_plan", r"(?:proposed\s+)?(?:floor|layout|dimension(?:ed)?(?:\s+floor)?|general\s+arrangement|ga|set\s*-?\s*out|"
+                  r"fit\s*-?\s*out|tenancy|ground\s+floor|mezzanine(?:\s+floor)?)\s+plan|proposed\s+plan"),
+    ("shopfront", r"(?:shop\s*front|store\s*front|external|street|facade)\s+elevations?"),
+    ("elevation", r"(?:internal\s+|interior\s+|front\s+|side\s+|rear\s+)?elevations?(?:\s+[a-z0-9]{1,3})?"),
+    ("section", r"sections?(?:\s+[a-z0-9]{1,3})?"),
+    ("schedule", r"[a-z][a-z &/]{1,40}?\s+schedules?(?:\s*-?\s*\d{1,2})?"),
+]
+VIEW_TITLE_PRIORITY = {"rcp": 0, "main_plan": 1, "shopfront": 2, "existing_plan": 3, "support_plan": 4, "part_plan": 4,
+                       "services_plan": 5, "context_plan": 6, "elevation": 7, "section": 8, "schedule": 9}
+TITLE_BLOCK_LABEL = re.compile(r"(?:drawing\s+)?title\s*:\s*([a-z0-9 &/\-()]{3,70}?\b(?:plan|elevations?|sections?|schedules?))\b", re.I)
+TITLE_NOTE_WORDS = re.compile(r"\b(?:refer|conjunction|see|shown|to\s+be|shall|must|notify|read|including|accordance|"
+                              r"verify|check|confirm|discrepanc\w*|contractor|prior)\b", re.I)
+# Drawing-view codes before a title: "1", "1.", "P01", "A-101", or up to three letters followed by a
+# column gap ("EP   EXISTING FLOOR PLAN"). A word like "BAR" followed by one space is part of the title.
+TITLE_CODE_PREFIX = re.compile(r"^(?:\d{1,3}(?:\.\d{1,2})?[\s.:)\-]+|[a-z]{1,3}-?\d{1,3}(?:\.\d{1,2})?[\s.:)\-]+|[a-z]{1,3}\s{2,})?", re.I)
+DRAWING_LIST_ROW = re.compile(r"^\s*(?:[a-z]{1,3}[-\s.]?\d{2,4}(?:\.\d)?|\d{2}\.\d{2})\s{2,}[a-z]", re.I)
+DRAWING_WORD = re.compile(r"\b(?:plan|elevations?|sections?|notes|page|details?|schedules?|perspectives?|images?|rcp)\b", re.I)
+
+
+def view_title_candidates(raw_text):
+    """(kind, phrase, line) for every line that reads as a printed view title.
+
+    When no line does, the title block is used instead: on some sheets the view title is only
+    recoverable from there. Not on notes, render or schedule pages, whose title area often names
+    other drawings.
+    """
+    found = _title_candidates_from(raw_text.splitlines())
+    if not found and not non_plan_context(raw_text):
+        # A labelled title ("TITLE : BAR LAYOUT PLAN") is more specific than the extracted drawing
+        # title, which may keep only the generic end ("Layout Plan").
+        labelled = [match.group(1) for match in TITLE_BLOCK_LABEL.finditer(title_area(raw_text))]
+        sheet_titles = labelled or [clean_text(extract_drawing_title(raw_text, title_block_only=True))]
+        plain_lines = [re.sub(r"\s+", " ", line).lower() for line in raw_text.splitlines()
+                       if not TITLE_NOTE_WORDS.search(line) and len(SHEET_NUMBER.findall(line)) < 2]
+        for kind, phrase, line in _title_candidates_from(sheet_titles):
+            # The title must appear somewhere other than inside a note ("refer to reflected ceiling plan")
+            # or a drawing-list row ("01.01 Layout Plan  03.18 Detail").
+            if labelled or any(" ".join(phrase.split()) in plain for plain in plain_lines):
+                found.append((kind, phrase, line))
+    return found
+
+
+ROOM_AFTER_TITLE = re.compile(r"\s*[-–:,]?\s*(?:bathroom|toilets?|wc|kitchen|bar|amenit\w*|counter|servery|cool\s*room|"
+                              r"freezer|store\s*room|reception|office)\b", re.I)
+SHEET_NUMBER = re.compile(r"\b(?:\d{1,3}\.\d{2}|[a-z]{1,2}-?\d{2,4}(?:\.\d)?)\b", re.I)
+
+
+def _title_candidates_from(lines):
+    found = []
+    for raw_line in lines:
+        line = re.sub(r"[ \t]{2,}", "  ", raw_line.strip())
+        if not line or len(line) > 160 or TITLE_NOTE_WORDS.search(line):
+            continue
+        if len(SHEET_NUMBER.findall(line)) >= 2:  # a drawing-list row ("01.01 Layout Plan  03.18 Detail")
+            continue
+        lowered = line.lower()
+        lowered = re.sub(r"^drawing\s+title\s*:?\s*", "", lowered)
+        body = TITLE_CODE_PREFIX.sub("", lowered, count=1).strip()
+        body = re.sub(r"^(?:proposed|new)\s+(?!plan\b)", "", body)  # "proposed reflected ceiling plan"
+        for kind, pattern in VIEW_TITLE_KINDS:
+            match = re.match(r"(?:" + pattern + r")\b", body)
+            if not match:
+                continue
+            rest = body[match.end():]
+            if kind == "main_plan" and ROOM_AFTER_TITLE.match(rest):  # "layout plan bathroom": a part plan
+                found.append(("part_plan", match.group(0), line))
+                break
+            # The title ends the line, or is followed by a column gap, a level name or the scale.
+            if rest.strip() and not re.match(r"\s{2,}|\s*[-–:]?\s*(?:level\b|ground\b|lower\b|upper\b|mezzanine\b|scale\b|1\s*:\s*\d|\(|option\b)", rest):
+                continue
+            found.append((kind, match.group(0), line))
+            break
+    return found
+
+
+def view_title(raw_text):
+    """The page's strongest printed view title: (kind, phrase), ("drawing_list", "") or None."""
+    # Five or more "A-131    PROPOSED RCP (GF)"-style rows naming drawings: a drawing list (cover or
+    # index sheet). Legend rows on plans ("FL 02    FLOOR TILES") don't name a drawing type.
+    if sum(1 for line in raw_text.splitlines() if DRAWING_LIST_ROW.match(line) and DRAWING_WORD.search(line)) >= 5:
+        return ("drawing_list", "")
+    candidates = view_title_candidates(raw_text)
+    if not candidates:
+        return None
+    # A drawing list names many sheets of different kinds (plans, ceiling plans, elevations, schedules);
+    # a sheet of elevations A-D is one kind.
+    coded_rows = [line for kind, phrase, line in candidates if DRAWING_LIST_ROW.match(line)]
+    phrases, kinds = {phrase for kind, phrase, line in candidates}, {kind for kind, phrase, line in candidates}
+    if len(phrases) >= 4 and (len(coded_rows) >= 4 or len(kinds) >= 3):
+        return ("drawing_list", "")
+    kind, phrase, _line = min(candidates, key=lambda row: VIEW_TITLE_PRIORITY[row[0]])
+    return (kind, phrase)
+
+
+def strongly_top_down(visual):
+    return bool(visual and visual.get("likely_view") == "top_down_plan" and visual.get("top_down_score", 0) >= 0.8)
+
+
+def title_first_match(raw_text, page_number, visual):
+    """Classify a page by its printed view title, before the word-anywhere rules. None = no decision."""
+    titled = view_title(raw_text)
+    if titled is None:
+        return None
+    kind, phrase = titled
+    title = " ".join(phrase.split()).title() if phrase else ""
+    base = {"page": page_number, "title": title, "confidence": 0.9, "score": 150,
+            "matched_title_words": [phrase] if phrase else [], "matched_support_words": ["printed view title"]}
+    if kind == "drawing_list":
+        return {"bucket": "discarded", "discard": {"type": "cover_or_drawing_list", "matched_words": ["drawing list"]}}
+    if kind == "rcp":
+        match = {**base, "type": "reflected_ceiling_plan", "importance": "essential", "plan_role": "reflected_ceiling_plan"}
+    elif kind == "main_plan":
+        match = {**base, "type": "floor_plan", "importance": "essential", "plan_role": "main_floor_plan"}
+    elif kind in {"support_plan", "part_plan"}:
+        role = ("furniture_plan" if "furniture" in phrase else "enlarged_plan" if kind == "part_plan"
+                else "supporting_geometry_plan")
+        match = {**base, "type": "floor_plan", "importance": "essential", "plan_role": role}
+    elif kind == "context_plan":
+        match = {**base, "type": "site_plan", "importance": "useful", "plan_role": "site_plan"}
+    elif kind == "schedule" and not strongly_top_down(visual):
+        # A page titled only as a schedule (lighting, finishes, equipment…) is a table, not a plan.
+        schedule_type = ("material_or_finish_schedule" if re.search(r"finish|material", phrase)
+                         else "equipment_or_fixture_schedule")
+        match = {**base, "type": schedule_type, "importance": "useful", "plan_role": "reference_context"}
+        match["extracted"] = extract_page_info(raw_text, schedule_type)
+        attach_visual_features(match, visual)
+        return {"bucket": "reference", "match": match}
+    elif kind == "shopfront":
+        match = {**base, "type": "elevation", "importance": "useful", "plan_role": "reference_context"}
+        match["extracted"] = extract_page_info(raw_text, "elevation")
+        attach_visual_features(match, visual)
+        return {"bucket": "reference", "match": match}
+    else:  # existing and services plans keep their earlier handling
+        return None
+    match["extracted"] = extract_page_info(raw_text, match["type"])
+    attach_visual_features(match, visual)
+    return {"bucket": "primary", "match": match}
+
+
+SERVICES_TITLE = re.compile(r"\b(?:mechanical|services|pipework|ductwork|electrical|power|lighting|hydraulics?|plumbing|"
+                            r"drainage|fire|sprinkler|data|communications)\b", re.I)
+
+
+def fallback_main_plan(primary_pages, kept_pages, texts):
+    """When no sheet reads as a main plan, use the most plan-like page (visual top-down score).
+
+    Never a ceiling plan, elevation, section, schedule or a page whose printed title says it is
+    something else; only pages the visual check sees as top-down plans with a score of 0.75 or more.
+    """
+    if any(row.get("plan_role") == "main_floor_plan" for row in primary_pages):
+        return None
+    excluded_types = {"reflected_ceiling_plan", "elevation", "section", "site_plan", "equipment_or_fixture_schedule",
+                      "material_or_finish_schedule", "schedule", "notes", "cover_or_drawing_list", "render_or_photo"}
+    candidates = []
+    for row in [*primary_pages, *kept_pages]:
+        visual = row.get("visual_features") or {}
+        text = texts[row["page"] - 1] if 0 < row["page"] <= len(texts) else ""
+        titled = view_title(text)
+        if row.get("type") in excluded_types or row.get("review_bucket") == "non_thermal":
+            continue
+        if titled and titled[0] != "main_plan":  # titled as something else (section, schedule, services…)
+            continue
+        if SERVICES_TITLE.search(str(row.get("title", ""))):  # a services consultant's plan, not the tenancy plan
+            continue
+        if visual.get("likely_view") not in {"top_down_plan", "uncertain"} or visual.get("top_down_score", 0) < 0.75:
+            continue
+        if schedule_or_component_score(text) >= 0.55 or notes_page_score(text) >= 0.68:
+            continue
+        candidates.append((visual.get("top_down_score", 0), -row["page"], row))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: (item[0], item[1]))[2]
+
+
 def find_pages(pdf_path):
     matches = []
     document_title = extract_pdf_title(pdf_path)
@@ -489,8 +680,23 @@ def analyze_pages(pdf_path, visual_features=None):
     document_title = extract_pdf_title(pdf_path)
     visual_features = visual_features or safe_visual_features(pdf_path)
 
-    for page_number, text in enumerate(extract_text_pages(pdf_path), start=1):
+    texts = list(extract_text_pages(pdf_path))
+    for page_number, text in enumerate(texts, start=1):
         visual = visual_features.get(page_number)
+        titled = title_first_match(text, page_number, visual)
+        if titled and titled["bucket"] == "discarded":
+            discarded = discarded_page(text, page_number, titled["discard"], visual)
+            discarded_pages.append(discarded)
+            kept_pages.append(retained_non_thermal_page(discarded, text))
+            continue
+        if titled and titled["bucket"] == "primary":
+            primary_pages.append(titled["match"])
+            kept_pages.append(kept_page_from_match(titled["match"], "primary"))
+            continue
+        if titled and titled["bucket"] == "reference":
+            reference_pages.append(titled["match"])
+            kept_pages.append(kept_page_from_match(titled["match"], "reference"))
+            continue
         visual_discard = visual_non_design_discard(text, visual)
         if visual_discard:
             discarded = discarded_page(text, page_number, visual_discard, visual)
@@ -531,6 +737,13 @@ def analyze_pages(pdf_path, visual_features=None):
             continue
 
         kept_pages.append(unclassified_page(text, page_number, visual))
+
+    fallback = fallback_main_plan(primary_pages, kept_pages, texts)
+    if fallback is not None:
+        promoted = {**fallback, "type": "floor_plan", "plan_role": "main_floor_plan", "importance": "essential",
+                    "plan_role_reason": "No sheet is titled as a main plan; this is the most plan-like page."}
+        primary_pages = [row for row in primary_pages if row["page"] != promoted["page"]] + [promoted]
+        kept_pages = [row for row in kept_pages if row["page"] != promoted["page"]] + [kept_page_from_match(promoted, "primary")]
 
     return {
         "primary_pages": sorted(primary_pages, key=sort_key),

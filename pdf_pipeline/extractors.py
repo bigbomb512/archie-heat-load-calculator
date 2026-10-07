@@ -102,7 +102,12 @@ def extract_pdf_title(pdf_path):
     return match.group(1).strip() if match else ""
 
 
-def extract_drawing_title(raw_text):
+def extract_drawing_title(raw_text, *, title_block_only=False):
+    """The sheet's drawing title.
+
+    title_block_only=True skips the last resort (a known title found anywhere in the page text),
+    which can pick up a drawing named in a note or legend rather than this sheet's own title.
+    """
     lines = useful_lines(raw_text)
 
     # Most consultant sheets place the actual title on the line immediately
@@ -134,6 +139,8 @@ def extract_drawing_title(raw_text):
     if title:
         return title
 
+    if title_block_only:
+        return ""
     for known_title in KNOWN_TITLES:
         if known_title.lower() in raw_text.lower():
             return known_title

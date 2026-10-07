@@ -103,3 +103,20 @@ records. Do not create answer-sheet facts until a person verifies them.
 The drawing-coverage stage also reports saved level-candidate counts by kind
 and page level-status counts. These describe what the classifier recorded;
 they do not measure whether its classifications are correct.
+
+## Page-role scorecard (architect sets)
+
+`evaluations/page_roles/caseP01-14.json` hold a few page facts per permitted architect set:
+the main plan page(s), ceiling plans (RCPs), pages that must not be discarded, and pages that must
+never be chosen as the main plan. Sheets marked `"confirmed": false` are drafts awaiting the
+user's check. The PDFs stay outside the repository; map each case to its PDF in the ignored
+`output/evaluations/page_role_sources.json` (`{"caseP03": "/absolute/path.pdf", ...}`).
+
+    PYTHONPATH=. python3 tools/evaluate_page_roles.py            # full analysis per set (minutes)
+    PYTHONPATH=. python3 tools/evaluate_page_roles.py --fast     # page finder only, on cached text (seconds)
+    PYTHONPATH=. python3 tools/evaluate_page_roles.py --fast --compare output/evaluations/page-roles-<time>.json
+
+`--fast` caches each PDF's page text and visual features under `output/evaluations/page_role_cache/`
+and gives the same page groups as the full analysis. `--compare` lists every fact that was fixed or
+regressed since an earlier report. Baseline on 2026-10-07: 135/157 facts (main plan right in 6 of 14
+sets, RCPs 9 of 16); after the printed-view-title rules: 157/157.

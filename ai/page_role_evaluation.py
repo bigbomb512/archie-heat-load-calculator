@@ -40,12 +40,14 @@ def validate_answer_sheet(sheet):
 def app_page_roles(packet):
     """Per page: group (primary/reference/kept/discarded), type and plan role, from packet.json."""
     roles = {}
-    for group in ("discarded_pages", "kept_pages", "reference_pages", "primary_pages"):
+    # Later groups win: primary > reference > discarded > kept. A discarded page is also listed in
+    # kept_pages (tagged "not calculation evidence"); it still counts as discarded.
+    for group in ("kept_pages", "discarded_pages", "reference_pages", "primary_pages"):
         for row in packet.get(group) or []:
             if not isinstance(row, dict) or type(row.get("page")) is not int:
                 continue
             current = roles.setdefault(row["page"], {"page": row["page"]})
-            current["group"] = group.removesuffix("_pages")  # later groups win: primary > reference > kept > discarded
+            current["group"] = group.removesuffix("_pages")
             current["type"] = row.get("type")
             current["plan_role"] = row.get("plan_role")
             current["title"] = row.get("title") or ""

@@ -14,6 +14,8 @@ PACKET = {
                    {"page": 3, "type": "reflected_ceiling_plan", "plan_role": "reference_context"}],
     "discarded_pages": [{"page": 5, "type": "render_or_photo", "plan_role": None, "title": "Reflected Ceiling Plan"}],
 }
+# The page finder also lists every discarded page in kept_pages, tagged as not calculation evidence.
+PACKET["kept_pages"].append({"page": 5, "type": "render_or_photo", "plan_role": None, "review_bucket": "non_thermal"})
 
 
 class PageRoleEvaluationTests(unittest.TestCase):
@@ -59,6 +61,25 @@ class PageRoleEvaluationTests(unittest.TestCase):
         markdown = evaluation.render_markdown([good, bad], summary)
         self.assertIn("(draft, not yet confirmed)", markdown)
         self.assertIn("1 of 3 facts right", markdown)
+
+
+class CompareTests(unittest.TestCase):
+    def test_compare_lists_fixed_and_regressed_facts_only(self):
+        import json, tempfile
+        from pathlib import Path
+        from tools.evaluate_page_roles import compare
+        before = {"cases": [{"case_id": "a", "facts": [{"fact": "rcp", "page": 3, "passed": False},
+                                                         {"fact": "geometry", "page": [1, 2], "passed": True},
+                                                         {"fact": "must_keep", "page": 4, "passed": True}]}]}
+        now = [{"case_id": "a", "facts": [{"fact": "rcp", "page": 3, "passed": True, "detail": "primary"},
+                                          {"fact": "geometry", "page": [1, 2], "passed": False, "detail": "none"},
+                                          {"fact": "must_keep", "page": 4, "passed": True, "detail": "kept"}]},
+               {"case_id": "new", "facts": [{"fact": "rcp", "page": 1, "passed": False, "detail": "-"}]}]
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "before.json"
+            path.write_text(json.dumps(before))
+            lines = compare(path, now)
+        self.assertEqual(lines, ["a rcp p3: fixed (primary)", "a geometry p[1, 2]: REGRESSED (none)"])
 
 
 if __name__ == "__main__":
