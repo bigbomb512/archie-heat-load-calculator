@@ -87,6 +87,106 @@ class SkillWorkflowTests(unittest.TestCase):
             self.assertEqual(manifest["error_code"], "skill_provider_unavailable")
             self.assertIn("credentials", blocked["blocked_reason"])
 
+    def test_findings_derive_evidence_labels_and_keep_missing_values_editable(self):
+        with tempfile.TemporaryDirectory() as folder:
+            project, web = self.project(folder), Web()
+            root = Path(folder)
+            catalog = skills.load_catalog()
+            source_fp = skills._source_fingerprint(skills._project_paths(project), catalog)
+            manifest = skills._new_manifest(catalog, source_fp, "pdf_review")
+            manifest.update({"run_id": "evidence-run", "status": "needs_review"})
+            manifest["subskills"]["room_identity_use"].update({"status": "needs_review", "evidence_reviewed": {
+                "pages": [1], "provider": "test-provider", "model": "test-model", "started_at": 10, "finished_at": 11, "attempt_ref": "attempts/a"}})
+            (root / "skill_workflow_run.json").write_text(json.dumps(manifest))
+            proposal_dir = root / "skill_workflow_runs" / "evidence-run" / "proposals"
+            proposal_dir.mkdir(parents=True)
+            (proposal_dir / "room_identity_use.json").write_text(json.dumps({
+                "subskill_id": "room_identity_use", "status": "needs_review",
+                "proposal_fields": {"rooms": [
+                    {"room_id": "supported", "taxonomy_id": "shop", "page": 1, "excerpt": "SHOP"},
+                    {"room_id": "inferred", "taxonomy_id": "kitchen", "page": 1, "formula": "fixture count × load"},
+                    None,
+                    {"room_id": "conflict", "taxonomy_id": "shop", "page": 1, "alternatives": ["shop", "kitchen"]},
+                ]},
+                "inferences": [{"field": "rooms", "target": "inferred", "value": "kitchen", "method": "fixture count × load"}],
+                "citations": [{"physical_pdf_page": 1, "excerpt_or_crop": "Shop / Kitchen"}],
+                "alternatives": [], "unresolved_fields": [{"field": "rooms[2]", "reason": "Not shown"}],
+            }))
+            response = skills.get(web, project)
+            rows = response["findings"]
+            by_target = {row["target"]: row["evidence"] for row in rows if row.get("target")}
+            self.assertEqual(by_target, {"supported": "supported", "inferred": "inferred", "conflict": "conflicting"})
+            self.assertTrue(any(row["evidence"] == "missing" for row in rows))
+            self.assertEqual(response["status"], "needs_review")
+            identity = next(row for row in response["subskills"] if row["id"] == "room_identity_use")
+            self.assertEqual(identity["evidence_reviewed"]["pages"], [1])
+            self.assertEqual(identity["evidence_reviewed"]["provider"], "test-provider")
+            self.assertEqual(identity["evidence_reviewed"]["model"], "test-model")
+            self.assertEqual(identity["evidence_reviewed"]["started_at"], 10)
+            self.assertEqual(identity["evidence_reviewed"]["finished_at"], 11)
+            self.assertEqual(identity["evidence_reviewed"]["attempt_ref"], "attempts/a")
+            missing = next(row for row in rows if row["evidence"] == "missing")
+            with self.assertRaisesRegex(ValueError, "Enter a value"):
+                skills.post(web, project, {"action": "review_finding", "finding_id": missing["id"],
+                    "decision": "accepted"})
+
+    def test_supported_and_inferred_labels_are_derived_from_evidence_and_method(self):
+        self.assertEqual(skills._finding_evidence({"value": 2}, "area", [1], [], "", "", []), "supported")
+        self.assertEqual(skills._finding_evidence({"value": 2}, "area", [1], [{"method": "scale"}], "", "", []), "inferred")
+        self.assertEqual(skills._finding_evidence({"value": 2}, "area", [], [], "", "", []), "missing")
+        self.assertEqual(skills._finding_evidence(None, "area", [1], [], "", "", []), "missing")
+        self.assertEqual(skills._finding_evidence({"value": 2, "printed_value": 3}, "area", [1], [], "", "", []), "conflicting")
+        self.assertEqual(skills._finding_evidence({"taxonomy_id": "shop", "printed_value": "kitchen"}, "rooms", [1], [], "", "", []), "conflicting")
+        rows = [{"field": "area", "target": "shop", "value": 10, "evidence": "supported"},
+                {"field": "area", "target": "shop", "value": 12, "evidence": "supported"}]
+        skills._mark_conflicting_findings(rows)
+        self.assertEqual([row["evidence"] for row in rows], ["conflicting", "conflicting"])
+        # Rows of one list field without a room/surface/page aren't two readings of one value.
+        plain = [{"field": "notes", "target": "", "value": "a", "evidence": "supported"},
+                 {"field": "notes", "target": "", "value": "b", "evidence": "supported"}]
+        skills._mark_conflicting_findings(plain)
+        self.assertEqual([row["evidence"] for row in plain], ["supported", "supported"])
+
+    def test_the_source_fingerprint_is_reused_until_an_input_file_changes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            project = self.project(folder)
+            paths, catalog = skills._project_paths(project), skills.load_catalog()
+            first = skills._source_fingerprint(paths, catalog)
+            with patch.object(skills, "_source_inputs", side_effect=AssertionError("re-read")):
+                self.assertEqual(skills._source_fingerprint(paths, catalog), first)
+            (Path(folder) / "vision_extraction_settings.json").write_text(json.dumps({"owner_opt_in": True, "selected_group_ids": ["plans"]}))
+            self.assertNotEqual(skills._source_fingerprint(paths, catalog), first)
+            settings_changed = skills._source_fingerprint(paths, catalog)
+            (Path(folder) / "spatial_ocr.json").write_text(json.dumps({"pages": [1]}))
+            self.assertNotEqual(skills._source_fingerprint(paths, catalog), settings_changed)
+
+    def test_rejecting_a_missing_finding_closes_it(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            project = self.project(folder)
+            paths = skills._project_paths(project)
+            fp = skills._source_fingerprint(paths, skills.load_catalog())
+            manifest = {"run_id": "r1", "source_fingerprint": fp}
+            proposals = root / "skill_workflow_runs" / "r1" / "proposals"
+            proposals.mkdir(parents=True)
+            (proposals / "ceiling_height_volume.json").write_text(json.dumps({"subskill_id": "ceiling_height_volume",
+                "status": "needs_review", "proposal_fields": {"heights": []}, "unresolved_fields": []}))
+            self.assertTrue(skills._has_open_findings(paths, manifest))
+            decision = {"status": "rejected", "run_id": "r1", "source_fingerprint": fp}
+            (root / "skill_review_decisions.json").write_text(json.dumps(
+                {"decisions": {"ceiling_height_volume:missing:heights:0": decision}}))
+            self.assertFalse(skills._has_open_findings(paths, manifest))
+
+    def test_withdrawn_consent_makes_findings_read_only(self):
+        with tempfile.TemporaryDirectory() as folder:
+            project, web = self.project(folder), Web()
+            (Path(folder) / "vision_extraction_settings.json").write_text(json.dumps({"owner_opt_in": False}))
+            result = skills.get(web, project)
+            self.assertTrue(result["read_only"])
+            self.assertEqual(result["status"], "blocked")
+            with self.assertRaisesRegex(ValueError, "consent was withdrawn"):
+                skills.post(web, project, {"action": "review_finding", "finding_id": "missing", "decision": "accepted"})
+
     def test_after_analysis_auto_starts_only_with_saved_consent_and_uses_pdf_review_scope(self):
         original_worker = skills._run_worker
         try:
@@ -219,6 +319,24 @@ class SkillWorkflowTests(unittest.TestCase):
                              "scanned_printed_areas.json").exists())
             self.assertFalse((Path(folder) / "skill_review_decisions.json").exists())
 
+    def test_scanned_plan_provider_failure_is_failed_not_needs_review(self):
+        from backend import autonomous_tasks_service
+
+        class BrokenProvider:
+            def propose(self, *_args, **_kwargs):
+                raise RuntimeError("provider unavailable")
+
+        with tempfile.TemporaryDirectory() as folder:
+            project = self.project(folder)
+            task = ("S1_printed_areas", "page-1", {"page": 1, "tiles": [], "factors": []}, "Read areas", [b"image"], "")
+            with patch.object(skills, "SKILL_PROVIDER_FACTORY", lambda _model: BrokenProvider()), \
+                    patch.object(autonomous_tasks_service, "_s1_packets", return_value=[task]), \
+                    patch.object(autonomous_tasks_service, "_create_run", return_value={}):
+                result = skills._read_scanned_printed_areas(project, "scan-failure")
+            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["proposal_fields"]["pages"][0]["status"], "failed")
+            self.assertNotEqual(result["status"], "needs_review")
+
     def test_scanned_area_edit_is_not_applied_without_s1_validation(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -243,8 +361,10 @@ class SkillWorkflowTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
+            project = self.project(root)
             run_id = "skill-run-test"
-            (root / "skill_workflow_run.json").write_text(json.dumps({"run_id": run_id,
+            source_fp = skills._source_fingerprint(skills._project_paths(project), skills.load_catalog())
+            (root / "skill_workflow_run.json").write_text(json.dumps({"run_id": run_id, "source_fingerprint": source_fp,
                 "subskills": {"room_boundaries_areas": {"status": "provisional"}}}), encoding="utf-8")
             proposal_dir = root / "skill_workflow_runs" / run_id / "proposals"
             proposal_dir.mkdir(parents=True)
@@ -260,7 +380,8 @@ class SkillWorkflowTests(unittest.TestCase):
             (proposal_dir / "room_boundaries_areas.json").write_text(json.dumps({"proposal_fields": {"geometry_candidates": [candidate]},
                 "citations": [{"page": 2, "excerpt": "Dining layout"}, {"page": 3, "excerpt": "Dimension plan"}]}), encoding="utf-8")
             (root / "skill_review_decisions.json").write_text(json.dumps({"decisions": {
-                "room_boundaries_areas:geometry_candidates:0": {"status": "accepted", "value": candidate, "run_id": run_id}}}), encoding="utf-8")
+                "room_boundaries_areas:geometry_candidates:0": {"status": "accepted", "value": candidate, "run_id": run_id,
+                    "source_fingerprint": source_fp}}}), encoding="utf-8")
 
             adapted = _room_geometry_skill_proposals(root)
 
@@ -416,6 +537,9 @@ class SkillWorkflowTests(unittest.TestCase):
                 self.assertEqual(manifest["subskills"]["room_identity_use"]["status"], "failed")
                 self.assertEqual(manifest["subskills"]["room_boundaries_areas"]["status"], "blocked")
                 self.assertEqual(manifest["subskills"]["sheet_identity"]["status"], "resolved")
+                self.assertEqual(manifest["status"], "failed")
+                self.assertFalse((Path(folder) / "skill_workflow_runs" / manifest["run_id"] / "proposals" /
+                                  "room_identity_use.json").exists())
         finally:
             skills._execute_subskill = original_execute
             skills._ensure_room_evidence = original_prepare
@@ -459,7 +583,7 @@ class SkillWorkflowTests(unittest.TestCase):
                     if state["status"] in {"failed", "blocked", "needs_review", "completed"}:
                         break
                     time.sleep(0.01)
-                self.assertEqual(state["status"], "completed")
+                self.assertEqual(state["status"], "needs_review")
                 self.assertGreaterEqual(max_active, 2)
                 self.assertEqual(observed_dependencies["room_boundaries_areas"].get("room_identity_use"), "resolved")
                 self.assertEqual(observed_dependencies["schedule_evidence"].get("lighting_evidence"), "resolved")

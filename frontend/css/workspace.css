@@ -263,3 +263,7 @@ polyline.ws-dim, polyline.ws-dim2 { fill: none; stroke-dasharray: 10 6; }
 .ws-skill-finding details { margin: .5rem 0; }
 .ws-skill-finding textarea { display: block; width: 100%; min-height: 7rem; margin: .5rem 0; font: .9rem/1.4 ui-monospace, monospace; }
 .ws-skill-finding .ws-actions { margin-top: .7rem; }
+.ws-evidence-supported { background: #e5f2ea; color: #27623e; }
+.ws-evidence-inferred { background: #fdf0d2; color: #8a5a00; }
+.ws-evidence-missing { background: #e1ecf5; color: var(--accent); }
+.ws-evidence-conflicting { background: #fbe8dc; color: #8a4319; }

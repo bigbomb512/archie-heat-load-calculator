@@ -1,4 +1,7 @@
 import { expect, test } from "@playwright/test";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 // Job workspace (docs/UI_REBUILD_PLAN.md phase 1): left rail of tabs, one focused page, Calculate always visible.
 const analysis = {
@@ -240,7 +243,9 @@ test("Drawings: shows analysis status, keeps page changes available on request, 
 });
 
 test("Drawings: completed analysis points contractors to review items instead of a check count", async ({page}) => {
-  await mockJob(page, {status: () => baseStatus({checks: {total: 11, waiting: 0, blocked: 0, marker: "done"}})});
+  await mockJob(page, {status: () => baseStatus({checks: {total: 11, waiting: 0, blocked: 0, marker: "done"}}),
+    skill: () => ({status: "completed", read_only: false, stages: [], findings: [], subskills: []}),
+    vision: () => ({settings: {owner_opt_in: true, selected_group_ids: ["plans"]}, selection: {page_count: 3, group_count: 1}})});
   await page.goto("/#/job/job-1/drawings");
   await expect(page.locator("[data-ws-checks]")).toContainText("Drawing analysis is complete");
   await expect(page.locator("[data-ws-checks]")).toContainText("Review");
@@ -273,6 +278,145 @@ test("PDF review: consent starts the skills review and findings show page eviden
   await expect(page.locator(".ws-skill-finding")).toContainText("Page 20: Shop 42 m2");
   await page.getByRole("button", {name: "Accept value"}).click();
   await expect(page.locator(".ws-skill-finding")).toContainText("accepted");
+});
+
+test("PDF review: evidence labels, missing-value editing, and conflict choice are explicit", async ({page}) => {
+  const decisions = [];
+  const findings = [
+    {id: "room_identity_use:rooms:0", subskill_id: "room_identity_use", field: "room use", target: "Shop",
+      value: "shop", evidence: "supported", pages: [20], citations: [{page: 20, excerpt: "SHOP"}], status: "proposed", alternatives: []},
+    {id: "room_identity_use:missing:ceiling_height:0", subskill_id: "ceiling_height_volume", field: "ceiling_height",
+      value: null, evidence: "missing", missing: true, pages: [], citations: [], status: "missing", alternatives: []},
+    {id: "room_identity_use:rooms:1", subskill_id: "room_identity_use", field: "room use", target: "Kitchen",
+      value: "shop", evidence: "conflicting", pages: [20], citations: [{page: 20, excerpt: "KITCHEN"}], status: "proposed", alternatives: ["kitchen", "shop"]},
+  ];
+  const skill = () => ({status: "needs_review", read_only: false, stages: [], findings: findings.map(row => ({...row,
+    status: decisions.includes(row.id) ? "accepted" : row.status}))});
+  await mockJob(page, {status: () => baseStatus(), skill, vision: () => ({settings: {owner_opt_in: true, selected_group_ids: ["plans"]}, selection: {page_count: 1, group_count: 1}}),
+    onPost: (kind, body) => { if (kind === "skill" && body.action === "review_finding") { decisions.push(body.finding_id); return skill(); } return null; }});
+  await page.goto("/#/job/job-1/drawings");
+  await expect(page.locator("[data-ws-evidence-count]")).toContainText("1 supported · 1 missing · 1 conflicting");
+  await expect(page.locator("[data-ws-finding='room_identity_use:rooms:0'] [data-ws-evidence]")).toHaveText("supported");
+  const missing = page.locator("[data-ws-finding='room_identity_use:missing:ceiling_height:0']");
+  await expect(missing.locator("[data-ws-finding-accept]")).toHaveCount(0);
+  await missing.locator("[data-ws-finding-edit]").fill("3.2");
+  await missing.getByRole("button", {name: "Save value"}).click();
+  expect(decisions).toContain("room_identity_use:missing:ceiling_height:0");
+  // Reviewed findings drop out of the open count.
+  await expect(page.locator("[data-ws-evidence-count]")).toHaveText("Open findings: 1 supported · 1 conflicting");
+  const conflict = page.locator("[data-ws-finding='room_identity_use:rooms:1']");
+  await expect(conflict.locator("[data-ws-finding-accept]")).toHaveCount(0);
+  await conflict.getByRole("button", {name: "kitchen"}).evaluate(button => button.click());
+  await expect(conflict.locator("[data-ws-finding-edit]")).toHaveValue('"kitchen"');
+  await conflict.getByRole("button", {name: "Save chosen value"}).click();
+  expect(decisions).toContain("room_identity_use:rooms:1");
+});
+
+test("PDF review: a missing or conflicting finding can be closed without a value", async ({page}) => {
+  const rejected = [];
+  const findings = [
+    {id: "surface_area:missing:area:0", subskill_id: "surface_area", field: "area", value: null, evidence: "missing",
+      missing: true, pages: [], citations: [], status: "missing", alternatives: []},
+    {id: "room_identity_use:rooms:1", subskill_id: "room_identity_use", field: "rooms", target: "Kitchen", value: "shop",
+      evidence: "conflicting", pages: [20], citations: [], status: "proposed", alternatives: ["kitchen", "shop"]},
+  ];
+  const skill = () => ({status: "needs_review", read_only: false, stages: [], findings: findings.map(row => ({...row,
+    status: rejected.includes(row.id) ? "rejected" : row.status}))});
+  await mockJob(page, {status: () => baseStatus(), skill, vision: () => ({settings: {owner_opt_in: true}, selection: {page_count: 1, group_count: 1}}),
+    onPost: (kind, body) => { if (kind === "skill" && body.action === "review_finding" && body.decision === "rejected") { rejected.push(body.finding_id); return skill(); } return null; }});
+  await page.goto("/#/job/job-1/drawings");
+  await page.locator("[data-ws-finding='surface_area:missing:area:0']").getByRole("button", {name: "Leave missing"}).click();
+  await expect(page.locator("[data-ws-finding='surface_area:missing:area:0']")).toContainText("rejected");
+  await page.locator("[data-ws-finding='room_identity_use:rooms:1']").getByRole("button", {name: "Reject"}).click();
+  expect(rejected).toEqual(["surface_area:missing:area:0", "room_identity_use:rooms:1"]);
+  await expect(page.locator("[data-ws-evidence-count]")).toHaveCount(0);
+});
+
+test("Results: open PDF review findings are clearly excluded from the displayed number", async ({page}) => {
+  await mockJob(page, {status: () => baseStatus(),
+    skill: () => ({status: "needs_review", findings: [
+      {id: "a", status: "proposed", evidence: "supported"}, {id: "b", status: "missing", evidence: "missing"},
+      {id: "c", status: "accepted", evidence: "supported"},
+    ]}), model: () => ({hourly_ai_preliminary_load_report: report})});
+  await page.goto("/#/job/job-1/results");
+  await expect(page.locator("[data-ws-open-findings]")).toContainText("2 PDF review findings are still open");
+  await expect(page.locator("[data-ws-open-findings]")).toContainText("We have not used these values in this number");
+});
+
+test("PDF review browser states on a temporary Butcher Buffet copy", async ({page}) => {
+  const projects = JSON.parse(readFileSync(new URL("../../output/web_projects.json", import.meta.url), "utf8"));
+  const neededFiles = ["ai_input.json", "drawing_coverage.json", "spatial_ocr.json", "vector_geometry.json", "packet.json"];
+  const source = Object.values(projects).filter(row => /20260226 Butcher Buffet/i.test(row.name || "") && row.review_dir)
+    .sort((a, b) => String(b.updated_at || "").localeCompare(String(a.updated_at || "")))
+    .find(row => neededFiles.every(file => existsSync(join(row.review_dir, file))));
+  test.skip(!source, "No saved Butcher Buffet project is available for this browser check.");
+  const copiedReview = mkdtempSync(join(tmpdir(), "archie-card-r2-bb-copy-"));
+  const screenshots = join(process.cwd(), "../output/card_r2_browser");
+  mkdirSync(screenshots, {recursive: true});
+  try {
+    for (const file of neededFiles) {
+      copyFileSync(join(source.review_dir, file), join(copiedReview, file));
+    }
+    let consented = false, accepted = false;
+    const roomUse = {id: "room_identity_use:rooms:0", subskill_id: "room_identity_use", field: "Shop room use",
+      target: "Shop", value: "shop", evidence: "supported", pages: [20], citations: [{page: 20, excerpt: "SHOP"}],
+      status: "proposed", alternatives: [], units: ""};
+    let response = {status: "blocked", blocked_reason: "Project consent is required before PDF evidence can be sent.", read_only: true, stages: [], findings: [], subskills: []};
+    const skill = () => response;
+    const vision = () => ({settings: {owner_opt_in: consented, selected_group_ids: ["plans"]}, selection: {page_count: 3, group_count: 1}, provider_configured: !consented || response.error_code !== "skill_provider_unavailable"});
+    const posts = await mockJob(page, {status: () => baseStatus({name: source.name}), skill, vision,
+      onPost: (kind, body) => {
+        if (kind === "skill" && body.action === "review_finding") {
+          accepted = body.finding_id === roomUse.id && body.decision === "accepted";
+          response = {...response, status: "needs_review", read_only: false,
+            findings: [{...roomUse, status: accepted ? "accepted" : "proposed", reviewer: accepted ? "Operator" : ""}]};
+          return response;
+        }
+        return null;
+      }});
+    await page.route("**/api/projects", route => route.fulfill({json: [{id: "job-1", name: source.name, pages: source.pages, relevant: 3, analysed: true}]}));
+    await page.route("**/api/analysis?id=job-1", route => route.fulfill({json: {...analysis, name: source.name, filename: source.name, file_name: source.name}}));
+    await page.route("**/api/job-status**", route => route.fulfill({json: baseStatus({name: source.name})}));
+    await page.goto("/#/job/job-1/drawings");
+    await expect(page.locator("[data-ws-pdf-review-status]")).toContainText("blocked");
+    await page.screenshot({path: join(screenshots, "01-bb-no-consent.png"), fullPage: true});
+
+    consented = true;
+    response = {status: "blocked", blocked_reason: "The configured AI provider is unavailable. Set up credentials, then retry.",
+      error_code: "skill_provider_unavailable", read_only: false, stages: [], findings: [], subskills: []};
+    await page.reload();
+    await expect(page.locator("[data-ws-pdf-review]")).toContainText("provider is unavailable");
+    await page.screenshot({path: join(screenshots, "02-bb-provider-unavailable.png"), fullPage: true});
+
+    response = {status: "needs_review", read_only: false, stages: [{label: "Rooms, geometry, and gains", status: "needs_review"}],
+      findings: [
+        roomUse,
+        {id: "ceiling_height_volume:heights:0", subskill_id: "ceiling_height_volume", field: "ceiling height", value: 3200,
+          evidence: "inferred", units: "mm", pages: [20], citations: [{page: 20, excerpt: "derived from section scale"}],
+          inferences: ["Measured from section scale"], formula: "scaled section measurement", status: "proposed", alternatives: []},
+        {id: "surface_area:missing:area:0", subskill_id: "surface_area", field: "surface area", value: null,
+          evidence: "missing", missing: true, pages: [], citations: [], status: "missing", alternatives: []},
+        {id: "glazing_properties:openings:0", subskill_id: "glazing_properties", field: "glazing type", value: "clear",
+          evidence: "conflicting", pages: [23], citations: [{page: 23, excerpt: "Clear/low-e notation differs across elevations"}],
+          status: "proposed", alternatives: ["clear", "low-e"]},
+      ], subskills: [{id: "room_identity_use", status: "needs_review", evidence_reviewed: {pages: [20, 23], provider: "test-provider", model: "test-model"}}]};
+    await page.reload();
+    await expect(page.locator("[data-ws-evidence-count]")).toContainText("supported");
+    await expect(page.locator("[data-ws-evidence-count]")).toContainText("inferred");
+    await expect(page.locator("[data-ws-evidence-count]")).toContainText("missing");
+    await expect(page.locator("[data-ws-evidence-count]")).toContainText("conflicting");
+    await expect(page.locator("[data-ws-checks]")).toContainText("PDF review has finished. Some findings below still need our review.");
+    await expect(page.locator("[data-ws-checks]")).not.toContainText("Drawing analysis is complete");
+    await page.screenshot({path: join(screenshots, "03-bb-findings.png"), fullPage: true});
+
+    await page.locator(`[data-ws-finding='${roomUse.id}']`).getByRole("button", {name: "Accept value"}).click();
+    await expect(page.locator(`[data-ws-finding='${roomUse.id}']`)).toContainText("accepted");
+    expect(accepted).toBe(true);
+    expect(posts.some(([kind]) => kind === "calculation")).toBe(false);
+    await page.screenshot({path: join(screenshots, "04-bb-room-use-accepted.png"), fullPage: true});
+  } finally {
+    rmSync(copiedReview, {recursive: true, force: true});
+  }
 });
 
 test("PDF review: manual P0–P6 is an explicit fallback, not an automatic second review", async ({page}) => {

@@ -104,6 +104,44 @@ class CalculationJobTests(unittest.TestCase):
         self.assertIn("Analyse the PDF", failed["error"])
         self.assertNotIn("inputs", self.calls)
 
+    def test_input_resolution_never_starts_a_skills_run_with_or_without_consent(self):
+        from backend import model_input_resolution_service, skill_workflow_service
+        for consent in (False, True):
+            (self.root / "vision_extraction_settings.json").write_text(json.dumps({"owner_opt_in": consent}))
+            (self.root / "skill_workflow_run.json").unlink(missing_ok=True)
+            with patch.object(skill_workflow_service, "post") as start, \
+                    patch.object(model_input_resolution_service, "post", return_value={}) as resolve:
+                service._resolve_inputs(self.web, "job")
+            start.assert_not_called()
+            resolve.assert_called_once_with(self.web, self.web.project, {"action": "resolve"})
+            resolve.reset_mock()
+
+    def test_input_resolution_waits_for_an_already_running_pdf_review(self):
+        import threading
+        from backend import model_input_resolution_service, skill_workflow_service
+        run = threading.Event()
+        run.set()
+        skill_workflow_service._RUNNING.add("job")
+        (self.root / "skill_workflow_run.json").write_text(json.dumps({"scope": "pdf_review", "status": "running"}))
+
+        def finish_review():
+            time.sleep(0.04)
+            skill_workflow_service._RUNNING.discard("job")
+            run.clear()
+
+        thread = threading.Thread(target=finish_review)
+        thread.start()
+        try:
+            with patch.object(skill_workflow_service, "post") as start, \
+                    patch.object(model_input_resolution_service, "post", side_effect=lambda *_args: self.calls.append("resolved")):
+                service._resolve_inputs(self.web, "job")
+            self.assertFalse(run.is_set())
+            self.assertIn("resolved", self.calls)
+            start.assert_not_called()
+        finally:
+            thread.join()
+            skill_workflow_service._RUNNING.discard("job")
+
     def test_no_cooled_room_with_an_area_stops_before_calculating(self):
         _, failed = self.run_job({"include": {"kitchen": False, "shop": False}})
         self.assertEqual(failed["status"], "failed")

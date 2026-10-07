@@ -302,11 +302,19 @@
     const checks = status.checks || {total: 0, waiting: 0, blocked: 0};
     const done = checks.total - checks.waiting - checks.blocked;
     const pendingReview = checks.waiting > 0 || checks.blocked > 0;
-    const drawingMessage = checks.waiting
-      ? "The Toki team is reviewing drawing details. You can continue with the rooms and measurements below."
-      : checks.blocked
-        ? "Some drawing checks need attention from the Toki team. Review the available room information while they are resolved."
-        : "Drawing analysis is complete. Review any items marked To do or Review in Rooms, Walls & roof, and Windows.";
+    const drawingMessage = pendingReview
+      ? checks.waiting
+        ? "The Toki team is reviewing drawing details. You can continue with the rooms and measurements below."
+        : "Some drawing checks need attention from the Toki team. Review the available room information while they are resolved."
+      : review.status === "failed"
+        ? "PDF review failed before it could finish. See the reason below, then retry or use the manual fallback."
+        : review.status === "blocked"
+          ? "PDF review is blocked. See what is needed below, then retry or use the manual fallback."
+          : ["queued", "running"].includes(review.status)
+            ? "We are reviewing the drawing set for heat-load evidence. You can continue with the room information below."
+            : review.status === "needs_review"
+              ? "PDF review has finished. Some findings below still need our review."
+              : "Drawing analysis is complete. Review any items marked To do or Review in Rooms, Walls & roof, and Windows.";
     body.innerHTML = `<div class="ws-card" data-ws-drawings>
       <h2>Drawing analysis</h2>
       <p class="ws-hint">PDF review searches the drawing set for heat-load evidence. You can review each proposed value with its page evidence before it is used.</p>
@@ -343,38 +351,76 @@
     return String(value);
   }
 
+  function formatEditableFindingValue(value) {
+    return typeof value === "string" ? JSON.stringify(value) : formatFindingValue(value);
+  }
+
   function pdfReviewMarkup(review, vision) {
     const settings = vision.settings || {};
     const selection = vision.selection || {};
     const consented = !!settings.owner_opt_in;
     const stages = (review.stages || []).map(stage => `<li><span>${esc(stage.label)}</span><b>${esc(stage.status.replaceAll("_", " "))}</b></li>`).join("");
+    const openCounts = (review.findings || []).filter(row => !["accepted", "rejected"].includes(row.status)).reduce((counts, row) => {
+      counts[row.evidence] = (counts[row.evidence] || 0) + 1; return counts;
+    }, {});
+    const evidenceCount = Object.entries(openCounts).map(([name, count]) => `${count} ${name}`).join(" · ");
     const findings = (review.findings || []).map(row => {
       const evidence = (row.citations || []).map(citation => `<li>Page ${esc(citation.page ?? "?")}${citation.excerpt ? `: ${esc(citation.excerpt)}` : ""}</li>`).join("");
       const inference = (row.inferences || []).map(item => `<li>${esc(typeof item === "string" ? item : JSON.stringify(item))}</li>`).join("");
-      const alternatives = (row.alternatives || []).map(item => `<li>${esc(typeof item === "string" ? item : JSON.stringify(item))}</li>`).join("");
       const pages = row.pages?.length ? `Page${row.pages.length === 1 ? "" : "s"} ${row.pages.map(esc).join(", ")}` : "Page citation missing";
       const unresolved = row.unresolved_fields?.length ? `<p class="ws-fine">Still missing: ${esc(row.unresolved_fields.join(", "))}</p>` : "";
-      const reviewActions = row.status === "proposed" ? `<details><summary>Edit before accepting</summary><textarea data-ws-finding-edit aria-label="Edit proposed value">${esc(formatFindingValue(row.value))}</textarea></details>
-        <div class="ws-actions"><button class="btn key" type="button" data-ws-finding-accept="${esc(row.id)}">Accept value</button><button class="btn ghost" type="button" data-ws-finding-reject="${esc(row.id)}">Reject</button></div>` : `<p class="ws-fine">${esc(row.status)}${row.reviewer ? ` by ${esc(row.reviewer)}` : ""}${row.status === "accepted" ? (row.input_applied ? " · used in the calculation draft" : " · saved as reviewed evidence; not yet connected to a calculation input") : ""}</p>`;
+      const readOnly = !!review.read_only;
+      const editor = `<details open><summary>${row.evidence === "missing" ? "Enter the missing value" : row.evidence === "conflicting" ? "Choose or edit a reading" : "Edit proposed value"}</summary><textarea data-ws-finding-edit aria-label="Edit proposed value">${esc(formatEditableFindingValue(row.value))}</textarea></details>`;
+      const choiceButtons = row.evidence === "conflicting" ? (row.alternatives || []).map((item, index) => `<li><button type="button" class="link-button" data-ws-conflict-pick="${index}">${esc(typeof item === "string" ? item : JSON.stringify(item))}</button></li>`).join("") : "";
+      const reviewActions = readOnly ? `<p class="ws-fine">Read only — consent was withdrawn. Restore consent and retry before changing this finding.</p>`
+        : row.status === "accepted" || row.status === "rejected" ? `<p class="ws-fine">${esc(row.status)}${row.reviewer ? ` by ${esc(row.reviewer)}` : ""}${row.status === "accepted" ? (row.input_applied ? " · used in the calculation draft" : " · saved as reviewed evidence; not yet connected to a calculation input") : ""}</p>`
+        : row.evidence === "missing" ? `${editor}<div class="ws-actions"><button class="btn key" type="button" data-ws-finding-save="${esc(row.id)}">Save value</button><button class="btn ghost" type="button" data-ws-finding-reject="${esc(row.id)}">Leave missing</button></div>`
+        : row.evidence === "conflicting" ? `${editor}${choiceButtons ? `<p class="ws-fine">Choose a conflicting reading or edit the value:</p><ul>${choiceButtons}</ul>` : ""}<div class="ws-actions"><button class="btn key" type="button" data-ws-finding-save="${esc(row.id)}">Save chosen value</button><button class="btn ghost" type="button" data-ws-finding-reject="${esc(row.id)}">Reject</button></div>`
+        : `${editor}<div class="ws-actions"><button class="btn key" type="button" data-ws-finding-accept="${esc(row.id)}">Accept value</button><button class="btn ghost" type="button" data-ws-finding-reject="${esc(row.id)}">Reject</button></div>`;
       return `<article class="ws-skill-finding" data-ws-finding="${esc(row.id)}"><div class="ws-skill-finding-head"><b>${esc(row.field.replaceAll("_", " "))}</b><span>${esc(row.subskill_id.replaceAll("_", " "))}</span></div>
+        <span class="ws-chip ws-evidence-${esc(row.evidence)}" data-ws-evidence>${esc(row.evidence)}</span>
         <pre>${esc(formatFindingValue(row.value))}${row.units ? ` ${esc(row.units)}` : ""}</pre><p class="ws-fine">${esc(pages)}${row.confidence != null ? ` · confidence ${esc(row.confidence)}` : ""}</p>
-        ${row.formula ? `<p class="ws-fine">Method: ${esc(row.formula)}</p>` : ""}${evidence ? `<details><summary>Evidence excerpts</summary><ul>${evidence}</ul></details>` : ""}
-        ${inference ? `<details><summary>Inferences</summary><ul>${inference}</ul></details>` : ""}
-        ${alternatives ? `<details><summary>Conflicting readings</summary><ul>${alternatives}</ul></details>` : ""}${unresolved}${reviewActions}</article>`;
+        ${row.formula ? `<p class="ws-fine">Calculation: ${esc(row.formula)}</p>` : ""}${row.calculation ? `<p class="ws-fine">Working: ${esc(row.calculation)}</p>` : ""}${evidence ? `<details><summary>Evidence excerpts</summary><ul>${evidence}</ul></details>` : ""}
+        ${inference ? `<details><summary>Why this is inferred</summary><ul>${inference}</ul></details>` : ""}
+        ${unresolved}${reviewActions}</article>`;
     }).join("");
-    const retry = ["failed", "blocked", "stale", "needs_review"].includes(review.status) && consented
-      ? `<button class="btn ghost mini" type="button" data-ws-skill-retry>Retry PDF review</button>` : "";
+    const retry = ["failed", "blocked", "stale", "needs_review"].includes(review.status)
+      ? `<button class="btn ghost mini" type="button" data-ws-skill-retry ${consented ? "" : "disabled"}>Retry PDF review</button>` : "";
+    const evidenceReviewed = review.subskills || [];
+    const issues = (review.issues || []).map(item => `<li><b>${esc(item.name.replaceAll("_", " "))} (${esc(item.status)})</b>${item.reason ? `: ${esc(item.reason)}` : ""}</li>`).join("");
+    const reviewedSummary = evidenceReviewed.map(row => {
+      const item = row.evidence_reviewed || {};
+      const pagesText = item.pages?.length ? `pages ${item.pages.map(esc).join(", ")}` : "no page evidence sent";
+      return `<li>${esc(row.id.replaceAll("_", " "))}: ${pagesText} · ${esc(row.status.replaceAll("_", " "))}${item.provider ? ` · ${esc(item.provider)}` : ""}${item.model ? ` / ${esc(item.model)}` : ""}</li>`;
+    }).join("");
     return `<section class="ws-pdf-review" aria-label="PDF evidence review" data-ws-pdf-review><h3>PDF review</h3>
-      <p class="ws-fine">Searches room geometry, internal gains, envelope, glazing, airflow, HVAC and schedules. Findings remain proposals until you accept them.</p>
+      <p class="ws-fine">We search room geometry, internal gains, envelope, glazing, airflow, HVAC and schedules. Findings remain proposals until you review and save them.</p>
       <label class="ws-check"><input type="checkbox" data-ws-pdf-consent ${consented ? "checked" : ""}> I approve sending the selected pages from this job to the configured AI provider for heat-load evidence review.</label>
       <p class="ws-fine" data-ws-pdf-consent-scope>${selection.page_count ? `${selection.page_count} page${selection.page_count === 1 ? "" : "s"} across ${selection.group_count || 0} evidence groups are selected.` : "No eligible page groups are available yet. Analyse the PDF first."} <button class="link-button" type="button" data-ws-consent-settings>Review page-group settings</button></p>
       ${review.blocked_reason ? `<p class="ws-banner is-warn" role="status">${esc(review.blocked_reason)}${vision.provider_configured === false && consented ? " The AI provider is not configured on this server." : ""}</p>` : ""}
+      ${issues ? `<p class="ws-banner is-warn" role="alert"><b>Some parts of this review did not finish.</b><ul>${issues}</ul></p>` : ""}
       <p class="ws-fine" role="status" data-ws-pdf-review-status>${esc(review.status.replaceAll("_", " "))}${review.remediation ? ` · ${esc(review.remediation)}` : ""}</p>
+      ${evidenceCount ? `<p data-ws-evidence-count>Open findings: ${esc(evidenceCount)}</p>` : ""}
+      ${reviewedSummary ? `<details><summary>Evidence reviewed by each skill</summary><ul>${reviewedSummary}</ul></details>` : ""}
       ${stages ? `<details><summary>Skill progress and coverage</summary><ul class="ws-list">${stages}</ul></details>` : ""}
       ${findings ? `<div class="ws-skill-findings">${findings}</div>` : ""}${retry}</section>`;
   }
 
   function wirePdfReview(projectId, review, vision) {
+    body.querySelectorAll("[data-ws-conflict-pick]").forEach(button => button.addEventListener("click", () => {
+      const finding = button.closest("[data-ws-finding]");
+      const item = review.findings?.find(row => row.id === finding?.dataset.wsFinding);
+      const alternative = item?.alternatives?.[Number(button.dataset.wsConflictPick)];
+      if (alternative !== undefined) {
+        finding.querySelector("[data-ws-finding-edit]").value = JSON.stringify(
+          alternative && typeof alternative === "object" && Object.hasOwn(alternative, "value") ? alternative.value : alternative, null, 2);
+        finding.dataset.wsConflictChosen = "true";
+      }
+    }));
+    body.querySelectorAll("[data-ws-finding-edit]").forEach(input => input.addEventListener("input", () => {
+      const finding = input.closest("[data-ws-finding]");
+      finding.dataset.wsConflictChosen = "true";
+    }));
     body.querySelector("[data-ws-consent-settings]")?.addEventListener("click", () => {
       leave();
       const panel = document.getElementById("visionPanel");
@@ -397,18 +443,21 @@
       try { await sendJson("/api/skill-workflow", {project_id: projectId, action: "retry", scope: "pdf_review"}); await renderDrawings(); }
       catch (error) { event.target.disabled = false; event.target.textContent = `Retry failed: ${error.message}`; }
     });
-    body.querySelectorAll("[data-ws-finding-accept], [data-ws-finding-reject]").forEach(button => button.addEventListener("click", async () => {
+    body.querySelectorAll("[data-ws-finding-accept], [data-ws-finding-reject], [data-ws-finding-save]").forEach(button => button.addEventListener("click", async () => {
       const accept = button.hasAttribute("data-ws-finding-accept");
-      const findingId = accept ? button.dataset.wsFindingAccept : button.dataset.wsFindingReject;
+      const reject = button.hasAttribute("data-ws-finding-reject");
+      const findingId = accept ? button.dataset.wsFindingAccept : reject ? button.dataset.wsFindingReject : button.dataset.wsFindingSave;
       let value;
-      if (accept) {
+      if (accept || !reject) {
         const text = button.closest("[data-ws-finding]").querySelector("[data-ws-finding-edit]")?.value;
         if (text) { try { value = JSON.parse(text); } catch (_) { button.textContent = "Enter a valid JSON value"; return; } }
       }
       button.disabled = true;
       try {
         await sendJson("/api/skill-workflow", {project_id: projectId, action: "review_finding", finding_id: findingId,
-          decision: accept ? "accepted" : "rejected", ...(value === undefined ? {} : {value}), reviewer: userName() || "Operator"});
+          decision: reject ? "rejected" : "accepted", ...(value === undefined ? {} : {value}),
+          conflict_choice: button.closest("[data-ws-finding]")?.dataset.wsConflictChosen === "true",
+          reviewer: userName() || "Operator"});
         await renderDrawings();
       } catch (error) { button.disabled = false; button.textContent = error.message; }
     }));
@@ -1244,13 +1293,16 @@
     const projectId = state.projectId;
     progress("Loading the result", "");
     const model = state.lastResult || await getJson(modelUrl());
+    const review = await getJson(`/api/skill-workflow?project_id=${encodeURIComponent(projectId)}`);
     state.lastResult = null;
     if (!live(projectId, "results")) return;
+    const openFindings = (review.findings || []).filter(row => !["accepted", "rejected"].includes(row.status)).length;
+    const openFindingsNote = openFindings ? `<p class="ws-banner is-warn" data-ws-open-findings>${openFindings} PDF review finding${openFindings === 1 ? " is" : "s are"} still open. We have not used these values in this number; review them on Drawings, then calculate again if you accept one.</p>` : "";
     const report = model.hourly_ai_preliminary_load_report || {};
     const peak = report.included_scope_peak || {};
     const total = peak.final_design_total_kw ?? peak.design_total_kw;
     if (total == null) {
-      body.innerHTML = `<div class="ws-card" data-ws-results><h2>Results</h2><p>Not calculated yet. When the rooms have areas, press <b>Calculate</b>.</p>
+      body.innerHTML = `<div class="ws-card" data-ws-results><h2>Results</h2>${openFindingsNote}<p>Not calculated yet. When the rooms have areas, press <b>Calculate</b>.</p>
         <button class="btn key" type="button" data-ws-calc-here>Calculate</button></div>`;
       body.querySelector("[data-ws-calc-here]").addEventListener("click", calculate);
       return;
@@ -1267,8 +1319,9 @@
     const COMPONENTS = [["people", "People"], ["lighting", "Lighting"], ["equipment_refrigeration", "Equipment"],
                         ["envelope", "Walls, roof and glazing"], ["outside_air", "Fresh air"], ["infiltration", "Air leakage"]];
     body.innerHTML = `<div class="ws-card ws-result" data-ws-results>
+      ${openFindingsNote}
       ${state.status?.result_stale ? `<p class="ws-banner is-warn">Inputs changed since this result. Press <b>Calculate</b> to update it.</p>` : ""}
-      <p class="ws-banner">Draft estimate from the drawings — not engineering-reviewed. Check it before using it for equipment selection.</p>
+      <p class="ws-banner">This is a draft estimate from the drawings. We recommend checking it before using it to select equipment.</p>
       <div class="ws-total-big"><span data-ws-total>${kw(total)}</span><span>kW total cooling</span></div>
       <p class="ws-hint">Peak ${hour != null ? `at ${hour > 12 ? hour - 12 : hour} ${hour >= 12 ? "pm" : "am"} on the design day` : "on the design day"}${factor > 1 ? `, including a ${Math.round((factor - 1) * 100)}% allowance` : ""}.</p>
       <h3>By room</h3>

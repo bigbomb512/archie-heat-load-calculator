@@ -1,76 +1,109 @@
 #!/usr/bin/env python3
-"""Verify runtime room/gain proposals reach the established resolvers."""
+"""Runtime room-use findings enter resolvers only after current-run acceptance."""
 
 import json
 from pathlib import Path
 import sys
 import tempfile
+import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ai import room_use_resolution
-from backend.ai_preliminary_service import _proposal_for_resolution, _resolve_room_uses
+from backend import skill_workflow_service
+from backend.ai_preliminary_service import _proposal_for_resolution
 
 
-def check(name, condition):
-    if not condition:
-        raise AssertionError(name)
-    print("PASS - " + name)
-
-
-def main():
-    with tempfile.TemporaryDirectory(prefix="archie-skill-bridge-") as temporary:
-        root = Path(temporary)
-        skill_dir = root / "skill_workflow_runs" / "run-1" / "proposals"
-        skill_dir.mkdir(parents=True)
-        (root / "ai_preliminary_run.json").write_text(json.dumps({"local_room_inference_proposal": {"rooms": [
+class AcceptedSkillBridgeTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="archie-skill-bridge-")
+        self.root = Path(self.temp.name)
+        self.run_id = "run-1"
+        self.rooms = [
             {"kind": "room", "room_id": "room-use:unassigned-level:shop", "label": "Shop", "level_name": "Unassigned level", "page": 20},
             {"kind": "room", "room_id": "room-use:unassigned-level:bar", "label": "Bar", "level_name": "Unassigned level", "page": 20},
             {"kind": "room", "room_id": "room-use:unassigned-level:kitchen", "label": "Kitchen", "level_name": "Unassigned level", "page": 20},
-        ]}}))
-        (root / "skill_workflow_run.json").write_text(json.dumps({"run_id": "run-1", "subskills": {
-            "room_identity_use": {"status": "needs_review"}, "room_boundaries_areas": {"status": "needs_review"}
-        }}))
-        identity = {
-            "citations": [{"citation_id": "c19", "physical_pdf_page": 19, "drawing_identity": "H509 / 201 / B", "title": "PROPOSED FLOOR LAYOUT", "excerpt_or_crop": "140-seat schedule"}],
+        ]
+        self.run_path = self.root / "ai_preliminary_run.json"
+        self.run_path.write_text(json.dumps({"local_room_inference_proposal": {"rooms": self.rooms}}))
+        for name, value in {
+            "ai_input.json": {"drawing_set": {"pages": [{"page": 20, "title": "Plan"}] }},
+            "drawing_coverage.json": {"page_roles": [{"page": 20, "proposed_role": "main_floor_plan"}]},
+            "spatial_ocr.json": {"pages": []}, "vector_geometry.json": {"pages": []},
+            "vision_response.json": {}, "vision_extraction_settings.json": {"owner_opt_in": True, "selected_group_ids": []},
+        }.items():
+            (self.root / name).write_text(json.dumps(value))
+        self.skill_dir = self.root / "skill_workflow_runs" / self.run_id / "proposals"
+        self.skill_dir.mkdir(parents=True)
+        self.identity = {
+            "citations": [{"citation_id": "c19", "physical_pdf_page": 19, "drawing_identity": "H509 / 201 / B",
+                           "title": "PROPOSED FLOOR LAYOUT", "excerpt_or_crop": "140-seat schedule"}],
             "proposal_fields": {"rooms": [
-                {"room_id": "room-use:unassigned-level:shop", "original_label": "Shop", "taxonomy_id": "dining", "evidence_page_ids": [19]},
-                {"room_id": "room-use:unassigned-level:bar", "original_label": "Bar", "taxonomy_id": "dining", "evidence_page_ids": [19]},
-                {"room_id": "room-use:unassigned-level:kitchen", "original_label": "Kitchen", "taxonomy_id": "kitchen", "evidence_page_ids": [19]},
+                {"room_id": self.rooms[0]["room_id"], "original_label": "Shop", "taxonomy_id": "dining", "evidence_page_ids": [19]},
+                {"room_id": self.rooms[1]["room_id"], "original_label": "Bar", "taxonomy_id": "dining", "evidence_page_ids": [19]},
+                {"room_id": self.rooms[2]["room_id"], "original_label": "Kitchen", "taxonomy_id": "kitchen", "evidence_page_ids": [19]},
             ]},
             "inferences": [
-                {"field": "rooms[room-use:unassigned-level:shop].taxonomy_id", "value": "dining", "method": "Furniture and adjacency indicate a customer hospitality area.", "confidence": .9},
-                {"field": "rooms[room-use:unassigned-level:bar].taxonomy_id", "value": {"taxonomy_id": "dining", "boundary_status": "Functional zone; independent room separation unresolved"}, "method": "Functional area only.", "confidence": .8},
-                {"field": "rooms[room-use:unassigned-level:kitchen].taxonomy_id", "value": "kitchen", "method": "Cooking fixtures and notes.", "confidence": .97},
+                {"field": f"rooms[{self.rooms[0]['room_id']}].taxonomy_id", "value": "dining", "method": "Hospitality furniture.", "confidence": .9},
+                {"field": f"rooms[{self.rooms[1]['room_id']}].taxonomy_id", "value": {"taxonomy_id": "dining", "boundary_status": "Functional zone; independent room separation unresolved"}, "method": "Functional area only.", "confidence": .8},
+                {"field": f"rooms[{self.rooms[2]['room_id']}].taxonomy_id", "value": "kitchen", "method": "Cooking fixtures and notes.", "confidence": .97},
             ],
-            "unresolved_fields": [{"field": "rooms[room-use:unassigned-level:shop].original_label", "reason": "Shop is not a visible label."}],
+            "unresolved_fields": [{"field": f"rooms[{self.rooms[0]['room_id']}].original_label", "reason": "No visible source label."}],
             "observations": [{"citation_ids": ["c19"], "detail": "Drawing 201 seating schedule lists 140 seats."}],
         }
-        geometry = {"proposal_fields": {"geometry_candidates": [
-            {"room_id": "room-use:unassigned-level:bar", "unresolved_fields": ["parent_connected_zone_boundary"]}
-        ]}}
-        (skill_dir / "room_identity_use.json").write_text(json.dumps(identity))
-        (skill_dir / "room_boundaries_areas.json").write_text(json.dumps(geometry))
+        (self.skill_dir / "room_identity_use.json").write_text(json.dumps(self.identity))
+        (self.skill_dir / "room_boundaries_areas.json").write_text(json.dumps({"proposal_fields": {"geometry_candidates": []}}))
+        self.source_fingerprint = skill_workflow_service._source_fingerprint(
+            skill_workflow_service._project_paths({"id": "bridge-test", "review_dir": str(self.root)}),
+            skill_workflow_service.load_catalog())
+        (self.root / "skill_workflow_run.json").write_text(json.dumps({"run_id": self.run_id,
+            "scope": "pdf_review", "status": "needs_review", "source_fingerprint": self.source_fingerprint,
+            "subskills": {"room_identity_use": {"status": "needs_review"}}}))
+        self.paths = {"root": self.root, "run": self.run_path}
 
-        proposal = _proposal_for_resolution({"root": root, "run": root / "ai_preliminary_run.json"})
-        by_label = {row["label"]: row for row in proposal["rooms"]}
-        check("room identity skill enriches existing room records", by_label["Kitchen"]["room_use_category"] == "kitchen")
-        check("room identity skill citations become resolver evidence", by_label["Shop"]["evidence"][-1]["page"] == 19)
-        check("skill preserves a directly observed seating count", by_label["Shop"]["seat_count"] == 140)
-        check("unverified source label is not allowed to win taxonomy precedence", by_label["Shop"]["direct_label_verified"] is False)
-        check("functional bar subarea is marked non-counting without a separate boundary", by_label["Bar"]["non_counting_functional_subarea"] and by_label["Bar"]["calculation_scope_override"] == "unresolved_scope")
-        use = room_use_resolution.resolve({}, proposal=proposal, source_fingerprints={})
-        shop = next(row for row in use["records"] if row["original_label"] == "Shop")
-        bar = next(row for row in use["records"] if row["original_label"] == "Bar")
-        check("authoritative room-use artifact uses the skill's dining classification", shop["taxonomy_id"] == "dining")
-        check("non-counting functional area cannot add duplicate comfort load", bar["status"] == "excluded" and bar["space_scope"] == "unresolved_scope")
+    def tearDown(self):
+        self.temp.cleanup()
 
-        resolved_through_service = _resolve_room_uses({"root": root, "run": root / "ai_preliminary_run.json",
-            "room_use": root / "room_use_resolution.json", "building": root / "building_evidence.json",
-            "vision": root / "vision_response.json"})
-        service_shop = next(row for row in resolved_through_service["records"] if row["original_label"] == "Shop")
-        check("standard preliminary service path consumes runtime skill classifications", service_shop["taxonomy_id"] == "dining")
+    def _decision(self, index, status, value=None, *, source_fingerprint=None, run_id=None):
+        path = self.root / "skill_review_decisions.json"
+        data = json.loads(path.read_text()) if path.exists() else {"decisions": {}}
+        key = f"room_identity_use:rooms:{index}"
+        data["decisions"][key] = {"status": status, "value": value if value is not None else self.identity["proposal_fields"]["rooms"][index],
+            "run_id": run_id or self.run_id, "source_fingerprint": source_fingerprint or self.source_fingerprint}
+        path.write_text(json.dumps(data))
+
+    def _proposal(self):
+        return _proposal_for_resolution(self.paths)
+
+    def test_unaccepted_findings_leave_room_use_identical_to_no_skill_run(self):
+        manifest = self.root / "skill_workflow_run.json"
+        baseline = json.dumps(self._proposal(), sort_keys=True)
+        self.assertNotIn("room_use_category", self._proposal()["rooms"][0])
+        self.assertEqual(json.dumps(self._proposal(), sort_keys=True), baseline)
+        manifest.unlink()
+        no_run = json.dumps(self._proposal(), sort_keys=True)
+        manifest.write_text(json.dumps({"run_id": self.run_id, "status": "needs_review", "source_fingerprint": self.source_fingerprint}))
+        self.assertEqual(json.dumps(self._proposal(), sort_keys=True), no_run)
+
+    def test_accepted_finding_is_used(self):
+        self._decision(0, "accepted")
+        shop = self._proposal()["rooms"][0]
+        self.assertEqual(shop["room_use_category"], "dining")
+        self.assertEqual(shop["evidence"][-1]["page"], 19)
+
+    def test_edited_accepted_finding_replaces_the_proposed_value(self):
+        edited = {**self.identity["proposal_fields"]["rooms"][0], "taxonomy_id": "office"}
+        self._decision(0, "accepted", edited)
+        self.assertEqual(self._proposal()["rooms"][0]["room_use_category"], "office")
+
+    def test_rejected_finding_is_ignored(self):
+        self._decision(0, "rejected")
+        self.assertNotIn("room_use_category", self._proposal()["rooms"][0])
+
+    def test_acceptance_is_ignored_after_pdf_fingerprint_changes(self):
+        self._decision(0, "accepted")
+        (self.root / "ai_input.json").write_text(json.dumps({"drawing_set": {"pages": [{"page": 20, "title": "Revised plan"}]}}))
+        self.assertNotIn("room_use_category", self._proposal()["rooms"][0])
 
 
 if __name__ == "__main__":
-    main()
+    unittest.main()

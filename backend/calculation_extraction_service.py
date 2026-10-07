@@ -51,6 +51,13 @@ def _room_geometry_skill_proposals(root):
     state = manifest.get("subskills", {}).get("room_boundaries_areas", {})
     if not run_id or state.get("status") not in {"running", "provisional", "needs_review", "resolved", "completed"}:
         return []
+    from backend import skill_workflow_service
+    source_fingerprint = manifest.get("source_fingerprint", "")
+    current_source_fingerprint = skill_workflow_service._source_fingerprint(
+        skill_workflow_service._project_paths({"id": "", "review_dir": str(root)}),
+        skill_workflow_service.load_catalog())
+    if not source_fingerprint or source_fingerprint != current_source_fingerprint:
+        return []
     proposal_path = root / "skill_workflow_runs" / str(run_id) / "proposals" / "room_boundaries_areas.json"
     proposal = _read(proposal_path)
     review = _read(root / "skill_review_decisions.json", {})
@@ -60,7 +67,8 @@ def _room_geometry_skill_proposals(root):
     result = []
     for index, row in enumerate(rows if isinstance(rows, list) else []):
         decision = decisions.get(f"room_boundaries_areas:geometry_candidates:{index}", {})
-        if decision.get("status") != "accepted" or decision.get("run_id") != run_id:
+        if (decision.get("status") != "accepted" or decision.get("run_id") != run_id
+                or decision.get("source_fingerprint") != current_source_fingerprint):
             continue
         row = decision.get("value", row)
         if not isinstance(row, dict):

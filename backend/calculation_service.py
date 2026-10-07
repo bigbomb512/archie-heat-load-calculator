@@ -9,6 +9,7 @@ calculation_job.json, which the workspace polls, so closing the page doesn't sto
 
 import re
 import time
+from pathlib import Path
 
 from backend.job_runner import BackgroundJob
 
@@ -48,15 +49,18 @@ def _rows(scope, include):
 
 
 def _resolve_inputs(web, project_id):
-    """The guided resolver, on the server: evidence workflow, then the model-input resolver."""
-    from backend import model_input_resolution_service, skill_workflow_service
+    """Wait for an active PDF review, then resolve using its accepted findings."""
+    from backend import ai_preliminary_service, model_input_resolution_service, skill_workflow_service
     project = web.project_by_id(project_id)
-    skill_workflow_service.post(web, project, {"action": "start"})
-    deadline = time.monotonic() + WORKFLOW_TIMEOUT_S
-    while project_id in skill_workflow_service._RUNNING:
-        if time.monotonic() > deadline:
-            raise RuntimeError("Preparing the inputs took longer than 10 minutes. Press Calculate again.")
-        time.sleep(1)
+    manifest = ai_preliminary_service._read(Path(project["review_dir"]) / "skill_workflow_run.json", {})
+    reviewing = (manifest.get("scope") == "pdf_review" and manifest.get("status") in {"queued", "running"}
+                 and project_id in skill_workflow_service._RUNNING)
+    if reviewing:
+        deadline = time.monotonic() + WORKFLOW_TIMEOUT_S
+        while project_id in skill_workflow_service._RUNNING:
+            if time.monotonic() > deadline:
+                raise RuntimeError("PDF review took longer than 10 minutes. Retry the review, then calculate again.")
+            time.sleep(1)
     # Evidence exceptions are listed by the resolver itself; they don't stop it (as in the engineer screen).
     model_input_resolution_service.post(web, web.project_by_id(project_id), {"action": "resolve"})
 

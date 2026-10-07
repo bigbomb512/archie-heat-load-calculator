@@ -351,12 +351,30 @@ def _proposal_for_resolution(paths):
     skill_dir = paths["root"] / "skill_workflow_runs" / str(run_id) / "proposals" if run_id else None
     if not skill_dir:
         return proposal
-    identity_proposal = _read(skill_dir / "room_identity_use.json", {})
-    identity_state = manifest.get("subskills", {}).get("room_identity_use", {})
-    if identity_state.get("status") not in {"needs_review", "provisional", "resolved", "completed"}:
+    from backend import skill_workflow_service
+    current_source_fingerprint = skill_workflow_service._source_fingerprint(
+        skill_workflow_service._project_paths({"id": "", "review_dir": str(paths["root"])}),
+        skill_workflow_service.load_catalog())
+    manifest_source_fingerprint = manifest.get("source_fingerprint")
+    if not manifest_source_fingerprint or manifest_source_fingerprint != current_source_fingerprint:
         return proposal
+    decisions = _read(paths["root"] / "skill_review_decisions.json", {}).get("decisions", {})
+    identity_proposal = _read(skill_dir / "room_identity_use.json", {})
     fields = identity_proposal.get("proposal_fields", {}) if isinstance(identity_proposal, dict) else {}
     identity_rows = fields.get("rooms", []) if isinstance(fields, dict) else []
+    accepted_rows = []
+    for index, suggested in enumerate(identity_rows if isinstance(identity_rows, list) else []):
+        if not isinstance(suggested, dict):
+            continue
+        decision = decisions.get(f"room_identity_use:rooms:{index}", {})
+        if (decision.get("status") != "accepted" or decision.get("run_id") != run_id
+                or decision.get("source_fingerprint") != current_source_fingerprint):
+            continue
+        accepted_value = decision.get("value", suggested)
+        if isinstance(accepted_value, dict):
+            accepted_rows.append((index, accepted_value))
+    if not accepted_rows:
+        return proposal
     citations = {
         row.get("citation_id"): row for row in identity_proposal.get("citations", [])
         if isinstance(row, dict) and row.get("citation_id")
@@ -377,10 +395,14 @@ def _proposal_for_resolution(paths):
         if match:
             inference_by_id.setdefault(match.group(1), []).append(inference)
     unresolved_fields = identity_proposal.get("unresolved_fields", []) if isinstance(identity_proposal, dict) else []
-    for finding in identity_rows if isinstance(identity_rows, list) else []:
+    from backend.calculation_extraction_service import _room_geometry_skill_proposals
+    candidates = _room_geometry_skill_proposals(paths["root"])
+    accepted_room_ids = set()
+    for index, finding in accepted_rows:
         if not isinstance(finding, dict):
             continue
         room_id = str(finding.get("room_id", ""))
+        accepted_room_ids.add(room_id)
         row = rooms_by_id.get(room_id) or rooms_by_label.get(str(finding.get("original_label", "")).strip().casefold())
         if not row:
             continue
@@ -390,10 +412,6 @@ def _proposal_for_resolution(paths):
         supporting_inferences = inference_by_id.get(room_id, [])
         taxonomy_inference = next((item for item in supporting_inferences if item.get("field", "").endswith(".taxonomy_id")), None)
         inferred_value = taxonomy_inference.get("value") if isinstance(taxonomy_inference, dict) else None
-        if isinstance(inferred_value, dict):
-            category = inferred_value.get("taxonomy_id") or category
-        elif isinstance(inferred_value, str):
-            category = inferred_value or category
         if category:
             row["room_use_category"] = category
             row["room_use_rationale"] = str(taxonomy_inference.get("method", "Skill interpretation of cited room evidence.")) if taxonomy_inference else "Skill-selected controlled room-use category."
@@ -414,8 +432,6 @@ def _proposal_for_resolution(paths):
             row["direct_label_verified"] = False
         matching_inference = next((item for item in supporting_inferences if isinstance(item.get("value"), dict)
                                    and item["value"].get("boundary_status") == "Functional zone; independent room separation unresolved"), None)
-        geometry_proposal = _read(skill_dir / "room_boundaries_areas.json", {})
-        candidates = (geometry_proposal.get("proposal_fields", {}) or {}).get("geometry_candidates", [])
         candidate = next((item for item in candidates if isinstance(item, dict) and item.get("room_id") == room_id), None)
         if matching_inference or (candidate and "parent_connected_zone_boundary" in candidate.get("unresolved_fields", [])):
             # A bar/service subarea without its own boundary must not receive a
@@ -437,7 +453,8 @@ def _proposal_for_resolution(paths):
         page = citation.get("physical_pdf_page") if citation else None
         if page:
             for row in proposal["rooms"]:
-                if isinstance(row, dict) and str(row.get("room_id", "")).endswith(":shop"):
+                if (isinstance(row, dict) and str(row.get("room_id", "")).endswith(":shop")
+                        and str(row.get("room_id", "")) in accepted_room_ids):
                     row["seat_count"] = int(seat_match.group(1))
                     row["evidence"] = row.get("evidence", []) + [{"page": page, "drawing_number": citation.get("drawing_identity", ""),
                         "title": citation.get("title", ""), "excerpt": f"Seating schedule: {seat_match.group(1)} seats."}]
