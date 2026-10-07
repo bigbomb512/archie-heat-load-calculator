@@ -1,0 +1,38 @@
+{
+  "case_id": "caseP08",
+  "description": "73-page restaurant set: renders, axonometric, finish/equipment schedules, layout, set-out and dimension plans, equipment plan, RCP, services, shopfront elevation, joinery.",
+  "confirmed": false,
+  "drafted_by": "Claude from page thumbnails, 2026-10-07",
+  "pages": {
+    "geometry": [
+      32,
+      33,
+      34
+    ],
+    "rcp": [
+      36
+    ],
+    "must_keep": [
+      32,
+      33,
+      34,
+      36,
+      40
+    ],
+    "not_geometry": [
+      1,
+      22,
+      23,
+      24,
+      25,
+      26,
+      28,
+      29,
+      30
+    ]
+  },
+  "notes": [
+    "p22 is a 3D axonometric; p23-30 are finish and equipment schedules (tables).",
+    "p40 is the shopfront elevation."
+  ]
+}

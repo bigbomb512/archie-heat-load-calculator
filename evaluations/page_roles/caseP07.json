@@ -1,0 +1,35 @@
+{
+  "case_id": "caseP07",
+  "description": "20-page restaurant concept set (raster): renders, material boards, notes, schedules, proposed plan, dimension plan, two RCPs, switch and services plans.",
+  "confirmed": false,
+  "drafted_by": "Claude from page thumbnails, 2026-10-07",
+  "pages": {
+    "geometry": [
+      15,
+      16
+    ],
+    "rcp": [
+      17,
+      18
+    ],
+    "must_keep": [
+      15,
+      16,
+      17,
+      18
+    ],
+    "not_geometry": [
+      1,
+      2,
+      3,
+      4,
+      12,
+      13,
+      14
+    ]
+  },
+  "notes": [
+    "p14 is a lighting schedule (product pictures), not a plan.",
+    "Little text layer: scanned or flattened."
+  ]
+}

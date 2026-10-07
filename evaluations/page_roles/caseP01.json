@@ -1,0 +1,15 @@
+{
+  "case_id": "caseP01",
+  "description": "Single-page food tenancy floor plan exported from the CAD model space (no title block).",
+  "confirmed": false,
+  "drafted_by": "Claude from page thumbnails, 2026-10-07",
+  "pages": {
+    "geometry": [
+      1
+    ],
+    "must_keep": [
+      1
+    ]
+  },
+  "notes": []
+}

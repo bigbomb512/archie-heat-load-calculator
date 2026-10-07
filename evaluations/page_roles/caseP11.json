@@ -1,0 +1,36 @@
+{
+  "case_id": "caseP11",
+  "description": "17-page two-level tenancy (ground floor + mezzanine): cover, notes, location, existing plans, proposed ground and mezzanine plans, two RCPs, sections, elevations, details.",
+  "confirmed": false,
+  "drafted_by": "Claude from page thumbnails, 2026-10-07",
+  "pages": {
+    "geometry": [
+      7,
+      8
+    ],
+    "rcp": [
+      9,
+      10
+    ],
+    "must_keep": [
+      7,
+      8,
+      9,
+      10,
+      11,
+      12
+    ],
+    "not_geometry": [
+      1,
+      2,
+      4,
+      14,
+      16,
+      17
+    ]
+  },
+  "notes": [
+    "Two levels: p7 ground, p8 mezzanine \u2014 both should become main plans for their level.",
+    "p5-6 are existing plans."
+  ]
+}

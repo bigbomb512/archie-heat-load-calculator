@@ -1,0 +1,21 @@
+{
+  "case_id": "caseP09",
+  "description": "Two-sheet kiosk/cafe in a round-ended building: proposed floor plan and outdoor (context) floor plan.",
+  "confirmed": false,
+  "drafted_by": "Claude from page thumbnails, 2026-10-07",
+  "pages": {
+    "geometry": [
+      1
+    ],
+    "must_keep": [
+      1
+    ],
+    "not_geometry": [
+      2
+    ]
+  },
+  "notes": [
+    "The building's curved walls are real walls here (contrast with joinery curves elsewhere).",
+    "p2 'Outdoor Floor Plan' shows the tenancy small, within outdoor dining \u2014 context, not the main plan."
+  ]
+}

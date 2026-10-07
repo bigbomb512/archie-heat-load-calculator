@@ -1,0 +1,31 @@
+{
+  "case_id": "caseP10",
+  "description": "11-page small retail set: cover, notes, location photos, location plan, existing/proposed/dimension plans, two RCPs, electrical, hydraulic.",
+  "confirmed": false,
+  "drafted_by": "Claude from page thumbnails, 2026-10-07",
+  "pages": {
+    "geometry": [
+      6,
+      7
+    ],
+    "rcp": [
+      8,
+      9
+    ],
+    "must_keep": [
+      5,
+      6,
+      7,
+      8
+    ],
+    "not_geometry": [
+      1,
+      2,
+      3,
+      4
+    ]
+  },
+  "notes": [
+    "p5 is the EXISTING (empty shell) plan with a printed area (41.73 m\u00b2): kept, left out of geometry/not_geometry \u2014 confirm."
+  ]
+}

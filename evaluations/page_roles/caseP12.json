@@ -1,0 +1,31 @@
+{
+  "case_id": "caseP12",
+  "description": "51-page cafe set in a curved-facade building: cover, notes, locality, renders, layout, partition, equipment, services, RCP, furniture and finishes plans, shopfront and interior elevations, joinery.",
+  "confirmed": false,
+  "drafted_by": "Claude from page thumbnails, 2026-10-07",
+  "pages": {
+    "geometry": [
+      8,
+      9
+    ],
+    "rcp": [
+      13
+    ],
+    "must_keep": [
+      8,
+      13,
+      17
+    ],
+    "not_geometry": [
+      1,
+      2,
+      3,
+      18,
+      20
+    ]
+  },
+  "notes": [
+    "The curved facade is a real wall.",
+    "p17 is the shopfront elevation (glazing)."
+  ]
+}

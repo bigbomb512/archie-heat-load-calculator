@@ -1,0 +1,24 @@
+{
+  "case_id": "caseP06",
+  "description": "38-page restaurant set (the Butcher Buffet regression case): dimension plan, room-name plan, RCP, lighting/power plans, elevations, details.",
+  "confirmed": false,
+  "drafted_by": "Claude from page thumbnails, 2026-10-07",
+  "pages": {
+    "geometry": [
+      20,
+      21
+    ],
+    "rcp": [
+      22
+    ],
+    "must_keep": [
+      20,
+      21,
+      22,
+      26
+    ]
+  },
+  "notes": [
+    "Facts reuse the user-confirmed Butcher Buffet work: p20 dimension plan, p21 plan with room names, p22 RCP, p26 storefront elevation."
+  ]
+}

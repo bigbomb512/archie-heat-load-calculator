@@ -1,0 +1,29 @@
+{
+  "case_id": "caseP14",
+  "description": "22-page three-storey restaurant: cover, locality, notes, renders, demolition, general arrangement, furniture, finishes, RCP, elevations, enlarged kitchen.",
+  "confirmed": false,
+  "drafted_by": "Claude from page thumbnails, 2026-10-07",
+  "pages": {
+    "geometry": [
+      14
+    ],
+    "rcp": [
+      17
+    ],
+    "must_keep": [
+      14,
+      17,
+      19
+    ],
+    "not_geometry": [
+      1,
+      2,
+      3,
+      21
+    ]
+  },
+  "notes": [
+    "Each plan sheet shows three levels side by side; levels need splitting within one page.",
+    "p21 is an enlarged kitchen plan (part of one level)."
+  ]
+}
