@@ -912,6 +912,7 @@ requiredElement("workflowDevControls").addEventListener("click", event => {
   if (control) workflowDevAction(control.dataset.workflowDev);
 });
 requiredElement("btnVisionSubmit").addEventListener("click", submitVisionResponse);
+requiredElement("btnVisionSaveSettings").addEventListener("click", () => visionExtractionAction("save_settings"));
 requiredElement("btnVisionStart").addEventListener("click", () => visionExtractionAction("start"));
 requiredElement("btnVisionCancel").addEventListener("click", () => visionExtractionAction("cancel"));
 requiredElement("btnVisionRetry").addEventListener("click", () => visionExtractionAction("retry"));
@@ -1847,6 +1848,7 @@ async function visionExtractionAction(action){
     if (!res.ok || data.error) throw new Error(data.error || "AI extraction request failed.");
     drawVisionExtraction(data);
     if (action === "start") toast("AI extraction started", "Only selected architect evidence is being processed.");
+    if (action === "save_settings" && data.skill_workflow?.status !== "blocked") toast("PDF review started", "The heat-load evidence skills are checking this job's selected pages.");
   } catch (error) { toast("AI extraction", error.message); }
 }
 

@@ -64,7 +64,9 @@ function geometryContext(records = []) {
 }
 
 async function mockJob(page, {status, model = () => ({room_scope: scope}), onPost = () => null, tasks = () => [], geometry = () => geometryContext(),
-                               prepare = () => ({status: "none"}), calculation = () => ({status: "none"})}) {
+                               prepare = () => ({status: "none"}), calculation = () => ({status: "none"}),
+                               skill = () => ({status: "blocked", blocked_reason: "Project consent is required before PDF evidence can be sent.", stages: [], findings: []}),
+                               vision = () => ({settings: {owner_opt_in: false, selected_group_ids: []}, selection: {page_count: 3, group_count: 2}, provider_configured: true})}) {
   const posts = [];
   await page.route("**/api/test-mode/status", route => route.fulfill({json: {enabled: false}}));
   await page.route("**/api/projects", route => route.fulfill({json: [{id: "job-1", name: analysis.name, pages: 38, relevant: 3, analysed: true}]}));
@@ -87,6 +89,14 @@ async function mockJob(page, {status, model = () => ({room_scope: scope}), onPos
     if (url.includes("/api/autonomous-tasks/image")) return route.fulfill({contentType: "image/png", body: PNG});
     if (route.request().method() === "GET") return route.fulfill({json: {tasks: tasks()}});
     return record("tasks")(route);
+  });
+  await page.route("**/api/skill-workflow**", async route => {
+    if (route.request().method() === "GET") return route.fulfill({json: skill()});
+    return record("skill")(route);
+  });
+  await page.route("**/api/vision-extraction**", async route => {
+    if (route.request().method() === "GET") return route.fulfill({json: vision()});
+    return record("vision")(route);
   });
   await page.route("**/api/decisions", record("decisions"));
   // Server-side Calculate: POST starts it, GET reports it.
@@ -236,6 +246,43 @@ test("Drawings: completed analysis points contractors to review items instead of
   await expect(page.locator("[data-ws-checks]")).toContainText("Review");
   await expect(page.locator("[data-ws-checks]")).not.toContainText("11 checks");
   await expect(page.locator("[data-ws-operator-panel]")).toHaveCount(0);
+});
+
+test("PDF review: consent starts the skills review and findings show page evidence before approval", async ({page}) => {
+  let approved = false;
+  let consented = false;
+  const proposal = {id: "room_boundaries_areas:geometry_candidates:0", subskill_id: "room_boundaries_areas",
+    field: "geometry_candidates", value: {label: "Shop", area_m2: 42}, units: "m²", pages: [20],
+    citations: [{page: 20, excerpt: "Shop 42 m2"}], confidence: 0.87, status: "proposed", inferences: [], unresolved_fields: []};
+  const run = () => consented
+    ? ({status: "needs_review", stages: [{label: "Rooms, geometry, and gains", status: "needs_review"}],
+       findings: [{...proposal, status: approved ? "accepted" : "proposed", reviewer: approved ? "Operator" : ""}]})
+    : ({status: "blocked", blocked_reason: "Project consent is required before PDF evidence can be sent.", stages: [], findings: []});
+  const consent = {settings: {owner_opt_in: false, selected_group_ids: []}, selection: {page_count: 3, group_count: 2}, provider_configured: true};
+  await mockJob(page, {status: () => baseStatus(), skill: run, vision: () => consent,
+    onPost: (kind, body) => {
+      if (kind === "vision" && body.action === "save_settings") { consent.settings.owner_opt_in = body.settings.owner_opt_in; consented = body.settings.owner_opt_in; return {settings: consent.settings, selection: consent.selection, provider_configured: true}; }
+      if (kind === "skill" && body.action === "review_finding") { approved = body.decision === "accepted"; return run(); }
+      return null;
+    }});
+  await page.goto("/#/job/job-1/drawings");
+  await expect(page.locator("[data-ws-pdf-review]")).toContainText("Project consent is required");
+  await page.locator("[data-ws-pdf-consent]").check();
+  await expect(page.locator("[data-ws-pdf-consent]")).toBeChecked();
+  await expect(page.locator(".ws-skill-finding")).toContainText("Shop");
+  await expect(page.locator(".ws-skill-finding")).toContainText("Page 20: Shop 42 m2");
+  await page.getByRole("button", {name: "Accept value"}).click();
+  await expect(page.locator(".ws-skill-finding")).toContainText("accepted");
+});
+
+test("PDF review: manual P0–P6 is an explicit fallback, not an automatic second review", async ({page}) => {
+  const posts = await mockJob(page, {status: () => baseStatus()});
+  await page.goto("/#/job/job-1/drawings");
+  await expect(page.locator("[data-ws-manual-fallback]")).toBeVisible();
+  expect(posts.some(([kind, body]) => kind === "tasks" && body.action === "run_all")).toBe(false);
+  await page.locator("[data-ws-manual-fallback]").click();
+  await expect(page.locator("[data-ws-operator-panel]")).toBeVisible();
+  expect(posts.some(([kind, body]) => kind === "tasks" && body.action === "run_all")).toBe(true);
 });
 
 test("Drawings: a saved page selection is shown after reopening the job", async ({ page }) => {

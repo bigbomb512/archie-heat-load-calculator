@@ -1650,6 +1650,11 @@ def analyse_project(project, review_dir=None, *, app=None, persist_project=True)
     ai_preliminary_service.after_pdf_analysis(app, project)
     if persist_project:
         app.update_project(project)
+    # The skills review is the normal AI-assisted PDF review path. It is
+    # automatically started only when project-local consent already exists;
+    # the consent endpoint starts it when consent is granted later.
+    from backend import skill_workflow_service
+    skill_workflow_service.start_after_analysis(app, project)
     return project
 
 

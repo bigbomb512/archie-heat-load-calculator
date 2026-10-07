@@ -380,6 +380,15 @@ def post(web, project, data):
     with LOCK:
         paths = _paths(project)
         action = data.get("action", "start")
+        if action == "save_settings":
+            settings = _save_settings(paths, data.get("settings", {}))
+            vision = _response(web, project)
+            skill_status = None
+            if settings.get("owner_opt_in") and paths["ai_input"].exists():
+                from backend import skill_workflow_service
+                skill_status = skill_workflow_service.start_after_analysis(web, project)
+            vision["skill_workflow"] = skill_status
+            return vision
         if action == "start":
             return _start(web, project, data)
         if action == "retry":

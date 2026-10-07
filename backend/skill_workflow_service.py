@@ -82,6 +82,19 @@ _VALUE_TARGET_KEYWORDS = {
 # full workflow's provider usage.
 _WORKFLOW_SCOPES = {
     "all": None,
+    # PDF review covers evidence discovery for a heat-load calculation. Policy
+    # approval and final model reconciliation happen after the evidence review.
+    "pdf_review": frozenset({
+        "sheet_identity", "revision_scope", "page_relationships", "site_clue_extraction",
+        "address_confirmation", "weather_source_matching", "room_identity_use", "room_boundaries_areas",
+        "ceiling_height_volume", "occupancy_seating", "lighting_evidence", "equipment_evidence",
+        "schedule_evidence", "surface_inventory", "surface_area", "construction_matching",
+        "boundary_resolution", "cross_sheet_opening_match", "glazing_properties", "exposure_orientation",
+        "solar_source", "shading", "outside_air", "infiltration", "process_exhaust", "make_up_air",
+        "airflow_deduplication", "system_detection", "zone_ownership", "air_path_reconciliation",
+        "component_inputs", "coil_duty", "plant_detection", "circuit_mapping", "pump_inputs",
+        "pipe_effects", "coincident_duty",
+    }),
     "rooms_only": frozenset({"sheet_identity", "revision_scope", "page_relationships",
                              "room_identity_use", "room_boundaries_areas", "ceiling_height_volume"}),
 }
@@ -259,6 +272,8 @@ def _source_inputs(paths, catalog):
         "spatial_ocr": _read(paths["spatial"], {}),
         "vector_geometry": _read(paths["vector"], {}),
         "vision_response": _read(paths["vision"], {}),
+        # Consent and selected evidence groups are part of the run identity.
+        "vision_extraction_settings": _read(paths["root"] / "vision_extraction_settings.json", {}),
         "catalog": catalog,
         "subskill_registry": load_subskill_registry(),
         "instructions_fingerprint": catalog_fingerprint(),
@@ -1060,16 +1075,26 @@ def _relevant_consented_images(subskill, project, limit=4, render_dir=None):
         return []
     dimension_page_ids = set()
     floor_layout_page_ids = set()
+    resolved_root = paths["root"].resolve()
     job = _read(paths["root"] / "vision_extraction_job.json", {})
     manifest_path = Path(str(job.get("manifest_path", "")))
     try:
         resolved_manifest = manifest_path.resolve(strict=True)
-        resolved_root = paths["root"].resolve(strict=True)
-        if resolved_root not in resolved_manifest.parents:
-            return []
-        manifest = _read(resolved_manifest, {})
+        manifest = _read(resolved_manifest, {}) if resolved_root in resolved_manifest.parents else {}
     except (OSError, RuntimeError, ValueError):
-        return []
+        manifest = {}
+    # Skill review must not depend on running the separate, optional vision
+    # extraction job. Build a page index from the analysed packet directly;
+    # consent still limits every page that can be attached to a model request.
+    if not manifest.get("groups"):
+        ai_input = _read(paths["ai_input"], {})
+        page_rows = {row.get("page"): row for row in ai_input.get("drawing_set", {}).get("pages", []) if isinstance(row, dict)}
+        source_images = ai_input.get("source_files", {}).get("page_images", [])
+        manifest = {"groups": [{"group_id": "analysed_pdf", "pages": [
+            {**page_rows.get(image.get("page"), {}), **image,
+             "image_path": image.get("path", image.get("image_path", ""))}
+            for image in source_images if isinstance(image, dict) and image.get("page") in allowed_pages
+        ]}]}
     pinned_pages = []
     if subskill["id"] in {"room_identity_use", "room_boundaries_areas"}:
         coverage = _read(paths["coverage"], {})
@@ -1136,7 +1161,7 @@ def _relevant_consented_images(subskill, project, limit=4, render_dir=None):
         group_rank = preferred_groups.index(group_id) if group_id in preferred_groups else len(preferred_groups)
         for page in group.get("pages", []) if isinstance(group, dict) else []:
             page_number = page.get("page") if isinstance(page, dict) else None
-            image_path = Path(str(page.get("image_path", ""))) if isinstance(page, dict) else None
+            image_path = Path(str(page.get("image_path", page.get("path", "")))) if isinstance(page, dict) else None
             if page_number not in allowed_pages or image_path is None:
                 continue
             try:
@@ -1793,6 +1818,88 @@ def _handoff_room_geometry_skill(web, project, run_path):
     return handoff
 
 
+def _read_scanned_printed_areas(project, run_id):
+    """Run the bounded S1 scan-reading validator for consented raster plans.
+
+    Results stay as skill proposals. The usual S1 apply function is called only
+    after an operator accepts the page finding.
+    """
+    from ai import scan_reading
+    from backend import autonomous_tasks_service
+
+    paths = _project_paths(project)
+    allowed_pages = _consented_page_ids(paths)
+    if not allowed_pages:
+        return None
+    settings = _read(paths["root"] / "vision_extraction_settings.json", {})
+    model = settings.get("model") or os.environ.get("ARCHIE_VISION_MODEL", "gpt-5")
+    provider_factory = (lambda: SKILL_PROVIDER_FACTORY(model)) if SKILL_PROVIDER_FACTORY is not None else (
+        lambda: OpenAISkillProposalProvider(os.environ["OPENAI_API_KEY"], model))
+    page_proposals, raw_replies, blocked = [], {}, []
+    for task, target, packet, prompt, image_bytes, reason in autonomous_tasks_service._s1_packets(paths["root"]):
+        page = packet.get("page")
+        if page not in allowed_pages:
+            continue
+        record = autonomous_tasks_service._create_run(paths["root"], task, target, packet, prompt, image_bytes, reason)
+        if reason:
+            page_proposals.append({"page": page, "status": "blocked", "rooms": [], "remediation": reason})
+            blocked.append(reason)
+            continue
+        try:
+            with tempfile.TemporaryDirectory(prefix="archie-scan-reading-") as folder:
+                images = []
+                for index, content in enumerate(image_bytes):
+                    image_path = Path(folder) / f"tile-{index + 1}.png"
+                    image_path.write_bytes(content)
+                    images.append({"page": page, "path": image_path})
+                provider_result = provider_factory().propose(prompt, image_paths=images)
+            reply = provider_result.proposal if isinstance(provider_result, SkillProviderResult) else provider_result
+            if not isinstance(reply, dict):
+                raise ValueError("The scan-reading provider reply must be a JSON object.")
+            tiles = packet.get("tiles", [])
+            factors = packet.get("factors", [])
+            validated = scan_reading.validate_area_reply(reply, tiles, factors)
+            if not validated["rooms"]:
+                message = "Scanned plan with no printed areas or dimensions; room areas need the contractor."
+                page_proposals.append({"page": page, "status": "blocked", "rooms": [], "remediation": message})
+                blocked.append(message)
+                raw_replies[str(page)] = reply
+                continue
+            context = autonomous_tasks_service._p0_context(paths["root"], page)
+            working_scale = scan_reading.mm_per_px_from_scale(packet.get("working_scale_denominator", 100), packet.get("render_dpi", 180))
+            outlines = autonomous_tasks_service._scan_outlines(context, working_scale)
+            validated = scan_reading.validate_area_reply(reply, tiles, factors, outlines)
+            declared_scale = scan_reading.mm_per_px_from_scale(validated.get("scale_denominator"), packet.get("render_dpi", 180))
+            try:
+                calibration = scan_reading.calibration_from_areas(validated["rooms"], outlines, declared_mm_per_px=declared_scale)
+                calibration_reason = ""
+            except ValueError as error:
+                calibration, calibration_reason = None, str(error)
+            mapped = [{"name": row["label"], "number": row.get("number"), "area_m2": row["area_m2"],
+                       "printed_text": row["printed_text"], "page": page} for row in validated["rooms"]]
+            page_proposals.append({"page": page, "status": "proposed", "rooms": mapped,
+                "scale_text": validated.get("scale_text"), "calibration": calibration,
+                "calibration_reason": calibration_reason, "remediation": []})
+            raw_replies[str(page)] = reply
+            record["skill_review_run_id"] = run_id
+            autonomous_tasks_service._update_record(paths["root"], record)
+        except Exception as error:
+            message = str(error)[:500] or "Printed areas could not be validated from the scanned plan."
+            page_proposals.append({"page": page, "status": "needs_review", "rooms": [], "remediation": message})
+            blocked.append(message)
+    if not page_proposals:
+        return None
+    proposal = {"subskill_id": "scanned_printed_areas", "status": "needs_review" if blocked else "provisional",
+        "proposal_fields": {"pages": page_proposals},
+        "citations": [{"page": row["page"], "excerpt": "; ".join(room["printed_text"] for room in row.get("rooms", []))
+                       or row.get("remediation", "Scanned room plan")} for row in page_proposals],
+        "inferences": [], "unresolved_fields": ["room areas"] if blocked else [],
+        "remediation": blocked, "raw_replies": raw_replies}
+    proposal_path = paths["root"] / "skill_workflow_runs" / run_id / "proposals" / "scanned_printed_areas.json"
+    _atomic_json(proposal_path, proposal)
+    return proposal
+
+
 def _update_parent_stages(manifest, catalog, registry):
     active_parents = set(catalog.get("enabled_skill_ids", catalog.get("pilot_skill_ids", [])))
     for parent in active_parents:
@@ -1827,6 +1934,26 @@ def _run_worker(web, project, run_id, source_fp, catalog):
             selected = _scoped_subskill_ids(registry, selected_parents, manifest.get("scope", "all"))
             manifest["status"] = "running"
             _write_manifest(run_path, manifest)
+
+        # Scan-reading is part of the consented PDF review. Keep its result as
+        # a proposal until an operator accepts the page finding.
+        if manifest.get("scope") == "pdf_review":
+            with _project_lock(project["id"]):
+                manifest = _read(run_path, {})
+                manifest.setdefault("preparation", {})["scan_reading"] = {"status": "running", "started_at": time.time()}
+                _write_manifest(run_path, manifest)
+            try:
+                scan_proposal = _read_scanned_printed_areas(project, run_id)
+                scan_state = "not_applicable" if scan_proposal is None else scan_proposal.get("status", "needs_review")
+                scan_error = ""
+            except Exception:
+                scan_state, scan_error = "failed", "Scanned plan evidence could not be reviewed. Retry PDF review."
+                LOGGER.exception("Scanned-page review failed", extra={"error_code": "scan_review_failed"})
+            with _project_lock(project["id"]):
+                manifest = _read(run_path, {})
+                manifest.setdefault("preparation", {})["scan_reading"] = {
+                    "status": scan_state, "finished_at": time.time(), "remediation": scan_error}
+                _write_manifest(run_path, manifest)
 
         pending = set(selected)
         completed = set()
@@ -1940,25 +2067,8 @@ def _run_worker(web, project, run_id, source_fp, catalog):
                         })
                         _update_parent_stages(manifest, catalog, registry)
                         _write_manifest(run_path, manifest)
-                    geometry_candidates = (result.get("proposal_fields", {}) or {}).get("geometry_candidates", [])
-                    if skill_id == "room_boundaries_areas" and geometry_candidates:
-                        failure_phase = "resolver_handoff"
-                        handoff = _handoff_room_geometry_skill(web, project, run_path)
-                        with _project_lock(project["id"]):
-                            manifest = _read(run_path, {})
-                            row = manifest.get("subskills", {}).get(skill_id, {})
-                            artifact_names = list(row.get("artifact_names", []))
-                            artifact_names.extend(name for name in handoff.get("artifact_names", []) if name not in artifact_names)
-                            row["artifact_names"] = artifact_names
-                            row.setdefault("output_summary", {})["geometry_handoff"] = {
-                                "status": handoff.get("status"),
-                                "active_area_count": handoff.get("active_area_count", 0),
-                                "ai_geometry_candidate_count": handoff.get("ai_geometry_candidate_count", 0),
-                                "proof_count": handoff.get("proof_count", 0),
-                                "issue_count": handoff.get("issue_count", 0),
-                                "model_input_status": (handoff.get("model_input") or {}).get("status", ""),
-                            }
-                            _write_manifest(run_path, manifest)
+                    # Keep proposals as evidence-only until an operator accepts
+                    # a specific finding in the PDF review panel.
                     (failures if status in {"blocked"} else completed).add(skill_id)
                     # A successfully handled node must leave the pending set.
                     # Without this, the scheduler reruns terminal nodes forever
@@ -2027,8 +2137,11 @@ def _run_worker(web, project, run_id, source_fp, catalog):
             manifest = _read(run_path, {})
             _update_parent_stages(manifest, catalog, registry)
             states = {manifest["subskills"][skill_id].get("status") for skill_id in selected}
+            scan_state = manifest.get("preparation", {}).get("scan_reading", {}).get("status")
             manifest["status"] = (
-                "needs_review" if states.intersection({"failed", "blocked", "needs_review", "provisional", "stale"}) else
+                "failed" if scan_state == "failed" else
+                "needs_review" if states.intersection({"failed", "blocked", "needs_review", "provisional", "stale"})
+                    or scan_state in {"blocked", "needs_review", "provisional"} else
                 "completed"
             )
             if manifest["status"] == "needs_review":
@@ -2083,6 +2196,10 @@ def _response(web, project):
         row = safe.get("skills", {}).get(skill_id, {})
         stages.append({"label": labels.get(skill_id, "Evidence review"), "status": row.get("status", "not_started"),
                        "summary": row.get("output_summary", {}), "remediation": public_text(row.get("remediation", ""))})
+    scan_stage = safe.get("preparation", {}).get("scan_reading", {})
+    if scan_stage and scan_stage.get("status") != "not_applicable":
+        stages.append({"label": "Scanned plan area reading", "status": scan_stage.get("status", "queued"),
+                       "summary": {}, "remediation": public_text(scan_stage.get("remediation", ""))})
     subskill_registry = load_subskill_registry()
     subskills = []
     for spec in subskill_registry["subskills"]:
@@ -2098,19 +2215,153 @@ def _response(web, project):
             "validation_detail": public_text(row.get("validation_detail", "")),
             "raw_output_url": web.safe_link(paths["root"] / row["attempt_ref"] / "raw_output.txt") if row.get("attempt_ref") else "",
             "prompt_url": web.safe_link(paths["root"] / row["attempt_ref"] / "prompt.txt") if row.get("attempt_ref") else ""})
+    proposal_root = paths["root"] / "skill_workflow_runs" / str(safe.get("run_id", "")) / "proposals"
+    decisions_path = paths["root"] / "skill_review_decisions.json"
+    decisions = _read(decisions_path, {})
+    findings = []
+    if safe.get("run_id") and proposal_root.is_dir():
+        for proposal_path in sorted(proposal_root.glob("*.json")):
+            proposal = _read(proposal_path, {})
+            subskill_id = proposal.get("subskill_id") or proposal_path.stem
+            for field, raw in (proposal.get("proposal_fields") or {}).items():
+                rows = raw if isinstance(raw, list) else ([raw] if raw is not None else [])
+                for index, value in enumerate(rows):
+                    finding_id = f"{subskill_id}:{field}:{index}"
+                    decision = decisions.get("decisions", {}).get(finding_id, {})
+                    if decision.get("run_id") != safe.get("run_id"):
+                        decision = {}
+                    cited_pages = []
+                    if isinstance(value, dict):
+                        cited_pages.extend(value.get(key) for key in ("page", "physical_page", "source_page")
+                                           if isinstance(value.get(key), int))
+                        for key in ("source_pages", "evidence_page_ids"):
+                            cited_pages.extend(item for item in value.get(key, []) if isinstance(item, int)) if isinstance(value.get(key), list) else None
+                    cited_pages.extend(row.get("page") for row in proposal.get("citations", []) if isinstance(row, dict) and isinstance(row.get("page"), int))
+                    cited_pages = sorted(set(cited_pages))
+                    default_status = value.get("status", "proposed") if subskill_id == "scanned_printed_areas" and isinstance(value, dict) else "proposed"
+                    input_applied = (decision.get("status") == "accepted" and (
+                        subskill_id == "room_boundaries_areas" or subskill_id == "scanned_printed_areas"))
+                    findings.append({"id": finding_id, "subskill_id": subskill_id, "field": field,
+                        "value": decision.get("value", value), "status": decision.get("status", default_status),
+                        "units": _finding_units(field, value), "pages": cited_pages,
+                        "citations": proposal.get("citations", []), "inferences": proposal.get("inferences", []),
+                        "input_applied": input_applied,
+                        "formula": value.get("formula", "") if isinstance(value, dict) else "",
+                        "confidence": proposal.get("confidence"), "alternatives": proposal.get("alternatives", []),
+                        "unresolved_fields": proposal.get("unresolved_fields", []),
+                        "reviewer": decision.get("reviewer", ""), "reviewed_at": decision.get("updated_at", "")})
+    consent = _read(paths["root"] / "vision_extraction_settings.json", {})
+    visible_status = safe.get("status", "not_started")
+    blocked_reason = ""
+    if not consent.get("owner_opt_in") and visible_status == "not_started":
+        visible_status = "blocked"
+        blocked_reason = "Project consent is required before PDF evidence can be sent to the configured model."
     return {
-        "project_id": project["id"], "status": safe.get("status", "not_started"),
+        "project_id": project["id"], "status": visible_status,
         "run_id": safe.get("run_id", ""), "source_fingerprint": safe.get("source_fingerprint", ""),
         "stale_reasons": [public_text(item) for item in safe.get("stale_reasons", [])], "remediation": public_text(safe.get("remediation", "")),
-        "stages": stages,
+        "stages": stages, "findings": findings,
+        "blocked_reason": public_text(blocked_reason or safe.get("blocked_reason", "")),
         "subskills": subskills,
         "preparation": {"status": safe.get("preparation", {}).get("status", "not_started"),
                         "candidate_count": safe.get("preparation", {}).get("candidate_count", 0),
                         "model_input": safe.get("preparation", {}).get("model_input", {}),
+                        "scan_reading": safe.get("preparation", {}).get("scan_reading", {}),
                         "remediation": safe.get("preparation", {}).get("remediation", "")},
         "catalog": {"id": catalog["catalog_id"], "version": catalog["schema_version"]},
         "artifact_links": {name: web.safe_link(paths["root"] / name) for name in {artifact for row in safe.get("skills", {}).values() for artifact in row.get("artifact_names", [])} if (paths["root"] / name).exists()},
     }
+
+
+def _finding_units(field, value):
+    text = f"{field} {json.dumps(value, ensure_ascii=False) if isinstance(value, dict) else value}".lower()
+    if any(token in text for token in ("_m2", "m²", "area_m2")):
+        return "m²"
+    if any(token in text for token in ("_mm", "height_mm", "width_mm")):
+        return "mm"
+    if any(token in text for token in ("_kw", "kw")):
+        return "kW"
+    if any(token in text for token in ("_w", "watt")):
+        return "W"
+    if "_c" in text or "temperature" in text:
+        return "°C"
+    if any(token in text for token in ("_l_s", "l/s", "airflow")):
+        return "L/s"
+    return ""
+
+
+def _blocked_manifest(catalog, source_fp, scope, reason, code):
+    manifest = _new_manifest(catalog, source_fp, scope)
+    manifest.update({"status": "blocked", "finished_at": time.time(), "error_code": code,
+                     "blocked_reason": reason, "remediation": reason})
+    for row in manifest.get("subskills", {}).values():
+        if row.get("status") == "queued":
+            row.update({"status": "blocked", "finished_at": time.time(), "error_code": code,
+                        "remediation": [reason]})
+    return manifest
+
+
+def start_after_analysis(web, project):
+    """Start the focused PDF review only when this project's owner opted in."""
+    paths = _project_paths(project)
+    settings = _read(paths["root"] / "vision_extraction_settings.json", {})
+    if not settings.get("owner_opt_in") or not paths["ai_input"].exists():
+        return _response(web, project)
+    return post(web, project, {"action": "start", "scope": "pdf_review", "automatic": True})
+
+
+def _review_finding(web, project, data):
+    paths = _project_paths(project)
+    manifest = _read(paths["manifest"], {})
+    if not manifest.get("run_id") or manifest.get("status") == "stale":
+        raise ValueError("Run PDF review again before recording a finding decision.")
+    if manifest.get("source_fingerprint") != _source_fingerprint(paths, load_catalog()):
+        raise ValueError("PDF review findings are stale. Run the review again before accepting them.")
+    finding_id = str(data.get("finding_id", ""))
+    decision = str(data.get("decision", ""))
+    if not finding_id or decision not in {"accepted", "rejected"}:
+        raise ValueError("Choose a finding and accept or reject it.")
+    current = _response(web, project)
+    finding = next((row for row in current.get("findings", []) if row.get("id") == finding_id), None)
+    if finding is None:
+        raise ValueError("The finding is not part of the current PDF review.")
+    value = data.get("value", finding["value"])
+    original = finding["value"]
+    if type(value) is not type(original) and not (isinstance(original, (int, float)) and type(value) in {int, float}):
+        raise ValueError("Edited finding must keep the original value type.")
+    reviewer = " ".join(str(data.get("reviewer", "")).split())[:100] or "Operator"
+    if finding["subskill_id"] == "scanned_printed_areas" and decision == "accepted":
+        if value != original:
+            raise ValueError("Accept the validated scanned areas as shown, then edit individual room areas in Rooms.")
+        existing_decision = _read(paths["root"] / "skill_review_decisions.json", {}).get("decisions", {}).get(finding_id, {})
+        if not (existing_decision.get("run_id") == manifest["run_id"] and existing_decision.get("status") == "accepted"):
+            from backend import autonomous_tasks_service, calculation_extraction_service, room_use_resolution_service
+            page = original.get("page") if isinstance(original, dict) else None
+            scan_path = paths["root"] / "skill_workflow_runs" / manifest["run_id"] / "proposals" / "scanned_printed_areas.json"
+            scan_proposal = _read(scan_path, {})
+            raw_reply = scan_proposal.get("raw_replies", {}).get(str(page))
+            record = autonomous_tasks_service._current_task(paths["root"], "S1_printed_areas", f"page-{page}")
+            if not isinstance(raw_reply, dict) or not isinstance(record, dict):
+                raise ValueError("The scanned area evidence is no longer available. Retry PDF review before accepting it.")
+            autonomous_tasks_service.post(web, project, {"action": "validate_apply", "task": "S1_printed_areas",
+                "target": f"page-{page}", "reply": json.dumps(raw_reply, ensure_ascii=False)})
+            applied = autonomous_tasks_service._current_task(paths["root"], "S1_printed_areas", f"page-{page}")
+            if not applied or not applied.get("applied_value", {}).get("rooms"):
+                raise ValueError("The printed areas did not pass S1 validation and were not applied.")
+            room_use_resolution_service.post(web, project, {"action": "resolve"})
+            calculation_extraction_service.post(web, project, {"action": "build"})
+    artifact_path = paths["root"] / "skill_review_decisions.json"
+    artifact = _read(artifact_path, {"schema_version": 1, "decisions": {}})
+    artifact.setdefault("decisions", {})[finding_id] = {"status": decision, "value": value,
+        "reviewer": reviewer, "updated_at": time.time(), "run_id": manifest["run_id"],
+        "source_fingerprint": manifest["source_fingerprint"]}
+    _atomic_json(artifact_path, artifact)
+    # Geometry proposals are intentionally withheld from the calculation
+    # evidence builder until the operator accepts them.
+    if finding["subskill_id"] == "room_boundaries_areas" and decision == "accepted":
+        from backend import calculation_extraction_service
+        calculation_extraction_service.post(web, project, {"action": "build"})
+    return _response(web, project)
 
 
 def get(web, project):
@@ -2119,10 +2370,12 @@ def get(web, project):
 
 def post(web, project, data):
     action = str((data or {}).get("action", "start"))
+    if action == "review_finding":
+        return _review_finding(web, project, data)
     if action not in {"start", "retry"}:
-        raise ValueError("Skill workflow action must be start or retry.")
+        raise ValueError("Skill workflow action must be start, retry, or review_finding.")
     explicit_scope = (data or {}).get("scope")
-    scope = str(explicit_scope or "all")
+    scope = str(explicit_scope or "pdf_review")
     if scope not in _WORKFLOW_SCOPES:
         raise ValueError("Skill workflow scope must be one of: " + ", ".join(sorted(_WORKFLOW_SCOPES)) + ".")
     paths = _project_paths(project)
@@ -2150,10 +2403,24 @@ def post(web, project, data):
             _write_manifest(paths["manifest"], existing)
             if action != "retry":
                 raise ValueError("The previous skill workflow was interrupted. Retry it to continue.")
+        settings = _read(paths["root"] / "vision_extraction_settings.json", {})
+        if not settings.get("owner_opt_in"):
+            return _response(web, project)
+        allowed_pages = _consented_page_ids(paths)
+        unavailable_reason = ""
+        unavailable_code = ""
+        if not allowed_pages:
+            unavailable_reason, unavailable_code = "Select at least one page group covered by the project consent.", "consented_pages_unavailable"
+        elif SKILL_PROVIDER_FACTORY is None and not os.environ.get("OPENAI_API_KEY"):
+            unavailable_reason, unavailable_code = "The configured AI provider is unavailable. Set up provider credentials, then retry PDF review.", "skill_provider_unavailable"
+        if unavailable_reason:
+            blocked = _blocked_manifest(catalog, source_fp, scope, unavailable_reason, unavailable_code)
+            _write_manifest(paths["manifest"], blocked)
+            return _response(web, project)
         if (action == "start" and existing.get("source_fingerprint") == source_fp
                 and existing.get("scope", "all") == scope and existing.get("status") in {"completed", "needs_review"}):
             return _response(web, project)
-        if action == "retry" and existing.get("status") not in {"failed", "stale", "needs_review"}:
+        if action == "retry" and existing.get("status") not in {"failed", "blocked", "stale", "needs_review"}:
             if existing:
                 raise ValueError("Retry is available only after a failed or stale skill workflow.")
         manifest = _new_manifest(catalog, source_fp, scope)

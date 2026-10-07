@@ -1,6 +1,7 @@
 """Runtime skill catalog, dependency and project-run lifecycle tests."""
 
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -12,6 +13,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from backend import skill_workflow_service as skills
+from backend import vision_extraction_service
 
 
 class Web:
@@ -40,8 +42,9 @@ def empty_typed_proposal(subskill):
 class SkillWorkflowTests(unittest.TestCase):
     def project(self, root):
         root = Path(root)
-        (root / "ai_input.json").write_text(json.dumps({"drawing_set": {"pages": [{"page": 1}]}}), encoding="utf-8")
-        (root / "drawing_coverage.json").write_text(json.dumps({"pages": [{"page": 1, "drawing_number": "201", "title": "Proposed Floor Plan", "identity_status": "confirmed"}]}), encoding="utf-8")
+        (root / "ai_input.json").write_text(json.dumps({"drawing_set": {"pages": [{"page": 1, "title": "Proposed Floor Plan", "structured_content": {"markdown": "Proposed Floor Plan"}}]}}), encoding="utf-8")
+        (root / "drawing_coverage.json").write_text(json.dumps({"page_roles": [{"page": 1, "drawing_number": "201", "title": "Proposed Floor Plan", "proposed_role": "main_floor_plan", "identity_status": "confirmed"}]}), encoding="utf-8")
+        (root / "vision_extraction_settings.json").write_text(json.dumps({"owner_opt_in": True, "selected_group_ids": []}), encoding="utf-8")
         return {"id": "skills-test-" + root.name, "review_dir": str(root)}
 
     def test_catalog_contracts_dependencies_and_full_enablement(self):
@@ -58,6 +61,182 @@ class SkillWorkflowTests(unittest.TestCase):
                 {"id": "a", "version": 1, "purpose": "a", "depends_on": ["b"], "subskills": [], "output_contract": "a", "resolver_handoff": "a"},
                 {"id": "b", "version": 1, "purpose": "b", "depends_on": ["a"], "subskills": [], "output_contract": "a", "resolver_handoff": "b"},
             ], "enabled_skill_ids": ["a"], "pilot_skill_ids": ["a"]})
+
+    def test_pdf_review_scope_covers_heat_load_evidence_but_not_final_policy(self):
+        registry = skills.load_subskill_registry()
+        selected = skills._scoped_subskill_ids(registry, set(skills.load_catalog()["enabled_skill_ids"]), "pdf_review")
+        self.assertTrue({"room_boundaries_areas", "ceiling_height_volume", "surface_inventory", "glazing_properties",
+                         "outside_air", "system_detection", "plant_detection"}.issubset(selected))
+        self.assertNotIn("policy_source", selected)
+        self.assertNotIn("report_readiness", selected)
+
+    def test_review_requires_consent_and_reports_missing_provider_as_blocked(self):
+        with tempfile.TemporaryDirectory() as folder:
+            project, web = self.project(folder), Web()
+            settings_path = Path(folder) / "vision_extraction_settings.json"
+            settings_path.write_text(json.dumps({"owner_opt_in": False, "selected_group_ids": []}), encoding="utf-8")
+            no_consent = skills.post(web, project, {"action": "start"})
+            self.assertEqual(no_consent["status"], "blocked")
+            self.assertIn("consent", no_consent["blocked_reason"].lower())
+            self.assertFalse((Path(folder) / "skill_workflow_run.json").exists())
+            settings_path.write_text(json.dumps({"owner_opt_in": True, "selected_group_ids": []}), encoding="utf-8")
+            with patch.dict(os.environ, {}, clear=True):
+                blocked = skills.post(web, project, {"action": "start"})
+            manifest = json.loads((Path(folder) / "skill_workflow_run.json").read_text(encoding="utf-8"))
+            self.assertEqual(blocked["status"], "blocked")
+            self.assertEqual(manifest["error_code"], "skill_provider_unavailable")
+            self.assertIn("credentials", blocked["blocked_reason"])
+
+    def test_after_analysis_auto_starts_only_with_saved_consent_and_uses_pdf_review_scope(self):
+        original_worker = skills._run_worker
+        try:
+            skills._run_worker = lambda *_args: None
+            with tempfile.TemporaryDirectory() as folder:
+                project, web = self.project(folder), Web()
+                settings = Path(folder) / "vision_extraction_settings.json"
+                settings.write_text(json.dumps({"owner_opt_in": False}), encoding="utf-8")
+                waiting = skills.start_after_analysis(web, project)
+                self.assertEqual(waiting["status"], "blocked")
+                self.assertFalse((Path(folder) / "skill_workflow_run.json").exists())
+                settings.write_text(json.dumps({"owner_opt_in": True}), encoding="utf-8")
+                with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+                    started = skills.start_after_analysis(web, project)
+                self.assertIn(started["status"], {"queued", "running"})
+                manifest = json.loads((Path(folder) / "skill_workflow_run.json").read_text(encoding="utf-8"))
+                self.assertEqual(manifest["scope"], "pdf_review")
+        finally:
+            skills._run_worker = original_worker
+
+    def test_saving_job_consent_automatically_starts_pdf_review(self):
+        original_worker = skills._run_worker
+        try:
+            skills._run_worker = lambda *_args: None
+            with tempfile.TemporaryDirectory() as folder:
+                project, web = self.project(folder), Web()
+                settings_path = Path(folder) / "vision_extraction_settings.json"
+                settings_path.write_text(json.dumps({"owner_opt_in": False, "selected_group_ids": []}), encoding="utf-8")
+                with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+                    response = vision_extraction_service.post(web, project, {"action": "save_settings",
+                        "settings": {"owner_opt_in": True, "selected_group_ids": []}})
+                self.assertTrue(response["settings"]["owner_opt_in"])
+                self.assertEqual(response["skill_workflow"]["status"], "queued")
+                manifest = json.loads(settings_path.with_name("skill_workflow_run.json").read_text(encoding="utf-8"))
+                self.assertEqual(manifest["scope"], "pdf_review")
+        finally:
+            skills._run_worker = original_worker
+
+    def test_skill_findings_are_reviewed_before_geometry_enters_calculation(self):
+        from backend.calculation_extraction_service import _room_geometry_skill_proposals
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            project = self.project(root)
+            run_id = "review-run"
+            manifest = skills._new_manifest(skills.load_catalog(), skills._source_fingerprint(skills._project_paths(project), skills.load_catalog()), "pdf_review")
+            manifest.update({"run_id": run_id, "status": "needs_review"})
+            manifest["subskills"]["room_boundaries_areas"]["status"] = "needs_review"
+            (root / "skill_workflow_run.json").write_text(json.dumps(manifest), encoding="utf-8")
+            proposal_dir = root / "skill_workflow_runs" / run_id / "proposals"
+            proposal_dir.mkdir(parents=True)
+            candidate = {"room_id": "room-1", "label": "Shop", "page": 1, "boundary_points_mm": [[0, 0], [4000, 0], [4000, 3000], [0, 3000], [0, 0]],
+                         "area_m2": 12, "source_pages": [1]}
+            (proposal_dir / "room_boundaries_areas.json").write_text(json.dumps({"subskill_id": "room_boundaries_areas",
+                "proposal_fields": {"geometry_candidates": [candidate]}, "citations": [{"page": 1, "excerpt": "Shop"}]}), encoding="utf-8")
+            before = _room_geometry_skill_proposals(root)
+            self.assertEqual(before, [])
+            with patch("backend.calculation_extraction_service.post", return_value={}) as build:
+                result = skills.post(Web(), project, {"action": "review_finding", "finding_id": "room_boundaries_areas:geometry_candidates:0",
+                    "decision": "accepted", "value": {**candidate, "area_m2": 13}, "reviewer": "Operator"})
+            stored = skills._read(root / "skill_review_decisions.json", {})
+            self.assertEqual(stored["decisions"]["room_boundaries_areas:geometry_candidates:0"]["value"]["area_m2"], 13)
+            self.assertEqual(result["findings"][0]["status"], "accepted")
+            self.assertTrue(result["findings"][0]["input_applied"])
+            build.assert_called_once()
+            accepted = _room_geometry_skill_proposals(root)
+            self.assertEqual(len(accepted), 1)
+            self.assertEqual(accepted[0]["geometry"]["area_m2"], 13)
+
+    def test_scanned_page_findings_apply_s1_areas_only_after_acceptance(self):
+        from backend import autonomous_tasks_service, calculation_extraction_service, room_use_resolution_service
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            project, web = self.project(root), Web()
+            catalog = skills.load_catalog()
+            source_fp = skills._source_fingerprint(skills._project_paths(project), catalog)
+            manifest = skills._new_manifest(catalog, source_fp, "pdf_review")
+            manifest.update({"run_id": "scan-review", "status": "needs_review"})
+            (root / "skill_workflow_run.json").write_text(json.dumps(manifest), encoding="utf-8")
+            proposal_dir = root / "skill_workflow_runs" / "scan-review" / "proposals"
+            proposal_dir.mkdir(parents=True)
+            page_value = {"page": 4, "status": "proposed", "rooms": [{"name": "Shop", "area_m2": 42.0}],
+                          "calibration": {"status": "agreed"}}
+            (proposal_dir / "scanned_printed_areas.json").write_text(json.dumps({
+                "subskill_id": "scanned_printed_areas", "proposal_fields": {"pages": [page_value]},
+                "citations": [{"page": 4, "excerpt": "Shop 42 m2"}], "raw_replies": {"4": {"areas": []}}}), encoding="utf-8")
+            record = {"task": "S1_printed_areas", "target": "page-4", "packet": {"page": 4}}
+            applied = {"applied_value": {"rooms": [{"label": "Shop", "area_m2": 42.0}]}}
+            with patch.object(autonomous_tasks_service, "post") as apply_s1, \
+                    patch.object(autonomous_tasks_service, "_current_task", side_effect=[record, applied]), \
+                    patch.object(room_use_resolution_service, "post") as resolve, \
+                    patch.object(calculation_extraction_service, "post") as build:
+                result = skills.post(web, project, {"action": "review_finding",
+                    "finding_id": "scanned_printed_areas:pages:0", "decision": "accepted"})
+            self.assertEqual(result["findings"][0]["status"], "accepted")
+            apply_s1.assert_called_once()
+            self.assertEqual(apply_s1.call_args.args[2]["task"], "S1_printed_areas")
+            self.assertEqual(apply_s1.call_args.args[2]["reply"], json.dumps({"areas": []}))
+            resolve.assert_called_once()
+            build.assert_called_once_with(web, project, {"action": "build"})
+
+    def test_image_only_plan_uses_s1_scan_reading_and_keeps_areas_as_proposals(self):
+        from backend import autonomous_tasks_service
+
+        class Provider:
+            def propose(self, _prompt, image_paths):
+                self.image_paths = image_paths
+                return {"rooms": [{"tile": 1, "name": "Shop", "number": None, "area_value": 42,
+                    "unit": "m2", "printed_text": "42 m2", "label_px": [40, 40]}], "scale_text": None}
+
+        provider = Provider()
+        with tempfile.TemporaryDirectory() as folder:
+            project = self.project(folder)
+            packet = {"page": 1, "tiles": [(0, 0, 100, 100)], "factors": [1], "render_dpi": 180,
+                      "working_scale_denominator": 100}
+            task = ("S1_printed_areas", "page-1", packet, "Read printed areas", [b"synthetic image"], "")
+            with patch.object(skills, "SKILL_PROVIDER_FACTORY", lambda _model: provider), \
+                    patch.object(autonomous_tasks_service, "_s1_packets", return_value=[task]), \
+                    patch.object(autonomous_tasks_service, "_create_run", return_value={"task": "S1_printed_areas"}), \
+                    patch.object(autonomous_tasks_service, "_p0_context", return_value={}), \
+                    patch.object(autonomous_tasks_service, "_scan_outlines", return_value=[]):
+                proposal = skills._read_scanned_printed_areas(project, "image-only-run")
+            self.assertEqual(proposal["subskill_id"], "scanned_printed_areas")
+            self.assertEqual(proposal["proposal_fields"]["pages"][0]["rooms"],
+                             [{"name": "Shop", "number": None, "area_m2": 42.0, "printed_text": "42 m2", "page": 1}], proposal)
+            self.assertEqual(proposal["proposal_fields"]["pages"][0]["calibration"], None)
+            self.assertEqual(len(provider.image_paths), 1)
+            self.assertTrue((Path(folder) / "skill_workflow_runs" / "image-only-run" / "proposals" /
+                             "scanned_printed_areas.json").exists())
+            self.assertFalse((Path(folder) / "skill_review_decisions.json").exists())
+
+    def test_scanned_area_edit_is_not_applied_without_s1_validation(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            project, web = self.project(root), Web()
+            catalog = skills.load_catalog()
+            source_fp = skills._source_fingerprint(skills._project_paths(project), catalog)
+            manifest = skills._new_manifest(catalog, source_fp, "pdf_review")
+            manifest.update({"run_id": "scan-edit", "status": "needs_review"})
+            (root / "skill_workflow_run.json").write_text(json.dumps(manifest), encoding="utf-8")
+            proposal_dir = root / "skill_workflow_runs" / "scan-edit" / "proposals"
+            proposal_dir.mkdir(parents=True)
+            page_value = {"page": 4, "status": "proposed", "rooms": [{"name": "Shop", "area_m2": 42.0}]}
+            (proposal_dir / "scanned_printed_areas.json").write_text(json.dumps({"subskill_id": "scanned_printed_areas",
+                "proposal_fields": {"pages": [page_value]}, "citations": [{"page": 4, "excerpt": "Shop"}]}), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "edit individual room areas"):
+                skills.post(web, project, {"action": "review_finding", "finding_id": "scanned_printed_areas:pages:0",
+                    "decision": "accepted", "value": {**page_value, "rooms": [{"name": "Shop", "area_m2": 43.0}]}})
+            self.assertFalse((root / "skill_review_decisions.json").exists())
 
     def test_room_geometry_skill_proposal_is_adapted_for_existing_resolver(self):
         from backend.calculation_extraction_service import _room_geometry_skill_proposals
@@ -80,6 +259,8 @@ class SkillWorkflowTests(unittest.TestCase):
                 "conflicts": [], "unresolved_fields": [], "alternatives": []}
             (proposal_dir / "room_boundaries_areas.json").write_text(json.dumps({"proposal_fields": {"geometry_candidates": [candidate]},
                 "citations": [{"page": 2, "excerpt": "Dining layout"}, {"page": 3, "excerpt": "Dimension plan"}]}), encoding="utf-8")
+            (root / "skill_review_decisions.json").write_text(json.dumps({"decisions": {
+                "room_boundaries_areas:geometry_candidates:0": {"status": "accepted", "value": candidate, "run_id": run_id}}}), encoding="utf-8")
 
             adapted = _room_geometry_skill_proposals(root)
 
@@ -174,7 +355,8 @@ class SkillWorkflowTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as folder:
                 project = self.project(folder)
                 web = Web()
-                started = skills.post(web, project, {"action": "start"})
+                with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+                    started = skills.post(web, project, {"action": "start", "scope": "all"})
                 self.assertIn(started["status"], {"queued", "running", "needs_review"})
                 deadline = time.time() + 30
                 while time.time() < deadline:
@@ -194,7 +376,8 @@ class SkillWorkflowTests(unittest.TestCase):
                     "ceiling_height_volume", "occupancy_seating", "lighting_evidence", "equipment_evidence", "schedule_evidence")))
                 self.assertEqual(manifest["preparation"]["status"], "completed")
                 self.assertNotIn(folder, json.dumps(state))
-                repeated = skills.post(web, project, {"action": "start"})
+                with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+                    repeated = skills.post(web, project, {"action": "start", "scope": "all"})
                 self.assertEqual(repeated["run_id"], state["run_id"])
                 (Path(folder) / "drawing_coverage.json").write_text(json.dumps({"pages": [{"page": 2}]}), encoding="utf-8")
                 self.assertEqual(skills.get(web, project)["status"], "stale")
@@ -221,7 +404,8 @@ class SkillWorkflowTests(unittest.TestCase):
             skills._execute_subskill = execute
             with tempfile.TemporaryDirectory() as folder:
                 project, web = self.project(folder), Web()
-                skills.post(web, project, {"action": "start"})
+                with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+                    skills.post(web, project, {"action": "start", "scope": "all"})
                 deadline = time.time() + 30
                 while time.time() < deadline:
                     state = skills.get(web, project)
@@ -267,7 +451,8 @@ class SkillWorkflowTests(unittest.TestCase):
             skills._execute_subskill = execute
             with tempfile.TemporaryDirectory() as folder:
                 project, web = self.project(folder), Web()
-                skills.post(web, project, {"action": "start"})
+                with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+                    skills.post(web, project, {"action": "start", "scope": "all"})
                 deadline = time.time() + 30
                 while time.time() < deadline:
                     state = skills.get(web, project)
@@ -300,7 +485,8 @@ class SkillWorkflowTests(unittest.TestCase):
                 old.update({"status": "running", "run_id": "orphaned-run"})
                 skills._write_manifest(paths["manifest"], old)
 
-                response = skills.post(web, project, {"action": "retry"})
+                with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+                    response = skills.post(web, project, {"action": "retry"})
 
                 self.assertNotEqual(response["run_id"], "orphaned-run")
                 self.assertFalse(response["deduplicated"])
@@ -339,6 +525,24 @@ class SkillWorkflowTests(unittest.TestCase):
             with patch.object(skills, "_consented_page_ids", return_value={1}):
                 selected = skills._relevant_consented_images(subskill, project)
             self.assertEqual([row["page"] for row in selected], [1])
+            self.assertEqual(selected[0]["path"], image.resolve())
+
+    def test_skill_images_are_rendered_from_analysed_pdf_without_separate_vision_run(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            image = root / "thumbnails" / "page_020.png"
+            image.parent.mkdir()
+            image.write_bytes(b"thumbnail")
+            (root / "ai_input.json").write_text(json.dumps({"drawing_set": {"pages": [
+                {"page": 20, "title": "Dimension Plan", "structured_content": {"word_count": 0}}]},
+                "source_files": {"page_images": [{"page": 20, "path": str(image), "title": "Dimension Plan"}]}}), encoding="utf-8")
+            (root / "drawing_coverage.json").write_text(json.dumps({"page_roles": [
+                {"page": 20, "proposed_role": "main_floor_plan", "geometry_eligible": True, "title": "Dimension Plan"}]}), encoding="utf-8")
+            project = {"id": "scan-image-test", "review_dir": str(root)}
+            subskill = {"id": "room_boundaries_areas", "task": "room boundaries", "inputs": ["floor plan"]}
+            with patch.object(skills, "_consented_page_ids", return_value={20}):
+                selected = skills._relevant_consented_images(subskill, project)
+            self.assertEqual([row["page"] for row in selected], [20])
             self.assertEqual(selected[0]["path"], image.resolve())
 
     def test_room_area_skill_prefers_ranked_dimension_plan_pages(self):
@@ -688,7 +892,8 @@ class SkillWorkflowTests(unittest.TestCase):
                 web = Web()
                 with self.assertRaisesRegex(ValueError, "scope"):
                     skills.post(web, project, {"action": "start", "scope": "everything"})
-                skills.post(web, project, {"action": "start", "scope": "rooms_only"})
+                with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+                    skills.post(web, project, {"action": "start", "scope": "rooms_only"})
                 deadline = time.time() + 30
                 while time.time() < deadline:
                     state = skills.get(web, project)
@@ -696,8 +901,9 @@ class SkillWorkflowTests(unittest.TestCase):
                         break
                     time.sleep(0.01)
                 manifest = json.loads((Path(folder) / "skill_workflow_run.json").read_text())
-                reused = skills.post(web, project, {"action": "start", "scope": "rooms_only"})
-                full_run = skills.post(web, project, {"action": "start", "scope": "all"})
+                with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+                    reused = skills.post(web, project, {"action": "start", "scope": "rooms_only"})
+                    full_run = skills.post(web, project, {"action": "start", "scope": "all"})
                 deadline = time.time() + 30
                 while time.time() < deadline:
                     if skills.get(web, project)["status"] in {"needs_review", "completed", "failed", "blocked"}:

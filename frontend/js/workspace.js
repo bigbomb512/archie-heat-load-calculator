@@ -40,7 +40,7 @@
   const state = {projectId: null, analysis: null, status: null, tab: "project", subtab: "", active: false, engineer: false,
                  include: new Map(), poll: null, busy: new Set(), message: "", pageReviewOpen: false, envelopeCtx: null,
                  wallsRoomId: "", wallsTraceId: "", windowsRoomId: "", windowsTraceId: "",
-                 projectDraft: null, envelopeDrafts: {}};
+                 projectDraft: null, envelopeDrafts: {}, skillReview: null, visionSettings: null};
 
   const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
   const kw = value => (value == null || !isFinite(value)) ? "—" : Number(value).toFixed(1);
@@ -290,12 +290,13 @@
     }
     let status = await loadStatus();
     if (!live(projectId, "drawings")) return;
-    if (!status.checks?.total) {
-      progress("Starting the drawing check", "Setting up the measurements and checks for your drawings.");
-      await sendJson("/api/autonomous-tasks", {project_id: projectId, action: "run_all"});
-      status = await loadStatus();
-      if (!live(projectId, "drawings")) return;
-    }
+    const [review, vision] = await Promise.all([
+      getJson(`/api/skill-workflow?project_id=${encodeURIComponent(projectId)}`),
+      getJson(`/api/vision-extraction?project_id=${encodeURIComponent(projectId)}`),
+    ]);
+    if (!live(projectId, "drawings")) return;
+    state.skillReview = review;
+    state.visionSettings = vision;
     const tasks = operatorMode() ? (await getJson(`/api/autonomous-tasks?project_id=${encodeURIComponent(projectId)}`)).tasks || [] : null;
     if (!live(projectId, "drawings")) return;
     const checks = status.checks || {total: 0, waiting: 0, blocked: 0};
@@ -308,19 +309,109 @@
         : "Drawing analysis is complete. Review any items marked To do or Review in Rooms, Walls & roof, and Windows.";
     body.innerHTML = `<div class="ws-card" data-ws-drawings>
       <h2>Drawing analysis</h2>
-      <p class="ws-hint">Toki selects likely plan pages and reads the information needed for this job. Check the room, wall and window tabs for details that need your review.</p>
+      <p class="ws-hint">PDF review searches the drawing set for heat-load evidence. You can review each proposed value with its page evidence before it is used.</p>
       <p data-ws-checks role="status">${esc(operatorMode() && pendingReview ? `${done} of ${checks.total} checks resolved. Answer the remaining Toki checks below.` : drawingMessage)}</p>
+      ${pdfReviewMarkup(review, vision)}
       ${pendingReview && !operatorMode() ? `<p class="ws-fine">You can continue with the information already available. The Toki team will resolve the remaining drawing checks.
         <button class="link-button" type="button" data-ws-operator-on>Open Toki team review</button></p>` : ""}
       ${tasks ? operatorMarkup(tasks) : ""}
+      ${!operatorMode() ? `<button class="link-button" type="button" data-ws-manual-fallback>Open manual P0–P6 fallback</button>` : ""}
       ${pagesMarkup()}
       ${nextButton("drawings")}</div>`;
     wireCommon();
     wirePages(projectId);
+    wirePdfReview(projectId, review, vision);
+    body.querySelector("[data-ws-manual-fallback]")?.addEventListener("click", async () => {
+      const button = body.querySelector("[data-ws-manual-fallback]");
+      button.disabled = true;
+      try {
+        await sendJson("/api/autonomous-tasks", {project_id: projectId, action: "run_all"});
+        setOperatorMode(true);
+        await renderDrawings();
+      } catch (error) { button.disabled = false; button.textContent = `Manual fallback unavailable: ${error.message}`; }
+    });
     body.querySelector("[data-ws-operator-on]")?.addEventListener("click", () => { setOperatorMode(true); renderDrawings().catch(showTabError); });
     if (tasks) wireOperator(projectId, tasks);
     // The contractor's view refreshes itself; the operator's doesn't, so a half-pasted reply is never wiped.
-    if (pendingReview && !operatorMode()) state.poll = setTimeout(() => { if (live(projectId, "drawings")) renderDrawings().catch(() => {}); }, POLL_MS);
+    if ((pendingReview && !operatorMode()) || ["queued", "running"].includes(review.status))
+      state.poll = setTimeout(() => { if (live(projectId, "drawings")) renderDrawings().catch(() => {}); }, 3000);
+  }
+
+  function formatFindingValue(value) {
+    if (value == null || value === "") return "No value identified";
+    if (typeof value === "object") return JSON.stringify(value, null, 2);
+    return String(value);
+  }
+
+  function pdfReviewMarkup(review, vision) {
+    const settings = vision.settings || {};
+    const selection = vision.selection || {};
+    const consented = !!settings.owner_opt_in;
+    const stages = (review.stages || []).map(stage => `<li><span>${esc(stage.label)}</span><b>${esc(stage.status.replaceAll("_", " "))}</b></li>`).join("");
+    const findings = (review.findings || []).map(row => {
+      const evidence = (row.citations || []).map(citation => `<li>Page ${esc(citation.page ?? "?")}${citation.excerpt ? `: ${esc(citation.excerpt)}` : ""}</li>`).join("");
+      const inference = (row.inferences || []).map(item => `<li>${esc(typeof item === "string" ? item : JSON.stringify(item))}</li>`).join("");
+      const alternatives = (row.alternatives || []).map(item => `<li>${esc(typeof item === "string" ? item : JSON.stringify(item))}</li>`).join("");
+      const pages = row.pages?.length ? `Page${row.pages.length === 1 ? "" : "s"} ${row.pages.map(esc).join(", ")}` : "Page citation missing";
+      const unresolved = row.unresolved_fields?.length ? `<p class="ws-fine">Still missing: ${esc(row.unresolved_fields.join(", "))}</p>` : "";
+      const reviewActions = row.status === "proposed" ? `<details><summary>Edit before accepting</summary><textarea data-ws-finding-edit aria-label="Edit proposed value">${esc(formatFindingValue(row.value))}</textarea></details>
+        <div class="ws-actions"><button class="btn key" type="button" data-ws-finding-accept="${esc(row.id)}">Accept value</button><button class="btn ghost" type="button" data-ws-finding-reject="${esc(row.id)}">Reject</button></div>` : `<p class="ws-fine">${esc(row.status)}${row.reviewer ? ` by ${esc(row.reviewer)}` : ""}${row.status === "accepted" ? (row.input_applied ? " · used in the calculation draft" : " · saved as reviewed evidence; not yet connected to a calculation input") : ""}</p>`;
+      return `<article class="ws-skill-finding" data-ws-finding="${esc(row.id)}"><div class="ws-skill-finding-head"><b>${esc(row.field.replaceAll("_", " "))}</b><span>${esc(row.subskill_id.replaceAll("_", " "))}</span></div>
+        <pre>${esc(formatFindingValue(row.value))}${row.units ? ` ${esc(row.units)}` : ""}</pre><p class="ws-fine">${esc(pages)}${row.confidence != null ? ` · confidence ${esc(row.confidence)}` : ""}</p>
+        ${row.formula ? `<p class="ws-fine">Method: ${esc(row.formula)}</p>` : ""}${evidence ? `<details><summary>Evidence excerpts</summary><ul>${evidence}</ul></details>` : ""}
+        ${inference ? `<details><summary>Inferences</summary><ul>${inference}</ul></details>` : ""}
+        ${alternatives ? `<details><summary>Conflicting readings</summary><ul>${alternatives}</ul></details>` : ""}${unresolved}${reviewActions}</article>`;
+    }).join("");
+    const retry = ["failed", "blocked", "stale", "needs_review"].includes(review.status) && consented
+      ? `<button class="btn ghost mini" type="button" data-ws-skill-retry>Retry PDF review</button>` : "";
+    return `<section class="ws-pdf-review" aria-label="PDF evidence review" data-ws-pdf-review><h3>PDF review</h3>
+      <p class="ws-fine">Searches room geometry, internal gains, envelope, glazing, airflow, HVAC and schedules. Findings remain proposals until you accept them.</p>
+      <label class="ws-check"><input type="checkbox" data-ws-pdf-consent ${consented ? "checked" : ""}> I approve sending the selected pages from this job to the configured AI provider for heat-load evidence review.</label>
+      <p class="ws-fine" data-ws-pdf-consent-scope>${selection.page_count ? `${selection.page_count} page${selection.page_count === 1 ? "" : "s"} across ${selection.group_count || 0} evidence groups are selected.` : "No eligible page groups are available yet. Analyse the PDF first."} <button class="link-button" type="button" data-ws-consent-settings>Review page-group settings</button></p>
+      ${review.blocked_reason ? `<p class="ws-banner is-warn" role="status">${esc(review.blocked_reason)}${vision.provider_configured === false && consented ? " The AI provider is not configured on this server." : ""}</p>` : ""}
+      <p class="ws-fine" role="status" data-ws-pdf-review-status>${esc(review.status.replaceAll("_", " "))}${review.remediation ? ` · ${esc(review.remediation)}` : ""}</p>
+      ${stages ? `<details><summary>Skill progress and coverage</summary><ul class="ws-list">${stages}</ul></details>` : ""}
+      ${findings ? `<div class="ws-skill-findings">${findings}</div>` : ""}${retry}</section>`;
+  }
+
+  function wirePdfReview(projectId, review, vision) {
+    body.querySelector("[data-ws-consent-settings]")?.addEventListener("click", () => {
+      leave();
+      const panel = document.getElementById("visionPanel");
+      panel?.classList.remove("hide");
+      panel?.scrollIntoView({behavior: "smooth", block: "start"});
+      panel?.querySelector("summary")?.click();
+    });
+    body.querySelector("[data-ws-pdf-consent]")?.addEventListener("change", async event => {
+      const checkbox = event.target, line = body.querySelector("[data-ws-pdf-review-status]");
+      checkbox.disabled = true; line.textContent = "Saving consent and starting PDF review…";
+      try {
+        const settings = vision.settings || {};
+        const response = await sendJson("/api/vision-extraction", {project_id: projectId, action: "save_settings",
+          settings: {owner_opt_in: checkbox.checked, selected_group_ids: settings.selected_group_ids || []}});
+        state.visionSettings = response; await renderDrawings();
+      } catch (error) { checkbox.checked = !checkbox.checked; checkbox.disabled = false; line.textContent = `Could not save consent: ${error.message}`; }
+    });
+    body.querySelector("[data-ws-skill-retry]")?.addEventListener("click", async event => {
+      event.target.disabled = true;
+      try { await sendJson("/api/skill-workflow", {project_id: projectId, action: "retry", scope: "pdf_review"}); await renderDrawings(); }
+      catch (error) { event.target.disabled = false; event.target.textContent = `Retry failed: ${error.message}`; }
+    });
+    body.querySelectorAll("[data-ws-finding-accept], [data-ws-finding-reject]").forEach(button => button.addEventListener("click", async () => {
+      const accept = button.hasAttribute("data-ws-finding-accept");
+      const findingId = accept ? button.dataset.wsFindingAccept : button.dataset.wsFindingReject;
+      let value;
+      if (accept) {
+        const text = button.closest("[data-ws-finding]").querySelector("[data-ws-finding-edit]")?.value;
+        if (text) { try { value = JSON.parse(text); } catch (_) { button.textContent = "Enter a valid JSON value"; return; } }
+      }
+      button.disabled = true;
+      try {
+        await sendJson("/api/skill-workflow", {project_id: projectId, action: "review_finding", finding_id: findingId,
+          decision: accept ? "accepted" : "rejected", ...(value === undefined ? {} : {value}), reviewer: userName() || "Operator"});
+        await renderDrawings();
+      } catch (error) { button.disabled = false; button.textContent = error.message; }
+    }));
   }
 
   // ------------------------------------------------------------------ Drawings: pages used

@@ -53,10 +53,16 @@ def _room_geometry_skill_proposals(root):
         return []
     proposal_path = root / "skill_workflow_runs" / str(run_id) / "proposals" / "room_boundaries_areas.json"
     proposal = _read(proposal_path)
+    review = _read(root / "skill_review_decisions.json", {})
+    decisions = review.get("decisions", {}) if isinstance(review, dict) else {}
     fields = proposal.get("proposal_fields", {}) if isinstance(proposal, dict) else {}
     rows = fields.get("geometry_candidates", []) if isinstance(fields, dict) else []
     result = []
-    for row in rows if isinstance(rows, list) else []:
+    for index, row in enumerate(rows if isinstance(rows, list) else []):
+        decision = decisions.get(f"room_boundaries_areas:geometry_candidates:{index}", {})
+        if decision.get("status") != "accepted" or decision.get("run_id") != run_id:
+            continue
+        row = decision.get("value", row)
         if not isinstance(row, dict):
             continue
         page = row.get("page")

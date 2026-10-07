@@ -13,11 +13,14 @@ import argparse
 from datetime import datetime
 import json
 from pathlib import Path
-
-from ai.autonomous_task_scoring import AUTO_APPLY_BAR, score_case, summarise
-
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from ai.autonomous_task_scoring import AUTO_APPLY_BAR, score_case, summarise  # noqa: E402
+
 ACCURACY_PATH = ROOT / "evaluations" / "autonomous" / "accuracy.json"
 
 
