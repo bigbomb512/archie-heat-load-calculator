@@ -847,6 +847,48 @@ def _validated_trace_openings(data, trace, paths, room, calibration_record):
     return result
 
 
+def _matched_trace_edges(previous, current, midpoint_tolerance_mm=300.0, direction_tolerance_deg=5.0):
+    """Return one-to-one new-index -> old-index matches for geometrically stable walls."""
+    previous_points = previous.get("points_image_px", [])
+    current_points = current.get("points_image_px", [])
+    mm_per_px = current.get("calibration", {}).get("mm_per_px")
+    if (not isinstance(mm_per_px, (int, float)) or not math.isfinite(mm_per_px)
+            or mm_per_px <= 0):
+        return {}
+
+    def segment(points, index):
+        first, second = points[index], points[index + 1]
+        dx, dy = second[0] - first[0], second[1] - first[1]
+        length = math.hypot(dx, dy)
+        if length <= 0:
+            return None
+        return ((first[0] + second[0]) / 2, (first[1] + second[1]) / 2, dx / length, dy / length)
+
+    old_segments = {index: segment(previous_points, index)
+                    for index in range(max(0, len(previous_points) - 1))}
+    new_segments = {index: segment(current_points, index)
+                    for index in range(max(0, len(current_points) - 1))}
+    candidates = []
+    cosine_limit = math.cos(math.radians(direction_tolerance_deg))
+    for new_index, new in new_segments.items():
+        if new is None:
+            continue
+        for old_index, old in old_segments.items():
+            if old is None:
+                continue
+            midpoint_mm = math.hypot(new[0] - old[0], new[1] - old[1]) * mm_per_px
+            direction_cosine = abs(new[2] * old[2] + new[3] * old[3])
+            if midpoint_mm <= midpoint_tolerance_mm and direction_cosine >= cosine_limit:
+                angle = math.degrees(math.acos(min(1.0, direction_cosine)))
+                candidates.append((midpoint_mm, angle, new_index, old_index))
+    matches, used_old = {}, set()
+    for _distance, _angle, new_index, old_index in sorted(candidates):
+        if new_index not in matches and old_index not in used_old:
+            matches[new_index] = old_index
+            used_old.add(old_index)
+    return matches
+
+
 def _sync_room_use(web, project, action, data, artifact):
     """Keep room-use in step: a new room gets the reviewer's chosen use."""
     from backend import room_use_resolution_service
@@ -868,6 +910,7 @@ def post(web, project, data, _validated_current_records=None, _defer_evidence_re
     action = str(data.get("action", ""))
     artifact = reviewer_room_geometry.validate_artifact(_read(paths["artifact"], reviewer_room_geometry.empty_artifact()))
     previous_fingerprint = artifact.get("fingerprint", "")
+    trace_save_update = None
     if action == "delete":
         trace_id = str(data.get("trace_id", ""))
         kept = [row for row in artifact["records"] if row.get("trace_id") != trace_id]
@@ -1014,6 +1057,18 @@ def post(web, project, data, _validated_current_records=None, _defer_evidence_re
         trace_for_openings = {**trace, **merged}
         openings = _validated_trace_openings(data, trace_for_openings, paths, room, calibration)
         trace.update(merged)
+        # A prior "no glazing" declaration is meaningful only while that edge
+        # remains an external or enclosed-mall boundary. Drop stale marks
+        # before artifact validation when an AI or reviewer reclassifies it.
+        valid_no_glazing = {row["index"] for row in trace.get("edges", [])
+                            if row.get("boundary") in {"external", "mall"}}
+        opening_edges = {row["edge_index"] for row in openings}
+        no_glazing = [index for index in trace.get("openings_none_edges", [])
+                      if index in valid_no_glazing and index not in opening_edges]
+        if no_glazing:
+            trace["openings_none_edges"] = no_glazing
+        else:
+            trace.pop("openings_none_edges", None)
         if isinstance(data.get("boundary_evidence"), list):
             trace["boundary_evidence"] = deepcopy(data["boundary_evidence"])
         trace["openings"] = openings
@@ -1083,8 +1138,72 @@ def post(web, project, data, _validated_current_records=None, _defer_evidence_re
                   "page": page_number, "points_image_px": points, "snapped_line_ids": snapped,
                   "calibration": calibration, "reviewer": str(data.get("reviewer", "")).strip(),
                   "note": str(data.get("note", "")).strip(), "status": "geometry_proposed",
+                  "edges": [{"index": index, "boundary": "unknown"} for index in range(len(points) - 1)],
                   "created_at": ai_preliminary.now(),
                   "source_fingerprints": {"source_pdf": current_pdf_fp, "vector_page": current_vector_fp}}
+        previous = next((row for row in artifact["records"] if row.get("trace_id") == record["trace_id"]), None)
+        kept_walls, dropped_openings, reset_edges = [], [], list(range(len(points) - 1))
+        if previous:
+            matches = _matched_trace_edges(previous, record)
+            previous_edges = {row["index"]: row["boundary"] for row in previous.get("edges", [])}
+            previous_sources = previous.get("edge_sources", {})
+            new_sources = {}
+            for new_index, old_index in matches.items():
+                boundary = previous_edges.get(old_index, "unknown")
+                if boundary != "unknown":
+                    record["edges"][new_index]["boundary"] = boundary
+                    source = previous_sources.get(str(old_index))
+                    if source:
+                        new_sources[str(new_index)] = source
+                    kept_walls.append({"edge_index": new_index, "previous_edge_index": old_index,
+                                       "boundary": boundary})
+            if new_sources:
+                record["edge_sources"] = new_sources
+            reset_edges = [index for index in range(len(points) - 1) if index not in matches]
+
+            previous_openings = previous.get("openings", [])
+            carried_openings = []
+            for opening in previous_openings:
+                old_index = opening.get("edge_index")
+                new_index = next((index for index, old in matches.items() if old == old_index), None)
+                if new_index is None:
+                    dropped_openings.append({"opening_id": opening.get("opening_id", ""),
+                                             "reason": "The wall did not match the redrawn trace."})
+                    continue
+                candidate = {**opening, "edge_index": new_index}
+                try:
+                    carried_openings = _validated_trace_openings(
+                        {"openings": [*carried_openings, candidate]}, record, paths, room, calibration)
+                except ValueError as error:
+                    dropped_openings.append({"opening_id": opening.get("opening_id", ""),
+                                             "reason": str(error)})
+            record["openings"] = carried_openings
+
+            previous_none = set(previous.get("openings_none_edges", []))
+            carried_none = [new_index for new_index, old_index in matches.items()
+                            if old_index in previous_none
+                            and record["edges"][new_index]["boundary"] in {"external", "mall"}
+                            and all(row["edge_index"] != new_index for row in carried_openings)]
+            if carried_none:
+                record["openings_none_edges"] = sorted(carried_none)
+
+            old_evidence = {row.get("index"): row for row in previous.get("boundary_evidence", [])
+                            if isinstance(row, dict)}
+            carried_evidence = [{**deepcopy(old_evidence[old_index]), "index": new_index}
+                                for new_index, old_index in matches.items() if old_index in old_evidence]
+            if carried_evidence:
+                record["boundary_evidence"] = carried_evidence
+
+            for key in ("roof", "roof_source", "envelope_reviewer", "envelope_declared_at",
+                        "envelope_declaration_source", "envelope_ai_run_id"):
+                if key in previous:
+                    record[key] = deepcopy(previous[key])
+            trace_save_update = {
+                "kept_walls": kept_walls,
+                "reset_edge_indices": reset_edges,
+                "roof_kept": previous.get("roof", "unknown") != "unknown",
+                "dropped_openings": dropped_openings,
+            }
         if page_context.get("fallback_plan"):
             # Traced over a services plan because the set has no architectural
             # plan; keep that visible wherever the trace is used.
@@ -1117,4 +1236,6 @@ def post(web, project, data, _validated_current_records=None, _defer_evidence_re
     result = _response(web, project)
     result["calculation_input_evidence"] = evidence_result.get("calculation_input_evidence", {})
     result["geometry_resolution"] = evidence_result.get("geometry_resolution", {})
+    if action == "save" and trace_save_update is not None:
+        result["trace_save_update"] = trace_save_update
     return result

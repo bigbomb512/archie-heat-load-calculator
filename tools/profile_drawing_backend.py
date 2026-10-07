@@ -7,17 +7,21 @@ Examples:
   PYTHONPATH=. python3 tools/profile_drawing_backend.py p0-apply --project-id PROJECT_ID \
       --task P0_dimensions --target page-1-dimension-1 --reply-file reply.json
 
-Saved projects are copied to a temporary review directory before task operations,
-so profiling never applies a reply to the user's project.
+Saved projects are copied to a temporary review directory before task
+operations, so profiling never applies a reply to the user's project. Copies
+are removed after the run unless --keep-copy is given.
 """
 
 import argparse
 from contextlib import nullcontext
+from datetime import datetime, timezone
+import hashlib
 import json
 import shutil
 import sys
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from unittest.mock import patch
 try:
@@ -26,6 +30,7 @@ except ImportError:  # pragma: no cover - not available on Windows
     resource = None
 
 ROOT = Path(__file__).resolve().parents[1]
+COPY_MARKER = ".archie-profile-copy.json"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -53,11 +58,37 @@ def _clone_project(project, temporary_root):
     return cloned
 
 
-def _profile(operation, cache_root=None):
-    cache_scope = page_analysis_cache.operation(cache_root) if cache_root else nullcontext(None)
+def _write_copy_marker(profile_copy, project_id):
+    marker = {"project_id": project_id, "created_at": datetime.now(timezone.utc).isoformat()}
+    (Path(profile_copy) / COPY_MARKER).write_text(json.dumps(marker, indent=2) + "\n", encoding="utf-8")
+
+
+def _copy_marker(project_copy, project_id=None, require_review=True):
+    project_copy = Path(project_copy)
+    try:
+        marker = json.loads((project_copy / COPY_MARKER).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if (not isinstance(marker, dict) or not isinstance(marker.get("project_id"), str)
+            or not marker.get("project_id") or not isinstance(marker.get("created_at"), str)
+            or (require_review and not (project_copy / "review").is_dir())
+            or (project_id is not None and marker["project_id"] != project_id)):
+        return None
+    return marker
+
+
+def _remove_owned_copy(project_copy, project_id):
+    if _copy_marker(project_copy, project_id=project_id, require_review=False) is None:
+        raise ValueError(f"Refusing to remove an unmarked or unrelated profile copy: {project_copy}")
+    shutil.rmtree(project_copy)
+
+
+def _profile(operation, cache_root=None, code_fingerprint=None):
+    cache_scope = (page_analysis_cache.operation(cache_root, code_fingerprint=code_fingerprint)
+                   if cache_root else nullcontext(None))
+    wall_start, cpu_start = time.perf_counter(), time.process_time()
+    child_start = resource.getrusage(resource.RUSAGE_CHILDREN) if resource else None
     with cache_scope as cache:
-        wall_start, cpu_start = time.perf_counter(), time.process_time()
-        child_start = resource.getrusage(resource.RUSAGE_CHILDREN) if resource else None
         result = operation()
         wall_seconds = time.perf_counter() - wall_start
         cpu_seconds = time.process_time() - cpu_start
@@ -126,7 +157,12 @@ def main(argv=None):
     for phase in ("run-all", "p0-apply"):
         command = subparsers.add_parser(phase)
         command.add_argument("--project-id", required=True)
-        command.add_argument("--cold-cache", action="store_true", help="Remove the cloned page-analysis cache before profiling.")
+        command.add_argument("--cold-cache", action="store_true",
+                             help="Use a fresh isolated project copy and an empty page-analysis cache.")
+        command.add_argument("--keep-copy", action="store_true",
+                             help="Keep the isolated copy after profiling and print its path and size.")
+        command.add_argument("--copy-path", type=Path,
+                             help="Reuse a copy previously printed by --keep-copy.")
         command.add_argument("--uncached-page-analysis", action="store_true",
                              help="Bypass the page cache for a baseline comparison (task phases only).")
         if phase == "p0-apply":
@@ -152,12 +188,53 @@ def main(argv=None):
         original_root = Path(project.get("review_dir", ""))
         if not original_root.is_dir():
             parser.error("The selected project has no existing review directory.")
-        with tempfile.TemporaryDirectory(prefix=f"archie-profile-{args.phase}-", ignore_cleanup_errors=True) as temporary:
-            clone = _clone_project(project, temporary)
-            cache_dir = Path(clone["review_dir"]) / "page_analysis_cache"
-            if args.cold_cache and cache_dir.exists():
-                shutil.rmtree(cache_dir)
+        copy_key = hashlib.sha256(f"{args.phase}:{args.project_id}".encode("utf-8")).hexdigest()[:20]
+        default_copy = Path(tempfile.gettempdir()) / f"archie-profile-copy-{copy_key}"
+        if args.copy_path and args.cold_cache:
+            parser.error("--copy-path cannot be combined with --cold-cache; cold-cache always creates a fresh copy.")
+        if args.copy_path:
+            profile_copy = args.copy_path.expanduser().resolve()
+            if _copy_marker(profile_copy, project_id=args.project_id) is None:
+                parser.error(f"--copy-path must be a marked profile copy for project {args.project_id} with a review/ folder: {profile_copy}")
+        elif args.cold_cache and args.keep_copy:
+            profile_copy = default_copy
+        elif args.keep_copy:
+            profile_copy = default_copy
+        else:
+            profile_copy = None
+        if (args.keep_copy and not args.copy_path and profile_copy.exists()
+                and _copy_marker(profile_copy, project_id=args.project_id) is None):
+            # Never write into a coincidentally named, unmarked directory.
+            profile_copy = Path(tempfile.gettempdir()) / f"archie-profile-copy-{copy_key}-{uuid.uuid4().hex[:8]}"
+
+        temporary_copy = None
+        if profile_copy is None:
+            temporary_copy = tempfile.TemporaryDirectory(prefix="archie-profile-copy-", ignore_cleanup_errors=True)
+            profile_copy = Path(temporary_copy.name)
+            _write_copy_marker(profile_copy, args.project_id)
+        try:
+            review_copy = profile_copy / "review"
+            if args.cold_cache or not review_copy.is_dir():
+                if profile_copy.exists():
+                    if _copy_marker(profile_copy, project_id=args.project_id, require_review=False) is None:
+                        if args.copy_path:
+                            parser.error(f"Refusing to replace the --copy-path directory: {profile_copy}")
+                        # A deterministic keep-copy path may already belong to
+                        # the user. Leave it untouched and create elsewhere.
+                        if args.keep_copy:
+                            profile_copy = Path(tempfile.gettempdir()) / f"archie-profile-copy-{copy_key}-{uuid.uuid4().hex[:8]}"
+                        else:
+                            parser.error(f"Refusing to replace an unmarked profile copy: {profile_copy}")
+                    else:
+                        _remove_owned_copy(profile_copy, args.project_id)
+                profile_copy.mkdir(parents=True, exist_ok=True)
+                _write_copy_marker(profile_copy, args.project_id)
+                clone = _clone_project(project, profile_copy)
+            else:
+                clone = dict(project)
+                clone["review_dir"] = str(review_copy)
             isolated_web = _IsolatedWeb()
+            code_fingerprint = autonomous_tasks_service._page_analysis_code_fingerprint()
             if args.phase == "run-all":
                 action = lambda: autonomous_tasks_service.run_all(isolated_web, clone)
             else:
@@ -168,10 +245,16 @@ def main(argv=None):
                 action = lambda: autonomous_tasks_service.post(isolated_web, clone, data)
             if args.uncached_page_analysis:
                 with patch.object(page_analysis_cache, "get_context",
-                                  side_effect=lambda _root, _page, builder: builder()):
-                    report = _profile(action, clone["review_dir"])
+                                  side_effect=lambda _root, _page, builder, **_: builder()):
+                    report = _profile(action, clone["review_dir"], code_fingerprint=code_fingerprint)
             else:
-                report = _profile(action, clone["review_dir"])
+                report = _profile(action, clone["review_dir"], code_fingerprint=code_fingerprint)
+            if args.keep_copy or args.copy_path:
+                size_bytes = sum(path.stat().st_size for path in profile_copy.rglob("*") if path.is_file())
+                report["profile_copy"] = {"path": str(profile_copy), "size_bytes": size_bytes}
+        finally:
+            if temporary_copy is not None:
+                temporary_copy.cleanup()
 
     report["result"] = _json_summary(report.get("result"))
     print(json.dumps(report, indent=2, sort_keys=True))

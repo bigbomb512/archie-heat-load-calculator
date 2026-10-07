@@ -377,6 +377,74 @@ class ReviewerRoomGeometryTests(unittest.TestCase):
             self.assertEqual(saved["records"][0]["openings"][0]["opening_id"], "front-window")
             self.assertEqual(saved["rooms"], [reviewer_room])
 
+    def test_classifying_no_glazing_wall_as_internal_drops_no_glazing_mark(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            vector_page = {"page": 1, "unchanged": True}
+            trace = {**self.trace,
+                     "source_fingerprints": {"source_pdf": "pdf-a", "vector_page": fingerprint(vector_page)},
+                     "edges": [{"index": 0, "boundary": "external"},
+                               *[{"index": index, "boundary": "unknown"} for index in range(1, 4)]],
+                     "edge_sources": {"0": "ai_determined"}, "openings_none_edges": [0],
+                     "envelope_reviewer": "QA", "envelope_declared_at": "now"}
+            (root / "ai_input.json").write_text(json.dumps({"source_pdf_fingerprint": "pdf-a"}), encoding="utf-8")
+            (root / "vector_geometry.json").write_text(json.dumps({"geometry_key_points": {"pages": [vector_page]}}), encoding="utf-8")
+            (root / "building_evidence.json").write_text(json.dumps({"spaces": [
+                {"id": "room-shop", "name": "Shop", "level_name": "Ground", "evidence": [{"page": 1}]},
+            ]}), encoding="utf-8")
+            path = root / "reviewer_room_geometry.json"
+            path.write_text(json.dumps(reviewer_room_geometry.validate_artifact({"records": [trace]})), encoding="utf-8")
+            project = {"id": "no-glazing-classification", "review_dir": str(root)}
+            web = SimpleNamespace(safe_link=lambda _path: "", update_project=lambda _project: None)
+            with patch.object(reviewer_room_geometry_service, "_response", return_value={"ok": True}), \
+                    patch("backend.calculation_extraction_service.post", return_value={}), \
+                    patch("backend.productization.record_change_if_fingerprint_changed"):
+                reviewer_room_geometry_service.post(web, project, {
+                    "action": "classify_envelope", "trace_id": trace["trace_id"],
+                    "edges": [{"index": 0, "boundary": "internal"}], "roof": "unknown",
+                    "reviewer": "Archie AI (P3)", "declaration_source": "ai_determined", "ai_run_id": "run-p3",
+                    "openings": [],
+                })
+            saved = json.loads(path.read_text(encoding="utf-8"))["records"][0]
+            self.assertEqual(saved["edges"][0]["boundary"], "internal")
+            self.assertNotIn("openings_none_edges", saved)
+
+    def test_p3_apply_drops_no_glazing_mark_when_ai_classifies_wall_internal(self):
+        from backend import autonomous_tasks_service
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            vector_page = {"page": 1, "unchanged": True}
+            trace = {**self.trace,
+                     "source_fingerprints": {"source_pdf": "pdf-a", "vector_page": fingerprint(vector_page)},
+                     "edges": [{"index": 0, "boundary": "external"},
+                               *[{"index": index, "boundary": "unknown"} for index in range(1, 4)]],
+                     "edge_sources": {"0": "ai_determined"}, "openings_none_edges": [0],
+                     "envelope_reviewer": "QA", "envelope_declared_at": "now"}
+            artifact_path = root / "reviewer_room_geometry.json"
+            artifact_path.write_text(json.dumps(reviewer_room_geometry.validate_artifact({"records": [trace]})), encoding="utf-8")
+            (root / "ai_input.json").write_text(json.dumps({"source_pdf_fingerprint": "pdf-a"}), encoding="utf-8")
+            (root / "vector_geometry.json").write_text(json.dumps({"geometry_key_points": {"pages": [vector_page]}}), encoding="utf-8")
+            (root / "building_evidence.json").write_text(json.dumps({"spaces": [
+                {"id": "room-shop", "name": "Shop", "level_name": "Ground", "evidence": [{"page": 1}]},
+            ]}), encoding="utf-8")
+            packet = {"trace_ids": [trace["trace_id"]], "room_edges": [
+                {"trace_id": trace["trace_id"], "edge_index": index,
+                 "perimeter_run_index": 0 if index == 0 else None, "length_m": 4.0}
+                for index in range(4)], "storefront_run_index": None, "nearby_text": ""}
+            task = {"packet": packet, "run_id": "run-p3", "accuracy": {"auto_apply": True}}
+            project = {"id": "p3-no-glazing", "review_dir": str(root)}
+            web = SimpleNamespace(update_project=lambda _project: None)
+            with patch.object(autonomous_tasks_service, "_current_traces", return_value={trace["trace_id"]: trace}), \
+                    patch("backend.calculation_extraction_service.post", return_value={}), \
+                    patch("backend.productization.record_change_if_fingerprint_changed"), \
+                    patch.object(reviewer_room_geometry_service, "_response", return_value={"ok": True}):
+                autonomous_tasks_service._apply_p3(web, project, root, task, {
+                    "edges": [{"index": 0, "boundary": "internal", "evidence": "internal wall"}],
+                })
+            saved = json.loads(artifact_path.read_text(encoding="utf-8"))["records"][0]
+            self.assertEqual(saved["edges"][0]["boundary"], "internal")
+            self.assertNotIn("openings_none_edges", saved)
+
     def test_declare_north_action_persists_page_bearing_reviewer_and_time(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -444,7 +512,9 @@ class ReviewerRoomGeometryTests(unittest.TestCase):
                                                                                          "preview_matches_vector_coordinates": False}]):
                 with self.assertRaisesRegex(ValueError, "matching full-resolution plan image"):
                     reviewer_room_geometry_service.post(web, project, payload)
-            with patch.object(reviewer_room_geometry_service, "_page_context", return_value=[page_context]):
+            with patch.object(reviewer_room_geometry_service, "_page_context", return_value=[page_context]), \
+                    patch("ai.ceiling_volume_resolution.values_by_room",
+                          return_value={"room-shop": {"ceiling_height_mm": 3750}}):
                 saved = reviewer_room_geometry_service.post(web, project, payload)
                 candidates = saved["calculation_input_evidence"]["candidates"]
                 area = next(row for row in candidates if row["target"] == "room.Shop.area_m2")
@@ -453,6 +523,47 @@ class ReviewerRoomGeometryTests(unittest.TestCase):
                 proof = next(row for row in saved["geometry_resolution"]["entities"] if row["kind"] == "room_geometry_proof")
                 self.assertEqual(proof["value"]["calibration"]["status"], "agreed")
                 self.assertEqual(proof["value"]["source_fingerprints"], {"source_pdf": "pdf-fixture", "vector_page": reviewer_room_geometry_service._page_fp(vector_page)})
+                artifact_path = root / "reviewer_room_geometry.json"
+                artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+                artifact["records"][0].update({
+                    "edges": [{"index": 0, "boundary": "external"}, {"index": 1, "boundary": "adjacent_tenancy"},
+                              {"index": 2, "boundary": "mall"}, {"index": 3, "boundary": "unknown"}],
+                    "edge_sources": {"0": "reviewer", "1": "reviewer", "2": "reviewer"}, "openings_none_edges": [2],
+                    "openings": [{"opening_id": "front-window", "edge_index": 0,
+                                  "width_m": 1.5, "head_height_m": 2.0, "sill_height_m": 0.9,
+                                  "elevation_page": 26, "glazing_choice": "retail",
+                                  "shading_category": "unshaded"}],
+                    "roof": "exposed", "roof_source": "reviewer",
+                    "envelope_reviewer": "QA-1", "envelope_declared_at": "now",
+                })
+                artifact_path.write_text(json.dumps(reviewer_room_geometry.validate_artifact(artifact)), encoding="utf-8")
+                rotated_payload = {**payload, "points_image_px": [[300, 100], [300, 300], [100, 300],
+                                                                    [100, 100], [300, 100]]}
+                rotated = reviewer_room_geometry_service.post(web, project, rotated_payload)
+                rotated_record = json.loads(artifact_path.read_text(encoding="utf-8"))["records"][0]
+                self.assertEqual(rotated_record["edges"][3]["boundary"], "external")
+                self.assertEqual(rotated_record["edges"][1]["boundary"], "mall")
+                self.assertEqual(rotated_record["edges"][0]["boundary"], "adjacent_tenancy")
+                self.assertEqual(rotated_record["openings"][0]["edge_index"], 3)
+                self.assertEqual(rotated_record["openings_none_edges"], [1])
+                self.assertEqual(rotated_record["roof"], "exposed")
+                self.assertEqual(rotated_record["roof_source"], "reviewer")
+                self.assertEqual(sorted(rotated["trace_save_update"]["kept_walls"], key=lambda row: row["edge_index"]), [
+                    {"edge_index": 0, "previous_edge_index": 1, "boundary": "adjacent_tenancy"},
+                    {"edge_index": 1, "previous_edge_index": 2, "boundary": "mall"},
+                    {"edge_index": 3, "previous_edge_index": 0, "boundary": "external"},
+                ])
+
+                shortened_payload = {**payload, "points_image_px": [[100, 100], [240, 100], [240, 300],
+                                                                       [100, 300], [100, 100]]}
+                shortened = reviewer_room_geometry_service.post(web, project, shortened_payload)
+                shortened_record = json.loads(artifact_path.read_text(encoding="utf-8"))["records"][0]
+                self.assertEqual(shortened_record["roof"], "exposed")
+                self.assertEqual(shortened_record["edges"][0]["boundary"], "external")
+                self.assertEqual(shortened_record["edges"][1]["boundary"], "unknown")
+                self.assertEqual(shortened_record["openings"], [])
+                self.assertEqual(shortened["trace_save_update"]["dropped_openings"][0]["opening_id"], "front-window")
+                self.assertIn("cannot exceed", shortened["trace_save_update"]["dropped_openings"][0]["reason"])
                 deleted = reviewer_room_geometry_service.post(web, project, {"action": "delete", "trace_id": "room_trace_" + reviewer_room_geometry_service.fingerprint(["room-shop", 1])[:20]})
                 self.assertFalse(any(row.get("target") == "room.Shop.area_m2" for row in deleted["calculation_input_evidence"]["candidates"]))
                 self.assertFalse(any(row.get("kind") == "room_geometry_proof" for row in deleted["geometry_resolution"]["entities"]))

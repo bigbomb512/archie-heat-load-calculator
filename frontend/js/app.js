@@ -3607,12 +3607,19 @@ async function removeReviewerAddedRoom(){
 async function saveReviewerRoomGeometryTrace(){
   const s=ROOM_TRACE_STATE,ctx=ROOM_GEOMETRY_CONTEXT,page=ctx.pages.find(row=>row.page===s.page),secondPoints=s.secondDimensionPoints||[];
   const previous=ctx.reviewer_room_geometry.records.find(row=>row.room_id===s.roomId&&row.page===s.page);
-  const resetEnvelope=!!previous&&(previous.roof!=="unknown"||(previous.edges||[]).some(edge=>edge.boundary!=="unknown")||(previous.openings||[]).length>0);
+  const resetEnvelope=!!previous&&(previous.roof!=="unknown"||(previous.edges||[]).some(edge=>edge.boundary!=="unknown")||(previous.openings||[]).length>0||(previous.openings_none_edges||[]).length>0);
   try{
     const response=await fetch("/api/reviewer-room-geometry",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"save",project_id:DATA.id,room_id:s.roomId,page:s.page,points_image_px:s.points,snapped_line_ids:s.snapped,dimension_points_image_px:s.dimensionPoints.length? s.dimensionPoints:(previous?.calibration?.dimension_points_image_px||[]),dimension_value_mm:Number(s.dimensionMm)||Number(previous?.calibration?.dimension_value_mm),second_dimension_points_image_px:secondPoints,second_dimension_value_mm:Number(s.secondDimensionMm)||null,reviewer:s.reviewer,note:s.note,source_pdf_fingerprint:ctx.source_pdf_fingerprint,vector_page_fingerprint:s.snap?.vector_page_fingerprint})});
     const data=await response.json();if(!response.ok||data.error)throw new Error(data.error||"Could not save trace.");
     ROOM_GEOMETRY_CONTEXT={...ctx,...data};s.points=[];s.snapped=[];s.dimensionPoints=[];s.dimensionMm="";s.envelopeOpenings=[];s.envelopeEdges=null;s.envelopeRoof="unknown";
-    s.envelopeResetNotice=resetEnvelope?"Re-saving this trace reset its prior wall, roof, and opening declarations. Classify the new trace before resolving the draft.":"";
+    if(resetEnvelope){
+      const update=data.trace_save_update||{},kept=update.kept_walls||[],reset=update.reset_edge_indices||[],dropped=update.dropped_openings||[];
+      const keptText=kept.length?`Kept wall classification${kept.length===1?"":"s"} on ${kept.map(row=>`run ${row.edge_index+1} (${row.boundary})`).join(", ")}.`:"No previous wall classifications matched the redrawn trace.";
+      const resetText=reset.length?` Reset unmatched wall run${reset.length===1?"":"s"} ${reset.map(index=>index+1).join(", ")}.`:"";
+      const roofText=update.roof_kept?" Kept the roof classification.":"";
+      const openingText=dropped.length?` Dropped opening${dropped.length===1?"":"s"}: ${dropped.map(row=>`${row.opening_id||"unnamed"} (${row.reason})`).join("; ")}.`:"";
+      s.envelopeResetNotice=`Re-saving this trace: ${keptText}${resetText}${roofText}${openingText}`;
+    }else s.envelopeResetNotice="";
     renderReviewerRoomGeometryWorkspace();
     await loadCalculationInputEvidence();toast("Room trace saved","The geometry proof remains proposed pending separate review.");
   }catch(error){showReviewerGeometryError(error.message);}

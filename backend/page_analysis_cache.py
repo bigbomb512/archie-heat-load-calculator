@@ -15,6 +15,9 @@ import shutil
 import tempfile
 import threading
 
+# Changes to ai/room_outline.py, ai/dimension_wall_matcher.py, or
+# _build_p0_context refresh generations automatically through their source hash.
+# Bump CACHE_VERSION only when the on-disk cache format changes.
 CACHE_VERSION = 1
 RENDER_VERSION = "pdfplumber-page-to-image-72x-scale-v1"
 
@@ -76,8 +79,9 @@ def _source_pdf(root):
 
 
 class PageAnalysisCache:
-    def __init__(self, root):
+    def __init__(self, root, code_fingerprint=None):
         self.root = Path(root)
+        self.code_fingerprint = code_fingerprint or ""
         self.source_pdf = _source_pdf(self.root)
         self.stats = {"cache_hits": {}, "cache_misses": {}, "pdf_page_opens": {},
                       "page_object_extractions": {}, "page_renders": {}}
@@ -89,6 +93,7 @@ class PageAnalysisCache:
             return
 
         dependencies = {"version": CACHE_VERSION, "renderer": RENDER_VERSION,
+                        "code_fingerprint": code_fingerprint or "",
                         "source_pdf": _digest_file(self.source_pdf)}
         for name in ("ai_input.json", "spatial_ocr.json", "vector_geometry.json"):
             path = self.root / name
@@ -158,15 +163,17 @@ class PageAnalysisCache:
 
 
 @contextmanager
-def operation(root):
+def operation(root, code_fingerprint=None):
     """Share one cache session across a backend operation, with one-page RAM reuse."""
     active = _ACTIVE.get()
     if active is not None and active.root.resolve() == Path(root).resolve():
+        if code_fingerprint is not None and active.code_fingerprint != code_fingerprint:
+            raise ValueError("Nested page-analysis cache operation has a different code fingerprint.")
         yield active
         return
     lock = _project_lock(root)
     with lock:
-        cache = PageAnalysisCache(root)
+        cache = PageAnalysisCache(root, code_fingerprint=code_fingerprint)
         token = _ACTIVE.set(cache)
         try:
             yield cache
@@ -174,11 +181,12 @@ def operation(root):
             _ACTIVE.reset(token)
 
 
-def get_context(root, page, builder):
+def get_context(root, page, builder, code_fingerprint=None):
     """Return a cached page context, opening an implicit one-page operation if needed."""
     active = _ACTIVE.get()
     if active is not None and active.root.resolve() == Path(root).resolve():
+        if code_fingerprint is not None and active.code_fingerprint != code_fingerprint:
+            raise ValueError("Page context code fingerprint does not match its cache operation.")
         return active.get(page, builder)
-    with operation(root) as cache:
+    with operation(root, code_fingerprint=code_fingerprint) as cache:
         return cache.get(page, builder)
-

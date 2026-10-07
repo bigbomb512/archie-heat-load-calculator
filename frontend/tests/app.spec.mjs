@@ -1236,7 +1236,7 @@ test("internal-room shortcut classifies every edge and roof, and classification 
   await expect(workspace.locator("[data-geometry-error]")).toHaveText("Envelope can only be classified on a calibrated room trace.");
 });
 
-test("re-saving a classified trace warns that its envelope declarations reset", async ({page})=>{
+test("re-saving a classified trace reports which wall declarations were kept", async ({page})=>{
   const edges=Array.from({length:4},(_,index)=>({index,boundary:"internal"}));
   const {context,trace}=envelopeTraceContext({edges,roof:"not_exposed"});
   await page.route("**/api/reviewer-room-geometry?project_id=demo-project",route=>route.fulfill({json:context}));
@@ -1249,10 +1249,14 @@ test("re-saving a classified trace warns that its envelope declarations reset", 
     const body=route.request().postDataJSON();
     const reset={...trace,points_image_px:body.points_image_px,edges:Array.from({length:4},(_,index)=>({index,boundary:"unknown"})),roof:"unknown"};
     context.reviewer_room_geometry.records=[reset];
-    return route.fulfill({json:context});
+    return route.fulfill({json:{...context,trace_save_update:{
+      kept_walls:[{edge_index:2,previous_edge_index:0,boundary:"external"}],reset_edge_indices:[0,1,3],roof_kept:true,dropped_openings:[]
+    }}});
   });
   await workspace.locator("[data-geometry-save]").click();
-  await expect(workspace.locator("[data-envelope-reset]")).toContainText("Re-saving this trace reset its prior wall, roof, and opening declarations");
+  await expect(workspace.locator("[data-envelope-reset]")).toContainText("Kept wall classification on run 3 (external)");
+  await expect(workspace.locator("[data-envelope-reset]")).toContainText("Reset unmatched wall runs 1, 2, 4");
+  await expect(workspace.locator("[data-envelope-reset]")).toContainText("Kept the roof classification");
 });
 
 test("analysis reaches results without browser errors", async ({ page }) => {

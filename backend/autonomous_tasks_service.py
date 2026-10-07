@@ -2,10 +2,12 @@
 
 from copy import deepcopy
 from datetime import datetime, timezone
+import inspect
 import hashlib
 import json
 import math
 import re
+from functools import lru_cache
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib.parse import quote
@@ -419,7 +421,24 @@ def _p6_kitchen_packets(root):
 
 def _p0_context(root, page_number):
     """Load the same page/vector context used by the standalone P0 tool."""
-    return page_analysis_cache.get_context(root, page_number, lambda: _build_p0_context(root, page_number))
+    return page_analysis_cache.get_context(root, page_number, lambda: _build_p0_context(root, page_number),
+                                           code_fingerprint=_page_analysis_code_fingerprint())
+
+
+@lru_cache(maxsize=1)
+def _page_analysis_code_fingerprint():
+    """Fingerprint code that shapes cached page contexts, once per process."""
+    source_root = Path(__file__).resolve().parents[1]
+    digest = hashlib.sha256()
+    for relative_path in ("ai/room_outline.py", "ai/dimension_wall_matcher.py"):
+        digest.update(relative_path.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update((source_root / relative_path).read_text(encoding="utf-8").encode("utf-8"))
+        digest.update(b"\0")
+    builder_source = inspect.getsource(_build_p0_context)
+    digest.update(b"backend.autonomous_tasks_service._build_p0_context\0")
+    digest.update(builder_source.encode("utf-8"))
+    return digest.hexdigest()
 
 
 def _build_p0_context(root, page_number):
@@ -1848,7 +1867,7 @@ def _task_progress(root):
 
 def run_all(web, project):
     root = _root(project)
-    with page_analysis_cache.operation(root):
+    with page_analysis_cache.operation(root, code_fingerprint=_page_analysis_code_fingerprint()):
         return _run_all(web, project, root)
 
 
@@ -2230,7 +2249,7 @@ def _answer_roof(web, project, root, data):
 
 
 def post(web, project, data):
-    with page_analysis_cache.operation(_root(project)):
+    with page_analysis_cache.operation(_root(project), code_fingerprint=_page_analysis_code_fingerprint()):
         return _post(web, project, data)
 
 

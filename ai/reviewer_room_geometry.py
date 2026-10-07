@@ -201,6 +201,22 @@ def validate_artifact(raw):
             if opening["opening_id"] in opening_ids or type(opening.get("edge_index")) is not int or not 0 <= opening["edge_index"] < edge_count:
                 raise ValueError("Trace opening IDs and edge references must be unique and valid.")
             opening_ids.add(opening["opening_id"])
+        openings_none_edges = checked.get("openings_none_edges", [])
+        if not isinstance(openings_none_edges, list):
+            raise ValueError("Edges with no glazing must be a list.")
+        if (any(type(index) is not int or not 0 <= index < edge_count for index in openings_none_edges)
+                or len(set(openings_none_edges)) != len(openings_none_edges)):
+            raise ValueError("Edges with no glazing must contain unique valid edge indices.")
+        if openings_none_edges:
+            edge_values = {edge["index"]: edge["boundary"] for edge in checked["edges"]}
+            opening_edges = {opening["edge_index"] for opening in openings}
+            if any(edge_values.get(index) not in {"external", "mall"} for index in openings_none_edges):
+                raise ValueError("No-glazing decisions can only be recorded on external or mall walls.")
+            if set(openings_none_edges) & opening_edges:
+                raise ValueError("A wall cannot have both a window and a no-glazing decision.")
+            checked["openings_none_edges"] = sorted(openings_none_edges)
+        else:
+            checked.pop("openings_none_edges", None)
         records.append(checked)
     page_north = raw.get("page_north", {})
     if not isinstance(page_north, dict):
@@ -259,6 +275,8 @@ def validate_artifact(raw):
             record.pop("roof_source", None)
         if not record.get("edge_sources"):
             record.pop("edge_sources", None)
+        if not record.get("openings_none_edges"):
+            record.pop("openings_none_edges", None)
     result["fingerprint"] = fingerprint(fingerprint_basis)
     return result
 

@@ -1,138 +1,159 @@
-# Contractor workflow session — pack (prepared 2026-10-04)
+# Contractor workflow session — pack (updated 2026-10-07 for the job workspace)
 
-Purpose: find out whether a real HVAC contractor or estimator can go from an
+Purpose: find out whether a real HVAC contractor or estimator can get from an
 architect's PDF to a labelled **draft** cooling load in Archie **without help**,
 how long it takes, and where they get stuck. This is a **workflow test**, not a
-test of the number: the draft still leaves out the envelope and air-side loads.
+test of the number (see "What the result will and won't include").
 
 Drawing set: **Butcher Buffet** (`20260226 Butcher Buffet @ Melrose Park
-CONSTRUCTION REV B(2).pdf`) — a permitted evaluation case with a known
-reference (do **not** tell the participant the reference or the acceptable
-range before or during the session).
+CONSTRUCTION REV B(2).pdf`), a permitted evaluation case with a known
+reference. Do **not** tell the participant the reference or the acceptable
+range, before or during the session.
+
+The screens changed on 2026-10-06/07 (commits `b2c50c6`, `8ad9e0a`, `e5516c7`,
+`20d98f4`). A job now opens in a **workspace with a left rail of tabs**:
+Project, Drawings, Rooms, (Walls & roof and Windows once Card W lands),
+Results. Calculate and the total are always in the rail. Engineer review is one
+click away but is **not** part of this test. Sections 8–10 describe the old
+screens and are kept as history.
 
 ---
 
 ## 1. Before the session
 
-Status (updated 2026-10-06): the session flow has changed. Since Card P, the
-AI outlines the rooms and the participant **no longer traces**. The
-facilitator runs the AI tasks in the operator panel (`?operator=1`) between
-"Confirm drawings" and "Resolve model inputs"; the participant only answers
-the roof question. An AI-only dry run on `a6f0fc3` reached a labelled draft
-of 33.76 kW with no tracing (section 9), but it found three problems that
-should be fixed before scheduling (section 9, C1–C3). A second AI-only dry run
-on `13a05b1` (section 10) confirmed C1–C8 fixed and every task completing
-except north on the services plans (D3-1).
+### What the participant will do
 
-Earlier status (2026-10-04, tracing flow): D3, D5 and D7 below are fixed.
+1. **Main task (about 30–45 min):** open the prepared Butcher Buffet job and
+   get a draft cooling load. The tabs ask them to:
+   - **Project:** check the address and say what's above the tenancy;
+   - **Rooms:** check the room list and areas, untick rooms that aren't cooled,
+     and measure or type any missing area;
+   - **Calculate**, then read **Results**.
+2. **Short upload task (about 5 min, at the end):** upload the same PDF as a
+   new job and say what they think is happening while the pages are prepared.
+   Stop once the Drawings tab shows the preparation progress; don't wait for
+   it to finish.
 
-### Fixed
+Why the job is prepared in advance: the AI step (reading rooms, walls,
+windows and north from the drawings) is still done by the Toki team pasting
+into ChatGPT. In the final product a hosted model does it automatically. If
+the participant waited for a person to paste replies, the session would
+measure the facilitator, not the tool.
 
-| # | Problem found in the first dry run (commit `347b031`) | Fix and how it was checked |
+### What the result will and won't include
+
+- **Walls, roof and glazing.** Unless Card W (Walls & roof, Windows tabs) has
+  landed:
+  - rooms with only an area have no outline, so their walls and roof are "not
+    assessed";
+  - measured rooms show "Walls (not classified yet)" and "Roof (not checked
+    yet)".
+
+  Results then shows "Walls, roof and glazing 0.0 kW" and lists them under
+  "Not included yet". This is expected; don't treat it as a participant error.
+- **Never included in this version:**
+  - air leakage (infiltration);
+  - kitchen exhaust and make-up air;
+  - moisture from cooking;
+  - air-system design;
+  - the coolroom and freezer (refrigeration, sized separately).
+
+  The weather is a generic Australian design day, not the site's (AIRAH DA09
+  comes later).
+- **For your reference only** (do not tell the participant): engineer's
+  whole-building figure about **39.6 kW**, acceptable range **35–50 kW**.
+  Recent drafts on the walkthrough copy:
+  - 34.4–34.8 kW with typed or measured areas;
+  - Kitchen measured on the plan at 104.4 m² (answer key 104.9 m²).
+
+  None of these is a validated number.
+
+### Known rough edges (not session-blocking; note them if they come up)
+
+| # | What | What the participant sees |
 |---|---|---|
-| D3 ✅ `dcca237` | **Every room appeared twice in the trace room picker** ("Bar · area unresolved" and "Bar · Unassigned level · area unresolved"). A trace saved on the first entry was calibrated but **never counted**. | The picker now lists one entry per room (label + level). A trace saved on the old entry is mapped to the room and counts. Checked on a copy of the dry-run project: one entry per room; the old Bar trace counts; the area gate lists only the really untraced Kitchen and Shop. |
-| D5 ✅ `6bb3754` | **The room confirmation list only showed rooms that already had an area**, so a participant could trace one room and get a small total (dry run: 4.1 kW, Bar only) without noticing two rooms were missing. | Untraced comfort rooms are listed as "Not traced — not included in the total" with a "Trace this room" button. They cannot be included, and a line above the list names them. |
-| D7 ✅ `dcca237` | **Opening a project took ~45 s** before the room confirmation block appeared (`GET /api/ai-preliminary-model` returned ~29 MB). | The room list now appears in **0.8 s (12 KB)**. A freshness check follows in the background; the status line reads "checking freshness" for up to ~30 s. Confirm/calculate each take 11–13 s. Checked in the real UI on the dry-run project. |
+| W1 | **Calculate takes about 1.5–2 minutes** (the first time on a job up to about 3 minutes) | "Preparing the calculation: room uses, heights, people and equipment…" under the button |
+| W2 | **Saving a measured room takes 11–16 s**; adding a room about 15 s | "Saving… (about 15 s)" |
+| W3 | Typed and measured areas count straight away, but the total only changes after Calculate | The rail says "Out of date — calculate again" |
+| W4 | Measuring: room names are often on a different page from the dimensions | "Kitchen's name is printed on page 21" above the plan |
+| W5 | Preparing pages takes 4–7 min on this 38-page set (upload task only) | Progress with the current step; "You can leave this page" |
+| W6 | Phones: the plan is small and has no pinch-to-zoom | Use a laptop or desktop for the session |
 
-### Still open (not session-blocking)
-
-- **D1** Before confirmation, the summary says "Review required before AI"
-  and the next action is "Create ChatGPT packet". The manual ChatGPT route stays
-  for now (user decision 2026-10-04: keep ChatGPT on the user's computer for
-  testing, convenience and cost; a hosted model comes later), so this wording is
-  acceptable — but in the session the participant should not be sent into
-  ChatGPT (see section 4).
-- **D4** After saving a trace, the room picker still says "area unresolved"
-  (walkthrough finding #15).
-- **D6** When the guided resolver stops because rooms need tracing, the
-  instruction ("For Bar, Kitchen, Shop: trace and calibrate each room…") only
-  appears in a toast; the status line stays generic.
-- **D8 (new)** For ~30 s after opening a project the status line says
-  "checking freshness" while the Confirm button is already active. If the
-  participant confirms during that time and the model turns out to be stale,
-  confirmation is refused with "The draft model is out of date … Resolve model
-  inputs again". Safe, but may confuse — note it if it happens.
-
-### What the session result will and won't include
-
-- **Walls and roof cannot be declared in the UI yet.** The backend support
-  exists (Card I), but the screen to mark walls external/internal and the roof
-  exposed is Card J (with Codex). Unless Card J lands before the session, the
-  participant's total will have **no envelope**, and the result will list
-  "Envelope" under "Not included in this total". This is expected; don't
-  treat it as a participant error.
-- Also not included in any case: glazing and façade sun, roof sun, infiltration,
-  kitchen ventilation/exhaust, and the coolroom/freezer (refrigeration, outside
-  the comfort total).
-- For your reference only (do not tell the participant): with all three rooms
-  traced, the walkthrough project gave 33.8 kW without envelope, and 36.1 kW
-  with the roof declared exposed through the API. Neither is a validated number.
-
-## 2. Dry-run timings (Claude, 2026-10-04)
-
-First dry run on `347b031`, except where marked. Re-measure all of these in the
-pending dry run on the fixed code.
+## 2. Timings measured so far (Claude, real UI, Butcher Buffet copy)
 
 | Stage | Time | Notes |
 |---|---|---|
-| Upload + analysis (38 pages) | 45 s | |
-| Confirm selected drawings | 136 s | Long wait — watch whether the participant thinks it has stalled |
-| Open the project / room list appears | 0.8 s (`dcca237`) | Was ~45 s. Status says "checking freshness" for up to ~30 s afterwards |
-| Guided "Resolve model inputs" (no traces yet) | 60 s | Stops with "trace and calibrate each room" (toast only) |
-| Trace + calibrate one room | not representative | Claude placed corners by keyboard; budget **4–8 min per room** for a first-time user with a mouse (walkthrough: first room took ~19 min) |
-| Guided resolve after tracing | 90 s | |
-| Confirm rooms | 11–13 s (`dcca237`) | Was < 10 s; now includes the freshness check |
-| Calculate draft load | 12–13 s (`dcca237`) | Was ~25 s |
+| Upload + analysis (38 pages) | ~50 s | earlier dry runs |
+| Prepare pages (server job) | 238–391 s | `20d98f4`; reload-safe |
+| AI step, per check (Toki team) | not yet measured with real ChatGPT replies | the Drawings tab records it per check ("about N min each") |
+| Open a job → rail and tab | < 2 s | |
+| Type a room area | instant | saved per field |
+| Measure a room (scripted clicks) | 52–67 s + 11–16 s save | **not a human time**: clicks were computed from a known outline. The session measures the real first-room time (target: under 5 min) |
+| Calculate | 77–120 s | |
 
-Expected session length: **35–50 min** for three comfort rooms (Bar, Kitchen,
-Shop) plus reading the result. Stop at 60 min regardless.
+Expected session length: **35–50 min** for the main task, plus 5 min upload
+task, plus 10 min of questions. Stop at 60 min of task time regardless.
 
 ## 3. Setting up (for you)
 
-1. Use a machine with this repo on commit `dcca237` or later (D3, D5 and D7
-   fixed), ideally the commit the re-run dry run passed on. Start the app from
-   the repo folder:
+1. **Code.** Use commit `20d98f4` or later; also include Card W if it has been
+   merged. Start the app from the repo folder:
    ```bash
    ./start_web --port 8000
    ```
-2. Open `http://localhost:8000` in a normal browser window, full screen, with
-   no other projects open in the sidebar if possible.
-3. Put the Butcher Buffet PDF on the desktop. The participant uploads it
-   themselves — uploading is part of the test.
-4. If the participant agrees, start a screen recording (with audio) before
+2. **Prepare the job (the day before; about 30–40 min of your time):**
+   1. Open `http://localhost:8000/?operator=1` and upload the Butcher Buffet PDF.
+   2. Let the Drawings tab prepare the pages (4–7 min; you can leave the page
+      open).
+   3. Answer every check in the **AI step** panel (copy the prompt, attach the
+      images, paste the reply, Check and apply) until it says "No checks are
+      waiting for a reply". Use real ChatGPT replies, not stand-ins.
+   4. Note the panel's time line ("N min spent on N checks · about N min
+      each"); this is the first real per-check timing.
+   5. Don't fill the Project tab, don't type areas, and don't press Calculate:
+      those are the participant's job.
+3. **The participant's browser.** Use a **separate browser profile** (or a
+   private window) that has never opened the app with `?operator=1`. The
+   workspace remembers the AI-step switch and your name per browser, and the
+   participant must see neither. Open `http://localhost:8000` (no `?operator=1`)
+   at the projects list, full screen.
+4. Put the Butcher Buffet PDF on the desktop for the upload task.
+5. If the participant agrees, start a screen recording (with audio) before
    reading the task.
-5. Have this page's observation sheet (section 5) open to take notes, or print
-   it.
+6. Have the observation sheet (section 5) open, or print it.
 
 ## 4. Script (read this out, then stay quiet)
 
 > "Thanks for helping. This is an early tool that estimates cooling loads from
-> architect drawings. We're testing the tool, not you — if something is
+> architect drawings. We're testing the tool, not you. If something is
 > confusing, that's exactly what we want to find.
 >
-> Here's the task: **get a draft cooling load for this tenancy using the tool.
-> The drawings are on the desktop.** Please think out loud as you go — say what
+> I've already uploaded the drawings for a restaurant tenancy, **Butcher
+> Buffet**. The tool has read them. Your task: **get a draft cooling load for
+> this tenancy using the tool.** Please think out loud as you go: say what
 > you're looking for and what you expect to happen.
 >
-> I won't be able to help or answer questions about the tool while you work,
-> because we want to see where it's unclear. If you'd normally give up or call
-> someone, just say so and we'll stop there."
+> I can't help or answer questions about the tool while you work, because we
+> want to see where it's unclear. If you'd normally give up or call someone,
+> just say so and we'll stop there."
 
-AI step in this session: **skip it.** The manual ChatGPT copy/paste is an
-interim development route that won't exist in the final product (which will
-call a hosted model automatically), so the participant should not do it. If
-they open the ChatGPT packet or ask about it, say: "That step is done
-separately in this test — please carry on without it." Run the ChatGPT step
-yourself afterwards on the same project if you want to compare.
+At the end of the main task, read:
+
+> "One more short thing: the drawings are on the desktop. Please start a new
+> job with them, as if this were a new tenancy, and tell me what you think is
+> happening. You don't need to wait for it to finish."
 
 Facilitator rules:
 
-- Don't point, hint or explain. If asked, reply: "What would you try?" or "What
+- Don't point, hint or explain. If asked, reply "What would you try?" or "What
   do you think it wants you to do?"
 - If they are completely stuck for **3 minutes**, note it, then give the
   smallest possible hint and record exactly what you said.
-- Don't mention ChatGPT, tracing, room confirmation or any feature name before
-  they find it.
+- Don't name tabs or features (Measure on the plan, Calculate, Engineer review)
+  before they find them.
+- If they open **Engineer review**, note it and let them continue. If they're
+  still there after 2 minutes, say: "Please stay in the main job screen for
+  this test."
 - Don't mention the reference load or the acceptable range.
 
 ## 5. Observation sheet
@@ -142,50 +163,57 @@ question, wrong click or error message (with the exact wording).
 
 | Stage | Start | End | Hesitations / questions / errors (exact words) |
 |---|---|---|---|
-| Upload the PDF | | | |
-| Analysis → first screen (did they understand what to do next?) | | | |
-| Confirm drawings (did the long wait worry them?) | | | |
-| Find where to start (guided action vs. other buttons) | | | |
-| Find the room tracing tool | | | |
-| Trace + calibrate room 1 (which room? which plan page? which dimension?) | | | |
-| Trace + calibrate room 2 | | | |
-| Trace + calibrate room 3 | | | |
-| Resolve model inputs | | | |
-| Confirm the room list (did they notice missing rooms?) | | | |
-| Calculate draft load | | | |
-| Read the result (did they read what is excluded?) | | | |
+| Find and open the job | | | |
+| First look at the job screen: did they understand the rail and the tab states (✓ / ● / ! / ◌)? | | | |
+| Project tab: address ("Use this"?), building type, what's above | | | |
+| Rooms: did they check the areas? Did they notice which were "Measured by AI" and which were "Printed on the drawings"? | | | |
+| Rooms: unticking rooms that aren't cooled (coolroom, freezer?) | | | |
+| Rooms: typing an area or ceiling height (which rooms, why) | | | |
+| Measure on the plan, room 1: which room, which page, which dimension? Time to the first corner; time to save | | | |
+| Measure on the plan, room 2 (did they reuse the scale?) | | | |
+| Walls & roof / Windows (only if Card W has landed) | | | |
+| Calculate: did the 1.5–2 min wait worry them? | | | |
+| Results: did they read "Not included yet" and the draft warning? Print or CSV? | | | |
+| Upload task: what did they think the page preparation was doing? | | | |
 
 Also note:
 
-- Hints given (exact words and time): 
-- Point where they would have given up, if any: 
-- Final number shown: 
-- Rooms included in the total: 
+- Hints given (exact words and time):
+- Point where they would have given up, if any:
+- Final number shown, and the per-room numbers:
+- Rooms included; areas typed vs measured vs AI:
+- Did they open Engineer review? When and why?
 
 ## 6. After the session — questions
 
 Ask these in order, after the participant has seen the result:
 
-1. "Before we look at it together — what cooling load would you have expected
+1. "Before we look at it together, what cooling load would you have expected
    for this tenancy, roughly?"
 2. "What do you think this number includes, and what does it leave out?"
 3. "Would you send this number to a client or use it to select equipment? Why
    or why not?"
 4. "What would you need to see to trust it?"
-5. "Which step was the most frustrating? Which was easiest?"
-6. "How long would this job normally take you, and how?"
-7. "Anything you expected the tool to do that it didn't?"
+5. "When the tool showed room areas it had worked out, did you trust them?
+   What made you check (or not check) them?"
+6. "Which step was the most frustrating? Which was easiest?"
+7. "How long would this job normally take you, and how?"
+8. "Anything you expected the tool to do that it didn't?"
 
 ## 7. What to send back to Claude
 
 - The completed observation sheet (photo or typed).
 - The screen recording, if made (or your notes of key moments with times).
-- The project name or ID from the sidebar, so the saved project can be
-  inspected.
+- The job name from the projects list, so the saved job can be inspected.
+- The AI-step time line from the job prep (section 3, step 2.4).
 
 Claude turns these into a friction log in the same format as
 `docs/WALKTHROUGH_2026-10-02_butcher_buffet.md`, ranks the fixes and writes the
 next cards.
+
+---
+
+# History: dry runs on the old screens (before the job workspace)
 
 ## 8. Dry-run project (for reference)
 

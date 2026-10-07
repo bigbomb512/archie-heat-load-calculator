@@ -1699,7 +1699,42 @@ class AutonomousTaskTests(unittest.TestCase):
             generations = [path for path in (root / "page_analysis_cache").iterdir() if path.is_dir()]
             self.assertEqual(len(generations), 1)
 
+    def test_page_analysis_cache_invalidates_builder_code_and_reuses_same_fingerprint(self):
+        from PIL import Image
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source.pdf"
+            source.write_bytes(b"synthetic-pdf-content")
+            (root / "ai_input.json").write_text(json.dumps({"source_pdf": str(source)}), encoding="utf-8")
+            builds = []
+
+            def build():
+                builds.append(1)
+                return {"objects": [], "image": Image.new("RGB", (6, 4), "white"), "page_meta": {}}
+
+            with page_analysis_cache.operation(root, code_fingerprint="source-v1") as cache:
+                page_analysis_cache.get_context(root, 1, build, code_fingerprint="source-v1")
+                self.assertEqual(cache.stats["cache_misses"], {"1": 1})
+            with page_analysis_cache.operation(root, code_fingerprint="source-v1") as cache:
+                page_analysis_cache.get_context(root, 1, build, code_fingerprint="source-v1")
+                self.assertEqual(cache.stats["cache_hits"], {"1": 1})
+            self.assertEqual(len(builds), 1)
+
+            with page_analysis_cache.operation(root, code_fingerprint="source-v2") as cache:
+                page_analysis_cache.get_context(root, 1, build, code_fingerprint="source-v2")
+                self.assertEqual(cache.stats["cache_misses"], {"1": 1})
+            self.assertEqual(len(builds), 2)
+            generations = [path for path in (root / "page_analysis_cache").iterdir() if path.is_dir()]
+            self.assertEqual(len(generations), 1)
+
+    def test_page_analysis_code_fingerprint_is_stable_in_process(self):
+        first = autonomous_tasks_service._page_analysis_code_fingerprint()
+        second = autonomous_tasks_service._page_analysis_code_fingerprint()
+        self.assertEqual(first, second)
+        self.assertEqual(len(first), 64)
+
     def test_page_analysis_cache_keeps_scanned_task_packet_identical(self):
+        from contextlib import nullcontext
         from PIL import Image
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1718,19 +1753,23 @@ class AutonomousTaskTests(unittest.TestCase):
                         "pdf_chars_in_viewport": False, "render_dpi": 72.0,
                         "declared_mm_per_px": None, "summary": [], "page_meta": {"page": 4}}
 
-            def make_packet():
-                with page_analysis_cache.operation(root):
+            def make_packet(uncached=False):
+                cache_scope = nullcontext() if uncached else page_analysis_cache.operation(root)
+                with cache_scope:
                     with patch.object(autonomous_tasks_service, "_p0_main_geometry_pages", return_value=[{"page": 4}]), \
                             patch.object(autonomous_tasks_service, "_p0_context",
-                                         side_effect=lambda cache_root, page: page_analysis_cache.get_context(cache_root, page, build)), \
+                                         side_effect=lambda cache_root, page: build() if uncached else
+                                         page_analysis_cache.get_context(cache_root, page, build)), \
                             patch.object(autonomous_tasks_service, "_page_has_text_layer", return_value=False), \
                             patch.object(autonomous_tasks_service, "_page_dimension_candidates", return_value=[]):
                         return autonomous_tasks_service._s1_packets(root)
 
             cold = make_packet()
             warm = make_packet()
+            uncached = make_packet(uncached=True)
             self.assertEqual(cold, warm)
-            self.assertEqual(len(builds), 1)
+            self.assertEqual(cold, uncached)
+            self.assertEqual(len(builds), 2)
             self.assertEqual(cold[0][0:4], warm[0][0:4])
             self.assertEqual(cold[0][4], warm[0][4])
 
