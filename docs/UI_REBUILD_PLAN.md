@@ -243,8 +243,11 @@ Nothing is deleted; it is just out of the contractor's way.
 
 **Open items:**
 - **Time per check with real ChatGPT replies is not measured yet.** The timing is built in, but only stand-in replies have been run. The next real Butcher Buffet run through this tab gives the numbers.
-- **Preparing pages is driven from the browser** (save decisions, then rebuild the prepared drawings). If the page is closed mid-way, the job is left half-prepared until the Drawings tab is opened again, which then prepares it automatically. A single server-side action would remove this.
-- **Speed:** a page change takes about 6–7 min on the 38-page set.
+- ~~Preparing pages is driven from the browser.~~ **Fixed 2026-10-07.** `POST /api/prepare-pages` runs the page choice, drawing preparation and check rebuild as one server job (`backend/page_preparation_service.py`, progress in `page_preparation_job.json`, `GET /api/prepare-pages`). The workspace only starts and watches it, so closing or reloading the page no longer interrupts it.
+  - Real check (Butcher Buffet copy): the page was reloaded mid-job and the reopened tab picked up the same run. The job finished in 238 s with the drawings prepared and the unticked page left out.
+  - A server restart mid-job is reported as "interrupted"; opening the Drawings tab starts it again.
+  - The engineer screen's own "Confirm selected drawings" still uses the browser-driven steps.
+- **Speed:** a page change takes about 4–7 min on the 38-page set.
 
 ### Phase 3 status (2026-10-06)
 **Built (Rooms tab, "Measure on the plan"):**

@@ -1244,6 +1244,17 @@ async function loadRoomInference(startIfMissing = false){
   }
 }
 
+// The saved decision for each chosen page (shared with the job workspace's server-side page preparation).
+function pageDecisions(picked){
+  return (DATA?.sheets || []).filter(s => picked.has(s.page)).map(s => ({
+    page: s.page, detected_type: s.type,
+    decision: s.plan_role === "main_floor_plan" ? "Confirm as floor plan"
+            : s.type === "reflected_ceiling_plan" ? "Confirm as RCP"
+            : s.relevant ? "Confirm as detected" : "Keep as reference",
+    scale_confirmed: false, note: "",
+  }));
+}
+
 async function confirmSelection(){
   if (!DATA || !Array.isArray(DATA.sheets)) return toast("Analyse PDF first", "Archie needs to identify the drawing pages before there is a selection to confirm.");
   if (ANALYSIS_IN_PROGRESS) return toast("Analysis in progress", "Archie is finding the drawing pages before it can confirm them.");
@@ -1254,13 +1265,7 @@ async function confirmSelection(){
   let selectionConfirmed = false;
   requiredElement("statusText").textContent = "Preparing AI packet";
   requiredElement("statusSub").textContent = "Creating selected-page geometry and evidence files. This can take a moment.";
-  const pages = DATA.sheets.filter(s => PICK.has(s.page)).map(s => ({
-    page: s.page, detected_type: s.type,
-    decision: s.plan_role === "main_floor_plan" ? "Confirm as floor plan"
-            : s.type === "reflected_ceiling_plan" ? "Confirm as RCP"
-            : s.relevant ? "Confirm as detected" : "Keep as reference",
-    scale_confirmed: false, note: "",
-  }));
+  const pages = pageDecisions(PICK);
   try {
     const res = await fetch("/api/decisions", {
       method:"POST", headers:{"Content-Type":"application/json"},

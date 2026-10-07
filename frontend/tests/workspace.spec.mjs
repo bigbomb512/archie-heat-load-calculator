@@ -59,7 +59,8 @@ function geometryContext(records = []) {
           reviewer_room_geometry: {records}};
 }
 
-async function mockJob(page, {status, model = () => ({room_scope: scope}), onPost = () => null, tasks = () => [], geometry = () => geometryContext()}) {
+async function mockJob(page, {status, model = () => ({room_scope: scope}), onPost = () => null, tasks = () => [], geometry = () => geometryContext(),
+                               prepare = () => ({status: "none"})}) {
   const posts = [];
   await page.route("**/api/test-mode/status", route => route.fulfill({json: {enabled: false}}));
   await page.route("**/api/projects", route => route.fulfill({json: [{id: "job-1", name: analysis.name, pages: 38, relevant: 3, analysed: true}]}));
@@ -83,6 +84,11 @@ async function mockJob(page, {status, model = () => ({room_scope: scope}), onPos
     return record("tasks")(route);
   });
   await page.route("**/api/decisions", record("decisions"));
+  // Server-side page preparation: POST starts it, GET reports it. Tests replace prepareJob to script a run.
+  await page.route("**/api/prepare-pages**", async route => {
+    if (route.request().method() === "POST") { posts.push(["prepare", route.request().postDataJSON()]); return route.fulfill({json: prepare("start")}); }
+    return route.fulfill({json: prepare("status")});
+  });
   await page.route("**/api/plan-snap**", route => route.fulfill({json: SNAP}));
   await page.route("**/api/artifact**", route => route.fulfill({contentType: "image/png", body: PNG}));
   await page.route("**/api/vision-response/no-ai", route => route.fulfill({json: {status: "already_started_without_ai", has_reasoning_packet: true}}));
@@ -168,8 +174,14 @@ test("Drawings: a saved page selection is shown after reopening the job", async 
   await expect(page.locator("[data-ws-page='27']")).not.toBeChecked();
 });
 
-test("Drawings: changing the pages used prepares them again and rebuilds the checks", async ({ page }) => {
-  const posts = await mockJob(page, {status: () => baseStatus()});
+test("Drawings: changing the pages used runs one server job, and switching tabs meanwhile watches it instead of starting another", async ({ page }) => {
+  let job = {status: "none"};
+  let polls = 0;
+  const posts = await mockJob(page, {status: () => baseStatus(), prepare: kind => {
+    if (kind === "start") job = {status: "running", step: "pages", step_label: "Saving the page choice and reading the pages"};
+    else if (job.status === "running" && ++polls >= 3) job = {...job, step: "drawings", step_label: "Preparing the drawings"};
+    return job;
+  }});
   await page.goto("/#/job/job-1/drawings");
   await expect(page.locator("[data-ws-use-pages]")).toHaveCount(0);
   await page.locator("[data-ws-page='27']").uncheck();
@@ -177,23 +189,51 @@ test("Drawings: changing the pages used prepares them again and rebuilds the che
   await page.locator("[data-ws-page='27']").check();
   await expect(page.locator("[data-ws-use-pages]")).toHaveCount(0);   // back to the confirmed pages: nothing to do
   await page.locator("[data-ws-page='27']").uncheck();
-  let release;
-  const slow = new Promise(resolve => { release = resolve; });
-  await page.route("**/api/decisions", async route => { posts.push(["decisions", route.request().postDataJSON()]); await slow; return route.fulfill({json: {}}); });
   await page.locator("[data-ws-use-pages]").click();
   await expect(page.locator("[data-ws-progress]")).toContainText("Updating the drawing pages");
-  // Switching away and back while the pages are prepared waits for the same run instead of starting another.
+  await expect(page.locator("[data-ws-progress-step]")).toHaveText("Saving the page choice and reading the pages");
+  await expect(page.locator("[data-ws-progress]")).toContainText("You can leave this page; it carries on");
+  // Switching away and back while the server prepares the pages watches the same run.
   await page.locator("[data-ws-tab='project']").click();
   await expect(page.locator("[data-ws-project]")).toBeVisible();
   await page.locator("[data-ws-tab='drawings']").click();
   await expect(page.locator("[data-ws-progress]")).toContainText("Updating the drawing pages");
-  release();
-  await expect.poll(() => posts.filter(([kind]) => kind === "tasks").length).toBe(1);
-  expect(posts.filter(([kind]) => kind === "decisions")).toHaveLength(1);
-  const decisions = posts.find(([kind]) => kind === "decisions")[1];
-  expect(decisions.pages.map(row => row.page)).toEqual([20]);
-  expect(posts.find(([kind]) => kind === "tasks")[1]).toMatchObject({project_id: "job-1", action: "run_all"});
-  await expect(page.locator("[data-ws-drawings]")).toBeVisible();
+  await expect(page.locator("[data-ws-progress-step]")).toHaveText("Preparing the drawings", {timeout: 15000});
+  job = {status: "done", step: "checks"};
+  await expect(page.locator("[data-ws-drawings]")).toBeVisible({timeout: 10000});
+  const starts = posts.filter(([kind]) => kind === "prepare");
+  expect(starts).toHaveLength(1);
+  expect(starts[0][1].project_id).toBe("job-1");
+  expect(starts[0][1].pages.map(row => row.page)).toEqual([20]);
+  expect(starts[0][1].pages[0]).toMatchObject({decision: "Confirm as floor plan", detected_type: "floor_plan"});
+  // The browser no longer drives the steps itself.
+  expect(posts.filter(([kind]) => kind === "decisions" || kind === "tasks")).toHaveLength(0);
+});
+
+test("Drawings: reopening a job while the server still prepares its pages shows the progress and starts nothing new", async ({ page }) => {
+  let job = {status: "running", step: "checks", step_label: "Setting up the drawing checks"};
+  const posts = await mockJob(page, {status: () => baseStatus(), prepare: () => job});
+  await page.goto("/#/job/job-1/drawings");
+  await expect(page.locator("[data-ws-progress-step]")).toHaveText("Setting up the drawing checks");
+  job = {status: "done"};
+  await expect(page.locator("[data-ws-drawings]")).toBeVisible({timeout: 10000});
+  expect(posts.filter(([kind]) => kind === "prepare")).toHaveLength(0);
+});
+
+test("Drawings: a job whose pages were never prepared starts the server job; a failure is shown with its reason and can be retried", async ({ page }) => {
+  let job = {status: "none"};
+  const posts = await mockJob(page, {status: () => baseStatus(), prepare: kind => {
+    if (kind === "start") job = {status: "failed", step: "drawings", error: "The drawings could not be prepared from these pages."};
+    return job;
+  }});
+  await page.route("**/api/analysis?id=job-1", route => route.fulfill({json: {...analysis, has_reasoning_packet: false}}));
+  await page.goto("/#/job/job-1/drawings");
+  await expect(page.locator(".ws-error")).toContainText("The drawings could not be prepared from these pages.");
+  expect(posts.filter(([kind]) => kind === "prepare")).toHaveLength(1);
+  await page.route("**/api/analysis?id=job-1", route => route.fulfill({json: {...analysis, has_reasoning_packet: true}}));
+  job = {status: "none"};
+  await page.getByRole("button", {name: "Try again"}).click();
+  await expect.poll(() => posts.filter(([kind]) => kind === "prepare").length).toBe(2);
 });
 
 test("AI step: ?operator=1 opens the checks one at a time, in order; a bad reply is kept with the reason, a good one moves on", async ({ page, context }) => {

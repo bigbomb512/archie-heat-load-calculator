@@ -161,29 +161,56 @@
   }
 
   // ------------------------------------------------------------------ Drawings
-  // Preparing the pages runs once per job at a time; a re-render (tab switch, refresh) waits for the same run.
-  function preparePages(projectId, title, rebuildChecks) {
+  // Preparing the pages runs on the server as one job (save the page choice, prepare the drawings, rebuild
+  // the checks). The page only starts and watches it, so closing or reloading the page doesn't interrupt it.
+  const PREPARE_POLL_MS = 3000;
+  const PREPARE_DETAIL = "Getting the drawing pages ready. This can take five to seven minutes on a large set. You can leave this page; it carries on, and you can come back.";
+  function preparePages(projectId, title, pages) {
     if (state.preparing?.projectId !== projectId) {
       clearTimeout(state.poll);
-      const promise = (async () => {
-        await confirmSelection();
-        if (requiredElement("btnContinue").textContent !== "Drawings confirmed") {
-          throw new Error("The drawing pages could not be prepared. Engineer review shows which pages are included.");
+      const run = {projectId, title, step: ""};
+      const statusUrl = `/api/prepare-pages?project_id=${encodeURIComponent(projectId)}`;
+      run.promise = (async () => {
+        let job = pages ? await sendJson("/api/prepare-pages", {project_id: projectId, pages, requested_by: userName()})
+                        : await getJson(statusUrl);
+        while (job.status === "running" || job.status === "queued") {
+          run.step = job.step_label || "";
+          const line = body.querySelector("[data-ws-progress] [data-ws-progress-step]");
+          if (line && state.preparing === run) line.textContent = run.step;
+          await new Promise(resolve => setTimeout(resolve, PREPARE_POLL_MS));
+          job = await getJson(statusUrl);
         }
-        DATA.has_reasoning_packet = true;
-        if (state.analysis) state.analysis.has_reasoning_packet = true;
-        if (rebuildChecks) await sendJson("/api/autonomous-tasks", {project_id: projectId, action: "run_all"});
-      })().finally(() => { if (state.preparing?.promise === promise) state.preparing = null; });
-      state.preparing = {projectId, title, promise};
+        if (job.status !== "done") throw new Error(job.error || "The drawing pages could not be prepared. Engineer review shows which pages are included.");
+        await refreshAnalysis(projectId);
+      })().finally(() => { if (state.preparing === run) state.preparing = null; });
+      state.preparing = run;
     }
     return state.preparing;
   }
 
+  // After the server prepared the pages, take the new page data (and the saved page choice) into the app.
+  async function refreshAnalysis(projectId) {
+    const data = await getJson(`/api/analysis?id=${encodeURIComponent(projectId)}`);
+    if (DATA?.id !== projectId) return;
+    DATA = Object.assign({}, DATA, data);
+    if (Array.isArray(data.selected_pages) && data.selected_pages.length) PICK = new Set(data.selected_pages);
+    state.analysis = Object.assign({}, state.analysis || {}, data);
+    requiredElement("btnContinue").textContent = data.has_reasoning_packet ? "Drawings confirmed" : "Confirm selected drawings";
+  }
+
   async function renderDrawings() {
     const projectId = state.projectId;
-    if (state.preparing?.projectId === projectId || !DATA?.has_reasoning_packet) {
-      const run = state.preparing?.projectId === projectId ? state.preparing : preparePages(projectId, "Preparing your drawing pages", false);
-      progress(run.title, "Getting the drawing pages ready. This can take five to seven minutes on a large set; keep this page open until it finishes.");
+    if (state.preparing?.projectId !== projectId) {
+      // A run started earlier (another visit, or before a reload) is watched rather than started again.
+      const job = await getJson(`/api/prepare-pages?project_id=${encodeURIComponent(projectId)}`).catch(() => ({}));
+      if (!live(projectId, "drawings")) return;
+      if (job.status === "running" || job.status === "queued") preparePages(projectId, "Preparing your drawing pages", null);
+      else if (!DATA?.has_reasoning_packet) preparePages(projectId, "Preparing your drawing pages", pageDecisions(PICK));
+    }
+    if (state.preparing?.projectId === projectId) {
+      const run = state.preparing;
+      body.innerHTML = `<div class="ws-card ws-progress" data-ws-progress><div class="ws-spinner" aria-hidden="true"></div>
+        <div><h3>${esc(run.title)}</h3><p data-ws-progress-step role="status">${esc(run.step)}</p><p>${esc(PREPARE_DETAIL)}</p></div></div>`;
       await run.promise;
       if (!live(projectId, "drawings")) return;
     }
@@ -256,7 +283,7 @@
       if (!state.pagePick?.size) { body.querySelector("[data-ws-pages-status]").textContent = "Keep at least one page."; return; }
       PICK = new Set(state.pagePick);
       state.pagePick = null;
-      preparePages(projectId, "Updating the drawing pages", true);
+      preparePages(projectId, "Updating the drawing pages", pageDecisions(PICK));
       await renderDrawings();
     });
   }
@@ -1143,9 +1170,6 @@
     if (TABS.some(row => row.id === route.tab) && route.tab !== state.tab) { state.tab = route.tab; renderTab(); }
     else if (route.tab === state.tab && !body.firstElementChild) renderTab();
   });
-
-  // Leaving while pages are prepared would stop the browser from finishing the preparation.
-  window.addEventListener("beforeunload", event => { if (state.preparing) { event.preventDefault(); event.returnValue = ""; } });
 
   document.getElementById("wsCalculate")?.addEventListener("click", calculate);
   document.getElementById("wsSectionSelect")?.addEventListener("change", event => go(event.target.value));

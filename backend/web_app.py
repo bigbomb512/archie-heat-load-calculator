@@ -90,7 +90,7 @@ from ai.calculator_draft import DraftConflict
 from backend import draft_service
 from backend import evidence_fusion_service
 from backend import calculation_extraction_service
-from backend import vision_extraction_service, window_scan_service, site_orientation_service, site_location_service, site_design_weather_service, room_use_resolution_service, room_inference_service, reviewer_room_geometry_service, ceiling_volume_resolution_service, internal_gains_resolution_service, thermal_surface_resolution_service, airflow_resolution_service, ahu_resolution_service, plant_resolution_service, safety_factor_resolution_service, ai_preliminary_service, model_input_resolution_service, au_ventilation_rules_service, autonomous_tasks_service, job_service
+from backend import vision_extraction_service, window_scan_service, site_orientation_service, site_location_service, site_design_weather_service, room_use_resolution_service, room_inference_service, reviewer_room_geometry_service, ceiling_volume_resolution_service, internal_gains_resolution_service, thermal_surface_resolution_service, airflow_resolution_service, ahu_resolution_service, plant_resolution_service, safety_factor_resolution_service, ai_preliminary_service, model_input_resolution_service, au_ventilation_rules_service, autonomous_tasks_service, job_service, page_preparation_service
 from backend import productization, test_mode_service, skill_workflow_service
 from backend import security
 from ai.ventilation import calculate_ventilation_report
@@ -370,6 +370,13 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._send_security_error(error, 403)
             except Exception as error:
                 return self.send_json({"error": product_error(error).get("error", "Task image is unavailable.")}, 404)
+        if urlparse(self.path).path == "/api/prepare-pages":
+            try:
+                return self.send_json(api_page_preparation_status(self))
+            except security.SecurityError as error:
+                return self._send_security_error(error, 403)
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
         if urlparse(self.path).path == "/api/job-status":
             try:
                 return self.send_json(api_job_status(self))
@@ -706,6 +713,13 @@ class Handler(SimpleHTTPRequestHandler):
                 self._require_api_access(write=True)
             except security.SecurityError as error:
                 return self._send_security_error(error, 403)
+        if urlparse(self.path).path == "/api/prepare-pages":
+            try:
+                return self.send_json(api_start_page_preparation(self))
+            except security.SecurityError as error:
+                return self._send_security_error(error, 403)
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
         if urlparse(self.path).path in {"/api/job-setup", "/api/room-area-override", "/api/room-height-override"}:
             try:
                 return self.send_json(api_save_job(self))
@@ -1639,7 +1653,11 @@ def selected_pages(project):
 
 def api_save_decisions(request):
     data = read_json_body(request)
-    project = project_by_id(data.get("id", ""))
+    return save_page_decisions(project_by_id(data.get("id", "")), data)
+
+
+def save_page_decisions(project, data):
+    """Save the confirmed page choice and rebuild the evidence that depends on it (also run by page_preparation_service)."""
     if not project.get("packet"):
         raise ValueError("Analyse the PDF before saving page decisions.")
 
@@ -1756,9 +1774,12 @@ def api_save_vision_response(request):
 
 
 def api_start_without_ai_evidence(request):
-    """Build the reviewed workspace while recording that no AI reply was used."""
     data = read_json_body(request)
-    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    return start_without_ai_evidence(project_by_id(data.get("project_id") or data.get("id", "")))
+
+
+def start_without_ai_evidence(project):
+    """Build the reviewed workspace while recording that no AI reply was used (also run by page_preparation_service)."""
     review_dir = Path(project["review_dir"])
     vision_path = existing_path(project.get("vision_response"), review_dir / "vision_response.json")
     if vision_path and vision_path.is_file():
@@ -4086,6 +4107,22 @@ def api_autonomous_tasks(request):
         return autonomous_tasks_service.get_labels(project)
     security.require_project_role(project, request._identity(), "editor")
     return autonomous_tasks_service.get(sys.modules[__name__], project)
+
+
+def api_page_preparation_status(request):
+    query = parse_qs(urlparse(request.path).query)
+    return page_preparation_service.status(sys.modules[__name__], project_by_id(query.get("project_id", [""])[0]))
+
+
+def api_start_page_preparation(request):
+    """Save the page choice, prepare the drawings and rebuild the checks, as one server-side job."""
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    security.require_project_role(project, request._identity(), "editor")
+    if not project.get("packet"):
+        raise ValueError("Analyse the PDF before choosing its pages.")
+    return page_preparation_service.start(sys.modules[__name__], project, data)
 
 
 def api_job_status(request):
