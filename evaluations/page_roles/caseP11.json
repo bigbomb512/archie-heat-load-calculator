@@ -29,6 +29,10 @@
       17
     ]
   },
+  "levels": {
+    "7": "Ground",
+    "8": "Mezzanine"
+  },
   "notes": [
     "Two levels: p7 ground, p8 mezzanine \u2014 both should become main plans for their level.",
     "p5-6 are existing plans."

@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Page role check</title>
+<style>
+:root {
+  --bg: #f6f5f2; --card: #ffffff; --ink: #1d1d1b; --muted: #66645e; --line: #dedbd3;
+  --accent: #1f5f8b; --right: #1d7a46; --right-bg: #e3f3e9; --wrong: #b3261e; --wrong-bg: #fbe5e3;
+  --warn-bg: #fff4d6; --warn: #7a5a00; --chip: #eeece6;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #161615; --card: #1f1f1d; --ink: #ecebe6; --muted: #a3a097; --line: #3a3935;
+    --accent: #78b4de; --right: #6fcf97; --right-bg: #1d3226; --wrong: #f08a82; --wrong-bg: #3b2120;
+    --warn-bg: #3a3118; --warn: #e8c55c; --chip: #2a2a27; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+header { position: sticky; top: 0; z-index: 5; background: var(--bg); border-bottom: 1px solid var(--line); padding: 12px 16px; }
+header h1 { font-size: 18px; margin: 0 0 4px; }
+.status { color: var(--muted); font-size: 13px; }
+nav { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+nav a { text-decoration: none; color: var(--ink); background: var(--chip); border-radius: 999px; padding: 3px 10px; font-size: 13px; }
+nav a.done { background: var(--right-bg); color: var(--right); }
+main { max-width: 1180px; margin: 0 auto; padding: 16px; }
+.intro { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 18px; }
+.intro p { margin: 0 0 6px; }
+.intro ol { margin: 4px 0 0; padding-left: 20px; }
+section.set { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 22px; scroll-margin-top: 110px; }
+section.set h2 { font-size: 17px; margin: 0; }
+.desc { margin: 4px 0 2px; }
+.file { color: var(--muted); font-size: 12px; word-break: break-all; }
+.notes { margin: 10px 0; padding: 8px 12px; background: var(--chip); border-radius: 8px; font-size: 13px; }
+.notes ul { margin: 4px 0 0; padding-left: 18px; }
+.app { margin: 10px 0 4px; font-size: 13px; }
+.app button.link { font-size: 13px; }
+.fact { border-top: 1px solid var(--line); padding: 12px 0 4px; }
+.fact h3 { font-size: 15px; margin: 0; }
+.fact .hint { color: var(--muted); font-size: 13px; margin: 2px 0 8px; }
+.thumbs { display: flex; flex-wrap: wrap; gap: 12px; }
+.tile { width: 196px; border: 2px solid var(--line); border-radius: 8px; padding: 6px; background: var(--card); }
+.tile.right { border-color: var(--right); background: var(--right-bg); }
+.tile.wrong { border-color: var(--wrong); background: var(--wrong-bg); }
+.tile img { width: 100%; height: 132px; object-fit: contain; background: #fff; border-radius: 4px; cursor: zoom-in; display: block; }
+.tile .label { font-size: 13px; margin: 4px 0; display: flex; justify-content: space-between; gap: 4px; }
+.tile .title { color: var(--muted); font-size: 12px; min-height: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tag { font-size: 11px; background: var(--chip); border-radius: 4px; padding: 0 5px; }
+.marks { display: flex; gap: 6px; margin-top: 4px; }
+.marks button, .tile .remove { flex: 1; border: 1px solid var(--line); background: var(--card); color: var(--ink); border-radius: 6px; padding: 5px 0; font: inherit; font-size: 13px; cursor: pointer; }
+.marks button[aria-pressed="true"].r { background: var(--right); border-color: var(--right); color: #fff; }
+.marks button[aria-pressed="true"].w { background: var(--wrong); border-color: var(--wrong); color: #fff; }
+.tile input.level { width: 100%; margin-top: 6px; font: inherit; font-size: 13px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); }
+.empty { color: var(--muted); font-size: 13px; }
+details.all { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 10px; }
+details.all summary { cursor: pointer; font-size: 14px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; margin-top: 10px; }
+.grid figure { margin: 0; text-align: center; font-size: 12px; color: var(--muted); }
+.grid img { width: 100%; height: 70px; object-fit: contain; background: #fff; border: 1px solid var(--line); border-radius: 4px; cursor: zoom-in; }
+.finish { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 12px; display: grid; gap: 8px; }
+.finish textarea { width: 100%; min-height: 56px; font: inherit; font-size: 14px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); }
+.finish label.check { font-weight: 600; display: flex; gap: 8px; align-items: center; }
+.warn { background: var(--warn-bg); color: var(--warn); border-radius: 6px; padding: 6px 10px; font-size: 13px; }
+button.link { background: none; border: none; color: var(--accent); cursor: pointer; padding: 0; font: inherit; text-decoration: underline; }
+dialog { border: none; border-radius: 10px; padding: 0; max-width: min(1100px, 96vw); width: 96vw; background: var(--card); color: var(--ink); }
+dialog::backdrop { background: rgba(0,0,0,.6); }
+.box-head { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); gap: 8px; }
+.box-body { max-height: 72vh; overflow: auto; background: #fff; text-align: center; }
+.box-body img { max-width: 100%; }
+.box-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 14px; align-items: center; }
+.box-actions button { border: 1px solid var(--line); background: var(--chip); color: var(--ink); border-radius: 6px; padding: 6px 10px; font: inherit; font-size: 13px; cursor: pointer; }
+.box-actions button:disabled { opacity: .45; cursor: default; }
+@media (max-width: 520px) { header { position: static; } section.set { scroll-margin-top: 8px; } .tile { width: calc(50% - 6px); } .tile img { height: 100px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Page role check</h1>
+  <div class="status" id="status">Loading…</div>
+  <nav id="nav"></nav>
+</header>
+<main>
+  <div class="intro">
+    <p>For each drawing set, Claude wrote down which pages it thinks play each role. The page finder is scored against these lists, so they need to be right. Please check them.</p>
+    <ol>
+      <li>Click a picture to see the page large.</li>
+      <li>Mark every listed page <b>Right</b> or <b>Wrong</b>.</li>
+      <li>If a page is missing, open it (in the list, or under "All pages") and use the <b>Add to</b> buttons.</li>
+      <li>For main floor plans, write the level (e.g. Ground, Mezzanine, Level 1) when the job has more than one.</li>
+      <li>Tick <b>This set is checked</b>. Answers save by themselves; you can stop and come back.</li>
+    </ol>
+  </div>
+  <div id="sets"></div>
+</main>
+<dialog id="box">
+  <div class="box-head"><strong id="box-title"></strong><button class="link" id="box-close">Close</button></div>
+  <div class="box-body"><img id="box-img" alt=""></div>
+  <div class="box-actions" id="box-actions"></div>
+</dialog>
+<script>
+const FACTS = [
+  ["geometry", "Main floor plan", "The page rooms are measured on (the proposed layout or dimension plan). If several pages would each do, all of them are right. For a job with more than one level, each level needs its own main plan: write the level under it."],
+  ["rcp", "Ceiling plans (RCP)", "Reflected ceiling plans. Each must be recognised as a ceiling plan."],
+  ["must_keep", "Pages the app must keep", "Needed for the heat load: plans, ceiling plans, shopfront and other elevations with glazing, sections."],
+  ["not_geometry", "Never the main plan", "Pages that must never be used as the main floor plan: covers, notes, schedules, details, joinery, site or context plans."],
+];
+const FACT_NAME = Object.fromEntries(FACTS.map(([key, name]) => [key, name]));
+let data = null, answers = {}, saveTimer = null;
+const $ = (selector, root = document) => root.querySelector(selector);
+const esc = value => String(value ?? "").replace(/[&<>"']/g, char => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[char]));
+
+function answerFor(caseId) {
+  const row = answers[caseId] ||= {};
+  row.marks ||= {}; row.added ||= {}; row.levels ||= {}; row.notes ||= ""; row.checked = !!row.checked;
+  for (const [key] of FACTS) { row.marks[key] ||= {}; row.added[key] ||= []; }
+  return row;
+}
+function unmarked(view) {
+  const answer = answerFor(view.case_id);
+  return FACTS.reduce((count, [key]) => count + view.facts[key].filter(page => !answer.marks[key][page]).length, 0);
+}
+function title(view, page) { return view.app.titles[String(page)] || ""; }
+
+function save() {
+  clearTimeout(saveTimer);
+  $("#status").textContent = "Saving…";
+  try { localStorage.setItem("page-role-check", JSON.stringify(answers)); } catch (error) {}
+  saveTimer = setTimeout(async () => {
+    try {
+      const response = await fetch("/api/answers", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(answers)});
+      if (!response.ok) throw new Error((await response.json()).error || response.statusText);
+      status();
+    } catch (error) { $("#status").textContent = "Not saved: " + error.message + ". Keep this tab open and try again."; }
+  }, 400);
+}
+function status() {
+  const done = data.cases.filter(view => answerFor(view.case_id).checked).length;
+  $("#status").textContent = `${done} of ${data.cases.length} sets checked · saved` + (data.missing.length ? ` · no local PDF for ${data.missing.join(", ")}` : "");
+  $("#nav").innerHTML = data.cases.map(view => `<a href="#${view.case_id}" class="${answerFor(view.case_id).checked ? "done" : ""}">${view.case_id.replace("case", "")}</a>`).join("");
+}
+
+function tile(view, key, page, added) {
+  const answer = answerFor(view.case_id);
+  const mark = added ? "right" : answer.marks[key][page] || "";
+  const level = key === "geometry" && mark !== "wrong"
+    ? `<input class="level" data-level="${page}" placeholder="Level (if more than one)" value="${esc(answer.levels[page] || "")}" aria-label="Level of page ${page}">` : "";
+  const controls = added
+    ? `<button class="remove" data-remove="${key}:${page}">Remove</button>`
+    : `<div class="marks"><button class="r" aria-pressed="${mark === "right"}" data-mark="${key}:${page}:right">Right</button><button class="w" aria-pressed="${mark === "wrong"}" data-mark="${key}:${page}:wrong">Wrong</button></div>`;
+  return `<div class="tile ${mark}"><img loading="lazy" src="/thumb/${view.case_id}/${page}" alt="Page ${page}" data-open="${page}">
+    <div class="label"><strong>Page ${page}</strong>${added ? '<span class="tag">Added by you</span>' : ""}</div>
+    <div class="title" title="${esc(title(view, page))}">${esc(title(view, page))}</div>${controls}${level}</div>`;
+}
+
+function appLine(view) {
+  const pages = list => list.length ? list.map(page => `<button class="link" data-open="${page}">p${page}</button>`).join(", ") : "none";
+  const extra = view.app.main_plan.filter(page => !view.facts.geometry.includes(page));
+  return `<div class="app"><b>The app currently picks</b> — main floor plan: ${pages(view.app.main_plan)} · ceiling plans: ${pages(view.app.rcp)}${
+    extra.length ? `<div class="warn">The app picks ${extra.map(page => "p" + page).join(", ")} as a main plan, which isn't on the list below. If it's right, open it and add it.</div>` : ""}</div>`;
+}
+
+function renderSet(view) {
+  const answer = answerFor(view.case_id);
+  const left = unmarked(view);
+  const facts = FACTS.map(([key, name, hint]) => {
+    const pages = view.facts[key], added = answer.added[key];
+    const tiles = pages.map(page => tile(view, key, page, false)).join("") + added.map(page => tile(view, key, page, true)).join("");
+    return `<div class="fact"><h3>${name}</h3><p class="hint">${hint}</p><div class="thumbs">${tiles || '<span class="empty">No pages listed. Add any that belong here.</span>'}</div></div>`;
+  }).join("");
+  const all = Array.from({length: view.page_count}, (_, index) => index + 1)
+    .map(page => `<figure><img loading="lazy" src="/thumb/${view.case_id}/${page}" alt="Page ${page}" data-open="${page}"><figcaption>p${page}</figcaption></figure>`).join("");
+  return `<h2>${view.case_id} · ${view.page_count} page${view.page_count === 1 ? "" : "s"}${answer.checked ? " · checked ✓" : ""}</h2>
+    <p class="desc">${esc(view.description)}</p><div class="file">${esc(view.file_name)}</div>
+    ${view.notes.length ? `<div class="notes"><b>Claude's notes</b><ul>${view.notes.map(note => `<li>${esc(note)}</li>`).join("")}</ul></div>` : ""}
+    ${appLine(view)}${facts}
+    <details class="all"><summary>All pages (${view.page_count}) — to find a page that's missing</summary><div class="grid">${all}</div></details>
+    <div class="finish">
+      <label>Anything else we should know about this set? <textarea data-notes placeholder="Optional">${esc(answer.notes)}</textarea></label>
+      ${left ? `<div class="warn">Mark every listed page Right or Wrong first (${left} left).</div>` : ""}
+      <label class="check"><input type="checkbox" data-checked ${answer.checked ? "checked" : ""} ${left && !answer.checked ? "disabled" : ""}> This set is checked</label>
+    </div>`;
+}
+
+function rerender(caseId) {
+  const view = data.cases.find(row => row.case_id === caseId);
+  const answer = answerFor(caseId);
+  if (answer.checked && unmarked(view)) answer.checked = false;
+  $(`#${caseId}`).innerHTML = renderSet(view);
+  status();
+}
+
+function addPage(caseId, key, page) {
+  const view = data.cases.find(row => row.case_id === caseId);
+  const answer = answerFor(caseId);
+  if (view.facts[key].includes(page)) answer.marks[key][page] = "right";
+  else if (!answer.added[key].includes(page)) answer.added[key].push(page);
+  // A main plan can't also be "never the main plan", and the other way round.
+  const other = key === "geometry" ? "not_geometry" : key === "not_geometry" ? "geometry" : null;
+  if (other) {
+    if (view.facts[other].includes(page)) answer.marks[other][page] = "wrong";
+    answer.added[other] = answer.added[other].filter(item => item !== page);
+  }
+  save(); rerender(caseId);
+}
+
+function openPage(caseId, page) {
+  const view = data.cases.find(row => row.case_id === caseId);
+  const answer = answerFor(caseId);
+  $("#box-title").textContent = `${caseId} · page ${page}${title(view, page) ? " · " + title(view, page) : ""}`;
+  $("#box-img").src = `/large/${caseId}/${page}`;
+  $("#box-actions").innerHTML = "<span>Add to:</span>" + FACTS.map(([key, name]) => {
+    const has = (view.facts[key].includes(page) && answer.marks[key][page] !== "wrong") || answer.added[key].includes(page);
+    return `<button data-add="${key}" ${has ? "disabled" : ""}>${name}${has ? " ✓" : ""}</button>`;
+  }).join("");
+  $("#box-actions").dataset.case = caseId; $("#box-actions").dataset.page = page;
+  $("#box").showModal();
+}
+
+document.addEventListener("click", event => {
+  const target = event.target;
+  const section = target.closest("section.set");
+  if (target.dataset.open && section) return openPage(section.id, Number(target.dataset.open));
+  if (target.dataset.mark && section) {
+    const [key, page, mark] = target.dataset.mark.split(":");
+    const marks = answerFor(section.id).marks[key];
+    marks[page] = marks[page] === mark ? undefined : mark;
+    if (!marks[page]) delete marks[page];
+    save(); return rerender(section.id);
+  }
+  if (target.dataset.remove && section) {
+    const [key, page] = target.dataset.remove.split(":");
+    const answer = answerFor(section.id);
+    answer.added[key] = answer.added[key].filter(item => item !== Number(page));
+    save(); return rerender(section.id);
+  }
+  if (target.dataset.add) {
+    const box = $("#box-actions");
+    addPage(box.dataset.case, target.dataset.add, Number(box.dataset.page));
+    return openPage(box.dataset.case, Number(box.dataset.page));
+  }
+  if (target.id === "box-close") $("#box").close();
+});
+document.addEventListener("change", event => {
+  const section = event.target.closest("section.set");
+  if (!section) return;
+  if (event.target.matches("[data-checked]")) { answerFor(section.id).checked = event.target.checked; save(); rerender(section.id); }
+});
+document.addEventListener("input", event => {
+  const section = event.target.closest("section.set");
+  if (!section) return;
+  const answer = answerFor(section.id);
+  if (event.target.dataset.level) answer.levels[event.target.dataset.level] = event.target.value;
+  else if (event.target.matches("[data-notes]")) answer.notes = event.target.value;
+  else return;
+  save();
+});
+$("#box").addEventListener("click", event => { if (event.target.id === "box") $("#box").close(); });
+
+(async () => {
+  try {
+    data = await (await fetch("/api/data")).json();
+  } catch (error) { $("#status").textContent = "Couldn't load the sets: " + error.message; return; }
+  answers = data.answers && Object.keys(data.answers).length ? data.answers : {};
+  if (!Object.keys(answers).length) {
+    try { answers = JSON.parse(localStorage.getItem("page-role-check") || "{}") || {}; } catch (error) { answers = {}; }
+  }
+  for (const view of data.cases) {
+    const answer = answerFor(view.case_id);
+    for (const [page, name] of Object.entries(view.levels)) if (!answer.levels[page]) answer.levels[page] = name;
+  }
+  $("#sets").innerHTML = data.cases.map(view => `<section class="set" id="${view.case_id}"></section>`).join("");
+  data.cases.forEach(view => rerender(view.case_id));
+})();
+</script>
+</body>
+</html>

@@ -42,6 +42,12 @@
       19
     ]
   },
+  "levels": {
+    "20": "Ground",
+    "21": "Level 01",
+    "22": "Ground",
+    "23": "Level 01"
+  },
   "notes": [
     "Two levels: p20/p22/p24 ground, p21/p23/p25 level 01.",
     "p6-17 are finishes, furniture, equipment, fittings and lighting schedules (tables).",
