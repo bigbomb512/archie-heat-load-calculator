@@ -44,11 +44,17 @@ external lookup is a separate consented, allowlisted service operation.
 5. IDs must be stable from source identity and component anchor, not row order,
    display text, or AI response order. Do not merge different levels or
    revisions without explicit evidence.
-6. Return exactly the declared `proposal_fields` with their declared types.
+6. Never withhold an item the evidence shows. When one of its attributes is
+   uncertain (which room, how many, what type), still list the item with that
+   field null, put the candidate values in `alternatives` with their basis,
+   and say why in `unresolved_fields`. The operators resolve uncertainty;
+   leaving a visible item off the list hides it from them. This does not
+   permit choosing between conflicting readings: list them, don't pick one.
+7. Return exactly the declared `proposal_fields` with their declared types.
    Empty evidence means an empty proposal plus `not_applicable` only when the
    evidence packet proves the domain does not apply; otherwise use
    `needs_review` and name the missing evidence.
-7. Do not expose secrets, local paths, unrelated personal data, or raw
+8. Do not expose secrets, local paths, unrelated personal data, or raw
    provider payloads. Do not include project data outside the assigned scope.
 
 ### Workflow and validation
@@ -280,6 +286,10 @@ resolvers. No visual-proportion area estimates.
   either value unless a supplied source explicitly matches it.
 - Preserve process/refrigeration equipment separately from comfort gains.
   Unknown heat rejection is unresolved, never zero.
+- List only items that use power or give off heat (appliances, refrigeration,
+  screens, signs, water heaters, refrigeration plant). Benches, sinks, hand
+  basins, shelving, racks, lockers and furniture are not equipment, even when
+  a schedule lists them with a tag; leave them out.
 
 ### Subskill: schedule_evidence
 

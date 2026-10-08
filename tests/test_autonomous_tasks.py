@@ -95,7 +95,7 @@ class AutonomousTaskTests(unittest.TestCase):
                 blocked = autonomous_task_service._apply_s1_areas(None, {}, root, record, empty)
             self.assertEqual(blocked["status"], "blocked")
             self.assertEqual(blocked["block_reason"],
-                             "Scanned plan with no printed areas or dimensions; room areas need the contractor.")
+                             "Scanned plan with no printed areas or dimensions; we need to enter the room areas.")
 
     def test_s3_image_only_pages_create_transcription_and_site_packets(self):
         from ai import scan_reading
@@ -1410,7 +1410,7 @@ class AutonomousTaskTests(unittest.TestCase):
                  patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "post", side_effect=lambda _w, _p, body, **_kwargs: calls.append(body)):
                 result = autonomous_tasks_service._answer_roof(web, project, root, {"task": "P5_roof", "target": "shop", "answer": "not_sure"})
                 self.assertEqual(calls[-1]["roof"], "unknown")
-                self.assertEqual(calls[-1]["reviewer"], "Answered by the contractor")
+                self.assertEqual(calls[-1]["reviewer"], "Answered by us")
                 saved = autonomous_tasks_service._current_task(root, "P5_roof", "shop")
                 self.assertEqual(saved["status"], "contractor_answered_not_sure")
                 self.assertEqual(saved["applied_value"], {})
@@ -1445,12 +1445,12 @@ class AutonomousTaskTests(unittest.TestCase):
             self.assertEqual({call["trace_id"] for call in calls},{"trace-shop","trace-shop-part-2"})
             self.assertTrue(all(call["action"]=="classify_envelope" for call in calls))
             self.assertTrue(all(call["roof"]=="not_exposed" for call in calls))
-            self.assertTrue(all(call["reviewer"]=="Answered by the contractor" for call in calls))
+            self.assertTrue(all(call["reviewer"]=="Answered by us" for call in calls))
             self.assertTrue(all(call["confirm_roof"] for call in calls))
             rebuild.assert_called_once()
             saved = autonomous_tasks_service._current_task(root, "P5_roof", "shop")
             self.assertEqual(saved["status"], "applied")
-            self.assertEqual(saved["applied_value"]["label"], "Answered by the contractor")
+            self.assertEqual(saved["applied_value"]["label"], "Answered by us")
             exported = json.loads((root / "ai_task_determinations.json").read_text())
             self.assertEqual(exported["P5_roof"][0]["source"], "reviewer")
 

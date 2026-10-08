@@ -67,7 +67,7 @@ def _resolve_inputs(web, project_id):
 
 def start(web, project, data):
     include = _include_map(data)
-    reviewer = " ".join(str(data.get("reviewer") or "").split())[:80] or "Contractor"
+    reviewer = " ".join(str(data.get("reviewer") or "").split())[:80] or "Operator"
 
     def work(web, project_id, step):
         from backend import ai_preliminary_service, job_service

@@ -55,6 +55,12 @@ class CaseFileTests(unittest.TestCase):
         needs, needs_images = skill_case_file.build("information_needs", self.project)
         self.assertEqual((len(needs["readings"]), needs_images), (6, []))  # every kind, as text only
 
+    def test_a_skill_is_worth_a_call_only_when_a_page_shows_its_kinds(self):
+        self.assertTrue(skill_case_file.worth_a_call("equipment_evidence", self.project))      # page 5 and 20
+        self.assertFalse(skill_case_file.worth_a_call("plant_detection", self.project))        # no HVAC plant anywhere
+        self.assertFalse(skill_case_file.worth_a_call("pump_inputs", self.project))
+        self.assertTrue(skill_case_file.worth_a_call("sheet_identity", self.project))          # document mapping always runs
+
     def test_the_route_needs_page_reading_on_and_pages_read(self):
         self.assertTrue(skill_case_file.available(self.project))
         pass1.set_enabled(None, self.project, {"enabled": False})
@@ -143,6 +149,9 @@ class RunTests(unittest.TestCase):
             self.assertLess(called.index("room_identity_use"), called.index("equipment_evidence"))
             self.assertEqual(manifest["subskills"]["information_needs"]["status"], "needs_review")
             self.assertNotIn("address_confirmation", called)               # confirmation stays with the operators
+            # No page shows HVAC plant, so the plant chain is skipped without a call and marked not applicable.
+            self.assertFalse({"plant_detection", "circuit_mapping", "pump_inputs"} & set(called))
+            self.assertEqual(manifest["subskills"]["plant_detection"]["status"], "not_applicable")
         finally:
             skills.CASE_FILE_PROVIDER_FACTORY = None
 
@@ -206,6 +215,10 @@ class ResumeTests(unittest.TestCase):
                 first = json.loads((root / "skill_workflow_run.json").read_text())
                 self.assertEqual(first["status"], "failed")
                 self.assertEqual(first["subskills"]["equipment_evidence"]["status"], "failed")
+                # A failed prerequisite doesn't block what depends on it: schedules still ran, told it was unavailable.
+                self.assertNotEqual(first["subskills"]["schedule_evidence"]["status"], "blocked")
+                self.assertEqual(skills._prompt_budget_chars("lighting_evidence", case_file=True), 120_000)
+                self.assertEqual(skills._prompt_budget_chars("lighting_evidence"), 80_000)
                 first_calls = len(provider.prompts)
                 # The operator accepted a lighting finding on the first run.
                 decision_id = "lighting_evidence:lighting:0"
@@ -218,12 +231,13 @@ class ResumeTests(unittest.TestCase):
             retried = called(provider.prompts[first_calls:])
             needs = next(row for row in skills.load_subskill_registry()["subskills"] if row["id"] == "information_needs")
             self.assertIn("equipment_evidence", retried)
-            self.assertTrue(set(retried) <= {"equipment_evidence", "schedule_evidence", "information_needs"}, retried)
+            failed_first = {name for name, row in first["subskills"].items() if row.get("status") == "failed"}
+            self.assertTrue(set(retried) <= {"equipment_evidence", "schedule_evidence", "information_needs"} | failed_first, retried)
             self.assertNotIn("room_identity_use", retried)                       # finished before: reused, no call
             self.assertEqual(second["subskills"]["room_identity_use"]["reused_from"], first["run_id"])
             self.assertEqual(second["subskills"]["lighting_evidence"]["reused_from"], first["run_id"])
             self.assertEqual(second["subskills"]["equipment_evidence"].get("reused_from", ""), "")
-            self.assertNotEqual(second["status"], "failed")
+            self.assertNotEqual(second["subskills"]["equipment_evidence"]["status"], "failed")   # the retried skill succeeds
             self.assertTrue(skills._decision_is_current({"run_id": first["run_id"], "source_fingerprint": second["source_fingerprint"]},
                                                         second, second["source_fingerprint"], "lighting_evidence"))
             self.assertFalse(skills._decision_is_current({"run_id": first["run_id"], "source_fingerprint": second["source_fingerprint"]},
@@ -258,3 +272,82 @@ class JobContextTests(unittest.TestCase):
             self.assertEqual(skills._consented_page_ids(paths), {1, 5, 20, 26})
             pass1.set_enabled(None, {"id": "j", "review_dir": folder}, {"enabled": False})
             self.assertEqual(skills._consented_page_ids(paths), set())
+
+
+class RecheckTests(unittest.TestCase):
+    def test_a_reply_that_only_failed_checking_is_rechecked_on_retry_and_a_still_bad_one_is_asked_again(self):
+        class Provider(FakeProvider):
+            def __init__(self):
+                super().__init__()
+                self.bad = {"lighting_evidence"}
+
+            def propose(self, prompt, image_paths=()):
+                subskill_id = prompt.split("Subskill: ", 1)[1].split(" ", 1)[0]
+                reply = super().propose(prompt, image_paths)
+                if subskill_id in self.bad:
+                    reply["proposal_fields"] = {"lighting": "not a list"}     # fails the type check
+                return reply
+
+        provider = Provider()
+        skills.CASE_FILE_PROVIDER_FACTORY = lambda: provider
+        called = lambda prompts: [prompt.split("Subskill: ", 1)[1].split(" ", 1)[0] for prompt in prompts]
+        try:
+            with tempfile.TemporaryDirectory() as folder, \
+                    patch.object(skills, "_ensure_room_evidence", return_value={"artifact_names": [], "candidate_count": 0, "model_input": {}}):
+                root = Path(folder)
+                (root / "ai_input.json").write_text(json.dumps({"drawing_set": {"pages": [{"page": 5, "title": "EQUIPMENT SCHEDULE"}]}}))
+                (root / "drawing_coverage.json").write_text(json.dumps({"page_roles": [{"page": p} for p in (1, 5, 20, 26)]}))
+                (root / pass1.RESULT_FILE).write_text(json.dumps({"pages": {**READINGS, "3": {"page_type": "reflected_ceiling_plan",
+                    "information": [{"kind": "lighting", "what": "12 downlights", "evidence": "legend"}]}}}))
+                project = {"id": "recheck-" + root.name, "review_dir": str(root)}
+                run = lambda action: (skills.post(Web(), project, {"action": action, "scope": "pdf_review"}) if action == "retry"
+                                      else skills.start_after_reading(Web(), project))
+                wait = lambda: [time.sleep(0.05) for _ in range(600) if project["id"] in skills._RUNNING]
+                run("start"); wait()
+                first = json.loads((root / "skill_workflow_run.json").read_text())
+                self.assertEqual(first["subskills"]["lighting_evidence"]["status"], "failed")
+                before = len(provider.prompts)
+                run("retry"); wait()                                   # still bad: asked again (one new call), fails again
+                self.assertEqual(called(provider.prompts[before:]).count("lighting_evidence"), 1)
+                # Now pretend the checks were fixed: the stored reply is good, so the retry uses it without a call.
+                provider.bad.clear()
+                second = json.loads((root / "skill_workflow_run.json").read_text())
+                attempt = root / second["subskills"]["lighting_evidence"]["attempt_ref"] / "raw_output.txt"
+                subskill = next(row for row in skills.load_subskill_registry()["subskills"] if row["id"] == "lighting_evidence")
+                from tests.test_skill_workflow_service import empty_typed_proposal
+                attempt.write_text(json.dumps({"status": "needs_review", "affected_ids": [], "observations": [], "inferences": [],
+                    "citations": [], "confidence": None, "alternatives": [], "unresolved_fields": [], "remediation": [],
+                    "proposal_fields": empty_typed_proposal(subskill)}))
+                before = len(provider.prompts)
+                run("retry"); wait()
+                third = json.loads((root / "skill_workflow_run.json").read_text())
+            self.assertNotIn("lighting_evidence", called(provider.prompts[before:]))
+            self.assertEqual(third["subskills"]["lighting_evidence"]["status"], "needs_review")
+        finally:
+            skills.CASE_FILE_PROVIDER_FACTORY = None
+
+
+class TrimTests(CaseFileTests):
+    def tearDown(self):
+        skills.CASE_FILE_PROVIDER_FACTORY = None
+        super().tearDown()
+
+    def test_the_duplicate_page_index_is_dropped_and_an_oversized_case_file_is_trimmed_before_blocking(self):
+        provider = FakeProvider()
+        skills.CASE_FILE_PROVIDER_FACTORY = lambda: provider
+        subskill = next(row for row in skills.load_subskill_registry()["subskills"] if row["id"] == "equipment_evidence")
+        record = {"raw_record": {}}
+        skills._call_case_file_provider(subskill, self.project, {}, {"page_index": [{"page": 1, "title": "x" * 500}]}, record)
+        self.assertNotIn("x" * 500, provider.prompts[-1])                       # shared copy of the index left out
+        # Squeeze the cap so the full case file doesn't fit but a trimmed one does.
+        full = len(provider.prompts[-1])
+        with patch.object(skills, "_CASE_FILE_PROMPT_BUDGET_CHARS", full - 50), patch.object(skills, "_PROMPT_BUDGET_CHARS", 1000):
+            record = {"raw_record": {}}
+            skills._call_case_file_provider(subskill, self.project, {}, {}, record)
+        self.assertEqual(record["prompt_budget"]["case_file_trimmed"][0], "readings")
+        self.assertNotIn("E21 UB fridge x10", provider.prompts[-1])
+        self.assertIn('"job"', provider.prompts[-1])                            # the job section always stays
+        with patch.object(skills, "_CASE_FILE_PROMPT_BUDGET_CHARS", 2000), patch.object(skills, "_PROMPT_BUDGET_CHARS", 1000):
+            record = {"raw_record": {}}
+            self.assertIsNone(skills._call_case_file_provider(subskill, self.project, {}, {}, record))   # nothing fits: blocked, no call
+        self.assertEqual(len(provider.prompts), 2)

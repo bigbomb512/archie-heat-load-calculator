@@ -678,7 +678,7 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                 trace_citation = {"page": page,
                                   "reference": ("Room area entered by a person" if trace_area_is_edited else
                                                 "Printed room area read from image" if traced_area.get("area_only") else f"Room trace {trace_id}"),
-                                  "excerpt": (f"Room area typed in by {traced_area.get('edited_by') or 'the contractor'}: {traced_area.get('area_m2')} m²."
+                                  "excerpt": (f"Room area typed in by {traced_area.get('edited_by') or 'an operator'}: {traced_area.get('area_m2')} m²."
                                               if trace_area_is_edited else
                                               f"Printed room area read from image: {traced_area.get('printed_text') or room.get('label', '')}."
                                               if traced_area.get("area_only") else

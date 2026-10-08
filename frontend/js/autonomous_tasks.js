@@ -109,7 +109,7 @@
     line.textContent = "Saving answer…";
     try {
       await request("POST", {action:"answer_roof", task:"P5_roof", target:card.dataset.target, answer:choice.value});
-      contractorQuestionStatus.textContent = choice.value === "not_sure" ? "Saved. Roof exposure remains unknown and is not assessed." : "Saved as a contractor declaration.";
+      contractorQuestionStatus.textContent = choice.value === "not_sure" ? "Saved. Roof exposure remains unknown and is not assessed." : "Saved as our answer.";
     } catch (error) { line.textContent = error.message; button.disabled = false; }
   });
 

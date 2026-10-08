@@ -72,7 +72,10 @@ _UNVALIDATED_GEOMETRY_KINDS = frozenset({"wall", "dimension"})
 _LINE_ROLE_CODES = {"possible_wall_or_dimension": "W", "vector_context": "C"}
 # The room-boundary task is the one task that must see a plan's full vector
 # line index to cite real line IDs, so it carries a larger explicit budget.
-_TASK_PROMPT_BUDGET_CHARS = {"room_boundaries_areas": 120_000}
+# Room boundaries carries the plan's vector geometry, which it needs to propose outlines.
+_TASK_PROMPT_BUDGET_CHARS = {"room_boundaries_areas": 130_000}
+# Skills on the case-file route also carry the job section and the readings; still a hard cap (about 30,000 tokens).
+_CASE_FILE_PROMPT_BUDGET_CHARS = 120_000
 _ACCEPTED_GEOMETRY_STATUSES = frozenset({"geometry_confirmed", "ai_estimated"})
 _VALUE_TARGET_KEYWORDS = {
     "glazing_properties": ("glazing", "window", "opening", "shgc", "solar", "u_value"),
@@ -794,9 +797,13 @@ def _validate_subskill_output(subskill, result, registry, allowed_pages=None):
     fingerprint = result.get("input_fingerprint")
     if not isinstance(fingerprint, str) or len(fingerprint) != 64 or any(char not in "0123456789abcdef" for char in fingerprint):
         _validation_error("input_fingerprint_invalid", "input_fingerprint", "Expected a 64-character lowercase SHA-256 fingerprint.")
+    # A malformed citation is dropped (and noted), not allowed to fail the whole answer: one bad reference used to
+    # throw away a skill's findings and block every skill depending on it. Dropped citations are never trusted.
+    kept, dropped = [], []
     for index, citation in enumerate(result["citations"]):
         if not isinstance(citation, dict):
-            _validation_error("citation_object", f"citations[{index}]", "Expected a citation object.")
+            dropped.append(f"citation {index + 1} is not an object")
+            continue
         # Accept the explicit citation spelling used by runtime skill prompts as
         # well as the legacy aliases used by existing resolver artifacts.
         cited_pages = [citation.get(key) for key in ("page", "physical_page", "physical_pdf_page")
@@ -804,13 +811,21 @@ def _validate_subskill_output(subskill, result, registry, allowed_pages=None):
         physical_pages = citation.get("physical_pages")
         if physical_pages is not None:
             if not isinstance(physical_pages, list) or not physical_pages or any(type(page) is not int for page in physical_pages):
-                _validation_error("citation_pages_invalid", f"citations[{index}].physical_pages", "Expected a non-empty list of integer physical page numbers.")
+                dropped.append(f"citation {index + 1} has no usable page list")
+                continue
             cited_pages.extend(physical_pages)
-        if not cited_pages and not any(citation.get(key) for key in ("source_id", "url")):
-            _validation_error("citation_reference_missing", f"citations[{index}]", "Citation needs a physical page, source_id, or URL.")
+        if not cited_pages and not any(citation.get(key) for key in ("source_id", "source_document_id", "url")):
+            dropped.append(f"citation {index + 1} names no page or source")
+            continue
         if allowed_pages is not None and any(page not in allowed_pages for page in cited_pages):
             unknown = sorted(page for page in cited_pages if page not in allowed_pages)
-            _validation_error("citation_page_missing", f"citations[{index}]", f"Physical pages are not in the selected packet: {unknown}.", "subskill_citation_unknown_page")
+            dropped.append(f"citation {index + 1} cites pages not in the set: {unknown}")
+            continue
+        kept.append(citation)
+    if dropped:
+        result["citations"] = kept
+        note = "Dropped " + "; ".join(dropped) + "."
+        result["remediation"] = list(result.get("remediation") or []) + [note] if isinstance(result.get("remediation"), list) else [note]
     for index, inference in enumerate(result.get("inferences", [])):
         if not isinstance(inference, dict) or not inference.get("field"):
             _validation_error("inference_shape", f"inferences[{index}]", "Each inference must be an object with a field name.")
@@ -1476,9 +1491,9 @@ def _compact_dependencies(dependencies):
     return result
 
 
-def _prompt_budget_chars(subskill_id=""):
+def _prompt_budget_chars(subskill_id="", case_file=False):
     raw = os.environ.get("ARCHIE_SKILL_PROMPT_MAX_CHARS", "").strip()
-    default = _TASK_PROMPT_BUDGET_CHARS.get(subskill_id, _PROMPT_BUDGET_CHARS)
+    default = max(_TASK_PROMPT_BUDGET_CHARS.get(subskill_id, _PROMPT_BUDGET_CHARS), _CASE_FILE_PROMPT_BUDGET_CHARS if case_file else 0)
     try:
         value = int(raw) if raw else default
     except ValueError:
@@ -1486,7 +1501,7 @@ def _prompt_budget_chars(subskill_id=""):
     return max(1_000, value)
 
 
-def _bounded_proposal_prompt(subskill, dependencies, evidence, image_frames=()):
+def _bounded_proposal_prompt(subskill, dependencies, evidence, image_frames=(), case_file=False):
     """Build a scoped prompt and report whether it fits the per-task budget.
 
     Over-budget prompts are never truncated into a different task: the caller
@@ -1496,7 +1511,7 @@ def _bounded_proposal_prompt(subskill, dependencies, evidence, image_frames=()):
     compact_evidence = _compact_for_prompt(evidence, stats)
     compact_dependencies = _compact_for_prompt(_compact_dependencies(dependencies), stats)
     prompt = _proposal_prompt(subskill, compact_dependencies, compact_evidence, image_frames=image_frames)
-    budget = _prompt_budget_chars(subskill["id"])
+    budget = _prompt_budget_chars(subskill["id"], case_file=case_file)
     sections = {"prerequisites": len(json.dumps(compact_dependencies, ensure_ascii=False, allow_nan=False))}
     for key, item in compact_evidence.items():
         sections["evidence." + key] = len(json.dumps(item, ensure_ascii=False, allow_nan=False))
@@ -1755,6 +1770,15 @@ def _reuse_table(paths, previous):
     run_id = (previous or {}).get("run_id")
     table = {}
     for skill_id, row in ((previous or {}).get("subskills") or {}).items():
+        raw_path = paths["root"] / str(row.get("attempt_ref") or "") / "raw_output.txt" if isinstance(row, dict) and row.get("attempt_ref") else None
+        attempt_fp = _read(raw_path.parent / "attempt.json", {}).get("input_fingerprint") if raw_path is not None else None
+        if (isinstance(row, dict) and row.get("status") == "failed" and row.get("failure_phase") == "proposal_validation"
+                and attempt_fp and raw_path.is_file()):
+            # The AI answered but the answer failed checking: re-check that reply (the checks may have been fixed)
+            # before paying for a new one. The attempt records the inputs the reply was made from.
+            table[skill_id] = {"run_id": run_id, "input_fingerprint": attempt_fp,
+                               "raw_reply": str(raw_path.relative_to(paths["root"])), "status": "failed"}
+            continue
         proposal_path = paths["root"] / "skill_workflow_runs" / str(run_id) / "proposals" / f"{skill_id}.json"
         if (run_id and isinstance(row, dict) and row.get("status") in _REUSABLE_STATUSES and row.get("input_fingerprint")
                 and row.get("error_code") != "prompt_over_budget" and proposal_path.is_file()):
@@ -1770,6 +1794,23 @@ def _reused_proposal(subskill, project, input_fp):
     entry = (_read(paths["manifest"], {}).get("reuse_from") or {}).get("subskills", {}).get(subskill["id"])
     if not entry or entry.get("input_fingerprint") != input_fp:
         return None
+    if entry.get("raw_reply"):
+        from backend import ai_provider
+        try:
+            raw = ai_provider.parse_json_reply((paths["root"] / entry["raw_reply"]).read_text(encoding="utf-8"))
+        except (OSError, RuntimeError):
+            return None
+        proposal = _proposal_from_raw(subskill, raw, input_fp)
+        try:  # still failing the checks: ask the AI again rather than fail on the same reply
+            allowed = {row.get("page") for row in _page_rows(_read(paths["coverage"], {})) if isinstance(row.get("page"), int)}
+            _validate_subskill_output(subskill, deepcopy(proposal), load_subskill_registry(), allowed_pages=allowed or None)
+        except Exception:
+            return None
+        proposal.update({"provider_kind": "rechecked_previous_reply",
+                         "_attempt_record": {"prompt": "", "images": [], "started_at": time.time(),
+                                             "raw_record": {"provider": "rechecked_previous_reply", "run_id": entry["run_id"],
+                                                            "reply_text": json.dumps(raw, ensure_ascii=False)[-20000:]}}})
+        return proposal
     proposal = _read(paths["root"] / entry["proposal"], {})
     if not isinstance(proposal, dict) or not proposal.get("proposal_fields"):
         return None
@@ -1793,13 +1834,30 @@ def _case_file_route(project):
     return skill_case_file.available(project)
 
 
+def _worth_a_call(subskill, project):
+    from backend import skill_case_file
+    return skill_case_file.worth_a_call(subskill["id"], project)
+
+
 def _call_case_file_provider(subskill, project, dependencies, evidence, attempt_record):
     """Ask the AI for one sub-skill with its case file. Returns the raw proposal, or None when over budget."""
     from backend import page_inventory_service, skill_case_file
     key = str(Path(project["review_dir"]).resolve())
     case, images = skill_case_file.build(subskill["id"], project)
-    evidence = {**evidence, "case_file": case}
-    prompt, budget = _bounded_proposal_prompt(subskill, dependencies, evidence)
+    # The case file carries the page index, so the shared evidence's copy of it is left out (every call is smaller).
+    evidence = {key: value for key, value in evidence.items() if key != "page_index"}
+    prompt, budget = _bounded_proposal_prompt(subskill, dependencies, {**evidence, "case_file": case}, case_file=True)
+    # Still over the cap: shrink the case file step by step (the job section and the key pages always stay).
+    trimmed = []
+    for part in ("readings", "page_index", "extracted"):
+        if budget["status"] == "within_budget":
+            break
+        if case.get(part):
+            case = {**case, part: [] if isinstance(case[part], list) else {}}
+            trimmed.append(part)
+            prompt, budget = _bounded_proposal_prompt(subskill, dependencies, {**evidence, "case_file": case}, case_file=True)
+    if trimmed:
+        budget["case_file_trimmed"] = trimmed
     model = os.environ.get("ARCHIE_CODEX_MODEL", "").strip() or "codex default"
     attempt_record.update({"prompt": prompt, "images": [{"page": page, "path": str(path)} for page, path in zip(case["attached_pages"], images)],
                            "prompt_budget": budget, "provider": "codex_case_file", "model": model,
@@ -1869,8 +1927,11 @@ def _execute_subskill(subskill, project, dependencies, source_fp):
     evidence, artifact_names = _shared_evidence_packet(subskill, project)
     registry = load_subskill_registry()
     input_fp = _fingerprint({"source": source_fp, "subskill": subskill, "evidence": evidence,
+        # The attempt reference says where a result is stored, not what it says: leave it out, or a prerequisite that
+        # is re-produced unchanged (e.g. a deterministic one) would make everything after it look changed on a retry.
         "prerequisites": {key: {"status": value.get("status", ""), "input_fingerprint": value.get("input_fingerprint", ""),
-            "proposal_fingerprint": _fingerprint(value.get("proposal", {}))} for key, value in dependencies.items()}})
+            "proposal_fingerprint": _fingerprint({k: v for k, v in (value.get("proposal") or {}).items() if k != "attempt_ref"})}
+            for key, value in dependencies.items()}})
     settings_path = Path(project["review_dir"]) / "vision_extraction_settings.json"
     settings = _read(settings_path, {})
     test_mode = os.environ.get("ARCHIE_ENV") == "test" and os.environ.get("ARCHIE_TEST_MODE") == "1"
@@ -1892,7 +1953,7 @@ def _execute_subskill(subskill, project, dependencies, source_fp):
             "citations": citations, "confidence": candidate.get("confidence") if isinstance(candidate, dict) else None,
             "alternatives": candidate.get("alternatives", []) if isinstance(candidate, dict) else [],
             "unresolved_fields": ["confirmed_address", "confirmation_actor", "confirmation_time", "consent_ref"],
-            "remediation": ["A contractor must confirm or correct the project address before any location or weather lookup."],
+            "remediation": ["We need to confirm or correct the project address before any location or weather lookup."],
             "input_fingerprint": input_fp, "proposal_fields": {"confirmed_address": None, "confirmation_actor": None,
                 "confirmation_time": None, "consent_ref": None}, "artifact_names": []}
         provider_kind = "user_confirmation_required"
@@ -1938,6 +1999,12 @@ def _execute_subskill(subskill, project, dependencies, source_fp):
                 "remediation": ["No deterministic fixture record is available for this domain task."] if has_evidence else [],
                 "input_fingerprint": input_fp, "proposal_fields": _empty_fields(subskill), "artifact_names": []}
         provider_kind = "local_test_fixture"
+    elif _case_file_route(project) and not _worth_a_call(subskill, project):
+        # No page shows anything this skill works on: not applicable, without spending an AI call.
+        proposal = _not_applicable_proposal(subskill, input_fp)
+        proposal["observations"] = [{"description": "No page of the drawing set shows the kinds of information this skill works on; "
+                                                    "it was skipped without an AI call."}]
+        provider_kind = "skipped_no_relevant_pages"
     elif _case_file_route(project):
         raw = _call_case_file_provider(subskill, project, dependencies, evidence, attempt_record)
         if raw is None:
@@ -2088,7 +2155,7 @@ def _read_scanned_printed_areas(project, run_id):
             factors = packet.get("factors", [])
             validated = scan_reading.validate_area_reply(reply, tiles, factors)
             if not validated["rooms"]:
-                message = "Scanned plan with no printed areas or dimensions; room areas need the contractor."
+                message = "Scanned plan with no printed areas or dimensions; we need to enter the room areas."
                 page_proposals.append({"page": page, "status": "blocked", "rooms": [], "remediation": message})
                 blocked.append(message)
                 raw_replies[str(page)] = reply
@@ -2187,11 +2254,15 @@ def _run_worker(web, project, run_id, source_fp, catalog):
         completed = set()
         failures = set()
         room_prepared = False
+        case_file_route = _case_file_route(project)
         while pending:
             ready = sorted(skill_id for skill_id in pending if set(subskill_defs[skill_id].get("depends_on", [])) <= completed | failures)
             if not ready:
                 raise RuntimeError("subskill_graph_blocked")
-            runnable = [skill_id for skill_id in ready if not (set(subskill_defs[skill_id].get("depends_on", [])) & failures)]
+            # On the case-file route a skill has the page index, the readings and a rule for missing prerequisites,
+            # so a failed or blocked prerequisite no longer blocks everything after it: the dependent runs and is told.
+            runnable = [skill_id for skill_id in ready if case_file_route
+                        or not (set(subskill_defs[skill_id].get("depends_on", [])) & failures)]
             blocked = set(ready) - set(runnable)
             if blocked:
                 with _project_lock(project["id"]):

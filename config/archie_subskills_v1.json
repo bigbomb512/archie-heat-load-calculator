@@ -245,7 +245,7 @@
     {
       "id": "ceiling_height_volume",
       "parent": "rooms_geometry_gains",
-      "version": 1,
+      "version": 2,
       "task": "Resolve floor-to-finished-ceiling height from explicitly scoped RCP, section, elevation, or ceiling notes; derive room volume from current validated area and cited height. Keep ceiling voids separate.",
       "inputs": [
         "room_boundaries_areas.proposal",
@@ -258,7 +258,7 @@
         "room_boundaries_areas"
       ],
       "proposal_fields": {
-        "heights": "array<{room_id:string,height_mm:number|null,scope:string,source_page:int|null,volume_m3:number|null,formula:string|null}>"
+        "heights": "array<{room_id:string|null,height_mm:number|null,scope:string,source_page:int|null,volume_m3:number|null,formula:string|null}>"
       },
       "constraints": [
         "Do not use door/joinery/detail dimensions or apply shared height beyond explicit scope.",
@@ -271,7 +271,7 @@
     {
       "id": "occupancy_seating",
       "parent": "rooms_geometry_gains",
-      "version": 1,
+      "version": 2,
       "task": "Count legible seats, workstations, beds, or other occupancy indicators; distinguish a counted quantity from a room-use density estimate and retain the evidence used for each.",
       "inputs": [
         "room_identity_use.proposal",
@@ -283,7 +283,7 @@
         "room_identity_use"
       ],
       "proposal_fields": {
-        "occupancy": "array<{room_id:string,count:int|null,basis:string,density_record_id:string|null,rounding:string|null}>"
+        "occupancy": "array<{room_id:string|null,count:int|null,basis:string,density_record_id:string|null,rounding:string|null}>"
       },
       "constraints": [
         "Count symbols only when distinguishable and room-owned.",
@@ -296,7 +296,7 @@
     {
       "id": "lighting_evidence",
       "parent": "rooms_geometry_gains",
-      "version": 1,
+      "version": 2,
       "task": "Identify lighting fixture types and room-owned quantities from lighting/RCP drawings and schedules; retain wattage only when explicitly stated or selected from a released scoped record.",
       "inputs": [
         "room_identity_use.proposal",
@@ -309,7 +309,7 @@
         "room_identity_use"
       ],
       "proposal_fields": {
-        "lighting": "array<{room_id:string,fixture_id:string|null,quantity:number|null,wattage_w:number|null,basis:string,citation_ids:string[]}>"
+        "lighting": "array<{room_id:string|null,fixture_id:string|null,quantity:number|null,wattage_w:number|null,basis:string,citation_ids:string[]}>"
       },
       "constraints": [
         "Do not count decorative symbols or fixtures outside the room boundary.",
@@ -322,7 +322,7 @@
     {
       "id": "equipment_evidence",
       "parent": "rooms_geometry_gains",
-      "version": 1,
+      "version": 2,
       "task": "Identify room-owned equipment, model/tag, quantity, rated input, and heat-to-space evidence from plans and schedules. Separate equipment presence from its thermal contribution.",
       "inputs": [
         "room_identity_use.proposal",
@@ -335,7 +335,7 @@
         "room_identity_use"
       ],
       "proposal_fields": {
-        "equipment": "array<{room_id:string,equipment_id:string|null,name:string,model:string|null,quantity:number|null,rated_input_w:number|null,heat_to_space_factor:number|null}>"
+        "equipment": "array<{room_id:string|null,equipment_id:string|null,name:string,model:string|null,quantity:number|null,rated_input_w:number|null,heat_to_space_factor:number|null}>"
       },
       "constraints": [
         "Equipment identity/count does not establish input power or heat-to-space factor.",
@@ -348,7 +348,7 @@
     {
       "id": "schedule_evidence",
       "parent": "rooms_geometry_gains",
-      "version": 1,
+      "version": 2,
       "task": "Extract explicit weekday, Saturday, Sunday, holiday, and operating-hour statements and map them to controlled schedules without inventing operating hours from a business type.",
       "inputs": [
         "room_identity_use.proposal",
@@ -364,7 +364,7 @@
         "equipment_evidence"
       ],
       "proposal_fields": {
-        "schedules": "array<{room_id:string,day_type:string,profile_id:string|null,hours_text:string|null,hourly_factors:number[]|null}>"
+        "schedules": "array<{room_id:string|null,day_type:string,profile_id:string|null,hours_text:string|null,hourly_factors:number[]|null}>"
       },
       "constraints": [
         "Preserve explicit hours and day types.",

@@ -161,6 +161,19 @@ test("a job opens in the workspace: rail with a status per tab, the projects lis
   await expect(page.locator("[data-ws-walls]")).toBeVisible();
 });
 
+test("operator-facing Project, Drawings, and Results tabs contain no outside-user wording", async ({page}) => {
+  await mockJob(page, {status: () => baseStatus()});
+  const screenshotDir = join(process.cwd(), "../output/operator_copy_browser");
+  mkdirSync(screenshotDir, {recursive: true});
+  for (const tabId of ["project", "drawings", "results"]) {
+    await page.goto(`/#/job/job-1/${tabId}`);
+    await expect(page.locator("#vJob")).toBeVisible();
+    const visibleText = await page.locator("body").innerText();
+    expect(visibleText).not.toMatch(/\bcontractor\b|\bToki\s+team\b/i);
+    await page.screenshot({path: join(screenshotDir, `${tabId}.png`), fullPage: true});
+  }
+});
+
 test("Project: the job details are saved once and the rail updates", async ({ page }) => {
   let saved = false;
   const posts = await mockJob(page, {status: () => saved ? baseStatus({address: "1 Main St, Ryde NSW 2112", above: "floor", tabs: {...baseStatus().tabs, project: tab("done")},
@@ -857,7 +870,7 @@ test("AI step: ?operator=1 opens the checks one at a time, in order; a bad reply
   await expect(task.locator(".ws-op-count")).toHaveText("Check 1 of 2 to answer");
   await expect(task).toContainText("scored 90% on the answer keys (4 cases)");
   await expect(page.locator("[data-ws-op-blocked]")).toHaveText("List the kitchen equipment — Kitchen — Waiting for room outlines (P0).");
-  await expect(page.locator("[data-ws-op-asked]")).toContainText("1 roof question is answered by the contractor on the Project tab");
+  await expect(page.locator("[data-ws-op-asked]")).toContainText("1 roof question is ready for your answer on the Project tab");
   await page.getByRole("button", {name: "Copy prompt"}).click();
   await expect(task.locator("[data-ws-op-status]")).toHaveText("Prompt copied.");
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("Which excerpt names the site?");
@@ -1003,7 +1016,7 @@ test("Calculate runs one server job with the person's room choices, shows its st
   await expect(page.locator("#wsTotal")).toHaveText("34.1");
   const starts = posts.filter(([kind]) => kind === "calculation");
   expect(starts).toHaveLength(1);
-  expect(starts[0][1]).toEqual({project_id: "job-1", reviewer: "Contractor",
+  expect(starts[0][1]).toEqual({project_id: "job-1", reviewer: "Operator",
     include: {"room-use:unassigned-level:shop": true}});
   expect(posts.filter(([kind]) => kind === "model")).toHaveLength(0);   // the browser no longer drives the steps
   await expect(page.locator("[data-ws-room-loads]")).toContainText("Kitchen");
@@ -1040,11 +1053,11 @@ test("Calculate without any room area sends the contractor to Rooms instead of f
   expect(posts.filter(([kind]) => kind === "model" || kind === "calculation")).toHaveLength(0);
 });
 
-test("Engineer review opens the full screen; Back to the job returns", async ({ page }) => {
+test("Detailed tools opens the full screen; Back to the job returns", async ({ page }) => {
   await mockJob(page, {status: () => baseStatus()});
   await openJob(page);
   await expect(page.locator("#vJob")).toBeVisible();
-  await page.getByRole("button", {name: "Engineer review"}).click();
+  await page.getByRole("button", {name: "Detailed tools"}).click();
   await expect(page.locator("#vRes")).toBeVisible();
   await expect(page.locator("aside.side")).toBeVisible();
   await page.getByRole("button", {name: "Back to the job"}).click();

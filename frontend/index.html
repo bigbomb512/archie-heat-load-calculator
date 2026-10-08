@@ -136,7 +136,8 @@
               <button class="btn key" id="wsCalculate" type="button">Calculate</button>
               <p class="ws-calc-note" id="wsCalcNote" role="status" aria-live="polite"></p>
             </div>
-            <button class="ws-engineer" id="btnJobEngineer" type="button">Engineer review</button>
+            <button class="ws-engineer" id="btnJobEngineer" type="button" title="The full set of tools behind the workspace">Detailed tools</button>
+            <p class="fine">The full set of tools behind the workspace.</p>
           </nav>
           <div class="ws-content">
             <nav class="ws-subtabs" id="wsSubtabs" aria-label="Section details" hidden></nav>
@@ -201,7 +202,7 @@
         <section class="workflow-skeleton hide" id="workflowSkeleton" aria-labelledby="workflowSkeletonHeading">
           <div class="workflow-skeleton-head">
             <div>
-              <div class="micro">Contractor workflow</div>
+              <div class="micro">Operator workflow</div>
               <h3 id="workflowSkeletonHeading">Resolve the building from evidence to plant</h3>
               <p class="fine">This guided workflow runs the shared model-input resolver and keeps unresolved items visible for review.</p>
             </div>
@@ -303,7 +304,7 @@
           </div></details>
           <details class="workflow-advanced-tools">
             <summary>Advanced AI, source, and evidence controls</summary>
-            <p class="fine">These controls are retained for recovery and testing. The guided resolver above is the normal contractor path.</p>
+            <p class="fine">These controls are retained for recovery and testing. The guided workspace above is our normal path.</p>
           <details class="analysis-tool" id="preliminaryTool"><summary><span class="analysis-tool-icon" aria-hidden="true">◷</span><span><strong id="aiPreliminaryHeading">Preliminary load estimate</strong><small>Build an early cooling estimate and review its assumptions.</small></span><span class="analysis-tool-tag">Draft only</span></summary><div class="analysis-tool-body">
             <p class="fine">An early estimate using Australian preliminary profiles. Results are draft only and require engineering review. Your reviewed calculator inputs remain separate.</p>
             <div class="ai-consent-grid">
@@ -400,7 +401,7 @@
             <div class="review-list" id="kitchenEquipmentResults" aria-live="polite" aria-label="Kitchen equipment identification"></div>
             <details class="workflow-advanced-tools" id="autonomousTasksPanel" hidden>
               <summary>AI task operator tools</summary>
-              <p class="fine">Manual ChatGPT transport. Copy each bounded prompt and attach only the listed images. Paste the JSON reply here; contractors never see this panel.</p>
+              <p class="fine">Manual ChatGPT task handling for the two of us. Copy each prompt, attach only the listed images, and paste the JSON reply here.</p>
               <button class="btn ghost mini" id="autonomousTasksRunAll" type="button">Run all tasks</button>
               <p class="fine" id="autonomousTasksStatus" role="status" aria-live="polite">Tasks have not been built.</p>
               <div id="autonomousTasksList" class="review-list"></div>
@@ -465,7 +466,7 @@
         <div class="review-panel hide" id="designRequirementsPanel">
           <section class="contractor-journey" id="contractorJourney" aria-labelledby="contractorJourneyHeading">
             <div class="contractor-journey-head">
-              <div><div class="micro">Guided contractor workflow</div><h3 id="contractorJourneyHeading">One decision at a time</h3></div>
+              <div><div class="micro">Guided operator workflow</div><h3 id="contractorJourneyHeading">One decision at a time</h3></div>
               <button class="btn ghost mini" id="btnShowAllWorkflowTools" type="button">Show all tools</button>
             </div>
             <p id="contractorJourneyStatus" role="status" aria-live="polite">Start with the evidence Archie found. You can return to any step without losing work.</p>

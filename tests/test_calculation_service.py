@@ -88,6 +88,14 @@ class CalculationJobTests(unittest.TestCase):
         self.assertEqual(rooms[3], [{"key": "kitchen", "include": True, "reason": ""},
                                     {"key": "shop", "include": False, "reason": "Not cooled"},
                                     {"key": "store", "include": False, "reason": "Not cooled"}])
+
+    def test_missing_reviewer_defaults_to_operator(self):
+        job_service.save_job_setup(self.web.project, {"above": "floor"})
+        _, done = self.run_job({"include": {"shop": False, "store": True}})
+        self.assertEqual(done["status"], "done")
+        self.assertEqual(done["requested_by"], "Operator")
+        rooms = next(call for call in self.calls if isinstance(call, tuple) and call[0] == "rooms")
+        self.assertEqual(rooms[1], "Operator")
         self.assertEqual(self.calls[3], "calculate")
         self.assertEqual(self.web.updated, 1)
 

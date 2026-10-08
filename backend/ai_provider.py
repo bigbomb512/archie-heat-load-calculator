@@ -33,6 +33,8 @@ USAGE_FILE = "ai_usage.jsonl"
 PROVIDERS = ("codex_cli", "openai", "anthropic")
 DEFAULT_MODELS = {"openai": "gpt-5", "anthropic": "claude-sonnet-5-5"}
 TIMEOUT_S = 600
+# Replies are stored whole (a retry re-checks a stored reply instead of paying for a new one); this only guards size.
+MAX_REPLY_CHARS = 2_000_000
 MAX_OUTPUT_TOKENS = 16000
 _USAGE_LOCK = threading.Lock()
 
@@ -125,7 +127,7 @@ class CodexCliProvider:
             reply_text = output.read_text(encoding="utf-8") if output.is_file() else ""
             tokens = re.search(r"tokens used\s*\n?\s*([\d,]+)", (result.stdout or "") + "\n" + (result.stderr or ""), re.I)
             raw = {"provider": self.name, "model": self.model or "codex default", "exit_code": result.returncode,
-                   "reply_text": reply_text[-20000:], "stderr_tail": (result.stderr or "")[-2000:],
+                   "reply_text": reply_text[:MAX_REPLY_CHARS], "stderr_tail": (result.stderr or "")[-2000:],
                    # The CLI reports one total; it is recorded as input+output combined.
                    "usage": {"total_tokens": int(tokens.group(1).replace(",", ""))} if tokens else {},
                    "seconds": round(time.monotonic() - started, 2)}
@@ -183,7 +185,7 @@ class OpenAIProvider(_HttpProvider):
                             "response_format": {"type": "json_object"}})
         text = ((reply.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
         usage = reply.get("usage") or {}
-        raw = {"provider": self.name, "model": reply.get("model", self.model), "reply_text": text[-20000:],
+        raw = {"provider": self.name, "model": reply.get("model", self.model), "reply_text": text[:MAX_REPLY_CHARS],
                "usage": {"input_tokens": usage.get("prompt_tokens"), "output_tokens": usage.get("completion_tokens")},
                "seconds": round(time.monotonic() - started, 2)}
         return parse_json_reply(text), raw
@@ -200,7 +202,7 @@ class AnthropicProvider(_HttpProvider):
                            {"model": self.model, "max_tokens": MAX_OUTPUT_TOKENS, "messages": [{"role": "user", "content": content}]})
         text = "".join(part.get("text", "") for part in reply.get("content") or [] if isinstance(part, dict))
         usage = reply.get("usage") or {}
-        raw = {"provider": self.name, "model": reply.get("model", self.model), "reply_text": text[-20000:],
+        raw = {"provider": self.name, "model": reply.get("model", self.model), "reply_text": text[:MAX_REPLY_CHARS],
                "usage": {"input_tokens": usage.get("input_tokens"), "output_tokens": usage.get("output_tokens")},
                "seconds": round(time.monotonic() - started, 2)}
         return parse_json_reply(text), raw

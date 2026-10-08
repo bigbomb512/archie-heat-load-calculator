@@ -2625,9 +2625,9 @@ function addZone(zone = {}){
       <label>Cooling outside-air flow (L/s)<input class="zone-outside-air" type="number" min="0" step="0.1" value="${zone.cooling_load?.outside_air_lps ?? ""}"></label>
       <label>Outside-air volume reference<select class="zone-outside-air-reference"><option value="legacy_unverified">Legacy / not stated (outdoor-state calculation assumption)</option><option value="outdoor_design_condition">Outdoor design-air state, as stated in source</option><option value="standard_air_1_2kg_da_m3">Standard air, 1.2 kg dry air/m³, as stated in source</option></select></label>
       <p class="fine">Choose only the basis stated by the airflow source. The standard-air choice uses 1.2 kg dry air/m³. Missing legacy values keep their previous outdoor-state calculation.</p>
-      <p class="fine zone-outside-air-help">Enter the design airflow from the mechanical schedule or contractor/designer basis. Archie uses it to calculate sensible and latent outside-air load; this field does not determine code compliance. Keep process exhaust and make-up air in their separate fields.</p>
+      <p class="fine zone-outside-air-help">Enter the design airflow from the mechanical schedule or project design basis. Archie uses it to calculate sensible and latent outside-air load; this field does not determine code compliance. Keep process exhaust and make-up air in their separate fields.</p>
       <label>Outside-air flow review status<select class="zone-outside-air-status"><option value="missing">Missing</option><option value="provisional">Provisional / unverified</option><option value="confirmed">Confirmed against source</option></select></label>
-      <label>Outside-air flow source<input class="zone-outside-air-source" placeholder="Mechanical schedule, drawing, or designer/contractor basis" value="${esc(zone.cooling_load?.outside_air_source ?? zone.cooling_load?.source ?? "")}"></label>
+      <label>Outside-air flow source<input class="zone-outside-air-source" placeholder="Mechanical schedule, drawing, or project design basis" value="${esc(zone.cooling_load?.outside_air_source ?? zone.cooling_load?.source ?? "")}"></label>
       <label>Safety factor<input class="zone-safety" type="number" min="1" step="0.01" value="${zone.cooling_load?.safety_factor ?? ""}"></label>
       <label>Other cooling-input status<select class="zone-load-status"><option value="missing">Missing</option><option value="provisional">Provisional</option><option value="confirmed">Confirmed</option></select></label>
       <label>Other cooling-input source<textarea class="zone-load-source" rows="2" placeholder="Source for people, lighting, equipment, and envelope inputs">${esc(zone.cooling_load?.source || "")}</textarea></label>
@@ -3287,7 +3287,7 @@ async function saveComponentInterpretationReview(card){
 async function unlockComponentInterpretation(componentId, field){
   if (!DATA?.id) return;
   try {
-    const res = await fetch("/api/calculation-input-evidence", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({project_id: DATA.id, action:"unlock_component_interpretation_field", component_id: componentId, field, reviewer:"local_user"})});
+    const res = await fetch("/api/calculation-input-evidence", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({project_id: DATA.id, action:"unlock_component_interpretation_field", component_id: componentId, field, reviewer:localStorage.getItem("toki.workspace.name")?.trim() || "Operator"})});
     const data = await res.json();
     if (!res.ok || data.error) throw new Error(data.error || "Could not unlock the interpretation field.");
     showComponentInterpretations(data.component_interpretations, data.component_interpretations_status, data.component_interpretations_url);
@@ -3872,7 +3872,7 @@ function calculatorDraftCandidateMarkup(item, savedDecision, draft = CALCULATOR_
   const proofRows = proof?.supporting_proofs || (proof ? [proof] : []);
   const proofLine = proof ? `<small>Current trace${proofRows.length === 1 ? "" : "s"} ${esc(proofRows.map(row => `${row.trace_id} (p. ${row.page})`).join(" · "))} · ${esc(proof.area_m2)} m² · ${esc(proof.calibration?.status || "calibration unresolved")} · reviewer ${esc(proofRows.map(row => row.reviewer || "unavailable").join(" · "))}</small>` : "";
   const acceptLabel = proof && item.kind === "room" ? "Accept traced geometry" : "Accept";
-  return `<article class="review-item draft-candidate" data-candidate="${esc(item.candidate_id)}"><div><b>${esc(item.kind)} · ${esc(displayName)}</b><small class="draft-candidate-id">${esc(item.candidate_id)}</small><span>${esc(item.reason || "Source-backed proposal")}</span><small>${citationText(savedDecision.citations || item.citations)} · confidence ${esc(item.confidence || "unknown")} · target ${esc(item.target_artifact || "")}</small>${proofLine}${geometry}${geometryEvidence}${unresolved}${floor}<details><summary>Review fields and evidence</summary><div class="draft-fields">${fields}${profiles}<label>Engineer review source<input class="calculator-draft-review-field" data-field="source" placeholder="Reviewer, calculation note, or marked-up drawing" value="${esc(savedDecision.source || "")}"></label><label>Reviewer<input class="calculator-draft-review-field" data-field="reviewer" placeholder="Name / initials" value="${esc(savedDecision.reviewer || "")}"></label><label>Review citation reference<input class="calculator-draft-review-field" data-field="citation_reference" value="${esc(citation.reference || "")}"></label><label>Review excerpt<textarea class="calculator-draft-review-field" data-field="citation_excerpt">${esc(citation.excerpt || "")}</textarea></label></div></details></div><label>Decision <select class="calculator-draft-decision" data-candidate="${esc(item.candidate_id)}"><option value="pending" ${action === "pending" ? "selected" : ""}>Pending review</option><option value="accept" ${action === "accept" ? "selected" : ""}>${acceptLabel}</option><option value="edit" ${action === "edit" ? "selected" : ""}>Edit</option><option value="reject" ${action === "reject" ? "selected" : ""}>Reject</option><option value="needs_evidence" ${action === "needs_evidence" ? "selected" : ""}>Needs evidence</option></select></label></article>`;
+  return `<article class="review-item draft-candidate" data-candidate="${esc(item.candidate_id)}"><div><b>${esc(item.kind)} · ${esc(displayName)}</b><small class="draft-candidate-id">${esc(item.candidate_id)}</small><span>${esc(item.reason || "Source-backed proposal")}</span><small>${citationText(savedDecision.citations || item.citations)} · confidence ${esc(item.confidence || "unknown")} · target ${esc(item.target_artifact || "")}</small>${proofLine}${geometry}${geometryEvidence}${unresolved}${floor}<details><summary>Review fields and evidence</summary><div class="draft-fields">${fields}${profiles}<label>Source<input class="calculator-draft-review-field" data-field="source" placeholder="Operator, calculation note, or marked-up drawing" value="${esc(savedDecision.source || "")}"></label><label>Reviewer<input class="calculator-draft-review-field" data-field="reviewer" placeholder="Name / initials" value="${esc(savedDecision.reviewer || "")}"></label><label>Review citation reference<input class="calculator-draft-review-field" data-field="citation_reference" value="${esc(citation.reference || "")}"></label><label>Review excerpt<textarea class="calculator-draft-review-field" data-field="citation_excerpt">${esc(citation.excerpt || "")}</textarea></label></div></details></div><label>Decision <select class="calculator-draft-decision" data-candidate="${esc(item.candidate_id)}"><option value="pending" ${action === "pending" ? "selected" : ""}>Pending review</option><option value="accept" ${action === "accept" ? "selected" : ""}>${acceptLabel}</option><option value="edit" ${action === "edit" ? "selected" : ""}>Edit</option><option value="reject" ${action === "reject" ? "selected" : ""}>Reject</option><option value="needs_evidence" ${action === "needs_evidence" ? "selected" : ""}>Needs evidence</option></select></label></article>`;
 }
 
 function calculatorDraftAreaRoomName(draft, value){
@@ -3936,7 +3936,7 @@ function calculatorDraftDecisions(){
     const reference = row?.querySelector('[data-field="citation_reference"]')?.value.trim();
     const excerpt = row?.querySelector('[data-field="citation_excerpt"]')?.value.trim();
     if (source) decision.source = source;
-    if (reference || excerpt) decision.citations = [{reference: reference || "Engineer review", page: null, excerpt: excerpt || ""}];
+    if (reference || excerpt) decision.citations = [{reference: reference || "Operator review", page: null, excerpt: excerpt || ""}];
     decisions[candidateId] = decision;
   });
   return decisions;
@@ -4762,7 +4762,7 @@ function renderCalculatorExceptions(){
 async function saveExceptionDecision(exceptionId, decision){
   if (!DATA?.id || !exceptionId) return;
   try {
-    const response = await fetch("/api/calculator-inputs", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({project_id: DATA.id, action: "save_exception_decision", exception_id: exceptionId, decision, reviewer: PROJECT_CONTEXT?.reviewer || "local_user", source_fingerprint: CALCULATOR_INPUT_SET?.current_assembled_fingerprint || CALCULATOR_INPUT_SET?.input_fingerprint || ""})});
+  const response = await fetch("/api/calculator-inputs", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({project_id: DATA.id, action: "save_exception_decision", exception_id: exceptionId, decision, reviewer: PROJECT_CONTEXT?.reviewer || localStorage.getItem("toki.workspace.name")?.trim() || "Operator", source_fingerprint: CALCULATOR_INPUT_SET?.current_assembled_fingerprint || CALCULATOR_INPUT_SET?.input_fingerprint || ""})});
     const data = await response.json();
     if (!response.ok || data.error) throw new Error(data.message || data.error || "Could not save exception decision.");
     await loadCalculatorInputs();
@@ -5030,7 +5030,8 @@ function drawSafetyFactorResolution(payload = {}){
   const rows = ["cooling", "heating"].map(mode => {
     const row = policies[mode] || {};
     const factor = row.factor == null ? "unresolved" : Number(row.factor).toFixed(2);
-    const source = row.source || "No cited source";
+    const rawSource = row.source || "No cited source";
+    const source = rawSource === "contractor override" ? "Operator override" : rawSource;
     const status = row.status || "blocked";
     return `<article class="review-item"><div><b>${mode[0].toUpperCase() + mode.slice(1)} · ${esc(status)}</b><span>Factor ${esc(factor)}${row.allowance_percent == null ? "" : ` · allowance ${Number(row.allowance_percent).toFixed(1)}%`} · ${esc(source)}</span><small>${esc(row.origin === "controlled_preliminary_fallback" ? "Controlled preliminary assumption — draft only." : (row.citations?.[0]?.reference || row.remediation || "Cited policy required."))}</small></div></article>`;
   }).join("");

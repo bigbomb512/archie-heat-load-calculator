@@ -1,13 +1,15 @@
 # Plan: a usable job workspace, CAMEL-style tabs adapted to Toki (2026-10-06)
 
+**Current product direction:** Archie is an in-house tool for two operators calculating client heat loads from architectural PDFs. Earlier notes that describe a customer handoff or a separate review group are superseded; the operators use both the job workspace and detailed tools.
+
 ## Why
 The 2026-10-06 usability audit (`docs/USABILITY_AUDIT_2026-10-06.md`) found:
 - the engineer page is ~130,000 px tall, with 1,605 inputs and ~37,000 words;
 - the room tracing tool is ~100 screens down;
-- without the AI step a contractor hits a dead end;
+- without the AI step we hit a dead end;
 - the AI step itself is hidden behind `?operator=1`.
 
-CAMEL+ (screenshots in `docs/camel_screenshot_feature_report.md`) shows the layout contractors already know:
+CAMEL+ (screenshots in `docs/camel_screenshot_feature_report.md`) shows the layout operators can use:
 a job-name header, a short list of input tabs in a left rail, one focused grid per tab, a validity badge
 and an always-visible **Calculate** button.
 
@@ -26,7 +28,7 @@ and an always-visible **Calculate** button.
 2. **The rail is the guide.** Each tab shows ✓ Done / ● Check / ! Needed / ◌ Working. The first tab needing something is highlighted, and every tab ends with "Next: … →".
 3. **AI fills, people correct.** Every value shows where it came from (AI from the drawings, Printed on the drawings, Assumed, Edited by you). Any value can be corrected in place.
 4. **Calculate is never a dead end.** If something blocks it, say exactly what and link to it. If something is merely missing, calculate anyway and list it as "Not included".
-5. **Plain words.** No "resolver", "coverage", "remediation", "calibrate", "assumption pack" on contractor screens. Engineer terms live in the Engineer review tab.
+5. **Plain words.** No "resolver", "coverage", "remediation", "calibrate", "assumption pack" on operator screens. Engineer terms live in the Detailed tools tab.
 6. **Fast.** Each tab loads only its own data, and opening a job shows the rail within ~1 s.
 
 ## The workspace
@@ -45,7 +47,7 @@ and an always-visible **Calculate** button.
 │  ✓ Fresh air                │  [Measure a room on the plan]  [Add a room]                  │
 │  ─────────                  │                                                              │
 │  Results                    │                                     Next: Walls & roof →    │
-│  Engineer review            │                                                              │
+│  Detailed tools            │                                                              │
 │  [ Calculate ]              │                                                              │
 └─────────────────────────────┴──────────────────────────────────────────────────────────────┘
 ```
@@ -80,7 +82,7 @@ Each tab lists what it shows, where the data comes from today (existing endpoint
 - **New:**
   - an operator mode inside this tab (shown when `?operator=1` or a setting is on), replacing the
     hidden list panel;
-  - automatic drawing confirmation (already in the contractor view).
+  - automatic drawing confirmation (already in the operator workspace).
 - **Status rules:** ◌ while checks are waiting; ● when some checks are blocked; ✓ when all are done.
 
 ### 3. Rooms
@@ -141,7 +143,7 @@ Each tab lists what it shows, where the data comes from today (existing endpoint
 - **Shows:** the existing simple result: total, by room, included, not included, print/PDF, CSV.
 - **Later:** a room-load breakdown chart and peak-hour chart (CAMEL report items 25–27), from the hourly report.
 
-### 10. Engineer review *(last, collapsed by default)*
+### 10. Detailed tools *(last, collapsed by default)*
 Holds the current engineer page's tools as **closed sections with a contents list**:
 - evidence review (the ~80 forms become a summary table with a "Review" button per item);
 - method gates;
@@ -150,7 +152,7 @@ Holds the current engineer page's tools as **closed sections with a contents lis
 - annual;
 - audit and packages.
 
-Nothing is deleted; it is just out of the contractor's way.
+Nothing is deleted; it is just out of the operator's way.
 
 ## Calculate (job header and rail)
 - Runs confirm-room-scope (with the remembered name), then calculate.
@@ -175,7 +177,7 @@ Nothing is deleted; it is just out of the contractor's way.
   undo/redo of unsaved edits, save per row). Edits call the existing override endpoints.
 - **Reuse the engineer panels:** existing sections move into tabs keeping their element IDs, so the 70
   browser tests keep passing while sections migrate. The old long page remains reachable as Engineer
-  review until it's empty of contractor tasks.
+  review until it's empty of operator tasks.
 - **Backend additions:**
   - `GET /api/job-status`;
   - typed room-area override (area-only reviewer record, source "edited");
@@ -188,28 +190,28 @@ Nothing is deleted; it is just out of the contractor's way.
 |---|---|---|
 | 1. Shell + Project + Rooms + Results | Left rail, routing, job header with Calculate, status endpoint, Project form, Rooms grid (include, use, height, typed area), Results | A fresh Butcher Buffet upload reaches a number from these tabs alone, with room areas typed in if there's no AI; no page longer than about two screens; timed walkthrough recorded |
 | 2. Drawings + operator mode | Page list, check progress, one-task-at-a-time operator flow inside the tab | Butcher Buffet's AI step done from the Drawings tab without `?operator=1` typing; time per task measured |
-| 3. Measure a room | Tracing tool extracted into Rooms (full width, guided) | A room traced and calibrated without visiting Engineer review; first-room time under 5 min |
+| 3. Measure a room | Tracing tool extracted into Rooms (full width, guided) | A room traced and calibrated without visiting Detailed tools; first-room time under 5 min |
 | 4. Walls & roof, Windows | Plan colouring, wall-run edits, window grid and edits | Butcher Buffet: every comfort wall classified and the shopfront window visible and editable |
 | 5. People & equipment, Kitchen, Fresh air | Grids on existing overrides; kitchen tab with the AIRAH-pending note | All overrides round-trip and show "Edited by you" in Results |
-| 6. Engineer review clean-up | Contents list, the 80 review forms → summary table, sections closed | Engineer review under 10 screens when expanded section by section |
-| 7. Contractor session | Run `docs/CONTRACTOR_SESSION_PACK.md` on this UI | Session notes and the next fixes |
+| 6. Detailed tools clean-up | Contents list, the 80 review forms → summary table, sections closed | Detailed tools under 10 screens when expanded section by section |
+| 7. Operator session | Run the archived session pack only as historical context | Session notes and the next fixes |
 
 ### Phase 1 status (2026-10-06)
 **Built:**
 - **Rail and routing:** a left rail with a status per tab (`/api/job-status`, one call); hash routes `#/job/<id>/<tab>`; a section menu at phone width.
 - **Job header:** the total, plus Calculate (assemble → confirm cooled rooms → calculate, with the resolver run as a fallback).
 - **Project tab:** name, address ("Use this" for the address found on the drawings), building type, and what's above. The answer to what's above settles every open roof question.
-- **Drawings tab:** check progress, plus a link for the Toki team (`?operator=1`).
+- **Drawings tab:** check progress, plus a link for the operators (`?operator=1`).
 - **Rooms grid:**
   - a Cool tickbox and a use choice where the use is unknown;
   - a typed area and a typed ceiling height ("Edited by you"; they beat AI and drawing values);
   - "Trace on the plan" and "Add a room the drawings missed".
 - **Results tab:** the total, a by-room table, what was included and what wasn't, and print/CSV.
-- **Engineer review:** one click away; `?engineer=1` opens it directly.
+- **Detailed tools:** one click away; `?engineer=1` opens it directly.
 
 **Verified:**
 - `npm test` passes (Python suites plus 76 Playwright tests, 11 of them in `workspace.spec.mjs`).
-- Real-data browser check on the Butcher Buffet walkthrough copy: typed areas give 34.8 kW, and a typed Shop height of 3.6 m reaches the model as a contractor override.
+- Real-data browser check on the Butcher Buffet walkthrough copy: typed areas give 34.8 kW, and a typed Shop height of 3.6 m reaches the model as an operator override.
 - Phone width (375 px): no page-wide horizontal scroll on Rooms, Results or Project.
 
 **Open items:**
@@ -225,18 +227,18 @@ Nothing is deleted; it is just out of the contractor's way.
 
 ### Phase 2 status (2026-10-06)
 **Built (Drawings tab):**
-- Contractor view summarizes drawing analysis and directs review to Rooms, Walls & roof, and Windows instead of exposing a raw “N of M checks done” count. Page thumbnails and selection controls are available under “Review or change selected pages.” The Toki-team reply queue remains an explicit internal/manual review path; drawing extraction is not yet fully autonomous.
-- **Analysis state.** The contractor sees a plain-language in-progress/complete message; internal status still tracks waiting and blocked tasks.
+- Operator workspace summarizes drawing analysis and directs review to Rooms, Walls & roof, and Windows instead of exposing a raw “N of M checks done” count. Page thumbnails and selection controls are available under “Review or change selected pages.” The operator reply queue remains an explicit internal/manual review path; drawing extraction is not yet fully autonomous.
+- **Analysis state.** We see a plain-language in-progress/complete message; internal status still tracks waiting and blocked tasks.
 - **Pages used:** thumbnails with tickboxes, main plans marked, "Show all pages", and "Use these pages". That last button prepares the pages again and rebuilds the checks.
-  - The saved page selection is now returned as `selected_pages` and restored on reload, on the engineer screen too. Before this, unticked pages came back after a reload.
+  - The saved page selection is now returned as `selected_pages` and restored on reload, in Detailed tools too. Before this, unticked pages came back after a reload.
   - A re-render or tab switch during preparation waits for the same run, and leaving the page asks for confirmation.
-- **AI step for the Toki team.** It opens with `?operator=1`, or with "Toki team: answer the checks here", which is remembered per browser. It shows one check at a time, in dependency order:
+- **AI step for the operators.** It opens with `?operator=1`, or with "operators: answer the checks here", which is remembered per browser. It shows one check at a time, in dependency order:
   - copy the prompt;
   - copy, download or drag the images;
   - paste the reply;
   - press Check and apply.
 
-  A rejected reply stays in the box with the reason. "Skip for now" moves on. Below the current check are lists of blocked checks, roof questions left to the contractor, and finished checks.
+  A rejected reply stays in the box with the reason. "Skip for now" moves on. Below the current check are lists of blocked checks, roof questions for us to answer, and finished checks.
 - **Timing.** The time per check is sent as `operator_seconds` with each reply, stored with the reply attempt, and summed in the panel ("about N min each").
 
 **Verified:**
@@ -258,7 +260,7 @@ Nothing is deleted; it is just out of the contractor's way.
 
 ### Phase 3 status (2026-10-06)
 **Built (Rooms tab, "Measure on the plan"):**
-- **A guided measuring view inside the Rooms tab** (no Engineer review). It opens on the main plan; when the room's name is printed on another page, it says which page. Its three steps:
+- **A guided measuring view inside the Rooms tab** (no Detailed tools). It opens on the main plan; when the room's name is printed on another page, it says which page. Its three steps:
   - **Outline the room.** Corners snap to the vector wall lines, and clicking the first corner again closes the outline. Undo and Start again are available.
   - **Set the scale from a printed dimension.** Click both ends, then type the printed number. This mirrors the server rule: the dimension must agree with the stated scale within 2%, or two dimensions must agree with each other. A scale already set on the page for another room can be reused.
   - **Save.** It shows the live area and needs the person's name.
@@ -276,7 +278,7 @@ Nothing is deleted; it is just out of the contractor's way.
 - Phone width (375 px): no page-wide scroll.
 
 **Open items:**
-- **First-room time for a real person is not measured yet.** The scripted run (clicks computed from a known outline) took 67 s, which says nothing about a contractor finding the corners. The contractor session (phase 7) measures it against the 5-minute target.
+- **First-room time for a real person is not measured yet.** The scripted run (clicks computed from a known outline) took 67 s, which says nothing about an operator finding the corners. The operator session (phase 7) measures it against the 5-minute target.
 - **Measuring doesn't yet bring walls and roof into the number.** A new trace's walls are "not classified yet", and its roof is "not checked yet":
   - the P3 wall check for a new trace only appears when the drawing checks are rebuilt;
   - the job-level "what's above" answer only settles open AI roof questions, not a hand-measured room's roof.
@@ -313,7 +315,7 @@ Nothing is deleted; it is just out of the contractor's way.
   "step_label": "Building the model from your rooms",
   "started_at": "2026-10-07T19:09:28+11:00",
   "pid": 62361,
-  "requested_by": "Contractor"
+  "requested_by": "Operator"
 }
 ```
 - The exact requested backend command passed: 136 tests. `cd frontend && npm test` passed after correcting the browser-history assertion: 93 Playwright tests plus the bundled Python regression and frontend contract checks.

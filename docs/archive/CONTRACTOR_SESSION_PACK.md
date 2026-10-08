@@ -1,3 +1,5 @@
+Superseded by the in-house service direction: Archie is now used by its two operators to calculate client heat loads.
+
 # Contractor workflow session — pack (updated 2026-10-07 for the job workspace)
 
 Purpose: find out whether a real HVAC contractor or estimator can get from an

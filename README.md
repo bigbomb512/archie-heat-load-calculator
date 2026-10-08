@@ -1,6 +1,6 @@
 # Archie Heat Load Calculator
 
-Dedicated evidence-first cooling and heating load-calculation project for Archie.
+Dedicated evidence-first cooling and heating load-calculation project for Archie. Archie is an in-house tool used by two operators to calculate heat loads from client PDFs.
 
 This repository owns load inputs, schedules, design-day scenarios, room/zone load models, calculation reports, and calculation readiness. It also retains the PDF intake and evidence-to-AI handoff pipeline needed to collect cited project facts.
 
@@ -19,7 +19,7 @@ It does **not** own HVAC layout, equipment placement, routing, CAD actions, or d
   irradiance contracts.
 - Site conditions, schedules, design-day scenarios, reviewed floor/zone/room overlays, readiness, and parity-report scaffolding.
 - Room-owned evidence records for unsupported airflow and moisture/process inputs. They are captured as confirmed absent, stored-not-calculated, or unassessed; they never silently change cooling totals.
-- Evidence-to-calculator draft bridge: cited drawing/thermal evidence becomes versioned proposals that an engineer can accept, edit, reject, or mark as needing evidence before anything is applied to the hourly model.
+- Evidence-to-calculator draft bridge: cited drawing/thermal evidence becomes versioned proposals that an operator can accept, edit, reject, or mark as needing evidence before anything is applied to the hourly model.
 
 The current cooling method is limited to its declared inputs. Infiltration can
 contribute only when its project method gate, air-path declaration, schedule,
@@ -79,7 +79,7 @@ PDF drawings
 → reviewed PDF/evidence packet
 → manual AI visual review and/or web-enabled research handoff
 → cited proposed facts
-→ engineer review
+→ operator review
 → calculator draft (`calculator_draft.json`)
 → save review → preview conflicts → apply accepted records
 → calculator input artifacts

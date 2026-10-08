@@ -129,6 +129,14 @@ class CodexCliTests(unittest.TestCase):
             result, raw = provider.propose("Read this page.")
         self.assertEqual((result, raw["usage"], raw["model"]), ({"page_type": "elevation"}, {"total_tokens": 6693}, "codex default"))
 
+    def test_a_long_reply_is_stored_whole_so_a_retry_can_recheck_it(self):
+        long_reply = json.dumps({"rows": ["x" * 50 for _ in range(1000)]})               # about 55,000 characters
+        with tempfile.TemporaryDirectory() as folder:
+            provider = ai_provider.CodexCliProvider(executable=self.fake_cli(folder, long_reply), model="")
+            result, raw = provider.propose("x")
+        self.assertEqual(len(result["rows"]), 1000)
+        self.assertEqual(json.loads(raw["reply_text"]), result)
+
     def test_a_used_up_plan_is_a_usage_limit(self):
         with tempfile.TemporaryDirectory() as folder:
             provider = ai_provider.CodexCliProvider(executable=self.fake_cli(folder, "", 1, "ERROR: You have hit your usage limit. try again at 6:01 PM."), model="")

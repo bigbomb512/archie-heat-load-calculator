@@ -787,8 +787,31 @@ class SkillWorkflowTests(unittest.TestCase):
             "proposal_fields": {"page_identities": [{"physical_page": 1, "drawing_number": "201",
                 "title": "Floor Plan", "drawing_type": "floor_plan", "alternatives": []}]}}
         self.assertEqual(skills._validate_subskill_output(task, proposal, registry, allowed_pages={1, 2}), proposal)
-        with self.assertRaisesRegex(ValueError, "unknown_page"):
-            skills._validate_subskill_output(task, proposal, registry, allowed_pages={1})
+        # A citation to pages outside the set is dropped and noted; the rest of the answer is kept.
+        import copy
+        trimmed = skills._validate_subskill_output(task, copy.deepcopy(proposal), registry, allowed_pages={1})
+        self.assertEqual(trimmed["citations"], [])
+        self.assertIn("cites pages not in the set: [2]", trimmed["remediation"][-1])
+        self.assertEqual(trimmed["proposal_fields"], proposal["proposal_fields"])
+
+    def test_malformed_citations_are_dropped_not_fatal_and_a_source_document_reference_counts(self):
+        registry = skills.load_subskill_registry()
+        task = next(row for row in registry["subskills"] if row["id"] == "sheet_identity")
+        proposal = {"subskill_id": task["id"], "subskill_version": task["version"], "status": "needs_review",
+            "affected_ids": [], "observations": [], "inferences": [],
+            "citations": [{"id": "doc", "source_document_id": "pdf-abc", "source": "case file index"},
+                          {"id": "bad-list", "physical_pages": []}, {"id": "nothing"}, "not an object",
+                          {"id": "p1", "physical_page": 1}],
+            "confidence": 0.7, "alternatives": [], "unresolved_fields": [], "remediation": ["keep me"],
+            "input_fingerprint": "a" * 64,
+            "proposal_fields": {"page_identities": [{"physical_page": 1, "drawing_number": "201", "title": "Floor Plan",
+                                                     "drawing_type": "floor_plan", "alternatives": []}]}}
+        result = skills._validate_subskill_output(task, proposal, registry, allowed_pages={1})
+        self.assertEqual([row["id"] for row in result["citations"]], ["doc", "p1"])
+        self.assertEqual(result["remediation"][0], "keep me")
+        self.assertIn("citation 2 has no usable page list", result["remediation"][-1])
+        self.assertIn("citation 3 names no page or source", result["remediation"][-1])
+        self.assertIn("citation 4 is not an object", result["remediation"][-1])
 
     def test_runtime_physical_pdf_page_citation_alias_is_accepted(self):
         registry = skills.load_subskill_registry()
@@ -959,7 +982,7 @@ class SkillWorkflowTests(unittest.TestCase):
         self.assertEqual(report["budget_chars"], 80_000)
         self.assertGreaterEqual(report["dropped_provenance_keys"], 3)
         self.assertEqual(report["truncated_strings"], 1)
-        self.assertEqual(skills._prompt_budget_chars("room_boundaries_areas"), 120_000)
+        self.assertEqual(skills._prompt_budget_chars("room_boundaries_areas"), 130_000)
         with patch.dict("os.environ", {"ARCHIE_SKILL_PROMPT_MAX_CHARS": "5000"}):
             self.assertEqual(skills._prompt_budget_chars("room_boundaries_areas"), 5000)
         self.assertEqual(skills._compact_line({"candidate_id": "P20-VLINE-1", "start_px": [10.4, 20.6], "end_px": [99.5, 20.6],

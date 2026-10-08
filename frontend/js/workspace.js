@@ -2,9 +2,8 @@
 //
 // A left rail of tabs (Project, Drawings, Rooms, Results) with a status per tab,
 // one focused page per tab, and Calculate always visible. Each tab loads only
-// its own data; the rail comes from one call (/api/job-status). The engineer
-// screen stays available as "Engineer review" (or with ?engineer=1). ?operator=1 opens the
-// Drawings tab with the AI step (one check at a time) for the Toki team.
+// its own data; the rail comes from one call (/api/job-status). Detailed tools
+// stay available with ?engineer=1. ?operator=1 opens the Drawings AI task review.
 // Addresses: #/job/<project id>/<tab>.
 (() => {
   const params = new URLSearchParams(location.search);
@@ -254,7 +253,7 @@
           await new Promise(resolve => setTimeout(resolve, PREPARE_POLL_MS));
           job = await getJson(statusUrl);
         }
-        if (job.status !== "done") throw new Error(job.error || "The drawing pages could not be prepared. Engineer review shows which pages are included.");
+        if (job.status !== "done") throw new Error(job.error || "The drawing pages could not be prepared. Detailed tools shows which pages are included.");
         await refreshAnalysis(projectId);
       })().finally(() => { if (state.preparing === run) state.preparing = null; });
       state.preparing = run;
@@ -362,7 +361,7 @@
     });
     body.querySelector("[data-ws-operator-on]")?.addEventListener("click", () => { setOperatorMode(true); renderDrawings().catch(showTabError); });
     if (tasks) wireOperator(projectId, tasks);
-    // The contractor's view refreshes itself; the operator's doesn't, so a half-pasted reply is never wiped.
+    // The workspace refreshes itself; this detailed view must keep a half-pasted reply.
     // Refresh while a step runs. Open manual checks don't: they only change when someone pastes a reply.
     if (busy(review) || busy(reading) || busy(equipment))
       state.poll = setTimeout(function refresh() {
@@ -821,7 +820,7 @@
     });
   }
 
-  // ------------------------------------------------------------------ Drawings: the AI step (Toki team)
+  // ------------------------------------------------------------------ Drawings: operator AI tasks
   // One check at a time: copy the prompt, attach the images, paste ChatGPT's reply, check and apply.
   const TASK_ORDER = ["P1_site", "S3_title_transcription", "P2_north", "P0_dimensions", "P0_wall_styles", "P0_room_names",
                       "P0_room_outlines", "S1_printed_areas", "P3_boundaries", "P4_openings", "P5_roof", "P6_kitchen"];
@@ -840,6 +839,11 @@
     const page = String(row.target).match(/^page-(\d+)(?:-dimension-(\d+))?/);
     const where = room ? room : page ? `page ${page[1]}${page[2] ? `, dimension ${page[2]}` : ""}` : row.target === "project" ? "" : String(row.target).replaceAll("-", " ");
     return `${TASK_NAME[row.task] || row.task}${where ? ` — ${where}` : ""}`;
+  }
+  function taskStatusLabel(row) {
+    if (row.status === "contractor_answered_not_sure") return "Answered: not sure";
+    if (row.status === "needs_contractor_answer") return "Waiting for your answer";
+    return row.quality_label || row.status.replaceAll("_", " ");
   }
   const minutes = seconds => seconds >= 90 ? `${Math.round(seconds / 60)} min` : `${Math.round(seconds)} s`;
   const timeOf = row => (row.reply_attempts || []).reduce((sum, attempt) => sum + (Number(attempt.operator_seconds) || 0), 0);
@@ -892,14 +896,14 @@
       </section>` : `<p class="ws-banner" data-ws-op-done>${esc(state.opMessage || "")} No checks are waiting for a reply.</p>`;
     state.opMessage = "";
     return `<div class="ws-op" data-ws-operator-panel>
-      <div class="ws-op-head"><h3>AI step <small>(Toki team)</small></h3>
+      <div class="ws-op-head"><h3>AI task review <small>(for us)</small></h3>
         <span class="ws-fine" data-ws-op-time>${timed.length ? `${minutes(total)} spent on ${timed.length} check${timed.length === 1 ? "" : "s"} · about ${minutes(total / timed.length)} each` : ""}</span>
         ${params.get("operator") === "1" ? "" : `<button class="link-button" type="button" data-ws-operator-off>Hide the AI step</button>`}</div>
       ${card}
       ${blocked.length ? `<h4>Waiting on earlier checks</h4><ul class="ws-list ws-bullets" data-ws-op-blocked>${blocked.map(item => `<li>${esc(taskTitle(item))} — ${esc(item.block_reason || "waiting")}</li>`).join("")}</ul>` : ""}
-      ${asked.length ? `<p class="ws-fine" data-ws-op-asked>${asked.length} roof question${asked.length === 1 ? " is" : "s are"} answered by the contractor on the Project tab ("What's above the tenancy").</p>` : ""}
+      ${asked.length ? `<p class="ws-fine" data-ws-op-asked>${asked.length} roof question${asked.length === 1 ? " is" : "s are"} ready for your answer on the Project tab ("What's above the tenancy").</p>` : ""}
       ${finished.length ? `<details class="ws-op-finished"><summary>Done (${finished.length})</summary><ul class="ws-list" data-ws-op-finished>${finished.map(item => `<li><span>${esc(taskTitle(item))}</span>
-        <span class="ws-fine">${esc(item.stand_in ? "Stand-in (test)" : item.quality_label || item.status.replaceAll("_", " "))}${timeOf(item) ? ` · ${minutes(timeOf(item))}` : ""}</span></li>`).join("")}</ul></details>` : ""}
+        <span class="ws-fine">${esc(item.stand_in ? "Stand-in (test)" : taskStatusLabel(item))}${timeOf(item) ? ` · ${minutes(timeOf(item))}` : ""}</span></li>`).join("")}</ul></details>` : ""}
     </div>`;
   }
 
@@ -992,7 +996,7 @@
 
   // ------------------------------------------------------------------ Rooms: measure a room on the plan
   // Guided: 1 click the room's corners (they snap to the wall lines), 2 set the scale from a printed
-  // dimension (never from the page scale alone), 3 save. Uses the same trace API as Engineer review.
+  // dimension (never from the page scale alone), 3 save. Uses the same trace API as Detailed tools.
   const SCALE_TOLERANCE = 0.02;  // the server's rule: a dimension must agree with the stated page scale within 2%
   const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
   const shoelace = points => Math.abs(points.slice(0, -1).reduce((sum, a, i) => sum + a[0] * points[i + 1][1] - points[i + 1][0] * a[1], 0)) / 2;
@@ -1005,7 +1009,7 @@
       m.ctx = await getJson(`/api/reviewer-room-geometry?project_id=${encodeURIComponent(projectId)}`);
       if (state.measure !== m || !live(projectId, "rooms")) return;
       const pages = measurePages(m.ctx);
-      if (!pages.length) throw new Error("No plan page with a full-resolution image is ready for measuring. Engineer review shows the page status.");
+      if (!pages.length) throw new Error("No plan page with a full-resolution image is ready for measuring. Detailed tools shows the page status.");
       const room = (m.ctx.rooms || []).find(row => row.room_id === m.key);
       const existing = (m.ctx.reviewer_room_geometry?.records || []).find(row => row.room_id === m.key && pages.some(page => page.page === row.page));
       // The main plan carries the printed dimensions the scale needs; room names are often on another sheet.
@@ -1349,7 +1353,7 @@
   }
 
   // Ceiling height: typed (shown as the value) or the current drawing/default height (shown greyed as the hint).
-  const HEIGHT_SOURCE = {edited: "Edited by you", preliminary_fallback: "Typical height", contractor_override: "Entered in Engineer review",
+  const HEIGHT_SOURCE = {edited: "Edited by you", preliminary_fallback: "Typical height", contractor_override: "Entered in Detailed tools",
                          project_evidence: "From the drawings", scoped_project_evidence: "From the drawings", ai_estimated: "AI-read"};
   function heightCell(row) {
     const current = state.status?.room_heights?.[row.key];
@@ -1409,7 +1413,7 @@
             <td><span class="ws-chip is-${esc(String(row.area_origin || "none").replace(/[^a-z_]/gi, "_"))}">${esc(areaSource(row))}</span></td>
             <td>${heightCell(row)}</td>
             <td><button class="link-button" type="button" data-ws-trace>Measure on the plan</button></td></tr>`;
-        }).join("") || `<tr><td colspan="7">No rooms were found on the drawings yet. They appear here once the drawing check has read the room names; Engineer review can trace them meanwhile.</td></tr>`}</tbody></table></div>
+        }).join("") || `<tr><td colspan="7">No rooms were found on the drawings yet. They appear here once the drawing check has read the room names; Detailed tools can trace them meanwhile.</td></tr>`}</tbody></table></div>
       <form class="ws-add" data-ws-add><b>Add a room the drawings missed</b>
         <label>Name<input name="label" required autocomplete="off"></label>
         <label>Used as<select name="use" required><option value="">Choose…</option>${uses.map(([id, label]) => `<option value="${esc(id)}">${esc(label)}</option>`).join("")}</select></label>
@@ -1463,7 +1467,7 @@
         status.textContent = `Saving the use of ${label}…`;
         try {
           await sendJson("/api/room-use-resolution", {project_id: projectId, action: "apply_override", room_id: key,
-            taxonomy_id: event.target.value, reviewer: userName() || "Contractor", note: "Use chosen in the job workspace."});
+            taxonomy_id: event.target.value, reviewer: userName() || "Operator", note: "Use chosen in the job workspace."});
           state.roomsModel = null;
           await after(`Use saved for ${label}.`);
         } catch (error) { status.textContent = `Could not save the use: ${error.message}`; status.classList.add("is-error"); status.setAttribute("role", "alert"); }
@@ -1480,7 +1484,7 @@
       status.textContent = `Adding ${label}…`;
       try {
         const added = await sendJson("/api/reviewer-room-geometry", {action: "add_room", project_id: projectId, label,
-          level_name: "Unassigned level", taxonomy_id: use, reviewer: userName() || "Contractor", page: planPage(rows),
+          level_name: "Unassigned level", taxonomy_id: use, reviewer: userName() || "Operator", page: planPage(rows),
           note: "Added in the job workspace."});
         const room = (added.rooms || []).find(row => row.reviewer_added && String(row.label).toLowerCase() === label.toLowerCase());
         const saved = await sendJson("/api/room-area-override", {project_id: projectId, room_id: room?.room_id || "", label,
@@ -1505,7 +1509,7 @@
       return;
     }
     try {
-      const job = await sendJson("/api/job-calculation", {project_id: projectId, reviewer: userName() || "Contractor",
+      const job = await sendJson("/api/job-calculation", {project_id: projectId, reviewer: userName() || "Operator",
                                                           include: Object.fromEntries(state.include)});
       await watchCalculation(projectId, job);
     } catch (error) {
@@ -1973,7 +1977,7 @@
     clearTimeout(state.poll);
     document.body.classList.remove("ws-open");
     if (state.analysis) showResults(state.analysis); else show("vRes");
-    requiredElement("topTitle").textContent = "Engineer review";
+    requiredElement("topTitle").textContent = "Detailed tools";
     if (enabled) document.getElementById("btnSimpleView")?.classList.remove("hide");
   }
 
@@ -2010,7 +2014,7 @@
   });
   document.getElementById("btnSimpleView")?.addEventListener("click", () => { state.engineer = false; enter(DATA); });
 
-  // Opening a job address directly (bookmark, refresh, or the "Toki team" link with ?operator=1).
+  // Opening a job address directly (bookmark, refresh, or the detailed AI task route).
   const initial = parseHash();
   if (initial && typeof openProject === "function") setTimeout(() => openProject(initial.projectId), 0);
 

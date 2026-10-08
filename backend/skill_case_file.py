@@ -40,6 +40,9 @@ SUBSKILL_KINDS = {
     "outside_air": AIR, "infiltration": AIR, "process_exhaust": AIR, "make_up_air": AIR, "airflow_deduplication": AIR,
     "system_detection": ("hvac_plant", "airflow_ventilation"), "zone_ownership": ("hvac_plant", "airflow_ventilation"),
     "plant_detection": ("hvac_plant",),
+    "air_path_reconciliation": ("hvac_plant", "airflow_ventilation"), "component_inputs": ("hvac_plant", "airflow_ventilation"),
+    "coil_duty": ("hvac_plant", "airflow_ventilation"),
+    "circuit_mapping": ("hvac_plant",), "pump_inputs": ("hvac_plant",), "pipe_effects": ("hvac_plant",), "coincident_duty": ("hvac_plant",),
     "information_needs": ALL_KINDS,
 }
 IMAGE_LIMIT = {"room_boundaries_areas": 6, "room_identity_use": 6, "cross_sheet_opening_match": 6, "glazing_properties": 6,
@@ -55,6 +58,19 @@ def available(project):
     """The case-file route can run: page reading is on for the job and pass 1 has read the pages."""
     root = Path(project["review_dir"])
     return pass1.enabled(project) and bool(read_json(root / pass1.RESULT_FILE).get("pages"))
+
+
+def worth_a_call(subskill_id, project):
+    """False when no page holds any of the kinds of information this skill works on, so it is skipped without an
+    AI call. Skills without listed kinds (document mapping, site and weather) are always worth a call."""
+    kinds = set(SUBSKILL_KINDS.get(subskill_id, ()))
+    if not kinds:
+        return True
+    root = Path(project["review_dir"])
+    pages = read_json(root / pass1.RESULT_FILE).get("pages") or {}
+    if any(item.get("kind") in kinds for row in pages.values() for item in row.get("information", [])):
+        return True
+    return any(read_json(root / pass2.RESULT_FILE).get(kind, {}).get("findings") for kind in kinds)
 
 
 def build(subskill_id, project):

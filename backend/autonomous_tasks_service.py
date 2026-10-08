@@ -248,7 +248,7 @@ def _apply_s1_areas(web, project, root, record, reply):
     if not validated["rooms"]:
         record.update({"status": "blocked", "source": "ai_determined", "applied_value": {},
                        "validation": validated,
-                       "block_reason": "Scanned plan with no printed areas or dimensions; room areas need the contractor."})
+                       "block_reason": "Scanned plan with no printed areas or dimensions; we need to enter the room areas."})
         return record
     try:
         calibration = scan_reading.calibration_from_areas(validated["rooms"], outlines,
@@ -1856,7 +1856,7 @@ def get(web, project):
 
 
 def get_labels(project):
-    """Small result-only view for contractor screens; never returns prompts or replies."""
+    """Small result-only view for the operator workspace; never returns prompts or replies."""
     root = _root(project)
     rows = []
     for record in _all_current(root):
@@ -2232,11 +2232,11 @@ def _has_explicit_roof_evidence(packet):
 
 def _answer_roof(web, project, root, data, *, defer_evidence_rebuild=False):
     if data.get("task") != "P5_roof":
-        raise ValueError("Contractor answer is only supported for roof exposure.")
+        raise ValueError("This answer action is only supported for roof exposure.")
     target = str(data.get("target", ""))
     record = _current_task(root, "P5_roof", target)
     if not record or record.get("status") != "needs_contractor_answer":
-        raise ValueError("This roof question is no longer awaiting a contractor answer.")
+        raise ValueError("This roof question is no longer waiting for your answer.")
     answer = str(data.get("answer", ""))
     answer_roof = {"floor_tenancy_above": "not_exposed", "roof_directly_above": "exposed", "not_sure": "unknown"}
     if answer not in answer_roof:
@@ -2249,20 +2249,20 @@ def _answer_roof(web, project, root, data, *, defer_evidence_rebuild=False):
     for trace in traces:
         reviewer_room_geometry_service.post(web, project, {
             "action": "classify_envelope", "trace_id": trace["trace_id"],
-            "reviewer": "Answered by the contractor", "edges": deepcopy(trace.get("edges", [])),
+            "reviewer": "Answered by us", "edges": deepcopy(trace.get("edges", [])),
             "roof": answer_roof[answer], "openings": deepcopy(trace.get("openings", [])),
             "confirm_roof": answer != "not_sure",
         }, _defer_evidence_rebuild=True)
     if answer == "not_sure":
         record.update({"status": "contractor_answered_not_sure", "source": "reviewer",
                        "applied_value": {}, "contractor_answer": answer,
-                       "contractor_answered_by": "Answered by the contractor",
+                       "contractor_answered_by": "Answered by us",
                        "block_reason": "Roof exposure remains unknown and not assessed."})
     else:
         record.update({"status": "applied", "source": "reviewer",
                        "applied_value": {"room": traces[0].get("room_label", target), "roof": answer_roof[answer],
-                                         "source": "reviewer", "label": "Answered by the contractor","part_count":len(traces)},
-                       "contractor_answer": answer, "contractor_answered_by": "Answered by the contractor",
+                                         "source": "reviewer", "label": "Answered by us","part_count":len(traces)},
+                       "contractor_answer": answer, "contractor_answered_by": "Answered by us",
                        "block_reason": ""})
     _update_record(root, record)
     _export_determinations(root)
