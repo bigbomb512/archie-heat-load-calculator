@@ -66,8 +66,8 @@ class ApplyTests(unittest.TestCase):
             self.apply(kind="roof_above", value="sky")
 
     def test_kinds_without_an_input_are_notes_and_bad_answers_are_refused(self):
-        self.assertEqual(self.apply(kind="opening_hours", value="11am-10pm"),
-                         {"applied": False, "summary": "Kept as a note (opening hours); not used by the calculation yet."})
+        self.assertEqual(self.apply(kind="other", value="Landlord supplies chilled water"),
+                         {"applied": False, "summary": "Kept as a note (other); not used by the calculation yet."})
         for data, message in (({"kind": "colour", "value": "1"}, "kind of answer"), ({"kind": "room_area", "room": "Attic", "value": "4"}, "Choose the room"),
                               ({"kind": "room_area", "room": "Shop", "value": "big"}, "as a number"),
                               ({"kind": "occupancy", "room": "Shop", "value": "-3"}, "above 0")):
@@ -127,3 +127,55 @@ class ExhaustTests(unittest.TestCase):
                     answers.apply(None, project, {"kind": "exhaust", "source": "client", **data})
         with tempfile.TemporaryDirectory() as empty:
             self.assertEqual(answers.process_exhaust(empty), {})
+
+
+class HoursAndBoundaryTests(unittest.TestCase):
+    def test_hours_become_on_off_schedules(self):
+        on = lambda values: [hour for hour, value in enumerate(values) if value]
+        self.assertEqual(on(answers.parse_hours("11-22")), list(range(11, 22)))
+        self.assertEqual(on(answers.parse_hours("11:30 - 22:15")), list(range(11, 23)))      # part-hours count as open
+        self.assertEqual(on(answers.parse_hours("18-2")), [0, 1, *range(18, 24)])             # past midnight
+        self.assertEqual(on(answers.parse_hours("Closed")), [])
+        self.assertEqual(on(answers.parse_hours("0-24")), list(range(24)))
+        for bad in ("lunch", "11-25", "11:75-22", ""):
+            with self.assertRaises(ValueError):
+                answers.parse_hours(bad)
+
+    def test_hours_for_one_room_or_every_room_reach_the_room_schedules(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder, patch.object(answers, "options", return_value=OPTIONS):
+            project = {"id": "job", "review_dir": folder}
+            result = answers.apply(None, project, {"kind": "opening_hours", "source": "client", "hours": {
+                "weekday": "11-22", "saturday": "10-23", "sunday": "closed"}})
+            self.assertEqual(result["summary"], "Opening hours for every room: Weekdays 11-22; Saturday 10-23; Sunday and holidays closed.")
+            answers.apply(None, project, {"kind": "opening_hours", "room": "Kitchen", "source": "client",
+                                          "hours": {"weekday": "9-23", "saturday": "9-23", "sunday": "9-23"}})
+            with self.assertRaisesRegex(ValueError, "Saturday hours"):
+                answers.apply(None, project, {"kind": "opening_hours", "source": "client", "hours": {"weekday": "11-22", "sunday": "closed"}})
+            proposal = answers.apply_hours(folder, {"rooms": [{"label": "Shop"}, {"label": "Kitchen"}]})
+        shop, kitchen = proposal["rooms"]
+        self.assertEqual((shop["schedules"]["weekday"][11], shop["schedules"]["weekday"][22], sum(shop["schedules"]["sunday"])), (1.0, 0.0, 0))
+        self.assertEqual(shop["schedules"]["holiday"], shop["schedules"]["sunday"])
+        self.assertEqual((kitchen["schedules"]["weekday"][9], sum(kitchen["schedules"]["sunday"])), (1.0, 14))
+        self.assertIn("answered by the operators", shop["schedule_source"])
+
+    def test_the_internal_gains_schedule_says_where_the_hours_came_from(self):
+        from ai import internal_gains_resolution, room_use_resolution
+        from ai.ai_preliminary import load_pack
+        proposal = {"rooms": [{"kind": "room", "label": "Shop", "level_name": "Ground", "area_m2": 80, "page": 2,
+                               "preliminary_profile_id": "retail", "schedules": answers.apply_hours.__globals__["json"].loads(
+                                   '{"weekday": [0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,0,0], "saturday": [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],'
+                                   ' "sunday": [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], "holiday": [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}'),
+                               "schedule_source": "Opening hours answered by the operators (client)"}]}
+        use = room_use_resolution.resolve({"spaces": []}, proposal=proposal, source_fingerprints={})
+        artifact = internal_gains_resolution.resolve({"spaces": []}, proposal=proposal, room_use=use, pack=load_pack(), source_fingerprints={})
+        schedule = artifact["schedules"][0]
+        self.assertEqual(schedule["source"], "Opening hours answered by the operators (client)")
+        self.assertEqual(schedule["day_profiles"]["weekday"][11], 1.0)
+        self.assertEqual(schedule["day_profiles"]["weekday"][10], 0.0)
+
+    def test_a_boundary_answer_is_recorded_and_sends_the_operator_to_the_walls_tab(self):
+        with patch.object(answers, "options", return_value=OPTIONS):
+            result = answers.apply(None, PROJECT, {"kind": "boundary", "room": "Kitchen", "value": "East wall faces the neighbouring tenancy", "source": "site_visit"})
+        self.assertEqual((result["applied"], result["open_tab"]), (False, "walls"))
+        self.assertIn("Walls tab", result["summary"])

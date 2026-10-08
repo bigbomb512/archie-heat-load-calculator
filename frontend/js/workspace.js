@@ -418,14 +418,19 @@
       const source = ANSWER_SOURCES.find(([key]) => key === saved?.source)?.[1] || saved?.source || "";
       const select = (attr, choices, current, empty) => `<select ${attr}><option value="">${empty}</option>${choices.map(([id, label]) =>
         `<option value="${esc(id)}" ${String(current) === String(id) ? "selected" : ""}>${esc(label)}</option>`).join("")}</select>`;
-      const needsRoom = ["room_area", "ceiling_height", "occupancy", "lighting_load", "equipment_rating", "exhaust"].includes(kind);
+      const needsRoom = ["room_area", "ceiling_height", "occupancy", "lighting_load", "equipment_rating", "exhaust", "boundary"].includes(kind);
+      const hoursFields = kind === "opening_hours"
+        ? `<label>Rooms ${select("data-ws-need-room", (options.rooms || []).map(item => [item.label, `${item.label} only`]), room, "every room")}</label>
+           ${[["weekday", "Weekdays"], ["saturday", "Saturday"], ["sunday", "Sunday & holidays"]].map(([day, label]) =>
+             `<label>${label} <input data-ws-need-hours="${day}" value="${esc(draft.hours?.[day] ?? saved?.hours?.[day] ?? "")}" placeholder="11-22 or closed"></label>`).join("")}` : "";
       const exhaustField = kind === "exhaust"
         ? `<label>Replaced by ${select("data-ws-need-method", (options.exhaust_methods || []).map(item => [item.id, item.label]), draft.method ?? "", "not known (assume through the conditioned space)")}</label>` : "";
       const glazingFields = kind === "glazing"
         ? `<label>Windows ${select("data-ws-need-room", (options.rooms || []).map(item => [item.label, `${item.label} only`]), room, "all windows")}</label>
            <label>U-value (W/m²K) <input data-ws-need-u inputmode="decimal" value="${esc(draft.u ?? "")}"></label>
            <label>SHGC <input data-ws-need-shgc inputmode="decimal" value="${esc(draft.shgc ?? "")}"></label>` : "";
-      const valueField = kind === "glazing"
+      const valueField = kind === "opening_hours" ? ""
+        : kind === "glazing"
         ? `<label>Glass (as specified) <input data-ws-need-value value="${esc(draft.value ?? saved?.answer ?? "")}" placeholder="e.g. 6.38 mm clear laminated"></label>`
         : kind === "roof_above"
         ? `<label>Answer ${select("data-ws-need-value", (options.above || []).map(item => [item.id, item.label]), draft.value ?? saved?.answer ?? "", "choose")}</label>`
@@ -438,7 +443,7 @@
           <label>Kind ${select("data-ws-need-kind", kinds.map(item => [item.id, item.label + (item.applied ? "" : " (kept as a note)")]), kind, "choose")}</label>
           ${needsRoom ? `<label>Room ${select("data-ws-need-room", (options.rooms || []).map(item => [item.label, item.label]), room, "choose a room")}</label>` : ""}
           ${kind === "equipment_rating" ? `<label>Item ${select("data-ws-need-equipment", (options.equipment || []).map(item => [item.id, item.label]), draft.equipment_id ?? saved?.equipment_id ?? "", "choose the item")}</label>` : ""}
-          ${glazingFields}
+          ${glazingFields}${hoursFields}
           ${valueField}
           ${exhaustField}
           <label>From ${select("data-ws-need-source", ANSWER_SOURCES, draft.source ?? saved?.source ?? "", "choose")}</label>
@@ -461,14 +466,17 @@
       const remember = () => {
         state.needDrafts[id] = {kind: field("kind")?.value, room: field("room")?.value, equipment_id: field("equipment")?.value,
                                 value: field("value")?.value, source: field("source")?.value, note: field("note")?.value,
-                                u: field("u")?.value, shgc: field("shgc")?.value, method: field("method")?.value};
+                                u: field("u")?.value, shgc: field("shgc")?.value, method: field("method")?.value,
+                                hours: Object.fromEntries([...item.querySelectorAll("[data-ws-need-hours]")].map(input => [input.dataset.wsNeedHours, input.value]))};
       };
       item.querySelectorAll("input, select").forEach(input => input.addEventListener("input", remember));
       // Changing the kind changes which fields the answer needs.
       field("kind")?.addEventListener("change", () => { remember(); renderDrawings().catch(showTabError); });
       field("save")?.addEventListener("click", async event => {
         const kind = field("kind").value, source = field("source").value;
-        const value = field("value")?.value.trim() || (kind === "glazing" ? "glass as specified" : "");
+        const hours = Object.fromEntries([...item.querySelectorAll("[data-ws-need-hours]")].map(input => [input.dataset.wsNeedHours, input.value.trim()]));
+        if (kind === "opening_hours" && Object.values(hours).some(text => !text)) { event.target.textContent = "Enter all three (or closed)"; return; }
+        const value = field("value")?.value.trim() || (kind === "glazing" ? "glass as specified" : kind === "opening_hours" ? Object.values(hours).join(" / ") : "");
         if (!kind) { event.target.textContent = "Choose the kind of answer"; return; }
         if (!value) { event.target.textContent = "Type the answer first"; return; }
         if (kind === "glazing" && (!field("u").value.trim() || !field("shgc").value.trim())) { event.target.textContent = "Enter the U-value and SHGC"; return; }
@@ -479,8 +487,16 @@
             room: field("room")?.value || "", equipment_id: field("equipment")?.value || "", note: field("note")?.value || "",
             ...(kind === "glazing" ? {u_value_w_m2k: field("u").value.trim(), shgc: field("shgc").value.trim()} : {}),
             ...(kind === "exhaust" ? {method: field("method").value} : {}),
+            ...(kind === "opening_hours" ? {hours} : {}),
             reviewer: userName() || "Operator"});
           delete state.needDrafts[id];
+          if (kind === "boundary") {
+            // Wall boundaries are set wall by wall on the Walls tab; open it on this room with the answer as a reminder.
+            state.wallsRoomLabel = field("room")?.value || "";
+            state.wallsHint = value;
+            location.hash = `#/job/${encodeURIComponent(projectId)}/walls/walls`;
+            return;
+          }
           await renderDrawings();
         } catch (error) { event.target.disabled = false; event.target.textContent = error.message; }
       });
@@ -1671,6 +1687,11 @@
     if (!live(projectId, "walls")) return;
     const rooms = ctx.rooms || [];
     const outlinedRooms = rooms.filter(row => envelopeRecords(row.room_id).length);
+    if (state.wallsRoomLabel) {
+      const asked = outlinedRooms.find(row => String(row.label).toLowerCase() === state.wallsRoomLabel.toLowerCase());
+      if (asked) { state.wallsRoomId = asked.room_id; state.wallsTraceId = ""; }
+      state.wallsRoomLabel = "";
+    }
     if (!state.wallsRoomId || !outlinedRooms.some(row => row.room_id === state.wallsRoomId))
       state.wallsRoomId = outlinedRooms[0]?.room_id || "";
     let selectedRoom = outlinedRooms.find(row => row.room_id === state.wallsRoomId);
@@ -1695,6 +1716,7 @@
       ${trace.points_image_px.slice(0, -1).map((point, i) => { const end = trace.points_image_px[i + 1];
         return `<line data-wall-edge="${i}" x1="${point[0]}" y1="${point[1]}" x2="${end[0]}" y2="${end[1]}" stroke="${colors[draftBoundary(i)] || colors.unknown}" class="${i === Number(state.selectedWallEdge) ? "is-selected" : ""}"/>`;}).join("")}</svg></div>` : "";
     body.innerHTML = `<div class="ws-card" data-ws-walls><h2>${roofTab ? "Roof" : "Walls"}</h2>
+      ${state.wallsHint && !roofTab ? `<p class="ws-banner" data-ws-walls-hint>From What we need to find: ${esc(state.wallsHint)} <button class="link-button" type="button" data-ws-walls-hint-close>Done</button></p>` : ""}
       <p class="ws-hint">${roofTab ? "For each room, record whether another tenancy or the roof is directly above it." : "Classify what each traced room wall faces. Area-only rooms stay unassessed until they are measured."}</p>
       ${outlinedRooms.length ? `<label>Room <select data-ws-wall-room>${outlinedRooms.map(room => `<option value="${esc(room.room_id)}" ${room.room_id === state.wallsRoomId ? "selected" : ""}>${esc(room.label)}${room.level_name ? ` — ${esc(room.level_name)}` : ""}</option>`).join("")}</select></label>` : `<p>${roofTab ? "Add a room outline on the Walls tab before recording what is above it." : "Add room outlines on the Rooms tab to review walls and roof."}</p>`}
       ${traces.length > 1 ? `<label>Outline <select data-ws-wall-trace>${traces.map((row, i) => `<option value="${esc(row.trace_id)}" ${row.trace_id === trace?.trace_id ? "selected" : ""}>Page ${row.page} — part ${i + 1}</option>`).join("")}</select></label>` : ""}
@@ -1712,6 +1734,7 @@
       ${nextButton("walls")}</div>`;
     state.message = "";
     body.querySelector("[data-ws-wall-room]")?.addEventListener("change", event => { state.wallsRoomId = event.target.value; state.wallsTraceId = ""; renderWalls(); });
+    body.querySelector("[data-ws-walls-hint-close]")?.addEventListener("click", () => { state.wallsHint = ""; renderWalls(); });
     body.querySelector("[data-ws-wall-trace]")?.addEventListener("change", event => { state.wallsTraceId = event.target.value; renderWalls(); });
     body.querySelectorAll("[data-ws-measure-room]").forEach(button => button.addEventListener("click", () => measureRoom(rooms.find(row => row.room_id === button.dataset.wsMeasureRoom))));
     body.querySelectorAll("[data-ws-boundary]").forEach(select => select.addEventListener("change", () => {

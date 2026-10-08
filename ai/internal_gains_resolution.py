@@ -296,8 +296,10 @@ def resolve(building, vision=None, proposal=None, room_use=None, pack=None,
         prior_schedule_input = (previous.get(room_id) or {}).get("schedule_input", {})
         schedule_profiles = _schedule_for({"schedules": schedule_input or prior_schedule_input}, profile_id)
         invalid_schedule_days = [day for day in DAY_TYPES if isinstance(schedule_input, dict) and day in schedule_input and not _valid_schedule(schedule_input.get(day))]
+        schedule_source = next((_text(source.get("schedule_source")) for source in sources
+                                if isinstance(source, dict) and isinstance(source.get("schedules"), dict) and source.get("schedule_source")), "")
         schedules.append({"schedule_id": schedule_id, "room_id": room_id, "status": "needs_review" if invalid_schedule_days else "provisional",
-                          "source": "direct project/PDF evidence" if schedule_input else "controlled preliminary room-use profile",
+                          "source": (schedule_source or "direct project/PDF evidence") if schedule_input else "controlled preliminary room-use profile",
                           "origin": "direct_project_evidence" if schedule_input else "controlled_preliminary_profile",
                           "confidence": .85 if schedule_input and not invalid_schedule_days else .3,
                           "invalid_day_types": invalid_schedule_days, "day_profiles": schedule_profiles,

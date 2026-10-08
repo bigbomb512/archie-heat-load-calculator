@@ -123,6 +123,7 @@ def _sources(paths):
         # Answers from the What-we-need-to-find list that the model reads directly.
         "glazing_answers": ai_preliminary.fingerprint(_read(paths["root"] / "glazing_answers.json", {})),
         "exhaust_answers": ai_preliminary.fingerprint(_read(paths["root"] / "exhaust_answers.json", {})),
+        "hours_answers": ai_preliminary.fingerprint(_read(paths["root"] / "hours_answers.json", {})),
     }
 
 
@@ -342,7 +343,8 @@ def _resolve_airflow(paths, persist=False):
 
 def _proposal_for_resolution(paths, equipment=True):
     """The room proposal the resolvers read: room-use findings, then accepted equipment from the PDF review."""
-    proposal = _proposal_with_skill_findings(paths)
+    from backend import need_answers_service
+    proposal = need_answers_service.apply_hours(paths["root"], _proposal_with_skill_findings(paths))
     return _with_accepted_equipment(paths, proposal) if equipment else proposal
 
 

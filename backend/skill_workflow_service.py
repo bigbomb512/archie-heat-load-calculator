@@ -2752,7 +2752,9 @@ def _answer_need(web, project, data):
                  and row["subskill_id"] == "information_needs" and row["field"] == "needs"), None)
     if not need:
         raise ValueError("That item isn't on the current list. Refresh and try again.")
-    answer = " ".join(str(data.get("value") if data.get("value") not in (None, "") else data.get("answer") or "").split())[:500]
+    hours = data.get("hours") if isinstance(data.get("hours"), dict) else {}
+    answer = " ".join(str(data.get("value") if data.get("value") not in (None, "") else data.get("answer") or
+                          "; ".join(f"{day} {text}" for day, text in hours.items() if text)).split())[:500]
     source = str(data.get("source") or "")
     if not answer:
         raise ValueError("Type the answer before saving it.")
@@ -2765,10 +2767,12 @@ def _answer_need(web, project, data):
         "target": value.get("target", ""), "field": value.get("field", ""), "kind": data.get("kind") or "other",
         "room": data.get("room") or "", "equipment_id": data.get("equipment_id") or "", "answer": answer, "source": source,
         "note": " ".join(str(data.get("note") or "").split())[:300], "applied": result["applied"], "summary": result["summary"],
+        "hours": data.get("hours") if isinstance(data.get("hours"), dict) else None,
         "by": " ".join(str(data.get("reviewer") or "").split())[:80] or "Operator", "at": time.time()}
     _atomic_json(paths["root"] / ANSWERS_FILE, stored)
     response = _response(web, project)
     response["answer_options"] = need_answers_service.options(web, project)
+    response["open_tab"] = result.get("open_tab", "")
     return response
 
 

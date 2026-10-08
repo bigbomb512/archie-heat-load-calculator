@@ -436,12 +436,12 @@ test("Drawings: what we need to find lists only the gaps, with where to look, an
     value: {target, field, answer_kind: kind, room, why, impact: "kitchen equipment, likely several kW", where_to_look: where, pages: "5, 20"}, status: "proposed", evidence: "missing"});
   const answer_options = {kinds: [{id: "equipment_rating", label: "Equipment rated power", applied: true, unit: "W"},
                                   {id: "occupancy", label: "Number of people", applied: true, unit: "people"},
-                                  {id: "opening_hours", label: "Opening hours", applied: false, unit: ""}],
+                                  {id: "other", label: "Other", applied: false, unit: ""}],
                           rooms: [{label: "Kitchen", level: "Ground"}, {label: "Shop", level: "Ground"}],
                           equipment: [{id: "eq:oven", label: "E06 COMBI OVEN"}], above: [{id: "roof", label: "The roof"}]};
   const skill = () => ({status: "needs_review", read_only: false, stages: [], answers, answer_options, findings: [
     need(0, "E06 Combi oven", "rated_input_w", "equipment_rating", "Kitchen", "No rating is printed on the schedule or plans.", "equipment spec sheet or supplier quote"),
-    need(1, "Shop", "operating_hours", "opening_hours", null, "No opening hours in the drawings.", "the client"),
+    need(1, "Base building", "chilled_water", "other", null, "The drawings don't say whether the landlord supplies chilled water.", "the landlord"),
     {id: "information_needs:inferred:0", subskill_id: "information_needs", field: "inferred", status: "proposed", evidence: "inferred",
      value: {target: "Shop", field: "ceiling_height", value: "3.2", unit: "m", method: "Section A ceiling line", pages: "31"}},
     {id: "equipment_evidence:equipment:0", subskill_id: "equipment_evidence", field: "equipment", status: "proposed", evidence: "supported",
@@ -450,9 +450,9 @@ test("Drawings: what we need to find lists only the gaps, with where to look, an
   const posts = [];
   await mockJob(page, {status: () => baseStatus(), skill,
     onPost: (kind, body) => { if (kind === "skill" && body.action === "answer_need") { posts.push(body);
-      const applied = body.kind !== "opening_hours";
+      const applied = body.kind !== "other";
       answers[body.finding_id] = {kind: body.kind, room: body.room, equipment_id: body.equipment_id, answer: body.value, source: body.source, by: "Sam", applied,
-        summary: applied ? "E06 COMBI OVEN in Kitchen: 18000 W each × 1 × 0.2 to the room." : "Kept as a note (opening hours); not used by the calculation yet."};
+        summary: applied ? "E06 COMBI OVEN in Kitchen: 18000 W each × 1 × 0.2 to the room." : "Kept as a note (other); not used by the calculation yet."};
       return skill(); } return null; }});
   await page.goto("/#/job/job-1/drawings");
   const section = page.locator("[data-ws-needs]");
@@ -470,11 +470,11 @@ test("Drawings: what we need to find lists only the gaps, with where to look, an
   expect(posts[0]).toMatchObject({action: "answer_need", finding_id: "information_needs:needs:0", kind: "equipment_rating", room: "Kitchen",
                                   equipment_id: "eq:oven", value: "18 kW", source: "spec_sheet"});
   await expect(section.locator("[data-ws-need='information_needs:needs:0'] [data-ws-need-applied]")).toContainText("In the calculation: E06 COMBI OVEN in Kitchen");
-  const hours = section.locator("[data-ws-need='information_needs:needs:1']");
-  await expect(hours.locator("[data-ws-need-room]")).toHaveCount(0);                       // opening hours aren't per room here
-  await hours.locator("[data-ws-need-value]").fill("Mon-Sun 11am-10pm");
-  await hours.locator("[data-ws-need-source]").selectOption("client");
-  await hours.locator("[data-ws-need-save]").click();
+  const note = section.locator("[data-ws-need='information_needs:needs:1']");
+  await expect(note.locator("[data-ws-need-room]")).toHaveCount(0);                        // a note isn't tied to a room
+  await note.locator("[data-ws-need-value]").fill("Landlord supplies chilled water");
+  await note.locator("[data-ws-need-source]").selectOption("landlord");
+  await note.locator("[data-ws-need-save]").click();
   await expect(section.locator("[data-ws-need='information_needs:needs:1'] [data-ws-need-applied]")).toContainText("not used by the calculation yet");
   await expect(section.locator("[data-ws-needs-status]")).toHaveText("2 items the drawings don't give · all answered.");
   await section.getByText("Worked out from the drawings (1)").click();
@@ -528,6 +528,53 @@ test("Drawings: an exhaust answer takes the kitchen, its rate and how the air is
   await need.locator("[data-ws-need-save]").click();
   await expect.poll(() => posts.length).toBe(1);
   expect(posts[0]).toMatchObject({kind: "exhaust", room: "Kitchen", value: "1200", method: "", source: "mechanical_drawings"});
+});
+
+test("Drawings: opening hours are entered per day type, for every room or one room", async ({page}) => {
+  const posts = [];
+  const skill = () => ({status: "needs_review", stages: [], answers: {}, answer_options: {
+      kinds: [{id: "opening_hours", label: "Opening hours", applied: true, unit: ""}], rooms: [{label: "Shop", level: "Ground"}], equipment: [], above: []},
+    findings: [{id: "information_needs:needs:0", subskill_id: "information_needs", field: "needs", status: "proposed",
+      value: {target: "Tenancy", field: "operating_hours", answer_kind: "opening_hours", room: null, why: "No opening hours in the drawings.",
+              impact: "when the peak falls", where_to_look: "the client", pages: ""}}]});
+  await mockJob(page, {status: () => baseStatus(), skill,
+    onPost: (kind, body) => { if (kind === "skill" && body.action === "answer_need") posts.push(body); return null; }});
+  await page.goto("/#/job/job-1/drawings");
+  const need = page.locator("[data-ws-need='information_needs:needs:0']");
+  await expect(need.locator("[data-ws-need-room]")).toHaveValue("");                        // every room unless one is chosen
+  await need.locator("[data-ws-need-hours='weekday']").fill("11-22");
+  await need.locator("[data-ws-need-source]").selectOption("client");
+  await need.locator("[data-ws-need-save]").click();
+  await expect(need.locator("[data-ws-need-save]")).toHaveText("Enter all three (or closed)");
+  await need.locator("[data-ws-need-hours='saturday']").fill("10-23");
+  await need.locator("[data-ws-need-hours='sunday']").fill("closed");
+  await need.locator("[data-ws-need-save]").click();
+  await expect.poll(() => posts.length).toBe(1);
+  expect(posts[0]).toMatchObject({kind: "opening_hours", room: "", hours: {weekday: "11-22", saturday: "10-23", sunday: "closed"}});
+});
+
+test("Drawings: a wall-boundary answer opens the Walls tab on that room with the answer as a reminder", async ({page}) => {
+  const {context, trace} = envelopeFixture();
+  // The Kitchen is listed first, so without the hand-off the Walls tab would open on it.
+  context.reviewer_room_geometry.records = [{...trace, trace_id: "kitchen-trace", room_id: "room-use:unassigned-level:kitchen", room_label: "Kitchen"}, trace];
+  const skill = () => ({status: "needs_review", stages: [], answers: {}, answer_options: {
+      kinds: [{id: "boundary", label: "What is beyond a wall (set on the Walls tab)", applied: false, unit: ""}],
+      rooms: [{label: "Kitchen", level: "Unassigned level"}, {label: "Shop", level: "Unassigned level"}], equipment: [], above: []},
+    findings: [{id: "information_needs:needs:0", subskill_id: "information_needs", field: "needs", status: "proposed",
+      value: {target: "Shop east wall", field: "boundary", answer_kind: "boundary", room: "Shop", why: "The plan doesn't show what is beyond the east wall.",
+              impact: "wall conduction", where_to_look: "a site visit or the centre plan", pages: "20"}}]});
+  await mockJob(page, {status: () => baseStatus(), geometry: () => context, skill,
+    onPost: (kind, body) => kind === "skill" && body.action === "answer_need" ? {...skill(), open_tab: "walls"} : null});
+  await page.goto("/#/job/job-1/drawings");
+  const need = page.locator("[data-ws-need='information_needs:needs:0']");
+  await need.locator("[data-ws-need-value]").fill("East wall faces the neighbouring tenancy");
+  await need.locator("[data-ws-need-source]").selectOption("site_visit");
+  await need.locator("[data-ws-need-save]").click();
+  await expect(page).toHaveURL(/#\/job\/job-1\/walls\/walls$/);
+  await expect(page.locator("[data-ws-walls-hint]")).toContainText("From What we need to find: East wall faces the neighbouring tenancy");
+  await expect(page.locator("[data-ws-wall-room]")).toHaveValue(context.rooms[1].room_id);
+  await page.locator("[data-ws-walls-hint-close]").click();
+  await expect(page.locator("[data-ws-walls-hint]")).toHaveCount(0);
 });
 
 test("Drawings: before the skills have run, the needs list says when it will appear", async ({page}) => {

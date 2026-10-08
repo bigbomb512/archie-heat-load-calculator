@@ -11,7 +11,11 @@ Each item on the list has a kind. Kinds with an existing input route go straight
                       applied to the windows when the calculation's proposal is prepared)
 - exhaust          -> a room's kitchen exhaust rate (L/s) and how the exhausted air is replaced (exhaust_answers.json,
                       passed to the calculation model; see EXHAUST_METHODS)
-Other kinds (opening hours, a wall's boundary, anything else) are kept as notes with their source,
+- opening_hours    -> the hours a room (or every room) is open on weekdays, Saturdays and Sundays/holidays
+                      (hours_answers.json): its people, lighting, equipment and outside-air schedule
+- boundary         -> what is beyond a wall: recorded, and set on the Walls tab, which is what the calculation reads
+                      (a need names a wall in words; matching it to one traced wall is left to the operator)
+Other kinds are kept as notes with their source,
 and the list says they are not used by the calculation yet. Press Calculate afterwards to update the result.
 """
 
@@ -32,6 +36,8 @@ EXHAUST_METHODS = {
     "tempered_makeup": "A separately cooled (tempered) make-up air unit",
 }
 EXHAUST_RANGE_LPS = (10.0, 20000.0)
+HOURS_FILE = "hours_answers.json"
+HOURS_DAYS = (("weekday", "Weekdays"), ("saturday", "Saturday"), ("sunday", "Sunday and holidays"))
 U_RANGE = (0.5, 7.0)       # W/m²K: from triple glazing to single clear glass
 SHGC_RANGE = (0.05, 0.95)
 
@@ -44,9 +50,9 @@ APPLIED_KINDS = {
     "roof_above": {"label": "What is above the tenancy", "unit": "", "room": False, "choice": True},
     "glazing": {"label": "Glass performance (U-value and SHGC)", "unit": "", "room": "optional"},
     "exhaust": {"label": "Kitchen exhaust rate and make-up air", "unit": "L/s", "room": True},
+    "opening_hours": {"label": "Opening hours", "unit": "", "room": "optional"},
 }
-NOTE_KINDS = {"opening_hours": "Opening hours",
-              "boundary": "What is beyond a wall, floor or ceiling", "other": "Other"}
+NOTE_KINDS = {"boundary": "What is beyond a wall (set on the Walls tab)", "other": "Other"}
 KINDS = {**{key: row["label"] for key, row in APPLIED_KINDS.items()}, **NOTE_KINDS}
 
 
@@ -116,6 +122,8 @@ def apply(web, project, data):
         raise ValueError("Choose what kind of answer this is.")
     reviewer = " ".join(str(data.get("reviewer") or "").split())[:80] or "Operator"
     note = f"From the What-we-need-to-find list ({data.get('source', '')})"
+    if kind == "boundary":
+        return {"applied": False, "summary": "Recorded. Set the walls on the Walls tab: that is what the calculation uses.", "open_tab": "walls"}
     if kind not in APPLIED_KINDS:
         return {"applied": False, "summary": f"Kept as a note ({KINDS[kind].lower()}); not used by the calculation yet."}
     found = options(web, project)
@@ -131,6 +139,8 @@ def apply(web, project, data):
         return _save_glazing(project, data, found["rooms"], reviewer)
     if kind == "exhaust":
         return _save_exhaust(project, data, found["rooms"], reviewer)
+    if kind == "opening_hours":
+        return _save_hours(project, data, found["rooms"], reviewer)
     room = _room(data, found["rooms"])
     where = room["label"]
     if kind == "room_area":
@@ -253,3 +263,64 @@ def process_exhaust(root):
         return {}
     stored = json.loads(path.read_text(encoding="utf-8"))
     return {str(label).casefold(): dict(row) for label, row in (stored.get("rooms") or {}).items()}
+
+
+def parse_hours(text):
+    """"11-22", "11:30-22", "18-2" (past midnight) or "closed" -> 24 hourly values (1 open, 0 closed).
+
+    Whole hours: a part-hour counts as open (open from the hour it starts, until the hour it ends is over)."""
+    text = " ".join(str(text or "").lower().split())
+    if text in {"closed", "close", "shut", "0"}:
+        return [0.0] * 24
+    import re
+    match = re.fullmatch(r"(\d{1,2})(?::(\d{2}))?\s*(?:-|–|to)\s*(\d{1,2})(?::(\d{2}))?", text)
+    if not match:
+        raise ValueError('Enter hours like "11-22" (24-hour clock), "18-2" past midnight, or "closed".')
+    start, start_min, end, end_min = int(match[1]), int(match[2] or 0), int(match[3]), int(match[4] or 0)
+    if not (0 <= start <= 24 and 0 <= end <= 24 and start_min < 60 and end_min < 60):
+        raise ValueError("Hours must be between 0 and 24.")
+    start, end = start % 24, (end + (1 if end_min else 0)) % 24
+    if start == end:
+        return [1.0] * 24          # open around the clock
+    hours = range(start, end) if start < end else [*range(start, 24), *range(0, end)]
+    return [1.0 if hour in set(hours) else 0.0 for hour in range(24)]
+
+
+def _save_hours(project, data, rooms, reviewer):
+    room = _room(data, rooms)["label"] if str(data.get("room") or "").strip() else ""
+    hours = data.get("hours") if isinstance(data.get("hours"), dict) else {}
+    profiles, said = {}, []
+    for day, label in HOURS_DAYS:
+        text = str(hours.get(day) or "").strip()
+        if not text:
+            raise ValueError(f"Enter the {dict(weekday='weekday', saturday='Saturday', sunday='Sunday and holiday')[day]} hours (or \"closed\").")
+        profiles[day] = parse_hours(text)
+        said.append(f"{label} {text}")
+    profiles["holiday"] = list(profiles["sunday"])
+    path = Path(project["review_dir"]) / HOURS_FILE
+    stored = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {"rooms": {}, "all": None}
+    record = {"hours": {day: str(hours.get(day)).strip() for day, _label in HOURS_DAYS}, "profiles": profiles,
+              "source": str(data.get("source") or ""), "by": reviewer, "at": time.time()}
+    if room:
+        stored.setdefault("rooms", {})[room] = record
+    else:
+        stored["all"] = record
+    _write_answers(path, stored)
+    return {"applied": True, "summary": f"Opening hours for {room or 'every room'}: {'; '.join(said)}."}
+
+
+def apply_hours(root, proposal):
+    """Give each room its answered opening hours as its schedule (a room's own answer, else the one for every room)."""
+    path = Path(root) / HOURS_FILE
+    if not path.is_file():
+        return proposal
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    rooms = {str(label).casefold(): row for label, row in (stored.get("rooms") or {}).items()}
+    for room in proposal.get("rooms", []) if isinstance(proposal, dict) else []:
+        if not isinstance(room, dict):
+            continue
+        answer = rooms.get(str(room.get("label", "")).casefold()) or stored.get("all")
+        if answer:
+            room["schedules"] = json.loads(json.dumps(answer["profiles"]))
+            room["schedule_source"] = f"Opening hours answered by the operators ({answer.get('source') or 'source not given'})"
+    return proposal
