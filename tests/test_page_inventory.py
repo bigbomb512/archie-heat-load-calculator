@@ -184,3 +184,29 @@ class ServiceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UsageLimitTests(unittest.TestCase):
+    def test_after_the_usage_limit_no_more_pages_are_sent_and_the_reason_says_when_to_retry(self):
+        message = ("ERROR: You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), "
+                   "visit https://chatgpt.com/settings/usage to purchase more credits or try again at 6:01 PM.")
+        reason = service._usage_limit_message(message)
+        self.assertIn("usage limit is reached; it resets at 6:01 PM", reason)
+        self.assertEqual(service._usage_limit_message("Codex CLI failed: network down"), "")
+
+        class LimitedReader:
+            model, calls = "fake", []
+
+            def propose(self, prompt, image_paths=()):
+                self.calls.append(image_paths[0])
+                raise service.UsageLimitReached(reason)
+
+        with tempfile.TemporaryDirectory() as folder:
+            images = {}
+            for page in (1, 2, 3):
+                images[page] = Path(folder) / f"p-{page}.png"
+                images[page].write_bytes(bytes([page]))
+            reader = LimitedReader()
+            readings, failures, calls = service.read_pages(images, Path(folder) / "replies", reader, workers=1)
+        self.assertEqual((readings, calls, len(reader.calls)), ({}, 1, 1))
+        self.assertEqual(set(failures.values()), {reason})

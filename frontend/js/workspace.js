@@ -290,10 +290,11 @@
     }
     let status = await loadStatus();
     if (!live(projectId, "drawings")) return;
-    const [review, vision, reading] = await Promise.all([
+    const [review, vision, reading, equipment] = await Promise.all([
       getJson(`/api/skill-workflow?project_id=${encodeURIComponent(projectId)}`),
       getJson(`/api/vision-extraction?project_id=${encodeURIComponent(projectId)}`),
       getJson(`/api/page-reading?project_id=${encodeURIComponent(projectId)}`).catch(() => null),
+      getJson(`/api/page-extraction?project_id=${encodeURIComponent(projectId)}&kind=equipment_appliances`).catch(() => null),
     ]);
     if (!live(projectId, "drawings")) return;
     state.skillReview = review;
@@ -321,6 +322,7 @@
       <p class="ws-hint">PDF review searches the drawing set for heat-load evidence. You can review each proposed value with its page evidence before it is used.</p>
       <p data-ws-checks role="status">${esc(operatorMode() && pendingReview ? `${done} of ${checks.total} checks resolved. Answer the remaining Toki checks below.` : drawingMessage)}</p>
       ${reading ? pageReadingMarkup(reading) : ""}
+      ${equipment && (equipment.status !== "none" || equipment.findings?.length) ? equipmentMarkup(equipment) : ""}
       ${pdfReviewMarkup(review, vision)}
       ${pendingReview && !operatorMode() ? `<p class="ws-fine">You can continue with the information already available. The Toki team will resolve the remaining drawing checks.
         <button class="link-button" type="button" data-ws-operator-on>Open Toki team review</button></p>` : ""}
@@ -332,6 +334,7 @@
     wirePages(projectId);
     wirePdfReview(projectId, review, vision);
     if (reading) wirePageReading(projectId);
+    if (equipment) wireEquipment(projectId, equipment);
     body.querySelector("[data-ws-manual-fallback]")?.addEventListener("click", async () => {
       const button = body.querySelector("[data-ws-manual-fallback]");
       button.disabled = true;
@@ -344,8 +347,13 @@
     body.querySelector("[data-ws-operator-on]")?.addEventListener("click", () => { setOperatorMode(true); renderDrawings().catch(showTabError); });
     if (tasks) wireOperator(projectId, tasks);
     // The contractor's view refreshes itself; the operator's doesn't, so a half-pasted reply is never wiped.
-    if ((pendingReview && !operatorMode()) || ["queued", "running"].includes(review.status) || ["queued", "running"].includes(reading?.status))
-      state.poll = setTimeout(() => { if (live(projectId, "drawings")) renderDrawings().catch(() => {}); }, 3000);
+    if ((pendingReview && !operatorMode()) || ["queued", "running"].includes(review.status) || ["queued", "running"].includes(reading?.status) || ["queued", "running"].includes(equipment?.status))
+      state.poll = setTimeout(function refresh() {
+        if (!live(projectId, "drawings")) return;
+        // Don't redraw under someone typing a correction; try again shortly.
+        if (body.contains(document.activeElement) && document.activeElement.matches("input, textarea, select")) { state.poll = setTimeout(refresh, 3000); return; }
+        renderDrawings().catch(() => {});
+      }, 3000);
   }
 
   const PAGE_TYPE_NAMES = {floor_plan: "Floor plan", reflected_ceiling_plan: "Ceiling plan", services_plan: "Services plan",
@@ -380,6 +388,94 @@
       ${canStart ? `<button class="btn ghost mini" type="button" data-ws-page-reading-start>${reading.status === "none" ? "Read the pages" : "Retry reading"}</button>` : ""}
       ${mainPlans}
       ${rows ? `<details data-ws-read-open="list" ${state.readOpen?.has("list") ? "open" : ""}><summary>What's on each page (${reading.read} of ${reading.page_count} read)</summary><ul class="ws-read-pages">${rows}</ul></details>` : ""}</section>`;
+  }
+
+  const EQUIPMENT_EDIT = [["quantity", "Qty"], ["size", "Size"], ["model", "Model"], ["rated_power", "Power"], ["under_hood", "Under hood"]];
+
+  function equipmentMarkup(run) {
+    const running = ["queued", "running"].includes(run.status);
+    const statusText = running ? (run.section_count ? `Reading equipment: ${run.sections_done || 0} of ${run.section_count} pages…` : `${run.step_label || "Starting"}…`)
+      : ["failed", "blocked", "interrupted"].includes(run.status) ? run.problem || "Reading the equipment didn't finish."
+      : `${run.findings.length} item${run.findings.length === 1 ? "" : "s"} from ${run.pages.length} page${run.pages.length === 1 ? "" : "s"}${run.open ? ` · ${run.open} to review` : " · all reviewed"}.`;
+    const shown = value => value === null || value === undefined || value === "" ? "" : value === true ? "yes" : value === false ? "no" : String(value);
+    const rows = run.findings.map(row => {
+      const value = row.decided_value || row.value;
+      const facts = [value.quantity != null ? `×${value.quantity}` : "", value.size, value.model, value.rated_power || "power not printed",
+                     value.under_hood === true ? "under hood" : ""].filter(Boolean).map(esc).join(" · ");
+      const conflicts = Object.entries(row.conflicts || {}).map(([field, options]) => `<li>${esc(field.replaceAll("_", " "))}: ${options.map(option =>
+        `<button type="button" class="link-button" data-ws-eq-pick="${esc(field)}" data-ws-eq-value="${esc(JSON.stringify(option.value))}">${esc(shown(option.value))} (p${option.pages.join(", p")})</button>`).join(" or ")}</li>`).join("");
+      const check = row.text_match === false ? `<p class="ws-fine is-warn" data-ws-eq-textcheck>Not found in the page's text: check this reading on the page.</p>` : "";
+      // Unsaved edits survive the tab's auto-refresh.
+      const edits = state.eqEdits?.[row.id] || {};
+      const typed = field => field in edits ? edits[field] : field === "under_hood" ? (value.under_hood === null || value.under_hood === undefined ? "" : String(value.under_hood)) : shown(value[field]);
+      const editor = EQUIPMENT_EDIT.map(([field, label]) => field === "under_hood"
+        ? `<label>${label} <select data-ws-eq-field="under_hood"><option value="">not shown</option><option value="true" ${typed(field) === "true" ? "selected" : ""}>yes</option><option value="false" ${typed(field) === "false" ? "selected" : ""}>no</option></select></label>`
+        : `<label>${label} <input data-ws-eq-field="${field}" value="${esc(typed(field))}" ${field === "quantity" ? 'inputmode="numeric"' : ""}></label>`).join("");
+      const actions = row.status === "proposed"
+        ? `<div class="ws-eq-edit">${editor}</div>${conflicts ? `<p class="ws-fine">The pages disagree. Choose a reading or type the value:</p><ul>${conflicts}</ul>` : ""}
+           <div class="ws-actions"><button class="btn key mini" type="button" data-ws-eq-accept>${row.conflicts && Object.keys(row.conflicts).length ? "Save chosen value" : "Accept"}</button>
+           <button class="btn ghost mini" type="button" data-ws-eq-reject>Reject</button></div>`
+        : `<p class="ws-fine">${esc(row.status)}${row.reviewer ? ` by ${esc(row.reviewer)}` : ""} · not yet used in the calculation</p>`;
+      return `<li class="ws-eq" data-ws-eq="${esc(row.id)}"><details data-ws-read-open="eq:${esc(row.id)}" ${state.readOpen?.has(`eq:${row.id}`) ? "open" : ""}>
+        <summary><b>${value.code ? `${esc(value.code)} ` : ""}${esc(value.name)}</b> <span class="ws-chip ws-evidence-${esc(row.evidence)}">${esc(row.evidence)}</span>
+        ${row.status !== "proposed" ? `<span class="ws-chip">${esc(row.status)}</span>` : ""}<br><span class="ws-fine">${facts} · p${row.pages.join(", p")}</span></summary>
+        ${row.pictures_only ? `<p class="ws-fine">Seen only in renders or photos, so it shows design intent: check it against the plans.</p>` : ""}
+        <ul>${row.citations.map(cite => `<li>Page ${esc(cite.page)}${cite.excerpt ? `: ${esc(cite.excerpt)}` : ""}</li>`).join("")}</ul>${check}${actions}</details></li>`;
+    }).join("");
+    const canRetry = ["failed", "blocked", "interrupted"].includes(run.status);
+    return `<section class="ws-page-reading" aria-label="Equipment found in the drawings" data-ws-equipment><h3>Equipment found in the drawings</h3>
+      <p class="ws-fine">Read from every page that shows equipment. These are proposals: accept, correct or reject each one. Power ratings are only what the drawings print.</p>
+      <p class="${canRetry ? "ws-banner is-warn" : "ws-fine"}" role="status" data-ws-equipment-status>${esc(statusText)}</p>
+      ${canRetry ? `<button class="btn ghost mini" type="button" data-ws-equipment-retry>Retry reading the equipment</button>` : ""}
+      ${rows ? `<ul class="ws-read-pages">${rows}</ul>` : ""}</section>`;
+  }
+
+  function wireEquipment(projectId, run) {
+    body.querySelector("[data-ws-equipment-retry]")?.addEventListener("click", async event => {
+      event.target.disabled = true;
+      try { await sendJson("/api/page-extraction", {project_id: projectId, action: "retry"}); await renderDrawings(); }
+      catch (error) { event.target.disabled = false; event.target.textContent = `Couldn't start: ${error.message}`; }
+    });
+    body.querySelectorAll("[data-ws-eq]").forEach(card => {
+      const finding = run.findings.find(row => row.id === card.dataset.wsEq);
+      if (!finding) return;
+      state.eqEdits ||= {};
+      const remember = input => { (state.eqEdits[finding.id] ||= {})[input.dataset.wsEqField] = input.value; };
+      const chosen = () => Object.keys(state.eqEdits[finding.id] || {}).length > 0;
+      card.querySelectorAll("[data-ws-eq-field]").forEach(input => {
+        input.addEventListener("input", () => remember(input));
+        input.addEventListener("change", () => remember(input));
+      });
+      card.querySelectorAll("[data-ws-eq-pick]").forEach(button => button.addEventListener("click", () => {
+        const field = card.querySelector(`[data-ws-eq-field="${button.dataset.wsEqPick}"]`);
+        const picked = JSON.parse(button.dataset.wsEqValue);
+        if (field) { field.value = picked === null ? "" : String(picked); remember(field); }
+      }));
+      const decide = async (decision, button) => {
+        let value;
+        if (decision === "accepted") {
+          value = {...finding.value};
+          for (const input of card.querySelectorAll("[data-ws-eq-field]")) {
+            const field = input.dataset.wsEqField, text = input.value.trim();
+            if (field === "quantity") {
+              if (text && !/^\d+$/.test(text)) { button.textContent = "Quantity must be a whole number"; return; }
+              value.quantity = text ? Number(text) : null;
+            } else if (field === "under_hood") value.under_hood = text === "" ? null : text === "true";
+            else value[field] = text;
+          }
+          if (Object.keys(finding.conflicts || {}).length && !chosen()) { button.textContent = "Choose a reading first"; return; }
+        }
+        button.disabled = true;
+        try {
+          await sendJson("/api/page-extraction", {project_id: projectId, action: "review", kind: "equipment_appliances",
+            finding_id: finding.id, decision, ...(value ? {value} : {}), reviewer: userName() || "Operator"});
+          delete state.eqEdits[finding.id];
+          await renderDrawings();
+        } catch (error) { button.disabled = false; button.textContent = error.message; }
+      };
+      card.querySelector("[data-ws-eq-accept]")?.addEventListener("click", event => decide("accepted", event.target));
+      card.querySelector("[data-ws-eq-reject]")?.addEventListener("click", event => decide("rejected", event.target));
+    });
   }
 
   function wirePageReading(projectId) {

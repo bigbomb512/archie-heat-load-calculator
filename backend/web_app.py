@@ -90,7 +90,7 @@ from ai.calculator_draft import DraftConflict
 from backend import draft_service
 from backend import evidence_fusion_service
 from backend import calculation_extraction_service
-from backend import vision_extraction_service, window_scan_service, site_orientation_service, site_location_service, site_design_weather_service, room_use_resolution_service, room_inference_service, reviewer_room_geometry_service, ceiling_volume_resolution_service, internal_gains_resolution_service, thermal_surface_resolution_service, airflow_resolution_service, ahu_resolution_service, plant_resolution_service, safety_factor_resolution_service, ai_preliminary_service, model_input_resolution_service, au_ventilation_rules_service, autonomous_tasks_service, job_service, page_preparation_service, calculation_service, page_inventory_service
+from backend import vision_extraction_service, window_scan_service, site_orientation_service, site_location_service, site_design_weather_service, room_use_resolution_service, room_inference_service, reviewer_room_geometry_service, ceiling_volume_resolution_service, internal_gains_resolution_service, thermal_surface_resolution_service, airflow_resolution_service, ahu_resolution_service, plant_resolution_service, safety_factor_resolution_service, ai_preliminary_service, model_input_resolution_service, au_ventilation_rules_service, autonomous_tasks_service, job_service, page_preparation_service, calculation_service, page_inventory_service, page_extraction_service
 from backend import productization, test_mode_service, skill_workflow_service
 from backend import security
 from ai.ventilation import calculate_ventilation_report
@@ -373,6 +373,13 @@ class Handler(SimpleHTTPRequestHandler):
         if urlparse(self.path).path == "/api/job-calculation":
             try:
                 return self.send_json(api_calculation_status(self))
+            except security.SecurityError as error:
+                return self._send_security_error(error, 403)
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if urlparse(self.path).path == "/api/page-extraction":
+            try:
+                return self.send_json(api_page_extraction_status(self))
             except security.SecurityError as error:
                 return self._send_security_error(error, 403)
             except Exception as error:
@@ -730,6 +737,13 @@ class Handler(SimpleHTTPRequestHandler):
         if urlparse(self.path).path == "/api/job-calculation":
             try:
                 return self.send_json(api_start_calculation(self))
+            except security.SecurityError as error:
+                return self._send_security_error(error, 403)
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if urlparse(self.path).path == "/api/page-extraction":
+            try:
+                return self.send_json(api_page_extraction(self))
             except security.SecurityError as error:
                 return self._send_security_error(error, 403)
             except Exception as error:
@@ -4193,6 +4207,26 @@ def api_page_reading(request):
     if action in {"start", "retry"}:
         return page_inventory_service.start(sys.modules[__name__], project, data)
     raise ValueError("Page reading action must be start, retry or set_enabled.")
+
+
+def api_page_extraction_status(request):
+    query = parse_qs(urlparse(request.path).query)
+    return page_extraction_service.status(sys.modules[__name__], project_by_id(query.get("project_id", [""])[0]),
+                                          query.get("kind", ["equipment_appliances"])[0])
+
+
+def api_page_extraction(request):
+    """Pass 2 of the PDF review: read values from the pages pass 1 flagged (start / retry), or review a finding."""
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    security.require_project_role(project, request._identity(), "editor")
+    action = data.get("action", "start")
+    if action == "review":
+        return page_extraction_service.review(sys.modules[__name__], project, data)
+    if action in {"start", "retry"}:
+        return page_extraction_service.start(sys.modules[__name__], project, data)
+    raise ValueError("Page extraction action must be start, retry or review.")
 
 
 def api_job_status(request):

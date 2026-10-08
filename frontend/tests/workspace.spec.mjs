@@ -70,7 +70,8 @@ async function mockJob(page, {status, model = () => ({room_scope: scope}), onPos
                                prepare = () => ({status: "none"}), calculation = () => ({status: "none"}),
                                skill = () => ({status: "blocked", blocked_reason: "Project consent is required before PDF evidence can be sent.", stages: [], findings: []}),
                                vision = () => ({settings: {owner_opt_in: false, selected_group_ids: []}, selection: {page_count: 3, group_count: 2}, provider_configured: true}),
-                               reading = () => ({status: "none", enabled: true, page_count: 0, read: 0, failed: 0, main_plans: {}, pages: []})}) {
+                               reading = () => ({status: "none", enabled: true, page_count: 0, read: 0, failed: 0, main_plans: {}, pages: []}),
+                               extraction = () => ({status: "none", findings: [], pages: [], open: 0})}) {
   const posts = [];
   await page.route("**/api/test-mode/status", route => route.fulfill({json: {enabled: false}}));
   await page.route("**/api/projects", route => route.fulfill({json: [{id: "job-1", name: analysis.name, pages: 38, relevant: 3, analysed: true}]}));
@@ -97,6 +98,10 @@ async function mockJob(page, {status, model = () => ({room_scope: scope}), onPos
   await page.route("**/api/skill-workflow**", async route => {
     if (route.request().method() === "GET") return route.fulfill({json: skill()});
     return record("skill")(route);
+  });
+  await page.route("**/api/page-extraction**", async route => {
+    if (route.request().method() === "GET") return route.fulfill({json: extraction()});
+    return record("extraction")(route);
   });
   await page.route("**/api/page-reading**", async route => {
     if (route.request().method() === "GET") return route.fulfill({json: reading()});
@@ -364,6 +369,53 @@ test("Drawings: every page read by AI shows main plans per level and what each p
   await section.locator("[data-ws-page-reading-enabled]").uncheck();
   await expect(page.locator("[data-ws-page-reading-status]")).toContainText("Switched off for this job");
   expect(posts).toEqual([{project_id: "job-1", action: "set_enabled", enabled: false}]);
+});
+
+test("Drawings: equipment found in the drawings can be corrected, chosen between, accepted or rejected", async ({page}) => {
+  const value = (name, extra = {}) => ({code: "", name, quantity: 1, size: "", model: "", supplier: "", rated_power: "", electrical: "",
+                                        under_hood: null, location: "", evidence: "", ...extra});
+  const findings = [
+    {id: "eq:oven", value: value("COMBI OVEN", {code: "E06", size: "750x790"}), pages: [5, 20], citations: [{page: 5, excerpt: "E06 COMBI OVEN"}],
+     conflicts: {}, evidence: "supported", pictures_only: false, text_match: true, not_printed: ["rated_power"], status: "proposed"},
+    {id: "eq:fridge", value: value("UB FRIDGE", {code: "E21", quantity: 10}), pages: [5, 20], citations: [{page: 5, excerpt: ""}],
+     conflicts: {quantity: [{value: 10, pages: [5]}, {value: 8, pages: [20]}]}, evidence: "conflicting", pictures_only: false, text_match: true, status: "proposed"},
+    {id: "eq:screen", value: value("Wall-mounted screen"), pages: [9], citations: [{page: 9, excerpt: "render"}],
+     conflicts: {}, evidence: "inferred", pictures_only: true, text_match: false, status: "proposed"},
+  ];
+  const decisions = [];
+  const run = () => ({status: "done", kind: "equipment_appliances", pages: [5, 9, 20], open: findings.length - decisions.length,
+    findings: findings.map(row => { const made = decisions.find(item => item.finding_id === row.id);
+      return made ? {...row, status: made.decision, decided_value: made.value || null, reviewer: "Sam"} : row; })});
+  await mockJob(page, {status: () => baseStatus(), extraction: run,
+    onPost: (kind, body) => { if (kind === "extraction" && body.action === "review") { decisions.push(body); return run(); } return null; }});
+  await page.goto("/#/job/job-1/drawings");
+  const section = page.locator("[data-ws-equipment]");
+  await expect(section.locator("[data-ws-equipment-status]")).toHaveText("3 items from 3 pages · 3 to review.");
+  const oven = section.locator("[data-ws-eq='eq:oven']");
+  await expect(oven.locator("summary")).toContainText("E06 COMBI OVEN");
+  await expect(oven.locator("summary")).toContainText("power not printed");
+  await oven.locator("summary").click();
+  await oven.locator("[data-ws-eq-field='quantity']").fill("2");
+  await oven.locator("[data-ws-eq-field='under_hood']").selectOption("true");
+  await oven.locator("[data-ws-eq-accept]").click();
+  expect(decisions[0]).toMatchObject({finding_id: "eq:oven", decision: "accepted", value: {name: "COMBI OVEN", quantity: 2, under_hood: true}});
+  await expect(section.locator("[data-ws-eq='eq:oven'] summary")).toContainText("accepted");
+  const fridge = section.locator("[data-ws-eq='eq:fridge']");
+  await fridge.locator("summary").click();
+  await fridge.locator("[data-ws-eq-accept]").click();
+  await expect(fridge.locator("[data-ws-eq-accept]")).toHaveText("Choose a reading first");
+  expect(decisions).toHaveLength(1);
+  await fridge.getByRole("button", {name: "8 (p20)"}).click();
+  await expect(fridge.locator("[data-ws-eq-field='quantity']")).toHaveValue("8");
+  await fridge.locator("[data-ws-eq-accept]").click();
+  expect(decisions[1]).toMatchObject({finding_id: "eq:fridge", decision: "accepted", value: {quantity: 8}});
+  const screen = section.locator("[data-ws-eq='eq:screen']");
+  await screen.locator("summary").click();
+  await expect(screen).toContainText("Seen only in renders or photos");
+  await expect(screen.locator("[data-ws-eq-textcheck]")).toContainText("Not found in the page's text");
+  await screen.locator("[data-ws-eq-reject]").click();
+  expect(decisions[2]).toMatchObject({finding_id: "eq:screen", decision: "rejected"});
+  await expect(section.locator("[data-ws-equipment-status]")).toHaveText("3 items from 3 pages · all reviewed.");
 });
 
 test("Drawings: a failed or blocked page reading says why and offers a retry", async ({page}) => {

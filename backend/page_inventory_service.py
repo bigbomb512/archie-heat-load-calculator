@@ -42,6 +42,20 @@ class PageReadingUnavailable(RuntimeError):
     pass
 
 
+class UsageLimitReached(RuntimeError):
+    """The ChatGPT plan's Codex allowance is used up; every further call would fail the same way."""
+
+
+def _usage_limit_message(text):
+    text = " ".join(str(text or "").split())
+    if "usage limit" not in text.lower():
+        return ""
+    import re
+    when = re.search(r"try again (at|in) ([^.]+)", text, re.I)
+    return ("The ChatGPT plan's Codex usage limit is reached" + (f"; it resets {when.group(1)} {when.group(2).strip()}" if when else "")
+            + ". Pages already read are kept; retry after the reset to read the rest.")
+
+
 class CodexCliPageReader:
     """One page per `codex exec` call, signed in with ChatGPT (read-only sandbox, nothing kept)."""
 
@@ -82,6 +96,9 @@ class CodexCliPageReader:
             raw = {"provider": "codex_cli", "model": self.model or "codex default", "exit_code": result.returncode,
                    "reply_text": reply_text[-20000:], "stderr_tail": (result.stderr or "")[-2000:]}
             if result.returncode != 0 or not reply_text.strip():
+                limit = _usage_limit_message((result.stderr or "") + (result.stdout or ""))
+                if limit:
+                    raise UsageLimitReached(limit)
                 tail = " ".join((result.stderr or result.stdout or "").split())[-300:]
                 raise RuntimeError(f"Codex CLI failed (exit {result.returncode}): {tail or 'no reply'}")
             text = reply_text.strip()
@@ -135,13 +152,21 @@ def read_pages(images, cache_dir, provider, workers=WORKERS, on_page=None):
     readings, failures, calls = {}, {}, 0
     lock = threading.Lock()
 
+    stopped = threading.Event()
+
     def one(page, image):
         cached = read_json(cache_dir / f"{_cache_key(image, model)}.json")
         if cached.get("reading"):
             return page, cached["reading"], None, False
+        if stopped.is_set():
+            return page, None, stopped.reason, False
         try:
             reply, raw = provider.propose(prompt, image_paths=[image])
             reading = validate_reply(reply)
+        except UsageLimitReached as error:
+            stopped.reason = str(error)
+            stopped.set()
+            return page, None, str(error), True
         except Exception as error:
             return page, None, " ".join(str(error).split())[:400] or error.__class__.__name__, True
         write_json(cache_dir / f"{_cache_key(image, model)}.json",
@@ -236,6 +261,10 @@ def start(web, project, data=None):
             "failures": {str(page): reason for page, reason in sorted(failures.items())},
             "packet": packet_from_readings(readings, len(images)),
         })
+        if not failures:
+            # Every page is read: pass 2 reads the values of each kind from the pages flagged for it.
+            from backend import page_extraction_service
+            page_extraction_service.start_after_pass1(web, web.project_by_id(project_id) if web else project)
         if failures:
             pages = ", ".join(str(page) for page in sorted(failures))
             first = failures[min(failures)]

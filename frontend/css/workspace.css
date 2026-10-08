@@ -272,3 +272,7 @@ polyline.ws-dim, polyline.ws-dim2 { fill: none; stroke-dasharray: 10 6; }
 .ws-read-pages summary { cursor: pointer; }
 .ws-read-pages .ws-chip { font-size: .75rem; margin-left: .2rem; }
 .ws-read-pages ul { margin: .3rem 0 .4rem 1rem; }
+.ws-eq-edit { display: flex; flex-wrap: wrap; gap: .4rem .8rem; margin: .5rem 0; }
+.ws-eq-edit label { display: flex; flex-direction: column; font-size: .8rem; gap: 2px; }
+.ws-eq-edit input { width: 8.5rem; max-width: 100%; }
+.ws-fine.is-warn { color: #8a4319; }
