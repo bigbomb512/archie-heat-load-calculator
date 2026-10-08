@@ -290,11 +290,12 @@
     }
     let status = await loadStatus();
     if (!live(projectId, "drawings")) return;
-    const [review, vision, reading, equipment] = await Promise.all([
+    const [review, vision, reading, equipment, usage] = await Promise.all([
       getJson(`/api/skill-workflow?project_id=${encodeURIComponent(projectId)}`),
       getJson(`/api/vision-extraction?project_id=${encodeURIComponent(projectId)}`),
       getJson(`/api/page-reading?project_id=${encodeURIComponent(projectId)}`).catch(() => null),
       getJson(`/api/page-extraction?project_id=${encodeURIComponent(projectId)}&kind=equipment_appliances`).catch(() => null),
+      getJson(`/api/ai-usage?project_id=${encodeURIComponent(projectId)}`).catch(() => null),
     ]);
     if (!live(projectId, "drawings")) return;
     state.skillReview = review;
@@ -321,6 +322,7 @@
       <h2>Drawing analysis</h2>
       <p class="ws-hint">PDF review searches the drawing set for heat-load evidence. You can review each proposed value with its page evidence before it is used.</p>
       <p data-ws-checks role="status">${esc(operatorMode() && pendingReview ? `${done} of ${checks.total} checks resolved. Answer the remaining Toki checks below.` : drawingMessage)}</p>
+      ${usage ? usageMarkup(usage) : ""}
       ${needsMarkup(review)}
       ${reading ? pageReadingMarkup(reading) : ""}
       ${equipment && (equipment.status !== "none" || equipment.findings?.length) ? equipmentMarkup(equipment) : ""}
@@ -390,6 +392,21 @@
       ${canStart ? `<button class="btn ghost mini" type="button" data-ws-page-reading-start>${reading.status === "none" ? "Read the pages" : "Retry reading"}</button>` : ""}
       ${mainPlans}
       ${rows ? `<details data-ws-read-open="list" ${state.readOpen?.has("list") ? "open" : ""}><summary>What's on each page (${reading.read} of ${reading.page_count} read)</summary><ul class="ws-read-pages">${rows}</ul></details>` : ""}</section>`;
+  }
+
+  const PROVIDER_NAMES = {codex_cli: "Codex CLI (ChatGPT sign-in)", openai: "OpenAI API", anthropic: "Anthropic API"};
+
+  function usageMarkup(usage) {
+    const number = value => Number(value || 0).toLocaleString();
+    const line = row => `${number(row.calls)} call${row.calls === 1 ? "" : "s"}${row.tokens ? ` · ${number(row.tokens)} tokens` : ""}${row.seconds ? ` · ${Math.round(row.seconds / 60) || "<1"} min` : ""}${row.failed ? ` · ${number(row.failed)} failed` : ""}`;
+    const total = usage.total || {calls: 0};
+    const provider = PROVIDER_NAMES[usage.provider] || usage.provider || "";
+    const rows = Object.entries(usage.by_pass || {}).map(([name, row]) => `<li>${esc(name)}: ${esc(line(row))}</li>`).join("");
+    return `<details class="ws-page-reading" data-ws-ai-usage data-ws-read-open="usage" ${state.readOpen?.has("usage") ? "open" : ""}><summary>AI use for this job: ${esc(total.calls ? line(total) : "none yet")}</summary>
+      <p class="ws-fine">Provider: ${esc(provider)}${usage.model ? ` / ${esc(usage.model)}` : ""}${usage.configured === false ? " — not set up on this server" : ""}.
+      ${total.usage_limit_hits ? ` The usage limit was hit ${number(total.usage_limit_hits)} time${total.usage_limit_hits === 1 ? "" : "s"}.` : ""}
+      ${total.calls_without_token_count ? ` ${number(total.calls_without_token_count)} call${total.calls_without_token_count === 1 ? " didn't" : "s didn't"} report tokens.` : ""}</p>
+      ${rows ? `<ul>${rows}</ul>` : ""}</details>`;
   }
 
   const ANSWER_SOURCES = [["spec_sheet", "Spec sheet"], ["supplier", "Supplier"], ["client", "Client"], ["site_visit", "Site visit"],

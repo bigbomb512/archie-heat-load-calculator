@@ -32,8 +32,7 @@ OUTPUT = ROOT / "output" / "evaluations"
 def run_case(sheet, pdf, workers):
     folder = OUTPUT / "page_inventory" / sheet["case_id"]
     images = service.render_pages(pdf, folder / "pages")
-    reader = service.CodexCliPageReader()
-    reader.check_signed_in()
+    reader = service.ai_provider.get()  # the provider chosen by ARCHIE_AI_PROVIDER
     started = time.monotonic()
 
     def progress(done, total):

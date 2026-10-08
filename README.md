@@ -122,3 +122,18 @@ PYTHONPATH=. python3 tools/create_reviewed_cooling_case.py \
 Bootstrap creates only missing `project_context.json`,
 `calculator_input_overrides.json`, and `hourly_load_model.json`; existing
 authored files and private PDFs are not overwritten or copied.
+
+## AI provider for the PDF review
+
+Pass 1 (every page), pass 2 (values) and the skills use one AI provider, chosen when the server starts:
+
+| `ARCHIE_AI_PROVIDER` | Needs | Model (`ARCHIE_AI_MODEL`) |
+|---|---|---|
+| `codex_cli` (default) | The Codex CLI installed and signed in with ChatGPT (`codex login`) | the CLI's default |
+| `openai` | `OPENAI_API_KEY` | `gpt-5` unless set |
+| `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-5-5` unless set |
+
+For example `ARCHIE_AI_PROVIDER=anthropic ANTHROPIC_API_KEY=… ./start_web`. Nothing else changes when switching.
+Every AI call is logged per job in `ai_usage.jsonl` (pass, provider, model, seconds, tokens where reported); the
+Drawings tab shows the totals under "AI use for this job". The Codex CLI reports one combined token count per call;
+the APIs report input and output separately. No prices are stored: multiply the tokens by your provider's current rates.

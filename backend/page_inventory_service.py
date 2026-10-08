@@ -1,6 +1,6 @@
 """Pass 1 of the PDF review on the server: read every page of the job's PDF with the AI, one page per call.
 
-The AI runs through the Codex CLI signed in with the team's ChatGPT subscription (no API key).
+The AI is the provider chosen in backend.ai_provider (the Codex CLI with the team's ChatGPT sign-in by default).
 Each page is rendered to an image, sent on its own, and the checked reply is saved. Replies are
 cached by page image and prompt version, so a retry only reads the pages that failed and a
 re-analysis of the same PDF repeats nothing. Progress is in page_inventory_job.json; the
@@ -21,6 +21,7 @@ import subprocess
 import threading
 
 from ai.page_inventory import PROMPT_VERSION, build_prompt, packet_from_readings, main_plan_pages, validate_reply
+from backend import ai_provider
 from backend.job_runner import BackgroundJob, now, read_json, write_json
 
 JOB_FILE = "page_inventory_job.json"
@@ -38,84 +39,18 @@ _RUNNING = _JOB.running
 PROVIDER_FACTORY = None
 
 
-class PageReadingUnavailable(RuntimeError):
-    pass
-
-
-class UsageLimitReached(RuntimeError):
-    """The ChatGPT plan's Codex allowance is used up; every further call would fail the same way."""
-
-
-def _usage_limit_message(text):
-    text = " ".join(str(text or "").split())
-    if "usage limit" not in text.lower():
-        return ""
-    import re
-    when = re.search(r"try again (at|in) ([^.]+)", text, re.I)
-    return ("The ChatGPT plan's Codex usage limit is reached" + (f"; it resets {when.group(1)} {when.group(2).strip()}" if when else "")
-            + ". Pages already read are kept; retry after the reset to read the rest.")
-
-
-class CodexCliPageReader:
-    """One page per `codex exec` call, signed in with ChatGPT (read-only sandbox, nothing kept)."""
-
-    def __init__(self, executable=None, timeout=PAGE_TIMEOUT_S):
-        self.executable = executable or shutil.which("codex")
-        self.timeout = timeout
-        self.model = os.environ.get("ARCHIE_CODEX_MODEL", "").strip()
-        if not self.executable:
-            raise PageReadingUnavailable("The Codex CLI isn't installed on this computer. Install it and sign in with ChatGPT (codex login).")
-
-    def check_signed_in(self):
-        try:
-            result = subprocess.run([self.executable, "login", "status"], capture_output=True, text=True, timeout=30)
-        except (OSError, subprocess.TimeoutExpired) as error:
-            raise PageReadingUnavailable(f"The Codex CLI couldn't be started: {error}") from error
-        if result.returncode != 0 or "logged in" not in (result.stdout + result.stderr).lower():
-            raise PageReadingUnavailable("The Codex CLI isn't signed in. Run `codex login` and sign in with ChatGPT.")
-
-    def propose(self, prompt, image_paths=()):
-        import tempfile
-        with tempfile.TemporaryDirectory(prefix="archie-page-read-") as folder:
-            output = Path(folder) / "reply.json"
-            command = [self.executable, "exec", "--sandbox", "read-only", "--ephemeral", "--skip-git-repo-check",
-                       "--output-last-message", str(output)]
-            if self.model:
-                command += ["--model", self.model]
-            for image in image_paths:
-                command += ["--image", str(image)]
-            command.append("-")
-            # The model process gets no API key from this server's environment.
-            env = {key: value for key, value in os.environ.items() if key != "OPENAI_API_KEY"}
-            try:
-                result = subprocess.run(command, input=prompt, capture_output=True, text=True,
-                                        timeout=self.timeout, env=env, check=False)
-            except subprocess.TimeoutExpired as error:
-                raise RuntimeError(f"No reply within {self.timeout} seconds.") from error
-            reply_text = output.read_text(encoding="utf-8") if output.is_file() else ""
-            raw = {"provider": "codex_cli", "model": self.model or "codex default", "exit_code": result.returncode,
-                   "reply_text": reply_text[-20000:], "stderr_tail": (result.stderr or "")[-2000:]}
-            if result.returncode != 0 or not reply_text.strip():
-                limit = _usage_limit_message((result.stderr or "") + (result.stdout or ""))
-                if limit:
-                    raise UsageLimitReached(limit)
-                tail = " ".join((result.stderr or result.stdout or "").split())[-300:]
-                raise RuntimeError(f"Codex CLI failed (exit {result.returncode}): {tail or 'no reply'}")
-            text = reply_text.strip()
-            if text.startswith("```"):
-                text = text.strip("`").removeprefix("json").strip()
-            try:
-                return json.loads(text), raw
-            except json.JSONDecodeError as error:
-                raise RuntimeError("The reply was not valid JSON.") from error
+# The provider lives in backend.ai_provider (Codex CLI, OpenAI API or Anthropic API, chosen by ARCHIE_AI_PROVIDER).
+# These names are kept for callers and tests written against pass 1.
+PageReadingUnavailable = ai_provider.ProviderUnavailable
+UsageLimitReached = ai_provider.UsageLimitReached
+CodexCliPageReader = ai_provider.CodexCliProvider
+_usage_limit_message = ai_provider.usage_limit_message
 
 
 def _provider():
     if PROVIDER_FACTORY is not None:
         return PROVIDER_FACTORY()
-    reader = CodexCliPageReader()
-    reader.check_signed_in()
-    return reader
+    return ai_provider.get()
 
 
 def pdf_signature(pdf_path):
@@ -235,7 +170,7 @@ def start(web, project, data=None):
     if not enabled(project):
         raise ValueError("Page reading is switched off for this job. Switch it on to read the pages.")
     try:
-        provider = _provider()
+        provider = ai_provider.recorded(_provider(), root, "pass1")
     except PageReadingUnavailable as error:
         if _JOB.status(project).get("status") not in {"queued", "running"}:
             write_json(_JOB.path(project), {"schema_version": 1, "status": "blocked", "error": str(error), "finished_at": now()})

@@ -98,8 +98,7 @@ def main(argv=None):
     parser.add_argument("--kind", default="equipment_appliances", choices=sorted(EXTRACTORS))
     args = parser.parse_args(argv)
     sources = json.loads((OUTPUT / "page_role_sources.json").read_text(encoding="utf-8"))
-    reader = pass1.CodexCliPageReader()
-    reader.check_signed_in()
+    reader = pass1.ai_provider.get()  # the provider chosen by ARCHIE_AI_PROVIDER
     results = []
     for case_id, role in [(case, "development") for case in args.dev] + [(case, "held back") for case in args.held]:
         result = run_case(case_id, sources[case_id], args.kind, reader, role)

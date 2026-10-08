@@ -23,7 +23,7 @@ import threading
 
 from ai import equipment_heat
 from ai.page_extraction import EXTRACTORS, build_prompt, merge, normalise_name, tiles, validate_reply
-from backend import page_inventory_service as pass1
+from backend import ai_provider, page_inventory_service as pass1
 from backend.job_runner import BackgroundJob, now, read_json, write_json
 
 JOB_FILE = "page_extraction_job.json"
@@ -242,8 +242,8 @@ def start(web, project, data=None):
                 write_json(job_path, job)
 
             step("read", f"Reading {extractor['label'].lower()} from {len(pages)} pages")
-            readings, failures, calls = read_sections(extractor, images, root / WORK_DIR / "replies" / kind, provider,
-                                                      on_done=progress)
+            readings, failures, calls = read_sections(extractor, images, root / WORK_DIR / "replies" / kind,
+                                                      ai_provider.recorded(provider, root, f"pass2:{kind}"), on_done=progress)
             step("merge")
             pass1_pages = read_json(root / pass1.RESULT_FILE).get("pages") or {}
             findings = merge(extractor, readings, texts, {int(page): row.get("page_type") for page, row in pass1_pages.items()})

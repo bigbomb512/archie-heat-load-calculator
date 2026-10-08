@@ -577,6 +577,20 @@ test("Drawings: a wall-boundary answer opens the Walls tab on that room with the
   await expect(page.locator("[data-ws-walls-hint]")).toHaveCount(0);
 });
 
+test("Drawings: AI use for the job is shown by pass, with the provider", async ({page}) => {
+  await mockJob(page, {status: () => baseStatus()});
+  await page.route("**/api/ai-usage**", route => route.fulfill({json: {provider: "codex_cli", model: "default", configured: true,
+    total: {calls: 75, failed: 2, usage_limit_hits: 1, tokens: 512000, seconds: 900, calls_without_token_count: 0},
+    by_pass: {"pass 1 (pages)": {calls: 38, failed: 0, tokens: 254000, seconds: 320}, "skills": {calls: 37, failed: 2, tokens: 258000, seconds: 580}}}}));
+  await page.goto("/#/job/job-1/drawings");
+  const usage = page.locator("[data-ws-ai-usage]");
+  await expect(usage.locator("summary")).toHaveText("AI use for this job: 75 calls · 512,000 tokens · 15 min · 2 failed");
+  await usage.locator("summary").click();
+  await expect(usage).toContainText("Provider: Codex CLI (ChatGPT sign-in) / default.");
+  await expect(usage).toContainText("The usage limit was hit 1 time.");
+  await expect(usage).toContainText("pass 1 (pages): 38 calls · 254,000 tokens · 5 min");
+});
+
 test("Drawings: before the skills have run, the needs list says when it will appear", async ({page}) => {
   await mockJob(page, {status: () => baseStatus(), skill: () => ({status: "running", stages: [], findings: []})});
   await page.goto("/#/job/job-1/drawings");

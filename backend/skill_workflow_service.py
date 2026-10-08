@@ -47,7 +47,7 @@ _SAFE_SUBSKILL_ERROR_CODES = {
     "subskill_numeric_inference_uncited", "subskill_contract_invalid", "drawing_coverage_missing",
     "room_inference_pending", "room_inference_failed", "room_evidence_missing", "codex_cli_failed",
     "codex_cli_timeout", "codex_cli_unavailable", "skill_provider_empty_output",
-    "skill_provider_invalid_json", "subskill_field_type_invalid", "skill_provider_usage_limit",
+    "skill_provider_invalid_json", "subskill_field_type_invalid", "skill_provider_usage_limit", "skill_provider_unavailable",
 }
 SKILL_PROVIDER_FACTORY = None
 # Tests replace this; otherwise the case-file route uses the Codex CLI signed in with ChatGPT.
@@ -1782,7 +1782,8 @@ def _case_file_route(project):
     from backend import skill_case_file
     if os.environ.get("ARCHIE_PAGE_READING", "").strip().lower() == "off":
         return False
-    if CASE_FILE_PROVIDER_FACTORY is None and not shutil.which("codex"):
+    from backend import ai_provider
+    if CASE_FILE_PROVIDER_FACTORY is None and not ai_provider.configured():
         return False
     return skill_case_file.available(project)
 
@@ -1806,9 +1807,24 @@ def _call_case_file_provider(subskill, project, dependencies, evidence, attempt_
         error = SkillProviderError("skill_provider_usage_limit", attempt_record["raw_record"])
         error.detail = _USAGE_STOPPED[key]
         raise error
-    provider = CASE_FILE_PROVIDER_FACTORY() if CASE_FILE_PROVIDER_FACTORY is not None else CodexCliSkillProposalProvider()
+    from backend import ai_provider
+    try:
+        provider = CASE_FILE_PROVIDER_FACTORY() if CASE_FILE_PROVIDER_FACTORY is not None else ai_provider.get()
+    except ai_provider.ProviderUnavailable as error:
+        unavailable = SkillProviderError("skill_provider_unavailable", attempt_record["raw_record"])
+        unavailable.detail = str(error)
+        raise unavailable from error
+    model = getattr(provider, "model", "") or model
+    attempt_record["model"] = model
+    provider = ai_provider.recorded(provider, project["review_dir"], f"skill:{subskill['id']}")
     try:
         result = provider.propose(prompt, image_paths=[str(path) for path in images])
+    except ai_provider.UsageLimitReached as error:
+        _USAGE_STOPPED[key] = str(error)
+        attempt_record["raw_record"] = {"provider": "codex_case_file", "model": model, "reply_text": ""}
+        stopped = SkillProviderError("skill_provider_usage_limit", attempt_record["raw_record"])
+        stopped.detail = str(error)
+        raise stopped from error
     except SkillProviderError as error:
         raw = getattr(error, "raw_record", {}) or {}
         limit = page_inventory_service._usage_limit_message(f"{raw.get('stderr_tail', '')} {raw.get('stdout_tail', '')} {raw.get('reply_text', '')}")
@@ -1819,6 +1835,9 @@ def _call_case_file_provider(subskill, project, dependencies, evidence, attempt_
             stopped.detail = limit
             raise stopped from error
         raise
+    if isinstance(result, tuple) and len(result) == 2:
+        attempt_record["raw_record"] = {**(result[1] or {}), "provider": "codex_case_file", "model": model}
+        return result[0]
     if isinstance(result, SkillProviderResult):
         attempt_record["raw_record"] = {**result.raw_record, "provider": "codex_case_file", "model": model}
         return result.proposal
