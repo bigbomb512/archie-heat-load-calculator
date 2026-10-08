@@ -7,13 +7,22 @@ Each item on the list has a kind. Kinds with an existing input route go straight
 - lighting_load    -> the room's lighting load in watts (internal-gains override)
 - equipment_rating -> that equipment item accepted with its rated power (page_extraction_service.review)
 - roof_above       -> the job's answer to what is above the tenancy (job_service, applied to every roof question)
-Other kinds (opening hours, glazing, exhaust, a wall's boundary, anything else) are kept as notes with their source,
+- glazing          -> the glass's U-value and SHGC for one room's windows, or for every window (glazing_answers.json,
+                      applied to the windows when the calculation's proposal is prepared)
+Other kinds (opening hours, exhaust, a wall's boundary, anything else) are kept as notes with their source,
 and the list says they are not used by the calculation yet. Press Calculate afterwards to update the result.
 """
 
+import json
+import os
 from pathlib import Path
+import time
 
 from ai.equipment_heat import printed_watts, proposal as heat_proposal
+
+GLAZING_FILE = "glazing_answers.json"
+U_RANGE = (0.5, 7.0)       # W/m²K: from triple glazing to single clear glass
+SHGC_RANGE = (0.05, 0.95)
 
 APPLIED_KINDS = {
     "room_area": {"label": "Room area", "unit": "m²", "room": True},
@@ -22,8 +31,9 @@ APPLIED_KINDS = {
     "lighting_load": {"label": "Lighting load", "unit": "W", "room": True},
     "equipment_rating": {"label": "Equipment rated power", "unit": "W", "room": True, "equipment": True},
     "roof_above": {"label": "What is above the tenancy", "unit": "", "room": False, "choice": True},
+    "glazing": {"label": "Glass performance (U-value and SHGC)", "unit": "", "room": "optional"},
 }
-NOTE_KINDS = {"opening_hours": "Opening hours", "glazing": "Glass type or window performance", "exhaust": "Kitchen exhaust or airflow",
+NOTE_KINDS = {"opening_hours": "Opening hours", "exhaust": "Kitchen exhaust or airflow",
               "boundary": "What is beyond a wall, floor or ceiling", "other": "Other"}
 KINDS = {**{key: row["label"] for key, row in APPLIED_KINDS.items()}, **NOTE_KINDS}
 
@@ -104,6 +114,8 @@ def apply(web, project, data):
         job_service.apply_roof_answer(web, project)
         label = next(row["label"] for row in found["above"] if row["id"] == choice)
         return {"applied": True, "summary": f"Above the tenancy: {label}."}
+    if kind == "glazing":
+        return _save_glazing(project, data, found["rooms"], reviewer)
     room = _room(data, found["rooms"])
     where = room["label"]
     if kind == "room_area":
@@ -140,3 +152,55 @@ def apply(web, project, data):
                                                   "value": value, "reviewer": reviewer})
     name = f"{value.get('code') + ' ' if value.get('code') else ''}{value.get('name', '')}"
     return {"applied": True, "summary": f"{name} in {where}: {watts:g} W each × {value.get('quantity') or 1} × {value['heat_to_space_factor']:g} to the room."}
+
+
+def _in_range(value, low, high, label):
+    number = _number(value, label)
+    if not low <= number <= high:
+        raise ValueError(f"The {label} must be between {low:g} and {high:g}.")
+    return round(number, 3)
+
+
+def _save_glazing(project, data, rooms, reviewer):
+    """Glass performance for one room's windows (room given) or for every window (no room)."""
+    u_value = _in_range(data.get("u_value_w_m2k"), *U_RANGE, "U-value (W/m²K)")
+    shgc = _in_range(data.get("shgc"), *SHGC_RANGE, "SHGC")
+    room = _room(data, rooms)["label"] if str(data.get("room") or "").strip() else ""
+    root = Path(project["review_dir"])
+    path = root / GLAZING_FILE
+    stored = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {"rooms": {}, "all": None}
+    record = {"u_value_w_m2k": u_value, "shgc": shgc, "glass": " ".join(str(data.get("value") or "").split())[:160],
+              "source": str(data.get("source") or ""), "by": reviewer, "at": time.time()}
+    if room:
+        stored.setdefault("rooms", {})[room] = record
+    else:
+        stored["all"] = record
+    staging = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    staging.write_text(json.dumps(stored, indent=2), encoding="utf-8")
+    os.replace(staging, path)
+    target = f"{room}'s windows" if room else "every window"
+    return {"applied": True, "summary": f"Glass for {target}: U {u_value:g} W/m²K, SHGC {shgc:g}"
+                                        + (f" ({record['glass']})" if record["glass"] else "") + "."}
+
+
+def apply_glazing(root, proposal):
+    """Give each window the answered glass performance: its room's answer, else the answer for every window.
+
+    Windows without an answer keep the preliminary assumption-pack glazing."""
+    path = Path(root) / GLAZING_FILE
+    if not path.is_file():
+        return proposal
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    rooms = {str(label).casefold(): row for label, row in (stored.get("rooms") or {}).items()}
+    for opening in proposal.get("openings", []) if isinstance(proposal, dict) else []:
+        if not isinstance(opening, dict):
+            continue
+        answer = rooms.get(str(opening.get("owner_room_label", "")).casefold()) or stored.get("all")
+        if not answer:
+            continue
+        opening["u_value_w_m2k"], opening["shgc"] = answer["u_value_w_m2k"], answer["shgc"]
+        opening["glazing_source"] = (f"Answered by the operators ({answer.get('source') or 'source not given'})"
+                                     + (f": {answer['glass']}" if answer.get("glass") else ""))
+        opening["assumptions"] = [item for item in opening.get("assumptions", []) if item != "preliminary_glazing_profile"]
+        opening["rationale"] = "Window geometry as entered; glass U-value and SHGC from the operators' answer."
+    return proposal

@@ -1254,17 +1254,21 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                 operating = _profile_schedule(profile_id)
                 schedules.append(_schedule_with_values(solar_schedule_id, f"Preliminary {opening_orientation} glazing solar profile", [round(operating[hour] * glazing_profile[hour] / glazing_peak, 6) for hour in range(24)], _source(f"solar-{opening_orientation}")))
                 room["schedule_assignments"]["solar"][opening["candidate_id"]] = solar_schedule_id
+            # Glass performance answered by the operators replaces the preliminary pack values (bounded, else ignored).
+            answered_u = _number(opening.get("u_value_w_m2k")) if 0.5 <= (_number(opening.get("u_value_w_m2k")) or 0) <= 7 else None
+            answered_shgc = _number(opening.get("shgc")) if 0.05 <= (_number(opening.get("shgc")) or 0) <= 0.95 else None
             glazing = {"surface_id": opening["candidate_id"], "owner_room_id": room["room_id"], "owner_zone_id": room["zone_id"],
                        "host_surface_id": candidate["candidate_id"], "opening_mapping_status": "proposed", "geometry_mode": "preliminary_ai_estimate",
                        "review_status": "provisional", "verification_status": "provisional", "boundary_method": "external", "external_exposure": "external",
                        "explicit_opening_area_m2": opening["opening_area_m2"], "explicit_glass_area_m2": opening.get("explicit_glass_area_m2"),
-                       "window": {"record_id": f"window-{opening['candidate_id']}", "u_value_w_m2k": pack["profiles"].get(opening.get("glazing_choice"), profile)["glazing_u_w_m2k"], "shgc": pack["profiles"].get(opening.get("glazing_choice"), profile)["shgc"],
+                       "window": {"record_id": f"window-{opening['candidate_id']}", "u_value_w_m2k": answered_u or pack["profiles"].get(opening.get("glazing_choice"), profile)["glazing_u_w_m2k"], "shgc": answered_shgc or pack["profiles"].get(opening.get("glazing_choice"), profile)["shgc"],
                                   "frame_fraction": envelope["glazing_frame_fraction"], "glass_area_correction": envelope["glazing_glass_area_correction"],
                                   "internal_shading_factor": envelope["glazing_internal_shading_factor"]},
                        "manual_solar": {"enabled": bool(glazing_peak), "incident_solar_w_m2": glazing_peak, "external_shading_factor": shade},
                        "solar_basis": "ai_preliminary_cardinal_profile", "preliminary_solar_profile_w_m2": glazing_profile,
                        "orientation": opening_orientation, "shading_category": opening["shading_category"], "preliminary_assumption": True,
-                       "source": _source(opening.get("glazing_choice") or profile_id) + "; preliminary assumption-pack glazing U-value and SHGC",
+                       "source": (opening.get("glazing_source") if answered_u and answered_shgc else
+                                  _source(opening.get("glazing_choice") or profile_id) + "; preliminary assumption-pack glazing U-value and SHGC"),
                        "citations": [], "source_pages": opening["evidence"]}
             room["cooling_load"]["glazing_surfaces"].append(glazing)
             accepted_opening_ids.add(opening["candidate_id"])

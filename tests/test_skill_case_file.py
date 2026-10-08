@@ -169,3 +169,65 @@ class AnswerTests(unittest.TestCase):
                                                      "source": "spec_sheet", "reviewer": "Sam"})
             saved = state["answers"][need["id"]]
             self.assertEqual((saved["answer"], saved["source"], saved["target"], saved["by"]), ("18 kW", "spec_sheet", "E06 Combi oven", "Sam"))
+
+
+class ResumeTests(unittest.TestCase):
+    def run_to_end(self, project):
+        deadline = time.monotonic() + 30
+        while project["id"] in skills._RUNNING and time.monotonic() < deadline:
+            time.sleep(0.05)
+
+    def test_a_retry_reuses_finished_skills_and_calls_only_the_failed_one_and_its_dependents(self):
+        class FlakyProvider(FakeProvider):
+            def __init__(self):
+                super().__init__()
+                self.fail = {"equipment_evidence"}
+
+            def propose(self, prompt, image_paths=()):
+                subskill_id = prompt.split("Subskill: ", 1)[1].split(" ", 1)[0]
+                if subskill_id in self.fail:
+                    self.prompts.append(prompt)
+                    raise skills.SkillProviderError("codex_cli_failed", {"stderr_tail": "network down"})
+                return super().propose(prompt, image_paths)
+
+        provider = FlakyProvider()
+        skills.CASE_FILE_PROVIDER_FACTORY = lambda: provider
+        called = lambda prompts: [prompt.split("Subskill: ", 1)[1].split(" ", 1)[0] for prompt in prompts]
+        try:
+            with tempfile.TemporaryDirectory() as folder, \
+                    patch.object(skills, "_ensure_room_evidence", return_value={"artifact_names": [], "candidate_count": 0, "model_input": {}}):
+                root = Path(folder)
+                (root / "ai_input.json").write_text(json.dumps({"drawing_set": {"pages": [{"page": 5, "title": "EQUIPMENT SCHEDULE"}]}}))
+                (root / "drawing_coverage.json").write_text(json.dumps({"page_roles": [{"page": 5, "title": "EQUIPMENT SCHEDULE"}]}))
+                (root / pass1.RESULT_FILE).write_text(json.dumps({"pages": READINGS}))
+                project = {"id": "resume-" + root.name, "review_dir": str(root)}
+                skills.start_after_reading(Web(), project)
+                self.run_to_end(project)
+                first = json.loads((root / "skill_workflow_run.json").read_text())
+                self.assertEqual(first["status"], "failed")
+                self.assertEqual(first["subskills"]["equipment_evidence"]["status"], "failed")
+                first_calls = len(provider.prompts)
+                # The operator accepted a lighting finding on the first run.
+                decision_id = "lighting_evidence:lighting:0"
+                (root / "skill_review_decisions.json").write_text(json.dumps({"decisions": {decision_id: {
+                    "status": "accepted", "run_id": first["run_id"], "source_fingerprint": first["source_fingerprint"]}}}))
+                provider.fail.clear()
+                skills.post(Web(), project, {"action": "retry"})
+                self.run_to_end(project)
+                second = json.loads((root / "skill_workflow_run.json").read_text())
+            retried = called(provider.prompts[first_calls:])
+            needs = next(row for row in skills.load_subskill_registry()["subskills"] if row["id"] == "information_needs")
+            self.assertIn("equipment_evidence", retried)
+            self.assertTrue(set(retried) <= {"equipment_evidence", "schedule_evidence", "information_needs"}, retried)
+            self.assertNotIn("room_identity_use", retried)                       # finished before: reused, no call
+            self.assertEqual(second["subskills"]["room_identity_use"]["reused_from"], first["run_id"])
+            self.assertEqual(second["subskills"]["lighting_evidence"]["reused_from"], first["run_id"])
+            self.assertEqual(second["subskills"]["equipment_evidence"].get("reused_from", ""), "")
+            self.assertNotEqual(second["status"], "failed")
+            self.assertTrue(skills._decision_is_current({"run_id": first["run_id"], "source_fingerprint": second["source_fingerprint"]},
+                                                        second, second["source_fingerprint"], "lighting_evidence"))
+            self.assertFalse(skills._decision_is_current({"run_id": first["run_id"], "source_fingerprint": second["source_fingerprint"]},
+                                                         second, second["source_fingerprint"], "equipment_evidence"))
+            self.assertIn("information_needs", needs["depends_on"] + ["information_needs"])
+        finally:
+            skills.CASE_FILE_PROVIDER_FACTORY = None

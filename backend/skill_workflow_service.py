@@ -1740,6 +1740,42 @@ def _call_skill_provider(subskill, project, dependencies, evidence, attempt_reco
         return provider_result
 
 
+_REUSABLE_STATUSES = {"needs_review", "provisional", "resolved", "completed", "not_applicable", "excluded"}
+
+
+def _reuse_table(paths, previous):
+    """Skills of the previous run that finished, with the inputs they ran on: a new run reuses a result instead
+    of calling the AI again when that skill's inputs are unchanged (same readings, definition, case file and
+    prerequisite results). Failed, blocked and over-budget skills are always run again."""
+    run_id = (previous or {}).get("run_id")
+    table = {}
+    for skill_id, row in ((previous or {}).get("subskills") or {}).items():
+        proposal_path = paths["root"] / "skill_workflow_runs" / str(run_id) / "proposals" / f"{skill_id}.json"
+        if (run_id and isinstance(row, dict) and row.get("status") in _REUSABLE_STATUSES and row.get("input_fingerprint")
+                and row.get("error_code") != "prompt_over_budget" and proposal_path.is_file()):
+            table[skill_id] = {"run_id": row.get("reused_from") or run_id, "input_fingerprint": row["input_fingerprint"],
+                               "proposal": str(proposal_path.relative_to(paths["root"])), "status": row["status"],
+                               "evidence_reviewed": row.get("evidence_reviewed", {})}
+    return {"run_id": run_id, "subskills": table} if table else {}
+
+
+def _reused_proposal(subskill, project, input_fp):
+    """The previous run's result for this skill when its inputs are unchanged, else None."""
+    paths = _project_paths(project)
+    entry = (_read(paths["manifest"], {}).get("reuse_from") or {}).get("subskills", {}).get(subskill["id"])
+    if not entry or entry.get("input_fingerprint") != input_fp:
+        return None
+    proposal = _read(paths["root"] / entry["proposal"], {})
+    if not isinstance(proposal, dict) or not proposal.get("proposal_fields"):
+        return None
+    proposal = deepcopy(proposal)
+    proposal.update({"provider_kind": "reused_from_previous_run", "reused_from": entry["run_id"],
+                     "_attempt_record": {"prompt": "", "images": [], "started_at": time.time(),
+                                         "raw_record": {"provider": "reused_from_previous_run", "run_id": entry["run_id"], "reply_text": ""},
+                                         "evidence_pages": (entry.get("evidence_reviewed") or {}).get("pages", [])}})
+    return proposal
+
+
 def _case_file_route(project):
     """Skills read their case file (pass 1 and 2's findings plus key pages) through the Codex CLI with the
     ChatGPT sign-in: on when the job's page reading is on and pass 1 has read the pages."""
@@ -1819,6 +1855,9 @@ def _execute_subskill(subskill, project, dependencies, source_fp):
     raw = None
     attempt_record = {"prompt": "", "images": [], "raw_record": {}, "started_at": time.time()}
     provider_kind = "existing_project_evidence"
+    reused = _reused_proposal(subskill, project, input_fp)
+    if reused is not None:
+        return reused
     if subskill["id"] == "address_confirmation":
         candidate = dependencies.get("site_clue_extraction", {}).get("proposal", {})
         candidate_fields = candidate.get("proposal_fields", {}) if isinstance(candidate, dict) else {}
@@ -2213,10 +2252,13 @@ def _run_worker(web, project, run_id, source_fp, catalog):
                         attempt_metadata.update({"outcome": "accepted", "failure_phase": failure_phase,
                             "validation_check": "proposal_valid", "validation_path": "", "validation_detail": "Proposal passed schema and citation validation."})
                     (Path(paths["root"]) / attempt_ref / "attempt.json").write_text(json.dumps(attempt_metadata, indent=2), encoding="utf-8")
-                    result["attempt_ref"] = attempt_ref
+                    reused_from = raw_result.get("reused_from", "")
+                    # A reused result is copied unchanged (with its original attempt), so the skills depending on it
+                    # see exactly the same prerequisite and can be reused in turn.
+                    result["attempt_ref"] = raw_result.get("attempt_ref", attempt_ref) if reused_from else attempt_ref
                     proposal_path = paths["root"] / "skill_workflow_runs" / run_id / "proposals" / f"{skill_id}.json"
                     proposal_path.parent.mkdir(parents=True, exist_ok=True)
-                    _atomic_json(proposal_path, {key: value for key, value in result.items() if key != "provider_kind"})
+                    _atomic_json(proposal_path, {key: value for key, value in result.items() if key not in {"provider_kind", "reused_from"}})
                     proposal_name = str(proposal_path.relative_to(paths["root"]))
                     with _project_lock(project["id"]):
                         manifest = _read(run_path, {})
@@ -2227,10 +2269,12 @@ def _run_worker(web, project, run_id, source_fp, catalog):
                             "output_summary": _summary({**result, "artifact_names": artifact_names}), "artifact_names": artifact_names,
                             "attempt_ref": attempt_ref, "validation_check": attempt_metadata.get("validation_check", "proposal_valid"),
                             "validation_detail": attempt_metadata.get("validation_detail", "Proposal passed schema and citation validation."),
-                            "evidence_reviewed": _evidence_review_record(attempt_record, attempt_ref, attempt_metadata),
+                            "evidence_reviewed": ((_read(run_path, {}).get("reuse_from") or {}).get("subskills", {}).get(skill_id, {}).get("evidence_reviewed")
+                                                  if reused_from else None) or _evidence_review_record(attempt_record, attempt_ref, attempt_metadata),
                             "error_code": attempt_metadata.get("error_code", ""),
                             "prompt_budget": attempt_metadata.get("prompt_budget", {}),
                             "remediation": result.get("remediation", []),
+                            "reused_from": reused_from,
                         })
                         _update_parent_stages(manifest, catalog, registry)
                         _write_manifest(run_path, manifest)
@@ -2401,7 +2445,7 @@ def _response(web, project):
                     missing_reason = missing.get("reason", "") if isinstance(missing, dict) else ""
                     finding_id = f"{subskill_id}:missing:{missing_field}:{missing_index}"
                     decision = decisions.get("decisions", {}).get(finding_id, {})
-                    if not _decision_is_current(decision, safe, current_fp):
+                    if not _decision_is_current(decision, safe, current_fp, subskill_id):
                         decision = {}
                     findings.append({"id": finding_id, "subskill_id": subskill_id, "field": missing_field,
                         "target": "", "value": decision.get("value"), "status": decision.get("status", "missing"),
@@ -2415,7 +2459,7 @@ def _response(web, project):
                 for index, value in enumerate(rows):
                     finding_id = f"{subskill_id}:{field}:{index}"
                     decision = decisions.get("decisions", {}).get(finding_id, {})
-                    if not _decision_is_current(decision, safe, current_fp):
+                    if not _decision_is_current(decision, safe, current_fp, subskill_id):
                         decision = {}
                     cited_pages = []
                     if isinstance(value, dict):
@@ -2530,8 +2574,13 @@ def _finding_unresolved(field, target, index, unresolved):
     return False
 
 
-def _decision_is_current(decision, manifest, current_fp):
-    return bool(isinstance(decision, dict) and decision.get("run_id") == manifest.get("run_id")
+def _decision_is_current(decision, manifest, current_fp, subskill_id=""):
+    """A decision belongs to this run's finding: made on this run, or on the earlier run whose unchanged result
+    this run reused for that skill (same inputs, same proposal, so the same finding)."""
+    if not isinstance(decision, dict):
+        return False
+    reused_from = ((manifest.get("subskills") or {}).get(subskill_id) or {}).get("reused_from") if subskill_id else None
+    return bool(decision.get("run_id") in {manifest.get("run_id"), reused_from} - {None, ""}
                 and current_fp and decision.get("source_fingerprint") == current_fp
                 and manifest.get("source_fingerprint") == current_fp)
 
@@ -2633,7 +2682,7 @@ def _has_open_findings(paths, manifest):
                 if not _finding_has_value(value):
                     continue
                 decision = decisions.get(f"{subskill}:{field}:{index}", {})
-                if not _decision_is_current(decision, manifest, manifest.get("source_fingerprint")) or decision.get("status") not in {"accepted", "rejected"}:
+                if not _decision_is_current(decision, manifest, manifest.get("source_fingerprint"), subskill) or decision.get("status") not in {"accepted", "rejected"}:
                     return True
         unresolved = list(proposal.get("unresolved_fields", []))
         for field, raw in proposal.get("proposal_fields", {}).items():
@@ -2643,7 +2692,7 @@ def _has_open_findings(paths, manifest):
         for index, missing in enumerate(unresolved):
             field = str(missing.get("field", "unknown field") if isinstance(missing, dict) else missing)
             decision = decisions.get(f"{subskill}:missing:{field}:{index}", {})
-            if not _decision_is_current(decision, manifest, manifest.get("source_fingerprint")) or decision.get("status") not in {"accepted", "rejected"}:
+            if not _decision_is_current(decision, manifest, manifest.get("source_fingerprint"), subskill) or decision.get("status") not in {"accepted", "rejected"}:
                 return True
     return False
 
@@ -2852,6 +2901,7 @@ def post(web, project, data):
             if existing:
                 raise ValueError("Retry is available only after a failed or stale skill workflow.")
         manifest = _new_manifest(catalog, source_fp, scope)
+        manifest["reuse_from"] = _reuse_table(paths, existing)
         _write_manifest(paths["manifest"], manifest)
         _USAGE_STOPPED.pop(str(paths["root"].resolve()), None)  # a new run tries again
         _RUNNING.add(project["id"])

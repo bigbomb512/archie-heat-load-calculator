@@ -916,7 +916,8 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
     proposal.setdefault("issues", []).extend(area_issues)
     if trace_review_issue:
         proposal["issues"].append(trace_review_issue)
-    return proposal
+    from backend import need_answers_service
+    return need_answers_service.apply_glazing(paths["root"], proposal)  # answered glass performance, where given
 
 
 def _queue_missing_research(paths, project, approved):

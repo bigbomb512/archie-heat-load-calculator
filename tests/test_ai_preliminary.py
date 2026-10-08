@@ -147,6 +147,19 @@ def main():
     envelope_report = calculate(preliminary_envelope)
     peak_components = envelope_report["included_scope_peak"]["components"]
     check("preliminary report keeps opaque and glazing solar components separate", "envelope" in peak_components and "glazing_conduction" in peak_components and "glazing_solar" in peak_components)
+    default_window = prelim_room["cooling_load"]["glazing_surfaces"][0]["window"]
+    answered = deepcopy(proposal)
+    answered["openings"][0].update({"u_value_w_m2k": 3.0, "shgc": 0.3, "glazing_source": "Answered by the operators (spec_sheet): low-e"})
+    answered_room = assemble({"spaces": []}, preliminary_proposal=answered)["material"]["hourly_load_model"]["rooms"][0]
+    answered_window = answered_room["cooling_load"]["glazing_surfaces"][0]
+    check("answered glass U-value and SHGC replace the preliminary pack values", (answered_window["window"]["u_value_w_m2k"], answered_window["window"]["shgc"]) == (3.0, 0.3)
+          and default_window["u_value_w_m2k"] != 3.0 and answered_window["source"].startswith("Answered by the operators"))
+    answered["openings"][0].update({"u_value_w_m2k": 40, "shgc": 2})
+    out_of_range = assemble({"spaces": []}, preliminary_proposal=answered)["material"]["hourly_load_model"]["rooms"][0]["cooling_load"]["glazing_surfaces"][0]["window"]
+    check("out-of-range glass values fall back to the preliminary pack", (out_of_range["u_value_w_m2k"], out_of_range["shgc"]) == (default_window["u_value_w_m2k"], default_window["shgc"]))
+    answered_report = calculate(assemble({"spaces": []}, preliminary_proposal={**deepcopy(proposal), "openings": [{**proposal["openings"][0], "u_value_w_m2k": 3.0, "shgc": 0.3}]}))
+    check("better glass lowers the glazing load", answered_report["included_scope_peak"]["components"]["glazing_solar"]["total_kw"]
+          < peak_components["glazing_solar"]["total_kw"])
     envelope_room_id = preliminary_envelope["material"]["hourly_load_model"]["rooms"][0]["room_id"]
     check("accepted opaque surface resolves that room's envelope assessment",
           not any(row["room_id"] == envelope_room_id and row["component_type"] == "envelope"

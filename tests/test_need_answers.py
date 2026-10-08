@@ -77,3 +77,31 @@ class ApplyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GlazingTests(unittest.TestCase):
+    def test_glass_answers_apply_to_one_rooms_windows_or_to_every_window(self):
+        import json, tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as folder, patch.object(answers, "options", return_value=OPTIONS):
+            project = {"id": "job", "review_dir": folder}
+            result = answers.apply(None, project, {"kind": "glazing", "value": "6.38 mm low-e laminated", "u_value_w_m2k": "3.4",
+                                                   "shgc": "0.32", "room": "Shop", "source": "spec_sheet", "reviewer": "Sam"})
+            self.assertEqual(result["summary"], "Glass for Shop's windows: U 3.4 W/m²K, SHGC 0.32 (6.38 mm low-e laminated).")
+            answers.apply(None, project, {"kind": "glazing", "value": "clear", "u_value_w_m2k": 5.8, "shgc": 0.7, "source": "client"})
+            for data, message in (({"u_value_w_m2k": "40", "shgc": "0.3"}, "between 0.5 and 7"), ({"u_value_w_m2k": "3", "shgc": "1.5"}, "between 0.05 and 0.95"),
+                                  ({"u_value_w_m2k": "", "shgc": "0.3"}, "as a number"), ({"u_value_w_m2k": "3", "shgc": "0.3", "room": "Attic"}, "Choose the room")):
+                with self.assertRaisesRegex(ValueError, message):
+                    answers.apply(None, project, {"kind": "glazing", "source": "client", **data})
+            proposal = {"openings": [{"owner_room_label": "Shop", "assumptions": ["preliminary_glazing_profile", "unshaded"]},
+                                     {"owner_room_label": "Kitchen", "assumptions": []}]}
+            answers.apply_glazing(folder, proposal)
+            shop, kitchen = proposal["openings"]
+            self.assertEqual((shop["u_value_w_m2k"], shop["shgc"], shop["assumptions"]), (3.4, 0.32, ["unshaded"]))
+            self.assertIn("spec_sheet", shop["glazing_source"])
+            self.assertEqual((kitchen["u_value_w_m2k"], kitchen["shgc"]), (5.8, 0.7))    # the every-window answer
+            stored = json.loads((Path(folder) / answers.GLAZING_FILE).read_text())
+            self.assertEqual(set(stored["rooms"]), {"Shop"})
+        unanswered = {"openings": [{"owner_room_label": "Shop"}]}
+        with tempfile.TemporaryDirectory() as empty:
+            self.assertNotIn("u_value_w_m2k", answers.apply_glazing(empty, unanswered)["openings"][0])

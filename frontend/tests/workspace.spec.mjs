@@ -483,6 +483,30 @@ test("Drawings: what we need to find lists only the gaps, with where to look, an
   await expect(page.locator("[data-ws-finding='equipment_evidence:equipment:0']")).toHaveCount(1);
 });
 
+test("Drawings: a glass answer takes a U-value and SHGC for one room's windows or every window", async ({page}) => {
+  const posts = [];
+  const skill = () => ({status: "needs_review", stages: [], answers: {}, answer_options: {
+      kinds: [{id: "glazing", label: "Glass performance (U-value and SHGC)", applied: true, unit: ""}],
+      rooms: [{label: "Shop", level: "Ground"}], equipment: [], above: []},
+    findings: [{id: "information_needs:needs:0", subskill_id: "information_needs", field: "needs", status: "proposed",
+      value: {target: "Shopfront", field: "glass_type", answer_kind: "glazing", room: null, why: "The elevation shows glazing but no glass type.",
+              impact: "shopfront sun load", where_to_look: "the shopfront supplier or the client", pages: "26"}}]});
+  await mockJob(page, {status: () => baseStatus(), skill,
+    onPost: (kind, body) => { if (kind === "skill" && body.action === "answer_need") posts.push(body); return null; }});
+  await page.goto("/#/job/job-1/drawings");
+  const need = page.locator("[data-ws-need='information_needs:needs:0']");
+  await expect(need.locator("[data-ws-need-room]")).toHaveValue("");                      // all windows unless a room is chosen
+  await need.locator("[data-ws-need-source]").selectOption("supplier");
+  await need.locator("[data-ws-need-save]").click();
+  await expect(need.locator("[data-ws-need-save]")).toHaveText("Enter the U-value and SHGC");
+  await need.locator("[data-ws-need-u]").fill("3.4");
+  await need.locator("[data-ws-need-shgc]").fill("0.32");
+  await need.locator("[data-ws-need-value]").fill("6.38 mm low-e laminated");
+  await need.locator("[data-ws-need-save]").click();
+  await expect.poll(() => posts.length).toBe(1);
+  expect(posts[0]).toMatchObject({kind: "glazing", room: "", u_value_w_m2k: "3.4", shgc: "0.32", value: "6.38 mm low-e laminated", source: "supplier"});
+});
+
 test("Drawings: before the skills have run, the needs list says when it will appear", async ({page}) => {
   await mockJob(page, {status: () => baseStatus(), skill: () => ({status: "running", stages: [], findings: []})});
   await page.goto("/#/job/job-1/drawings");

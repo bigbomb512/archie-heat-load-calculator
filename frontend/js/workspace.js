@@ -419,7 +419,13 @@
       const select = (attr, choices, current, empty) => `<select ${attr}><option value="">${empty}</option>${choices.map(([id, label]) =>
         `<option value="${esc(id)}" ${String(current) === String(id) ? "selected" : ""}>${esc(label)}</option>`).join("")}</select>`;
       const needsRoom = ["room_area", "ceiling_height", "occupancy", "lighting_load", "equipment_rating"].includes(kind);
-      const valueField = kind === "roof_above"
+      const glazingFields = kind === "glazing"
+        ? `<label>Windows ${select("data-ws-need-room", (options.rooms || []).map(item => [item.label, `${item.label} only`]), room, "all windows")}</label>
+           <label>U-value (W/m²K) <input data-ws-need-u inputmode="decimal" value="${esc(draft.u ?? "")}"></label>
+           <label>SHGC <input data-ws-need-shgc inputmode="decimal" value="${esc(draft.shgc ?? "")}"></label>` : "";
+      const valueField = kind === "glazing"
+        ? `<label>Glass (as specified) <input data-ws-need-value value="${esc(draft.value ?? saved?.answer ?? "")}" placeholder="e.g. 6.38 mm clear laminated"></label>`
+        : kind === "roof_above"
         ? `<label>Answer ${select("data-ws-need-value", (options.above || []).map(item => [item.id, item.label]), draft.value ?? saved?.answer ?? "", "choose")}</label>`
         : `<label>Answer${kindRow.unit ? ` (${esc(kindRow.unit)})` : ""} <input data-ws-need-value value="${esc(draft.value ?? saved?.answer ?? "")}"></label>`;
       return `<li class="ws-need" data-ws-need="${esc(row.id)}"><b>${esc(value.target || "")}${value.field ? ` · ${esc(String(value.field).replaceAll("_", " "))}` : ""}</b>
@@ -430,6 +436,7 @@
           <label>Kind ${select("data-ws-need-kind", kinds.map(item => [item.id, item.label + (item.applied ? "" : " (kept as a note)")]), kind, "choose")}</label>
           ${needsRoom ? `<label>Room ${select("data-ws-need-room", (options.rooms || []).map(item => [item.label, item.label]), room, "choose a room")}</label>` : ""}
           ${kind === "equipment_rating" ? `<label>Item ${select("data-ws-need-equipment", (options.equipment || []).map(item => [item.id, item.label]), draft.equipment_id ?? saved?.equipment_id ?? "", "choose the item")}</label>` : ""}
+          ${glazingFields}
           ${valueField}
           <label>From ${select("data-ws-need-source", ANSWER_SOURCES, draft.source ?? saved?.source ?? "", "choose")}</label>
           <label>Note <input data-ws-need-note value="${esc(draft.note ?? saved?.note ?? "")}" placeholder="optional"></label>
@@ -450,20 +457,24 @@
       const field = name => item.querySelector(`[data-ws-need-${name}]`);
       const remember = () => {
         state.needDrafts[id] = {kind: field("kind")?.value, room: field("room")?.value, equipment_id: field("equipment")?.value,
-                                value: field("value")?.value, source: field("source")?.value, note: field("note")?.value};
+                                value: field("value")?.value, source: field("source")?.value, note: field("note")?.value,
+                                u: field("u")?.value, shgc: field("shgc")?.value};
       };
       item.querySelectorAll("input, select").forEach(input => input.addEventListener("input", remember));
       // Changing the kind changes which fields the answer needs.
       field("kind")?.addEventListener("change", () => { remember(); renderDrawings().catch(showTabError); });
       field("save")?.addEventListener("click", async event => {
-        const kind = field("kind").value, value = field("value")?.value.trim() || "", source = field("source").value;
+        const kind = field("kind").value, source = field("source").value;
+        const value = field("value")?.value.trim() || (kind === "glazing" ? "glass as specified" : "");
         if (!kind) { event.target.textContent = "Choose the kind of answer"; return; }
         if (!value) { event.target.textContent = "Type the answer first"; return; }
+        if (kind === "glazing" && (!field("u").value.trim() || !field("shgc").value.trim())) { event.target.textContent = "Enter the U-value and SHGC"; return; }
         if (!source) { event.target.textContent = "Say where it came from"; return; }
         event.target.disabled = true;
         try {
           await sendJson("/api/skill-workflow", {project_id: projectId, action: "answer_need", finding_id: id, kind, value, source,
             room: field("room")?.value || "", equipment_id: field("equipment")?.value || "", note: field("note")?.value || "",
+            ...(kind === "glazing" ? {u_value_w_m2k: field("u").value.trim(), shgc: field("shgc").value.trim()} : {}),
             reviewer: userName() || "Operator"});
           delete state.needDrafts[id];
           await renderDrawings();
