@@ -21,7 +21,8 @@ import struct
 import subprocess
 import threading
 
-from ai.page_extraction import EXTRACTORS, build_prompt, merge, tiles, validate_reply
+from ai import equipment_heat
+from ai.page_extraction import EXTRACTORS, build_prompt, merge, normalise_name, tiles, validate_reply
 from backend import page_inventory_service as pass1
 from backend.job_runner import BackgroundJob, now, read_json, write_json
 
@@ -161,23 +162,49 @@ def _extractor(kind):
     return EXTRACTORS[kind]
 
 
+def rooms(project):
+    """The job's room names, for assigning equipment to a room."""
+    from backend import ai_preliminary_service
+    try:
+        proposal = ai_preliminary_service._proposal_for_resolution(ai_preliminary_service._paths(project), equipment=False)
+    except Exception:
+        return []
+    return sorted({str(row.get("label")) for row in proposal.get("rooms", []) if isinstance(row, dict) and row.get("label")})
+
+
+def suggested_room(location, room_names):
+    """The room whose name appears in the printed location ("KITCHEN AREA" -> "Kitchen"), else ""."""
+    text = f" {normalise_name(location)} "
+    matches = [name for name in room_names if normalise_name(name) and f" {normalise_name(name)} " in text]
+    return max(matches, key=len) if matches else ""
+
+
 def status(web, project, kind="equipment_appliances"):
     extractor = _extractor(kind)
     job = _JOB.status(project)
     problem = job.pop("error", "")  # sent as "problem": the workspace treats an "error" field as a failed request
     result = read_json(Path(project["review_dir"]) / RESULT_FILE).get(kind, {})
     decisions = read_json(Path(project["review_dir"]) / DECISIONS_FILE).get(kind, {})
+    room_names = rooms(project) if kind == "equipment_appliances" else []
     findings = []
     for row in result.get("findings", []):
         decision = decisions.get(row["id"], {})
         if decision.get("run") != result.get("run"):
             decision = {}
-        findings.append({**row, "status": decision.get("status", "proposed"), "decided_value": decision.get("value"),
+        extra = {}
+        if kind == "equipment_appliances":
+            decided = decision.get("value") or {}
+            extra = {"heat": equipment_heat.proposal(row["value"]),
+                     "suggested_room": suggested_room(row["value"].get("location"), room_names),
+                     "accepted_heat_w": equipment_heat.heat_w(decided) if decision.get("status") == "accepted" else None,
+                     "in_calculation": bool(decision.get("status") == "accepted" and decided.get("room") in room_names
+                                            and equipment_heat.heat_w(decided) is not None)}
+        findings.append({**row, **extra, "status": decision.get("status", "proposed"), "decided_value": decision.get("value"),
                          "reviewer": decision.get("reviewer", ""), "reviewed_at": decision.get("at", "")})
     open_count = sum(1 for row in findings if row["status"] == "proposed")
     return {**job, "problem": problem, "kind": kind, "label": extractor["label"], "pages": result.get("pages", []),
             "failures": result.get("failures", {}), "findings": findings, "open": open_count,
-            "run": result.get("run", ""), "read_at": result.get("read_at", "")}
+            "run": result.get("run", ""), "read_at": result.get("read_at", ""), "rooms": room_names}
 
 
 def start(web, project, data=None):
@@ -232,6 +259,7 @@ def start(web, project, data=None):
                                 f"(pages {', '.join(map(str, pages_failed))}). First reason: {failures[min(failures)]}")
         if problems:
             raise RuntimeError(" ".join(problems) + " Retry to read them.")
+        _start_skills(web, project_id)
         return {"kinds": totals}
 
     started = _JOB.start(web, project, {"kinds": kinds, "sections_done": 0, "section_count": 0}, work)
@@ -257,6 +285,17 @@ def review(web, project, data):
             value = finding["value"]
         if not isinstance(value, dict) or not str(value.get("name", "")).strip():
             raise ValueError("An accepted item needs at least a name.")
+        for field, low, high in (("rated_input_w", 0, None), ("heat_to_space_factor", 0, 1)):
+            if value.get(field) in (None, ""):
+                value[field] = None
+                continue
+            try:
+                number = float(value[field])
+            except (TypeError, ValueError):
+                raise ValueError(f"{field.replace('_', ' ')} must be a number.") from None
+            if number < low or (high is not None and number > high) or (field == "rated_input_w" and number == 0):
+                raise ValueError("Rated power must be above 0 W." if field == "rated_input_w" else "The heat-to-room factor must be between 0 and 1.")
+            value[field] = number
     root = Path(project["review_dir"])
     decisions = read_json(root / DECISIONS_FILE)
     decisions.setdefault(kind, {})[finding["id"]] = {
@@ -276,11 +315,24 @@ def accepted(project, kind="equipment_appliances"):
             if decisions.get(row["id"], {}).get("status") == "accepted" and decisions[row["id"]].get("run") == result.get("run")]
 
 
+def _start_skills(web, project_id):
+    """The skills run last, each on its case file built from pass 1 and 2 (ideas 1 and 3)."""
+    if web is None:
+        return
+    from backend import skill_workflow_service
+    try:
+        skill_workflow_service.start_after_reading(web, web.project_by_id(project_id))
+    except ValueError:
+        pass
+
+
 def start_after_pass1(web, project):
-    """Pass 1 finished: read the values of every kind that has an extractor and flagged pages."""
+    """Pass 1 finished: read the values of every kind that has an extractor and flagged pages, then the skills."""
     kinds = [kind for kind in EXTRACTORS if flagged_pages(project, kind)]
     if kinds:
         try:
             start(web, project, {"kinds": kinds})
+            return
         except ValueError:
             pass
+    _start_skills(web, project["id"])

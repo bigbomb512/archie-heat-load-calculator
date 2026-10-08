@@ -321,6 +321,7 @@
       <h2>Drawing analysis</h2>
       <p class="ws-hint">PDF review searches the drawing set for heat-load evidence. You can review each proposed value with its page evidence before it is used.</p>
       <p data-ws-checks role="status">${esc(operatorMode() && pendingReview ? `${done} of ${checks.total} checks resolved. Answer the remaining Toki checks below.` : drawingMessage)}</p>
+      ${needsMarkup(review)}
       ${reading ? pageReadingMarkup(reading) : ""}
       ${equipment && (equipment.status !== "none" || equipment.findings?.length) ? equipmentMarkup(equipment) : ""}
       ${pdfReviewMarkup(review, vision)}
@@ -333,6 +334,7 @@
     wireCommon();
     wirePages(projectId);
     wirePdfReview(projectId, review, vision);
+    wireNeeds(projectId);
     if (reading) wirePageReading(projectId);
     if (equipment) wireEquipment(projectId, equipment);
     body.querySelector("[data-ws-manual-fallback]")?.addEventListener("click", async () => {
@@ -390,35 +392,99 @@
       ${rows ? `<details data-ws-read-open="list" ${state.readOpen?.has("list") ? "open" : ""}><summary>What's on each page (${reading.read} of ${reading.page_count} read)</summary><ul class="ws-read-pages">${rows}</ul></details>` : ""}</section>`;
   }
 
-  const EQUIPMENT_EDIT = [["quantity", "Qty"], ["size", "Size"], ["model", "Model"], ["rated_power", "Power"], ["under_hood", "Under hood"]];
+  const ANSWER_SOURCES = [["spec_sheet", "Spec sheet"], ["supplier", "Supplier"], ["client", "Client"], ["site_visit", "Site visit"],
+    ["mechanical_drawings", "Mechanical drawings"], ["landlord", "Landlord / base building"], ["standard_or_reference", "Standard or reference"], ["other", "Other"]];
+
+  function needsMarkup(review) {
+    const rows = (review.findings || []).filter(row => row.subskill_id === "information_needs");
+    const needs = rows.filter(row => row.field === "needs" && row.value && typeof row.value === "object");
+    const inferred = rows.filter(row => row.field === "inferred" && row.value && typeof row.value === "object");
+    const answers = review.answers || {};
+    const answerFor = row => answers[row.id] || Object.values(answers).find(item => item.target === row.value.target && item.field === row.value.field);
+    if (!rows.length) {
+      const running = ["queued", "running"].includes(review.status);
+      return `<section class="ws-page-reading" aria-label="What we need to find" data-ws-needs><h3>What we need to find</h3>
+        <p class="ws-fine" data-ws-needs-status>${running ? "The skills are working through the drawings; the list appears when they finish." : "The list appears after every page has been read and the skills have worked through their case files."}</p></section>`;
+    }
+    const open = needs.filter(row => !answerFor(row)).length;
+    const items = needs.map(row => {
+      const value = row.value, saved = answerFor(row);
+      const source = ANSWER_SOURCES.find(([key]) => key === saved?.source)?.[1] || saved?.source || "";
+      return `<li class="ws-need" data-ws-need="${esc(row.id)}"><b>${esc(value.target || "")}${value.field ? ` · ${esc(String(value.field).replaceAll("_", " "))}` : ""}</b>
+        <p class="ws-fine">${esc(value.why || "")}${value.impact ? ` <b>Impact:</b> ${esc(value.impact)}.` : ""}${value.where_to_look ? ` <b>Usually found in:</b> ${esc(value.where_to_look)}.` : ""}${value.pages ? ` <span>Pages looked at: ${esc(value.pages)}</span>` : ""}</p>
+        ${saved ? `<p class="ws-fine" data-ws-need-answer><b>Answer:</b> ${esc(saved.answer)} <span>(${esc(source)}${saved.by ? `, ${esc(saved.by)}` : ""})</span></p>` : ""}
+        <div class="ws-eq-edit"><label>Answer <input data-ws-need-input value="${esc(saved?.answer || "")}"></label>
+          <label>From <select data-ws-need-source><option value="">choose</option>${ANSWER_SOURCES.map(([key, label]) => `<option value="${key}" ${saved?.source === key ? "selected" : ""}>${esc(label)}</option>`).join("")}</select></label>
+          <button class="btn ${saved ? "ghost" : "key"} mini" type="button" data-ws-need-save>${saved ? "Update" : "Save answer"}</button></div></li>`;
+    }).join("");
+    const worked = inferred.map(row => `<li>${esc(row.value.target || "")}${row.value.field ? ` · ${esc(String(row.value.field).replaceAll("_", " "))}` : ""}: <b>${esc(row.value.value ?? "")}${row.value.unit ? ` ${esc(row.value.unit)}` : ""}</b>
+      <span class="ws-fine">— ${esc(row.value.method || "")}${row.value.pages ? ` (pages ${esc(row.value.pages)})` : ""}</span></li>`).join("");
+    return `<section class="ws-page-reading" aria-label="What we need to find" data-ws-needs><h3>What we need to find</h3>
+      <p class="ws-fine" data-ws-needs-status>${needs.length ? `${needs.length} item${needs.length === 1 ? "" : "s"} the drawings don't give${open ? ` · ${open} still to find` : " · all answered"}.` : "Nothing to find: the drawings cover what the calculation needs."}</p>
+      ${items ? `<ul class="ws-read-pages">${items}</ul>` : ""}
+      ${worked ? `<details data-ws-read-open="worked" ${state.readOpen?.has("worked") ? "open" : ""}><summary>Worked out from the drawings (${inferred.length})</summary><ul>${worked}</ul></details>` : ""}</section>`;
+  }
+
+  function wireNeeds(projectId) {
+    body.querySelectorAll("[data-ws-need]").forEach(item => item.querySelector("[data-ws-need-save]")?.addEventListener("click", async event => {
+      const answer = item.querySelector("[data-ws-need-input]").value.trim(), source = item.querySelector("[data-ws-need-source]").value;
+      if (!answer) { event.target.textContent = "Type the answer first"; return; }
+      if (!source) { event.target.textContent = "Say where it came from"; return; }
+      event.target.disabled = true;
+      try {
+        await sendJson("/api/skill-workflow", {project_id: projectId, action: "answer_need", finding_id: item.dataset.wsNeed, answer, source, reviewer: userName() || "Operator"});
+        await renderDrawings();
+      } catch (error) { event.target.disabled = false; event.target.textContent = error.message; }
+    }));
+  }
+
+  const EQUIPMENT_EDIT = [["quantity", "Qty"], ["size", "Size"], ["model", "Model"], ["rated_power", "Printed power"], ["under_hood", "Under hood"],
+                          ["room", "Room"], ["rated_input_w", "Rated W (each)"], ["heat_to_space_factor", "Heat to room (0–1)"]];
+
+  function heatLine(row) {
+    const heat = row.heat || {};
+    if (heat.not_equipment) return `<p class="ws-fine" data-ws-eq-heat>Not counted as equipment: ${esc(heat.not_equipment)}.</p>`;
+    if (row.status === "accepted") return `<p class="ws-fine" data-ws-eq-heat>${row.in_calculation
+      ? `In the calculation: ${esc(Math.round(row.accepted_heat_w))} W into ${esc(row.decided_value?.room || "")}.`
+      : `Not in the calculation yet: it needs a room, a rated power and a heat-to-room factor.`}</p>`;
+    const parts = heat.rated_input_w ? `${heat.rated_input_w} W each (${esc(heat.rated_source)})` : "rated power not known";
+    const factor = heat.heat_to_space_factor != null ? ` × ${heat.heat_to_space_factor} to the room (${esc(heat.factor_source)})` : "";
+    return `<p class="ws-fine" data-ws-eq-heat>Proposed: ${parts}${factor}${heat.heat_w != null ? ` = ${esc(heat.heat_w)} W` : ""}.
+      ${heat.needed?.length ? `<b>Needs: ${esc(heat.needed.join(", "))}.</b>` : ""}</p>`;
+  }
 
   function equipmentMarkup(run) {
     const running = ["queued", "running"].includes(run.status);
     const statusText = running ? (run.section_count ? `Reading equipment: ${run.sections_done || 0} of ${run.section_count} pages…` : `${run.step_label || "Starting"}…`)
       : ["failed", "blocked", "interrupted"].includes(run.status) ? run.problem || "Reading the equipment didn't finish."
-      : `${run.findings.length} item${run.findings.length === 1 ? "" : "s"} from ${run.pages.length} page${run.pages.length === 1 ? "" : "s"}${run.open ? ` · ${run.open} to review` : " · all reviewed"}.`;
+      : `${run.findings.length} item${run.findings.length === 1 ? "" : "s"} from ${run.pages.length} page${run.pages.length === 1 ? "" : "s"}${run.open ? ` · ${run.open} to review` : " · all reviewed"}${
+          run.findings.some(row => row.in_calculation) ? ` · ${Math.round(run.findings.reduce((sum, row) => sum + (row.in_calculation ? row.accepted_heat_w : 0), 0))} W in the calculation (press Calculate to update)` : ""}.`;
     const shown = value => value === null || value === undefined || value === "" ? "" : value === true ? "yes" : value === false ? "no" : String(value);
     const rows = run.findings.map(row => {
       const value = row.decided_value || row.value;
       const facts = [value.quantity != null ? `×${value.quantity}` : "", value.size, value.model, value.rated_power || "power not printed",
-                     value.under_hood === true ? "under hood" : ""].filter(Boolean).map(esc).join(" · ");
+                     value.under_hood === true ? "under hood" : "", row.in_calculation ? `${Math.round(row.accepted_heat_w)} W in ${value.room}` : ""].filter(Boolean).map(esc).join(" · ");
       const conflicts = Object.entries(row.conflicts || {}).map(([field, options]) => `<li>${esc(field.replaceAll("_", " "))}: ${options.map(option =>
         `<button type="button" class="link-button" data-ws-eq-pick="${esc(field)}" data-ws-eq-value="${esc(JSON.stringify(option.value))}">${esc(shown(option.value))} (p${option.pages.join(", p")})</button>`).join(" or ")}</li>`).join("");
       const check = row.text_match === false ? `<p class="ws-fine is-warn" data-ws-eq-textcheck>Not found in the page's text: check this reading on the page.</p>` : "";
       // Unsaved edits survive the tab's auto-refresh.
       const edits = state.eqEdits?.[row.id] || {};
-      const typed = field => field in edits ? edits[field] : field === "under_hood" ? (value.under_hood === null || value.under_hood === undefined ? "" : String(value.under_hood)) : shown(value[field]);
+      const start = {...value, room: row.suggested_room || "", rated_input_w: row.heat?.rated_input_w ?? "", heat_to_space_factor: row.heat?.heat_to_space_factor ?? ""};
+      const typed = field => field in edits ? edits[field] : field === "under_hood" ? (start.under_hood === null || start.under_hood === undefined ? "" : String(start.under_hood)) : shown(start[field]);
       const editor = EQUIPMENT_EDIT.map(([field, label]) => field === "under_hood"
         ? `<label>${label} <select data-ws-eq-field="under_hood"><option value="">not shown</option><option value="true" ${typed(field) === "true" ? "selected" : ""}>yes</option><option value="false" ${typed(field) === "false" ? "selected" : ""}>no</option></select></label>`
-        : `<label>${label} <input data-ws-eq-field="${field}" value="${esc(typed(field))}" ${field === "quantity" ? 'inputmode="numeric"' : ""}></label>`).join("");
+        : field === "room"
+          ? `<label>${label} <select data-ws-eq-field="room"><option value="">choose a room</option>${(run.rooms || []).map(name => `<option ${typed(field) === name ? "selected" : ""}>${esc(name)}</option>`).join("")}</select></label>`
+          : `<label>${label} <input data-ws-eq-field="${field}" value="${esc(typed(field))}" ${["quantity", "rated_input_w", "heat_to_space_factor"].includes(field) ? 'inputmode="decimal"' : ""}></label>`).join("");
       const actions = row.status === "proposed"
         ? `<div class="ws-eq-edit">${editor}</div>${conflicts ? `<p class="ws-fine">The pages disagree. Choose a reading or type the value:</p><ul>${conflicts}</ul>` : ""}
            <div class="ws-actions"><button class="btn key mini" type="button" data-ws-eq-accept>${row.conflicts && Object.keys(row.conflicts).length ? "Save chosen value" : "Accept"}</button>
            <button class="btn ghost mini" type="button" data-ws-eq-reject>Reject</button></div>`
-        : `<p class="ws-fine">${esc(row.status)}${row.reviewer ? ` by ${esc(row.reviewer)}` : ""} · not yet used in the calculation</p>`;
+        : `<p class="ws-fine">${esc(row.status)}${row.reviewer ? ` by ${esc(row.reviewer)}` : ""}</p>`;
       return `<li class="ws-eq" data-ws-eq="${esc(row.id)}"><details data-ws-read-open="eq:${esc(row.id)}" ${state.readOpen?.has(`eq:${row.id}`) ? "open" : ""}>
         <summary><b>${value.code ? `${esc(value.code)} ` : ""}${esc(value.name)}</b> <span class="ws-chip ws-evidence-${esc(row.evidence)}">${esc(row.evidence)}</span>
         ${row.status !== "proposed" ? `<span class="ws-chip">${esc(row.status)}</span>` : ""}<br><span class="ws-fine">${facts} · p${row.pages.join(", p")}</span></summary>
+        ${heatLine(row)}
         ${row.pictures_only ? `<p class="ws-fine">Seen only in renders or photos, so it shows design intent: check it against the plans.</p>` : ""}
         <ul>${row.citations.map(cite => `<li>Page ${esc(cite.page)}${cite.excerpt ? `: ${esc(cite.excerpt)}` : ""}</li>`).join("")}</ul>${check}${actions}</details></li>`;
     }).join("");
@@ -460,6 +526,9 @@
             if (field === "quantity") {
               if (text && !/^\d+$/.test(text)) { button.textContent = "Quantity must be a whole number"; return; }
               value.quantity = text ? Number(text) : null;
+            } else if (field === "rated_input_w" || field === "heat_to_space_factor") {
+              if (text && !Number.isFinite(Number(text))) { button.textContent = "Enter a number"; return; }
+              value[field] = text ? Number(text) : null;
             } else if (field === "under_hood") value.under_hood = text === "" ? null : text === "true";
             else value[field] = text;
           }
@@ -511,11 +580,12 @@
     const selection = vision.selection || {};
     const consented = !!settings.owner_opt_in;
     const stages = (review.stages || []).map(stage => `<li><span>${esc(stage.label)}</span><b>${esc(stage.status.replaceAll("_", " "))}</b></li>`).join("");
-    const openCounts = (review.findings || []).filter(row => !["accepted", "rejected"].includes(row.status)).reduce((counts, row) => {
+    const reviewFindings = (review.findings || []).filter(row => row.subskill_id !== "information_needs");
+    const openCounts = reviewFindings.filter(row => !["accepted", "rejected"].includes(row.status)).reduce((counts, row) => {
       counts[row.evidence] = (counts[row.evidence] || 0) + 1; return counts;
     }, {});
     const evidenceCount = Object.entries(openCounts).map(([name, count]) => `${count} ${name}`).join(" · ");
-    const findings = (review.findings || []).map(row => {
+    const findings = reviewFindings.map(row => {
       const evidence = (row.citations || []).map(citation => `<li>Page ${esc(citation.page ?? "?")}${citation.excerpt ? `: ${esc(citation.excerpt)}` : ""}</li>`).join("");
       const inference = (row.inferences || []).map(item => `<li>${esc(typeof item === "string" ? item : JSON.stringify(item))}</li>`).join("");
       const pages = row.pages?.length ? `Page${row.pages.length === 1 ? "" : "s"} ${row.pages.map(esc).join(", ")}` : "Page citation missing";

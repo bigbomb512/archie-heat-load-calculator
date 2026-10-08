@@ -4,101 +4,396 @@
   "workflow_id": "evidence-to-heat-load-v1",
   "instruction_file": "ai/skills/instructions/heatload_domains_v1.md",
   "subskill_registry_file": "config/archie_subskills_v1.json",
-  "enabled_skill_ids": ["document_mapping", "project_location_weather", "rooms_geometry_gains", "opaque_envelope", "openings_glazing_solar", "airflow_process_air", "ahu_airside", "plant_hydraulics", "final_design_policy", "model_reconciliation_report"],
-  "pilot_skill_ids": ["document_mapping", "project_location_weather", "rooms_geometry_gains", "opaque_envelope", "openings_glazing_solar", "airflow_process_air", "ahu_airside", "plant_hydraulics", "final_design_policy", "model_reconciliation_report"],
+  "enabled_skill_ids": [
+    "document_mapping",
+    "project_location_weather",
+    "rooms_geometry_gains",
+    "opaque_envelope",
+    "openings_glazing_solar",
+    "airflow_process_air",
+    "ahu_airside",
+    "plant_hydraulics",
+    "final_design_policy",
+    "model_reconciliation_report"
+  ],
+  "pilot_skill_ids": [
+    "document_mapping",
+    "project_location_weather",
+    "rooms_geometry_gains",
+    "opaque_envelope",
+    "openings_glazing_solar",
+    "airflow_process_air",
+    "ahu_airside",
+    "plant_hydraulics",
+    "final_design_policy",
+    "model_reconciliation_report"
+  ],
   "output_contracts": {
-    "document_map_summary_v1": {"type": "object", "required": ["status", "page_count", "identified_page_count", "ambiguous_page_count", "pages", "artifact_names"]},
-    "room_gains_evidence_v1": {"type": "object", "required": ["status", "room_candidate_count", "coverage", "model_input_status", "artifact_names"]},
-    "site_context_proposal_v1": {"type": "object", "required": ["status", "records", "unresolved", "evidence"]},
-    "opaque_envelope_proposal_v1": {"type": "object", "required": ["status", "records", "unresolved", "evidence"]},
-    "opening_solar_proposal_v1": {"type": "object", "required": ["status", "records", "unresolved", "evidence"]},
-    "airflow_proposal_v1": {"type": "object", "required": ["status", "records", "unresolved", "evidence"]},
-    "ahu_proposal_v1": {"type": "object", "required": ["status", "records", "unresolved", "evidence"]},
-    "plant_proposal_v1": {"type": "object", "required": ["status", "records", "unresolved", "evidence"]},
-    "final_policy_proposal_v1": {"type": "object", "required": ["status", "records", "unresolved", "evidence"]},
-    "model_readiness_v1": {"type": "object", "required": ["status", "records", "unresolved", "evidence"]}
+    "document_map_summary_v1": {
+      "type": "object",
+      "required": [
+        "status",
+        "page_count",
+        "identified_page_count",
+        "ambiguous_page_count",
+        "pages",
+        "artifact_names"
+      ]
+    },
+    "room_gains_evidence_v1": {
+      "type": "object",
+      "required": [
+        "status",
+        "room_candidate_count",
+        "coverage",
+        "model_input_status",
+        "artifact_names"
+      ]
+    },
+    "site_context_proposal_v1": {
+      "type": "object",
+      "required": [
+        "status",
+        "records",
+        "unresolved",
+        "evidence"
+      ]
+    },
+    "opaque_envelope_proposal_v1": {
+      "type": "object",
+      "required": [
+        "status",
+        "records",
+        "unresolved",
+        "evidence"
+      ]
+    },
+    "opening_solar_proposal_v1": {
+      "type": "object",
+      "required": [
+        "status",
+        "records",
+        "unresolved",
+        "evidence"
+      ]
+    },
+    "airflow_proposal_v1": {
+      "type": "object",
+      "required": [
+        "status",
+        "records",
+        "unresolved",
+        "evidence"
+      ]
+    },
+    "ahu_proposal_v1": {
+      "type": "object",
+      "required": [
+        "status",
+        "records",
+        "unresolved",
+        "evidence"
+      ]
+    },
+    "plant_proposal_v1": {
+      "type": "object",
+      "required": [
+        "status",
+        "records",
+        "unresolved",
+        "evidence"
+      ]
+    },
+    "final_policy_proposal_v1": {
+      "type": "object",
+      "required": [
+        "status",
+        "records",
+        "unresolved",
+        "evidence"
+      ]
+    },
+    "model_readiness_v1": {
+      "type": "object",
+      "required": [
+        "status",
+        "records",
+        "unresolved",
+        "evidence"
+      ]
+    }
   },
   "skills": [
     {
-      "id": "document_mapping", "version": 1, "enabled": true,
+      "id": "document_mapping",
+      "version": 1,
+      "enabled": true,
       "purpose": "Establish canonical physical-page, drawing identity, revision, type, scale, and cross-sheet references.",
-      "depends_on": [], "subskills": ["sheet_identity", "revision_scope", "page_relationships"],
-      "allowed_evidence": ["uploaded_pdf", "drawing_coverage", "page_text", "vision_response"],
-      "output_contract": "document_map_summary_v1", "resolver_handoff": "drawing_coverage.json",
+      "depends_on": [],
+      "subskills": [
+        "sheet_identity",
+        "revision_scope",
+        "page_relationships"
+      ],
+      "allowed_evidence": [
+        "uploaded_pdf",
+        "drawing_coverage",
+        "page_text",
+        "vision_response"
+      ],
+      "output_contract": "document_map_summary_v1",
+      "resolver_handoff": "drawing_coverage.json",
       "failure_behavior": "Mark mapping needs_review and block only skills requiring ambiguous sheet identity.",
       "execution": "local_evidence_audit"
     },
     {
-      "id": "project_location_weather", "version": 1, "enabled": true,
+      "id": "project_location_weather",
+      "version": 1,
+      "enabled": true,
       "purpose": "Resolve confirmed site context, design weather, and cited external location data.",
-      "depends_on": ["document_mapping"], "subskills": ["site_clue_extraction", "address_confirmation", "weather_source_matching"],
-      "allowed_evidence": ["site_plan", "project_brief", "consented_allowlisted_sources"],
-      "output_contract": "site_context_proposal_v1", "resolver_handoff": "site_location_resolution.json",
-      "failure_behavior": "Keep unresolved context explicit; never use live forecast as design weather.", "execution": "existing_domain_resolver"
+      "depends_on": [
+        "document_mapping"
+      ],
+      "subskills": [
+        "site_clue_extraction",
+        "address_confirmation",
+        "weather_source_matching"
+      ],
+      "allowed_evidence": [
+        "site_plan",
+        "project_brief",
+        "consented_allowlisted_sources"
+      ],
+      "output_contract": "site_context_proposal_v1",
+      "resolver_handoff": "site_location_resolution.json",
+      "failure_behavior": "Keep unresolved context explicit; never use live forecast as design weather.",
+      "execution": "existing_domain_resolver"
     },
     {
-      "id": "rooms_geometry_gains", "version": 1, "enabled": true,
+      "id": "rooms_geometry_gains",
+      "version": 1,
+      "enabled": true,
       "purpose": "Identify rooms and resolve draft geometry, ceiling, occupancy, lighting, equipment, and schedule evidence.",
-      "depends_on": ["document_mapping"], "subskills": ["room_identity_use", "room_boundaries_areas", "ceiling_height_volume", "occupancy_seating", "lighting_evidence", "equipment_evidence", "schedule_evidence"],
-      "allowed_evidence": ["ranked_plans", "dimension_plans", "sections", "rcp", "lighting_plans", "equipment_schedules", "project_brief"],
-      "output_contract": "room_gains_evidence_v1", "resolver_handoff": ["room_use_resolution.json", "geometry_resolution.json", "ceiling_volume_resolution.json", "internal_gains_resolution.json"],
-      "failure_behavior": "Retain candidates; exclude only invalid geometry or unsupported components and provide remediation.", "execution": "existing_room_and_model_resolvers"
+      "depends_on": [
+        "document_mapping"
+      ],
+      "subskills": [
+        "room_identity_use",
+        "room_boundaries_areas",
+        "ceiling_height_volume",
+        "occupancy_seating",
+        "lighting_evidence",
+        "equipment_evidence",
+        "schedule_evidence"
+      ],
+      "allowed_evidence": [
+        "ranked_plans",
+        "dimension_plans",
+        "sections",
+        "rcp",
+        "lighting_plans",
+        "equipment_schedules",
+        "project_brief"
+      ],
+      "output_contract": "room_gains_evidence_v1",
+      "resolver_handoff": [
+        "room_use_resolution.json",
+        "geometry_resolution.json",
+        "ceiling_volume_resolution.json",
+        "internal_gains_resolution.json"
+      ],
+      "failure_behavior": "Retain candidates; exclude only invalid geometry or unsupported components and provide remediation.",
+      "execution": "existing_room_and_model_resolvers"
     },
     {
-      "id": "opaque_envelope", "version": 1, "enabled": true,
+      "id": "opaque_envelope",
+      "version": 1,
+      "enabled": true,
       "purpose": "Inventory opaque surfaces and resolve area, construction, U-value, and boundary evidence.",
-      "depends_on": ["document_mapping", "rooms_geometry_gains"], "subskills": ["surface_inventory", "surface_area", "construction_matching", "boundary_resolution"],
-      "allowed_evidence": ["plans", "sections", "details", "schedules", "released_source_packs"],
-      "output_contract": "opaque_envelope_proposal_v1", "resolver_handoff": "thermal_surface_ledger",
-      "failure_behavior": "Retain blocked surfaces and exclude only affected components.", "execution": "existing_domain_resolver"
+      "depends_on": [
+        "document_mapping",
+        "rooms_geometry_gains"
+      ],
+      "subskills": [
+        "surface_inventory",
+        "surface_area",
+        "construction_matching",
+        "boundary_resolution"
+      ],
+      "allowed_evidence": [
+        "plans",
+        "sections",
+        "details",
+        "schedules",
+        "released_source_packs"
+      ],
+      "output_contract": "opaque_envelope_proposal_v1",
+      "resolver_handoff": "thermal_surface_ledger",
+      "failure_behavior": "Retain blocked surfaces and exclude only affected components.",
+      "execution": "existing_domain_resolver"
     },
     {
-      "id": "openings_glazing_solar", "version": 1, "enabled": true,
+      "id": "openings_glazing_solar",
+      "version": 1,
+      "enabled": true,
       "purpose": "Match openings and resolve glazing properties, exposure, orientation, radiation, and shading.",
-      "depends_on": ["document_mapping", "rooms_geometry_gains", "project_location_weather"], "subskills": ["cross_sheet_opening_match", "glazing_properties", "exposure_orientation", "solar_source", "shading"],
-      "allowed_evidence": ["plans", "elevations", "sections", "schedules", "site_survey", "consented_allowlisted_sources"],
-      "output_contract": "opening_solar_proposal_v1", "resolver_handoff": "opening_register",
-      "failure_behavior": "Do not apply outdoor solar to ambiguous or internal openings.", "execution": "existing_domain_resolver"
+      "depends_on": [
+        "document_mapping",
+        "rooms_geometry_gains",
+        "project_location_weather"
+      ],
+      "subskills": [
+        "cross_sheet_opening_match",
+        "glazing_properties",
+        "exposure_orientation",
+        "solar_source",
+        "shading"
+      ],
+      "allowed_evidence": [
+        "plans",
+        "elevations",
+        "sections",
+        "schedules",
+        "site_survey",
+        "consented_allowlisted_sources"
+      ],
+      "output_contract": "opening_solar_proposal_v1",
+      "resolver_handoff": "opening_register",
+      "failure_behavior": "Do not apply outdoor solar to ambiguous or internal openings.",
+      "execution": "existing_domain_resolver"
     },
     {
-      "id": "airflow_process_air", "version": 1, "enabled": true,
+      "id": "airflow_process_air",
+      "version": 1,
+      "enabled": true,
       "purpose": "Resolve ventilation, infiltration, exhaust, make-up, transfer, and airflow ownership.",
-      "depends_on": ["rooms_geometry_gains"], "subskills": ["outside_air", "infiltration", "process_exhaust", "make_up_air", "airflow_deduplication"],
-      "allowed_evidence": ["mechanical_plans", "schedules", "room_use", "geometry", "consented_allowlisted_sources"],
-      "output_contract": "airflow_proposal_v1", "resolver_handoff": "airflow_resolution.json",
-      "failure_behavior": "Keep distinct air paths; block duplicate or ambiguous ownership.", "execution": "existing_domain_resolver"
+      "depends_on": [
+        "rooms_geometry_gains"
+      ],
+      "subskills": [
+        "outside_air",
+        "infiltration",
+        "process_exhaust",
+        "make_up_air",
+        "airflow_deduplication"
+      ],
+      "allowed_evidence": [
+        "mechanical_plans",
+        "schedules",
+        "room_use",
+        "geometry",
+        "consented_allowlisted_sources"
+      ],
+      "output_contract": "airflow_proposal_v1",
+      "resolver_handoff": "airflow_resolution.json",
+      "failure_behavior": "Keep distinct air paths; block duplicate or ambiguous ownership.",
+      "execution": "existing_domain_resolver"
     },
     {
-      "id": "ahu_airside", "version": 1, "enabled": true,
+      "id": "ahu_airside",
+      "version": 1,
+      "enabled": true,
       "purpose": "Resolve AHU topology, room/zone ownership, air paths, states, fans, ducts, recovery, and coils.",
-      "depends_on": ["rooms_geometry_gains", "airflow_process_air"], "subskills": ["system_detection", "zone_ownership", "air_path_reconciliation", "component_inputs", "coil_duty"],
-      "allowed_evidence": ["mechanical_plans", "schematics", "equipment_schedules", "airflow_resolution"],
-      "output_contract": "ahu_proposal_v1", "resolver_handoff": "ahu_resolution.json",
-      "failure_behavior": "Exclude blocked AHU components while retaining eligible partial subtotals.", "execution": "existing_domain_resolver"
+      "depends_on": [
+        "rooms_geometry_gains",
+        "airflow_process_air"
+      ],
+      "subskills": [
+        "system_detection",
+        "zone_ownership",
+        "air_path_reconciliation",
+        "component_inputs",
+        "coil_duty"
+      ],
+      "allowed_evidence": [
+        "mechanical_plans",
+        "schematics",
+        "equipment_schedules",
+        "airflow_resolution"
+      ],
+      "output_contract": "ahu_proposal_v1",
+      "resolver_handoff": "ahu_resolution.json",
+      "failure_behavior": "Exclude blocked AHU components while retaining eligible partial subtotals.",
+      "execution": "existing_domain_resolver"
     },
     {
-      "id": "plant_hydraulics", "version": 1, "enabled": true,
+      "id": "plant_hydraulics",
+      "version": 1,
+      "enabled": true,
       "purpose": "Resolve plant, circuits, pumps, pipes, diversity, and AHU-to-plant reconciliation.",
-      "depends_on": ["ahu_airside"], "subskills": ["plant_detection", "circuit_mapping", "pump_inputs", "pipe_effects", "coincident_duty"],
-      "allowed_evidence": ["mechanical_plans", "schematics", "plant_schedules", "ahu_duty"],
-      "output_contract": "plant_proposal_v1", "resolver_handoff": "plant_resolution.json",
-      "failure_behavior": "Do not include plant duty without valid AHU/circuit/plant mapping.", "execution": "existing_domain_resolver"
+      "depends_on": [
+        "ahu_airside"
+      ],
+      "subskills": [
+        "plant_detection",
+        "circuit_mapping",
+        "pump_inputs",
+        "pipe_effects",
+        "coincident_duty"
+      ],
+      "allowed_evidence": [
+        "mechanical_plans",
+        "schematics",
+        "plant_schedules",
+        "ahu_duty"
+      ],
+      "output_contract": "plant_proposal_v1",
+      "resolver_handoff": "plant_resolution.json",
+      "failure_behavior": "Do not include plant duty without valid AHU/circuit/plant mapping.",
+      "execution": "existing_domain_resolver"
     },
     {
-      "id": "final_design_policy", "version": 1, "enabled": true,
+      "id": "final_design_policy",
+      "version": 1,
+      "enabled": true,
       "purpose": "Resolve cited cooling/heating safety policy and apply it once at final project rollup.",
-      "depends_on": ["rooms_geometry_gains", "opaque_envelope", "openings_glazing_solar", "airflow_process_air", "ahu_airside", "plant_hydraulics"], "subskills": ["policy_source", "double_application_check", "final_rollup"],
-      "allowed_evidence": ["project_brief", "engineer_instruction", "approved_rule"],
-      "output_contract": "final_policy_proposal_v1", "resolver_handoff": "safety_factor_resolution.json",
-      "failure_behavior": "Keep draft fallback labelled; block reviewed total without approved cited policy.", "execution": "existing_domain_resolver"
+      "depends_on": [
+        "rooms_geometry_gains",
+        "opaque_envelope",
+        "openings_glazing_solar",
+        "airflow_process_air",
+        "ahu_airside",
+        "plant_hydraulics"
+      ],
+      "subskills": [
+        "policy_source",
+        "double_application_check",
+        "final_rollup"
+      ],
+      "allowed_evidence": [
+        "project_brief",
+        "engineer_instruction",
+        "approved_rule"
+      ],
+      "output_contract": "final_policy_proposal_v1",
+      "resolver_handoff": "safety_factor_resolution.json",
+      "failure_behavior": "Keep draft fallback labelled; block reviewed total without approved cited policy.",
+      "execution": "existing_domain_resolver"
     },
     {
-      "id": "model_reconciliation_report", "version": 1, "enabled": true,
+      "id": "model_reconciliation_report",
+      "version": 1,
+      "enabled": true,
       "purpose": "Reconcile input coverage, provenance, stale state, exclusions, and report readiness.",
-      "depends_on": ["final_design_policy"], "subskills": ["shared_value_register", "dependency_freshness", "provenance_audit", "report_readiness"],
-      "allowed_evidence": ["all_domain_artifacts", "calculation_snapshot", "report"],
-      "output_contract": "model_readiness_v1", "resolver_handoff": "model_input_resolution.json",
-      "failure_behavior": "Suppress complete-project readiness where required scope is unresolved.", "execution": "existing_domain_resolver"
+      "depends_on": [
+        "final_design_policy"
+      ],
+      "subskills": [
+        "shared_value_register",
+        "dependency_freshness",
+        "provenance_audit",
+        "report_readiness",
+        "information_needs"
+      ],
+      "allowed_evidence": [
+        "all_domain_artifacts",
+        "calculation_snapshot",
+        "report"
+      ],
+      "output_contract": "model_readiness_v1",
+      "resolver_handoff": "model_input_resolution.json",
+      "failure_behavior": "Suppress complete-project readiness where required scope is unresolved.",
+      "execution": "existing_domain_resolver"
     }
   ]
 }

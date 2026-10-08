@@ -53,7 +53,7 @@ class SkillWorkflowTests(unittest.TestCase):
         self.assertTrue(all(row["enabled"] for row in catalog["skills"]))
         self.assertTrue(skills.validate_catalog(catalog))
         registry = skills.load_subskill_registry()
-        self.assertEqual(len(registry["subskills"]), 44)
+        self.assertEqual(len(registry["subskills"]), 45)
         self.assertTrue(skills.validate_subskill_registry(catalog, registry))
         self.assertTrue(all(row.get("task") and row.get("proposal_fields") and row.get("constraints") for row in registry["subskills"]))
         with self.assertRaisesRegex(ValueError, "cycle"):
@@ -77,7 +77,7 @@ class SkillWorkflowTests(unittest.TestCase):
             settings_path.write_text(json.dumps({"owner_opt_in": False, "selected_group_ids": []}), encoding="utf-8")
             no_consent = skills.post(web, project, {"action": "start"})
             self.assertEqual(no_consent["status"], "blocked")
-            self.assertIn("consent", no_consent["blocked_reason"].lower())
+            self.assertIn("every page has been read", no_consent["blocked_reason"].lower())
             self.assertFalse((Path(folder) / "skill_workflow_run.json").exists())
             settings_path.write_text(json.dumps({"owner_opt_in": True, "selected_group_ids": []}), encoding="utf-8")
             with patch.dict(os.environ, {}, clear=True):
@@ -184,7 +184,7 @@ class SkillWorkflowTests(unittest.TestCase):
             result = skills.get(web, project)
             self.assertTrue(result["read_only"])
             self.assertEqual(result["status"], "blocked")
-            with self.assertRaisesRegex(ValueError, "consent was withdrawn"):
+            with self.assertRaisesRegex(ValueError, "findings are read-only"):
                 skills.post(web, project, {"action": "review_finding", "finding_id": "missing", "decision": "accepted"})
 
     def test_after_analysis_auto_starts_only_with_saved_consent_and_uses_pdf_review_scope(self):
@@ -491,7 +491,7 @@ class SkillWorkflowTests(unittest.TestCase):
                 self.assertEqual(state["stages"][2]["label"], "Rooms, geometry, and gains")
                 self.assertTrue(all("id" not in row for row in state["stages"]))
                 manifest = json.loads((Path(folder) / "skill_workflow_run.json").read_text())
-                self.assertEqual(len(manifest["subskills"]), 44)
+                self.assertEqual(len(manifest["subskills"]), 45)
                 self.assertTrue(all(manifest["subskills"][key]["status"] != "not_enabled" for key in (
                     "sheet_identity", "revision_scope", "page_relationships", "room_identity_use", "room_boundaries_areas",
                     "ceiling_height_volume", "occupancy_seating", "lighting_evidence", "equipment_evidence", "schedule_evidence")))

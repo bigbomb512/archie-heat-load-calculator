@@ -108,12 +108,12 @@ def main_plan_pages(readings):
 
     readings = {page: validated reading}. Returns {level key: [pages]}.
     """
-    floors = {page: row for page, row in readings.items() if row and row["page_type"] == "floor_plan" and row["whole_floor"]}
-    proposed = {page: row for page, row in floors.items() if row["floor_plan_kind"] in MAIN_PLAN_KINDS}
-    chosen = proposed or {page: row for page, row in floors.items() if row["floor_plan_kind"] == "existing_or_demolition"}
+    floors = {page: row for page, row in readings.items() if row and row.get("page_type") == "floor_plan" and row.get("whole_floor")}
+    proposed = {page: row for page, row in floors.items() if row.get("floor_plan_kind") in MAIN_PLAN_KINDS}
+    chosen = proposed or {page: row for page, row in floors.items() if row.get("floor_plan_kind") == "existing_or_demolition"}
     levels = {}
     for page, row in sorted(chosen.items()):
-        levels.setdefault(level_key(row["level"]), []).append(page)
+        levels.setdefault(level_key(row.get("level")), []).append(page)
     return levels
 
 

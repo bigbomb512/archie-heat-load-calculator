@@ -47,9 +47,13 @@ _SAFE_SUBSKILL_ERROR_CODES = {
     "subskill_numeric_inference_uncited", "subskill_contract_invalid", "drawing_coverage_missing",
     "room_inference_pending", "room_inference_failed", "room_evidence_missing", "codex_cli_failed",
     "codex_cli_timeout", "codex_cli_unavailable", "skill_provider_empty_output",
-    "skill_provider_invalid_json", "subskill_field_type_invalid",
+    "skill_provider_invalid_json", "subskill_field_type_invalid", "skill_provider_usage_limit",
 }
 SKILL_PROVIDER_FACTORY = None
+# Tests replace this; otherwise the case-file route uses the Codex CLI signed in with ChatGPT.
+CASE_FILE_PROVIDER_FACTORY = None
+# Job folders whose run hit the ChatGPT plan's usage limit: their remaining sub-skills fail without a call.
+_USAGE_STOPPED: dict = {}
 _NO_EVIDENCE_PAGES = object()
 _ATTEMPT_TEXT_LIMIT = 20_000
 # Per-task prompt budget in characters (roughly 4 characters per token). A task
@@ -90,7 +94,7 @@ _WORKFLOW_SCOPES = {
         "solar_source", "shading", "outside_air", "infiltration", "process_exhaust", "make_up_air",
         "airflow_deduplication", "system_detection", "zone_ownership", "air_path_reconciliation",
         "component_inputs", "coil_duty", "plant_detection", "circuit_mapping", "pump_inputs",
-        "pipe_effects", "coincident_duty",
+        "pipe_effects", "coincident_duty", "information_needs",
     }),
     "rooms_only": frozenset({"sheet_identity", "revision_scope", "page_relationships",
                              "room_identity_use", "room_boundaries_areas", "ceiling_height_volume"}),
@@ -271,6 +275,9 @@ def _source_inputs(paths, catalog):
         "vision_response": _read(paths["vision"], {}),
         # Consent and selected evidence groups are part of the run identity.
         "vision_extraction_settings": _read(paths["root"] / "vision_extraction_settings.json", {}),
+        # The case files come from pass 1 and pass 2: new readings make a new run.
+        "page_inventory": _read(paths["root"] / "page_inventory.json", {}).get("pages", {}),
+        "page_extraction": {kind: row.get("findings") for kind, row in _read(paths["root"] / "page_extraction.json", {}).items()},
         "catalog": catalog,
         "subskill_registry": load_subskill_registry(),
         "instructions_fingerprint": catalog_fingerprint(),
@@ -296,7 +303,8 @@ def _source_fingerprint(paths, catalog):
     status read or calculation costs about half a second each time.
     """
     files = [paths["ai_input"], paths["coverage"], paths["spatial"], paths["vector"], paths["vision"],
-             paths["root"] / "vision_extraction_settings.json"]
+             paths["root"] / "vision_extraction_settings.json", paths["root"] / "page_inventory.json",
+             paths["root"] / "page_extraction.json"]
     key = (tuple(_file_signature(path) for path in files), _fingerprint(catalog),
            _fingerprint(load_subskill_registry()), catalog_fingerprint())
     root = str(paths["root"])
@@ -1732,6 +1740,71 @@ def _call_skill_provider(subskill, project, dependencies, evidence, attempt_reco
         return provider_result
 
 
+def _case_file_route(project):
+    """Skills read their case file (pass 1 and 2's findings plus key pages) through the Codex CLI with the
+    ChatGPT sign-in: on when the job's page reading is on and pass 1 has read the pages."""
+    from backend import skill_case_file
+    if os.environ.get("ARCHIE_PAGE_READING", "").strip().lower() == "off":
+        return False
+    if CASE_FILE_PROVIDER_FACTORY is None and not shutil.which("codex"):
+        return False
+    return skill_case_file.available(project)
+
+
+def _call_case_file_provider(subskill, project, dependencies, evidence, attempt_record):
+    """Ask the AI for one sub-skill with its case file. Returns the raw proposal, or None when over budget."""
+    from backend import page_inventory_service, skill_case_file
+    key = str(Path(project["review_dir"]).resolve())
+    case, images = skill_case_file.build(subskill["id"], project)
+    evidence = {**evidence, "case_file": case}
+    prompt, budget = _bounded_proposal_prompt(subskill, dependencies, evidence)
+    model = os.environ.get("ARCHIE_CODEX_MODEL", "").strip() or "codex default"
+    attempt_record.update({"prompt": prompt, "images": [{"page": page, "path": str(path)} for page, path in zip(case["attached_pages"], images)],
+                           "prompt_budget": budget, "provider": "codex_case_file", "model": model,
+                           "evidence_pages": sorted(set(case["attached_pages"]) | {row["page"] for row in case["readings"]})})
+    if budget["status"] != "within_budget":
+        attempt_record["raw_record"] = {"provider": "none_prompt_over_budget", "reply_text": ""}
+        return None
+    if key in _USAGE_STOPPED:
+        attempt_record["raw_record"] = {"provider": "codex_case_file", "model": model, "reply_text": ""}
+        error = SkillProviderError("skill_provider_usage_limit", attempt_record["raw_record"])
+        error.detail = _USAGE_STOPPED[key]
+        raise error
+    provider = CASE_FILE_PROVIDER_FACTORY() if CASE_FILE_PROVIDER_FACTORY is not None else CodexCliSkillProposalProvider()
+    try:
+        result = provider.propose(prompt, image_paths=[str(path) for path in images])
+    except SkillProviderError as error:
+        raw = getattr(error, "raw_record", {}) or {}
+        limit = page_inventory_service._usage_limit_message(f"{raw.get('stderr_tail', '')} {raw.get('stdout_tail', '')} {raw.get('reply_text', '')}")
+        attempt_record["raw_record"] = {**raw, "provider": "codex_case_file", "model": model}
+        if limit:
+            _USAGE_STOPPED[key] = limit
+            stopped = SkillProviderError("skill_provider_usage_limit", attempt_record["raw_record"])
+            stopped.detail = limit
+            raise stopped from error
+        raise
+    if isinstance(result, SkillProviderResult):
+        attempt_record["raw_record"] = {**result.raw_record, "provider": "codex_case_file", "model": model}
+        return result.proposal
+    attempt_record["raw_record"] = {"provider": "codex_case_file", "model": model, "reply_text": json.dumps(result, ensure_ascii=False)}
+    return result
+
+
+def _proposal_from_raw(subskill, raw, input_fp):
+    if not isinstance(raw, dict):
+        _validation_error("provider_proposal_object", "$", "Provider response must be a JSON object.")
+    proposal = {"subskill_id": subskill["id"], "subskill_version": subskill["version"],
+        "status": raw.get("status", "needs_review"), "affected_ids": raw.get("affected_ids", []),
+        "observations": raw.get("observations", []), "inferences": raw.get("inferences", []),
+        "citations": raw.get("citations", []), "confidence": raw.get("confidence"),
+        "alternatives": raw.get("alternatives", []), "unresolved_fields": raw.get("unresolved_fields", []),
+        "remediation": raw.get("remediation", []), "input_fingerprint": input_fp,
+        "proposal_fields": raw.get("proposal_fields", {}), "artifact_names": []}
+    if proposal["status"] == "resolved":
+        proposal["status"] = "provisional"
+    return proposal
+
+
 def _execute_subskill(subskill, project, dependencies, source_fp):
     evidence, artifact_names = _shared_evidence_packet(subskill, project)
     registry = load_subskill_registry()
@@ -1802,6 +1875,14 @@ def _execute_subskill(subskill, project, dependencies, source_fp):
                 "remediation": ["No deterministic fixture record is available for this domain task."] if has_evidence else [],
                 "input_fingerprint": input_fp, "proposal_fields": _empty_fields(subskill), "artifact_names": []}
         provider_kind = "local_test_fixture"
+    elif _case_file_route(project):
+        raw = _call_case_file_provider(subskill, project, dependencies, evidence, attempt_record)
+        if raw is None:
+            proposal = _over_budget_proposal(subskill, input_fp, attempt_record["prompt_budget"])
+            provider_kind = "prompt_budget_blocked"
+        else:
+            proposal = _proposal_from_raw(subskill, raw, input_fp)
+            provider_kind = "codex_case_file"
     elif settings.get("owner_opt_in") and _consented_page_ids(_project_paths(project)) and (SKILL_PROVIDER_FACTORY is not None or os.environ.get("OPENAI_API_KEY")):
         model = settings.get("model") or os.environ.get("ARCHIE_VISION_MODEL", "gpt-5")
 
@@ -2175,6 +2256,8 @@ def _run_worker(web, project, run_id, source_fp, catalog):
                                 "detail": f"Codex CLI exited with status {raw.get('exit_code')}; see archived CLI stderr."}
                         elif code == "codex_cli_timeout":
                             validation = {"check": "provider_timeout", "path": "duration_seconds", "detail": "Codex CLI did not finish before the configured timeout."}
+                        elif code == "skill_provider_usage_limit":
+                            validation = {"check": "provider_usage_limit", "path": "plan", "detail": getattr(error, "detail", "")}
                         elif code.startswith("skill_provider_http_error_"):
                             validation = {"check": "provider_http_status", "path": "http_status", "detail": "The AI provider returned an HTTP error; see archived status and output."}
                     if not attempt_ref:
@@ -2196,7 +2279,7 @@ def _run_worker(web, project, run_id, source_fp, catalog):
                     (Path(paths["root"]) / attempt_ref / "attempt.json").write_text(json.dumps(attempt_metadata, indent=2), encoding="utf-8")
                     with _project_lock(project["id"]):
                         manifest = _read(run_path, {})
-                        message = str(error)[:500] or subskill_defs[skill_id]["failure"]
+                        message = (getattr(error, "detail", "") or str(error))[:500] or subskill_defs[skill_id]["failure"]
                         manifest["subskills"][skill_id].update({"status": "failed",
                             "finished_at": time.time(), "error_code": code,
                             "failure_phase": failure_phase, "failure_type": failure_type,
@@ -2375,10 +2458,11 @@ def _response(web, project):
     consent = _read(paths["root"] / "vision_extraction_settings.json", {})
     visible_status = safe.get("status", "not_started")
     blocked_reason = ""
-    read_only = not consent.get("owner_opt_in")
+    read_only = not consent.get("owner_opt_in") and not _case_file_route(project)
     if read_only:
         visible_status = "blocked"
-        blocked_reason = "Project consent is required before PDF evidence can be sent to the configured model."
+        blocked_reason = ("Skills read the pages only after every page has been read (page reading on, and the Codex CLI "
+                          "installed and signed in).")
     issues = [{"name": row["id"], "status": row["status"],
                "reason": public_text(row.get("validation_detail") or row.get("remediation", ""))}
               for row in subskills if row["status"] in {"failed", "blocked"}]
@@ -2392,7 +2476,7 @@ def _response(web, project):
         "stale_reasons": [public_text(item) for item in safe.get("stale_reasons", [])], "remediation": public_text(safe.get("remediation", "")),
         "stages": stages, "findings": findings,
         "blocked_reason": public_text(blocked_reason or safe.get("blocked_reason", "")), "read_only": read_only,
-        "subskills": subskills, "issues": issues,
+        "subskills": subskills, "issues": issues, "answers": _read(paths["root"] / ANSWERS_FILE, {}).get("answers", {}),
         "preparation": {"status": safe.get("preparation", {}).get("status", "not_started"),
                         "candidate_count": safe.get("preparation", {}).get("candidate_count", 0),
                         "model_input": safe.get("preparation", {}).get("model_input", {}),
@@ -2574,6 +2658,13 @@ def _blocked_manifest(catalog, source_fp, scope, reason, code):
     return manifest
 
 
+def start_after_reading(web, project):
+    """Pass 1 (and pass 2, when it has kinds to read) finished: run the skills on their case files."""
+    if web is None or not _case_file_route(project) or not _project_paths(project)["ai_input"].exists():
+        return None
+    return post(web, project, {"action": "start", "scope": "pdf_review", "automatic": True})
+
+
 def start_after_analysis(web, project):
     """Start the focused PDF review only when this project's owner opted in."""
     paths = _project_paths(project)
@@ -2583,11 +2674,44 @@ def start_after_analysis(web, project):
     return post(web, project, {"action": "start", "scope": "pdf_review", "automatic": True})
 
 
+ANSWERS_FILE = "information_answers.json"
+ANSWER_SOURCES = {"spec_sheet", "supplier", "client", "site_visit", "mechanical_drawings", "landlord", "standard_or_reference", "other"}
+
+
+def _answer_need(web, project, data):
+    """Record the operators' answer to one item on the "What we need to find" list, with where it came from.
+
+    Answers are kept per need and survive re-runs of the review (a re-run may re-word a need; its answer stays
+    with the need's target and field). Equipment ratings entered in the equipment list reach the calculation;
+    other answers are recorded for now.
+    """
+    paths = _project_paths(project)
+    current = _response(web, project)
+    need = next((row for row in current["findings"] if row["id"] == data.get("finding_id")
+                 and row["subskill_id"] == "information_needs" and row["field"] == "needs"), None)
+    if not need:
+        raise ValueError("That item isn't on the current list. Refresh and try again.")
+    answer = " ".join(str(data.get("answer") or "").split())[:500]
+    source = str(data.get("source") or "")
+    if not answer:
+        raise ValueError("Type the answer before saving it.")
+    if source not in ANSWER_SOURCES:
+        raise ValueError("Say where the answer came from.")
+    value = need["value"] if isinstance(need["value"], dict) else {}
+    stored = _read(paths["root"] / ANSWERS_FILE, {"answers": {}})
+    stored.setdefault("answers", {})[need["id"]] = {
+        "target": value.get("target", ""), "field": value.get("field", ""), "answer": answer, "source": source,
+        "note": " ".join(str(data.get("note") or "").split())[:300],
+        "by": " ".join(str(data.get("reviewer") or "").split())[:80] or "Operator", "at": time.time()}
+    _atomic_json(paths["root"] / ANSWERS_FILE, stored)
+    return _response(web, project)
+
+
 def _review_finding(web, project, data):
     paths = _project_paths(project)
     consent = _read(paths["root"] / "vision_extraction_settings.json", {})
-    if not consent.get("owner_opt_in"):
-        raise ValueError("PDF review consent was withdrawn. Findings are read-only until consent is restored and the review is retried.")
+    if not consent.get("owner_opt_in") and not _case_file_route(project):
+        raise ValueError("Page reading is off for this job, so its findings are read-only. Switch it on and retry the review.")
     manifest = _read(paths["manifest"], {})
     if not manifest.get("run_id") or manifest.get("status") == "stale":
         raise ValueError("Run PDF review again before recording a finding decision.")
@@ -2655,8 +2779,10 @@ def post(web, project, data):
     action = str((data or {}).get("action", "start"))
     if action == "review_finding":
         return _review_finding(web, project, data)
+    if action == "answer_need":
+        return _answer_need(web, project, data)
     if action not in {"start", "retry"}:
-        raise ValueError("Skill workflow action must be start, retry, or review_finding.")
+        raise ValueError("Skill workflow action must be start, retry, review_finding or answer_need.")
     explicit_scope = (data or {}).get("scope")
     scope = str(explicit_scope or "pdf_review")
     if scope not in _WORKFLOW_SCOPES:
@@ -2687,12 +2813,15 @@ def post(web, project, data):
             if action != "retry":
                 raise ValueError("The previous skill workflow was interrupted. Retry it to continue.")
         settings = _read(paths["root"] / "vision_extraction_settings.json", {})
-        if not settings.get("owner_opt_in"):
+        case_file_route = _case_file_route(project)
+        if not settings.get("owner_opt_in") and not case_file_route:
             return _response(web, project)
         allowed_pages = _consented_page_ids(paths)
         unavailable_reason = ""
         unavailable_code = ""
-        if not allowed_pages:
+        if case_file_route:
+            pass  # pass 1 has read the pages and the Codex CLI is the provider
+        elif not allowed_pages:
             unavailable_reason, unavailable_code = "Select at least one page group covered by the project consent.", "consented_pages_unavailable"
         elif SKILL_PROVIDER_FACTORY is None and not os.environ.get("OPENAI_API_KEY"):
             unavailable_reason, unavailable_code = "The configured AI provider is unavailable. Set up provider credentials, then retry PDF review.", "skill_provider_unavailable"
@@ -2708,6 +2837,7 @@ def post(web, project, data):
                 raise ValueError("Retry is available only after a failed or stale skill workflow.")
         manifest = _new_manifest(catalog, source_fp, scope)
         _write_manifest(paths["manifest"], manifest)
+        _USAGE_STOPPED.pop(str(paths["root"].resolve()), None)  # a new run tries again
         _RUNNING.add(project["id"])
     thread = threading.Thread(target=_run_worker, args=(web, deepcopy(project), manifest["run_id"], source_fp, catalog), daemon=True)
     thread.start()

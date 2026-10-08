@@ -375,17 +375,20 @@ test("Drawings: equipment found in the drawings can be corrected, chosen between
   const value = (name, extra = {}) => ({code: "", name, quantity: 1, size: "", model: "", supplier: "", rated_power: "", electrical: "",
                                         under_hood: null, location: "", evidence: "", ...extra});
   const findings = [
-    {id: "eq:oven", value: value("COMBI OVEN", {code: "E06", size: "750x790"}), pages: [5, 20], citations: [{page: 5, excerpt: "E06 COMBI OVEN"}],
-     conflicts: {}, evidence: "supported", pictures_only: false, text_match: true, not_printed: ["rated_power"], status: "proposed"},
+    {id: "eq:oven", value: value("COMBI OVEN", {code: "E06", size: "750x790", location: "KITCHEN"}), pages: [5, 20], citations: [{page: 5, excerpt: "E06 COMBI OVEN"}],
+     conflicts: {}, evidence: "supported", pictures_only: false, text_match: true, not_printed: ["rated_power"], status: "proposed", suggested_room: "Kitchen",
+     heat: {type: "cooking", rated_input_w: null, rated_source: "", heat_to_space_factor: 0.2, factor_source: "generic placeholder (AIRAH DA09 pending)", heat_w: null,
+            needed: ["rated power (from the spec sheet)"]}},
     {id: "eq:fridge", value: value("UB FRIDGE", {code: "E21", quantity: 10}), pages: [5, 20], citations: [{page: 5, excerpt: ""}],
      conflicts: {quantity: [{value: 10, pages: [5]}, {value: 8, pages: [20]}]}, evidence: "conflicting", pictures_only: false, text_match: true, status: "proposed"},
     {id: "eq:screen", value: value("Wall-mounted screen"), pages: [9], citations: [{page: 9, excerpt: "render"}],
      conflicts: {}, evidence: "inferred", pictures_only: true, text_match: false, status: "proposed"},
   ];
   const decisions = [];
-  const run = () => ({status: "done", kind: "equipment_appliances", pages: [5, 9, 20], open: findings.length - decisions.length,
+  const run = () => ({status: "done", kind: "equipment_appliances", pages: [5, 9, 20], open: findings.length - decisions.length, rooms: ["Kitchen", "Shop"],
     findings: findings.map(row => { const made = decisions.find(item => item.finding_id === row.id);
-      return made ? {...row, status: made.decision, decided_value: made.value || null, reviewer: "Sam"} : row; })});
+      const heat = made?.value?.rated_input_w && made.value.room ? made.value.quantity * made.value.rated_input_w * made.value.heat_to_space_factor : null;
+      return made ? {...row, status: made.decision, decided_value: made.value || null, reviewer: "Sam", in_calculation: heat != null, accepted_heat_w: heat} : row; })});
   await mockJob(page, {status: () => baseStatus(), extraction: run,
     onPost: (kind, body) => { if (kind === "extraction" && body.action === "review") { decisions.push(body); return run(); } return null; }});
   await page.goto("/#/job/job-1/drawings");
@@ -395,10 +398,19 @@ test("Drawings: equipment found in the drawings can be corrected, chosen between
   await expect(oven.locator("summary")).toContainText("E06 COMBI OVEN");
   await expect(oven.locator("summary")).toContainText("power not printed");
   await oven.locator("summary").click();
+  await expect(oven.locator("[data-ws-eq-heat]")).toContainText("rated power not known");
+  await expect(oven.locator("[data-ws-eq-heat]")).toContainText("Needs: rated power (from the spec sheet)");
+  await expect(oven.locator("[data-ws-eq-field='room']")).toHaveValue("Kitchen");
   await oven.locator("[data-ws-eq-field='quantity']").fill("2");
   await oven.locator("[data-ws-eq-field='under_hood']").selectOption("true");
+  await oven.locator("[data-ws-eq-field='rated_input_w']").fill("abc");
   await oven.locator("[data-ws-eq-accept]").click();
-  expect(decisions[0]).toMatchObject({finding_id: "eq:oven", decision: "accepted", value: {name: "COMBI OVEN", quantity: 2, under_hood: true}});
+  await expect(oven.locator("[data-ws-eq-accept]")).toHaveText("Enter a number");
+  await oven.locator("[data-ws-eq-field='rated_input_w']").fill("18000");
+  await oven.locator("[data-ws-eq-accept]").click();
+  expect(decisions[0]).toMatchObject({finding_id: "eq:oven", decision: "accepted",
+    value: {name: "COMBI OVEN", quantity: 2, under_hood: true, room: "Kitchen", rated_input_w: 18000, heat_to_space_factor: 0.2}});
+  await expect(section.locator("[data-ws-equipment-status]")).toContainText("7200 W in the calculation");
   await expect(section.locator("[data-ws-eq='eq:oven'] summary")).toContainText("accepted");
   const fridge = section.locator("[data-ws-eq='eq:fridge']");
   await fridge.locator("summary").click();
@@ -415,7 +427,52 @@ test("Drawings: equipment found in the drawings can be corrected, chosen between
   await expect(screen.locator("[data-ws-eq-textcheck]")).toContainText("Not found in the page's text");
   await screen.locator("[data-ws-eq-reject]").click();
   expect(decisions[2]).toMatchObject({finding_id: "eq:screen", decision: "rejected"});
-  await expect(section.locator("[data-ws-equipment-status]")).toHaveText("3 items from 3 pages · all reviewed.");
+  await expect(section.locator("[data-ws-equipment-status]")).toHaveText("3 items from 3 pages · all reviewed · 7200 W in the calculation (press Calculate to update).");
+});
+
+test("Drawings: what we need to find lists only the gaps, with where to look, and takes answers with their source", async ({page}) => {
+  const answers = {};
+  const need = (index, target, field, why, where) => ({id: `information_needs:needs:${index}`, subskill_id: "information_needs", field: "needs",
+    value: {target, field, why, impact: "kitchen equipment, likely several kW", where_to_look: where, pages: "5, 20"}, status: "proposed", evidence: "missing"});
+  const skill = () => ({status: "needs_review", read_only: false, stages: [], answers, findings: [
+    need(0, "E06 Combi oven", "rated_input_w", "No rating is printed on the schedule or plans.", "equipment spec sheet or supplier quote"),
+    need(1, "Kitchen", "operating_hours", "No opening hours in the drawings.", "the client"),
+    {id: "information_needs:inferred:0", subskill_id: "information_needs", field: "inferred", status: "proposed", evidence: "inferred",
+     value: {target: "Shop", field: "ceiling_height", value: "3.2", unit: "m", method: "Section A ceiling line", pages: "31"}},
+    {id: "equipment_evidence:equipment:0", subskill_id: "equipment_evidence", field: "equipment", status: "proposed", evidence: "supported",
+     value: {name: "Combi oven"}, pages: [5], citations: []},
+  ]});
+  const posts = [];
+  await mockJob(page, {status: () => baseStatus(), skill,
+    onPost: (kind, body) => { if (kind === "skill" && body.action === "answer_need") { posts.push(body);
+      answers[body.finding_id] = {target: "E06 Combi oven", field: "rated_input_w", answer: body.answer, source: body.source, by: "Sam"}; return skill(); } return null; }});
+  await page.goto("/#/job/job-1/drawings");
+  const section = page.locator("[data-ws-needs]");
+  await expect(section.locator("[data-ws-needs-status]")).toHaveText("2 items the drawings don't give · 2 still to find.");
+  const oven = section.locator("[data-ws-need='information_needs:needs:0']");
+  await expect(oven).toContainText("E06 Combi oven · rated input w");
+  await expect(oven).toContainText("Usually found in: equipment spec sheet or supplier quote.");
+  await oven.locator("[data-ws-need-save]").click();
+  await expect(oven.locator("[data-ws-need-save]")).toHaveText("Type the answer first");
+  await oven.locator("[data-ws-need-input]").fill("18 kW (Rational iCombi Pro 10-1/1)");
+  await oven.locator("[data-ws-need-save]").click();
+  await expect(oven.locator("[data-ws-need-save]")).toHaveText("Say where it came from");
+  await oven.locator("[data-ws-need-source]").selectOption("spec_sheet");
+  await oven.locator("[data-ws-need-save]").click();
+  expect(posts[0]).toMatchObject({action: "answer_need", finding_id: "information_needs:needs:0", answer: "18 kW (Rational iCombi Pro 10-1/1)", source: "spec_sheet"});
+  await expect(section.locator("[data-ws-need='information_needs:needs:0'] [data-ws-need-answer]")).toContainText("18 kW (Rational iCombi Pro 10-1/1) (Spec sheet, Sam)");
+  await expect(section.locator("[data-ws-needs-status]")).toHaveText("2 items the drawings don't give · 1 still to find.");
+  await section.getByText("Worked out from the drawings (1)").click();
+  await expect(section).toContainText("Shop · ceiling height: 3.2 m — Section A ceiling line (pages 31)");
+  // Needs-list rows are not repeated in the general findings list; other skills' findings still are.
+  await expect(page.locator("[data-ws-finding='information_needs:needs:0']")).toHaveCount(0);
+  await expect(page.locator("[data-ws-finding='equipment_evidence:equipment:0']")).toHaveCount(1);
+});
+
+test("Drawings: before the skills have run, the needs list says when it will appear", async ({page}) => {
+  await mockJob(page, {status: () => baseStatus(), skill: () => ({status: "running", stages: [], findings: []})});
+  await page.goto("/#/job/job-1/drawings");
+  await expect(page.locator("[data-ws-needs-status]")).toContainText("the list appears when they finish");
 });
 
 test("Drawings: a failed or blocked page reading says why and offers a retry", async ({page}) => {

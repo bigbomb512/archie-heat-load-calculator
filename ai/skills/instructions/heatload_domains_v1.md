@@ -637,3 +637,30 @@ remain immutable.
   `0/0` is undetected/unknown, never proof of complete coverage.
 - Return direct remediation per blocker. Never describe draft output as
   engineering reviewed, validated, or a guaranteed whole-building load.
+
+### Subskill: information_needs
+
+- Purpose: tell the operators what they must research or ask the client, and
+  nothing else. They will check every item, so a short, exact list is the goal.
+- Work through the inputs a cooling heat load needs: rooms with areas and
+  heights; occupancy or seats; lighting; each piece of equipment with its rated
+  power and whether it is under a hood; opening hours; walls and roof
+  constructions and what is beyond each boundary (outside, neighbour, roof,
+  plant room); windows with sizes, glass type and orientation; outside air,
+  kitchen exhaust and make-up air; the site location.
+- For each, look in the case file and the prerequisite proposals first. If a
+  value is printed, it is not a need. If it can reasonably be worked out from
+  the drawings (a ceiling height from a section, seats counted on the furniture
+  plan, an area from printed dimensions, orientation from the north point),
+  put it under `inferred` with the method and pages, not under `needs`.
+- What remains goes under `needs`, one concrete item each: the target (room,
+  equipment code, window, wall), the field, why the calculation needs it, its
+  likely impact (a rough share of the load, e.g. "kitchen equipment, likely
+  several kW"), and where it is usually found (equipment spec sheet or
+  supplier quote, the client, the mechanical drawings, a site visit, the
+  landlord's base-building information).
+- Do not list generic design values the calculation supplies from its own
+  labelled defaults (design weather from the AIRAH tables, people heat gains
+  per person); list them only if the drawings contradict the default.
+- `pages` is a comma-separated list of the pages looked at, or "".
+

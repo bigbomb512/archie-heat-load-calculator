@@ -337,7 +337,38 @@ def _resolve_airflow(paths, persist=False):
     return artifact
 
 
-def _proposal_for_resolution(paths):
+def _proposal_for_resolution(paths, equipment=True):
+    """The room proposal the resolvers read: room-use findings, then accepted equipment from the PDF review."""
+    proposal = _proposal_with_skill_findings(paths)
+    return _with_accepted_equipment(paths, proposal) if equipment else proposal
+
+
+def _with_accepted_equipment(paths, proposal):
+    """Add each accepted pass-2 equipment item to its room, as cited equipment the internal-gains resolver uses.
+
+    Only items accepted on the current reading, assigned to a room, with a rated input and a heat-to-room
+    factor are added. A room with any such item uses its listed equipment instead of the area-based allowance.
+    """
+    from ai import equipment_heat
+    from backend import page_extraction_service
+    items = page_extraction_service.accepted({"review_dir": str(paths["root"])}, "equipment_appliances")
+    if not items:
+        return proposal
+    by_label = {str(row.get("label", "")).strip().casefold(): row for row in proposal.get("rooms", [])
+                if isinstance(row, dict) and row.get("label")}
+    for item in items:
+        room = by_label.get(str(item.get("room") or "").strip().casefold())
+        if room is None or equipment_heat.heat_w(item) is None:
+            continue
+        room.setdefault("equipment", []).append({
+            "name": item.get("name"), "quantity": item.get("quantity") or 1,
+            "rated_input_w": item["rated_input_w"], "heat_to_space_factor": item["heat_to_space_factor"],
+            "source": "PDF review (accepted by the operator)",
+            "evidence": [{"page": page, "excerpt": f"{item.get('code') or ''} {item.get('name')}".strip()} for page in item.get("pages", [])]})
+    return proposal
+
+
+def _proposal_with_skill_findings(paths):
     run = _read(paths["run"], {})
     proposal = room_proposal(run, paths["root"])
 
