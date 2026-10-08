@@ -1185,7 +1185,7 @@
     {
       "id": "information_needs",
       "parent": "model_reconciliation_report",
-      "version": 1,
+      "version": 2,
       "task": "List the information the heat-load calculation still needs that the drawing set does not give and cannot reasonably be worked out from it, so the operators know exactly what to research or ask the client. First infer everything the drawings support, showing the working; only what remains goes on the list.",
       "inputs": [
         "case_file",
@@ -1220,7 +1220,7 @@
       ],
       "proposal_fields": {
         "inferred": "array<{target:string,field:string,value:string,unit:string|null,method:string,pages:string}>",
-        "needs": "array<{target:string,field:string,why:string,impact:string,where_to_look:string,pages:string}>"
+        "needs": "array<{target:string,field:string,answer_kind:string,room:string|null,why:string,impact:string,where_to_look:string,pages:string}>"
       },
       "constraints": [
         "Never list information that is printed in the case file or can reasonably be worked out from it; infer it instead and show the working.",

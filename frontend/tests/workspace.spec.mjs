@@ -430,13 +430,18 @@ test("Drawings: equipment found in the drawings can be corrected, chosen between
   await expect(section.locator("[data-ws-equipment-status]")).toHaveText("3 items from 3 pages · all reviewed · 7200 W in the calculation (press Calculate to update).");
 });
 
-test("Drawings: what we need to find lists only the gaps, with where to look, and takes answers with their source", async ({page}) => {
+test("Drawings: what we need to find lists only the gaps, with where to look, and puts answers into the calculation", async ({page}) => {
   const answers = {};
-  const need = (index, target, field, why, where) => ({id: `information_needs:needs:${index}`, subskill_id: "information_needs", field: "needs",
-    value: {target, field, why, impact: "kitchen equipment, likely several kW", where_to_look: where, pages: "5, 20"}, status: "proposed", evidence: "missing"});
-  const skill = () => ({status: "needs_review", read_only: false, stages: [], answers, findings: [
-    need(0, "E06 Combi oven", "rated_input_w", "No rating is printed on the schedule or plans.", "equipment spec sheet or supplier quote"),
-    need(1, "Kitchen", "operating_hours", "No opening hours in the drawings.", "the client"),
+  const need = (index, target, field, kind, room, why, where) => ({id: `information_needs:needs:${index}`, subskill_id: "information_needs", field: "needs",
+    value: {target, field, answer_kind: kind, room, why, impact: "kitchen equipment, likely several kW", where_to_look: where, pages: "5, 20"}, status: "proposed", evidence: "missing"});
+  const answer_options = {kinds: [{id: "equipment_rating", label: "Equipment rated power", applied: true, unit: "W"},
+                                  {id: "occupancy", label: "Number of people", applied: true, unit: "people"},
+                                  {id: "opening_hours", label: "Opening hours", applied: false, unit: ""}],
+                          rooms: [{label: "Kitchen", level: "Ground"}, {label: "Shop", level: "Ground"}],
+                          equipment: [{id: "eq:oven", label: "E06 COMBI OVEN"}], above: [{id: "roof", label: "The roof"}]};
+  const skill = () => ({status: "needs_review", read_only: false, stages: [], answers, answer_options, findings: [
+    need(0, "E06 Combi oven", "rated_input_w", "equipment_rating", "Kitchen", "No rating is printed on the schedule or plans.", "equipment spec sheet or supplier quote"),
+    need(1, "Shop", "operating_hours", "opening_hours", null, "No opening hours in the drawings.", "the client"),
     {id: "information_needs:inferred:0", subskill_id: "information_needs", field: "inferred", status: "proposed", evidence: "inferred",
      value: {target: "Shop", field: "ceiling_height", value: "3.2", unit: "m", method: "Section A ceiling line", pages: "31"}},
     {id: "equipment_evidence:equipment:0", subskill_id: "equipment_evidence", field: "equipment", status: "proposed", evidence: "supported",
@@ -445,26 +450,35 @@ test("Drawings: what we need to find lists only the gaps, with where to look, an
   const posts = [];
   await mockJob(page, {status: () => baseStatus(), skill,
     onPost: (kind, body) => { if (kind === "skill" && body.action === "answer_need") { posts.push(body);
-      answers[body.finding_id] = {target: "E06 Combi oven", field: "rated_input_w", answer: body.answer, source: body.source, by: "Sam"}; return skill(); } return null; }});
+      const applied = body.kind !== "opening_hours";
+      answers[body.finding_id] = {kind: body.kind, room: body.room, equipment_id: body.equipment_id, answer: body.value, source: body.source, by: "Sam", applied,
+        summary: applied ? "E06 COMBI OVEN in Kitchen: 18000 W each × 1 × 0.2 to the room." : "Kept as a note (opening hours); not used by the calculation yet."};
+      return skill(); } return null; }});
   await page.goto("/#/job/job-1/drawings");
   const section = page.locator("[data-ws-needs]");
   await expect(section.locator("[data-ws-needs-status]")).toHaveText("2 items the drawings don't give · 2 still to find.");
   const oven = section.locator("[data-ws-need='information_needs:needs:0']");
-  await expect(oven).toContainText("E06 Combi oven · rated input w");
   await expect(oven).toContainText("Usually found in: equipment spec sheet or supplier quote.");
+  await expect(oven.locator("[data-ws-need-kind]")).toHaveValue("equipment_rating");      // the skill's kind
+  await expect(oven.locator("[data-ws-need-room]")).toHaveValue("Kitchen");                // and room
   await oven.locator("[data-ws-need-save]").click();
   await expect(oven.locator("[data-ws-need-save]")).toHaveText("Type the answer first");
-  await oven.locator("[data-ws-need-input]").fill("18 kW (Rational iCombi Pro 10-1/1)");
-  await oven.locator("[data-ws-need-save]").click();
-  await expect(oven.locator("[data-ws-need-save]")).toHaveText("Say where it came from");
+  await oven.locator("[data-ws-need-equipment]").selectOption("eq:oven");
+  await oven.locator("[data-ws-need-value]").fill("18 kW");
   await oven.locator("[data-ws-need-source]").selectOption("spec_sheet");
   await oven.locator("[data-ws-need-save]").click();
-  expect(posts[0]).toMatchObject({action: "answer_need", finding_id: "information_needs:needs:0", answer: "18 kW (Rational iCombi Pro 10-1/1)", source: "spec_sheet"});
-  await expect(section.locator("[data-ws-need='information_needs:needs:0'] [data-ws-need-answer]")).toContainText("18 kW (Rational iCombi Pro 10-1/1) (Spec sheet, Sam)");
-  await expect(section.locator("[data-ws-needs-status]")).toHaveText("2 items the drawings don't give · 1 still to find.");
+  expect(posts[0]).toMatchObject({action: "answer_need", finding_id: "information_needs:needs:0", kind: "equipment_rating", room: "Kitchen",
+                                  equipment_id: "eq:oven", value: "18 kW", source: "spec_sheet"});
+  await expect(section.locator("[data-ws-need='information_needs:needs:0'] [data-ws-need-applied]")).toContainText("In the calculation: E06 COMBI OVEN in Kitchen");
+  const hours = section.locator("[data-ws-need='information_needs:needs:1']");
+  await expect(hours.locator("[data-ws-need-room]")).toHaveCount(0);                       // opening hours aren't per room here
+  await hours.locator("[data-ws-need-value]").fill("Mon-Sun 11am-10pm");
+  await hours.locator("[data-ws-need-source]").selectOption("client");
+  await hours.locator("[data-ws-need-save]").click();
+  await expect(section.locator("[data-ws-need='information_needs:needs:1'] [data-ws-need-applied]")).toContainText("not used by the calculation yet");
+  await expect(section.locator("[data-ws-needs-status]")).toHaveText("2 items the drawings don't give · all answered.");
   await section.getByText("Worked out from the drawings (1)").click();
   await expect(section).toContainText("Shop · ceiling height: 3.2 m — Section A ceiling line (pages 31)");
-  // Needs-list rows are not repeated in the general findings list; other skills' findings still are.
   await expect(page.locator("[data-ws-finding='information_needs:needs:0']")).toHaveCount(0);
   await expect(page.locator("[data-ws-finding='equipment_evidence:equipment:0']")).toHaveCount(1);
 });

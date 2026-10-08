@@ -407,14 +407,32 @@
         <p class="ws-fine" data-ws-needs-status>${running ? "The skills are working through the drawings; the list appears when they finish." : "The list appears after every page has been read and the skills have worked through their case files."}</p></section>`;
     }
     const open = needs.filter(row => !answerFor(row)).length;
+    const options = review.answer_options || {};
+    const kinds = options.kinds || [];
     const items = needs.map(row => {
       const value = row.value, saved = answerFor(row);
+      const draft = state.needDrafts?.[row.id] || {};
+      const kind = draft.kind ?? saved?.kind ?? (kinds.some(item => item.id === value.answer_kind) ? value.answer_kind : "other");
+      const kindRow = kinds.find(item => item.id === kind) || {};
+      const room = draft.room ?? saved?.room ?? value.room ?? "";
       const source = ANSWER_SOURCES.find(([key]) => key === saved?.source)?.[1] || saved?.source || "";
+      const select = (attr, choices, current, empty) => `<select ${attr}><option value="">${empty}</option>${choices.map(([id, label]) =>
+        `<option value="${esc(id)}" ${String(current) === String(id) ? "selected" : ""}>${esc(label)}</option>`).join("")}</select>`;
+      const needsRoom = ["room_area", "ceiling_height", "occupancy", "lighting_load", "equipment_rating"].includes(kind);
+      const valueField = kind === "roof_above"
+        ? `<label>Answer ${select("data-ws-need-value", (options.above || []).map(item => [item.id, item.label]), draft.value ?? saved?.answer ?? "", "choose")}</label>`
+        : `<label>Answer${kindRow.unit ? ` (${esc(kindRow.unit)})` : ""} <input data-ws-need-value value="${esc(draft.value ?? saved?.answer ?? "")}"></label>`;
       return `<li class="ws-need" data-ws-need="${esc(row.id)}"><b>${esc(value.target || "")}${value.field ? ` · ${esc(String(value.field).replaceAll("_", " "))}` : ""}</b>
         <p class="ws-fine">${esc(value.why || "")}${value.impact ? ` <b>Impact:</b> ${esc(value.impact)}.` : ""}${value.where_to_look ? ` <b>Usually found in:</b> ${esc(value.where_to_look)}.` : ""}${value.pages ? ` <span>Pages looked at: ${esc(value.pages)}</span>` : ""}</p>
-        ${saved ? `<p class="ws-fine" data-ws-need-answer><b>Answer:</b> ${esc(saved.answer)} <span>(${esc(source)}${saved.by ? `, ${esc(saved.by)}` : ""})</span></p>` : ""}
-        <div class="ws-eq-edit"><label>Answer <input data-ws-need-input value="${esc(saved?.answer || "")}"></label>
-          <label>From <select data-ws-need-source><option value="">choose</option>${ANSWER_SOURCES.map(([key, label]) => `<option value="${key}" ${saved?.source === key ? "selected" : ""}>${esc(label)}</option>`).join("")}</select></label>
+        ${saved ? `<p class="ws-fine" data-ws-need-answer><b>Answer:</b> ${esc(saved.answer)} <span>(${esc(source)}${saved.by ? `, ${esc(saved.by)}` : ""})</span>
+          <br><span data-ws-need-applied class="${saved.applied ? "" : "is-warn"}">${saved.applied ? `In the calculation: ${esc(saved.summary)} Press Calculate to update the result.` : esc(saved.summary || "Kept as a note.")}</span></p>` : ""}
+        <div class="ws-eq-edit">
+          <label>Kind ${select("data-ws-need-kind", kinds.map(item => [item.id, item.label + (item.applied ? "" : " (kept as a note)")]), kind, "choose")}</label>
+          ${needsRoom ? `<label>Room ${select("data-ws-need-room", (options.rooms || []).map(item => [item.label, item.label]), room, "choose a room")}</label>` : ""}
+          ${kind === "equipment_rating" ? `<label>Item ${select("data-ws-need-equipment", (options.equipment || []).map(item => [item.id, item.label]), draft.equipment_id ?? saved?.equipment_id ?? "", "choose the item")}</label>` : ""}
+          ${valueField}
+          <label>From ${select("data-ws-need-source", ANSWER_SOURCES, draft.source ?? saved?.source ?? "", "choose")}</label>
+          <label>Note <input data-ws-need-note value="${esc(draft.note ?? saved?.note ?? "")}" placeholder="optional"></label>
           <button class="btn ${saved ? "ghost" : "key"} mini" type="button" data-ws-need-save>${saved ? "Update" : "Save answer"}</button></div></li>`;
     }).join("");
     const worked = inferred.map(row => `<li>${esc(row.value.target || "")}${row.value.field ? ` · ${esc(String(row.value.field).replaceAll("_", " "))}` : ""}: <b>${esc(row.value.value ?? "")}${row.value.unit ? ` ${esc(row.value.unit)}` : ""}</b>
@@ -426,16 +444,32 @@
   }
 
   function wireNeeds(projectId) {
-    body.querySelectorAll("[data-ws-need]").forEach(item => item.querySelector("[data-ws-need-save]")?.addEventListener("click", async event => {
-      const answer = item.querySelector("[data-ws-need-input]").value.trim(), source = item.querySelector("[data-ws-need-source]").value;
-      if (!answer) { event.target.textContent = "Type the answer first"; return; }
-      if (!source) { event.target.textContent = "Say where it came from"; return; }
-      event.target.disabled = true;
-      try {
-        await sendJson("/api/skill-workflow", {project_id: projectId, action: "answer_need", finding_id: item.dataset.wsNeed, answer, source, reviewer: userName() || "Operator"});
-        await renderDrawings();
-      } catch (error) { event.target.disabled = false; event.target.textContent = error.message; }
-    }));
+    state.needDrafts ||= {};
+    body.querySelectorAll("[data-ws-need]").forEach(item => {
+      const id = item.dataset.wsNeed;
+      const field = name => item.querySelector(`[data-ws-need-${name}]`);
+      const remember = () => {
+        state.needDrafts[id] = {kind: field("kind")?.value, room: field("room")?.value, equipment_id: field("equipment")?.value,
+                                value: field("value")?.value, source: field("source")?.value, note: field("note")?.value};
+      };
+      item.querySelectorAll("input, select").forEach(input => input.addEventListener("input", remember));
+      // Changing the kind changes which fields the answer needs.
+      field("kind")?.addEventListener("change", () => { remember(); renderDrawings().catch(showTabError); });
+      field("save")?.addEventListener("click", async event => {
+        const kind = field("kind").value, value = field("value")?.value.trim() || "", source = field("source").value;
+        if (!kind) { event.target.textContent = "Choose the kind of answer"; return; }
+        if (!value) { event.target.textContent = "Type the answer first"; return; }
+        if (!source) { event.target.textContent = "Say where it came from"; return; }
+        event.target.disabled = true;
+        try {
+          await sendJson("/api/skill-workflow", {project_id: projectId, action: "answer_need", finding_id: id, kind, value, source,
+            room: field("room")?.value || "", equipment_id: field("equipment")?.value || "", note: field("note")?.value || "",
+            reviewer: userName() || "Operator"});
+          delete state.needDrafts[id];
+          await renderDrawings();
+        } catch (error) { event.target.disabled = false; event.target.textContent = error.message; }
+      });
+    });
   }
 
   const EQUIPMENT_EDIT = [["quantity", "Qty"], ["size", "Size"], ["model", "Model"], ["rated_power", "Printed power"], ["under_hood", "Under hood"],

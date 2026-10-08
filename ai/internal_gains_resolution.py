@@ -161,6 +161,12 @@ def _room_rows(building, vision, proposal, room_use):
     return records
 
 
+def _override_value(override, name):
+    """A saved override's value: stored as {"value", "reviewer", "note", "updated_at"} (older files: the bare value)."""
+    saved = (override or {}).get(name)
+    return saved.get("value") if isinstance(saved, dict) else saved
+
+
 def _find_number(sources, keys):
     for source in sources:
         if not isinstance(source, dict):
@@ -242,9 +248,9 @@ def resolve(building, vision=None, proposal=None, room_use=None, pack=None,
             "Cited people sensible gain." if explicit_people_s else "Controlled room-use profile fallback.", evidence)
         fields["people_latent_w_per_person"] = _field(people_l, people_origin, .85 if explicit_people_l else .3,
             "Cited people latent gain." if explicit_people_l else "Controlled room-use profile fallback.", evidence)
-        diversity = _positive((override or {}).get("people_diversity")) or _positive(profile.get("people_diversity"))
-        fields["people_diversity"] = _field(diversity, "contractor_override" if (override or {}).get("people_diversity") else "controlled_preliminary_profile",
-            1.0 if (override or {}).get("people_diversity") else .3, "People diversity factor.", evidence)
+        diversity = _positive(_override_value(override, "people_diversity")) or _positive(profile.get("people_diversity"))
+        fields["people_diversity"] = _field(diversity, "contractor_override" if _override_value(override, "people_diversity") is not None else "controlled_preliminary_profile",
+            1.0 if _override_value(override, "people_diversity") is not None else .3, "People diversity factor.", evidence)
         fixtures = []
         for source in sources:
             values = source.get("lighting_fixtures") if isinstance(source, dict) else None
@@ -297,6 +303,14 @@ def resolve(building, vision=None, proposal=None, room_use=None, pack=None,
                           "invalid_day_types": invalid_schedule_days, "day_profiles": schedule_profiles,
                           "fields": {name: {"schedule_id": schedule_id, "day_types": list(DAY_TYPES)} for name in ("people", "lighting", "equipment", "outside_air", "infiltration", "process_equipment")},
                           "fingerprint": fingerprint(schedule_profiles)})
+        # Saved overrides win over evidence and profiles on every rebuild, not only when they were entered.
+        for name, saved in (override or {}).items():
+            if name in fields and name != "people_diversity" and _override_value(override, name) is not None:
+                note = saved.get("note", "") if isinstance(saved, dict) else ""
+                fields[name] = _field(_override_value(override, name), "contractor_override", 1.0, _text(note) or "Contractor override.", evidence)
+        lighting = fields["lighting_load_w"]
+        if isinstance(fields.get("equipment", {}).get("value"), list) and fields["equipment"].get("origin") == "contractor_override":
+            equipment_records = fields["equipment"]["value"]
         status = "excluded" if scope in {"refrigeration_process", "unresolved_scope", "not_a_room"} else "needs_review" if invalid_schedule_days or any(field.get("origin") == "unresolved" for field in fields.values() if isinstance(field, dict)) else "provisional"
         record = {"room_id": room_id, "level": level, "zone_id": f"zone-{room_id}", "geometry_proof_id": next((s.get("geometry_proof_id", "") for s in sources if s.get("geometry_proof_id")), ""),
                   "original_label": label, "room_use_taxonomy": use.get("taxonomy_id", "generic_conditioned"), "preliminary_profile_id": profile_id,

@@ -662,5 +662,11 @@ remain immutable.
 - Do not list generic design values the calculation supplies from its own
   labelled defaults (design weather from the AIRAH tables, people heat gains
   per person); list them only if the drawings contradict the default.
+- `answer_kind` says what the answer will be, so it reaches the right input:
+  `room_area`, `ceiling_height`, `occupancy` (people), `lighting_load` (W),
+  `equipment_rating` (an item's rated power), `roof_above` (what is above the
+  tenancy), `opening_hours`, `glazing`, `exhaust`, `boundary` (what is beyond a
+  wall, floor or ceiling), or `other`. `room` is the room's name as it appears
+  in the room proposals, or null when the need is not about one room.
 - `pages` is a comma-separated list of the pages looked at, or "".
 

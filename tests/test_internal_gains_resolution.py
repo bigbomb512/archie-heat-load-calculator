@@ -48,6 +48,21 @@ def main():
     overridden = internal_gains_resolution.apply_override(artifact, cafe["room_id"], "occupancy_count", 24, "Engineer", "Counted plan seats")
     cafe_override = next(row for row in overridden["records"] if row["room_id"] == cafe["room_id"])
     check("contractor occupancy override takes precedence", cafe_override["fields"]["occupancy_count"]["value"] == 24 and cafe_override["fields"]["occupancy_count"]["origin"] == "contractor_override")
+    # Overrides survive every rebuild (Calculate rebuilds internal gains), not only the moment they are entered.
+    overridden = internal_gains_resolution.apply_override(overridden, cafe["room_id"], "lighting_load_w", 900, "Engineer", "Client lighting schedule")
+    overridden = internal_gains_resolution.apply_override(overridden, cafe["room_id"], "people_diversity", .7, "Engineer")
+    for _ in range(2):
+        overridden = internal_gains_resolution.resolve(building, proposal=proposal, room_use=use, pack=pack,
+                                                       source_fingerprints={"proposal": "a"}, existing=overridden)
+    rebuilt = next(row for row in overridden["records"] if row["room_id"] == cafe["room_id"])
+    check("overrides are re-applied on rebuild", rebuilt["occupancy_count"] == 24 and rebuilt["fields"]["occupancy_count"]["origin"] == "contractor_override"
+          and rebuilt["lighting_load_w"] == 900 and rebuilt["fields"]["lighting_load_w"]["rationale"] == "Client lighting schedule")
+    check("a people-diversity override is read from its saved record", rebuilt["fields"]["people_diversity"]["value"] == .7
+          and rebuilt["fields"]["people_diversity"]["origin"] == "contractor_override")
+    rebuilt_model = ai_preliminary.assemble(building, preliminary_proposal=proposal, room_use_resolution=use, internal_gains_resolution=overridden,
+                                            source_fingerprints={"internal": overridden["fingerprint"]})
+    check("the calculation model uses the overridden people count", next(row for row in rebuilt_model["material"]["requirements"]["zones"]
+                                                                          if row["name"] == "Cafe")["occupancy"] == 24)
     try:
         internal_gains_resolution.validate({**artifact, "schedules": [{"schedule_id": "bad", "day_profiles": {"weekday": [2]}}]})
     except ValueError:

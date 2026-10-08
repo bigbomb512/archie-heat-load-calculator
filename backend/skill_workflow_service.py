@@ -2477,6 +2477,7 @@ def _response(web, project):
         "stages": stages, "findings": findings,
         "blocked_reason": public_text(blocked_reason or safe.get("blocked_reason", "")), "read_only": read_only,
         "subskills": subskills, "issues": issues, "answers": _read(paths["root"] / ANSWERS_FILE, {}).get("answers", {}),
+        "answer_options": _answer_options(web, project, findings),
         "preparation": {"status": safe.get("preparation", {}).get("status", "not_started"),
                         "candidate_count": safe.get("preparation", {}).get("candidate_count", 0),
                         "model_input": safe.get("preparation", {}).get("model_input", {}),
@@ -2674,37 +2675,52 @@ def start_after_analysis(web, project):
     return post(web, project, {"action": "start", "scope": "pdf_review", "automatic": True})
 
 
+def _answer_options(web, project, findings):
+    if not any(row.get("subskill_id") == "information_needs" and row.get("field") == "needs" for row in findings):
+        return {}
+    from backend import need_answers_service
+    try:
+        return need_answers_service.options(web, project)
+    except Exception:
+        return {}
+
+
 ANSWERS_FILE = "information_answers.json"
 ANSWER_SOURCES = {"spec_sheet", "supplier", "client", "site_visit", "mechanical_drawings", "landlord", "standard_or_reference", "other"}
 
 
 def _answer_need(web, project, data):
-    """Record the operators' answer to one item on the "What we need to find" list, with where it came from.
+    """Record the operators' answer to one item on the "What we need to find" list, and use it where it can be used.
 
-    Answers are kept per need and survive re-runs of the review (a re-run may re-word a need; its answer stays
-    with the need's target and field). Equipment ratings entered in the equipment list reach the calculation;
-    other answers are recorded for now.
+    The answer has a kind (room area, ceiling height, people, lighting, an equipment rating, what is above the
+    tenancy, or a kind kept as a note), a value and where it came from. need_answers_service puts it into the
+    calculation through the existing input route; the record says whether it was used and how.
     """
+    from backend import need_answers_service
     paths = _project_paths(project)
     current = _response(web, project)
     need = next((row for row in current["findings"] if row["id"] == data.get("finding_id")
                  and row["subskill_id"] == "information_needs" and row["field"] == "needs"), None)
     if not need:
         raise ValueError("That item isn't on the current list. Refresh and try again.")
-    answer = " ".join(str(data.get("answer") or "").split())[:500]
+    answer = " ".join(str(data.get("value") if data.get("value") not in (None, "") else data.get("answer") or "").split())[:500]
     source = str(data.get("source") or "")
     if not answer:
         raise ValueError("Type the answer before saving it.")
     if source not in ANSWER_SOURCES:
         raise ValueError("Say where the answer came from.")
+    result = need_answers_service.apply(web, project, {**data, "value": data.get("value") if data.get("value") not in (None, "") else answer})
     value = need["value"] if isinstance(need["value"], dict) else {}
     stored = _read(paths["root"] / ANSWERS_FILE, {"answers": {}})
     stored.setdefault("answers", {})[need["id"]] = {
-        "target": value.get("target", ""), "field": value.get("field", ""), "answer": answer, "source": source,
-        "note": " ".join(str(data.get("note") or "").split())[:300],
+        "target": value.get("target", ""), "field": value.get("field", ""), "kind": data.get("kind") or "other",
+        "room": data.get("room") or "", "equipment_id": data.get("equipment_id") or "", "answer": answer, "source": source,
+        "note": " ".join(str(data.get("note") or "").split())[:300], "applied": result["applied"], "summary": result["summary"],
         "by": " ".join(str(data.get("reviewer") or "").split())[:80] or "Operator", "at": time.time()}
     _atomic_json(paths["root"] / ANSWERS_FILE, stored)
-    return _response(web, project)
+    response = _response(web, project)
+    response["answer_options"] = need_answers_service.options(web, project)
+    return response
 
 
 def _review_finding(web, project, data):
