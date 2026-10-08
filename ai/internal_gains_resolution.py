@@ -293,8 +293,9 @@ def resolve(building, vision=None, proposal=None, room_use=None, pack=None,
                                       sum((item.get("evidence", []) for item in equipment_records), []), "Σ(quantity × rated_input_w × heat_to_space_factor)")
         schedule_id = "internal-gains-" + re.sub(r"[^a-z0-9_-]+", "-", room_id.casefold()).strip("-")
         schedule_input = next((source.get("schedules") for source in sources if isinstance(source, dict) and isinstance(source.get("schedules"), dict)), {})
-        prior_schedule_input = (previous.get(room_id) or {}).get("schedule_input", {})
-        schedule_profiles = _schedule_for({"schedules": schedule_input or prior_schedule_input}, profile_id)
+        # Schedules come from the current inputs only. Carrying an earlier input forward kept hours that had been
+        # removed, under a "typical profile" label; without a current schedule the room type's typical hours apply.
+        schedule_profiles = _schedule_for({"schedules": schedule_input}, profile_id)
         invalid_schedule_days = [day for day in DAY_TYPES if isinstance(schedule_input, dict) and day in schedule_input and not _valid_schedule(schedule_input.get(day))]
         schedule_source = next((_text(source.get("schedule_source")) for source in sources
                                 if isinstance(source, dict) and isinstance(source.get("schedules"), dict) and source.get("schedule_source")), "")
@@ -319,7 +320,7 @@ def resolve(building, vision=None, proposal=None, room_use=None, pack=None,
                   "space_scope": scope, "fields": fields, "occupancy_count": fields["occupancy_count"]["value"],
                   "people_sensible_w_per_person": fields["people_sensible_w_per_person"]["value"], "people_latent_w_per_person": fields["people_latent_w_per_person"]["value"],
                   "lighting_load_w": lighting["value"], "equipment": equipment_records, "schedule_id": schedule_id,
-                  "schedule_profiles": schedule_profiles, "schedule_input": deepcopy(schedule_input or prior_schedule_input), "evidence": evidence, "confidence_score": min((field.get("confidence", 0) for field in fields.values() if isinstance(field, dict)), default=0),
+                  "schedule_profiles": schedule_profiles, "schedule_input": deepcopy(schedule_input), "evidence": evidence, "confidence_score": min((field.get("confidence", 0) for field in fields.values() if isinstance(field, dict)), default=0),
                   "rationale": "Resolved from room evidence and controlled preliminary profile precedence.", "unresolved_fields": [key for key, field in fields.items() if isinstance(field, dict) and field.get("origin") == "unresolved"] + (["schedules"] if invalid_schedule_days else []),
                   "remediation": "Provide cited occupancy, lighting, equipment heat-to-space, or schedule evidence." if status == "needs_review" else "",
                   "override": deepcopy(override) if override else None, "status": status, "source_fingerprints": deepcopy(source_fingerprints or {})}

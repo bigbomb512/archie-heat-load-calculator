@@ -305,33 +305,45 @@
     const checks = status.checks || {total: 0, waiting: 0, blocked: 0};
     const done = checks.total - checks.waiting - checks.blocked;
     const pendingReview = checks.waiting > 0 || checks.blocked > 0;
-    const drawingMessage = pendingReview
-      ? checks.waiting
-        ? "The Toki team is reviewing drawing details. You can continue with the rooms and measurements below."
-        : "Some drawing checks need attention from the Toki team. Review the available room information while they are resolved."
-      : review.status === "failed"
-        ? "PDF review failed before it could finish. See the reason below, then retry or use the manual fallback."
-        : review.status === "blocked"
-          ? "PDF review is blocked. See what is needed below, then retry or use the manual fallback."
-          : ["queued", "running"].includes(review.status)
-            ? "We are reviewing the drawing set for heat-load evidence. You can continue with the room information below."
-            : review.status === "needs_review"
-              ? "PDF review has finished. Some findings below still need our review."
-              : "Drawing analysis is complete. Review any items marked To do or Review in Rooms, Walls & roof, and Windows.";
+    const busy = row => ["queued", "running"].includes(row?.status);
+    const openNeeds = (review.findings || []).filter(row => row.subskill_id === "information_needs" && row.field === "needs"
+      && !(review.answers || {})[row.id]).length;
+    // Findings not yet accepted or rejected, from the equipment list and the skills (the to-find list is counted apart).
+    const openReview = (equipment?.open || 0) + (review.findings || []).filter(row => row.subskill_id !== "information_needs"
+      && !["accepted", "rejected"].includes(row.status)).length;
+    // One line for where the PDF review is, in the order its three steps run.
+    const drawingMessage = busy(reading)
+      ? "Step 1 of 3: reading every page with AI. You can continue with the room information below."
+      : busy(equipment)
+        ? "Step 2 of 3: reading the equipment from the pages that show it."
+        : busy(review)
+          ? "Step 3 of 3: the skills are working through the drawings. You can continue with the room information below."
+          : review.status === "failed"
+            ? "PDF review failed before it could finish. See the reason below, then retry or use the manual fallback."
+            : review.status === "blocked"
+              ? "PDF review is blocked. See what is needed below, then retry or use the manual fallback."
+              : review.status === "needs_review" || openReview
+                ? `PDF review has finished. Some findings below still need our review${openNeeds ? `, and ${openNeeds} item${openNeeds === 1 ? " is" : "s are"} still to find` : ""}.`
+                : openNeeds
+                  ? `PDF review has finished. ${openNeeds} item${openNeeds === 1 ? " is" : "s are"} still to find.`
+                  : "Drawing analysis is complete. Review any items marked To do or Review in Rooms, Walls & roof, and Windows.";
+    const fallback = operatorMode() ? "" : `<details class="ws-page-reading" data-ws-fallback><summary>Manual fallback (P0–P6)</summary>
+      <p class="ws-fine">For when the AI provider is unavailable, or to check a step by hand: each check is a prompt you paste into ChatGPT, with the reply pasted back.
+      ${pendingReview ? `${checks.waiting + checks.blocked} manual check${checks.waiting + checks.blocked === 1 ? " is" : "s are"} open.` : ""}</p>
+      <div class="ws-actions">${pendingReview ? `<button class="btn ghost mini" type="button" data-ws-operator-on>Open the manual checks</button>` : ""}
+      <button class="btn ghost mini" type="button" data-ws-manual-fallback>${pendingReview ? "Set up the checks again" : "Set up the manual checks"}</button></div></details>`;
     body.innerHTML = `<div class="ws-card" data-ws-drawings>
       <h2>Drawing analysis</h2>
-      <p class="ws-hint">PDF review searches the drawing set for heat-load evidence. You can review each proposed value with its page evidence before it is used.</p>
-      <p data-ws-checks role="status">${esc(operatorMode() && pendingReview ? `${done} of ${checks.total} checks resolved. Answer the remaining Toki checks below.` : drawingMessage)}</p>
-      ${usage ? usageMarkup(usage) : ""}
-      ${needsMarkup(review)}
+      <p class="ws-hint">The PDF review runs in three steps: every page is read, the equipment is read, then the skills work through the drawings and list what we still need to find. Nothing changes the calculation until we accept or answer it.</p>
+      <p data-ws-checks role="status">${esc(operatorMode() && pendingReview ? `${done} of ${checks.total} manual checks resolved. Answer the remaining checks below.` : drawingMessage)}</p>
       ${reading ? pageReadingMarkup(reading) : ""}
       ${equipment && (equipment.status !== "none" || equipment.findings?.length) ? equipmentMarkup(equipment) : ""}
+      ${needsMarkup(review)}
       ${pdfReviewMarkup(review, vision)}
-      ${pendingReview && !operatorMode() ? `<p class="ws-fine">You can continue with the information already available. The Toki team will resolve the remaining drawing checks.
-        <button class="link-button" type="button" data-ws-operator-on>Open Toki team review</button></p>` : ""}
       ${tasks ? operatorMarkup(tasks) : ""}
-      ${!operatorMode() ? `<button class="link-button" type="button" data-ws-manual-fallback>Open manual P0–P6 fallback</button>` : ""}
       ${pagesMarkup()}
+      ${usage ? usageMarkup(usage) : ""}
+      ${fallback}
       ${nextButton("drawings")}</div>`;
     wireCommon();
     wirePages(projectId);
@@ -351,7 +363,8 @@
     body.querySelector("[data-ws-operator-on]")?.addEventListener("click", () => { setOperatorMode(true); renderDrawings().catch(showTabError); });
     if (tasks) wireOperator(projectId, tasks);
     // The contractor's view refreshes itself; the operator's doesn't, so a half-pasted reply is never wiped.
-    if ((pendingReview && !operatorMode()) || ["queued", "running"].includes(review.status) || ["queued", "running"].includes(reading?.status) || ["queued", "running"].includes(equipment?.status))
+    // Refresh while a step runs. Open manual checks don't: they only change when someone pastes a reply.
+    if (busy(review) || busy(reading) || busy(equipment))
       state.poll = setTimeout(function refresh() {
         if (!live(projectId, "drawings")) return;
         // Don't redraw under someone typing a correction; try again shortly.
@@ -658,9 +671,6 @@
   }
 
   function pdfReviewMarkup(review, vision) {
-    const settings = vision.settings || {};
-    const selection = vision.selection || {};
-    const consented = !!settings.owner_opt_in;
     const stages = (review.stages || []).map(stage => `<li><span>${esc(stage.label)}</span><b>${esc(stage.status.replaceAll("_", " "))}</b></li>`).join("");
     const reviewFindings = (review.findings || []).filter(row => row.subskill_id !== "information_needs");
     const openCounts = reviewFindings.filter(row => !["accepted", "rejected"].includes(row.status)).reduce((counts, row) => {
@@ -688,7 +698,7 @@
         ${unresolved}${reviewActions}</article>`;
     }).join("");
     const retry = ["failed", "blocked", "stale", "needs_review"].includes(review.status)
-      ? `<button class="btn ghost mini" type="button" data-ws-skill-retry ${consented ? "" : "disabled"}>Retry PDF review</button>` : "";
+      ? `<button class="btn ghost mini" type="button" data-ws-skill-retry ${review.read_only ? "disabled" : ""}>Retry PDF review</button>` : "";
     const evidenceReviewed = review.subskills || [];
     const issues = (review.issues || []).map(item => `<li><b>${esc(item.name.replaceAll("_", " "))} (${esc(item.status)})</b>${item.reason ? `: ${esc(item.reason)}` : ""}</li>`).join("");
     const reviewedSummary = evidenceReviewed.map(row => {
@@ -696,11 +706,9 @@
       const pagesText = item.pages?.length ? `pages ${item.pages.map(esc).join(", ")}` : "no page evidence sent";
       return `<li>${esc(row.id.replaceAll("_", " "))}: ${pagesText} · ${esc(row.status.replaceAll("_", " "))}${item.provider ? ` · ${esc(item.provider)}` : ""}${item.model ? ` / ${esc(item.model)}` : ""}</li>`;
     }).join("");
-    return `<section class="ws-pdf-review" aria-label="PDF evidence review" data-ws-pdf-review><h3>PDF review</h3>
-      <p class="ws-fine">We search room geometry, internal gains, envelope, glazing, airflow, HVAC and schedules. Findings remain proposals until you review and save them.</p>
-      <label class="ws-check"><input type="checkbox" data-ws-pdf-consent ${consented ? "checked" : ""}> I approve sending the selected pages from this job to the configured AI provider for heat-load evidence review.</label>
-      <p class="ws-fine" data-ws-pdf-consent-scope>${selection.page_count ? `${selection.page_count} page${selection.page_count === 1 ? "" : "s"} across ${selection.group_count || 0} evidence groups are selected.` : "No eligible page groups are available yet. Analyse the PDF first."} <button class="link-button" type="button" data-ws-consent-settings>Review page-group settings</button></p>
-      ${review.blocked_reason ? `<p class="ws-banner is-warn" role="status">${esc(review.blocked_reason)}${vision.provider_configured === false && consented ? " The AI provider is not configured on this server." : ""}</p>` : ""}
+    return `<section class="ws-pdf-review" aria-label="Findings from the skills" data-ws-pdf-review><h3>Findings from the skills</h3>
+      <p class="ws-fine">Values the skills read or worked out for rooms, gains, walls, glazing, airflow and plant, each with its pages. They are proposals: accept, edit or reject each one.</p>
+      ${review.blocked_reason ? `<p class="ws-banner is-warn" role="status">${esc(review.blocked_reason)}</p>` : ""}
       ${issues ? `<p class="ws-banner is-warn" role="alert"><b>Some parts of this review did not finish.</b><ul>${issues}</ul></p>` : ""}
       <p class="ws-fine" role="status" data-ws-pdf-review-status>${esc(review.status.replaceAll("_", " "))}${review.remediation ? ` · ${esc(review.remediation)}` : ""}</p>
       ${evidenceCount ? `<p data-ws-evidence-count>Open findings: ${esc(evidenceCount)}</p>` : ""}
@@ -1596,7 +1604,10 @@
     const projectId = state.projectId;
     progress("Loading the result", "");
     const model = state.lastResult || await getJson(modelUrl());
-    const review = await getJson(`/api/skill-workflow?project_id=${encodeURIComponent(projectId)}`);
+    const [review, gaps] = await Promise.all([
+      getJson(`/api/skill-workflow?project_id=${encodeURIComponent(projectId)}`),
+      getJson(`/api/result-status?project_id=${encodeURIComponent(projectId)}`).catch(() => null),
+    ]);
     state.lastResult = null;
     if (!live(projectId, "results")) return;
     const openFindings = (review.findings || []).filter(row => !["accepted", "rejected"].includes(row.status)).length;
@@ -1621,7 +1632,14 @@
     const factor = Number(peak.safety_factor || 1);
     const COMPONENTS = [["people", "People"], ["lighting", "Lighting"], ["equipment_refrigeration", "Equipment"],
                         ["envelope", "Walls, roof and glazing"], ["outside_air", "Fresh air"], ["infiltration", "Air leakage"]];
+    const job = gaps?.job || {};
+    const today = new Date().toLocaleDateString(undefined, {day: "numeric", month: "long", year: "numeric"});
     body.innerHTML = `<div class="ws-card ws-result" data-ws-results>
+      <header class="ws-report-head" data-ws-report-head>
+        <h1>Cooling load estimate</h1>
+        <p><b>${esc(job.name || state.status?.name || DATA?.name || "Job")}</b>${job.address ? ` · ${esc(job.address)}` : ""}</p>
+        <p class="ws-fine">Prepared ${esc(today)}${userName() ? ` by ${esc(userName())}` : ""} · from the architectural drawings: ${esc((state.status?.name || DATA?.name || "").replace(/\.pdf$/i, ""))}</p>
+      </header>
       ${openFindingsNote}
       ${state.status?.result_stale ? `<p class="ws-banner is-warn">Inputs changed since this result. Press <b>Calculate</b> to update it.</p>` : ""}
       <p class="ws-banner">This is a draft estimate from the drawings. We recommend checking it before using it to select equipment.</p>
@@ -1635,13 +1653,37 @@
       <ul class="ws-list" data-ws-included>${COMPONENTS.filter(([id]) => components[id]).map(([id, label]) => `<li><span>${esc(label)}</span><b>${kw(components[id].total_kw)} kW</b></li>`).join("")}</ul>
       ${excluded.length || refrigeration.length ? `<h3>Not included yet</h3><ul class="ws-list ws-bullets" data-ws-excluded>${excluded.map(line => `<li>${esc(line)}</li>`).join("")}
         ${refrigeration.map(item => `<li>${esc(item.room_name || "Cold room")} — refrigeration, sized separately</li>`).join("")}</ul>` : ""}
+      ${gaps ? gapsMarkup(gaps) : ""}
       ${basis.design_day ? `<h3>Weather used</h3><p class="ws-fine">A generic Australian design day (not specific to this site yet).</p>` : ""}
       <div class="ws-actions ws-no-print">
         <button class="btn key" type="button" data-ws-print>Print or save as PDF</button>
         <button class="btn ghost" type="button" data-ws-csv>Download room loads (CSV)</button>
       </div></div>`;
     body.querySelector("[data-ws-print]").addEventListener("click", () => window.print());
+    body.querySelectorAll("[data-ws-gap-tab]").forEach(button => button.addEventListener("click", () => go(button.dataset.wsGapTab)));
     body.querySelector("[data-ws-csv]").addEventListener("click", () => downloadCsv(rooms, total));
+  }
+
+  const GAP_KINDS = [["to_find", "Still to find or review", "These aren't in the number yet."],
+                     ["not_set", "Not set", "The calculation needs these; they haven't been given."],
+                     ["assumed", "Assumed", "A method chosen by default because the arrangement wasn't given."],
+                     ["typical", "Typical values used", "The drawings and answers don't give these, so typical values are used."],
+                     ["placeholder", "Placeholders", "Generic values waiting for the licensed AIRAH DA09 data."]];
+  const TAB_NAMES = {project: "Project", drawings: "Drawings", rooms: "Rooms", walls: "Walls & roof", windows: "Windows"};
+
+  function gapsMarkup(gaps) {
+    const items = gaps.items || [];
+    if (!items.length) return `<h3>Assumptions</h3><p class="ws-fine" data-ws-gaps>Nothing in this result is assumed or still to find.</p>`;
+    const groups = GAP_KINDS.map(([kind, title, hint]) => {
+      const rows = items.filter(row => row.kind === kind);
+      if (!rows.length) return "";
+      return `<div class="ws-gap-group" data-ws-gap-kind="${kind}"><h4>${esc(title)} <span class="ws-chip">${rows.length}</span></h4><p class="ws-fine">${esc(hint)}</p>
+        <ul class="ws-list ws-bullets">${rows.map(row => `<li><b>${esc(row.topic)}</b>: ${esc(row.text)}${row.detail ? ` <span class="ws-fine">(${esc(row.detail)})</span>` : ""}
+          ${TAB_NAMES[row.tab] ? ` <button class="link-button ws-no-print" type="button" data-ws-gap-tab="${esc(row.tab)}">${esc(TAB_NAMES[row.tab])}</button>` : ""}</li>`).join("")}</ul></div>`;
+    }).join("");
+    const confirm = items.filter(row => row.kind === "to_find" || row.kind === "not_set");
+    return `<h3>What this number still depends on</h3><div data-ws-gaps>${groups}</div>
+      ${confirm.length ? `<div class="ws-print-only" data-ws-client-confirm><h3>Please confirm</h3><ul>${confirm.map(row => `<li>${esc(row.topic)}: ${esc(row.text)}</li>`).join("")}</ul></div>` : ""}`;
   }
 
   function downloadCsv(rooms, total) {

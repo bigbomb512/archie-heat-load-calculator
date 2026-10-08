@@ -61,6 +61,13 @@ def main():
           and rebuilt["fields"]["people_diversity"]["origin"] == "contractor_override")
     rebuilt_model = ai_preliminary.assemble(building, preliminary_proposal=proposal, room_use_resolution=use, internal_gains_resolution=overridden,
                                             source_fingerprints={"internal": overridden["fingerprint"]})
+    without_hours = deepcopy(proposal)
+    without_hours["rooms"][0].pop("schedules")
+    rebuilt_without = internal_gains_resolution.resolve(building, proposal=without_hours, room_use=use, pack=pack,
+                                                        source_fingerprints={"proposal": "b"}, existing=overridden)
+    cafe_schedule = next(row for row in rebuilt_without["schedules"] if row["room_id"] == cafe["room_id"])
+    check("removed hours don't linger: the room returns to its type's typical hours, labelled as such",
+          cafe_schedule["origin"] == "controlled_preliminary_profile" and cafe_schedule["day_profiles"]["saturday"] != [.5] * 24)
     check("the calculation model uses the overridden people count", next(row for row in rebuilt_model["material"]["requirements"]["zones"]
                                                                           if row["name"] == "Cafe")["occupancy"] == 24)
     try:

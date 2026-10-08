@@ -226,14 +226,15 @@ test("Project save failures remain red and actionable", async ({page}) => {
   await expect(error).toContainText("Could not save");
 });
 
-test("Drawings: shows analysis status, keeps page changes available on request, and has a Toki-team override", async ({ page }) => {
+test("Drawings: shows analysis status, keeps page changes available on request, and keeps the manual checks as a fallback", async ({ page }) => {
   await mockJob(page, {status: () => baseStatus({checks: {total: 11, waiting: 9, blocked: 1, marker: "m"},
                                                   tabs: {...baseStatus().tabs, drawings: tab("working", "Toki is reviewing the drawings.")}}),
                        tasks: () => [{task: "P1_site", target: "project", status: "waiting_for_reply", prompt: "Find the site.", images: []}]});
   await page.goto("/#/job/job-1/drawings");
-  await expect(page.locator("[data-ws-checks]")).toContainText("The Toki team is reviewing drawing details");
-  await expect(page.locator("[data-ws-checks]")).not.toContainText("of 11 checks done");
-  await expect(page.locator("[data-ws-checks]")).toContainText("continue with the rooms and measurements");
+  // Open manual checks don't take over the status line; they wait in the fallback section.
+  await expect(page.locator("[data-ws-checks]")).not.toContainText("Toki team");
+  await expect(page.locator("[data-ws-checks]")).not.toContainText("of 11 checks");
+  await expect(page.locator("[data-ws-fallback] summary")).toHaveText("Manual fallback (P0–P6)");
   await expect(page.locator("[data-ws-tab='drawings'] .ws-tab-icon")).toHaveText("◌");
   await expect(page.locator("[data-ws-operator-panel]")).toHaveCount(0);
   await expect(page.locator("[data-ws-drawings]")).toContainText("Pages Toki selected");
@@ -245,11 +246,21 @@ test("Drawings: shows analysis status, keeps page changes available on request, 
   await page.getByRole("button", {name: "Show all 3 pages"}).click();
   await expect(page.locator("[data-ws-pages] li")).toHaveCount(3);
   await expect(page.locator("[data-ws-pages] li").nth(2)).toContainText("section");  // boilerplate titles fall back to the sheet type
-  await page.getByRole("button", {name: "Open Toki team review"}).click();
+  await page.locator("[data-ws-fallback] summary").click();
+  await expect(page.locator("[data-ws-fallback]")).toContainText("10 manual checks are open.");
+  await page.getByRole("button", {name: "Open the manual checks"}).click();
   await expect(page.locator("[data-ws-operator-panel]")).toBeVisible();
   await expect(page.locator("#wsOpTitle")).toHaveText("Find the site address");
   await page.getByRole("button", {name: "Hide the AI step"}).click();
   await expect(page.locator("[data-ws-operator-panel]")).toHaveCount(0);
+});
+
+test("Drawings: finished but unreviewed equipment or findings are not called complete", async ({page}) => {
+  await mockJob(page, {status: () => baseStatus(), skill: () => ({status: "completed", stages: [], findings: [], subskills: []}),
+    extraction: () => ({status: "done", findings: [{id: "eq:1", value: {name: "TV"}, pages: [9], citations: [], conflicts: {}, evidence: "supported", status: "proposed"}], pages: [9], open: 1})});
+  await page.goto("/#/job/job-1/drawings");
+  await expect(page.locator("[data-ws-checks]")).toContainText("Some findings below still need our review");
+  await expect(page.locator("[data-ws-checks]")).not.toContainText("complete");
 });
 
 test("Drawings: completed analysis points contractors to review items instead of a check count", async ({page}) => {
@@ -280,10 +291,10 @@ test("PDF review: consent starts the skills review and findings show page eviden
       if (kind === "skill" && body.action === "review_finding") { approved = body.decision === "accepted"; return run(); }
       return null;
     }});
+  consented = true;   // findings come from the skills once every page has been read; there is no separate consent box
   await page.goto("/#/job/job-1/drawings");
-  await expect(page.locator("[data-ws-pdf-review]")).toContainText("Project consent is required");
-  await page.locator("[data-ws-pdf-consent]").check();
-  await expect(page.locator("[data-ws-pdf-consent]")).toBeChecked();
+  await expect(page.locator("[data-ws-pdf-consent]")).toHaveCount(0);
+  await expect(page.locator("[data-ws-pdf-review] h3")).toHaveText("Findings from the skills");
   await expect(page.locator(".ws-skill-finding")).toContainText("Shop");
   await expect(page.locator(".ws-skill-finding")).toContainText("Page 20: Shop 42 m2");
   await page.getByRole("button", {name: "Accept value"}).click();
@@ -610,6 +621,35 @@ test("Drawings: a failed or blocked page reading says why and offers a retry", a
   expect(posts[0]).toMatchObject({project_id: "job-1", action: "retry"});
 });
 
+test("Results: what the number still depends on is listed by kind, with the tab that fixes each, and a report header for printing", async ({page}) => {
+  await mockJob(page, {status: () => baseStatus(), model: () => ({hourly_ai_preliminary_load_report: report})});
+  await page.route("**/api/result-status**", route => route.fulfill({json: {calculated: true, job: {name: "Butcher Buffet", address: "Melrose Central"},
+    counts: {to_find: 1, not_set: 1, assumed: 1, typical: 1, placeholder: 1},
+    items: [
+      {kind: "to_find", topic: "E06 Combi oven", text: "rated input w: No rating is printed.", tab: "drawings", detail: "equipment spec sheet"},
+      {kind: "not_set", topic: "Roof", text: "What is above the tenancy isn't answered, so roof heat isn't assessed.", tab: "walls", detail: ""},
+      {kind: "assumed", topic: "Kitchen", text: "Kitchen exhaust 1200 L/s assumed replaced through the conditioned space.", tab: "drawings", detail: ""},
+      {kind: "typical", topic: "Shop", text: "Uses people (typical density).", tab: "rooms", detail: ""},
+      {kind: "placeholder", topic: "Weather", text: "Generic Australian design day, not specific to this site (AIRAH DA09 pending).", tab: "project", detail: ""},
+    ]}}));
+  await page.goto("/#/job/job-1/results");
+  const gaps = page.locator("[data-ws-gaps]");
+  await expect(gaps.locator("[data-ws-gap-kind]")).toHaveCount(5);
+  await expect(gaps.locator("[data-ws-gap-kind='to_find'] h4")).toContainText("Still to find or review");
+  await expect(gaps.locator("[data-ws-gap-kind='assumed']")).toContainText("Kitchen exhaust 1200 L/s assumed");
+  await expect(gaps.locator("[data-ws-gap-kind='placeholder']")).toContainText("AIRAH DA09 pending");
+  // The report header and the client's confirm list are for the printout only.
+  await expect(page.locator("[data-ws-report-head]")).toBeHidden();
+  await expect(page.locator("[data-ws-client-confirm] li")).toHaveCount(2);
+  await page.emulateMedia({media: "print"});
+  await expect(page.locator("[data-ws-report-head]")).toContainText("Butcher Buffet · Melrose Central");
+  await expect(page.locator("[data-ws-client-confirm]")).toBeVisible();
+  await expect(page.locator("[data-ws-gap-tab]").first()).toBeHidden();
+  await page.emulateMedia({media: "screen"});
+  await gaps.locator("[data-ws-gap-kind='not_set'] [data-ws-gap-tab='walls']").click();
+  await expect(page).toHaveURL(/#\/job\/job-1\/walls/);
+});
+
 test("Results: open PDF review findings are clearly excluded from the displayed number", async ({page}) => {
   await mockJob(page, {status: () => baseStatus(),
     skill: () => ({status: "needs_review", findings: [
@@ -700,6 +740,8 @@ test("PDF review browser states on a temporary Butcher Buffet copy", async ({pag
 test("PDF review: manual P0–P6 is an explicit fallback, not an automatic second review", async ({page}) => {
   const posts = await mockJob(page, {status: () => baseStatus()});
   await page.goto("/#/job/job-1/drawings");
+  await expect(page.locator("[data-ws-manual-fallback]")).not.toBeVisible();      // tucked into the fallback section
+  await page.locator("[data-ws-fallback] summary").click();
   await expect(page.locator("[data-ws-manual-fallback]")).toBeVisible();
   expect(posts.some(([kind, body]) => kind === "tasks" && body.action === "run_all")).toBe(false);
   await page.locator("[data-ws-manual-fallback]").click();

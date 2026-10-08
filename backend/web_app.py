@@ -91,7 +91,7 @@ from ai.calculator_draft import DraftConflict
 from backend import draft_service
 from backend import evidence_fusion_service
 from backend import calculation_extraction_service
-from backend import vision_extraction_service, window_scan_service, site_orientation_service, site_location_service, site_design_weather_service, room_use_resolution_service, room_inference_service, reviewer_room_geometry_service, ceiling_volume_resolution_service, internal_gains_resolution_service, thermal_surface_resolution_service, airflow_resolution_service, ahu_resolution_service, plant_resolution_service, safety_factor_resolution_service, ai_preliminary_service, model_input_resolution_service, au_ventilation_rules_service, autonomous_tasks_service, job_service, page_preparation_service, calculation_service, page_inventory_service, page_extraction_service, ai_provider
+from backend import vision_extraction_service, window_scan_service, site_orientation_service, site_location_service, site_design_weather_service, room_use_resolution_service, room_inference_service, reviewer_room_geometry_service, ceiling_volume_resolution_service, internal_gains_resolution_service, thermal_surface_resolution_service, airflow_resolution_service, ahu_resolution_service, plant_resolution_service, safety_factor_resolution_service, ai_preliminary_service, model_input_resolution_service, au_ventilation_rules_service, autonomous_tasks_service, job_service, page_preparation_service, calculation_service, page_inventory_service, page_extraction_service, ai_provider, result_status_service
 from backend import productization, test_mode_service, skill_workflow_service
 from backend import security
 from ai.ventilation import calculate_ventilation_report
@@ -374,6 +374,13 @@ class Handler(SimpleHTTPRequestHandler):
         if urlparse(self.path).path == "/api/job-calculation":
             try:
                 return self.send_json(api_calculation_status(self))
+            except security.SecurityError as error:
+                return self._send_security_error(error, 403)
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if urlparse(self.path).path == "/api/result-status":
+            try:
+                return self.send_json(api_result_status(self))
             except security.SecurityError as error:
                 return self._send_security_error(error, 403)
             except Exception as error:
@@ -4215,6 +4222,14 @@ def api_page_reading(request):
     if action in {"start", "retry"}:
         return page_inventory_service.start(sys.modules[__name__], project, data)
     raise ValueError("Page reading action must be start, retry or set_enabled.")
+
+
+def api_result_status(request):
+    """What in the job's result is still assumed, a placeholder or still to find; plus the job details for the report."""
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    ensure_review_dir(project)
+    return {**result_status_service.gather(sys.modules[__name__], project), "job": job_service.job_setup(project)}
 
 
 def api_ai_usage(request):

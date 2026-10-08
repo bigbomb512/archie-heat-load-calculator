@@ -242,8 +242,16 @@ polyline.ws-dim, polyline.ws-dim2 { fill: none; stroke-dasharray: 10 6; }
   .ws-total-big span:first-child { font-size: 44px; }
 }
 
+.ws-report-head { display: none; }
+.ws-print-only { display: none; }
+.ws-gap-group { margin: .6rem 0 .9rem; }
+.ws-gap-group h4 { margin: 0; font-size: 1rem; }
+.ws-gap-group .ws-list { margin-top: .3rem; }
 @media print {
   body.hvac-app .side, body.hvac-app .top, .ws-rail, .ws-no-print, .ws-next, .toast { display: none !important; }
+  .ws-report-head, .ws-print-only { display: block; }
+  .ws-report-head h1 { margin: 0 0 .2rem; font-size: 1.5rem; }
+  .ws-gap-group, .ws-table-wrap, [data-ws-included] { break-inside: avoid; }
   .ws { display: block; }
   .ws-main { padding: 0; max-width: none; }
   .ws-card { border: 0; padding: 0; }
