@@ -120,6 +120,9 @@ def _sources(paths):
         "plant_resolution": artifact_fingerprint(paths["plant_resolution"], plant_resolution.empty_plant_resolution()),
         "safety_factor_resolution": artifact_fingerprint(paths["safety_factor_resolution"], safety_factor_resolution.empty_safety_factor_resolution()),
         "preliminary_geometry_resolution": ai_preliminary.fingerprint(_preliminary_geometry(paths)),
+        # Answers from the What-we-need-to-find list that the model reads directly.
+        "glazing_answers": ai_preliminary.fingerprint(_read(paths["root"] / "glazing_answers.json", {})),
+        "exhaust_answers": ai_preliminary.fingerprint(_read(paths["root"] / "exhaust_answers.json", {})),
     }
 
 
@@ -1213,6 +1216,7 @@ def _assemble(web, project, source="manual_placeholder"):
     airflow_artifact = _read(paths["airflow"], airflow_artifact)
     geometry = _preliminary_geometry(paths)
     proposal = _prepare_preliminary_proposal(paths, proposal, room_use, geometry)
+    from backend import need_answers_service
     input_set = ai_preliminary.assemble(
         building, vision, source_fingerprints=_sources(paths), preliminary_proposal=proposal,
         value_resolution=resolution, research_cache=validate_cache(_read(paths["research_cache"], empty_research_cache())),
@@ -1225,6 +1229,7 @@ def _assemble(web, project, source="manual_placeholder"):
         airflow_resolution=airflow_artifact,
         ahu_resolution=ahu_artifact,
         plant_resolution=plant_artifact,
+        process_exhaust=need_answers_service.process_exhaust(paths["root"]),
         # The consolidated real-PDF workflow must not turn a missing measured
         # room area into an 80/100 m2 profile assumption.  Older direct
         # preview callers retain their explicit legacy fallback behavior.

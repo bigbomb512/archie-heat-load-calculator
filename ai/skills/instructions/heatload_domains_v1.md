@@ -665,7 +665,8 @@ remain immutable.
 - `answer_kind` says what the answer will be, so it reaches the right input:
   `room_area`, `ceiling_height`, `occupancy` (people), `lighting_load` (W),
   `equipment_rating` (an item's rated power), `roof_above` (what is above the
-  tenancy), `opening_hours`, `glazing`, `exhaust`, `boundary` (what is beyond a
+  tenancy), `opening_hours`, `glazing` (glass U-value and SHGC), `exhaust` (a
+  kitchen's hood exhaust rate and how its air is replaced), `boundary` (what is beyond a
   wall, floor or ceiling), or `other`. `room` is the room's name as it appears
   in the room proposals, or null when the need is not about one room.
 - `pages` is a comma-separated list of the pages looked at, or "".

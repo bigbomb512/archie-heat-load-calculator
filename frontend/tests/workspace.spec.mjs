@@ -507,6 +507,29 @@ test("Drawings: a glass answer takes a U-value and SHGC for one room's windows o
   expect(posts[0]).toMatchObject({kind: "glazing", room: "", u_value_w_m2k: "3.4", shgc: "0.32", value: "6.38 mm low-e laminated", source: "supplier"});
 });
 
+test("Drawings: an exhaust answer takes the kitchen, its rate and how the air is replaced", async ({page}) => {
+  const posts = [];
+  const skill = () => ({status: "needs_review", stages: [], answers: {}, answer_options: {
+      kinds: [{id: "exhaust", label: "Kitchen exhaust rate and make-up air", applied: true, unit: "L/s"}],
+      rooms: [{label: "Kitchen", level: "Ground"}], equipment: [], above: [],
+      exhaust_methods: [{id: "through_space", label: "Replaced through the air-conditioned space (no dedicated make-up air)"},
+                        {id: "untempered_makeup", label: "Dedicated make-up air at the hood, not cooled"}]},
+    findings: [{id: "information_needs:needs:0", subskill_id: "information_needs", field: "needs", status: "proposed",
+      value: {target: "Kitchen rangehood", field: "exhaust_lps", answer_kind: "exhaust", room: "Kitchen", why: "The hood is drawn but no exhaust rate is given.",
+              impact: "make-up air, likely several kW", where_to_look: "the mechanical drawings or the kitchen supplier", pages: "20"}}]});
+  await mockJob(page, {status: () => baseStatus(), skill,
+    onPost: (kind, body) => { if (kind === "skill" && body.action === "answer_need") posts.push(body); return null; }});
+  await page.goto("/#/job/job-1/drawings");
+  const need = page.locator("[data-ws-need='information_needs:needs:0']");
+  await expect(need.locator("[data-ws-need-room]")).toHaveValue("Kitchen");
+  await expect(need.locator("[data-ws-need-method] option").first()).toHaveText("not known (assume through the conditioned space)");
+  await need.locator("[data-ws-need-value]").fill("1200");
+  await need.locator("[data-ws-need-source]").selectOption("mechanical_drawings");
+  await need.locator("[data-ws-need-save]").click();
+  await expect.poll(() => posts.length).toBe(1);
+  expect(posts[0]).toMatchObject({kind: "exhaust", room: "Kitchen", value: "1200", method: "", source: "mechanical_drawings"});
+});
+
 test("Drawings: before the skills have run, the needs list says when it will appear", async ({page}) => {
   await mockJob(page, {status: () => baseStatus(), skill: () => ({status: "running", stages: [], findings: []})});
   await page.goto("/#/job/job-1/drawings");

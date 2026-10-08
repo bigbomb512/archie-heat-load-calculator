@@ -418,7 +418,9 @@
       const source = ANSWER_SOURCES.find(([key]) => key === saved?.source)?.[1] || saved?.source || "";
       const select = (attr, choices, current, empty) => `<select ${attr}><option value="">${empty}</option>${choices.map(([id, label]) =>
         `<option value="${esc(id)}" ${String(current) === String(id) ? "selected" : ""}>${esc(label)}</option>`).join("")}</select>`;
-      const needsRoom = ["room_area", "ceiling_height", "occupancy", "lighting_load", "equipment_rating"].includes(kind);
+      const needsRoom = ["room_area", "ceiling_height", "occupancy", "lighting_load", "equipment_rating", "exhaust"].includes(kind);
+      const exhaustField = kind === "exhaust"
+        ? `<label>Replaced by ${select("data-ws-need-method", (options.exhaust_methods || []).map(item => [item.id, item.label]), draft.method ?? "", "not known (assume through the conditioned space)")}</label>` : "";
       const glazingFields = kind === "glazing"
         ? `<label>Windows ${select("data-ws-need-room", (options.rooms || []).map(item => [item.label, `${item.label} only`]), room, "all windows")}</label>
            <label>U-value (W/m²K) <input data-ws-need-u inputmode="decimal" value="${esc(draft.u ?? "")}"></label>
@@ -438,6 +440,7 @@
           ${kind === "equipment_rating" ? `<label>Item ${select("data-ws-need-equipment", (options.equipment || []).map(item => [item.id, item.label]), draft.equipment_id ?? saved?.equipment_id ?? "", "choose the item")}</label>` : ""}
           ${glazingFields}
           ${valueField}
+          ${exhaustField}
           <label>From ${select("data-ws-need-source", ANSWER_SOURCES, draft.source ?? saved?.source ?? "", "choose")}</label>
           <label>Note <input data-ws-need-note value="${esc(draft.note ?? saved?.note ?? "")}" placeholder="optional"></label>
           <button class="btn ${saved ? "ghost" : "key"} mini" type="button" data-ws-need-save>${saved ? "Update" : "Save answer"}</button></div></li>`;
@@ -458,7 +461,7 @@
       const remember = () => {
         state.needDrafts[id] = {kind: field("kind")?.value, room: field("room")?.value, equipment_id: field("equipment")?.value,
                                 value: field("value")?.value, source: field("source")?.value, note: field("note")?.value,
-                                u: field("u")?.value, shgc: field("shgc")?.value};
+                                u: field("u")?.value, shgc: field("shgc")?.value, method: field("method")?.value};
       };
       item.querySelectorAll("input, select").forEach(input => input.addEventListener("input", remember));
       // Changing the kind changes which fields the answer needs.
@@ -475,6 +478,7 @@
           await sendJson("/api/skill-workflow", {project_id: projectId, action: "answer_need", finding_id: id, kind, value, source,
             room: field("room")?.value || "", equipment_id: field("equipment")?.value || "", note: field("note")?.value || "",
             ...(kind === "glazing" ? {u_value_w_m2k: field("u").value.trim(), shgc: field("shgc").value.trim()} : {}),
+            ...(kind === "exhaust" ? {method: field("method").value} : {}),
             reviewer: userName() || "Operator"});
           delete state.needDrafts[id];
           await renderDrawings();

@@ -105,3 +105,25 @@ class GlazingTests(unittest.TestCase):
         unanswered = {"openings": [{"owner_room_label": "Shop"}]}
         with tempfile.TemporaryDirectory() as empty:
             self.assertNotIn("u_value_w_m2k", answers.apply_glazing(empty, unanswered)["openings"][0])
+
+
+class ExhaustTests(unittest.TestCase):
+    def test_exhaust_needs_a_room_and_rate_and_defaults_to_replacement_through_the_space(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder, patch.object(answers, "options", return_value=OPTIONS):
+            project = {"id": "job", "review_dir": folder}
+            result = answers.apply(None, project, {"kind": "exhaust", "room": "Kitchen", "value": "1,200 L/s", "source": "mechanical_drawings"})
+            self.assertEqual(result["summary"], "Kitchen exhaust 1200 L/s, replaced through the air-conditioned space (no dedicated make-up air) "
+                                                "(assumed: method not given); its replacement air is counted as outside air through the air conditioning.")
+            self.assertEqual(answers.process_exhaust(folder)["kitchen"], {**answers.process_exhaust(folder)["kitchen"],
+                                                                        "lps": 1200.0, "method": "through_space", "method_assumed": True})
+            tempered = answers.apply(None, project, {"kind": "exhaust", "room": "Kitchen", "value": "900", "method": "tempered_makeup", "source": "client"})
+            self.assertIn("its load belongs to the make-up air unit", tempered["summary"])
+            self.assertEqual((answers.process_exhaust(folder)["kitchen"]["method"], answers.process_exhaust(folder)["kitchen"]["method_assumed"]),
+                             ("tempered_makeup", False))
+            for data, message in (({"room": "Kitchen", "value": "5"}, "between 10 and 20000"), ({"room": "Kitchen", "value": "900", "method": "open window"}, "how the exhausted air"),
+                                  ({"room": "", "value": "900"}, "Choose the room")):
+                with self.assertRaisesRegex(ValueError, message):
+                    answers.apply(None, project, {"kind": "exhaust", "source": "client", **data})
+        with tempfile.TemporaryDirectory() as empty:
+            self.assertEqual(answers.process_exhaust(empty), {})

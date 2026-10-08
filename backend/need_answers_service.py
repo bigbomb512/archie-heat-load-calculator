@@ -9,7 +9,9 @@ Each item on the list has a kind. Kinds with an existing input route go straight
 - roof_above       -> the job's answer to what is above the tenancy (job_service, applied to every roof question)
 - glazing          -> the glass's U-value and SHGC for one room's windows, or for every window (glazing_answers.json,
                       applied to the windows when the calculation's proposal is prepared)
-Other kinds (opening hours, exhaust, a wall's boundary, anything else) are kept as notes with their source,
+- exhaust          -> a room's kitchen exhaust rate (L/s) and how the exhausted air is replaced (exhaust_answers.json,
+                      passed to the calculation model; see EXHAUST_METHODS)
+Other kinds (opening hours, a wall's boundary, anything else) are kept as notes with their source,
 and the list says they are not used by the calculation yet. Press Calculate afterwards to update the result.
 """
 
@@ -21,6 +23,15 @@ import time
 from ai.equipment_heat import printed_watts, proposal as heat_proposal
 
 GLAZING_FILE = "glazing_answers.json"
+EXHAUST_FILE = "exhaust_answers.json"
+# How the air a kitchen hood exhausts is replaced. "through_space" is the default (user decision 2026-10-08), also
+# used, and labelled as assumed, when the method isn't known.
+EXHAUST_METHODS = {
+    "through_space": "Replaced through the air-conditioned space (no dedicated make-up air)",
+    "untempered_makeup": "Dedicated make-up air at the hood, not cooled",
+    "tempered_makeup": "A separately cooled (tempered) make-up air unit",
+}
+EXHAUST_RANGE_LPS = (10.0, 20000.0)
 U_RANGE = (0.5, 7.0)       # W/m²K: from triple glazing to single clear glass
 SHGC_RANGE = (0.05, 0.95)
 
@@ -32,8 +43,9 @@ APPLIED_KINDS = {
     "equipment_rating": {"label": "Equipment rated power", "unit": "W", "room": True, "equipment": True},
     "roof_above": {"label": "What is above the tenancy", "unit": "", "room": False, "choice": True},
     "glazing": {"label": "Glass performance (U-value and SHGC)", "unit": "", "room": "optional"},
+    "exhaust": {"label": "Kitchen exhaust rate and make-up air", "unit": "L/s", "room": True},
 }
-NOTE_KINDS = {"opening_hours": "Opening hours", "exhaust": "Kitchen exhaust or airflow",
+NOTE_KINDS = {"opening_hours": "Opening hours",
               "boundary": "What is beyond a wall, floor or ceiling", "other": "Other"}
 KINDS = {**{key: row["label"] for key, row in APPLIED_KINDS.items()}, **NOTE_KINDS}
 
@@ -58,7 +70,8 @@ def options(web, project):
                       for key, label in KINDS.items()],
             "rooms": [{"label": label, "level": level} for label, level in room_rows],
             "equipment": equipment,
-            "above": [{"id": key, "label": label} for key, label in job_service.ABOVE_CHOICES.items() if key]}
+            "above": [{"id": key, "label": label} for key, label in job_service.ABOVE_CHOICES.items() if key],
+            "exhaust_methods": [{"id": key, "label": label} for key, label in EXHAUST_METHODS.items()]}
 
 
 def _number(value, unit_label):
@@ -116,6 +129,8 @@ def apply(web, project, data):
         return {"applied": True, "summary": f"Above the tenancy: {label}."}
     if kind == "glazing":
         return _save_glazing(project, data, found["rooms"], reviewer)
+    if kind == "exhaust":
+        return _save_exhaust(project, data, found["rooms"], reviewer)
     room = _room(data, found["rooms"])
     where = room["label"]
     if kind == "room_area":
@@ -204,3 +219,37 @@ def apply_glazing(root, proposal):
         opening["assumptions"] = [item for item in opening.get("assumptions", []) if item != "preliminary_glazing_profile"]
         opening["rationale"] = "Window geometry as entered; glass U-value and SHGC from the operators' answer."
     return proposal
+
+
+def _write_answers(path, stored):
+    staging = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    staging.write_text(json.dumps(stored, indent=2), encoding="utf-8")
+    os.replace(staging, path)
+
+
+def _save_exhaust(project, data, rooms, reviewer):
+    """A room's kitchen exhaust rate and how its air is replaced (the default method when not given)."""
+    room = _room(data, rooms)["label"]
+    rate = _in_range(str(data.get("value") or "").lower().replace("l/s", ""), *EXHAUST_RANGE_LPS, "exhaust rate (L/s)")
+    method = str(data.get("method") or "")
+    if method and method not in EXHAUST_METHODS:
+        raise ValueError("Choose how the exhausted air is replaced.")
+    path = Path(project["review_dir"]) / EXHAUST_FILE
+    stored = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {"rooms": {}}
+    stored.setdefault("rooms", {})[room] = {"lps": rate, "method": method or "through_space", "method_assumed": not method,
+                                            "source": str(data.get("source") or ""), "by": reviewer, "at": time.time()}
+    _write_answers(path, stored)
+    how = EXHAUST_METHODS[method or "through_space"].lower()
+    effect = {"through_space": "its replacement air is counted as outside air through the air conditioning",
+              "untempered_makeup": "it adds no cooling load to this system",
+              "tempered_makeup": "its load belongs to the make-up air unit, not this system"}[method or "through_space"]
+    return {"applied": True, "summary": f"{room} exhaust {rate:g} L/s, {how}{' (assumed: method not given)' if not method else ''}; {effect}."}
+
+
+def process_exhaust(root):
+    """Answered kitchen exhaust per room, for the calculation model: {room name (lower case): answer}."""
+    path = Path(root) / EXHAUST_FILE
+    if not path.is_file():
+        return {}
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    return {str(label).casefold(): dict(row) for label, row in (stored.get("rooms") or {}).items()}

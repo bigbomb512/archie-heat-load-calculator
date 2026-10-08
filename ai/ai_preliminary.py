@@ -780,10 +780,14 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
              preliminary_proposal=None, value_resolution=None, research_cache=None, source_pack_releases=None,
              site_location=None, site_design_weather=None, room_use_resolution=None, geometry_resolution=None,
              ceiling_volume_resolution=None, internal_gains_resolution=None, airflow_resolution=None, ahu_resolution=None,
-             plant_resolution=None, allow_area_fallbacks=True):
-    """Return a materialized preliminary payload plus its transparent ledger."""
+             plant_resolution=None, allow_area_fallbacks=True, process_exhaust=None):
+    """Return a materialized preliminary payload plus its transparent ledger.
+
+    process_exhaust: answered kitchen exhaust per room name (lower case): {"lps", "method", "method_assumed"}.
+    """
     pack = load_pack()
     overrides = contractor_overrides or {}
+    process_exhaust = process_exhaust or {}
     rooms, zones, floors, ledger, exclusions, schedules = [], [], [], [], [], []
     floor_ids, zone_ids = {}, set()
     requirements_zones = []
@@ -919,6 +923,25 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
         outside_air = round(occupancy * profile["outside_air_lps_person"] + area * profile["outside_air_lps_m2"], 3)
         if outside_record.get("air_path_type") == "outside_air" and outside_record.get("status") not in {"blocked", "excluded"} and outside_record.get("value") is not None:
             outside_air = round(float(outside_record["value"]), 3)
+        exhaust = process_exhaust.get(str(row["name"]).casefold())
+        exhaust_note = ""
+        if exhaust and _number(exhaust.get("lps")):
+            method = exhaust.get("method") or "through_space"
+            assumed = " (method assumed: not given)" if exhaust.get("method_assumed") else ""
+            if method == "through_space":
+                # The hood's air is replaced through the conditioned space: outside air enters to replace it, so the
+                # room takes the larger of its ventilation air and the exhaust (ventilation air already counted once).
+                replacement = max(0.0, float(exhaust["lps"]) - outside_air)
+                ledger.append({"room_id": room_id, "field": "process_exhaust_replacement_lps", "value": round(replacement, 3),
+                               "origin": "operator_answer", "profile_id": profile_id, "confidence": 0.7, "confidence_band": confidence_band(0.7),
+                               "rationale": f"Kitchen exhaust {exhaust['lps']:g} L/s replaced through the air-conditioned space{assumed}; "
+                                            f"outside air = max(ventilation {outside_air:g} L/s, exhaust {exhaust['lps']:g} L/s).",
+                               "evidence": []})
+                outside_air = round(max(outside_air, float(exhaust["lps"])), 3)
+            else:
+                exhaust_note = ("Exhaust replaced by untempered make-up air at the hood: no cooling load on this system."
+                                if method == "untempered_makeup" else
+                                f"Exhaust {exhaust['lps']:g} L/s replaced by a tempered make-up air unit: its load belongs to that unit, not this system.")
         cooling = {"people_sensible_w_per_person": people_sensible or profile["people_sensible_w"], "people_latent_w_per_person": people_latent or profile["people_latent_w"],
                    "people_diversity_factor": people_diversity, "lighting_w_m2": lighting_w_m2,
                    "lighting_diversity_factor": lighting_diversity,
@@ -947,9 +970,11 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
             ("glazing and façade solar", "No resolved reviewed/AI opening geometry, external exposure, orientation, and cited property set was available."),
             ("infiltration", "Preliminary profile airflow is not passed through the approved infiltration method gate."),
         ))
+        if exhaust_note:
+            exclusions.append({"room_id": room_id, "component": "process exhaust", "reason": exhaust_note})
         if row["scope"] == "comfort_hvac_with_process_exception":
             exclusions.extend({"room_id": room_id, "component": component, "reason": reason} for component, reason in (
-                ("process exhaust", "Kitchen process exhaust remains a project-specific preliminary exclusion."),
+                *((("process exhaust", "Kitchen process exhaust remains a project-specific preliminary exclusion."),) if not exhaust else ()),
                 ("steam and named equipment", "Steam and named equipment heat remain explicit project-specific exclusions."),
             ))
     weather_values = scenario_values["weather_profile"]
@@ -1319,7 +1344,7 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
     material = {"requirements": requirements, "schedule_library": {"schema_version": 1, "updated_at": now(), "schedules": schedules}, "design_day_scenarios": _scenario(pack, scenario_values, conditions_basis), "hourly_load_model": model,
                 "preliminary_policy": {"pack_version": pack["version"], "mode": "ai_preliminary", "surface_ids": sorted(accepted_surface_ids), "opening_ids": sorted(accepted_opening_ids)}}
     dependency_fingerprints = dict(source_fingerprints or {})
-    dependency_fingerprints.update({"preliminary_pack": fingerprint(pack), "room_use_taxonomy": room_use_artifact["taxonomy_fingerprint"], "room_use_resolution": room_use_artifact["fingerprint"], "ceiling_volume_resolution": ceiling_artifact["fingerprint"], "internal_gains_resolution": internal_artifact.get("fingerprint", ""), "airflow_resolution": airflow_artifact.get("fingerprint", ""), "ahu_resolution": ahu_artifact.get("fingerprint", ""), "plant_resolution": plant_artifact.get("fingerprint", ""), "geometry_resolution": fingerprint(geometry_resolution or {}), "thermal_surface_ledger": opaque_resolution.get("fingerprint", ""), "vision_response": fingerprint(vision or {}), "building_evidence": fingerprint(building or {}), "contractor_overrides": fingerprint(overrides),
+    dependency_fingerprints.update({"preliminary_pack": fingerprint(pack), "room_use_taxonomy": room_use_artifact["taxonomy_fingerprint"], "room_use_resolution": room_use_artifact["fingerprint"], "ceiling_volume_resolution": ceiling_artifact["fingerprint"], "internal_gains_resolution": internal_artifact.get("fingerprint", ""), "airflow_resolution": airflow_artifact.get("fingerprint", ""), "ahu_resolution": ahu_artifact.get("fingerprint", ""), "plant_resolution": plant_artifact.get("fingerprint", ""), "geometry_resolution": fingerprint(geometry_resolution or {}), "thermal_surface_ledger": opaque_resolution.get("fingerprint", ""), "vision_response": fingerprint(vision or {}), "building_evidence": fingerprint(building or {}), "contractor_overrides": fingerprint(overrides), "process_exhaust": fingerprint(process_exhaust),
                                      # Prefer fingerprints of the source records used by
                                      # stale-state checks; the normalized/effective proposal
                                      # below is materialized data, not the source artifact.

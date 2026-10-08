@@ -160,6 +160,23 @@ def main():
     answered_report = calculate(assemble({"spaces": []}, preliminary_proposal={**deepcopy(proposal), "openings": [{**proposal["openings"][0], "u_value_w_m2k": 3.0, "shgc": 0.3}]}))
     check("better glass lowers the glazing load", answered_report["included_scope_peak"]["components"]["glazing_solar"]["total_kw"]
           < peak_components["glazing_solar"]["total_kw"])
+    # Kitchen exhaust: replaced through the conditioned space by default (method A), else noted and not loaded here.
+    base_room = preliminary_envelope["material"]["requirements"]["zones"][0]
+    base_oa = base_room["cooling_load"]["outside_air_lps"]
+    through = assemble({"spaces": []}, preliminary_proposal=proposal,
+                       process_exhaust={"dining area": {"lps": base_oa + 500, "method": "through_space", "method_assumed": True}})
+    through_room = through["material"]["requirements"]["zones"][0]
+    check("exhaust replaced through the space raises the room's outside air to the exhaust rate", through_room["cooling_load"]["outside_air_lps"] == round(base_oa + 500, 3))
+    note = next(row for row in through["materialized_fields"] if row.get("field") == "process_exhaust_replacement_lps")
+    check("the replacement air and the assumed method are recorded", note["value"] == 500 and "method assumed" in note["rationale"])
+    check("an exhaust smaller than the ventilation air adds nothing", assemble({"spaces": []}, preliminary_proposal=proposal,
+          process_exhaust={"dining area": {"lps": 1, "method": "through_space"}})["material"]["requirements"]["zones"][0]["cooling_load"]["outside_air_lps"] == base_oa)
+    check("more replacement air raises the outside-air load", calculate(through)["included_scope_peak"]["components"]["outside_air"]["total_kw"]
+          > peak_components["outside_air"]["total_kw"])
+    for method in ("untempered_makeup", "tempered_makeup"):
+        noted = assemble({"spaces": []}, preliminary_proposal=proposal, process_exhaust={"dining area": {"lps": 900, "method": method}})
+        check(f"{method}: no change to this system's outside air, and a visible note", noted["material"]["requirements"]["zones"][0]["cooling_load"]["outside_air_lps"] == base_oa
+              and any(row.get("component") == "process exhaust" for row in noted["exclusions"]))
     envelope_room_id = preliminary_envelope["material"]["hourly_load_model"]["rooms"][0]["room_id"]
     check("accepted opaque surface resolves that room's envelope assessment",
           not any(row["room_id"] == envelope_room_id and row["component_type"] == "envelope"
