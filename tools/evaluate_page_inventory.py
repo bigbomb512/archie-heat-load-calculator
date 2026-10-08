@@ -20,6 +20,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from ai.page_inventory import main_plan_pages, packet_from_readings  # noqa: E402
+from ai.page_inventory_scoring import render_markdown as render_information_markdown  # noqa: E402
+from ai.page_inventory_scoring import score_information, summarise_information  # noqa: E402
 from ai.page_role_evaluation import score, summarise, validate_answer_sheet  # noqa: E402
 from backend import page_inventory_service as service  # noqa: E402
 from tools.evaluate_page_roles import analyse_fast  # noqa: E402
@@ -42,9 +44,10 @@ def run_case(sheet, pdf, workers):
     print()
     ai = score(sheet, packet_from_readings(readings, len(images)))
     code = score(sheet, analyse_fast(pdf, OUTPUT / "page_role_cache"))
+    information = score_information(sheet, readings, len(images))
     return {"case_id": sheet["case_id"], "pages": len(images), "calls": calls, "seconds": seconds,
             "failures": {str(page): reason for page, reason in failures.items()},
-            "main_plans": main_plan_pages(readings), "ai": ai, "code": code,
+            "main_plans": main_plan_pages(readings), "ai": ai, "code": code, "information": information,
             "readings": {str(page): row for page, row in sorted(readings.items())}}
 
 
@@ -66,6 +69,8 @@ def render_markdown(results):
             lines += ["", f"## {row['case_id']}"]
             lines += [f"- AI wrong: {item}" for item in missed]
             lines += [f"- Page {page} not read: {reason}" for page, reason in row["failures"].items()]
+    info_reports = [row["information"] for row in results]
+    lines += ["", render_information_markdown(info_reports, summarise_information(info_reports))]
     return "\n".join(lines) + "\n"
 
 
@@ -82,7 +87,10 @@ def main(argv=None):
         results.append(result)
         print(f"{case_id}: AI {result['ai']['totals']['passed']}/{result['ai']['totals']['facts']}, "
               f"code {result['code']['totals']['passed']}/{result['code']['totals']['facts']}, "
-              f"{result['calls']} AI calls in {result['seconds']} s, {len(result['failures'])} pages not read", flush=True)
+              f"{result['calls']} AI calls in {result['seconds']} s, {len(result['failures'])} pages not read; "
+              f"information key {result['information']['status']}" +
+              (f" · recall {result['information']['overall']['recall']}, precision {result['information']['overall']['precision']}"
+               if result['information']['scored'] else " · not scored"), flush=True)
     base = OUTPUT / f"page-inventory-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     base.with_suffix(".json").write_text(json.dumps({"cases": results}, indent=2), encoding="utf-8")
     base.with_suffix(".md").write_text(render_markdown(results), encoding="utf-8")

@@ -130,5 +130,24 @@ calls the AI for pages not yet read.
 
     python3 tools/evaluate_page_inventory.py --case caseP04 --case caseP06
 
-The answer sheets only check page roles (main plan, ceiling plans, pages kept). They don't yet say what
-information each page holds, so the AI's information lists are not scored.
+Answer sheets can also contain an optional `information` object. Its string page-number keys cover every
+page in the set; each value is a list of kinds from `ai.page_inventory.INFORMATION_KINDS`. An empty list
+means a person checked that page and found no heat-load information. The `information_status` records the
+provenance:
+
+- `not_started`: no person-confirmed information key yet.
+- `drafted_from_ai`: the AI's list was copied in, but the person has not checked every page.
+- `confirmed_blind`: the person labelled every page without filling from the AI first. This is the honest
+  measure of pass 1 accuracy.
+- `confirmed_from_draft`: the person checked every page after seeing the AI's list. These labels are
+  useful for coverage, but they are not independent; scoring them alongside the AI draft likely overstates
+  accuracy. Reports show these sets separately from blind confirmations.
+
+The page-role check page includes a “What's on each page” section with the 11 information kinds. A page is
+complete when at least one kind is selected or “Nothing for heat load” is checked. “Fill in from the AI's
+reading” is optional and off by default. `python3 tools/page_role_check.py --apply` writes confirmed page
+contents to the same answer sheets. Page-role facts are unchanged.
+
+The page-inventory report scores information-list recall and precision per kind, per set, and overall, and
+lists pages with missed or added kinds. AI pages that could not be read count as misses. Unconfirmed
+information keys are not scored.

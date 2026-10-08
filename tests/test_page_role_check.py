@@ -34,6 +34,13 @@ class CaseViewTests(unittest.TestCase):
         self.assertEqual(view["app"]["titles"]["4"], "Ground Floor Plan")
         self.assertEqual(view["page_count"], 9)
 
+    def test_view_exposes_confirmed_information_and_ai_draft(self):
+        sheet = {**SHEET, "information": {"1": ["room_geometry"]}, "information_status": "drafted_from_ai"}
+        view = case_view(sheet, PACKET, 9, {1: {"information": [{"kind": "room_geometry"}]}})
+        self.assertEqual(view["information"], {"1": ["room_geometry"]})
+        self.assertEqual(view["ai_information"], {"1": ["room_geometry"]})
+        self.assertTrue(view["has_ai_replies"])
+
 
 class ApplyAnswersTests(unittest.TestCase):
     def test_every_page_marked_and_ticked_confirms_the_sheet(self):
@@ -57,6 +64,10 @@ class ApplyAnswersTests(unittest.TestCase):
         self.assertEqual(sheet["pages"]["not_geometry"], [1])
         self.assertNotIn("levels", sheet)  # p5 is no longer a main plan; p4's level was cleared by the person
         self.assertEqual(sheet["notes"][-1], "Person check 2026-10-07: p7 is the second RCP")
+        again, _ = apply_answers(sheet, {"checked": True, "marks": marks, "added": {"rcp": [7], "geometry": [2]},
+                                         "notes": "p7 is the second RCP"}, 9, "2026-10-09")
+        self.assertEqual(again["notes"].count("Person check 2026-10-07: p7 is the second RCP"), 1)   # not repeated on re-apply
+        self.assertFalse(any("2026-10-09" in note for note in again["notes"]))
 
     def test_unmarked_pages_unticked_sets_and_clashes_leave_the_sheet_unconfirmed(self):
         partial = {"geometry": {"4": "right"}}
@@ -79,6 +90,42 @@ class ApplyAnswersTests(unittest.TestCase):
             apply_answers(SHEET, {"added": {"rcp": ["7"]}}, 9, "d")
         with self.assertRaisesRegex(ValueError, "right or wrong"):
             apply_answers(SHEET, {"marks": {"rcp": {"6": "maybe"}}}, 9, "d")
+
+    def test_information_is_confirmed_blind_only_after_all_pages_are_done(self):
+        info = {str(page): (["room_geometry"] if page == 1 else []) for page in range(1, 10)}
+        nothing = {str(page): page != 1 for page in range(1, 10)}
+        sheet, problems = apply_answers(SHEET, {"information": info, "information_nothing": nothing,
+                                                "information_checked": True, "marks": ALL_RIGHT,
+                                                "checked": True}, 9, "2026-10-08")
+        self.assertEqual(problems, [])
+        self.assertEqual(sheet["information_status"], "confirmed_blind")
+        self.assertEqual(sheet["information"]["1"], ["room_geometry"])
+
+        partial = dict(info)
+        partial.pop("9")
+        incomplete_nothing = dict(nothing)
+        incomplete_nothing.pop("9")
+        sheet, problems = apply_answers(SHEET, {"information": partial, "information_nothing": incomplete_nothing,
+                                                "information_checked": True, "marks": ALL_RIGHT,
+                                                "checked": True}, 9, "d")
+        self.assertEqual(sheet["information_status"], "not_started")
+        self.assertTrue(sheet["confirmed"])  # role confirmation is independent of the incomplete information key
+        self.assertTrue(any("page contents" in problem for problem in problems))
+
+    def test_information_draft_provenance_is_preserved_when_checked(self):
+        info = {str(page): [] for page in range(1, 10)}
+        nothing = {str(page): True for page in range(1, 10)}
+        sheet, _ = apply_answers(SHEET, {"information": info, "information_nothing": nothing,
+                                         "information_drafted": True, "information_checked": True}, 9, "d")
+        self.assertEqual(sheet["information_status"], "confirmed_from_draft")
+
+    def test_bad_information_kinds_and_page_keys_are_refused(self):
+        with self.assertRaisesRegex(ValueError, "unknown kind"):
+            apply_answers(SHEET, {"information": {"1": ["made_up"]}}, 9, "d")
+        with self.assertRaisesRegex(ValueError, "not in this set"):
+            apply_answers(SHEET, {"information": {"10": ["room_geometry"]}}, 9, "d")
+        with self.assertRaisesRegex(ValueError, "list of kinds"):
+            apply_answers(SHEET, {"information": {"1": "room_geometry"}}, 9, "d")
 
 
 class ServerTests(unittest.TestCase):

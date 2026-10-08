@@ -26,6 +26,23 @@ class PageRoleEvaluationTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 evaluation.validate_answer_sheet(bad)
 
+    def test_optional_information_key_checks_status_pages_and_kinds(self):
+        old_sheet = {"case_id": "old", "pages": {}}
+        self.assertIs(evaluation.validate_answer_sheet(old_sheet), old_sheet)
+        good = {"case_id": "new", "pages": {}, "information": {"1": [], "2": ["room_geometry"]},
+                "information_status": "confirmed_blind"}
+        self.assertIs(evaluation.validate_answer_sheet(good, page_count=2), good)
+        for bad in (
+            {"case_id": "x", "pages": {}, "information": {"x": []}},
+            {"case_id": "x", "pages": {}, "information": {"3": []}},
+            {"case_id": "x", "pages": {}, "information": {"1": "room_geometry"}},
+            {"case_id": "x", "pages": {}, "information": {"1": ["unknown"]}},
+            {"case_id": "x", "pages": {}, "information_status": "reviewed"},
+            {"case_id": "x", "pages": {}, "information_status": "confirmed_blind", "information": {"1": []}},
+        ):
+            with self.assertRaises(ValueError):
+                evaluation.validate_answer_sheet(bad, page_count=2)
+
     def test_roles_take_the_strongest_group_and_main_plans_are_primary_main_floor_plans(self):
         roles = evaluation.app_page_roles(PACKET)
         self.assertEqual(roles[2]["group"], "primary")
@@ -61,6 +78,14 @@ class PageRoleEvaluationTests(unittest.TestCase):
         markdown = evaluation.render_markdown([good, bad], summary)
         self.assertIn("(draft, not yet confirmed)", markdown)
         self.assertIn("1 of 3 facts right", markdown)
+
+
+class InformationKeyTests(unittest.TestCase):
+    def test_page_roles_still_score_when_the_packet_lacks_the_last_pages_of_a_confirmed_contents_key(self):
+        sheet = {"case_id": "c", "pages": {"geometry": [2]}, "information_status": "confirmed_blind",
+                 "information": {str(page): [] for page in range(1, 9)}}       # 8 pages; the packet only reaches page 5
+        report = evaluation.score(sheet, PACKET)
+        self.assertEqual(report["totals"]["facts"], 1)
 
 
 class CompareTests(unittest.TestCase):

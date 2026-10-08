@@ -15,12 +15,15 @@ The app's answer comes from the analysis packet (packet.json): primary, referenc
 kept and discarded pages with their type and plan role. Scoring is report-only.
 """
 
+from ai.page_inventory import INFORMATION_KINDS
+
 MAIN_ROLES = {"main_floor_plan"}
 RCP_TYPES = {"reflected_ceiling_plan"}
 FACT_KEYS = ("geometry", "rcp", "must_keep", "not_geometry")
+INFORMATION_STATUSES = {"not_started", "drafted_from_ai", "confirmed_blind", "confirmed_from_draft"}
 
 
-def validate_answer_sheet(sheet):
+def validate_answer_sheet(sheet, page_count=None):
     if not isinstance(sheet, dict) or not str(sheet.get("case_id", "")).strip():
         raise ValueError("An answer sheet needs a case_id.")
     pages = sheet.get("pages")
@@ -34,6 +37,29 @@ def validate_answer_sheet(sheet):
             raise ValueError(f"{key} must be a list of page numbers.")
     if set(pages.get("geometry", [])) & set(pages.get("not_geometry", [])):
         raise ValueError("A page can't be both geometry and not_geometry.")
+    status = sheet.get("information_status")
+    if status is not None and (not isinstance(status, str) or status not in INFORMATION_STATUSES):
+        raise ValueError("information_status must be not_started, drafted_from_ai, confirmed_blind or confirmed_from_draft.")
+    information = sheet.get("information")
+    if information is not None:
+        if not isinstance(information, dict):
+            raise ValueError("information must be an object mapping page numbers to lists of kinds.")
+        for page_key, kinds in information.items():
+            if not isinstance(page_key, str) or not page_key.isdigit() or str(int(page_key)) != page_key or int(page_key) < 1:
+                raise ValueError(f"Invalid information page key {page_key!r}.")
+            if page_count is not None and int(page_key) > page_count:
+                raise ValueError(f"Information page {page_key} is not in this set (1-{page_count}).")
+            if not isinstance(kinds, list):
+                raise ValueError(f"information page {page_key} must contain a list of kinds.")
+            for kind in kinds:
+                if kind not in INFORMATION_KINDS:
+                    raise ValueError(f"Unknown information kind {kind!r}; use {', '.join(INFORMATION_KINDS)}.")
+        if status in {"confirmed_blind", "confirmed_from_draft"} and page_count is not None:
+            expected = {str(page) for page in range(1, page_count + 1)}
+            if set(information) != expected:
+                raise ValueError("A confirmed information key must include every page in the set.")
+    elif status in {"confirmed_blind", "confirmed_from_draft"}:
+        raise ValueError("A confirmed information key needs information for every page.")
     return sheet
 
 
@@ -60,7 +86,7 @@ def main_plan_pages(roles):
 
 
 def score(sheet, packet):
-    sheet = validate_answer_sheet(sheet)
+    sheet = validate_answer_sheet(sheet)  # page-role facts only; page contents are scored by ai.page_inventory_scoring
     roles = app_page_roles(packet)
     main = set(main_plan_pages(roles))
     facts = []

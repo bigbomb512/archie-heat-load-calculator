@@ -29,6 +29,7 @@ if str(ROOT) not in sys.path:
 
 from ai.page_role_check import apply_answers, case_view  # noqa: E402
 from ai.page_role_evaluation import validate_answer_sheet  # noqa: E402
+from ai.page_inventory import validate_reply as validate_inventory_reply  # noqa: E402
 from tools.evaluate_page_roles import analyse_fast, cached_extraction  # noqa: E402
 
 CASES_DIR = ROOT / "evaluations" / "page_roles"
@@ -103,7 +104,17 @@ def build_data(sheets, sources):
             missing.append(case_id)
             continue
         texts, _title, _visual = cached_extraction(pdf, CACHE_DIR)
-        view = case_view(sheet, analyse_fast(pdf, CACHE_DIR), len(texts))
+        replies = {}
+        reply_dir = ROOT / "output" / "evaluations" / "page_inventory" / case_id / "replies"
+        for path in reply_dir.glob("*.json"):
+            try:
+                record = json.loads(path.read_text(encoding="utf-8"))
+                page = record.get("page")
+                if type(page) is int and 1 <= page <= len(texts):
+                    replies[page] = validate_inventory_reply(record.get("reading"))
+            except (OSError, ValueError, TypeError):
+                continue
+        view = case_view(sheet, analyse_fast(pdf, CACHE_DIR), len(texts), replies)
         view["file_name"] = Path(pdf).name
         cases.append(view)
         print(f"  {case_id}: {view['page_count']} pages", flush=True)
@@ -169,7 +180,9 @@ def apply_all():
         texts, _title, _visual = cached_extraction(sources[case_id], CACHE_DIR)
         updated, problems = apply_answers(sheets[case_id], answer, len(texts), today)
         write_json(CASES_DIR / f"{case_id}.json", updated)
-        state = "confirmed" if updated["confirmed"] else "not confirmed: " + "; ".join(problems)
+        state = f"roles {'confirmed' if updated['confirmed'] else 'not confirmed'}; information {updated.get('information_status', 'not_started')}"
+        if problems:
+            state += " · " + "; ".join(problems)
         print(f"{case_id}: {state}")
     return 0
 
@@ -179,7 +192,11 @@ def main(argv=None):
     parser.add_argument("--port", type=int, default=8770)
     parser.add_argument("--no-open", action="store_true", help="Don't open the browser.")
     parser.add_argument("--apply", action="store_true", help="Write the saved answers into the answer sheets.")
+    parser.add_argument("--answers", help="Use this answers file instead (for trying the page without touching the real answers).")
     args = parser.parse_args(argv)
+    if args.answers:
+        global ANSWERS
+        ANSWERS = Path(args.answers).resolve()
     if args.apply:
         return apply_all()
     sources = load_sources()
@@ -188,7 +205,7 @@ def main(argv=None):
     case_pages = {row["case_id"]: row["page_count"] for row in data["cases"]}
     server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(data, Pages(sources), case_pages))
     url = f"http://127.0.0.1:{args.port}/"
-    print(f"Check page: {url}  (answers save to {ANSWERS.relative_to(ROOT)}; Ctrl+C to stop)", flush=True)
+    print(f"Check page: {url}  (answers save to {ANSWERS}; Ctrl+C to stop)", flush=True)
     if not args.no_open:
         webbrowser.open(url)
     try:

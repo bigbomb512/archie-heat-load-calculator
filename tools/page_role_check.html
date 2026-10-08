@@ -28,6 +28,7 @@ main { max-width: 1180px; margin: 0 auto; padding: 16px; }
 .intro p { margin: 0 0 6px; }
 .intro ol { margin: 4px 0 0; padding-left: 20px; }
 section.set { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 22px; scroll-margin-top: 110px; }
+.info-page, .fact, .info-toolbar { scroll-margin-top: 110px; }
 section.set h2 { font-size: 17px; margin: 0; }
 .desc { margin: 4px 0 2px; }
 .file { color: var(--muted); font-size: 12px; word-break: break-all; }
@@ -60,6 +61,17 @@ details.all summary { cursor: pointer; font-size: 14px; }
 .finish { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 12px; display: grid; gap: 8px; }
 .finish textarea { width: 100%; min-height: 56px; font: inherit; font-size: 14px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); }
 .finish label.check { font-weight: 600; display: flex; gap: 8px; align-items: center; }
+.info-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 8px 0; }
+.info-toolbar button { border: 1px solid var(--line); background: var(--chip); color: var(--ink); border-radius: 6px; padding: 7px 10px; font: inherit; cursor: pointer; }
+.info-toolbar button:disabled { opacity: .45; cursor: default; }
+.info-pages { display: grid; grid-template-columns: repeat(auto-fill, minmax(245px, 1fr)); gap: 10px; }
+.info-page { border: 1px solid var(--line); border-radius: 8px; padding: 8px; display: grid; grid-template-columns: 95px 1fr; gap: 8px; }
+.info-page img { width: 95px; height: 120px; object-fit: contain; background: #fff; border-radius: 4px; cursor: zoom-in; }
+.info-page h4 { margin: 0 0 5px; }
+.info-kinds { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 8px; font-size: 12px; }
+.info-kinds label, .info-nothing { display: flex; gap: 4px; align-items: flex-start; }
+.info-nothing { margin-top: 5px; font-size: 12px; font-weight: 600; }
+.info-drafted { background: var(--warn-bg); color: var(--warn); border-radius: 6px; padding: 6px 10px; font-size: 13px; }
 .warn { background: var(--warn-bg); color: var(--warn); border-radius: 6px; padding: 6px 10px; font-size: 13px; }
 button.link { background: none; border: none; color: var(--accent); cursor: pointer; padding: 0; font: inherit; text-decoration: underline; }
 dialog { border: none; border-radius: 10px; padding: 0; max-width: min(1100px, 96vw); width: 96vw; background: var(--card); color: var(--ink); }
@@ -89,6 +101,7 @@ dialog::backdrop { background: rgba(0,0,0,.6); }
       <li>For main floor plans, write the level (e.g. Ground, Mezzanine, Level 1) when the job has more than one.</li>
       <li>Tick <b>This set is checked</b>. Answers save by themselves; you can stop and come back.</li>
     </ol>
+    <p>In “What's on each page”, mark every heat-load information kind you can see, or mark “Nothing for heat load”. You can start with the AI's list, but check every page before confirming it.</p>
   </div>
   <div id="sets"></div>
 </main>
@@ -113,6 +126,17 @@ function answerFor(caseId) {
   const row = answers[caseId] ||= {};
   row.marks ||= {}; row.added ||= {}; row.levels ||= {}; row.notes ||= ""; row.checked = !!row.checked;
   for (const [key] of FACTS) { row.marks[key] ||= {}; row.added[key] ||= []; }
+  const view = data?.cases.find(item => item.case_id === caseId);
+  if (view) {
+    row.information ||= structuredClone(view.information || {});
+    row.information_nothing ||= {};
+    if (view.information_status === "confirmed_blind" || view.information_status === "confirmed_from_draft") {
+      for (const [page, kinds] of Object.entries(row.information)) if (!kinds.length) row.information_nothing[page] = true;
+    }
+    row.information_drafted ??= ["drafted_from_ai", "confirmed_from_draft"].includes(view.information_status);
+    row.information_checked ??= ["confirmed_blind", "confirmed_from_draft"].includes(view.information_status);
+    row.information_status ??= view.information_status || "not_started";
+  } else { row.information ||= {}; row.information_nothing ||= {}; row.information_status ||= "not_started"; }
   return row;
 }
 function unmarked(view) {
@@ -159,6 +183,34 @@ function appLine(view) {
     extra.length ? `<div class="warn">The app picks ${extra.map(page => "p" + page).join(", ")} as a main plan, which isn't on the list below. If it's right, open it and add it.</div>` : ""}</div>`;
 }
 
+function informationDone(view, answer) {
+  return Array.from({length: view.page_count}, (_, index) => String(index + 1)).every(page =>
+    (answer.information[page] || []).length > 0 || answer.information_nothing[page] === true);
+}
+
+function informationSection(view, answer) {
+  const labels = view.information_kind_labels;
+  const pages = Array.from({length: view.page_count}, (_, index) => index + 1).map(page => {
+    const key = String(page), selected = answer.information[key] || [], nothing = answer.information_nothing[key] === true;
+    const kinds = Object.entries(labels).map(([kind, label]) =>
+      `<label><input type="checkbox" data-info="${page}:${kind}" ${selected.includes(kind) ? "checked" : ""} ${nothing ? "disabled" : ""}>${esc(label)}</label>`).join("");
+    const done = selected.length > 0 || nothing;
+    return `<article class="info-page"><img src="/thumb/${view.case_id}/${page}" alt="Page ${page}" data-open="${page}" loading="lazy"><div><h4>Page ${page} ${done ? "✓" : "· check"}</h4>
+      <div class="info-kinds">${kinds}</div>
+      <label class="info-nothing"><input type="checkbox" data-nothing="${page}" ${nothing ? "checked" : ""}>Nothing for heat load</label></div></article>`;
+  }).join("");
+  const checked = informationDone(view, answer);
+  const draftNote = answer.information_drafted ? '<div class="info-drafted">Drafted from the AI. Check every page.</div>' : "";
+  const status = answer.information_status || view.information_status || "not_started";
+  const statusText = status !== "not_started" ? `Information status: ${esc(status.replaceAll("_", " "))}.` : "No confirmed information key yet.";
+  return `<div class="fact"><h3>What's on each page</h3><p class="hint">Mark every kind visible on each page. A page is done when at least one kind is ticked or “Nothing for heat load” is checked.</p>
+    <div class="info-toolbar">${view.has_ai_replies ? '<button type="button" data-fill-ai>Fill in from the AI\'s reading</button>' : ""}<span>${esc(statusText)}</span></div>${draftNote}
+    <div class="info-pages">${pages}</div>
+    <div class="finish"><div class="warn" ${checked ? "hidden" : ""}>Check every page before confirming its contents.</div>
+      <label class="check"><input type="checkbox" data-info-checked ${answer.information_checked ? "checked" : ""} ${!checked && !answer.information_checked ? "disabled" : ""}> This set's page contents are checked</label></div>
+  </div>`;
+}
+
 function renderSet(view) {
   const answer = answerFor(view.case_id);
   const left = unmarked(view);
@@ -172,7 +224,7 @@ function renderSet(view) {
   return `<h2>${view.case_id} · ${view.page_count} page${view.page_count === 1 ? "" : "s"}${answer.checked ? " · checked ✓" : ""}</h2>
     <p class="desc">${esc(view.description)}</p><div class="file">${esc(view.file_name)}</div>
     ${view.notes.length ? `<div class="notes"><b>Claude's notes</b><ul>${view.notes.map(note => `<li>${esc(note)}</li>`).join("")}</ul></div>` : ""}
-    ${appLine(view)}${facts}
+    ${appLine(view)}${facts}${informationSection(view, answer)}
     <details class="all"><summary>All pages (${view.page_count}) — to find a page that's missing</summary><div class="grid">${all}</div></details>
     <div class="finish">
       <label>Anything else we should know about this set? <textarea data-notes placeholder="Optional">${esc(answer.notes)}</textarea></label>
@@ -184,7 +236,7 @@ function renderSet(view) {
 function rerender(caseId) {
   const view = data.cases.find(row => row.case_id === caseId);
   const answer = answerFor(caseId);
-  if (answer.checked && unmarked(view)) answer.checked = false;
+  // Drawing a set never changes saved answers; an unmarked page shows a warning instead (see renderSet).
   $(`#${caseId}`).innerHTML = renderSet(view);
   status();
 }
@@ -238,12 +290,47 @@ document.addEventListener("click", event => {
     addPage(box.dataset.case, target.dataset.add, Number(box.dataset.page));
     return openPage(box.dataset.case, Number(box.dataset.page));
   }
+  if (target.matches("[data-fill-ai]") && section) {
+    const answer = answerFor(section.id), view = data.cases.find(row => row.case_id === section.id);
+    answer.information = structuredClone(view.ai_information || {});
+    answer.information_nothing = {};
+    answer.information_drafted = true;
+    answer.information_checked = false;
+    answer.information_status = "drafted_from_ai";
+    save(); return rerender(section.id);
+  }
   if (target.id === "box-close") $("#box").close();
 });
 document.addEventListener("change", event => {
   const section = event.target.closest("section.set");
   if (!section) return;
   if (event.target.matches("[data-checked]")) { answerFor(section.id).checked = event.target.checked; save(); rerender(section.id); }
+  if (event.target.matches("[data-info]")) {
+    const answer = answerFor(section.id), [page, kind] = event.target.dataset.info.split(":");
+    const selected = new Set(answer.information[page] || []);
+    if (event.target.checked) selected.add(kind); else selected.delete(kind);
+    answer.information[page] = [...selected];
+    if (selected.size) delete answer.information_nothing[page];
+    answer.information_checked = false;
+    answer.information_status = answer.information_drafted ? "drafted_from_ai" : "not_started";
+    save(); return rerender(section.id);
+  }
+  if (event.target.matches("[data-nothing]")) {
+    const answer = answerFor(section.id), page = event.target.dataset.nothing;
+    if (event.target.checked) { answer.information[page] = []; answer.information_nothing[page] = true; }
+    else delete answer.information_nothing[page];
+    answer.information_checked = false;
+    answer.information_status = answer.information_drafted ? "drafted_from_ai" : "not_started";
+    save(); return rerender(section.id);
+  }
+  if (event.target.matches("[data-info-checked]")) {
+    const answer = answerFor(section.id), view = data.cases.find(row => row.case_id === section.id);
+    answer.information_checked = event.target.checked;
+    answer.information_status = event.target.checked
+      ? answer.information_drafted ? "confirmed_from_draft" : "confirmed_blind"
+      : answer.information_drafted ? "drafted_from_ai" : "not_started";
+    save(); rerender(section.id);
+  }
 });
 document.addEventListener("input", event => {
   const section = event.target.closest("section.set");
