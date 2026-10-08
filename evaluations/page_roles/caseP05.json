@@ -1,7 +1,7 @@
 {
   "case_id": "caseP05",
   "description": "29-page restaurant set: cover/transmittal, notes, finishes, proposed + dimension plans, finishes plan, RCP, services, elevations, joinery details.",
-  "confirmed": false,
+  "confirmed": true,
   "drafted_by": "Claude from page thumbnails, 2026-10-07",
   "pages": {
     "geometry": [
@@ -12,15 +12,10 @@
       7
     ],
     "must_keep": [
+      3,
       4,
       5,
       7,
-      11
-    ],
-    "not_geometry": [
-      1,
-      2,
-      3,
       11,
       12,
       20,
@@ -28,11 +23,18 @@
       26,
       27,
       28
+    ],
+    "not_geometry": [
+      1,
+      2
     ]
   },
   "notes": [
     "p1 is a cover sheet whose drawing list mentions 'Reflected Ceiling Plan' \u2014 not an RCP.",
     "p11-12 are shopfront elevations (glazing); p27 is a curved banquette plan (joinery, not a room outline).",
-    "Notes say dimensions are approximate, reference only, check onsite."
-  ]
+    "Notes say dimensions are approximate, reference only, check onsite.",
+    "Person check 2026-10-08: There is so much crucial information in pages within 'Never the main plan'. For example, there are direct measurements for the TV's and Windows, and the materials.",
+    "Person check 2026-10-08: pages [3, 11, 12, 20, 24, 26, 27, 28] were marked Wrong under 'never the main plan' because they hold heat-load information (materials, equipment, windows, areas); they are kept as must_keep and are not main plans."
+  ],
+  "confirmed_on": "2026-10-08"
 }

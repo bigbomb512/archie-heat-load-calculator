@@ -1,7 +1,7 @@
 {
   "case_id": "caseP10",
   "description": "11-page small retail set: cover, notes, location photos, location plan, existing/proposed/dimension plans, two RCPs, electrical, hydraulic.",
-  "confirmed": false,
+  "confirmed": true,
   "drafted_by": "Claude from page thumbnails, 2026-10-07",
   "pages": {
     "geometry": [
@@ -13,6 +13,8 @@
       9
     ],
     "must_keep": [
+      3,
+      4,
       5,
       6,
       7,
@@ -20,12 +22,13 @@
     ],
     "not_geometry": [
       1,
-      2,
-      3,
-      4
+      2
     ]
   },
   "notes": [
-    "p5 is the EXISTING (empty shell) plan with a printed area (41.73 m\u00b2): kept, left out of geometry/not_geometry \u2014 confirm."
-  ]
+    "p5 is the EXISTING (empty shell) plan with a printed area (41.73 m\u00b2): kept, left out of geometry/not_geometry \u2014 confirm.",
+    "Person check 2026-10-08: Pages 3 and 4 in Never the main plan have the location of the project and crucial measurements and areas, respectfully.",
+    "Person check 2026-10-08: pages [3, 4] were marked Wrong under 'never the main plan' because they hold heat-load information (materials, equipment, windows, areas); they are kept as must_keep and are not main plans."
+  ],
+  "confirmed_on": "2026-10-08"
 }

@@ -1,6 +1,6 @@
 {
   "case_id": "caseP13",
-  "confirmed": false,
+  "confirmed": true,
   "drafted_by": "Claude from page thumbnails, 2026-10-07",
   "description": "73-page two-level restaurant (ground + level 01): drawing list, notes, photos, many schedules, existing/demolition, layout, dimension and RCP plans per level, services, finishes, shopfront elevation, sections, joinery.",
   "pages": {
@@ -15,6 +15,13 @@
       25
     ],
     "must_keep": [
+      6,
+      7,
+      8,
+      12,
+      14,
+      18,
+      19,
       20,
       21,
       22,
@@ -28,18 +35,11 @@
       1,
       2,
       5,
-      6,
-      7,
-      8,
       10,
       11,
-      12,
-      14,
       15,
       16,
-      17,
-      18,
-      19
+      17
     ]
   },
   "levels": {
@@ -52,6 +52,9 @@
     "Two levels: p20/p22/p24 ground, p21/p23/p25 level 01.",
     "p6-17 are finishes, furniture, equipment, fittings and lighting schedules (tables).",
     "p18-19 are existing & demolition plans.",
-    "p33 is the shopfront elevation; p34-37 sections."
-  ]
+    "p33 is the shopfront elevation; p34-37 sections.",
+    "Person check 2026-10-08: There is crucial information in the missing pages and also in the Never in the main plan section.",
+    "Person check 2026-10-08: pages [6, 7, 8, 12, 14, 18, 19] were marked Wrong under 'never the main plan' because they hold heat-load information (materials, equipment, windows, areas); they are kept as must_keep and are not main plans."
+  ],
+  "confirmed_on": "2026-10-08"
 }

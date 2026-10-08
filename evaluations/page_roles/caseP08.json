@@ -1,7 +1,7 @@
 {
   "case_id": "caseP08",
   "description": "73-page restaurant set: renders, axonometric, finish/equipment schedules, layout, set-out and dimension plans, equipment plan, RCP, services, shopfront elevation, joinery.",
-  "confirmed": false,
+  "confirmed": true,
   "drafted_by": "Claude from page thumbnails, 2026-10-07",
   "pages": {
     "geometry": [
@@ -13,13 +13,6 @@
       36
     ],
     "must_keep": [
-      32,
-      33,
-      34,
-      36,
-      40
-    ],
-    "not_geometry": [
       1,
       22,
       23,
@@ -28,11 +21,20 @@
       26,
       28,
       29,
-      30
-    ]
+      30,
+      32,
+      33,
+      34,
+      36,
+      40
+    ],
+    "not_geometry": []
   },
   "notes": [
     "p22 is a 3D axonometric; p23-30 are finish and equipment schedules (tables).",
-    "p40 is the shopfront elevation."
-  ]
+    "p40 is the shopfront elevation.",
+    "Person check 2026-10-08: In the \"never the main plan\", there is information about materials and the equipment/devices used that can emit heat and contribute to heat-load.",
+    "Person check 2026-10-08: pages [1, 22, 23, 24, 25, 26, 28, 29, 30] were marked Wrong under 'never the main plan' because they hold heat-load information (materials, equipment, windows, areas); they are kept as must_keep and are not main plans."
+  ],
+  "confirmed_on": "2026-10-08"
 }

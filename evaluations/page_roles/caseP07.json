@@ -1,7 +1,7 @@
 {
   "case_id": "caseP07",
   "description": "20-page restaurant concept set (raster): renders, material boards, notes, schedules, proposed plan, dimension plan, two RCPs, switch and services plans.",
-  "confirmed": false,
+  "confirmed": true,
   "drafted_by": "Claude from page thumbnails, 2026-10-07",
   "pages": {
     "geometry": [
@@ -13,6 +13,9 @@
       18
     ],
     "must_keep": [
+      12,
+      13,
+      14,
       15,
       16,
       17,
@@ -22,14 +25,14 @@
       1,
       2,
       3,
-      4,
-      12,
-      13,
-      14
+      4
     ]
   },
   "notes": [
     "p14 is a lighting schedule (product pictures), not a plan.",
-    "Little text layer: scanned or flattened."
-  ]
+    "Little text layer: scanned or flattened.",
+    "Person check 2026-10-08: Again, in the 'Never the main plan', there are materials that are needed",
+    "Person check 2026-10-08: pages [12, 13, 14] were marked Wrong under 'never the main plan' because they hold heat-load information (materials, equipment, windows, areas); they are kept as must_keep and are not main plans."
+  ],
+  "confirmed_on": "2026-10-08"
 }

@@ -1,7 +1,7 @@
 {
   "case_id": "caseP02",
   "description": "47-page restaurant set: cover, specifications, renders, finish schedules, existing/proposed/dimension plans, RCP, services plans, elevations, joinery.",
-  "confirmed": false,
+  "confirmed": true,
   "drafted_by": "Claude from page thumbnails, 2026-10-07",
   "pages": {
     "geometry": [
@@ -34,6 +34,8 @@
   "notes": [
     "p11 is the EXISTING floor plan (old fit-out): left out of geometry and not_geometry \u2014 confirm whether it should never be the main plan.",
     "p23 is the shopfront elevation (glazing).",
-    "p2-3 are specification text pages and p9-10 finish schedules (tables), not plans."
-  ]
+    "p2-3 are specification text pages and p9-10 finish schedules (tables), not plans.",
+    "Person check 2026-10-08: Never is a strong word, especially for the materials section, because knowing the materials are crucial for heat-load"
+  ],
+  "confirmed_on": "2026-10-08"
 }

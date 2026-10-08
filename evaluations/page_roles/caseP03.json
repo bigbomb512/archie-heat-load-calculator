@@ -1,7 +1,7 @@
 {
   "case_id": "caseP03",
   "description": "Two-sheet coffee fit-out: proposed floor plan and RCP set-out plan.",
-  "confirmed": false,
+  "confirmed": true,
   "drafted_by": "Claude from page thumbnails, 2026-10-07",
   "pages": {
     "geometry": [
@@ -14,11 +14,12 @@
       1,
       2
     ],
-    "not_geometry": [
-      2
-    ]
+    "not_geometry": []
   },
   "notes": [
-    "p1 carries printed room areas; p2's dimensions are ceiling set-out, not tenancy boundaries; sheets say verify onsite."
-  ]
+    "p1 carries printed room areas; p2's dimensions are ceiling set-out, not tenancy boundaries; sheets say verify onsite.",
+    "Person check 2026-10-08: Page 2 is useful",
+    "Person check 2026-10-08: pages [2] were marked Wrong under 'never the main plan' because they hold heat-load information (materials, equipment, windows, areas); they are kept as must_keep and are not main plans."
+  ],
+  "confirmed_on": "2026-10-08"
 }
