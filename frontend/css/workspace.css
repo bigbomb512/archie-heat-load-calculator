@@ -267,3 +267,8 @@ polyline.ws-dim, polyline.ws-dim2 { fill: none; stroke-dasharray: 10 6; }
 .ws-evidence-inferred { background: #fdf0d2; color: #8a5a00; }
 .ws-evidence-missing { background: #e1ecf5; color: var(--accent); }
 .ws-evidence-conflicting { background: #fbe8dc; color: #8a4319; }
+.ws-page-reading { border-top: 1px solid var(--line); margin-top: 1rem; padding-top: .8rem; }
+.ws-read-pages { list-style: none; padding: 0; margin: .5rem 0 0; display: grid; gap: .35rem; }
+.ws-read-pages summary { cursor: pointer; }
+.ws-read-pages .ws-chip { font-size: .75rem; margin-left: .2rem; }
+.ws-read-pages ul { margin: .3rem 0 .4rem 1rem; }

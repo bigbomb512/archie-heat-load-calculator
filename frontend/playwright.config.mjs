@@ -8,7 +8,7 @@ export default defineConfig({
     headless: true,
   },
   webServer: {
-    command: "cd .. && python3 -m backend.web_app --port 4173",
+    command: "cd .. && ARCHIE_PAGE_READING=off python3 -m backend.web_app --port 4173",
     url: "http://127.0.0.1:4173",
     reuseExistingServer: false,
   },

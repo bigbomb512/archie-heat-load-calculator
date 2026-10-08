@@ -90,7 +90,7 @@ from ai.calculator_draft import DraftConflict
 from backend import draft_service
 from backend import evidence_fusion_service
 from backend import calculation_extraction_service
-from backend import vision_extraction_service, window_scan_service, site_orientation_service, site_location_service, site_design_weather_service, room_use_resolution_service, room_inference_service, reviewer_room_geometry_service, ceiling_volume_resolution_service, internal_gains_resolution_service, thermal_surface_resolution_service, airflow_resolution_service, ahu_resolution_service, plant_resolution_service, safety_factor_resolution_service, ai_preliminary_service, model_input_resolution_service, au_ventilation_rules_service, autonomous_tasks_service, job_service, page_preparation_service, calculation_service
+from backend import vision_extraction_service, window_scan_service, site_orientation_service, site_location_service, site_design_weather_service, room_use_resolution_service, room_inference_service, reviewer_room_geometry_service, ceiling_volume_resolution_service, internal_gains_resolution_service, thermal_surface_resolution_service, airflow_resolution_service, ahu_resolution_service, plant_resolution_service, safety_factor_resolution_service, ai_preliminary_service, model_input_resolution_service, au_ventilation_rules_service, autonomous_tasks_service, job_service, page_preparation_service, calculation_service, page_inventory_service
 from backend import productization, test_mode_service, skill_workflow_service
 from backend import security
 from ai.ventilation import calculate_ventilation_report
@@ -373,6 +373,13 @@ class Handler(SimpleHTTPRequestHandler):
         if urlparse(self.path).path == "/api/job-calculation":
             try:
                 return self.send_json(api_calculation_status(self))
+            except security.SecurityError as error:
+                return self._send_security_error(error, 403)
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if urlparse(self.path).path == "/api/page-reading":
+            try:
+                return self.send_json(api_page_reading_status(self))
             except security.SecurityError as error:
                 return self._send_security_error(error, 403)
             except Exception as error:
@@ -723,6 +730,13 @@ class Handler(SimpleHTTPRequestHandler):
         if urlparse(self.path).path == "/api/job-calculation":
             try:
                 return self.send_json(api_start_calculation(self))
+            except security.SecurityError as error:
+                return self._send_security_error(error, 403)
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if urlparse(self.path).path == "/api/page-reading":
+            try:
+                return self.send_json(api_page_reading(self))
             except security.SecurityError as error:
                 return self._send_security_error(error, 403)
             except Exception as error:
@@ -1655,6 +1669,8 @@ def analyse_project(project, review_dir=None, *, app=None, persist_project=True)
     # the consent endpoint starts it when consent is granted later.
     from backend import skill_workflow_service
     skill_workflow_service.start_after_analysis(app, project)
+    # Pass 1 of the PDF review: every page read by the AI (switched off per job or by ARCHIE_PAGE_READING=off).
+    page_inventory_service.start_after_analysis(app, project)
     return project
 
 
@@ -4158,6 +4174,25 @@ def api_start_page_preparation(request):
     if not project.get("packet"):
         raise ValueError("Analyse the PDF before choosing its pages.")
     return page_preparation_service.start(sys.modules[__name__], project, data)
+
+
+def api_page_reading_status(request):
+    query = parse_qs(urlparse(request.path).query)
+    return page_inventory_service.status(sys.modules[__name__], project_by_id(query.get("project_id", [""])[0]))
+
+
+def api_page_reading(request):
+    """Pass 1 of the PDF review: read every page with the AI (start / retry), or switch it on or off for the job."""
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    security.require_project_role(project, request._identity(), "editor")
+    action = data.get("action", "start")
+    if action == "set_enabled":
+        return page_inventory_service.set_enabled(sys.modules[__name__], project, data)
+    if action in {"start", "retry"}:
+        return page_inventory_service.start(sys.modules[__name__], project, data)
+    raise ValueError("Page reading action must be start, retry or set_enabled.")
 
 
 def api_job_status(request):

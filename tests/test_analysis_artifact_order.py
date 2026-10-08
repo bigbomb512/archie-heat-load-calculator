@@ -23,6 +23,7 @@ def main():
         for name in ("create_review_packet", "create_spatial_ocr", "build_ai_packet", "_rebuild_evidence_chain", "update_project", "WEB_REVIEW")
     }
     original_preliminary = web_app.ai_preliminary_service.after_pdf_analysis
+    original_page_reading = web_app.page_inventory_service.start_after_analysis
     try:
         with TemporaryDirectory() as folder:
             root = Path(folder)
@@ -59,6 +60,7 @@ def main():
             web_app.build_ai_packet = build_packet
             web_app._rebuild_evidence_chain = rebuild
             web_app.ai_preliminary_service.after_pdf_analysis = lambda *_args: None
+            web_app.page_inventory_service.start_after_analysis = lambda *_args: None  # never call the real AI in a test
             web_app.update_project = lambda _project: None
 
             project = {"id": "project-1", "pdf": str(pdf_path), "name": "drawing.pdf"}
@@ -86,6 +88,7 @@ def main():
         for name, value in originals.items():
             setattr(web_app, name, value)
         web_app.ai_preliminary_service.after_pdf_analysis = original_preliminary
+        web_app.page_inventory_service.start_after_analysis = original_page_reading
 
 
 if __name__ == "__main__":

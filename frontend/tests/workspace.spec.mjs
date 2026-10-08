@@ -69,7 +69,8 @@ function geometryContext(records = []) {
 async function mockJob(page, {status, model = () => ({room_scope: scope}), onPost = () => null, tasks = () => [], geometry = () => geometryContext(),
                                prepare = () => ({status: "none"}), calculation = () => ({status: "none"}),
                                skill = () => ({status: "blocked", blocked_reason: "Project consent is required before PDF evidence can be sent.", stages: [], findings: []}),
-                               vision = () => ({settings: {owner_opt_in: false, selected_group_ids: []}, selection: {page_count: 3, group_count: 2}, provider_configured: true})}) {
+                               vision = () => ({settings: {owner_opt_in: false, selected_group_ids: []}, selection: {page_count: 3, group_count: 2}, provider_configured: true}),
+                               reading = () => ({status: "none", enabled: true, page_count: 0, read: 0, failed: 0, main_plans: {}, pages: []})}) {
   const posts = [];
   await page.route("**/api/test-mode/status", route => route.fulfill({json: {enabled: false}}));
   await page.route("**/api/projects", route => route.fulfill({json: [{id: "job-1", name: analysis.name, pages: 38, relevant: 3, analysed: true}]}));
@@ -96,6 +97,10 @@ async function mockJob(page, {status, model = () => ({room_scope: scope}), onPos
   await page.route("**/api/skill-workflow**", async route => {
     if (route.request().method() === "GET") return route.fulfill({json: skill()});
     return record("skill")(route);
+  });
+  await page.route("**/api/page-reading**", async route => {
+    if (route.request().method() === "GET") return route.fulfill({json: reading()});
+    return record("reading")(route);
   });
   await page.route("**/api/vision-extraction**", async route => {
     if (route.request().method() === "GET") return route.fulfill({json: vision()});
@@ -330,6 +335,48 @@ test("PDF review: a missing or conflicting finding can be closed without a value
   await page.locator("[data-ws-finding='room_identity_use:rooms:1']").getByRole("button", {name: "Reject"}).click();
   expect(rejected).toEqual(["surface_area:missing:area:0", "room_identity_use:rooms:1"]);
   await expect(page.locator("[data-ws-evidence-count]")).toHaveCount(0);
+});
+
+test("Drawings: every page read by AI shows main plans per level and what each page holds", async ({page}) => {
+  let state = {status: "done", enabled: true, seconds: 250, page_count: 3, read: 2, failed: 1, main_plans: {ground: [2], mezzanine: [3]},
+    pages: [{page: 1, status: "failed", reason: "usage limit reached"},
+            {page: 2, status: "read", page_type: "floor_plan", title: "PROPOSED FLOOR PLAN", level: "Ground",
+             information: [{kind: "equipment_appliances", what: "75 inch TV", evidence: "north wall"}, {kind: "room_geometry", what: "Shop 120 m2", evidence: ""}]},
+            {page: 3, status: "read", page_type: "floor_plan", title: "MEZZANINE PLAN", level: "Mezzanine", information: []}]};
+  const posts = [];
+  await mockJob(page, {status: () => baseStatus(), reading: () => state,
+    onPost: (kind, body) => { if (kind === "reading") { posts.push(body); if (body.action === "set_enabled") state = {...state, enabled: body.enabled}; return state; } return null; }});
+  await page.goto("/#/job/job-1/drawings");
+  const section = page.locator("[data-ws-page-reading]");
+  await expect(section.locator("[data-ws-main-plans]")).toHaveText("Main floor plan: Ground p2 · Mezzanine p3");
+  await expect(section.locator("[data-ws-page-reading-status]")).toHaveText("Read all 2 pages in 4 min.");
+  await section.getByText("What's on each page (2 of 3 read)").click();
+  await expect(section.locator("[data-ws-read-page='1']")).toContainText("not read: usage limit reached");
+  await section.locator("[data-ws-read-page='2'] summary").click();
+  await expect(section.locator("[data-ws-read-page='2']")).toContainText("Equipment: 75 inch TV (north wall)");
+  await expect(section.locator("[data-ws-read-page='2'] summary")).toContainText("Areas and sizes");
+  await section.locator("[data-ws-read-page='3'] summary").click();
+  await expect(section.locator("[data-ws-read-page='3']")).toContainText("No heat-load information on this page.");
+  // A refresh of the tab keeps the opened list and page open.
+  await page.evaluate(() => window.dispatchEvent(new HashChangeEvent("hashchange")));
+  await expect(section.locator("[data-ws-read-page='2']")).toContainText("Equipment: 75 inch TV (north wall)");
+  await expect(section.locator("[data-ws-read-page='2'] details")).toHaveAttribute("open", "");
+  await section.locator("[data-ws-page-reading-enabled]").uncheck();
+  await expect(page.locator("[data-ws-page-reading-status]")).toContainText("Switched off for this job");
+  expect(posts).toEqual([{project_id: "job-1", action: "set_enabled", enabled: false}]);
+});
+
+test("Drawings: a failed or blocked page reading says why and offers a retry", async ({page}) => {
+  const posts = [];
+  await mockJob(page, {status: () => baseStatus(),
+    reading: () => ({status: "failed", enabled: true, problem: "2 of 38 pages couldn't be read (pages 4, 9). First reason: timeout Retry to read them.",
+                     page_count: 38, read: 36, failed: 2, main_plans: {}, pages: []}),
+    onPost: (kind, body) => { if (kind === "reading") posts.push(body); return null; }});
+  await page.goto("/#/job/job-1/drawings");
+  await expect(page.locator("[data-ws-page-reading-status]")).toContainText("2 of 38 pages couldn't be read");
+  await expect(page.locator("[data-ws-page-reading-status]")).toHaveClass(/is-warn/);
+  await page.locator("[data-ws-page-reading-start]").click();
+  expect(posts[0]).toMatchObject({project_id: "job-1", action: "retry"});
 });
 
 test("Results: open PDF review findings are clearly excluded from the displayed number", async ({page}) => {

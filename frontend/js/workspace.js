@@ -290,9 +290,10 @@
     }
     let status = await loadStatus();
     if (!live(projectId, "drawings")) return;
-    const [review, vision] = await Promise.all([
+    const [review, vision, reading] = await Promise.all([
       getJson(`/api/skill-workflow?project_id=${encodeURIComponent(projectId)}`),
       getJson(`/api/vision-extraction?project_id=${encodeURIComponent(projectId)}`),
+      getJson(`/api/page-reading?project_id=${encodeURIComponent(projectId)}`).catch(() => null),
     ]);
     if (!live(projectId, "drawings")) return;
     state.skillReview = review;
@@ -319,6 +320,7 @@
       <h2>Drawing analysis</h2>
       <p class="ws-hint">PDF review searches the drawing set for heat-load evidence. You can review each proposed value with its page evidence before it is used.</p>
       <p data-ws-checks role="status">${esc(operatorMode() && pendingReview ? `${done} of ${checks.total} checks resolved. Answer the remaining Toki checks below.` : drawingMessage)}</p>
+      ${reading ? pageReadingMarkup(reading) : ""}
       ${pdfReviewMarkup(review, vision)}
       ${pendingReview && !operatorMode() ? `<p class="ws-fine">You can continue with the information already available. The Toki team will resolve the remaining drawing checks.
         <button class="link-button" type="button" data-ws-operator-on>Open Toki team review</button></p>` : ""}
@@ -329,6 +331,7 @@
     wireCommon();
     wirePages(projectId);
     wirePdfReview(projectId, review, vision);
+    if (reading) wirePageReading(projectId);
     body.querySelector("[data-ws-manual-fallback]")?.addEventListener("click", async () => {
       const button = body.querySelector("[data-ws-manual-fallback]");
       button.disabled = true;
@@ -341,8 +344,60 @@
     body.querySelector("[data-ws-operator-on]")?.addEventListener("click", () => { setOperatorMode(true); renderDrawings().catch(showTabError); });
     if (tasks) wireOperator(projectId, tasks);
     // The contractor's view refreshes itself; the operator's doesn't, so a half-pasted reply is never wiped.
-    if ((pendingReview && !operatorMode()) || ["queued", "running"].includes(review.status))
+    if ((pendingReview && !operatorMode()) || ["queued", "running"].includes(review.status) || ["queued", "running"].includes(reading?.status))
       state.poll = setTimeout(() => { if (live(projectId, "drawings")) renderDrawings().catch(() => {}); }, 3000);
+  }
+
+  const PAGE_TYPE_NAMES = {floor_plan: "Floor plan", reflected_ceiling_plan: "Ceiling plan", services_plan: "Services plan",
+    elevation: "Elevation", section: "Section", detail: "Detail", schedule: "Schedule", notes_or_specification: "Notes",
+    site_or_location_plan: "Site or location plan", cover_or_drawing_list: "Cover or drawing list", render_or_photo: "Render or photo", other: "Other"};
+  const INFO_NAMES = {room_geometry: "Areas and sizes", ceiling_height: "Ceiling heights", materials_construction: "Materials",
+    windows_glazing: "Windows and glazing", equipment_appliances: "Equipment", lighting: "Lighting", people_occupancy: "People",
+    operating_hours: "Hours", airflow_ventilation: "Airflow", hvac_plant: "HVAC plant", location_orientation: "Location"};
+
+  function pageReadingMarkup(reading) {
+    const running = ["queued", "running"].includes(reading.status);
+    const statusText = !reading.enabled ? "Switched off for this job. Pages are only sorted by the app's own rules."
+      : running ? (reading.page_count ? `Reading page ${reading.pages_done || 0} of ${reading.page_count}…` : `${reading.step_label || "Starting"}…`)
+      : reading.status === "done" ? `Read all ${reading.read} pages${reading.seconds ? ` in ${reading.seconds < 60 ? `${Math.round(reading.seconds)} s` : `${Math.round(reading.seconds / 60)} min`}` : ""}.`
+      : reading.status === "failed" || reading.status === "blocked" || reading.status === "interrupted" ? reading.problem || "Page reading didn't finish."
+      : "Not read yet.";
+    const canStart = reading.enabled && !running && reading.status !== "done";
+    const levels = Object.entries(reading.main_plans || {});
+    const mainPlans = levels.length ? `<p data-ws-main-plans>Main floor plan: ${levels.map(([level, pages]) =>
+      `${esc(level ? level[0].toUpperCase() + level.slice(1) : "")}${level ? " " : ""}${pages.map(page => `p${page}`).join(", ")}`).join(" · ")}</p>` : "";
+    const rows = (reading.pages || []).map(row => {
+      if (row.status !== "read") return `<li data-ws-read-page="${row.page}"><b>p${row.page}</b> · <span class="ws-fine">${row.status === "failed" ? `not read: ${esc(row.reason)}` : "not read yet"}</span></li>`;
+      const kinds = [...new Set((row.information || []).map(item => item.kind))];
+      const items = (row.information || []).map(item => `<li><b>${esc(INFO_NAMES[item.kind] || item.kind)}:</b> ${esc(item.what)}${item.evidence ? ` <span class="ws-fine">(${esc(item.evidence)})</span>` : ""}</li>`).join("");
+      return `<li data-ws-read-page="${row.page}"><details data-ws-read-open="${row.page}" ${state.readOpen?.has(String(row.page)) ? "open" : ""}><summary><b>p${row.page}</b> · ${esc(PAGE_TYPE_NAMES[row.page_type] || row.page_type)}${row.title ? ` · ${esc(row.title)}` : ""}${row.level ? ` · ${esc(row.level)}` : ""}
+        ${kinds.map(kind => `<span class="ws-chip">${esc(INFO_NAMES[kind] || kind)}</span>`).join(" ")}</summary>
+        ${items ? `<ul>${items}</ul>` : `<p class="ws-fine">No heat-load information on this page.</p>`}</details></li>`;
+    }).join("");
+    return `<section class="ws-page-reading" aria-label="Every page, read by AI" data-ws-page-reading><h3>Every page, read by AI</h3>
+      <label class="ws-check"><input type="checkbox" data-ws-page-reading-enabled ${reading.enabled ? "checked" : ""}> Read every page with AI (your ChatGPT sign-in, through the Codex CLI)</label>
+      <p class="${["failed", "blocked", "interrupted"].includes(reading.status) && reading.enabled ? "ws-banner is-warn" : "ws-fine"}" role="status" data-ws-page-reading-status>${esc(statusText)}</p>
+      ${canStart ? `<button class="btn ghost mini" type="button" data-ws-page-reading-start>${reading.status === "none" ? "Read the pages" : "Retry reading"}</button>` : ""}
+      ${mainPlans}
+      ${rows ? `<details data-ws-read-open="list" ${state.readOpen?.has("list") ? "open" : ""}><summary>What's on each page (${reading.read} of ${reading.page_count} read)</summary><ul class="ws-read-pages">${rows}</ul></details>` : ""}</section>`;
+  }
+
+  function wirePageReading(projectId) {
+    // The tab refreshes itself while checks run; keep the pages someone opened open across refreshes.
+    if (state.readOpenProject !== projectId) { state.readOpen = new Set(); state.readOpenProject = projectId; }
+    body.querySelectorAll("[data-ws-read-open]").forEach(details => details.addEventListener("toggle", () => {
+      if (details.open) state.readOpen.add(details.dataset.wsReadOpen); else state.readOpen.delete(details.dataset.wsReadOpen);
+    }));
+    body.querySelector("[data-ws-page-reading-enabled]")?.addEventListener("change", async event => {
+      event.target.disabled = true;
+      try { await sendJson("/api/page-reading", {project_id: projectId, action: "set_enabled", enabled: event.target.checked}); await renderDrawings(); }
+      catch (error) { event.target.disabled = false; showTabError(error); }
+    });
+    body.querySelector("[data-ws-page-reading-start]")?.addEventListener("click", async event => {
+      event.target.disabled = true;
+      try { await sendJson("/api/page-reading", {project_id: projectId, action: "retry", requested_by: userName() || "Operator"}); await renderDrawings(); }
+      catch (error) { event.target.disabled = false; event.target.textContent = `Couldn't start: ${error.message}`; }
+    });
   }
 
   function formatFindingValue(value) {

@@ -120,3 +120,15 @@ user's check. The PDFs stay outside the repository; map each case to its PDF in 
 and gives the same page groups as the full analysis. `--compare` lists every fact that was fixed or
 regressed since an earlier report. Baseline on 2026-10-07: 135/157 facts (main plan right in 6 of 14
 sets, RCPs 9 of 16); after the printed-view-title rules: 157/157.
+
+## Pass 1: AI reads every page (`tools/evaluate_page_inventory.py`)
+
+Runs pass 1 of the PDF review on page-role sets and scores it beside the code's page finder, against the same
+answer sheets. Every page is sent on its own to the AI through the Codex CLI signed in with ChatGPT (no API key).
+Page images and replies are cached under the ignored `output/evaluations/page_inventory/<case>/`, so a re-run only
+calls the AI for pages not yet read.
+
+    python3 tools/evaluate_page_inventory.py --case caseP04 --case caseP06
+
+The answer sheets only check page roles (main plan, ceiling plans, pages kept). They don't yet say what
+information each page holds, so the AI's information lists are not scored.
