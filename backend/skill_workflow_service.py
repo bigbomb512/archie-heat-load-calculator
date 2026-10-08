@@ -925,6 +925,11 @@ def _matches_contract_type(value, type_name):
 def _consented_page_ids(paths):
     settings = _read(paths["root"] / "vision_extraction_settings.json", {})
     if not settings.get("owner_opt_in"):
+        # With page reading on, every page is already sent to the AI one by one, so the skills may see every page.
+        from backend import skill_case_file
+        if skill_case_file.available({"review_dir": str(paths["root"])}):
+            return {row.get("page") for row in _page_rows(_read(paths["coverage"], {})) if isinstance(row.get("page"), int)} \
+                or {int(page) for page in (_read(paths["root"] / "page_inventory.json", {}).get("pages") or {})}
         return set()
     groups = select_page_groups(_read(paths["ai_input"], {}), _read(paths["coverage"], {}))
     selected_ids = set(settings.get("selected_group_ids", [])) or {row["group_id"] for row in groups}

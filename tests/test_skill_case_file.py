@@ -231,3 +231,30 @@ class ResumeTests(unittest.TestCase):
             self.assertIn("information_needs", needs["depends_on"] + ["information_needs"])
         finally:
             skills.CASE_FILE_PROVIDER_FACTORY = None
+
+
+class JobContextTests(unittest.TestCase):
+    def test_every_case_file_carries_the_source_identity_id_formats_known_rooms_and_room_types(self):
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder) / pass1.RESULT_FILE).write_text(json.dumps({"pages": READINGS}))
+            (Path(folder) / "room_use_resolution.json").write_text(json.dumps({"records": [
+                {"room_id": "room-use:ground:kitchen", "original_label": "Kitchen", "level": "Ground", "taxonomy_id": "kitchen",
+                 "space_scope": "comfort_hvac_with_process_exception"}]}))
+            case, _ = skill_case_file.build("equipment_evidence", {"id": "j", "review_dir": folder, "pdf": "/x/Butcher Buffet.pdf"})
+        job = case["job"]
+        self.assertTrue(job["source_document"]["source_document_id"].startswith("pdf-"))
+        self.assertEqual((job["source_document"]["file_name"], job["source_document"]["page_count"]), ("Butcher Buffet.pdf", 4))
+        self.assertIn("room-use:ground:kitchen", job["id_formats"]["room_id"])
+        self.assertEqual(job["known_rooms"][0]["room_id"], "room-use:ground:kitchen")
+        self.assertIn("kitchen", {row["taxonomy_id"] for row in job["room_types"]})
+        self.assertIn("Do not refuse", job["when_prerequisites_are_empty"])
+
+    def test_with_page_reading_on_the_skills_may_see_every_page(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / pass1.RESULT_FILE).write_text(json.dumps({"pages": READINGS}))
+            (root / "drawing_coverage.json").write_text(json.dumps({"page_roles": [{"page": page} for page in (1, 5, 20, 26)]}))
+            paths = skills._project_paths({"id": "j", "review_dir": folder})
+            self.assertEqual(skills._consented_page_ids(paths), {1, 5, 20, 26})
+            pass1.set_enabled(None, {"id": "j", "review_dir": folder}, {"enabled": False})
+            self.assertEqual(skills._consented_page_ids(paths), set())

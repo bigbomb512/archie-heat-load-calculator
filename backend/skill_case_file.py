@@ -10,6 +10,7 @@ and the finishes; equipment needs the schedule, the plans and the elevations. It
 Mostly text, so a skill gets far more context than images alone would allow within the plan's usage.
 """
 
+import json
 from pathlib import Path
 
 from backend import page_extraction_service as pass2, page_inventory_service as pass1
@@ -81,9 +82,48 @@ def build(subskill_id, project):
     ranked = sorted(counts, key=lambda page: (-counts[page], TYPE_RANK.get(pages[page].get("page_type"), 4), page))[:limit]
     renders = {int(path.stem.split("-")[1]): path for path in (root / pass1.WORK_DIR / "pages").glob("p-*.png")}
     images = [renders[page] for page in ranked if page in renders]
-    case = {"note": ("Pages are numbered as in the PDF. 'readings' are what an AI page-by-page pass found on each page; "
+    case = {"job": job_context(project),
+            "note": ("Pages are numbered as in the PDF. 'readings' are what an AI page-by-page pass found on each page; "
                      "'extracted' are values already read for these kinds. Attached images are the listed pages. Cite pages "
                      "for every value; treat readings as leads to check, not as approved values."),
             "page_index": index, "readings": readings[:MAX_READINGS], "readings_omitted": max(0, len(readings) - MAX_READINGS),
             "extracted": extracted, "attached_pages": [page for page in ranked if page in renders]}
     return case, images
+
+
+def job_context(project):
+    """What every skill needs to name things the way the app does: the source, ID formats, rooms and room types."""
+    import hashlib
+    import re
+    root = Path(project["review_dir"])
+    pages = read_json(root / pass1.RESULT_FILE).get("pages") or {}
+    pdf = Path(str(project.get("pdf") or ""))
+    source_id = "pdf-" + hashlib.sha256(json_bytes(pages)).hexdigest()[:12]
+    rooms = []
+    for row in read_json(root / "room_use_resolution.json").get("records", []):
+        if isinstance(row, dict) and row.get("room_id"):
+            rooms.append({"room_id": row["room_id"], "label": row.get("original_label") or row.get("label", ""),
+                          "level": row.get("level", ""), "taxonomy_id": row.get("taxonomy_id", ""), "scope": row.get("space_scope", "")})
+    try:
+        taxonomy = json.loads((Path(__file__).resolve().parents[1] / "config" / "au_room_use_taxonomy_v1.json").read_text(encoding="utf-8"))
+        room_types = [{"taxonomy_id": key, "label": value.get("label", key)} for key, value in taxonomy.get("categories", {}).items()]
+    except (OSError, ValueError):
+        room_types = []
+    slug = lambda value: re.sub(r"[^a-z0-9]+", "-", str(value or "").casefold()).strip("-") or "unassigned"
+    return {
+        "source_document": {"source_document_id": source_id, "file_name": pdf.name, "page_count": len(pages),
+                            "note": "This is the project's source identity and version. Physical page numbers are the PDF's pages."},
+        "id_formats": {"room_id": "room-use:<level slug>:<room label slug> (e.g. " + ", ".join(
+                           f"room-use:{slug(row['level'] or 'Unassigned level')}:{slug(row['label'])}" for row in rooms[:3]) + ")",
+                       "component_id": "<source_document_id>:<drawing number or p<page>>:<printed tag or label slug>"},
+        "known_rooms": rooms,
+        "room_types": room_types,
+        "when_prerequisites_are_empty": ("If a prerequisite proposal is empty, failed or missing, use known_rooms, the readings and the "
+                                          "attached pages directly. Do not refuse for lack of validated prerequisites: give the values the "
+                                          "evidence supports, record how you matched each to a room as an inference, and leave a field "
+                                          "unresolved only when the drawings really don't show it."),
+    }
+
+
+def json_bytes(value):
+    return json.dumps(value, sort_keys=True, default=str).encode("utf-8")
