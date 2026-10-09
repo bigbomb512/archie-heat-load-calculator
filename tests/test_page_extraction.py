@@ -103,9 +103,14 @@ class FakeReader:
         self.replies, self.calls = replies, []
 
     def propose(self, prompt, image_paths=()):
-        page = int(Path(image_paths[0]).stem.split("_")[1])
-        self.calls.append(page)
-        reply = self.replies[page]
+        pages = [int(Path(path).stem.split("_")[1]) for path in image_paths]
+        self.calls.extend(pages)
+        self.batches = getattr(self, "batches", []) + [pages]
+        if len(pages) > 1:
+            # Several images in one call: one that would fail is left out of the reply (it's then read on its own).
+            return {"images": {str(index): self.replies[page] for index, page in enumerate(pages, 1)
+                               if not isinstance(self.replies[page], Exception)}}, {"provider": "fake"}
+        reply = self.replies[pages[0]]
         if isinstance(reply, Exception):
             raise reply
         return reply, {"provider": "fake"}
@@ -146,7 +151,7 @@ class ServiceTests(unittest.TestCase):
         pass1.PROVIDER_FACTORY = lambda: reader
         service.start(None, self.project)
         done = wait(self.project)
-        self.assertEqual((done["status"], done["pages"], sorted(reader.calls)), ("done", [1, 3], [1, 3]))
+        self.assertEqual((done["status"], done["pages"], reader.batches), ("done", [1, 3], [[1, 3]]))   # one call for both
         oven = next(row for row in done["findings"] if row["value"]["name"] == "Combi oven")
         self.assertEqual((oven["evidence"], oven["status"], oven["pages"]), ("conflicting", "proposed", [1, 3]))
         self.assertEqual(done["open"], 2)

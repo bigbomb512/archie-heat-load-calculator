@@ -131,8 +131,21 @@ EXTRACTORS = {
 
 
 def build_prompt(extractor, page, section=None, sections=1):
-    where = f"page {page}" if sections == 1 else f"section {section + 1} of {sections} of page {page} (sections overlap)"
-    return extractor["prompt"].format(where=where, noun="page" if sections == 1 else "section")
+    return extractor["prompt"].format(where=_where(page, section, sections), noun="page" if sections == 1 else "section")
+
+
+def _where(page, section=None, sections=1):
+    return f"page {page}" if sections == 1 else f"section {section + 1} of {sections} of page {page} (sections overlap)"
+
+
+def batch_prompt(extractor, keys):
+    """Several pages (or sections) read in one call, each its own full-size image read on its own; saves the fixed
+    cost of a call (about 4,600 tokens) for every image after the first. keys = [(page, section, sections)]."""
+    listing = "; ".join(f"image {index} is {_where(page, section, count)}" for index, (page, section, count) in enumerate(keys, 1))
+    body = extractor["prompt"].format(where="the attached images", noun="image")
+    return (f"{len(keys)} images are attached, one per page or section: {listing}. Read each image on its own, as if it "
+            f"were the only one, following the instructions below; give each image's reply under its number:\n"
+            f'{{"images": {{"1": <that image\'s reply>, "2": ...}}}} and nothing else (JSON only, no prose, no code fence).\n\n{body}')
 
 
 def validate_reply(extractor, reply):

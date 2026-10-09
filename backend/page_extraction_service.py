@@ -22,7 +22,7 @@ import subprocess
 import threading
 
 from ai import equipment_heat
-from ai.page_extraction import EXTRACTORS, build_prompt, merge, normalise_name, tiles, validate_reply
+from ai.page_extraction import EXTRACTORS, batch_prompt, build_prompt, merge, normalise_name, tiles, validate_reply
 from backend import ai_provider, page_inventory_service as pass1
 from backend.job_runner import BackgroundJob, now, read_json, write_json
 
@@ -101,8 +101,11 @@ def _cache_key(image, extractor, model):
     return hashlib.sha256(f"{digest}|{extractor['version']}|{model}".encode()).hexdigest()[:32]
 
 
-def read_sections(extractor, images, cache_dir, provider, workers=pass1.WORKERS, on_done=None):
-    """Read every section (cached). Returns ([(page, section, items)], {"page.section": reason}, calls)."""
+def read_sections(extractor, images, cache_dir, provider, workers=pass1.WORKERS, on_done=None, batch=None):
+    """Read every section (cached per section). Returns ([(page, section, items)], {"page.section": reason}, calls).
+
+    Sections not in the cache are read a few per call (pass1.batch_size()), each its own full-size image; each
+    section's items are checked and cached on their own, and one left out of a reply is read again on its own."""
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
     model = getattr(provider, "model", "") or "default"
@@ -110,38 +113,85 @@ def read_sections(extractor, images, cache_dir, provider, workers=pass1.WORKERS,
     lock = threading.Lock()
 
     stopped = threading.Event()
+    path_of = lambda key: cache_dir / f"{_cache_key(images[key][0], extractor, model)}.json"
 
-    def one(key, image, count):
+    def save(key, items, raw, together=None):
         page, section = key
-        path = cache_dir / f"{_cache_key(image, extractor, model)}.json"
-        cached = read_json(path)
-        if "items" in cached:
-            return key, cached["items"], None, False
+        write_json(path_of(key), {"page": page, "section": section, "extractor": extractor["version"], "model": model,
+                                  "read_at": now(), "items": items, "raw": raw,
+                                  **({"read_with": [list(other) for other in together]} if together else {})})
+
+    def one(key):
+        page, section = key
+        image, count = images[key]
         if stopped.is_set():  # the plan's usage limit was hit: further calls would fail the same way
-            return key, None, stopped.reason, False
+            return [(key, None, stopped.reason)], 0
         try:
             reply, raw = provider.propose(build_prompt(extractor, page, section, count), image_paths=[image])
             items = validate_reply(extractor, reply)
         except pass1.UsageLimitReached as error:
             stopped.reason = str(error)
             stopped.set()
-            return key, None, str(error), True
+            return [(key, None, str(error))], 1
         except Exception as error:
-            return key, None, " ".join(str(error).split())[:400] or error.__class__.__name__, True
-        write_json(path, {"page": page, "section": section, "extractor": extractor["version"], "model": model,
-                          "read_at": now(), "items": items, "raw": raw})
-        return key, items, None, True
+            return [(key, None, " ".join(str(error).split())[:400] or error.__class__.__name__)], 1
+        save(key, items, raw)
+        return [(key, items, None)], 1
 
+    def several(keys):
+        if len(keys) == 1:
+            return one(keys[0])
+        if stopped.is_set():
+            return [(key, None, stopped.reason) for key in keys], 0
+        try:
+            reply, raw = provider.propose(batch_prompt(extractor, [(page, section, images[(page, section)][1]) for page, section in keys]),
+                                          image_paths=[images[key][0] for key in keys])
+        except pass1.UsageLimitReached as error:
+            stopped.reason = str(error)
+            stopped.set()
+            return [(key, None, str(error)) for key in keys], 1
+        except Exception as error:
+            reason = " ".join(str(error).split())[:400] or error.__class__.__name__
+            return [(key, None, reason) for key in keys], 1
+        answers = reply.get("images") if isinstance(reply, dict) and isinstance(reply.get("images"), dict) else {}
+        results, made, again = [], 1, []
+        for index, key in enumerate(keys, 1):
+            try:
+                items = validate_reply(extractor, answers.get(str(index)))
+            except ValueError:
+                again.append(key)
+                continue
+            save(key, items, {**{name: value for name, value in (raw or {}).items() if name != "reply_text"},
+                              "reply_text": json.dumps(answers.get(str(index)), ensure_ascii=False)}, keys)
+            results.append((key, items, None))
+        for key in again:
+            rows, extra = one(key)
+            results.extend(rows)
+            made += extra
+        return results, made
+
+    todo = []
+    for key in sorted(images):
+        cached = read_json(path_of(key))
+        if "items" in cached:
+            readings.append((key[0], key[1], cached["items"]))
+        else:
+            todo.append(key)
+    size = batch or pass1.batch_size()
+    chunks = [todo[index:index + size] for index in range(0, len(todo), size)]
+    if on_done and readings:
+        on_done(len(readings), len(images))
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        futures = [pool.submit(one, key, image, count) for key, (image, count) in sorted(images.items())]
+        futures = [pool.submit(several, chunk) for chunk in chunks]
         for future in as_completed(futures):
-            (page, section), items, failure, called = future.result()
+            rows, made = future.result()
             with lock:
-                calls += int(called)
-                if items is None:
-                    failures[f"{page}.{section}"] = failure
-                else:
-                    readings.append((page, section, items))
+                calls += made
+                for (page, section), items, failure in rows:
+                    if items is None:
+                        failures[f"{page}.{section}"] = failure
+                    else:
+                        readings.append((page, section, items))
                 if on_done:
                     on_done(len(readings) + len(failures), len(images))
     return sorted(readings, key=lambda row: (row[0], row[1])), failures, calls
