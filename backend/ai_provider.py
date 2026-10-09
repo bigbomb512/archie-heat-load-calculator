@@ -5,6 +5,8 @@ Providers (ARCHIE_AI_PROVIDER):
 - openai     the OpenAI API (OPENAI_API_KEY); model ARCHIE_AI_MODEL, default "gpt-5".
 - anthropic  the Anthropic API (ANTHROPIC_API_KEY); model ARCHIE_AI_MODEL, default "claude-sonnet-5-5".
 - deepseek   the DeepSeek API (DEEPSEEK_API_KEY); model ARCHIE_AI_MODEL, default "deepseek-flash" (reads images).
+- openrouter OpenRouter (OPENROUTER_API_KEY); model ARCHIE_AI_MODEL, default "google/gemini-3.8-flash"; see
+             OpenRouterProvider for the data and host-pinning settings. Each call's cost in US dollars is logged.
 ARCHIE_AI_MODEL also picks the Codex CLI model (else the model in the signed-in user's Codex config). Switching
 provider changes nothing else: the same prompts, case files, caching, resume and usage-limit handling apply.
 
@@ -41,10 +43,11 @@ import urllib.error
 import urllib.request
 
 USAGE_FILE = "ai_usage.jsonl"
-PROVIDERS = ("codex_cli", "openai", "anthropic", "deepseek")
+PROVIDERS = ("codex_cli", "openai", "anthropic", "deepseek", "openrouter")
 # deepseek-flash (DeepSeek-V4.1-Flash) is DeepSeek's model that reads images; deepseek-v4-pro is text only, so it can't
 # read pages (DeepSeek's pricing page, checked 2026-10-09).
-DEFAULT_MODELS = {"openai": "gpt-5", "anthropic": "claude-sonnet-5-5", "deepseek": "deepseek-flash"}
+DEFAULT_MODELS = {"openai": "gpt-5", "anthropic": "claude-sonnet-5-5", "deepseek": "deepseek-flash",
+                  "openrouter": "google/gemini-3.8-flash"}
 TIMEOUT_S = 600
 # Replies are stored whole (a retry re-checks a stored reply instead of paying for a new one); this only guards size.
 MAX_REPLY_CHARS = 2_000_000
@@ -282,21 +285,28 @@ class OpenAIProvider(_HttpProvider):
     def extra_body(self):
         return {}
 
+    def headers(self):
+        return {}
+
     def propose(self, prompt, image_paths=()):
         started = time.monotonic()
         content = [{"type": "text", "text": str(prompt)}]
         content += [{"type": "image_url", "image_url": {"url": f"data:{media};base64,{data}"}} for media, data in _image_parts(image_paths)]
-        reply = self._post(self.url(), {"Authorization": f"Bearer {self.api_key}"},
+        reply = self._post(self.url(), {"Authorization": f"Bearer {self.api_key}", **self.headers()},
                            {"model": self.model, "messages": [{"role": "user", "content": content}],
                             "response_format": {"type": "json_object"}, **self.extra_body()})
         text = ((reply.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
         usage = reply.get("usage") or {}
         # Cached input: OpenAI reports it under prompt_tokens_details, DeepSeek as prompt_cache_hit_tokens.
         cached = usage.get("prompt_cache_hit_tokens", (usage.get("prompt_tokens_details") or {}).get("cached_tokens"))
+        cost = usage.get("cost")                      # OpenRouter reports what the call was charged, in US dollars
         raw = {"provider": self.name, "model": reply.get("model", self.model), "reply_text": text[:MAX_REPLY_CHARS],
                "usage": {"input_tokens": usage.get("prompt_tokens"), "output_tokens": usage.get("completion_tokens"),
-                         **({"cached_input_tokens": cached} if isinstance(cached, int) else {})},
+                         **({"cached_input_tokens": cached} if isinstance(cached, int) else {}),
+                         **({"cost_usd": float(cost)} if isinstance(cost, (int, float)) and not isinstance(cost, bool) else {})},
                "seconds": round(time.monotonic() - started, 2)}
+        if getattr(self, "upstream_header", ""):
+            raw["upstream"] = reply.get("provider", "")      # which host OpenRouter used for this call
         return parse_json_reply(text), raw
 
 
@@ -311,6 +321,37 @@ class DeepSeekProvider(OpenAIProvider):
 
     def extra_body(self):
         return {"max_tokens": MAX_OUTPUT_TOKENS}
+
+
+class OpenRouterProvider(OpenAIProvider):
+    """OpenRouter: one key for many models (ARCHIE_AI_MODEL, default google/gemini-3.8-flash), OpenAI-style requests
+    with page images inline. Routing is restricted to hosts that support JSON replies and don't store or train on
+    prompts (client drawings); ARCHIE_OPENROUTER_ZDR=1 also requires zero-data-retention hosts, and
+    ARCHIE_OPENROUTER_PROVIDERS (comma-separated host slugs, e.g. "deepinfra") pins the host, so a model served by
+    many hosts at different precisions is always answered by the same one; ARCHIE_OPENROUTER_REASONING (low, medium,
+    high) sets how much a thinking model reasons, which it bills as output. Each call's charged cost is logged."""
+    name, key_env = "openrouter", "OPENROUTER_API_KEY"
+    upstream_header = "provider"
+
+    def url(self):
+        return "https://openrouter.ai/api/v1/chat/completions"
+
+    def headers(self):
+        return {"X-OpenRouter-Title": "Archie heat-load review"}
+
+    def extra_body(self):
+        routing = {"data_collection": "deny", "require_parameters": True}
+        if os.environ.get("ARCHIE_OPENROUTER_ZDR", "").strip() == "1":
+            routing["zdr"] = True
+        hosts = [item.strip() for item in os.environ.get("ARCHIE_OPENROUTER_PROVIDERS", "").split(",") if item.strip()]
+        if hosts:
+            routing.update({"order": hosts, "allow_fallbacks": False})
+        body = {"max_tokens": MAX_OUTPUT_TOKENS, "provider": routing}
+        # How much a thinking model reasons before answering (low / medium / high); its thinking is billed as output.
+        effort = os.environ.get("ARCHIE_OPENROUTER_REASONING", "").strip().lower()
+        if effort in {"minimal", "low", "medium", "high"}:
+            body["reasoning"] = {"effort": effort}
+        return body
 
 
 class AnthropicProvider(_HttpProvider):
@@ -330,7 +371,8 @@ class AnthropicProvider(_HttpProvider):
         return parse_json_reply(text), raw
 
 
-CLASSES = {"codex_cli": CodexCliProvider, "openai": OpenAIProvider, "anthropic": AnthropicProvider, "deepseek": DeepSeekProvider}
+CLASSES = {"codex_cli": CodexCliProvider, "openai": OpenAIProvider, "anthropic": AnthropicProvider, "deepseek": DeepSeekProvider,
+           "openrouter": OpenRouterProvider}
 
 
 def chosen():
@@ -406,6 +448,8 @@ class recorded:
                                  "seconds": raw.get("seconds") or round(time.monotonic() - started, 2),
                                  "input_tokens": usage.get("input_tokens"), "output_tokens": usage.get("output_tokens"),
                                  "cached_input_tokens": usage.get("cached_input_tokens"),
+                                 **({"cost_usd": usage["cost_usd"]} if "cost_usd" in usage else {}),
+                                 **({"upstream": raw["upstream"]} if raw.get("upstream") else {}),
                                  "reasoning_output_tokens": usage.get("reasoning_output_tokens"),
                                  "total_tokens": usage.get("total_tokens") or (
                                      (usage.get("input_tokens") or 0) + (usage.get("output_tokens") or 0) or None)})
@@ -441,6 +485,7 @@ def usage_summary(root):
                 "output_tokens": sum(row.get("output_tokens") or 0 for row in items),
                 "cached_input_tokens": sum(row.get("cached_input_tokens") or 0 for row in items),
                 "reasoning_output_tokens": sum(row.get("reasoning_output_tokens") or 0 for row in items),
+                "cost_usd": round(sum(row.get("cost_usd") or 0 for row in items), 4),
                 "seconds": round(sum(row.get("seconds") or 0 for row in items), 1),
                 "calls_without_token_count": sum(1 for row in items if row.get("ok") and not row.get("total_tokens"))}
 

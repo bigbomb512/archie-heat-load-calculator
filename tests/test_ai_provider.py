@@ -107,6 +107,40 @@ class HttpProviderTests(unittest.TestCase):
             with self.assertRaises(ai_provider.ProviderUnavailable):
                 ai_provider.get()
 
+    def test_openrouter_keeps_drawings_off_hosts_that_store_them_logs_cost_and_can_pin_a_host(self):
+        captured = []
+        reply = {"model": "google/gemini-3.8-flash", "provider": "Google AI Studio",
+                 "choices": [{"message": {"content": '{"page_type": "schedule"}'}}],
+                 "usage": {"prompt_tokens": 9000, "completion_tokens": 700, "cost": 0.0094,
+                           "prompt_tokens_details": {"cached_tokens": 1200}}}
+        with patch.dict(os.environ, {"ARCHIE_AI_MODEL": "", "ARCHIE_OPENROUTER_ZDR": "", "ARCHIE_OPENROUTER_PROVIDERS": ""}):
+            provider = ai_provider.OpenRouterProvider(api_key="or-test", opener=opener(reply, captured))
+            self.assertEqual(provider.model, "google/gemini-3.8-flash")
+            result, raw = provider.propose("Read this page.", [self.image])
+        self.assertEqual(result, {"page_type": "schedule"})
+        self.assertEqual(raw["usage"], {"input_tokens": 9000, "output_tokens": 700, "cached_input_tokens": 1200, "cost_usd": 0.0094})
+        self.assertEqual(raw["upstream"], "Google AI Studio")
+        sent = captured[0]
+        self.assertEqual(sent["url"], "https://openrouter.ai/api/v1/chat/completions")
+        self.assertEqual(sent["headers"]["Authorization"], "Bearer or-test")
+        self.assertEqual(sent["body"]["provider"], {"data_collection": "deny", "require_parameters": True})
+        self.assertTrue(sent["body"]["messages"][0]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,"))
+        with patch.dict(os.environ, {"ARCHIE_OPENROUTER_ZDR": "1", "ARCHIE_OPENROUTER_PROVIDERS": "deepinfra, deepseek"}):
+            ai_provider.OpenRouterProvider(api_key="or-test", model="deepseek/deepseek-v4.1-flash", opener=opener(reply, captured)).propose("x")
+        self.assertEqual(captured[-1]["body"]["provider"], {"data_collection": "deny", "require_parameters": True, "zdr": True,
+                                                           "order": ["deepinfra", "deepseek"], "allow_fallbacks": False})
+        self.assertNotIn("reasoning", captured[-1]["body"])
+        with patch.dict(os.environ, {"ARCHIE_OPENROUTER_REASONING": "low"}):
+            ai_provider.OpenRouterProvider(api_key="or-test", opener=opener(reply, captured)).propose("x")
+        self.assertEqual(captured[-1]["body"]["reasoning"], {"effort": "low"})
+        with tempfile.TemporaryDirectory() as folder:
+            logged = ai_provider.recorded(ai_provider.OpenRouterProvider(api_key="or-test", opener=opener(reply, [])), folder, "pass1")
+            logged.propose("x")
+            logged.propose("x")
+            summary = ai_provider.usage_summary(folder)["total"]
+            entry = json.loads((Path(folder) / ai_provider.USAGE_FILE).read_text().splitlines()[0])
+        self.assertEqual((summary["cost_usd"], entry["upstream"]), (0.0188, "Google AI Studio"))
+
     def test_anthropic_sends_images_first_and_reads_a_fenced_json_reply(self):
         captured = []
         reply = {"model": "claude-sonnet-5-5", "content": [{"type": "text", "text": "```json\n{\"items\": []}\n```"}],

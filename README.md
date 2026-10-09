@@ -133,6 +133,7 @@ Pass 1 (every page), pass 2 (values) and the skills use one AI provider, chosen 
 | `openai` | `OPENAI_API_KEY` | `gpt-5` unless set |
 | `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-5-5` unless set |
 | `deepseek` | `DEEPSEEK_API_KEY` | `deepseek-flash` unless set (DeepSeek's model that reads page images; `deepseek-v4-pro` is text only and can't read pages) |
+| `openrouter` | `OPENROUTER_API_KEY` | `google/gemini-3.8-flash` unless set (any OpenRouter model ID that reads images). Hosts that store or train on prompts are excluded; `ARCHIE_OPENROUTER_PROVIDERS` pins the host, `ARCHIE_OPENROUTER_ZDR=1` requires zero data retention. Each call's US$ cost is logged and totalled. |
 
 For example `ARCHIE_AI_PROVIDER=anthropic ANTHROPIC_API_KEY=… ./start_web`. Nothing else changes when switching.
 Every AI call is logged per job in `ai_usage.jsonl` (pass, provider, model, seconds, tokens where reported); the

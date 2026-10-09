@@ -406,11 +406,12 @@
       ${rows ? `<details data-ws-read-open="list" ${state.readOpen?.has("list") ? "open" : ""}><summary>What's on each page (${reading.read} of ${reading.page_count} read)</summary><ul class="ws-read-pages">${rows}</ul></details>` : ""}</section>`;
   }
 
-  const PROVIDER_NAMES = {codex_cli: "Codex CLI (ChatGPT sign-in)", openai: "OpenAI API", anthropic: "Anthropic API", deepseek: "DeepSeek API"};
+  const PROVIDER_NAMES = {codex_cli: "Codex CLI (ChatGPT sign-in)", openai: "OpenAI API", anthropic: "Anthropic API", deepseek: "DeepSeek API",
+    openrouter: "OpenRouter"};
 
   function usageMarkup(usage) {
     const number = value => Number(value || 0).toLocaleString();
-    const line = row => `${number(row.calls)} call${row.calls === 1 ? "" : "s"}${row.tokens ? ` · ${number(row.tokens)} tokens` : ""}${row.seconds ? ` · ${Math.round(row.seconds / 60) || "<1"} min` : ""}${row.failed ? ` · ${number(row.failed)} failed` : ""}`;
+    const line = row => `${number(row.calls)} call${row.calls === 1 ? "" : "s"}${row.tokens ? ` · ${number(row.tokens)} tokens` : ""}${row.cost_usd ? ` · US$${Number(row.cost_usd).toFixed(2)}` : ""}${row.seconds ? ` · ${Math.round(row.seconds / 60) || "<1"} min` : ""}${row.failed ? ` · ${number(row.failed)} failed` : ""}`;
     const total = usage.total || {calls: 0};
     const provider = PROVIDER_NAMES[usage.provider] || usage.provider || "";
     const rows = Object.entries(usage.by_pass || {}).map(([name, row]) => `<li>${esc(name)}: ${esc(line(row))}</li>`).join("");
