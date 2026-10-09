@@ -268,6 +268,48 @@ class SkillWorkflowTests(unittest.TestCase):
             self.assertEqual(len(accepted), 1)
             self.assertEqual(accepted[0]["geometry"]["area_m2"], 13)
 
+    def test_accepting_a_seat_count_sets_the_rooms_people_once_a_room_is_chosen(self):
+        from backend import finding_inputs_service, need_answers_service
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            project, web = self.project(root), Web()
+            catalog = skills.load_catalog()
+            manifest = skills._new_manifest(catalog, skills._source_fingerprint(skills._project_paths(project), catalog), "pdf_review")
+            manifest.update({"run_id": "seats", "status": "needs_review"})
+            (root / "skill_workflow_run.json").write_text(json.dumps(manifest))
+            proposals = root / "skill_workflow_runs" / "seats" / "proposals"
+            proposals.mkdir(parents=True)
+            (proposals / "occupancy_seating.json").write_text(json.dumps({"subskill_id": "occupancy_seating", "status": "needs_review",
+                "citations": [{"page": 19, "excerpt": "TB1 35 140"}],
+                "proposal_fields": {"occupancy": [{"room_id": None, "count": 140, "basis": "seating schedule"}]}}))
+            rooms = [{"label": "Shop", "level": "Unassigned level"}]
+            with patch.object(finding_inputs_service, "rooms", return_value=rooms), \
+                    patch.object(need_answers_service, "options", return_value={"rooms": rooms}), \
+                    patch.object(need_answers_service, "_internal_gains_override") as set_people:
+                review = skills.get(web, project)
+                seats = next(row for row in review["findings"] if row["subskill_id"] == "occupancy_seating" and row["field"] == "occupancy")
+                self.assertEqual((seats["sets_input"], seats["room_label"]), (True, ""))       # no room named: the operator picks
+                self.assertEqual(review["answer_options"]["rooms"], rooms)
+                with self.assertRaisesRegex(ValueError, "Choose the room"):
+                    skills.post(web, project, {"action": "review_finding", "finding_id": seats["id"], "decision": "accepted"})
+                self.assertFalse((root / "skill_review_decisions.json").exists())               # nothing half-recorded
+                result = skills.post(web, project, {"action": "review_finding", "finding_id": seats["id"], "decision": "accepted",
+                                                    "room": "Shop", "reviewer": "Sam"})
+            set_people.assert_called_once()
+            self.assertEqual(set_people.call_args.args[3:5], ("occupancy_count", 140.0))
+            accepted = next(row for row in result["findings"] if row["id"] == seats["id"])
+            self.assertEqual((accepted["status"], accepted["input_applied"], accepted["applied_summary"], accepted["applied_room"]),
+                             ("accepted", True, "Shop: 140 people.", "Shop"))
+
+    def test_a_disagreement_about_one_item_marks_only_that_item(self):
+        alternatives = [{"field": "equipment.quantity", "component_id": "pdf-1:004:E29", "candidates": [{"value": 1}, {"value": 3}]},
+                        {"field": "general", "detail": "no identifier"}]
+        self.assertEqual(skills._row_alternatives(alternatives, {"equipment_id": "pdf-1:004:E29"}, 40), alternatives[:1])
+        self.assertEqual(skills._row_alternatives(alternatives, {"equipment_id": "pdf-1:004:E01"}, 40), [])
+        self.assertEqual(skills._row_alternatives(alternatives, {"equipment_id": "pdf-1:004:E01"}, 1), alternatives[1:])
+        self.assertEqual(skills._row_alternatives(None, {}, 1), [])
+
     def test_scanned_page_findings_apply_s1_areas_only_after_acceptance(self):
         from backend import autonomous_tasks_service, calculation_extraction_service, room_use_resolution_service
 

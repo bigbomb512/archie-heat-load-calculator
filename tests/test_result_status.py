@@ -62,6 +62,17 @@ class GatherTests(unittest.TestCase):
         self.assertIn(("typical", "Windows"), texts)
         self.assertEqual({row["topic"] for row in items if row["kind"] == "placeholder"} - {"Equipment"}, {"Weather", "Sun"})
 
+    def test_a_room_topped_up_to_its_equipment_allowance_is_listed_as_typical(self):
+        with tempfile.TemporaryDirectory() as folder, patch.object(skill_workflow_service, "get", return_value={}), \
+                patch.object(job_service, "job_setup", return_value={"above": "roof"}):
+            write(folder, "hourly_ai_preliminary_load_report.json", {"scenario_results": [{"rooms": [
+                {"name": "Shop", "hours": [{"contributions": [{"inputs": {"sources": [
+                    {"name": "POS"}, {"name": "Typical equipment allowance top-up (listed items are below the room's typical level)"}]}}]}]},
+                {"name": "Kitchen", "hours": [{"contributions": [{"inputs": {"sources": [{"name": "Combi oven"}]}}]}]}]}]})
+            result = status.gather(None, {"id": "j", "review_dir": folder})
+        topped = [row for row in result["items"] if "topped up" in row["text"]]
+        self.assertEqual([(row["kind"], row["topic"]) for row in topped], [("typical", "Shop")])
+
     def test_a_job_with_nothing_calculated_or_answered_gives_only_what_it_can(self):
         with tempfile.TemporaryDirectory() as folder, patch.object(skill_workflow_service, "get", return_value={}), \
                 patch.object(job_service, "job_setup", return_value={"above": "roof"}):

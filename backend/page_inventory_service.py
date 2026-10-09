@@ -132,8 +132,11 @@ def read_pages(images, cache_dir, provider, workers=WORKERS, on_page=None, batch
             stopped.set()
             return [(page, None, str(error)) for page in pages], 1
         except Exception as error:
-            reason = " ".join(str(error).split())[:400] or error.__class__.__name__
-            return [(page, None, reason) for page in pages], 1
+            if "JSON" in str(error):          # the reply itself was unreadable: read each page on its own instead
+                reply, raw = {}, {}
+            else:
+                reason = " ".join(str(error).split())[:400] or error.__class__.__name__
+                return [(page, None, reason) for page in pages], 1
         answers = reply.get("pages") if isinstance(reply, dict) and isinstance(reply.get("pages"), dict) else {}
         results, made, again = [], 1, []
         for page in pages:

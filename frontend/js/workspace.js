@@ -406,7 +406,7 @@
       ${rows ? `<details data-ws-read-open="list" ${state.readOpen?.has("list") ? "open" : ""}><summary>What's on each page (${reading.read} of ${reading.page_count} read)</summary><ul class="ws-read-pages">${rows}</ul></details>` : ""}</section>`;
   }
 
-  const PROVIDER_NAMES = {codex_cli: "Codex CLI (ChatGPT sign-in)", openai: "OpenAI API", anthropic: "Anthropic API"};
+  const PROVIDER_NAMES = {codex_cli: "Codex CLI (ChatGPT sign-in)", openai: "OpenAI API", anthropic: "Anthropic API", deepseek: "DeepSeek API"};
 
   function usageMarkup(usage) {
     const number = value => Number(value || 0).toLocaleString();
@@ -696,13 +696,18 @@
       const pages = row.pages?.length ? `Page${row.pages.length === 1 ? "" : "s"} ${row.pages.map(esc).join(", ")}` : "Page citation missing";
       const unresolved = row.unresolved_fields?.length ? `<p class="ws-fine">Still missing: ${esc(row.unresolved_fields.join(", "))}</p>` : "";
       const readOnly = !!review.read_only;
+      // A finding that sets an input (people, lighting, an equipment item) is applied to one room: pick it here.
+      const roomRows = review.answer_options?.rooms || [];
+      const roomPicker = row.sets_input && !["accepted", "rejected"].includes(row.status)
+        ? `<label class="ws-fine ws-finding-room">Room <select data-ws-finding-room>${row.room_label ? "" : `<option value="">Choose the room</option>`}${roomRows.map(room =>
+            `<option value="${esc(room.label)}" ${room.label === row.room_label ? "selected" : ""}>${esc(room.label)}</option>`).join("")}</select></label>` : "";
       const editor = `<details open><summary>${row.evidence === "missing" ? "Enter the missing value" : row.evidence === "conflicting" ? "Choose or edit a reading" : "Edit proposed value"}</summary><textarea data-ws-finding-edit aria-label="Edit proposed value"${row.evidence === "missing" ? ' placeholder="Type the value"' : ""}>${esc(formatEditableFindingValue(row.value))}</textarea></details>`;
       const choiceButtons = row.evidence === "conflicting" ? (row.alternatives || []).map((item, index) => `<li><button type="button" class="link-button" data-ws-conflict-pick="${index}">${esc(typeof item === "string" ? item : JSON.stringify(item))}</button></li>`).join("") : "";
       const reviewActions = readOnly ? `<p class="ws-fine">Read only — consent was withdrawn. Restore consent and retry before changing this finding.</p>`
-        : row.status === "accepted" || row.status === "rejected" ? `<p class="ws-fine">${esc(row.status)}${row.reviewer ? ` by ${esc(row.reviewer)}` : ""}${row.status === "accepted" ? (row.input_applied ? " · used in the calculation draft" : " · saved as reviewed evidence; not yet connected to a calculation input") : ""}</p>`
-        : row.evidence === "missing" ? `${editor}<div class="ws-actions"><button class="btn key" type="button" data-ws-finding-save="${esc(row.id)}">Save value</button><button class="btn ghost" type="button" data-ws-finding-reject="${esc(row.id)}">Leave missing</button></div>`
-        : row.evidence === "conflicting" ? `${editor}${choiceButtons ? `<p class="ws-fine">Choose a conflicting reading or edit the value:</p><ul>${choiceButtons}</ul>` : ""}<div class="ws-actions"><button class="btn key" type="button" data-ws-finding-save="${esc(row.id)}">Save chosen value</button><button class="btn ghost" type="button" data-ws-finding-reject="${esc(row.id)}">Reject</button></div>`
-        : `${editor}<div class="ws-actions"><button class="btn key" type="button" data-ws-finding-accept="${esc(row.id)}">Accept value</button><button class="btn ghost" type="button" data-ws-finding-reject="${esc(row.id)}">Reject</button></div>`;
+        : row.status === "accepted" || row.status === "rejected" ? `<p class="ws-fine">${esc(row.status)}${row.reviewer ? ` by ${esc(row.reviewer)}` : ""}${row.status === "accepted" ? (row.applied_summary ? ` · ${esc(row.applied_summary)}${row.input_applied ? " Press Calculate to update the result." : ""}` : row.input_applied ? " · used in the calculation draft" : " · saved as reviewed evidence; not yet connected to a calculation input") : ""}</p>`
+        : row.evidence === "missing" ? `${editor}${roomPicker}<div class="ws-actions"><button class="btn key" type="button" data-ws-finding-save="${esc(row.id)}">Save value</button><button class="btn ghost" type="button" data-ws-finding-reject="${esc(row.id)}">Leave missing</button></div>`
+        : row.evidence === "conflicting" ? `${editor}${roomPicker}${choiceButtons ? `<p class="ws-fine">Choose a conflicting reading or edit the value:</p><ul>${choiceButtons}</ul>` : ""}<div class="ws-actions"><button class="btn key" type="button" data-ws-finding-save="${esc(row.id)}">Save chosen value</button><button class="btn ghost" type="button" data-ws-finding-reject="${esc(row.id)}">Reject</button></div>`
+        : `${editor}${roomPicker}<div class="ws-actions"><button class="btn key" type="button" data-ws-finding-accept="${esc(row.id)}">Accept value</button><button class="btn ghost" type="button" data-ws-finding-reject="${esc(row.id)}">Reject</button></div>`;
       return `<article class="ws-skill-finding" data-ws-finding="${esc(row.id)}"><div class="ws-skill-finding-head"><b>${esc(row.field.replaceAll("_", " "))}</b><span>${esc(row.subskill_id.replaceAll("_", " "))}</span></div>
         <span class="ws-chip ws-evidence-${esc(row.evidence)}" data-ws-evidence>${esc(row.evidence)}</span>
         <pre>${esc(formatFindingValue(row.value))}${row.units && row.value != null && row.value !== "" ? ` ${esc(row.units)}` : ""}</pre><p class="ws-fine">${esc(pages)}${row.confidence != null ? ` · confidence ${esc(row.confidence)}` : ""}</p>
@@ -783,8 +788,9 @@
       }
       button.disabled = true;
       try {
+        const room = button.closest("[data-ws-finding]").querySelector("[data-ws-finding-room]")?.value;
         await sendJson("/api/skill-workflow", {project_id: projectId, action: "review_finding", finding_id: findingId,
-          decision: reject ? "rejected" : "accepted", ...(value === undefined ? {} : {value}),
+          decision: reject ? "rejected" : "accepted", ...(value === undefined ? {} : {value}), ...(room ? {room} : {}),
           conflict_choice: button.closest("[data-ws-finding]")?.dataset.wsConflictChosen === "true",
           reviewer: userName() || "Operator"});
         await renderDrawings();

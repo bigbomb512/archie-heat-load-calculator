@@ -82,6 +82,31 @@ class HttpProviderTests(unittest.TestCase):
         self.assertTrue(content[1]["image_url"]["url"].startswith("data:image/png;base64,"))
         self.assertEqual(sent["body"]["response_format"], {"type": "json_object"})
 
+    def test_deepseek_sends_the_page_image_to_its_endpoint_and_reads_cached_tokens(self):
+        captured = []
+        reply = {"model": "deepseek-flash", "choices": [{"message": {"content": '{"page_type": "schedule"}'}}],
+                 "usage": {"prompt_tokens": 9000, "completion_tokens": 700, "prompt_cache_hit_tokens": 4000,
+                           "prompt_cache_miss_tokens": 5000}}
+        with patch.dict(os.environ, {"ARCHIE_AI_MODEL": "", "ARCHIE_DEEPSEEK_BASE_URL": ""}):
+            os.environ.pop("ARCHIE_DEEPSEEK_BASE_URL")
+            provider = ai_provider.DeepSeekProvider(api_key="ds-test", opener=opener(reply, captured))
+        self.assertEqual(provider.model, "deepseek-flash")                     # the model that reads images
+        result, raw = provider.propose("Read this page.", [self.image])
+        self.assertEqual(result, {"page_type": "schedule"})
+        self.assertEqual(raw["usage"], {"input_tokens": 9000, "output_tokens": 700, "cached_input_tokens": 4000})
+        sent = captured[0]
+        self.assertEqual(sent["url"], "https://api.deepseek.com/chat/completions")
+        self.assertEqual(sent["headers"]["Authorization"], "Bearer ds-test")
+        self.assertTrue(sent["body"]["messages"][0]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,"))
+        self.assertEqual((sent["body"]["response_format"], sent["body"]["max_tokens"]), ({"type": "json_object"}, ai_provider.MAX_OUTPUT_TOKENS))
+        with patch.dict(os.environ, {"ARCHIE_AI_PROVIDER": "deepseek", "DEEPSEEK_API_KEY": "ds-test"}):
+            self.assertEqual(ai_provider.chosen(), "deepseek")
+            self.assertTrue(ai_provider.configured())
+        with patch.dict(os.environ, {"ARCHIE_AI_PROVIDER": "deepseek", "DEEPSEEK_API_KEY": ""}):
+            self.assertFalse(ai_provider.configured())
+            with self.assertRaises(ai_provider.ProviderUnavailable):
+                ai_provider.get()
+
     def test_anthropic_sends_images_first_and_reads_a_fenced_json_reply(self):
         captured = []
         reply = {"model": "claude-sonnet-5-5", "content": [{"type": "text", "text": "```json\n{\"items\": []}\n```"}],
@@ -158,6 +183,13 @@ class CodexCliTests(unittest.TestCase):
             summary = ai_provider.usage_summary(folder)["total"]
         self.assertEqual((summary["tokens"], summary["input_tokens"], summary["cached_input_tokens"], summary["output_tokens"]),
                          (12, 10, 4, 2))
+
+    def test_a_reply_ending_a_bracket_short_is_closed_and_other_broken_replies_stay_invalid(self):
+        self.assertEqual(ai_provider.parse_json_reply('{"pages": {"2": {"items": [{"what": "a}b"}]}'),
+                         {"pages": {"2": {"items": [{"what": "a}b"}]}}})          # a brace inside a string is text
+        for broken in ('{"a": [1, 2}', '{"a": "open', '{"a": 1}}'):
+            with self.assertRaises(RuntimeError):
+                ai_provider.parse_json_reply(broken)
 
     def test_a_long_reply_is_stored_whole_so_a_retry_can_recheck_it(self):
         long_reply = json.dumps({"rows": ["x" * 50 for _ in range(1000)]})               # about 55,000 characters

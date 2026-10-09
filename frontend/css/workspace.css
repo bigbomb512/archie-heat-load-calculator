@@ -284,3 +284,7 @@ polyline.ws-dim, polyline.ws-dim2 { fill: none; stroke-dasharray: 10 6; }
 .ws-eq-edit label { display: flex; flex-direction: column; font-size: .8rem; gap: 2px; }
 .ws-eq-edit input { width: 8.5rem; max-width: 100%; }
 .ws-fine.is-warn { color: #8a4319; }
+
+/* Room choice on a PDF review finding that sets an input */
+.ws-finding-room { display: block; margin: 0.4rem 0; }
+.ws-finding-room select { margin-left: 0.4rem; max-width: 100%; }

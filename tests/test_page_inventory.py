@@ -154,6 +154,22 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(reader.calls.count(1), 1)                     # never read again
         self.assertEqual(reader.batches[-1], [2, 3])                    # the retry reads only the failed pages, together
 
+    def test_an_unreadable_batch_reply_reads_each_page_on_its_own(self):
+        reader = FakeReader({1: self.plan, 2: self.schedule, 3: {"page_type": "render_or_photo"}})
+        original = reader.propose
+
+        def unreadable_batches(prompt, image_paths=()):
+            if len(image_paths) > 1:
+                reader.batches = getattr(reader, "batches", []) + [["batch"]]
+                raise RuntimeError("The reply was not valid JSON.")
+            return original(prompt, image_paths)
+        reader.propose = unreadable_batches
+        service.PROVIDER_FACTORY = lambda: reader
+        service.start(None, self.project)
+        done = wait(self.project)
+        self.assertEqual((done["status"], done["read"]), ("done", 3))
+        self.assertEqual(sorted(reader.calls), [1, 2, 3])                  # each page once more, on its own
+
     def test_pages_are_read_several_per_call_and_cached_one_by_one(self):
         reader = FakeReader({1: self.plan, 2: self.schedule, 3: {"page_type": "render_or_photo"}})
         service.PROVIDER_FACTORY = lambda: reader

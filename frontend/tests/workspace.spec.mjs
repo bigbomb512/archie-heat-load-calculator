@@ -353,6 +353,29 @@ test("PDF review: evidence labels, missing-value editing, and conflict choice ar
   expect(values["room_identity_use:rooms:1"]).toBe("kitchen");
 });
 
+test("PDF review: accepting a seat count asks for its room and says what it set", async ({page}) => {
+  const sent = [];
+  let accepted = false;
+  const rooms = [{label: "Kitchen", level: "Unassigned level"}, {label: "Shop", level: "Unassigned level"}];
+  const seats = {id: "occupancy_seating:occupancy:0", subskill_id: "occupancy_seating", field: "occupancy", target: "",
+    value: {room_id: null, count: 140, basis: "seating schedule"}, evidence: "supported", pages: [19],
+    citations: [{page: 19, excerpt: "TB1 35 140"}], alternatives: [], sets_input: true, room_label: ""};
+  const skill = () => ({status: "needs_review", read_only: false, stages: [], answer_options: {rooms},
+    findings: [accepted ? {...seats, status: "accepted", input_applied: true, applied_summary: "Shop: 140 people.", room_label: "Shop"}
+                        : {...seats, status: "proposed"}]});
+  await mockJob(page, {status: () => baseStatus(), skill, vision: () => ({settings: {owner_opt_in: true}, selection: {page_count: 1, group_count: 1}}),
+    onPost: (kind, body) => { if (kind === "skill" && body.action === "review_finding") { sent.push(body); accepted = true; return skill(); } return null; }});
+  await page.goto("/#/job/job-1/drawings");
+  const finding = page.locator("[data-ws-finding='occupancy_seating:occupancy:0']");
+  const picker = finding.locator("[data-ws-finding-room]");
+  await expect(picker).toHaveValue("");                                       // no room named: the operator chooses
+  await picker.selectOption("Shop");
+  await finding.getByRole("button", {name: "Accept value"}).click();
+  await expect.poll(() => sent[0]?.room).toBe("Shop");
+  await expect(finding).toContainText("Shop: 140 people. Press Calculate to update the result.");
+  await expect(finding.locator("[data-ws-finding-room]")).toHaveCount(0);
+});
+
 test("PDF review: a missing address can be typed as plain text", async ({page}) => {
   const values = {};
   const findings = [{id: "address_confirmation:missing:confirmed_address:0", subskill_id: "address_confirmation",

@@ -4,6 +4,7 @@ Providers (ARCHIE_AI_PROVIDER):
 - codex_cli  (default) the Codex CLI signed in with the team's ChatGPT subscription; no API key.
 - openai     the OpenAI API (OPENAI_API_KEY); model ARCHIE_AI_MODEL, default "gpt-5".
 - anthropic  the Anthropic API (ANTHROPIC_API_KEY); model ARCHIE_AI_MODEL, default "claude-sonnet-5-5".
+- deepseek   the DeepSeek API (DEEPSEEK_API_KEY); model ARCHIE_AI_MODEL, default "deepseek-flash" (reads images).
 ARCHIE_AI_MODEL also picks the Codex CLI model (else the model in the signed-in user's Codex config). Switching
 provider changes nothing else: the same prompts, case files, caching, resume and usage-limit handling apply.
 
@@ -40,8 +41,10 @@ import urllib.error
 import urllib.request
 
 USAGE_FILE = "ai_usage.jsonl"
-PROVIDERS = ("codex_cli", "openai", "anthropic")
-DEFAULT_MODELS = {"openai": "gpt-5", "anthropic": "claude-sonnet-5-5"}
+PROVIDERS = ("codex_cli", "openai", "anthropic", "deepseek")
+# deepseek-flash (DeepSeek-V4.1-Flash) is DeepSeek's model that reads images; deepseek-v4-pro is text only, so it can't
+# read pages (DeepSeek's pricing page, checked 2026-10-09).
+DEFAULT_MODELS = {"openai": "gpt-5", "anthropic": "claude-sonnet-5-5", "deepseek": "deepseek-flash"}
 TIMEOUT_S = 600
 # Replies are stored whole (a retry re-checks a stored reply instead of paying for a new one); this only guards size.
 MAX_REPLY_CHARS = 2_000_000
@@ -81,10 +84,39 @@ def parse_json_reply(text):
         try:
             value = json.loads(text[start:end + 1])
         except json.JSONDecodeError:
-            raise RuntimeError("The reply was not valid JSON.") from None
+            # A long reply sometimes ends one bracket short (seen on a four-page reading: 64 "{" and 63 "}"). Closing
+            # what is still open at the end changes no content; anything else stays invalid.
+            try:
+                value = json.loads(_close_open_brackets(text[start:]))
+            except (json.JSONDecodeError, ValueError):
+                raise RuntimeError("The reply was not valid JSON.") from None
     if not isinstance(value, dict):
         raise RuntimeError("The reply was not a JSON object.")
     return value
+
+
+def _close_open_brackets(text):
+    """The text with the brackets still open at its end closed, in order. Raises ValueError when a bracket closes
+    the wrong kind or a string is left open (not a reply that only ends short)."""
+    stack, in_string, escaped = [], False, False
+    for char in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+        elif char in "{[":
+            stack.append("}" if char == "{" else "]")
+        elif char in "}]":
+            if not stack or stack.pop() != char:
+                raise ValueError("mismatched bracket")
+    if in_string or not stack:
+        raise ValueError("not a reply that only ends short")
+    return text + "".join(reversed(stack))
 
 
 def _codex_user_config(path=None):
@@ -244,19 +276,41 @@ class _HttpProvider:
 class OpenAIProvider(_HttpProvider):
     name, key_env = "openai", "OPENAI_API_KEY"
 
+    def url(self):
+        return "https://api.openai.com/v1/chat/completions"
+
+    def extra_body(self):
+        return {}
+
     def propose(self, prompt, image_paths=()):
         started = time.monotonic()
         content = [{"type": "text", "text": str(prompt)}]
         content += [{"type": "image_url", "image_url": {"url": f"data:{media};base64,{data}"}} for media, data in _image_parts(image_paths)]
-        reply = self._post("https://api.openai.com/v1/chat/completions", {"Authorization": f"Bearer {self.api_key}"},
+        reply = self._post(self.url(), {"Authorization": f"Bearer {self.api_key}"},
                            {"model": self.model, "messages": [{"role": "user", "content": content}],
-                            "response_format": {"type": "json_object"}})
+                            "response_format": {"type": "json_object"}, **self.extra_body()})
         text = ((reply.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
         usage = reply.get("usage") or {}
+        # Cached input: OpenAI reports it under prompt_tokens_details, DeepSeek as prompt_cache_hit_tokens.
+        cached = usage.get("prompt_cache_hit_tokens", (usage.get("prompt_tokens_details") or {}).get("cached_tokens"))
         raw = {"provider": self.name, "model": reply.get("model", self.model), "reply_text": text[:MAX_REPLY_CHARS],
-               "usage": {"input_tokens": usage.get("prompt_tokens"), "output_tokens": usage.get("completion_tokens")},
+               "usage": {"input_tokens": usage.get("prompt_tokens"), "output_tokens": usage.get("completion_tokens"),
+                         **({"cached_input_tokens": cached} if isinstance(cached, int) else {})},
                "seconds": round(time.monotonic() - started, 2)}
         return parse_json_reply(text), raw
+
+
+class DeepSeekProvider(OpenAIProvider):
+    """The DeepSeek API: OpenAI-style chat completions at api.deepseek.com (ARCHIE_DEEPSEEK_BASE_URL to change it),
+    with page images sent inline. Replies are capped at MAX_OUTPUT_TOKENS (DeepSeek's default cap is lower than the
+    longest replies here, such as the needs list)."""
+    name, key_env = "deepseek", "DEEPSEEK_API_KEY"
+
+    def url(self):
+        return os.environ.get("ARCHIE_DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/") + "/chat/completions"
+
+    def extra_body(self):
+        return {"max_tokens": MAX_OUTPUT_TOKENS}
 
 
 class AnthropicProvider(_HttpProvider):
@@ -276,7 +330,7 @@ class AnthropicProvider(_HttpProvider):
         return parse_json_reply(text), raw
 
 
-CLASSES = {"codex_cli": CodexCliProvider, "openai": OpenAIProvider, "anthropic": AnthropicProvider}
+CLASSES = {"codex_cli": CodexCliProvider, "openai": OpenAIProvider, "anthropic": AnthropicProvider, "deepseek": DeepSeekProvider}
 
 
 def chosen():

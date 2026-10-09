@@ -950,8 +950,29 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                    "envelope_not_applicable": row.get("envelope_not_applicable") is True,
                    "verification_status": "provisional", "source": _source(profile_id), "envelope_surfaces": [], "glazing_surfaces": []}
         equipment_rows = internal_record.get("equipment", []) if internal_record and internal_record.get("fields", {}).get("equipment", {}).get("origin") in {"direct_project_evidence", "contractor_override", "project_evidence", "ai_interpretation", "ai_estimated"} else []
+        allowance_w = area * profile["equipment_w_m2"] * profile["equipment_space_gain"] * profile["equipment_diversity"]
         if not equipment_rows:
             equipment_rows = [{"name": "Preliminary profile equipment", "quantity": 1, "rated_input_w": area * profile["equipment_w_m2"], "heat_to_space_factor": profile["equipment_space_gain"], "diversity": profile["equipment_diversity"], "origin": "controlled_preliminary_profile"}]
+        else:
+            # Listed items never take a room below its typical allowance: accepting a few of a room's items used to
+            # replace the allowance with just those (a shop with one 100 W item fell from about 1 kW to 0.075 kW). The
+            # room takes the larger of its listed items and the allowance; the difference is a labelled top-up.
+            listed_w = sum((item.get("quantity") or 1) * (item.get("rated_input_w") or 0)
+                           * item.get("heat_to_space_factor", profile["equipment_space_gain"])
+                           * item.get("diversity", profile["equipment_diversity"]) for item in equipment_rows)
+            if listed_w < allowance_w:
+                top_up_w = allowance_w - listed_w
+                equipment_rows = [*equipment_rows, {
+                    "name": "Typical equipment allowance top-up (listed items are below the room's typical level)", "quantity": 1,
+                    "rated_input_w": round(top_up_w / (profile["equipment_space_gain"] * profile["equipment_diversity"]), 3),
+                    "heat_to_space_factor": profile["equipment_space_gain"], "diversity": profile["equipment_diversity"],
+                    "origin": "controlled_preliminary_profile"}]
+                ledger.append({"room_id": room_id, "field": "equipment_allowance_top_up_w", "value": round(top_up_w, 1),
+                               "origin": "controlled_preliminary_profile", "profile_id": profile_id, "confidence": 0.3,
+                               "confidence_band": confidence_band(0.3),
+                               "rationale": f"Listed equipment gives {listed_w:.0f} W to the room, below the typical allowance of "
+                                            f"{allowance_w:.0f} W for {area:g} m² of {profile['label']}; topped up to the allowance.",
+                               "evidence": []})
         heat_sources = [{"name": item.get("name", "Equipment"), "quantity": item.get("quantity", 1), "watts": round(item.get("rated_input_w", 0), 3), "kind": "other", "diversity_factor": item.get("diversity", profile["equipment_diversity"]), "space_gain_factor": item.get("heat_to_space_factor", profile["equipment_space_gain"]), "verification_status": "provisional", "source": item.get("origin", _source(profile_id))} for item in equipment_rows]
         requirements_zones.append({"zone_id": zone_id, "name": row["name"], "usage": profile["label"], "source_room_labels": [row["name"]],
                                    "area_m2": area, "occupancy": occupancy, "ceiling_height_mm": room_resolution.get("ceiling_height_mm"),

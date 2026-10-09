@@ -28,6 +28,15 @@ def _read(path, default):
     return value if isinstance(value, type(default)) else default
 
 
+def _mentions(value, text):
+    """Whether a name containing text appears anywhere in a report section (e.g. an equipment line's name)."""
+    if isinstance(value, dict):
+        return any(_mentions(item, text) for item in value.values())
+    if isinstance(value, list):
+        return any(_mentions(item, text) for item in value)
+    return isinstance(value, str) and text in value
+
+
 def _item(kind, topic, text, tab, detail=""):
     return {"kind": kind, "topic": topic, "text": text, "tab": tab, "detail": detail}
 
@@ -62,6 +71,12 @@ def gather(web, project):
             room = next((row.get("original_label") for row in gains.get("records", []) if row.get("room_id") == schedule.get("room_id")), "")
             if room and not any(row.get("original_label") == room and row.get("status") == "excluded" for row in gains.get("records", [])):
                 items.append(_item("typical", room, "Opening hours are typical for the room type, not the business's own.", "drawings"))
+
+    # Rooms whose listed equipment is below their typical allowance and were topped up to it.
+    for room in ((report.get("scenario_results") or [{}])[0].get("rooms") or []):
+        if isinstance(room, dict) and _mentions(room.get("hours"), "Typical equipment allowance top-up"):
+            items.append(_item("typical", room.get("name", "Room"), "Equipment is topped up to the typical allowance: the listed items "
+                                                                   "give less heat than a typical room of this kind.", "drawings"))
 
     # Equipment accepted with typical ratings or the generic heat-to-room factors.
     equipment = _read(root / "page_extraction.json", {}).get("equipment_appliances", {})

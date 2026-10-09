@@ -151,8 +151,11 @@ def read_sections(extractor, images, cache_dir, provider, workers=pass1.WORKERS,
             stopped.set()
             return [(key, None, str(error)) for key in keys], 1
         except Exception as error:
-            reason = " ".join(str(error).split())[:400] or error.__class__.__name__
-            return [(key, None, reason) for key in keys], 1
+            if "JSON" in str(error):          # the reply itself was unreadable: read each image on its own instead
+                reply, raw = {}, {}
+            else:
+                reason = " ".join(str(error).split())[:400] or error.__class__.__name__
+                return [(key, None, reason) for key in keys], 1
         answers = reply.get("images") if isinstance(reply, dict) and isinstance(reply.get("images"), dict) else {}
         results, made, again = [], 1, []
         for index, key in enumerate(keys, 1):

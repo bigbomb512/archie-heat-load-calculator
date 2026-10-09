@@ -3027,14 +3027,15 @@ def _response(web, project):
                     if not calculation and matching_inferences:
                         calculation = matching_inferences[0].get("calculation", "")
                     citations = _finding_citations(proposal, value, cited_pages, len(proposal_rows))
+                    row_alternatives = _row_alternatives(proposal.get("alternatives", []), value, len(proposal_rows))
                     evidence_label = _finding_evidence(value, field, cited_pages, matching_inferences, formula, calculation,
-                                                       value.get("alternatives", proposal.get("alternatives", [])) if isinstance(value, dict) else proposal.get("alternatives", []))
+                                                       value.get("alternatives", row_alternatives) if isinstance(value, dict) else row_alternatives)
                     if any(_finding_unresolved(field, target, index, item) for item in proposal.get("unresolved_fields", [])):
                         evidence_label = "missing"
                     default_status = (value.get("status", "proposed") if subskill_id == "scanned_printed_areas" and isinstance(value, dict)
                                       else evidence_label if evidence_label == "missing" else "proposed")
                     input_applied = (decision.get("status") == "accepted" and (
-                        subskill_id in {"room_identity_use", "room_boundaries_areas", "scanned_printed_areas"}))
+                        subskill_id in {"room_identity_use", "room_boundaries_areas", "scanned_printed_areas"} or decision.get("applied") is True))
                     findings.append({"id": finding_id, "subskill_id": subskill_id, "field": field,
                         "value": decision.get("value", value), "status": decision.get("status", default_status),
                         "evidence": evidence_label, "missing": evidence_label == "missing", "target": target,
@@ -3042,11 +3043,21 @@ def _response(web, project):
                         "citations": citations, "inferences": inference_text,
                         "input_applied": input_applied,
                         "formula": formula, "calculation": calculation,
-                        "confidence": proposal.get("confidence"), "alternatives": proposal.get("alternatives", []),
+                        "confidence": proposal.get("confidence"),
+                        "alternatives": value.get("alternatives", row_alternatives) if isinstance(value, dict) else row_alternatives,
                         "unresolved_fields": proposal.get("unresolved_fields", []),
+                        "applied_summary": decision.get("applied_summary", ""), "applied_room": decision.get("applied_room", ""),
                         "reviewer": decision.get("reviewer", ""), "reviewed_at": decision.get("updated_at", "")})
     case_file = _case_file_route(project)
     findings = [row for row in findings if not _hidden_finding(row, case_file)]
+    from backend import finding_inputs_service
+    if any(finding_inputs_service.applies(row) for row in findings):
+        room_rows = finding_inputs_service.rooms(web, project)
+        for row in findings:
+            if finding_inputs_service.applies(row):
+                # Accepting it sets an input; the room it names (in the app's rooms) is the default choice.
+                mapped = finding_inputs_service.mapped_room(row.get("value"), room_rows)
+                row.update({"sets_input": True, "room_label": row.get("applied_room") or (mapped or {}).get("label", "")})
     _mark_conflicting_findings(findings)
     consent = _read(paths["root"] / "vision_extraction_settings.json", {})
     visible_status = safe.get("status", "not_started")
@@ -3184,6 +3195,23 @@ def _finding_citations(proposal, value, pages, proposal_row_count):
     return output
 
 
+def _row_alternatives(alternatives, value, row_count):
+    """The proposal's alternative readings that concern this row: those naming one of its IDs, or (for a one-row
+    proposal) those naming none. A disagreement about one item (e.g. the fryers' quantity) used to mark every item
+    of the list as conflicting."""
+    if not isinstance(alternatives, list):
+        return []
+    ids = {str(value.get(key)) for key in ("equipment_id", "fixture_id", "room_id", "surface_id", "opening_id", "component_id")
+           if isinstance(value, dict) and value.get(key)}
+    kept = []
+    for item in alternatives:
+        named = {str(item.get(key)) for key in ("component_id", "target", "equipment_id", "fixture_id", "room_id", "surface_id", "opening_id")
+                 if isinstance(item, dict) and item.get(key)}
+        if (named & ids) or (not named and row_count == 1):
+            kept.append(item)
+    return kept
+
+
 def _finding_evidence(value, field, pages, inferences, formula, calculation, alternatives):
     if not _finding_has_value(value):
         return "missing"
@@ -3273,7 +3301,8 @@ def start_after_analysis(web, project):
 
 
 def _answer_options(web, project, findings):
-    if not any(row.get("subskill_id") == "information_needs" and row.get("field") == "needs" for row in findings):
+    if not any((row.get("subskill_id") == "information_needs" and row.get("field") == "needs") or row.get("sets_input")
+               for row in findings):
         return {}
     from backend import need_answers_service
     try:
@@ -3371,11 +3400,20 @@ def _review_finding(web, project, data):
                 raise ValueError("The printed areas did not pass S1 validation and were not applied.")
             room_use_resolution_service.post(web, project, {"action": "resolve"})
             calculation_extraction_service.post(web, project, {"action": "build"})
+    applied = {}
+    from backend import finding_inputs_service
+    if decision == "accepted" and finding_inputs_service.applies(finding):
+        # Set the input it gives (people, lighting watts, an equipment item) before recording the decision, so a
+        # finding that needs a room it doesn't name is refused with that reason rather than half-applied.
+        lighting = [(row["value"], row.get("applied_room", "")) for row in current.get("findings", [])
+                    if row.get("subskill_id") == "lighting_evidence" and row.get("status") == "accepted" and row["id"] != finding_id]
+        result = finding_inputs_service.apply(web, project, finding, value, data.get("room"), reviewer, accepted_lighting=lighting)
+        applied = {"applied": result["applied"], "applied_summary": result["summary"], "applied_room": result["room"]}
     artifact_path = paths["root"] / "skill_review_decisions.json"
     artifact = _read(artifact_path, {"schema_version": 1, "decisions": {}})
     artifact.setdefault("decisions", {})[finding_id] = {"status": decision, "value": value,
         "reviewer": reviewer, "updated_at": time.time(), "run_id": manifest["run_id"],
-        "source_fingerprint": manifest["source_fingerprint"]}
+        "source_fingerprint": manifest["source_fingerprint"], **applied}
     _atomic_json(artifact_path, artifact)
     # Geometry proposals are intentionally withheld from the calculation
     # evidence builder until the operator accepts them.

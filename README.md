@@ -132,6 +132,7 @@ Pass 1 (every page), pass 2 (values) and the skills use one AI provider, chosen 
 | `codex_cli` (default) | The Codex CLI installed and signed in with ChatGPT (`codex login`) | the CLI's default |
 | `openai` | `OPENAI_API_KEY` | `gpt-5` unless set |
 | `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-5-5` unless set |
+| `deepseek` | `DEEPSEEK_API_KEY` | `deepseek-flash` unless set (DeepSeek's model that reads page images; `deepseek-v4-pro` is text only and can't read pages) |
 
 For example `ARCHIE_AI_PROVIDER=anthropic ANTHROPIC_API_KEY=… ./start_web`. Nothing else changes when switching.
 Every AI call is logged per job in `ai_usage.jsonl` (pass, provider, model, seconds, tokens where reported); the
