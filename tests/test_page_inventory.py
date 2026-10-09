@@ -2,6 +2,7 @@
 """Pass 1 of the PDF review: page readings, page roles from them, and the server job (with a stand-in AI)."""
 
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -76,11 +77,16 @@ class FakeReader:
         self.replies, self.calls, self.gate = replies, [], gate
 
     def propose(self, prompt, image_paths=()):
-        page = int(Path(image_paths[0]).stem.split("-")[1])
-        self.calls.append(page)
+        pages = [int(Path(path).stem.split("-")[1]) for path in image_paths]
+        self.calls.extend(pages)
+        self.batches = getattr(self, "batches", []) + [pages]
         if self.gate:
             self.gate.wait(5)
-        reply = self.replies[page]
+        if len(pages) > 1:
+            # Several pages in one call: a page that would fail is left out of the reply (it's then read on its own).
+            return {"pages": {str(page): self.replies[page] for page in pages
+                              if not isinstance(self.replies[page], Exception)}}, {"provider": "fake"}
+        reply = self.replies[pages[0]]
         if isinstance(reply, Exception):
             raise reply
         return reply, {"provider": "fake"}
@@ -145,7 +151,23 @@ class ServiceTests(unittest.TestCase):
         service.start(None, self.project, {"action": "retry"})
         done = wait(self.project)
         self.assertEqual((done["status"], done["read"]), ("done", 3))
-        self.assertEqual(sorted(reader.calls), [1, 2, 2, 3, 3])
+        self.assertEqual(reader.calls.count(1), 1)                     # never read again
+        self.assertEqual(reader.batches[-1], [2, 3])                    # the retry reads only the failed pages, together
+
+    def test_pages_are_read_several_per_call_and_cached_one_by_one(self):
+        reader = FakeReader({1: self.plan, 2: self.schedule, 3: {"page_type": "render_or_photo"}})
+        service.PROVIDER_FACTORY = lambda: reader
+        service.start(None, self.project)
+        done = wait(self.project)
+        self.assertEqual((done["status"], done["read"]), ("done", 3))
+        self.assertEqual(reader.batches, [[1, 2, 3]])                   # one call for three pages
+        cached = [json.loads(path.read_text()) for path in (Path(self.project["review_dir"]) / service.WORK_DIR / "replies").glob("*.json")]
+        self.assertEqual(sorted(row["page"] for row in cached), [1, 2, 3])
+        self.assertTrue(all(row["read_with_pages"] == [1, 2, 3] for row in cached))
+        with patch.dict(os.environ, {"ARCHIE_PAGE_BATCH": "1"}):
+            self.assertEqual(service.batch_size(), 1)
+        with patch.dict(os.environ, {"ARCHIE_PAGE_BATCH": "x"}):
+            self.assertEqual(service.batch_size(), 4)
 
     def test_a_second_start_joins_the_running_job(self):
         gate = threading.Event()

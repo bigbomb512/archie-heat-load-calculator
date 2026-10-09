@@ -1,4 +1,4 @@
-"""Pass 1 of the PDF review on the server: read every page of the job's PDF with the AI, one page per call.
+"""Pass 1 of the PDF review on the server: read every page of the job's PDF with the AI, a few pages per call.
 
 The AI is the provider chosen in backend.ai_provider (the Codex CLI with the team's ChatGPT sign-in by default).
 Each page is rendered to an image, sent on its own, and the checked reply is saved. Replies are
@@ -20,7 +20,7 @@ import shutil
 import subprocess
 import threading
 
-from ai.page_inventory import PROMPT_VERSION, build_prompt, packet_from_readings, main_plan_pages, validate_reply
+from ai.page_inventory import PROMPT_VERSION, batch_prompt, build_prompt, packet_from_readings, main_plan_pages, validate_reply
 from backend import ai_provider
 from backend.job_runner import BackgroundJob, now, read_json, write_json
 
@@ -78,47 +78,102 @@ def _cache_key(image_path, model):
     return hashlib.sha256(f"{digest}|{PROMPT_VERSION}|{model}".encode()).hexdigest()[:32]
 
 
-def read_pages(images, cache_dir, provider, workers=WORKERS, on_page=None):
-    """Read each page image (cached). Returns ({page: reading}, {page: failure reason}, calls made)."""
+def batch_size():
+    """Pages per call (ARCHIE_PAGE_BATCH, default 4). Each call costs about 4,600 tokens before any page; one page
+    image about 2,300. Four pages per call cut a 38-page set from 38 calls to 10."""
+    try:
+        return max(1, min(8, int(os.environ.get("ARCHIE_PAGE_BATCH", "4"))))
+    except ValueError:
+        return 4
+
+
+def read_pages(images, cache_dir, provider, workers=WORKERS, on_page=None, batch=None):
+    """Read each page image (cached per page). Returns ({page: reading}, {page: failure reason}, calls made).
+
+    Pages not in the cache are read a few per call (batch_size()); each page's reading is checked and cached on its
+    own, so a page left out of a reply, or whose reading fails the checks, is read again on its own."""
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
     model = getattr(provider, "model", "") or "default"
     prompt = build_prompt()
     readings, failures, calls = {}, {}, 0
     lock = threading.Lock()
-
     stopped = threading.Event()
 
+    def save(page, image, reading, raw, batch_pages=None):
+        write_json(cache_dir / f"{_cache_key(image, model)}.json",
+                   {"page": page, "prompt_version": PROMPT_VERSION, "model": model, "read_at": now(),
+                    "reading": reading, "raw": raw, **({"read_with_pages": batch_pages} if batch_pages else {})})
+
     def one(page, image):
-        cached = read_json(cache_dir / f"{_cache_key(image, model)}.json")
-        if cached.get("reading"):
-            return page, cached["reading"], None, False
         if stopped.is_set():
-            return page, None, stopped.reason, False
+            return [(page, None, stopped.reason)], 0
         try:
             reply, raw = provider.propose(prompt, image_paths=[image])
             reading = validate_reply(reply)
         except UsageLimitReached as error:
             stopped.reason = str(error)
             stopped.set()
-            return page, None, str(error), True
+            return [(page, None, str(error))], 1
         except Exception as error:
-            return page, None, " ".join(str(error).split())[:400] or error.__class__.__name__, True
-        write_json(cache_dir / f"{_cache_key(image, model)}.json",
-                   {"page": page, "prompt_version": PROMPT_VERSION, "model": model, "read_at": now(),
-                    "reading": reading, "raw": raw})
-        return page, reading, None, True
+            return [(page, None, " ".join(str(error).split())[:400] or error.__class__.__name__)], 1
+        save(page, image, reading, raw)
+        return [(page, reading, None)], 1
 
+    def several(pages):
+        if len(pages) == 1:
+            return one(pages[0], images[pages[0]])
+        if stopped.is_set():
+            return [(page, None, stopped.reason) for page in pages], 0
+        try:
+            reply, raw = provider.propose(batch_prompt(pages), image_paths=[images[page] for page in pages])
+        except UsageLimitReached as error:
+            stopped.reason = str(error)
+            stopped.set()
+            return [(page, None, str(error)) for page in pages], 1
+        except Exception as error:
+            reason = " ".join(str(error).split())[:400] or error.__class__.__name__
+            return [(page, None, reason) for page in pages], 1
+        answers = reply.get("pages") if isinstance(reply, dict) and isinstance(reply.get("pages"), dict) else {}
+        results, made, again = [], 1, []
+        for page in pages:
+            try:
+                reading = validate_reply(answers.get(str(page)))
+            except ValueError:
+                again.append(page)
+                continue
+            # The call's record without the whole reply (kept once per page would repeat it): this page's part only.
+            save(page, images[page], reading, {**{key: value for key, value in (raw or {}).items() if key != "reply_text"},
+                                               "reply_text": json.dumps(answers.get(str(page)), ensure_ascii=False)}, pages)
+            results.append((page, reading, None))
+        for page in again:
+            rows, extra = one(page, images[page])
+            results.extend(rows)
+            made += extra
+        return results, made
+
+    todo = []
+    for page, image in sorted(images.items()):
+        cached = read_json(cache_dir / f"{_cache_key(image, model)}.json")
+        if cached.get("reading"):
+            readings[page] = cached["reading"]
+        else:
+            todo.append(page)
+    if on_page and readings:
+        on_page(len(readings), len(images))
+    size = batch or batch_size()
+    chunks = [todo[index:index + size] for index in range(0, len(todo), size)]
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        futures = [pool.submit(one, page, image) for page, image in sorted(images.items())]
+        futures = [pool.submit(several, chunk) for chunk in chunks]
         for future in as_completed(futures):
-            page, reading, failure, called = future.result()
+            rows, made = future.result()
             with lock:
-                calls += int(called)
-                if reading:
-                    readings[page] = reading
-                else:
-                    failures[page] = failure
+                calls += made
+                for page, reading, failure in rows:
+                    if reading:
+                        readings[page] = reading
+                    else:
+                        failures[page] = failure
                 if on_page:
                     on_page(len(readings) + len(failures), len(images))
     return readings, failures, calls

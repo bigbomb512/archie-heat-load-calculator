@@ -1,7 +1,7 @@
 """Pass 1 of the PDF review: what is on each page, read by an AI model one page at a time.
 
-Every page of the drawing set is sent on its own (a whole set in one request shrinks the
-small print). The model says what kind of page it is and lists the heat-load information
+Every page is sent as its own full-size image (a whole set drawn into one image shrinks the small print);
+a few pages can share a call, each still read on its own. The model says what kind of page it is and lists the heat-load information
 visible on it, with a short piece of evidence for each item.
 
 This module holds the prompt, the checks on a reply, and how a set's page readings become
@@ -30,12 +30,9 @@ MAIN_PLAN_KINDS = {"proposed_layout", "dimension_setout"}
 # Pages thrown away only when they also show no heat-load information at all.
 DISCARDABLE_TYPES = {"render_or_photo", "cover_or_drawing_list", "other"}
 
-PROMPT = f"""You are reading ONE page of an architectural drawing set for a commercial HVAC cooling heat-load calculation.
-Reply with JSON only (no prose, no code fence), exactly this shape:
-{{"page_type": "...", "floor_plan_kind": "...", "whole_floor": true, "title": "...", "drawing_number": "...", "level": "...",
- "information": [{{"kind": "...", "what": "...", "evidence": "..."}}]}}
-
-page_type: one of {", ".join(PAGE_TYPES)}.
+_SHAPE = """{"page_type": "...", "floor_plan_kind": "...", "whole_floor": true, "title": "...", "drawing_number": "...", "level": "...",
+ "information": [{"kind": "...", "what": "...", "evidence": "..."}]}"""
+_RULES = f"""page_type: one of {", ".join(PAGE_TYPES)}.
   floor_plan = a top-down plan of floor areas (layout, dimension/set-out, existing, furniture, finishes, equipment plans).
   reflected_ceiling_plan = ceiling plan (RCP). services_plan = mechanical, electrical, lighting, hydraulic or fire plan by a services consultant.
   schedule = a page that is mainly a table (finishes, equipment, door/window, lighting schedules).
@@ -48,6 +45,18 @@ information: every item of heat-load information visible on THIS page. kind is o
   what = the information itself with its numbers and units (e.g. "Shopfront 11,900 mm wide", "75 inch TV on wall", "6.38 mm clear laminated glass").
   evidence = a short quote or where on the page it is. List nothing that isn't visible here. An empty list is a valid answer.
 """
+PROMPT = ("You are reading ONE page of an architectural drawing set for a commercial HVAC cooling heat-load calculation.\n"
+          f"Reply with JSON only (no prose, no code fence), exactly this shape:\n{_SHAPE}\n\n{_RULES}")
+
+
+def batch_prompt(pages):
+    """Several pages read in one call: each attached image is one whole page at full size, read on its own. One call
+    instead of one per page saves the fixed cost of a call (about 4,600 tokens) for every page after the first."""
+    listing = ", ".join(f"image {index} is page {page}" for index, page in enumerate(pages, 1))
+    return (f"You are reading {len(pages)} pages of an architectural drawing set for a commercial HVAC cooling heat-load "
+            f"calculation, one image per page: {listing}. Read each page on its own, as if it were the only page.\n"
+            "Reply with JSON only (no prose, no code fence), exactly this shape, with one reading per page keyed by its "
+            f'page number:\n{{"pages": {{"{pages[0]}": READING, ...}}}}\nwhere each READING is exactly:\n{_SHAPE}\n\n{_RULES}')
 
 
 def build_prompt():
