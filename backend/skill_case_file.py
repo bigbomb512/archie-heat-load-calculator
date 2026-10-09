@@ -45,9 +45,14 @@ SUBSKILL_KINDS = {
     "circuit_mapping": ("hvac_plant",), "pump_inputs": ("hvac_plant",), "pipe_effects": ("hvac_plant",), "coincident_duty": ("hvac_plant",),
     "information_needs": ALL_KINDS,
 }
-IMAGE_LIMIT = {"room_boundaries_areas": 6, "room_identity_use": 6, "cross_sheet_opening_match": 6, "glazing_properties": 6,
-               "information_needs": 0}
-DEFAULT_IMAGES = 4
+# Each attached page costs about 3,000 tokens, close to a third of a typical call, so pages go only where reading the
+# drawing itself matters. Tasks that work from earlier skills' results and the readings get none.
+IMAGE_LIMIT = {"room_boundaries_areas": 4, "room_identity_use": 3, "cross_sheet_opening_match": 3, "glazing_properties": 3,
+               "equipment_evidence": 3,
+               **{task: 0 for task in ("information_needs", "solar_source", "surface_area", "boundary_resolution",
+                                       "outside_air", "infiltration", "make_up_air", "airflow_deduplication",
+                                       "air_path_reconciliation", "component_inputs", "coil_duty", "coincident_duty")}}
+DEFAULT_IMAGES = 2
 MAX_READINGS = 400
 # Pages that carry values first: schedules and plans before renders and covers.
 TYPE_RANK = {"schedule": 0, "floor_plan": 1, "reflected_ceiling_plan": 1, "elevation": 2, "section": 2, "services_plan": 2,
@@ -78,14 +83,16 @@ def build(subskill_id, project):
     root = Path(project["review_dir"])
     pages = {int(page): row for page, row in (read_json(root / pass1.RESULT_FILE).get("pages") or {}).items()}
     kinds = set(SUBSKILL_KINDS.get(subskill_id, ()))
-    index = [{"page": page, "type": row.get("page_type", ""), "title": row.get("title", ""), "level": row.get("level", ""),
-              "kinds": sorted({item.get("kind") for item in row.get("information", [])})}
+    # One line per page ("19 | floor_plan | PROPOSED FLOOR LAYOUT | level | kinds"): the same facts at half the size.
+    index = [" | ".join(str(part) for part in (page, row.get("page_type", ""), row.get("title", ""), row.get("level", ""),
+                                                ",".join(sorted({item.get("kind") for item in row.get("information", [])}))))
              for page, row in sorted(pages.items())]
     readings, counts = [], {}
     for page, row in sorted(pages.items()):
         for item in row.get("information", []):
             if item.get("kind") in kinds:
-                readings.append({"page": page, "kind": item["kind"], "what": item.get("what", ""), "evidence": item.get("evidence", "")[:160]})
+                # "p<page> <kind>: <what> — <evidence>": a line per reading rather than a keyed object.
+                readings.append(f"p{page} {item['kind']}: {item.get('what', '')} — {item.get('evidence', '')[:160]}")
                 counts[page] = counts.get(page, 0) + 1
     extracted = {}
     results = read_json(root / pass2.RESULT_FILE)
@@ -99,7 +106,7 @@ def build(subskill_id, project):
     renders = {int(path.stem.split("-")[1]): path for path in (root / pass1.WORK_DIR / "pages").glob("p-*.png")}
     images = [renders[page] for page in ranked if page in renders]
     case = {"job": job_context(project),
-            "note": ("Pages are numbered as in the PDF. 'readings' are what an AI page-by-page pass found on each page; "
+            "note": ("Pages are numbered as in the PDF; page_index lines are page | type | title | level | kinds. 'readings' are what an AI page-by-page pass found on each page; "
                      "'extracted' are values already read for these kinds. Attached images are the listed pages. Cite pages "
                      "for every value; treat readings as leads to check, not as approved values."),
             "page_index": index, "readings": readings[:MAX_READINGS], "readings_omitted": max(0, len(readings) - MAX_READINGS),

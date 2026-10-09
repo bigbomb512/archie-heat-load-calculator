@@ -120,8 +120,9 @@ class CodexCliProvider:
             # The model process gets no API key from this server's environment.
             env = {key: value for key, value in os.environ.items() if key not in {"OPENAI_API_KEY", "ANTHROPIC_API_KEY"}}
             try:
+                # Run in the empty temp folder so the CLI doesn't add this repository's AGENTS.md to every prompt.
                 result = subprocess.run(command, input=str(prompt), capture_output=True, text=True,
-                                        timeout=self.timeout, env=env, check=False)
+                                        timeout=self.timeout, env=env, check=False, cwd=folder)
             except subprocess.TimeoutExpired as error:
                 raise RuntimeError(f"No reply within {self.timeout} seconds.") from error
             reply_text = output.read_text(encoding="utf-8") if output.is_file() else ""

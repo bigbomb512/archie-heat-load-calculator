@@ -975,7 +975,7 @@ class SkillWorkflowTests(unittest.TestCase):
         for absent in ("witness_ids", "source_fingerprints", "record_fingerprint", "attempt_ref", "output_summary", "long observation"):
             self.assertNotIn(absent, prompt)
         self.assertIn("room-1", prompt)
-        self.assertIn("sheet:202", prompt)
+        self.assertNotIn("sheet:202", prompt)             # a prerequisite's affected IDs are left out; its fields carry the IDs
         self.assertIn("[truncated 1400 chars]", prompt)
         self.assertEqual(report["status"], "within_budget")
         self.assertEqual(report["prompt_chars"], len(prompt))
@@ -988,6 +988,29 @@ class SkillWorkflowTests(unittest.TestCase):
         self.assertEqual(skills._compact_line({"candidate_id": "P20-VLINE-1", "start_px": [10.4, 20.6], "end_px": [99.5, 20.6],
                                                "candidate_role_hint": "possible_wall_or_dimension"}),
                          ["P20-VLINE-1", 10, 21, 100, 21, "W"])
+
+    def test_prompt_compaction_shrinks_empties_schedules_numbers_and_citations(self):
+        stats = {}
+        hours = [0.0] * 10 + [1.0] * 13 + [0.0]
+        compact = skills._compact_for_prompt({
+            "room_id": "room-1", "model": None, "notes": "", "walls": [], "operands": {}, "flag": False, "count": 0,
+            "schedule": {"weekday": hours, "saturday": hours, "sunday": [0.0] * 24},
+            "mm_per_px": 14.102976029169326, "value_mm": 23265.0, "x": 1932.42,
+            "evidence": [{"page": 21, "excerpt": "Shop"}, {"page": 21, "excerpt": "Shop"}],
+            "points": [[1.0, 2.0], [1.0, 2.0]]}, stats)
+        self.assertEqual(compact, {"room_id": "room-1", "flag": False, "count": 0,
+            "schedule": {"weekday,saturday": "00-10:0 10-23:1 23-24:0", "sunday": "00-24:0"},
+            "mm_per_px": 14.1, "value_mm": 23265.0, "x": 1932.0,
+            "evidence": [{"page": 21, "excerpt": "Shop"}],    # an identical record once
+            "points": [[1.0, 2.0], [1.0, 2.0]]})              # coordinates are never de-duplicated (a closing point stays)
+        self.assertEqual((stats["dropped_empty"], stats["dropped_duplicates"]), (4, 1))
+        self.assertEqual(skills._compact_for_prompt([0.5] * 24, {}), "00-24:0.5")
+        dependencies = skills._compact_dependencies({"equipment_evidence": {"status": "needs_review", "proposal": {
+            "affected_ids": ["a"], "citations": [{"id": "c1", "physical_page": 5, "locator": "Upper right", "excerpt": "E06 COMBI OVEN"},
+                                                 {"page": 20, "visual_evidence": "v" * 300}]}}})
+        self.assertEqual(dependencies["equipment_evidence"]["proposal"],
+                         {"citations": ["p5: E06 COMBI OVEN", "p20: " + "v" * 160]})
+        self.assertEqual(skills._prompt_json({"a": [1, 2]}), '{"a":[1,2]}')
 
     def test_over_budget_task_is_blocked_without_contacting_provider(self):
         original_factory, original_groups = skills.SKILL_PROVIDER_FACTORY, skills.select_page_groups

@@ -66,8 +66,11 @@ _PROMPT_NOISE_KEYS = frozenset({
     "evidence_fingerprint", "fingerprint", "input_fingerprint", "dependency_fingerprints", "pack_fingerprint",
     "taxonomy_fingerprint", "created_at", "updated_at", "generated_at", "started_at", "finished_at",
     "bridge_provenance", "artifact_names", "evidence_artifact_names", "attempt_ref", "output_summary",
+    # Labels the model can derive or doesn't need: which file a record came from, a band restating the confidence,
+    # the page classifier's label (the page index carries the page type) and run bookkeeping.
+    "source_artifact", "confidence_band", "sheet_classification", "run_id",
 })
-_DEPENDENCY_PROMPT_FIELDS = ("status", "affected_ids", "citations", "proposal_fields", "unresolved_fields")
+_DEPENDENCY_PROMPT_FIELDS = ("status", "citations", "proposal_fields", "unresolved_fields")
 _UNVALIDATED_GEOMETRY_KINDS = frozenset({"wall", "dimension"})
 _LINE_ROLE_CODES = {"possible_wall_or_dimension": "W", "vector_context": "C"}
 # The room-boundary task is the one task that must see a plan's full vector
@@ -1465,29 +1468,86 @@ def _compact_for_prompt(value, stats):
     timestamps and witness lists are resolver bookkeeping the model cannot use.
     """
     if isinstance(value, dict):
+        hourly = _hourly_schedule_text(value)
+        if hourly is not None:
+            return hourly
         result = {}
         for key, item in value.items():
             if key in _PROMPT_NOISE_KEYS:
                 stats["dropped_keys"] = stats.get("dropped_keys", 0) + 1
                 continue
-            result[key] = _compact_for_prompt(item, stats)
+            item = _compact_for_prompt(item, stats)
+            # An empty or null field says nothing the model can use; leaving it out is most of a prompt's saving.
+            if item is None or item == "" or item == [] or item == {}:
+                stats["dropped_empty"] = stats.get("dropped_empty", 0) + 1
+                continue
+            result[key] = item
         return result
     if isinstance(value, list):
-        return [_compact_for_prompt(item, stats) for item in value]
+        if _is_hourly(value):
+            return _hours_text(value)
+        result = []
+        for item in (_compact_for_prompt(item, stats) for item in value):
+            if isinstance(item, dict) and item in result:
+                stats["dropped_duplicates"] = stats.get("dropped_duplicates", 0) + 1
+                continue
+            result.append(item)
+        return result
+    if isinstance(value, float) and value == value and abs(value) != float("inf"):
+        # Pixel coordinates and fitted ratios carry 12+ digits the model can't use: keep 4 significant figures
+        # (whole numbers from 1,000 up), enough for any measurement on a drawing.
+        return float(round(value)) if abs(value) >= 1000 else float(f"{value:.4g}")
     if isinstance(value, str) and len(value) > _PROMPT_TEXT_LIMIT:
         stats["truncated_strings"] = stats.get("truncated_strings", 0) + 1
         return value[:_PROMPT_TEXT_LIMIT] + f"…[truncated {len(value) - _PROMPT_TEXT_LIMIT} chars]"
     return value
 
 
+def _is_hourly(value):
+    return (isinstance(value, list) and len(value) == 24
+            and all(isinstance(item, (int, float)) and not isinstance(item, bool) for item in value))
+
+
+def _hours_text(values):
+    """24 hourly fractions as runs, e.g. "00-10:0 10-23:1 23-24:0"."""
+    runs, start = [], 0
+    for hour in range(1, 25):
+        if hour == 24 or values[hour] != values[start]:
+            runs.append(f"{start:02d}-{hour:02d}:{values[start]:g}")
+            start = hour
+    return " ".join(runs)
+
+
+def _hourly_schedule_text(value):
+    """A day-type schedule ({weekday: [24], saturday: [24], ...}) as runs, with identical day types merged."""
+    if not value or not all(_is_hourly(item) for item in value.values()):
+        return None
+    grouped = {}
+    for day, hours in value.items():
+        grouped.setdefault(_hours_text(hours), []).append(day)
+    return {",".join(days): text for text, days in grouped.items()}
+
+
+def _citation_line(citation):
+    """A prerequisite's citation as "p<page>: <what it shows>"; the page is what a later task needs to look again."""
+    if not isinstance(citation, dict):
+        return citation
+    page = next((citation.get(key) for key in ("physical_page", "page", "source_page") if citation.get(key) is not None), "?")
+    text = next((str(citation[key]) for key in ("excerpt", "visual_evidence", "detail", "locator") if citation.get(key)), "")
+    return f"p{page}: {text[:160]}"
+
+
 def _compact_dependencies(dependencies):
-    """Pass prerequisites as their validated proposal content only."""
+    """Pass prerequisites as their validated proposal content only, with citations shortened to page and quote."""
     result = {}
     for key, value in (dependencies or {}).items():
         proposal = value.get("proposal", {}) if isinstance(value, dict) else {}
         proposal = proposal if isinstance(proposal, dict) else {}
+        content = {field: proposal.get(field) for field in _DEPENDENCY_PROMPT_FIELDS if field in proposal}
+        if isinstance(content.get("citations"), list):
+            content["citations"] = [_citation_line(citation) for citation in content["citations"]]
         result[key] = {"status": value.get("status", proposal.get("status", "")) if isinstance(value, dict) else "",
-                       "proposal": {field: proposal.get(field) for field in _DEPENDENCY_PROMPT_FIELDS if field in proposal}}
+                       "proposal": content}
     return result
 
 
@@ -1523,6 +1583,7 @@ def _bounded_proposal_prompt(subskill, dependencies, evidence, image_frames=(), 
     report = {"prompt_chars": len(prompt), "budget_chars": budget,
               "status": "within_budget" if len(prompt) <= budget else "over_budget",
               "dropped_provenance_keys": stats.get("dropped_keys", 0),
+              "dropped_empty_fields": stats.get("dropped_empty", 0),
               "truncated_strings": stats.get("truncated_strings", 0),
               "largest_sections": [{"section": name, "chars": size} for name, size in largest]}
     return prompt, report
@@ -1545,6 +1606,10 @@ def _not_applicable_proposal(subskill, input_fp):
             "proposal_fields": _empty_fields(subskill), "artifact_names": []}
 
 
+def _prompt_json(value):
+    return json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+
+
 def _proposal_prompt(subskill, dependencies, evidence, image_frames=()):
     from ai.skill_registry import load_catalog
     catalog = load_catalog()
@@ -1560,10 +1625,10 @@ def _proposal_prompt(subskill, dependencies, evidence, image_frames=()):
         f"Subskill: {subskill['id']} — {subskill['task']}\n"
         f"Declared proposal fields: {json.dumps(subskill['proposal_fields'], ensure_ascii=False)}\n"
         f"Allowed inputs: {json.dumps(subskill['inputs'], ensure_ascii=False)}\n"
-        f"Validated prerequisite proposals: {json.dumps(dependencies, ensure_ascii=False, allow_nan=False)}\n"
+        f"Validated prerequisite proposals: {_prompt_json(dependencies)}\n"
         f"Instructions:\n{instructions}\n"
         f"Attached image coordinate frames: {json.dumps(list(image_frames), ensure_ascii=False, allow_nan=False)}\n"
-        f"Shared evidence package:\n{json.dumps(evidence, ensure_ascii=False, allow_nan=False)}"
+        f"Shared evidence package:\n{_prompt_json(evidence)}"
     )
 
 
@@ -1861,7 +1926,7 @@ def _call_case_file_provider(subskill, project, dependencies, evidence, attempt_
     model = os.environ.get("ARCHIE_CODEX_MODEL", "").strip() or "codex default"
     attempt_record.update({"prompt": prompt, "images": [{"page": page, "path": str(path)} for page, path in zip(case["attached_pages"], images)],
                            "prompt_budget": budget, "provider": "codex_case_file", "model": model,
-                           "evidence_pages": sorted(set(case["attached_pages"]) | {row["page"] for row in case["readings"]})})
+                           "evidence_pages": sorted(set(case["attached_pages"]) | {int(row[1:].split(" ", 1)[0]) for row in case["readings"]})})
     if budget["status"] != "within_budget":
         attempt_record["raw_record"] = {"provider": "none_prompt_over_budget", "reply_text": ""}
         return None

@@ -44,14 +44,15 @@ class CaseFileTests(unittest.TestCase):
 
     def test_a_skill_gets_the_whole_index_its_own_readings_the_extracted_values_and_its_key_pages(self):
         case, images = skill_case_file.build("equipment_evidence", self.project)
-        self.assertEqual([row["page"] for row in case["page_index"]], [1, 5, 20, 26])
-        self.assertEqual([(row["page"], row["what"]) for row in case["readings"]],
-                         [(5, "E06 Combi oven x1"), (5, "E21 UB fridge x10"), (20, "Combi oven under hood")])
+        self.assertEqual([row.split(" | ")[0] for row in case["page_index"]], ["1", "5", "20", "26"])  # one line per page
+        self.assertEqual([row.split(" — ")[0] for row in case["readings"]],
+                         ["p5 equipment_appliances: E06 Combi oven x1", "p5 equipment_appliances: E21 UB fridge x10",
+                          "p20 equipment_appliances: Combi oven under hood"])
         self.assertEqual(case["extracted"]["equipment_appliances"][0]["value"]["code"], "E06")
         self.assertEqual(case["attached_pages"], [5, 20])                 # most relevant readings first
         self.assertEqual([path.name for path in images], ["p-05.png", "p-20.png"])
         glazing, _ = skill_case_file.build("glazing_properties", self.project)
-        self.assertEqual([row["page"] for row in glazing["readings"]], [26])
+        self.assertEqual([row.split(" ")[0] for row in glazing["readings"]], ["p26"])
         needs, needs_images = skill_case_file.build("information_needs", self.project)
         self.assertEqual((len(needs["readings"]), needs_images), (6, []))  # every kind, as text only
 

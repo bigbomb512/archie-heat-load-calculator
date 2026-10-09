@@ -137,6 +137,17 @@ class CodexCliTests(unittest.TestCase):
         self.assertEqual(len(result["rows"]), 1000)
         self.assertEqual(json.loads(raw["reply_text"]), result)
 
+    def test_the_cli_runs_outside_the_repository_so_its_agents_file_is_not_sent(self):
+        with tempfile.TemporaryDirectory() as folder:
+            script = Path(folder) / "codex"
+            script.write_text("#!/bin/sh\n"
+                              'out=""; while [ $# -gt 0 ]; do if [ "$1" = "--output-last-message" ]; then out="$2"; fi; shift; done\n'
+                              'cat > /dev/null\nprintf \'{"cwd": "%s", "agents": "%s"}\' "$PWD" "$(ls AGENTS.md 2>/dev/null)" > "$out"\n')
+            script.chmod(script.stat().st_mode | stat.S_IEXEC)
+            result, _ = ai_provider.CodexCliProvider(executable=str(script), model="").propose("x")
+        self.assertNotEqual(Path(result["cwd"]).resolve(), Path.cwd().resolve())
+        self.assertEqual(result["agents"], "")
+
     def test_a_used_up_plan_is_a_usage_limit(self):
         with tempfile.TemporaryDirectory() as folder:
             provider = ai_provider.CodexCliProvider(executable=self.fake_cli(folder, "", 1, "ERROR: You have hit your usage limit. try again at 6:01 PM."), model="")
