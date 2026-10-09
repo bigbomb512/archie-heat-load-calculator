@@ -47,10 +47,10 @@ CodexCliPageReader = ai_provider.CodexCliProvider
 _usage_limit_message = ai_provider.usage_limit_message
 
 
-def _provider():
+def _provider(task="pass1"):
     if PROVIDER_FACTORY is not None:
         return PROVIDER_FACTORY()
-    return ai_provider.get()
+    return ai_provider.get(task)
 
 
 def pdf_signature(pdf_path):

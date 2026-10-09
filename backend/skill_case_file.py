@@ -45,10 +45,10 @@ SUBSKILL_KINDS = {
     "circuit_mapping": ("hvac_plant",), "pump_inputs": ("hvac_plant",), "pipe_effects": ("hvac_plant",), "coincident_duty": ("hvac_plant",),
     "information_needs": ALL_KINDS,
 }
-# Each attached page costs about 3,000 tokens, close to a third of a typical call, so pages go only where reading the
+# Each attached page costs about 2,300 tokens (measured on a page reading), so pages go only where reading the
 # drawing itself matters. Tasks that work from earlier skills' results and the readings get none.
 IMAGE_LIMIT = {"room_boundaries_areas": 4, "room_identity_use": 3, "cross_sheet_opening_match": 3, "glazing_properties": 3,
-               "equipment_evidence": 3,
+               "equipment_evidence": 4,
                **{task: 0 for task in ("information_needs", "solar_source", "surface_area", "boundary_resolution",
                                        "outside_air", "infiltration", "make_up_air", "airflow_deduplication",
                                        "air_path_reconciliation", "component_inputs", "coil_duty", "coincident_duty")}}

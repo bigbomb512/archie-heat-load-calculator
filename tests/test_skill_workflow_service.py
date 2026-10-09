@@ -62,13 +62,25 @@ class SkillWorkflowTests(unittest.TestCase):
                 {"id": "b", "version": 1, "purpose": "b", "depends_on": ["a"], "subskills": [], "output_contract": "a", "resolver_handoff": "b"},
             ], "enabled_skill_ids": ["a"], "pilot_skill_ids": ["a"]})
 
-    def test_pdf_review_scope_covers_heat_load_evidence_but_not_final_policy(self):
+    def test_pdf_review_scope_is_the_needs_list_and_what_it_depends_on_but_not_final_policy(self):
         registry = skills.load_subskill_registry()
-        selected = skills._scoped_subskill_ids(registry, set(skills.load_catalog()["enabled_skill_ids"]), "pdf_review")
-        self.assertTrue({"room_boundaries_areas", "ceiling_height_volume", "surface_inventory", "glazing_properties",
-                         "outside_air", "system_detection", "plant_detection"}.issubset(selected))
-        self.assertNotIn("policy_source", selected)
-        self.assertNotIn("report_readiness", selected)
+        enabled = set(skills.load_catalog()["enabled_skill_ids"])
+        selected = skills._scoped_subskill_ids(registry, enabled, "pdf_review")
+        self.assertTrue({"information_needs", "room_boundaries_areas", "ceiling_height_volume", "surface_inventory",
+                         "glazing_properties", "outside_air", "process_exhaust", "sheet_identity", "address_confirmation",
+                         "weather_source_matching"}.issubset(selected))
+        # Nothing reads these skills' results, so the default review doesn't pay for them.
+        for unused in ("airflow_deduplication", "infiltration", "make_up_air", "surface_area", "boundary_resolution", "shading",
+                       "solar_source", "system_detection", "zone_ownership", "plant_detection", "coil_duty", "component_inputs"):
+            self.assertNotIn(unused, selected)
+        by_id = {row["id"]: row for row in registry["subskills"]}
+        for skill_id in selected:                                  # closed over prerequisites
+            self.assertLessEqual(set(by_id[skill_id].get("depends_on", [])) - {"policy_source"}, selected, skill_id)
+        full = skills._scoped_subskill_ids(registry, enabled, "full_review")
+        self.assertTrue({"system_detection", "plant_detection", "airflow_deduplication"}.issubset(full))
+        for selected_scope in (selected, full):
+            self.assertNotIn("policy_source", selected_scope)
+            self.assertNotIn("report_readiness", selected_scope)
 
     def test_review_requires_consent_and_reports_missing_provider_as_blocked(self):
         with tempfile.TemporaryDirectory() as folder:

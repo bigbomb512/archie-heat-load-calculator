@@ -27,7 +27,7 @@ from copy import deepcopy
 from pathlib import Path
 
 from backend.vision_extraction_service import _atomic_json
-from ai.skill_registry import catalog_fingerprint, compose_subskill_instructions, load_subskill_registry
+from ai.skill_registry import compose_subskill_instructions, instruction_path, load_subskill_registry, subskill_instructions_fingerprint
 from ai.vision_extraction import select_page_groups
 
 
@@ -89,9 +89,13 @@ _VALUE_TARGET_KEYWORDS = {
 # full workflow's provider usage.
 _WORKFLOW_SCOPES = {
     "all": None,
-    # PDF review covers evidence discovery for a heat-load calculation. Policy
-    # approval and final model reconciliation happen after the evidence review.
-    "pdf_review": frozenset({
+    # PDF review is the "What we need to find" list and every skill it depends on (the scope is closed over
+    # prerequisites), plus the address and weather steps, which make no AI call. Skills whose results nothing reads
+    # (airflow reconciliation, surface areas, shading, solar, zones, plant and coils) are left out: about a third of the
+    # calls of a full review. Their findings never reached the calculation; "full_review" still runs them on request.
+    "pdf_review": frozenset({"information_needs", "address_confirmation", "weather_source_matching"}),
+    # Evidence discovery across every domain. Policy approval and final model reconciliation happen afterwards.
+    "full_review": frozenset({
         "sheet_identity", "revision_scope", "page_relationships", "site_clue_extraction",
         "address_confirmation", "weather_source_matching", "room_identity_use", "room_boundaries_areas",
         "ceiling_height_volume", "occupancy_seating", "lighting_evidence", "equipment_evidence",
@@ -199,18 +203,14 @@ def validate_catalog(catalog):
             require_dependencies(dependency)
     for skill_id in enabled_ids:
         require_dependencies(skill_id)
-    for skill in skills:
-        instruction = skill.get("instruction_file") or catalog.get("instruction_file")
-        if instruction and not (_INSTRUCTIONS_PATH / instruction).is_file():
-            raise ValueError(f"Skill {skill['id']} references a missing instruction file.")
-    instruction = (_INSTRUCTIONS_PATH / catalog.get("instruction_file", "")).read_text(encoding="utf-8")
-    required_headings = {"## Shared control policy"}
-    for skill in skills:
-        required_headings.add(f"## Parent playbook: {skill['id']}")
-        required_headings.update(f"### Subskill: {subskill}" for subskill in skill["subskills"])
-    missing_headings = sorted(heading for heading in required_headings if heading not in instruction.splitlines())
-    if missing_headings:
-        raise ValueError("Runtime skill instructions are incomplete: " + ", ".join(missing_headings))
+    # Every skill needs its instruction files: the shared policy, its playbook and one file per sub-skill.
+    missing_files = []
+    for path in [instruction_path(catalog)] + [instruction_path(catalog, skill["id"], subskill) for skill in skills
+                                                for subskill in [None, *skill["subskills"]]]:
+        if not path.is_file():
+            missing_files.append(path.relative_to(instruction_path(catalog).parent).as_posix())
+    if missing_files:
+        raise ValueError("Runtime skill instructions are incomplete: " + ", ".join(missing_files))
     return True
 
 
@@ -285,8 +285,8 @@ def _source_inputs(paths, catalog):
         "page_inventory": _read(paths["root"] / "page_inventory.json", {}).get("pages", {}),
         "page_extraction": {kind: row.get("findings") for kind, row in _read(paths["root"] / "page_extraction.json", {}).items()},
         "catalog": catalog,
-        "subskill_registry": load_subskill_registry(),
-        "instructions_fingerprint": catalog_fingerprint(),
+        # Each sub-skill's own definition and instructions are in its input fingerprint (_execute_subskill), not here:
+        # editing one skill's instructions or definition re-runs that skill and what depends on its result, not all.
     }
 
 
@@ -311,8 +311,7 @@ def _source_fingerprint(paths, catalog):
     files = [paths["ai_input"], paths["coverage"], paths["spatial"], paths["vector"], paths["vision"],
              paths["root"] / "vision_extraction_settings.json", paths["root"] / "page_inventory.json",
              paths["root"] / "page_extraction.json"]
-    key = (tuple(_file_signature(path) for path in files), _fingerprint(catalog),
-           _fingerprint(load_subskill_registry()), catalog_fingerprint())
+    key = (tuple(_file_signature(path) for path in files), _fingerprint(catalog))
     root = str(paths["root"])
     with _SOURCE_FP_LOCK:
         cached = _SOURCE_FP_CACHE.get(root)
@@ -1937,7 +1936,7 @@ def _call_case_file_provider(subskill, project, dependencies, evidence, attempt_
         raise error
     from backend import ai_provider
     try:
-        provider = CASE_FILE_PROVIDER_FACTORY() if CASE_FILE_PROVIDER_FACTORY is not None else ai_provider.get()
+        provider = CASE_FILE_PROVIDER_FACTORY() if CASE_FILE_PROVIDER_FACTORY is not None else ai_provider.get(f"skill:{subskill['id']}")
     except ai_provider.ProviderUnavailable as error:
         unavailable = SkillProviderError("skill_provider_unavailable", attempt_record["raw_record"])
         unavailable.detail = str(error)
@@ -1992,6 +1991,7 @@ def _execute_subskill(subskill, project, dependencies, source_fp):
     evidence, artifact_names = _shared_evidence_packet(subskill, project)
     registry = load_subskill_registry()
     input_fp = _fingerprint({"source": source_fp, "subskill": subskill, "evidence": evidence,
+        "instructions": subskill_instructions_fingerprint(subskill),
         # The attempt reference says where a result is stored, not what it says: leave it out, or a prerequisite that
         # is re-produced unchanged (e.g. a deterministic one) would make everything after it look changed on a retry.
         "prerequisites": {key: {"status": value.get("status", ""), "input_fingerprint": value.get("input_fingerprint", ""),

@@ -26,44 +26,56 @@ def load_subskill_registry():
         raise ValueError("The Archie runtime subskills registry is unavailable or invalid.") from error
 
 
+def _instruction_root(catalog):
+    """The folder of skill instructions: shared_policy.md, and per parent skill <parent>/playbook.md and
+    <parent>/<subskill>.md (one file each, so an edit to one skill changes only that skill's instructions)."""
+    root = _ROOT.resolve()
+    path = (root / Path(catalog.get("instruction_dir", ""))).resolve()
+    if root not in path.parents or not path.is_dir():
+        raise ValueError("The runtime skills instruction folder is invalid or missing.")
+    return path
+
+
+def instruction_path(catalog, parent_id=None, subskill_id=None):
+    """Where one instruction file lives: the shared policy, a parent's playbook, or one sub-skill's procedure."""
+    root = _instruction_root(catalog)
+    if parent_id is None:
+        return root / "shared_policy.md"
+    return root / parent_id / f"{subskill_id or 'playbook'}.md"
+
+
+def _read_instruction(path):
+    """A file's text without its title line (the title names the file; the worker gets the body)."""
+    if not path.is_file():
+        raise ValueError("A runtime skill instruction file is missing: " + "/".join(path.parts[-2:]))
+    text = path.read_text(encoding="utf-8")
+    if text.startswith("# "):
+        text = text.split("\n", 1)[1] if "\n" in text else ""
+    return text.strip()
+
+
 def catalog_fingerprint():
+    """Every skill's instructions and definitions together (the vision pass's guidance identity)."""
     catalog = load_catalog()
-    instruction = _instruction_text(catalog)
+    root = _instruction_root(catalog)
+    instructions = {path.relative_to(root).as_posix(): path.read_text(encoding="utf-8") for path in sorted(root.rglob("*.md"))}
     subskills = load_subskill_registry()
-    payload = json.dumps({"catalog": catalog, "instructions": instruction, "subskills": subskills}, sort_keys=True, separators=(",", ":"))
+    payload = json.dumps({"catalog": catalog, "instructions": instructions, "subskills": subskills}, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _instruction_text(catalog):
-    relative = Path(catalog.get("instruction_file", ""))
-    path = (_ROOT / relative).resolve()
-    if _ROOT not in path.parents or not path.is_file():
-        raise ValueError("The runtime skills instruction file is invalid or missing.")
-    return path.read_text(encoding="utf-8")
-
-
-def _section(text, heading, *, stop_at=None):
-    """Read one exact Markdown heading section, stopping at the next peer."""
-    lines = text.splitlines()
-    start = next((index for index, line in enumerate(lines) if line.strip() == heading), None)
-    if start is None:
-        raise ValueError("A runtime skill instruction section is missing.")
-    level = stop_at or len(heading) - len(heading.lstrip("#"))
-    body = []
-    for line in lines[start + 1:]:
-        if line.startswith("#") and len(line) - len(line.lstrip("#")) <= level:
-            break
-        body.append(line)
-    return "\n".join(body).strip()
+def subskill_instructions_fingerprint(subskill):
+    """The identity of exactly what one sub-skill is told: an edit elsewhere doesn't make it run again."""
+    text = compose_subskill_instructions(subskill["parent"], subskill)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def compose_subskill_instructions(parent_id, subskill):
     """Compose canonical safeguards with the parent and bounded task method."""
     catalog = load_catalog()
-    text = _instruction_text(catalog)
-    shared = _section(text, "## Shared control policy")
-    parent = _section(text, f"## Parent playbook: {parent_id}", stop_at=3)
-    task = _section(text, f"### Subskill: {subskill['id']}")
+    shared = _read_instruction(instruction_path(catalog))
+    parent = _read_instruction(instruction_path(catalog, parent_id))
+    task = _read_instruction(instruction_path(catalog, parent_id, subskill["id"]))
     return "\n\n".join((shared, parent, task))
 
 
@@ -81,12 +93,11 @@ def vision_guidance():
     # duplicated prompt on every page group.
     active_subskills = [{key: row.get(key) for key in ("id", "parent", "task", "proposal_fields")}
         for row in registry.get("subskills", []) if row.get("parent") in active]
-    text = _instruction_text(catalog)
     return {
         "catalog_id": catalog.get("catalog_id", ""),
         "catalog_version": catalog.get("schema_version"),
         "skills": skills,
         "subskills": active_subskills,
         "proposal_envelope": registry.get("proposal_envelope", {}),
-        "instructions": _section(text, "## Shared control policy"),
+        "instructions": _read_instruction(instruction_path(catalog)),
     }

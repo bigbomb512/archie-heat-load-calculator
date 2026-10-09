@@ -220,7 +220,7 @@ def start(web, project, data=None):
     if not read_json(root / pass1.RESULT_FILE).get("pages"):
         raise ValueError("Read every page first (pass 1); pass 2 reads the pages it flags.")
     try:
-        provider = pass1._provider()
+        provider = pass1._provider("pass2")
     except pass1.PageReadingUnavailable as error:
         if _JOB.status(project).get("status") not in {"queued", "running"}:
             write_json(_JOB.path(project), {"schema_version": 1, "status": "blocked", "error": str(error), "finished_at": now()})

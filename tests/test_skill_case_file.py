@@ -150,9 +150,10 @@ class RunTests(unittest.TestCase):
             self.assertLess(called.index("room_identity_use"), called.index("equipment_evidence"))
             self.assertEqual(manifest["subskills"]["information_needs"]["status"], "needs_review")
             self.assertNotIn("address_confirmation", called)               # confirmation stays with the operators
-            # No page shows HVAC plant, so the plant chain is skipped without a call and marked not applicable.
-            self.assertFalse({"plant_detection", "circuit_mapping", "pump_inputs"} & set(called))
-            self.assertEqual(manifest["subskills"]["plant_detection"]["status"], "not_applicable")
+            # Skills the needs list doesn't depend on aren't part of the default review and make no call.
+            self.assertFalse({"plant_detection", "circuit_mapping", "pump_inputs", "airflow_deduplication", "surface_area",
+                              "shading", "zone_ownership"} & set(called))
+            self.assertEqual(manifest["subskills"]["plant_detection"]["status"], "not_in_scope")
         finally:
             skills.CASE_FILE_PROVIDER_FACTORY = None
 

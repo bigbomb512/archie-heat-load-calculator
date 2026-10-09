@@ -2,7 +2,7 @@
   "schema_version": 1,
   "catalog_id": "archie-heat-load-skills-v1",
   "workflow_id": "evidence-to-heat-load-v1",
-  "instruction_file": "ai/skills/instructions/heatload_domains_v1.md",
+  "instruction_dir": "ai/skills",
   "subskill_registry_file": "config/archie_subskills_v1.json",
   "enabled_skill_ids": [
     "document_mapping",

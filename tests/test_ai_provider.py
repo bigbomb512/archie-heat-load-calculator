@@ -114,6 +114,16 @@ class HttpProviderTests(unittest.TestCase):
 
 
 class CodexCliTests(unittest.TestCase):
+    def setUp(self):
+        # The provider reads the user's Codex config for the model; tests use an empty Codex home instead.
+        self.home = tempfile.TemporaryDirectory()
+        self.env = patch.dict(os.environ, {"CODEX_HOME": self.home.name})
+        self.env.start()
+
+    def tearDown(self):
+        self.env.stop()
+        self.home.cleanup()
+
     def fake_cli(self, folder, reply, exit_code=0, stderr=""):
         script = Path(folder) / "codex"
         script.write_text("#!/bin/sh\n"
@@ -128,6 +138,26 @@ class CodexCliTests(unittest.TestCase):
             provider = ai_provider.CodexCliProvider(executable=self.fake_cli(folder, '{"page_type": "elevation"}'), model="")
             result, raw = provider.propose("Read this page.")
         self.assertEqual((result, raw["usage"], raw["model"]), ({"page_type": "elevation"}, {"total_tokens": 6693}, "codex default"))
+
+    def test_the_json_events_give_the_token_split(self):
+        events = "\n".join(['{"type":"thread.started"}', '{"type":"item.completed","item":{"type":"agent_message","text":"{}"}}',
+                            '{"type":"turn.completed","usage":{"input_tokens":20000,"cached_input_tokens":15000,'
+                            '"output_tokens":900,"reasoning_output_tokens":300}}'])
+        self.assertEqual(ai_provider.codex_event_usage(events), {"input_tokens": 20000, "cached_input_tokens": 15000,
+                         "output_tokens": 900, "reasoning_output_tokens": 300, "total_tokens": 20900})
+        self.assertEqual(ai_provider.codex_event_usage("not json\ntokens used 5"), {})
+        with tempfile.TemporaryDirectory() as folder:
+            script = Path(folder) / "codex"
+            script.write_text("#!/bin/sh\n"
+                              'out=""; while [ $# -gt 0 ]; do if [ "$1" = "--output-last-message" ]; then out="$2"; fi; shift; done\n'
+                              "cat > /dev/null\nprintf '{}' > \"$out\"\n"
+                              "echo '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":10,\"cached_input_tokens\":4,\"output_tokens\":2}}'\n")
+            script.chmod(script.stat().st_mode | stat.S_IEXEC)
+            log = ai_provider.recorded(ai_provider.CodexCliProvider(executable=str(script), model=""), folder, "skill:x")
+            log.propose("x")
+            summary = ai_provider.usage_summary(folder)["total"]
+        self.assertEqual((summary["tokens"], summary["input_tokens"], summary["cached_input_tokens"], summary["output_tokens"]),
+                         (12, 10, 4, 2))
 
     def test_a_long_reply_is_stored_whole_so_a_retry_can_recheck_it(self):
         long_reply = json.dumps({"rows": ["x" * 50 for _ in range(1000)]})               # about 55,000 characters
@@ -147,6 +177,39 @@ class CodexCliTests(unittest.TestCase):
             result, _ = ai_provider.CodexCliProvider(executable=str(script), model="").propose("x")
         self.assertNotEqual(Path(result["cwd"]).resolve(), Path.cwd().resolve())
         self.assertEqual(result["agents"], "")
+
+    def test_calls_run_lean_with_the_users_model_and_effort_and_can_be_turned_back(self):
+        with tempfile.TemporaryDirectory() as folder:
+            config = Path(folder) / "config.toml"
+            config.write_text('model = "big-model"\nmodel_reasoning_effort = "low"\npersonality = "pragmatic"\n')
+            script = Path(folder) / "codex"
+            script.write_text("#!/bin/sh\n"
+                              'out=""; args=$(echo "$*" | sed \'s/"/\\\\"/g\'); while [ $# -gt 0 ]; do if [ "$1" = "--output-last-message" ]; then out="$2"; fi; shift; done\n'
+                              'cat > /dev/null\nprintf \'{"args": "%s"}\' "$args" > "$out"\n')
+            script.chmod(script.stat().st_mode | stat.S_IEXEC)
+            with patch.dict(os.environ, {}, clear=False):
+                for key in ("ARCHIE_AI_MODEL", "ARCHIE_CODEX_MODEL", "ARCHIE_CODEX_LEAN", "ARCHIE_CODEX_REASONING"):
+                    os.environ.pop(key, None)
+                args = ai_provider.CodexCliProvider(executable=str(script), config_path=config).propose("x")[0]["args"]
+                lean = ai_provider.CodexCliProvider(executable=str(script), config_path=config)
+                self.assertEqual((lean.model, lean.cli_model), ("", "big-model"))   # page-reading cache keys don't change
+                os.environ["ARCHIE_CODEX_LEAN"] = "0"
+                plain = ai_provider.CodexCliProvider(executable=str(script), config_path=config).propose("x")[0]["args"]
+        for part in ("--ignore-user-config", "project_doc_max_bytes=0", 'model_reasoning_effort="low"', "--disable apps",
+                     "--disable computer_use", "--disable shell_tool", "model_instructions_file=", 'web_search="disabled"',
+                     'personality="none"', "--model big-model", "--json"):
+            self.assertIn(part, args)
+        self.assertNotIn("--ignore-user-config", plain)
+        self.assertNotIn("--model", plain)                          # the CLI reads the user's config itself
+
+    def test_a_small_model_is_used_only_for_simple_tasks_and_only_when_set(self):
+        with patch.dict(os.environ, {"ARCHIE_AI_SMALL_MODEL": ""}):
+            self.assertIsNone(ai_provider.model_for("pass1"))
+        with patch.dict(os.environ, {"ARCHIE_AI_SMALL_MODEL": "small-model"}):
+            self.assertEqual(ai_provider.model_for("pass1"), "small-model")
+            self.assertEqual(ai_provider.model_for("skill:sheet_identity"), "small-model")
+            for task in ("pass2", "skill:equipment_evidence", "skill:information_needs", ""):
+                self.assertIsNone(ai_provider.model_for(task))
 
     def test_a_used_up_plan_is_a_usage_limit(self):
         with tempfile.TemporaryDirectory() as folder:
