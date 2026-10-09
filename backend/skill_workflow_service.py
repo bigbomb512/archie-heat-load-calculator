@@ -474,6 +474,126 @@ def _ensure_room_evidence(web, project):
     ]}
 
 
+# Document mapping is done in code from the page reading (pass 1 saw every page's image; these three tasks only
+# ever received page data as text). Measured on Butcher Buffet, the AI versions re-listed pass 1's 38 page
+# identities, found no revision on any page and accepted none of the 354 candidate page links, for about 130,000
+# prompt characters over three calls.
+_CODE_MAPPED_TASKS = frozenset({"sheet_identity", "revision_scope", "page_relationships"})
+# Code-built tasks whose builder version is part of their input fingerprint, so a result made another way (by the AI
+# before) or by an older builder is rebuilt. Every dependant's fingerprint includes its prerequisites' fingerprints,
+# so a rebuild re-runs everything after the task, even when the rebuilt result is the same. The document-mapping
+# tasks are therefore left out: they come before nearly every skill, and adding the marker re-ran a whole review
+# (about 400,000 tokens on Butcher Buffet) to rebuild identical results. A change to their builder needs a re-read.
+_CODE_BUILT_VERSIONS = {"room_boundaries_areas": "traced_rooms_v1"}
+# A page link is kept only when a printed reference supports it (the playbook's rule); links proposed from shared
+# roles or terminology are left out, as the AI version did.
+_PRINTED_LINK_WORDS = ("callout", "reference", "section mark", "detail mark", "tag", "drawing index", "see dwg", "see drawing")
+
+
+def _traced_rooms_proposal(subskill, project, input_fp):
+    """room_boundaries_areas from the traced room outlines, without an AI call.
+
+    On Butcher Buffet the AI version (the largest call, about 59,000 tokens with the plan's vector lines) returned no
+    outline, wall, scale or area for any of 8 rooms. Areas come from tracing (by an operator or the automatic tracer),
+    calibrated against printed dimensions; a room without one is left unresolved, so the needs list asks for it.
+    """
+    from backend import reviewer_room_geometry_service
+    paths = _project_paths(project)
+    traced = reviewer_room_geometry_service.current_traced_areas(paths["root"])
+    room_use = _read(paths["root"] / "room_use_resolution.json", {})
+    # Every room, including those outside comfort cooling (refrigeration rooms are "excluded" from that scope but
+    # still rooms); only detections an operator marked as not a room are left out.
+    not_rooms = reviewer_room_geometry_service._not_a_room_identities(room_use)
+    rooms = [row for row in room_use.get("records", []) if isinstance(row, dict) and row.get("room_id")
+             and str(row["room_id"]) not in not_rooms]
+    candidates, citations, unresolved = [], [], []
+    for room in rooms:
+        trace = traced.get(str(room["room_id"]), {})
+        calibration = trace.get("calibration") if isinstance(trace.get("calibration"), dict) else {}
+        label = str(room.get("original_label") or room.get("label") or room["room_id"])
+        area = trace.get("area_m2")
+        candidates.append({
+            "room_id": str(room["room_id"]), "label": label, "page": trace.get("page") or 0,
+            "level": str(room.get("level_name") or room.get("level") or ""),
+            "boundary_ref": trace.get("proof_id") or None, "boundary_points_px": [], "boundary_points_mm": [],
+            "coordinate_units": "image_px", "wall_ids": [], "walls": [], "dimension_ids": [], "dimensions": [],
+            "dimension_links": [], "scale_mm_per_px": round(float(calibration["mm_per_px"]), 4) if calibration.get("mm_per_px") else None,
+            "area_m2": round(float(area), 2) if area else None,
+            "formula": "traced outline area × (calibrated mm per px)²" if area else None,
+            "calibration": {key: calibration[key] for key in ("source", "status", "printed_text") if key in calibration} or None,
+            "source_crop": None, "independent_witnesses": [], "confidence": None, "conflicts": [],
+            "unresolved_fields": [] if area else ["area_m2"], "alternatives": []})
+        if area and trace.get("page"):
+            citations.append({"page": trace["page"], "excerpt": f"{label}: traced outline, {float(area):.1f} m²"})
+        elif not area:
+            unresolved.append(f"{label}: no traced outline, so no area yet.")
+    return {"subskill_id": subskill["id"], "subskill_version": subskill["version"], "status": "needs_review",
+            "affected_ids": [row["room_id"] for row in candidates],
+            "observations": [{"description": "Built in code from the traced room outlines; no AI call."}],
+            "inferences": [], "citations": citations, "confidence": None, "alternatives": [],
+            "unresolved_fields": unresolved, "remediation": [], "input_fingerprint": input_fp,
+            "proposal_fields": {"geometry_candidates": candidates}, "artifact_names": []}
+
+
+def _document_map_proposal(subskill, project, input_fp):
+    """sheet_identity, revision_scope or page_relationships, built from the page reading and drawing coverage."""
+    from backend import page_inventory_service as pass1
+    paths = _project_paths(project)
+    pages = {int(page): row for page, row in (_read(paths["root"] / pass1.RESULT_FILE, {}).get("pages") or {}).items()}
+    coverage = _read(paths["coverage"], {})
+    covered = {row.get("page"): row for row in _page_rows(coverage) if isinstance(row, dict)}
+    unresolved, observations, citations = [], [], []
+    if subskill["id"] == "sheet_identity":
+        identities = []
+        for page, row in sorted(pages.items()):
+            other = str(covered.get(page, {}).get("resolved_drawing_number") or covered.get(page, {}).get("drawing_number") or "")
+            number = row.get("drawing_number") or None
+            identities.append({"physical_page": page, "drawing_number": number, "title": row.get("title") or None,
+                               "drawing_type": row.get("page_type") or None,
+                               "alternatives": [other] if other and other != number else []})
+        citations = [{"page": row["physical_page"], "excerpt": " ".join(str(part) for part in (row["drawing_number"], row["title"]) if part)}
+                     for row in identities if row["drawing_number"] or row["title"]]
+        missing = [str(row["physical_page"]) for row in identities if not row["drawing_number"]]
+        if missing:
+            unresolved.append("No drawing number was read on page(s) " + ", ".join(missing) + ".")
+        fields = {"page_identities": identities}
+        observations.append({"description": f"Page identities of all {len(identities)} pages, as the page reading read them."})
+    elif subskill["id"] == "revision_scope":
+        records = []
+        for page in sorted(pages):
+            row = covered.get(page, {})
+            revision = row.get("revision") or row.get("resolved_revision") or None
+            records.append({"page": page, "revision": revision, "issue_date": row.get("issue_date") or None,
+                            "status": "read_from_title_block" if revision else "not_read", "precedence_citation_ids": []})
+        citations = [{"page": row["page"], "excerpt": f"Revision {row['revision']}"} for row in records if row["revision"]]
+        if not any(row["revision"] for row in records):
+            unresolved.append("No revision mark was read on any page; every page is treated as current.")
+        fields = {"revision_records": records}
+    else:
+        candidates = coverage.get("page_relationships", []) or coverage.get("cross_sheet_links", [])
+        links, weak = [], 0
+        for row in candidates if isinstance(candidates, list) else []:
+            if not isinstance(row, dict) or not isinstance(row.get("from_page"), int) or not isinstance(row.get("to_page"), int):
+                continue
+            basis = row.get("basis") if isinstance(row.get("basis"), list) else [row.get("basis")]
+            basis = [str(item) for item in basis if item]
+            if any(word in item.casefold() for item in basis for word in _PRINTED_LINK_WORDS):
+                links.append({"from_page": row["from_page"], "to_page": row["to_page"],
+                              "relationship": str(row.get("relationship") or row.get("kind") or "related_page"), "evidence": basis})
+                citations.append({"page": row["from_page"], "excerpt": "; ".join(basis)[:160]})
+            else:
+                weak += 1
+        if weak:
+            observations.append({"description": f"{weak} candidate link(s) rested only on shared roles or terminology, not a "
+                                                "printed reference, and were left out."})
+        fields = {"page_links": links}
+    observations.insert(0, {"description": "Built in code from the page reading and drawing coverage; no AI call."})
+    return {"subskill_id": subskill["id"], "subskill_version": subskill["version"], "status": "needs_review",
+            "affected_ids": [], "observations": observations, "inferences": [], "citations": citations, "confidence": None,
+            "alternatives": [], "unresolved_fields": unresolved, "remediation": [], "input_fingerprint": input_fp,
+            "proposal_fields": fields, "artifact_names": []}
+
+
 def _subskill_records(subskill_id, project):
     paths = _project_paths(project)
     coverage = _read(paths["coverage"], {})
@@ -668,7 +788,7 @@ def _subskill_records(subskill_id, project):
             if isinstance(value, dict) and value:
                 records = value.get("records", value.get("entities", value.get("room_geometry_proofs", [])))
                 if isinstance(records, list):
-                    rows.extend({"source_artifact": name, **row} for row in records
+                    rows.extend({"source_artifact": name, **_task_view(subskill_id, name, row)} for row in records
                                 if isinstance(row, dict) and _generic_record_relevant(subskill_id, name, row))
                 else:
                     rows.append({"source_artifact": name, "status": value.get("status", "present"),
@@ -1439,6 +1559,20 @@ def _compact_label(row):
     return [row.get("text"), *coords]
 
 
+# An airflow task sees the airflow records of its own kind (all 17 records went to each, about 12,000 characters),
+# and of each room's internal gains only the field it uses (people, lighting and diversity records were 19,000 more).
+_AIRFLOW_TYPES = {"outside_air": {"outside_air"}, "process_exhaust": {"process_exhaust", "make_up_air"},
+                  "infiltration": {"infiltration"}}
+_GAINS_FIELDS = {"outside_air": ("occupancy_count",), "process_exhaust": ("equipment",)}
+
+
+def _task_view(subskill_id, artifact_name, row):
+    """A record as one task needs it: an internal-gains room keeps only the fields that task uses."""
+    if artifact_name == "internal_gains_resolution.json" and subskill_id in _GAINS_FIELDS and isinstance(row.get("fields"), dict):
+        return {**row, "fields": {key: row["fields"][key] for key in _GAINS_FIELDS[subskill_id] if key in row["fields"]}}
+    return row
+
+
 def _generic_record_relevant(subskill_id, artifact_name, row):
     """Keep only records a generic domain task can use.
 
@@ -1451,6 +1585,8 @@ def _generic_record_relevant(subskill_id, artifact_name, row):
         if row.get("kind") in _UNVALIDATED_GEOMETRY_KINDS:
             return row.get("geometry_status") in _ACCEPTED_GEOMETRY_STATUSES
         return True
+    if artifact_name == "airflow_resolution.json" and subskill_id in _AIRFLOW_TYPES:
+        return row.get("air_path_type") in _AIRFLOW_TYPES[subskill_id]
     if artifact_name == "value_resolution.json":
         keywords = _VALUE_TARGET_KEYWORDS.get(subskill_id)
         if keywords is None:
@@ -1832,7 +1968,10 @@ def _reuse_table(paths, previous):
     of calling the AI again when that skill's inputs are unchanged (same readings, definition, case file and
     prerequisite results). Failed, blocked and over-budget skills are always run again."""
     run_id = (previous or {}).get("run_id")
-    table = {}
+    # Results the previous run could have reused but never reached (it was interrupted, or stopped at the usage
+    # limit) stay on the list: they are still on disk and are matched by fingerprint, so nothing stale comes back.
+    carried = ((previous or {}).get("reuse_from") or {}).get("subskills") or {}
+    table = {skill_id: entry for skill_id, entry in carried.items() if isinstance(entry, dict)}
     for skill_id, row in ((previous or {}).get("subskills") or {}).items():
         raw_path = paths["root"] / str(row.get("attempt_ref") or "") / "raw_output.txt" if isinstance(row, dict) and row.get("attempt_ref") else None
         attempt_fp = _read(raw_path.parent / "attempt.json", {}).get("input_fingerprint") if raw_path is not None else None
@@ -1846,9 +1985,15 @@ def _reuse_table(paths, previous):
         proposal_path = paths["root"] / "skill_workflow_runs" / str(run_id) / "proposals" / f"{skill_id}.json"
         if (run_id and isinstance(row, dict) and row.get("status") in _REUSABLE_STATUSES and row.get("input_fingerprint")
                 and row.get("error_code") != "prompt_over_budget" and proposal_path.is_file()):
-            table[skill_id] = {"run_id": row.get("reused_from") or run_id, "input_fingerprint": row["input_fingerprint"],
-                               "proposal": str(proposal_path.relative_to(paths["root"])), "status": row["status"],
-                               "evidence_reviewed": row.get("evidence_reviewed", {})}
+            entry = {"run_id": row.get("reused_from") or run_id, "input_fingerprint": row["input_fingerprint"],
+                     "proposal": str(proposal_path.relative_to(paths["root"])), "status": row["status"],
+                     "evidence_reviewed": row.get("evidence_reviewed", {})}
+            older = table.get(skill_id)
+            if older and older.get("input_fingerprint") != entry["input_fingerprint"]:
+                # An older result made from other inputs stays as a fallback: a retry whose inputs match it again
+                # (e.g. after an interrupted run with different inputs) reuses it instead of paying for a new answer.
+                entry["fallback"] = {key: value for key, value in older.items() if key != "fallback"}
+            table[skill_id] = entry
     return {"run_id": run_id, "subskills": table} if table else {}
 
 
@@ -1856,6 +2001,8 @@ def _reused_proposal(subskill, project, input_fp):
     """The previous run's result for this skill when its inputs are unchanged, else None."""
     paths = _project_paths(project)
     entry = (_read(paths["manifest"], {}).get("reuse_from") or {}).get("subskills", {}).get(subskill["id"])
+    if entry and entry.get("input_fingerprint") != input_fp:
+        entry = entry.get("fallback")
     if not entry or entry.get("input_fingerprint") != input_fp:
         return None
     if entry.get("raw_reply"):
@@ -1990,8 +2137,9 @@ def _proposal_from_raw(subskill, raw, input_fp):
 def _execute_subskill(subskill, project, dependencies, source_fp):
     evidence, artifact_names = _shared_evidence_packet(subskill, project)
     registry = load_subskill_registry()
+    built_by = _CODE_BUILT_VERSIONS.get(subskill["id"]) if _case_file_route(project) else None
     input_fp = _fingerprint({"source": source_fp, "subskill": subskill, "evidence": evidence,
-        "instructions": subskill_instructions_fingerprint(subskill),
+        "instructions": subskill_instructions_fingerprint(subskill), **({"built_by": built_by} if built_by else {}),
         # The attempt reference says where a result is stored, not what it says: leave it out, or a prerequisite that
         # is re-produced unchanged (e.g. a deterministic one) would make everything after it look changed on a retry.
         "prerequisites": {key: {"status": value.get("status", ""), "input_fingerprint": value.get("input_fingerprint", ""),
@@ -2064,6 +2212,12 @@ def _execute_subskill(subskill, project, dependencies, source_fp):
                 "remediation": ["No deterministic fixture record is available for this domain task."] if has_evidence else [],
                 "input_fingerprint": input_fp, "proposal_fields": _empty_fields(subskill), "artifact_names": []}
         provider_kind = "local_test_fixture"
+    elif _case_file_route(project) and subskill["id"] in _CODE_MAPPED_TASKS:
+        proposal = _document_map_proposal(subskill, project, input_fp)
+        provider_kind = "page_reading_by_code"
+    elif _case_file_route(project) and subskill["id"] == "room_boundaries_areas":
+        proposal = _traced_rooms_proposal(subskill, project, input_fp)
+        provider_kind = "traced_rooms_by_code"
     elif _case_file_route(project) and not _worth_a_call(subskill, project):
         # No page shows anything this skill works on: not applicable, without spending an AI call.
         proposal = _not_applicable_proposal(subskill, input_fp)

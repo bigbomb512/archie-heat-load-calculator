@@ -105,7 +105,7 @@ def build(subskill_id, project):
     ranked = sorted(counts, key=lambda page: (-counts[page], TYPE_RANK.get(pages[page].get("page_type"), 4), page))[:limit]
     renders = {int(path.stem.split("-")[1]): path for path in (root / pass1.WORK_DIR / "pages").glob("p-*.png")}
     images = [renders[page] for page in ranked if page in renders]
-    case = {"job": job_context(project),
+    case = {"job": job_context(project, room_types=subskill_id in ROOM_TYPE_TASKS),
             "note": ("Pages are numbered as in the PDF; page_index lines are page | type | title | level | kinds. 'readings' are what an AI page-by-page pass found on each page; "
                      "'extracted' are values already read for these kinds. Attached images are the listed pages. Cite pages "
                      "for every value; treat readings as leads to check, not as approved values."),
@@ -114,8 +114,13 @@ def build(subskill_id, project):
     return case, images
 
 
-def job_context(project):
-    """What every skill needs to name things the way the app does: the source, ID formats, rooms and room types."""
+# The room-type list (about 730 characters) goes only to the task that assigns room types.
+ROOM_TYPE_TASKS = frozenset({"room_identity_use"})
+
+
+def job_context(project, room_types=True):
+    """What every skill needs to name things the way the app does: the source, ID formats, rooms and (for the task
+    that assigns them) room types."""
     import hashlib
     import re
     root = Path(project["review_dir"])
@@ -127,11 +132,13 @@ def job_context(project):
         if isinstance(row, dict) and row.get("room_id"):
             rooms.append({"room_id": row["room_id"], "label": row.get("original_label") or row.get("label", ""),
                           "level": row.get("level", ""), "taxonomy_id": row.get("taxonomy_id", ""), "scope": row.get("space_scope", "")})
-    try:
-        taxonomy = json.loads((Path(__file__).resolve().parents[1] / "config" / "au_room_use_taxonomy_v1.json").read_text(encoding="utf-8"))
-        room_types = [{"taxonomy_id": key, "label": value.get("label", key)} for key, value in taxonomy.get("categories", {}).items()]
-    except (OSError, ValueError):
-        room_types = []
+    types = []
+    if room_types:
+        try:
+            taxonomy = json.loads((Path(__file__).resolve().parents[1] / "config" / "au_room_use_taxonomy_v1.json").read_text(encoding="utf-8"))
+            types = [{"taxonomy_id": key, "label": value.get("label", key)} for key, value in taxonomy.get("categories", {}).items()]
+        except (OSError, ValueError):
+            types = []
     slug = lambda value: re.sub(r"[^a-z0-9]+", "-", str(value or "").casefold()).strip("-") or "unassigned"
     return {
         "source_document": {"source_document_id": source_id, "file_name": pdf.name, "page_count": len(pages),
@@ -140,7 +147,7 @@ def job_context(project):
                            f"room-use:{slug(row['level'] or 'Unassigned level')}:{slug(row['label'])}" for row in rooms[:3]) + ")",
                        "component_id": "<source_document_id>:<drawing number or p<page>>:<printed tag or label slug>"},
         "known_rooms": rooms,
-        "room_types": room_types,
+        **({"room_types": types} if room_types else {}),
         "when_prerequisites_are_empty": ("If a prerequisite proposal is empty, failed or missing, use known_rooms, the readings and the "
                                           "attached pages directly. Do not refuse for lack of validated prerequisites: give the values the "
                                           "evidence supports, record how you matched each to a room as an inference, and leave a field "

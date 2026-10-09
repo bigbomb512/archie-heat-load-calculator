@@ -19,6 +19,12 @@
   several kW"), and where it is usually found (equipment spec sheet or
   supplier quote, the client, the mechanical drawings, a site visit, the
   landlord's base-building information).
+- One need per equipment item that needs a rating, with its code as the
+  target: an answer is recorded against one item, so a need naming several
+  items would be marked answered when only one of them is. Other needs may
+  cover several things of one kind (e.g. all unrated light fittings).
+- Keep each need short: `why` in one sentence of at most 20 words, `impact`
+  in at most 8 words, `where_to_look` in at most 12 words.
 - Do not list generic design values the calculation supplies from its own
   labelled defaults (design weather from the AIRAH tables, people heat gains
   per person); list them only if the drawings contradict the default.

@@ -122,7 +122,75 @@ class CallTests(CaseFileTests):
         self.assertEqual(len(provider.prompts), 1)
 
 
+class ReuseCarryTests(unittest.TestCase):
+    def test_results_an_interrupted_run_never_reached_stay_reusable(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "skill_workflow_runs" / "new" / "proposals").mkdir(parents=True)
+            (root / "skill_workflow_runs" / "new" / "proposals" / "sheet_identity.json").write_text("{}")
+            interrupted = {"run_id": "new", "status": "running",
+                           "reuse_from": {"run_id": "old", "subskills": {
+                               "equipment_evidence": {"run_id": "old", "input_fingerprint": "e" * 64, "status": "needs_review",
+                                                      "proposal": "skill_workflow_runs/old/proposals/equipment_evidence.json"},
+                               "sheet_identity": {"run_id": "old", "input_fingerprint": "s" * 64, "status": "needs_review"}}},
+                           "subskills": {"equipment_evidence": {"status": "queued"},
+                                         "sheet_identity": {"status": "needs_review", "input_fingerprint": "t" * 64}}}
+            table = skills._reuse_table(skills._project_paths({"review_dir": folder}), interrupted)["subskills"]
+        self.assertEqual(table["equipment_evidence"]["run_id"], "old")          # never reached: carried forward
+        self.assertEqual(table["sheet_identity"]["input_fingerprint"], "t" * 64)  # finished in the run: its own result wins
+        self.assertEqual(table["sheet_identity"]["fallback"]["input_fingerprint"], "s" * 64)  # the older one kept as fallback
+
+    def test_a_retry_whose_inputs_match_the_fallback_reuses_it(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "skill_workflow_runs" / "old" / "proposals").mkdir(parents=True)
+            (root / "skill_workflow_runs" / "old" / "proposals" / "schedule_evidence.json").write_text(json.dumps(
+                {"status": "needs_review", "proposal_fields": {"schedules": []}}))
+            (root / "skill_workflow_run.json").write_text(json.dumps({"reuse_from": {"subskills": {"schedule_evidence": {
+                "run_id": "new", "input_fingerprint": "x" * 64, "proposal": "skill_workflow_runs/new/proposals/schedule_evidence.json",
+                "fallback": {"run_id": "old", "input_fingerprint": "y" * 64,
+                             "proposal": "skill_workflow_runs/old/proposals/schedule_evidence.json"}}}}}))
+            subskill = next(row for row in skills.load_subskill_registry()["subskills"] if row["id"] == "schedule_evidence")
+            reused = skills._reused_proposal(subskill, {"id": "j", "review_dir": folder}, "y" * 64)
+            unmatched = skills._reused_proposal(subskill, {"id": "j", "review_dir": folder}, "z" * 64)
+        self.assertEqual(reused["reused_from"], "old")
+        self.assertIsNone(unmatched)
+
+
 class RunTests(unittest.TestCase):
+    def test_a_changed_builder_rebuilds_its_skill_and_unaffected_ai_skills_are_reused(self):
+        provider = FakeProvider()
+        skills.CASE_FILE_PROVIDER_FACTORY = lambda: provider
+        try:
+            with tempfile.TemporaryDirectory() as folder, \
+                    patch.object(skills, "_ensure_room_evidence", return_value={"artifact_names": [], "candidate_count": 0, "model_input": {}}):
+                root = Path(folder)
+                (root / "ai_input.json").write_text(json.dumps({"drawing_set": {"pages": [{"page": 5, "title": "EQUIPMENT SCHEDULE"}]}}))
+                (root / "drawing_coverage.json").write_text(json.dumps({"page_roles": [{"page": p} for p in (1, 5, 20, 26)]}))
+                (root / pass1.RESULT_FILE).write_text(json.dumps({"pages": READINGS}))
+                project = {"id": "rebuild-" + root.name, "review_dir": str(root)}
+                wait = lambda: [time.sleep(0.05) for _ in range(600) if project["id"] in skills._RUNNING]
+                skills.start_after_reading(Web(), project); wait()
+                before = len(provider.prompts)
+                with patch.dict(skills._CODE_BUILT_VERSIONS, {"room_boundaries_areas": "traced_rooms_v2"}):
+                    skills.post(Web(), project, {"action": "retry", "scope": "pdf_review"}); wait()
+                manifest = json.loads((root / "skill_workflow_run.json").read_text())
+            self.assertFalse(manifest["subskills"]["room_boundaries_areas"].get("reused_from"))   # rebuilt by the new builder
+            self.assertTrue(manifest["subskills"]["equipment_evidence"].get("reused_from"))       # AI result kept
+            # Only skills after it are asked again (a prerequisite's fingerprint is part of each dependant's inputs).
+            registry = {row["id"]: row for row in skills.load_subskill_registry()["subskills"]}
+            after = {"room_boundaries_areas"}
+            while True:
+                more = {skill_id for skill_id, row in registry.items() if set(row["depends_on"]) & after} - after
+                if not more:
+                    break
+                after |= more
+            again = {prompt.split("Subskill: ", 1)[1].split(" ", 1)[0] for prompt in provider.prompts[before:]}
+            self.assertTrue(again)
+            self.assertLessEqual(again, after)
+        finally:
+            skills.CASE_FILE_PROVIDER_FACTORY = None
+
     def test_a_job_with_its_pages_read_runs_the_review_skills_in_order_ending_with_the_needs_list(self):
         provider = FakeProvider()
         skills.CASE_FILE_PROVIDER_FACTORY = lambda: provider
@@ -150,6 +218,9 @@ class RunTests(unittest.TestCase):
             self.assertLess(called.index("room_identity_use"), called.index("equipment_evidence"))
             self.assertEqual(manifest["subskills"]["information_needs"]["status"], "needs_review")
             self.assertNotIn("address_confirmation", called)               # confirmation stays with the operators
+            # Document mapping (from the page reading) and room boundaries (from traced outlines) are built in code.
+            self.assertFalse({"sheet_identity", "revision_scope", "page_relationships", "room_boundaries_areas"} & set(called))
+            self.assertEqual(manifest["subskills"]["sheet_identity"]["status"], "needs_review")
             # Skills the needs list doesn't depend on aren't part of the default review and make no call.
             self.assertFalse({"plant_detection", "circuit_mapping", "pump_inputs", "airflow_deduplication", "surface_area",
                               "shading", "zone_ownership"} & set(called))
@@ -250,19 +321,21 @@ class ResumeTests(unittest.TestCase):
 
 
 class JobContextTests(unittest.TestCase):
-    def test_every_case_file_carries_the_source_identity_id_formats_known_rooms_and_room_types(self):
+    def test_every_case_file_carries_the_source_identity_id_formats_known_rooms_and_room_types_where_assigned(self):
         with tempfile.TemporaryDirectory() as folder:
             (Path(folder) / pass1.RESULT_FILE).write_text(json.dumps({"pages": READINGS}))
             (Path(folder) / "room_use_resolution.json").write_text(json.dumps({"records": [
                 {"room_id": "room-use:ground:kitchen", "original_label": "Kitchen", "level": "Ground", "taxonomy_id": "kitchen",
                  "space_scope": "comfort_hvac_with_process_exception"}]}))
             case, _ = skill_case_file.build("equipment_evidence", {"id": "j", "review_dir": folder, "pdf": "/x/Butcher Buffet.pdf"})
+            rooms, _ = skill_case_file.build("room_identity_use", {"id": "j", "review_dir": folder, "pdf": "/x/Butcher Buffet.pdf"})
         job = case["job"]
+        self.assertNotIn("room_types", job)                          # only the task that assigns room types gets them
+        self.assertIn("kitchen", {row["taxonomy_id"] for row in rooms["job"]["room_types"]})
         self.assertTrue(job["source_document"]["source_document_id"].startswith("pdf-"))
         self.assertEqual((job["source_document"]["file_name"], job["source_document"]["page_count"]), ("Butcher Buffet.pdf", 4))
         self.assertIn("room-use:ground:kitchen", job["id_formats"]["room_id"])
         self.assertEqual(job["known_rooms"][0]["room_id"], "room-use:ground:kitchen")
-        self.assertIn("kitchen", {row["taxonomy_id"] for row in job["room_types"]})
         self.assertIn("Do not refuse", job["when_prerequisites_are_empty"])
 
     def test_with_page_reading_on_the_skills_may_see_every_page(self):

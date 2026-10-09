@@ -1024,6 +1024,73 @@ class SkillWorkflowTests(unittest.TestCase):
                          {"citations": ["p5: E06 COMBI OVEN", "p20: " + "v" * 160]})
         self.assertEqual(skills._prompt_json({"a": [1, 2]}), '{"a":[1,2]}')
 
+    def test_document_mapping_is_built_from_the_page_reading_and_keeps_only_printed_reference_links(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "page_inventory.json").write_text(json.dumps({"pages": {
+                "1": {"page_type": "cover_or_drawing_list", "title": "COVER", "drawing_number": "000", "information": []},
+                "2": {"page_type": "floor_plan", "title": "PLAN", "drawing_number": "", "information": []}}}))
+            (root / "drawing_coverage.json").write_text(json.dumps({
+                "page_roles": [{"page": 1, "resolved_drawing_number": "00O", "revision": "B"}, {"page": 2}],
+                "page_relationships": [{"from_page": 1, "to_page": 2, "basis": ["compatible architect evidence roles"]},
+                                       {"from_page": 2, "to_page": 1, "basis": ["section mark 1/000 on plan"], "relationship": "section"}]}))
+            project = {"id": "j", "review_dir": folder}
+            registry = {row["id"]: row for row in skills.load_subskill_registry()["subskills"]}
+            sheets = skills._document_map_proposal(registry["sheet_identity"], project, "0" * 64)
+            self.assertEqual(sheets["proposal_fields"]["page_identities"][0],
+                             {"physical_page": 1, "drawing_number": "000", "title": "COVER", "drawing_type": "cover_or_drawing_list",
+                              "alternatives": ["00O"]})                      # the coverage reading kept as an alternative
+            self.assertIn("page(s) 2", sheets["unresolved_fields"][0])
+            revisions = skills._document_map_proposal(registry["revision_scope"], project, "0" * 64)
+            self.assertEqual([(row["revision"], row["status"]) for row in revisions["proposal_fields"]["revision_records"]],
+                             [("B", "read_from_title_block"), (None, "not_read")])
+            links = skills._document_map_proposal(registry["page_relationships"], project, "0" * 64)
+            self.assertEqual(links["proposal_fields"]["page_links"],
+                             [{"from_page": 2, "to_page": 1, "relationship": "section", "evidence": ["section mark 1/000 on plan"]}])
+            self.assertIn("1 candidate link", links["observations"][1]["description"])
+            for proposal, skill_id in ((sheets, "sheet_identity"), (revisions, "revision_scope"), (links, "page_relationships")):
+                skills._validate_subskill_output(registry[skill_id], proposal, skills.load_subskill_registry())
+
+    def test_room_boundaries_come_from_traced_outlines_without_a_call(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "room_use_resolution.json").write_text(json.dumps({"records": [
+                {"room_id": "room-use:ground:kitchen", "original_label": "Kitchen", "status": "resolved", "space_scope": "comfort_hvac"},
+                {"room_id": "room-use:ground:freezer", "original_label": "Freezer", "status": "excluded", "space_scope": "refrigeration_process"},
+                {"room_id": "room-use:ground:shop", "original_label": "Shop", "status": "resolved", "space_scope": "comfort_hvac"},
+                {"room_id": "room-use:ground:sign", "original_label": "Sign", "status": "excluded", "space_scope": "not_a_room"}]}))
+            traced = {"room-use:ground:kitchen": {"area_m2": 104.904, "page": 20, "proof_id": "geometry_1",
+                                                  "calibration": {"mm_per_px": 14.10297, "status": "agreed", "source": "printed", "x": 1}},
+                      "room-use:ground:freezer": {"area_m2": 7.88, "page": 20, "proof_id": "geometry_2", "calibration": {"mm_per_px": 14.1}}}
+            subskill = next(row for row in skills.load_subskill_registry()["subskills"] if row["id"] == "room_boundaries_areas")
+            from backend import reviewer_room_geometry_service
+            with patch.object(reviewer_room_geometry_service, "current_traced_areas", return_value=traced):
+                proposal = skills._traced_rooms_proposal(subskill, {"id": "j", "review_dir": folder}, "0" * 64)
+        rooms = {row["label"]: row for row in proposal["proposal_fields"]["geometry_candidates"]}
+        self.assertEqual(sorted(rooms), ["Freezer", "Kitchen", "Shop"])      # refrigeration rooms stay; "not a room" goes
+        self.assertEqual((rooms["Kitchen"]["area_m2"], rooms["Kitchen"]["scale_mm_per_px"], rooms["Kitchen"]["page"]), (104.9, 14.103, 20))
+        self.assertEqual(rooms["Kitchen"]["calibration"], {"source": "printed", "status": "agreed"})
+        self.assertIsNone(rooms["Shop"]["area_m2"])
+        self.assertEqual(rooms["Shop"]["unresolved_fields"], ["area_m2"])
+        self.assertEqual(proposal["unresolved_fields"], ["Shop: no traced outline, so no area yet."])
+        skills._validate_subskill_output(subskill, proposal, skills.load_subskill_registry())
+
+    def test_airflow_tasks_see_their_own_airflow_records_and_only_the_gains_field_they_use(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "airflow_resolution.json").write_text(json.dumps({"records": [
+                {"airflow_id": "a1", "air_path_type": "outside_air"}, {"airflow_id": "a2", "air_path_type": "infiltration"},
+                {"airflow_id": "a3", "air_path_type": "process_exhaust"}, {"airflow_id": "a4", "air_path_type": "make_up_air"}]}))
+            (root / "internal_gains_resolution.json").write_text(json.dumps({"records": [{"room_id": "r1", "fields": {
+                "occupancy_count": {"value": 40}, "lighting_load_w": {"value": 900}, "equipment": {"value": []}}}]}))
+            project = {"id": "j", "review_dir": folder}
+            outside = skills._subskill_records("outside_air", project)[0]["outside_air"]
+            exhaust = skills._subskill_records("process_exhaust", project)[0]["exhaust"]
+        self.assertEqual([row.get("airflow_id") for row in outside if row.get("airflow_id")], ["a1"])
+        self.assertEqual([row.get("airflow_id") for row in exhaust if row.get("airflow_id")], ["a3", "a4"])
+        self.assertEqual([row["fields"] for row in outside if "fields" in row], [{"occupancy_count": {"value": 40}}])
+        self.assertEqual([row["fields"] for row in exhaust if "fields" in row], [{"equipment": {"value": []}}])
+
     def test_over_budget_task_is_blocked_without_contacting_provider(self):
         original_factory, original_groups = skills.SKILL_PROVIDER_FACTORY, skills.select_page_groups
         calls = []
