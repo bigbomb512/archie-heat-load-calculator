@@ -98,11 +98,12 @@ def build_for(subskill_ids, project):
         for item in row.get("information", []):
             if item.get("kind") in kinds:
                 # "p<page> <kind>: <what> — <evidence>": a line per reading rather than a keyed object.
-                readings.append(f"p{page} {item['kind']}: {item.get('what', '')} — {item.get('evidence', '')[:160]}")
+                quote = "" if set(subskill_ids) <= READINGS_WITHOUT_QUOTES else f" — {item.get('evidence', '')[:160]}"
+                readings.append(f"p{page} {item['kind']}: {item.get('what', '')}{quote}")
                 counts[page] = counts.get(page, 0) + 1
     extracted = {}
     results = read_json(root / pass2.RESULT_FILE)
-    for kind in sorted(kinds & set(results)):
+    for kind in sorted(kinds & set(results)) if not set(subskill_ids) <= WITHOUT_EXTRACTED else []:
         extracted[kind] = [{"value": {key: value for key, value in row["value"].items() if value not in ("", None)},
                             "pages": row["pages"], "evidence": row["evidence"], "conflicts": row.get("conflicts", {}),
                             "name_found_in_page_text": row.get("text_match")}
@@ -120,6 +121,11 @@ def build_for(subskill_ids, project):
     return case, images
 
 
+# The needs list sees every kind of reading, so its case file is the largest (about 120,000 characters on Butcher
+# Buffet, at its budget): it gets each reading without the quote (what is shown, and where, is what it needs) and no
+# pass 2 values (the equipment skill's result, one of its prerequisites, already carries them).
+READINGS_WITHOUT_QUOTES = frozenset({"information_needs"})
+WITHOUT_EXTRACTED = frozenset({"information_needs"})
 # The room-type list (about 730 characters) goes only to the task that assigns room types.
 ROOM_TYPE_TASKS = frozenset({"room_identity_use"})
 

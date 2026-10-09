@@ -55,6 +55,9 @@ class CaseFileTests(unittest.TestCase):
         self.assertEqual([row.split(" ")[0] for row in glazing["readings"]], ["p26"])
         needs, needs_images = skill_case_file.build("information_needs", self.project)
         self.assertEqual((len(needs["readings"]), needs_images), (6, []))  # every kind, as text only
+        self.assertFalse(any(" — " in row for row in needs["readings"]))   # what is shown and where, without quotes
+        self.assertEqual(needs["extracted"], {})                          # the equipment skill's result carries them
+        self.assertTrue(all(" — " in row for row in case["readings"]))     # other skills keep the quotes
 
     def test_a_skill_is_worth_a_call_only_when_a_page_shows_its_kinds(self):
         self.assertTrue(skill_case_file.worth_a_call("equipment_evidence", self.project))      # page 5 and 20

@@ -799,6 +799,29 @@ def _subskill_records(subskill_id, project):
     return {key: rows if isinstance(rows, list) else []}, artifact_names
 
 
+# Findings operators don't review: the page register built in code from the page reading (shown under "What's on each
+# page"), and the address step's bookkeeping fields (who confirmed it, when, under which consent), which are filled
+# when the address is confirmed, not typed in.
+_ADDRESS_BOOKKEEPING = {"confirmation_actor", "confirmation_time", "consent_ref"}
+
+
+def _hidden_finding(row, case_file=True):
+    if case_file and row.get("subskill_id") in _CODE_MAPPED_TASKS:
+        return True
+    return row.get("subskill_id") == "address_confirmation" and str(row.get("field", "")).split(".")[0] in _ADDRESS_BOOKKEEPING
+
+
+def _issue_reason(row):
+    """Why a skill didn't finish. A blocked skill gives its own reason (e.g. waiting for the address); the checking
+    note is only a reason when the answer failed its checks ("passed" notes are never a reason)."""
+    detail = str(row.get("validation_detail") or "")
+    remediation = row.get("remediation") or ""
+    remediation = " ".join(str(item) for item in remediation) if isinstance(remediation, list) else str(remediation)
+    if row.get("status") == "blocked" or detail.startswith("Proposal passed"):
+        return remediation or str(row.get("error_code", "")).replace("_", " ")
+    return detail or remediation
+
+
 def _record_id(row):
     return next((row.get(key) for key in ("room_id", "surface_id", "opening_id", "ahu_id", "plant_id", "circuit_id", "page", "physical_page", "id") if row.get(key) is not None), "")
 
@@ -1672,14 +1695,21 @@ def _citation_line(citation):
     return f"p{page}: {text[:160]}"
 
 
-def _compact_dependencies(dependencies):
+# The needs list draws on every prerequisite's values and open items; their citations (about 7,000 characters) are
+# for review, not for deciding what is still missing.
+_PREREQUISITES_WITHOUT_CITATIONS = frozenset({"information_needs"})
+
+
+def _compact_dependencies(dependencies, citations=True):
     """Pass prerequisites as their validated proposal content only, with citations shortened to page and quote."""
     result = {}
     for key, value in (dependencies or {}).items():
         proposal = value.get("proposal", {}) if isinstance(value, dict) else {}
         proposal = proposal if isinstance(proposal, dict) else {}
         content = {field: proposal.get(field) for field in _DEPENDENCY_PROMPT_FIELDS if field in proposal}
-        if isinstance(content.get("citations"), list):
+        if not citations:
+            content.pop("citations", None)
+        elif isinstance(content.get("citations"), list):
             content["citations"] = [_citation_line(citation) for citation in content["citations"]]
         result[key] = {"status": value.get("status", proposal.get("status", "")) if isinstance(value, dict) else "",
                        "proposal": content}
@@ -1704,7 +1734,8 @@ def _bounded_proposal_prompt(subskill, dependencies, evidence, image_frames=(), 
     """
     stats = {}
     compact_evidence = _compact_for_prompt(evidence, stats)
-    compact_dependencies = _compact_for_prompt(_compact_dependencies(dependencies), stats)
+    compact_dependencies = _compact_for_prompt(_compact_dependencies(
+        dependencies, citations=subskill["id"] not in _PREREQUISITES_WITHOUT_CITATIONS), stats)
     prompt = _proposal_prompt(subskill, compact_dependencies, compact_evidence, image_frames=image_frames)
     budget = _prompt_budget_chars(subskill["id"], case_file=case_file)
     sections = {"prerequisites": len(json.dumps(compact_dependencies, ensure_ascii=False, allow_nan=False))}
@@ -3014,6 +3045,8 @@ def _response(web, project):
                         "confidence": proposal.get("confidence"), "alternatives": proposal.get("alternatives", []),
                         "unresolved_fields": proposal.get("unresolved_fields", []),
                         "reviewer": decision.get("reviewer", ""), "reviewed_at": decision.get("updated_at", "")})
+    case_file = _case_file_route(project)
+    findings = [row for row in findings if not _hidden_finding(row, case_file)]
     _mark_conflicting_findings(findings)
     consent = _read(paths["root"] / "vision_extraction_settings.json", {})
     visible_status = safe.get("status", "not_started")
@@ -3023,8 +3056,7 @@ def _response(web, project):
         visible_status = "blocked"
         blocked_reason = ("Skills read the pages only after every page has been read (page reading on, and the Codex CLI "
                           "installed and signed in).")
-    issues = [{"name": row["id"], "status": row["status"],
-               "reason": public_text(row.get("validation_detail") or row.get("remediation", ""))}
+    issues = [{"name": row["id"], "status": row["status"], "reason": public_text(_issue_reason(row))}
               for row in subskills if row["status"] in {"failed", "blocked"}]
     scan_state = safe.get("preparation", {}).get("scan_reading", {})
     if scan_state.get("status") in {"failed", "blocked"}:

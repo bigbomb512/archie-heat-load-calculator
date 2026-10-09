@@ -1023,6 +1023,14 @@ class SkillWorkflowTests(unittest.TestCase):
         self.assertEqual(dependencies["equipment_evidence"]["proposal"],
                          {"citations": ["p5: E06 COMBI OVEN", "p20: " + "v" * 160]})
         self.assertEqual(skills._prompt_json({"a": [1, 2]}), '{"a":[1,2]}')
+        bare = skills._compact_dependencies({"equipment_evidence": {"status": "needs_review", "proposal": {
+            "citations": [{"page": 5, "excerpt": "E06"}], "proposal_fields": {"equipment": []}}}}, citations=False)
+        self.assertEqual(bare["equipment_evidence"]["proposal"], {"proposal_fields": {"equipment": []}})
+        needs = next(row for row in skills.load_subskill_registry()["subskills"] if row["id"] == "information_needs")
+        prompt, _ = skills._bounded_proposal_prompt(needs, {"equipment_evidence": {"status": "needs_review", "proposal": {
+            "citations": [{"page": 5, "excerpt": "E06 COMBI"}], "proposal_fields": {"equipment": [{"name": "Combi oven"}]}}}}, {})
+        self.assertNotIn("E06 COMBI", prompt)                              # the needs list gets values, not citations
+        self.assertIn("Combi oven", prompt)
 
     def test_document_mapping_is_built_from_the_page_reading_and_keeps_only_printed_reference_links(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -1090,6 +1098,36 @@ class SkillWorkflowTests(unittest.TestCase):
         self.assertEqual([row.get("airflow_id") for row in exhaust if row.get("airflow_id")], ["a3", "a4"])
         self.assertEqual([row["fields"] for row in outside if "fields" in row], [{"occupancy_count": {"value": 40}}])
         self.assertEqual([row["fields"] for row in exhaust if "fields" in row], [{"equipment": {"value": []}}])
+
+    def test_the_review_hides_the_page_register_and_address_bookkeeping_and_gives_blocked_reasons(self):
+        with tempfile.TemporaryDirectory() as folder:
+            project, web = self.project(folder), Web()
+            root = Path(folder)
+            catalog = skills.load_catalog()
+            source_fp = skills._source_fingerprint(skills._project_paths(project), catalog)
+            manifest = skills._new_manifest(catalog, source_fp, "pdf_review")
+            manifest.update({"run_id": "r", "status": "needs_review"})
+            manifest["subskills"]["weather_source_matching"].update({"status": "blocked",
+                "validation_detail": "Proposal passed schema and citation validation.",
+                "remediation": "Confirm the project address and design basis, then run the location resolver."})
+            (root / "skill_workflow_run.json").write_text(json.dumps(manifest))
+            proposals = root / "skill_workflow_runs" / "r" / "proposals"
+            proposals.mkdir(parents=True)
+            (proposals / "sheet_identity.json").write_text(json.dumps({"subskill_id": "sheet_identity", "status": "needs_review",
+                "proposal_fields": {"page_identities": [{"physical_page": 1, "drawing_number": "001", "title": "COVER"}]}}))
+            (proposals / "address_confirmation.json").write_text(json.dumps({"subskill_id": "address_confirmation", "status": "needs_review",
+                "unresolved_fields": ["confirmed_address", "confirmation_actor", "confirmation_time", "consent_ref"],
+                "proposal_fields": {"confirmed_address": None, "confirmation_actor": None, "confirmation_time": None, "consent_ref": None}}))
+            with patch.object(skills, "_case_file_route", return_value=True):
+                review = skills.get(web, project)
+            with patch.object(skills, "_case_file_route", return_value=False):
+                legacy = skills.get(web, project)
+        shown = {(row["subskill_id"], row["field"]) for row in review["findings"]}
+        self.assertNotIn("sheet_identity", {subskill for subskill, _ in shown})        # page register: not for review
+        self.assertEqual({field for subskill, field in shown if subskill == "address_confirmation"}, {"confirmed_address"})
+        self.assertIn("sheet_identity", {row["subskill_id"] for row in legacy["findings"]})   # without page reading it stays
+        weather = next(row for row in review["issues"] if row["name"] == "weather_source_matching")
+        self.assertEqual(weather["reason"], "Confirm the project address and design basis, then run the location resolver.")
 
     def test_over_budget_task_is_blocked_without_contacting_provider(self):
         original_factory, original_groups = skills.SKILL_PROVIDER_FACTORY, skills.select_page_groups
