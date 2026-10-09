@@ -359,7 +359,7 @@ class recorded:
 
 
 def _group(purpose):
-    if purpose.startswith("skill:"):
+    if purpose.startswith(("skill:", "skill-group:")):
         return "skills"
     if purpose.startswith("pass2"):
         return "pass 2 (values)"

@@ -2052,8 +2052,7 @@ def _worth_a_call(subskill, project):
 
 def _call_case_file_provider(subskill, project, dependencies, evidence, attempt_record):
     """Ask the AI for one sub-skill with its case file. Returns the raw proposal, or None when over budget."""
-    from backend import page_inventory_service, skill_case_file
-    key = str(Path(project["review_dir"]).resolve())
+    from backend import skill_case_file
     case, images = skill_case_file.build(subskill["id"], project)
     # The case file carries the page index, so the shared evidence's copy of it is left out (every call is smaller).
     evidence = {key: value for key, value in evidence.items() if key != "page_index"}
@@ -2069,13 +2068,22 @@ def _call_case_file_provider(subskill, project, dependencies, evidence, attempt_
             prompt, budget = _bounded_proposal_prompt(subskill, dependencies, {**evidence, "case_file": case}, case_file=True)
     if trimmed:
         budget["case_file_trimmed"] = trimmed
-    model = os.environ.get("ARCHIE_CODEX_MODEL", "").strip() or "codex default"
     attempt_record.update({"prompt": prompt, "images": [{"page": page, "path": str(path)} for page, path in zip(case["attached_pages"], images)],
-                           "prompt_budget": budget, "provider": "codex_case_file", "model": model,
+                           "prompt_budget": budget, "provider": "codex_case_file",
                            "evidence_pages": sorted(set(case["attached_pages"]) | {int(row[1:].split(" ", 1)[0]) for row in case["readings"]})})
     if budget["status"] != "within_budget":
         attempt_record["raw_record"] = {"provider": "none_prompt_over_budget", "reply_text": ""}
         return None
+    return _send_case_file_prompt(project, f"skill:{subskill['id']}", prompt, images, attempt_record)
+
+
+def _send_case_file_prompt(project, purpose, prompt, images, attempt_record):
+    """Send one case-file prompt (one sub-skill, or a group) and return the reply; records the model and raw reply in
+    attempt_record. After the plan's usage limit, nothing more is sent for this job until a new run."""
+    from backend import page_inventory_service
+    key = str(Path(project["review_dir"]).resolve())
+    model = os.environ.get("ARCHIE_CODEX_MODEL", "").strip() or "codex default"
+    attempt_record["model"] = model
     if key in _USAGE_STOPPED:
         attempt_record["raw_record"] = {"provider": "codex_case_file", "model": model, "reply_text": ""}
         error = SkillProviderError("skill_provider_usage_limit", attempt_record["raw_record"])
@@ -2083,14 +2091,14 @@ def _call_case_file_provider(subskill, project, dependencies, evidence, attempt_
         raise error
     from backend import ai_provider
     try:
-        provider = CASE_FILE_PROVIDER_FACTORY() if CASE_FILE_PROVIDER_FACTORY is not None else ai_provider.get(f"skill:{subskill['id']}")
+        provider = CASE_FILE_PROVIDER_FACTORY() if CASE_FILE_PROVIDER_FACTORY is not None else ai_provider.get(purpose)
     except ai_provider.ProviderUnavailable as error:
-        unavailable = SkillProviderError("skill_provider_unavailable", attempt_record["raw_record"])
+        unavailable = SkillProviderError("skill_provider_unavailable", attempt_record.get("raw_record", {}))
         unavailable.detail = str(error)
         raise unavailable from error
     model = getattr(provider, "model", "") or model
     attempt_record["model"] = model
-    provider = ai_provider.recorded(provider, project["review_dir"], f"skill:{subskill['id']}")
+    provider = ai_provider.recorded(provider, project["review_dir"], purpose)
     try:
         result = provider.propose(prompt, image_paths=[str(path) for path in images])
     except ai_provider.UsageLimitReached as error:
@@ -2117,6 +2125,191 @@ def _call_case_file_provider(subskill, project, dependencies, evidence, attempt_
         return result.proposal
     attempt_record["raw_record"] = {"provider": "codex_case_file", "model": model, "reply_text": json.dumps(result, ensure_ascii=False)}
     return result
+
+
+# Sub-skills answered together in one call. Each call carries the same fixed cost (about 4,600 tokens of Codex
+# overhead) plus the shared rules, job details and page index, and members of a group read the same pages, so a group
+# pays for these once. Each member's answer is still checked, stored and fingerprinted on its own, so reuse and edits
+# work per sub-skill as before. A group only contains sub-skills whose dependencies outside the group come earlier.
+_SKILL_GROUPS = {
+    "rooms_and_site": ("room_identity_use", "site_clue_extraction"),
+    "internal_gains": ("occupancy_seating", "lighting_evidence", "equipment_evidence", "schedule_evidence", "outside_air"),
+    "heights_and_exhaust": ("ceiling_height_volume", "process_exhaust"),
+    "opaque_envelope": ("surface_inventory", "construction_matching"),
+    "openings": ("cross_sheet_opening_match", "glazing_properties", "exposure_orientation"),
+}
+_GROUP_OF = {member: group for group, members in _SKILL_GROUPS.items() for member in members}
+# On the case-file route these never call the AI.
+_NO_CALL_TASKS = frozenset(_CODE_MAPPED_TASKS | set(_CODE_BUILT_VERSIONS) | {"address_confirmation", "weather_source_matching"})
+_GROUP_PROMPT_BUDGET_CHARS = 130_000
+_GROUP_REPLIES: dict = {}
+_GROUP_FAILED: dict = {}      # a group call that failed: its other members fail with it in this run, not ask again
+_GROUP_LOCKS: dict = {}
+_GROUP_LOCKS_LOCK = threading.Lock()
+
+
+def _group_member_reply(subskill, project, dependencies, evidence, attempt_record, source_fp):
+    """One group member's raw proposal: from a single call answering every member still waiting, or from its own
+    call when it is the only one waiting, the group prompt is over budget, or the reply left it out."""
+    group = _GROUP_OF[subskill["id"]]
+    paths = _project_paths(project)
+    manifest = _read(paths["manifest"], {})
+    key = (str(paths["root"].resolve()), manifest.get("run_id"), group)
+    with _GROUP_LOCKS_LOCK:
+        lock = _GROUP_LOCKS.setdefault(key, threading.Lock())
+    with lock:
+        answered = _GROUP_REPLIES.get(key, {})
+        failed = _GROUP_FAILED.get(key)
+        if failed and subskill["id"] in failed[0]:
+            attempt_record.update(deepcopy(failed[1]))
+            raise failed[2]
+        if subskill["id"] not in answered:
+            members = _group_members_to_ask(group, subskill["id"], project, manifest, answered, source_fp)
+            if len(members) > 1:
+                try:
+                    replies = _ask_group(group, members, project, manifest, attempt_record)
+                except SkillProviderError as error:
+                    _GROUP_FAILED[key] = (set(members), {k: v for k, v in attempt_record.items() if k != "started_at"}, error)
+                    raise
+                if replies:
+                    answered = {**answered, **replies}
+                    for other in [item for item in _GROUP_REPLIES if item[0] == key[0] and item[1] != key[1]]:
+                        _GROUP_REPLIES.pop(other, None)       # replies of an older run of this job are no longer needed
+                    _GROUP_REPLIES[key] = answered
+        entry = answered.get(subskill["id"])
+    if entry is None:
+        return _call_case_file_provider(subskill, project, dependencies, evidence, attempt_record)
+    attempt_record.update(deepcopy(entry["attempt"]))
+    return deepcopy(entry["raw"])
+
+
+def _group_members_to_ask(group, asking, project, manifest, answered, source_fp):
+    """The members one group call should answer: those in scope, not answered yet, whose dependencies outside the
+    group have finished, and that can't reuse an earlier result. `asking` (which couldn't) is always included."""
+    registry = {row["id"]: row for row in load_subskill_registry()["subskills"]}
+    rows = manifest.get("subskills", {})
+    reuse = (manifest.get("reuse_from") or {}).get("subskills", {})
+    waiting = [member for member in _SKILL_GROUPS[group] if member not in answered
+               and rows.get(member, {}).get("status") in {"queued", "running"}]
+    finished = lambda skill_id: rows.get(skill_id, {}).get("status") not in {"queued", "running", None}
+
+    def unchanged(skill_id):
+        row = rows.get(skill_id, {})
+        entry = reuse.get(skill_id) or {}
+        return bool(row.get("reused_from")) or (finished(skill_id) and row.get("input_fingerprint") in
+                                                 {entry.get("input_fingerprint"), (entry.get("fallback") or {}).get("input_fingerprint")})
+
+    def likely_reused(member, seen=()):
+        # A member that will find its earlier result: one exists, and everything it depends on is unchanged
+        # (finished and reused this run, or a group member that will itself be reused). A wrong guess costs a solo
+        # call later, or an unused answer; never a wrong result, since reuse is still checked by fingerprint.
+        if member == asking or member in seen or not reuse.get(member):
+            return False
+        for dep in registry[member].get("depends_on", []):
+            if dep in waiting and not finished(dep):
+                if not likely_reused(dep, (*seen, member)):
+                    return False
+            elif not unchanged(dep):
+                return False
+        return True
+
+    members = [member for member in waiting if member == asking or not likely_reused(member)]
+    # Dependencies outside the call must be finished, or about to be reused unchanged (the prompt then carries their
+    # earlier result); drop members until that holds.
+    changed = True
+    while changed:
+        changed = False
+        for member in list(members):
+            deps = registry[member].get("depends_on", [])
+            if member != asking and any(dep not in members and not finished(dep) and not likely_reused(dep) for dep in deps):
+                members.remove(member)
+                changed = True
+    return [member for member in _SKILL_GROUPS[group] if member in members]
+
+
+def _ask_group(group, members, project, manifest, attempt_record):
+    """One call for several sub-skills. Returns {member: {"raw", "attempt"}}, or None when the prompt is over budget."""
+    from backend import skill_case_file
+    paths = _project_paths(project)
+    registry = {row["id"]: row for row in load_subskill_registry()["subskills"]}
+    run_id = manifest.get("run_id")
+    outside = [dep for member in members for dep in registry[member].get("depends_on", []) if dep not in members]
+    reuse = (manifest.get("reuse_from") or {}).get("subskills", {})
+
+    def proposal_of(dep):
+        # This run's result, or (for a prerequisite about to be reused unchanged) the earlier result it will reuse.
+        current = paths["root"] / "skill_workflow_runs" / str(run_id) / "proposals" / f"{dep}.json"
+        if current.is_file():
+            return _read(current, {})
+        entry = reuse.get(dep) or {}
+        return _read(paths["root"] / str(entry.get("proposal") or ""), {}) if entry.get("proposal") else {}
+    dependencies = {dep: {**manifest.get("subskills", {}).get(dep, {}), "proposal": proposal_of(dep)}
+                    for dep in dict.fromkeys(outside)}
+    evidence, task_evidence = {}, {}
+    for member in members:
+        packet, _ = _shared_evidence_packet(registry[member], project)
+        task_evidence[member] = packet.get("task_evidence", {})
+        evidence.update({key: value for key, value in packet.items() if key not in {"task_evidence", "page_index"}})
+    case, images = skill_case_file.build_for(members, project)
+    build = lambda case: _group_prompt([registry[member] for member in members], _compact_dependencies(dependencies),
+                                       {**evidence, "task_evidence": task_evidence, "case_file": case})
+    prompt, trimmed = build(case), []
+    for part in ("readings", "page_index", "extracted"):
+        if len(prompt) <= _GROUP_PROMPT_BUDGET_CHARS:
+            break
+        if case.get(part):
+            case = {**case, part: [] if isinstance(case[part], list) else {}}
+            trimmed.append(part)
+            prompt = build(case)
+    if len(prompt) > _GROUP_PROMPT_BUDGET_CHARS:
+        return None
+    record = {"prompt": prompt, "images": [{"page": page, "path": str(path)} for page, path in zip(case["attached_pages"], images)],
+              "prompt_budget": {"prompt_chars": len(prompt), "budget_chars": _GROUP_PROMPT_BUDGET_CHARS, "status": "within_budget",
+                                **({"case_file_trimmed": trimmed} if trimmed else {})},
+              "provider": "codex_case_file_group", "group": group, "group_members": members,
+              "evidence_pages": sorted(set(case["attached_pages"]) | {int(row[1:].split(" ", 1)[0]) for row in case["readings"]})}
+    try:
+        reply = _send_case_file_prompt(project, f"skill-group:{group}", prompt, images, record)
+    finally:
+        attempt_record.update({key: value for key, value in record.items() if key != "prompt"})
+    results = reply.get("results") if isinstance(reply, dict) and isinstance(reply.get("results"), dict) else {}
+    answered = {}
+    for member in members:
+        part = results.get(member)
+        if isinstance(part, dict):
+            # Each member keeps its own reply, so a reply that fails checking can be re-checked on its own later.
+            raw_record = {**record.get("raw_record", {}), "reply_text": json.dumps(part, ensure_ascii=False),
+                          "group": group, "group_members": members}
+            answered[member] = {"raw": part, "attempt": {**{key: value for key, value in record.items() if key != "raw_record"},
+                                                         "raw_record": raw_record}}
+    return answered
+
+
+def _group_prompt(subskills, dependencies, evidence):
+    from ai.skill_registry import compose_group_instructions
+    from ai.skill_registry import load_catalog
+    parents = {skill["id"]: skill for skill in load_catalog()["skills"]}
+    listing = "\n".join(
+        f"- Subskill: {row['id']} — {row['task']}\n  Parent skill: {row['parent']} — {parents[row['parent']]['purpose']}\n"
+        f"  Declared proposal fields: {json.dumps(row['proposal_fields'], ensure_ascii=False)}\n"
+        f"  Allowed inputs: {json.dumps(row['inputs'], ensure_ascii=False)}"
+        for row in subskills)
+    ids = [row["id"] for row in subskills]
+    stats = {}
+    return (
+        f"Perform these {len(subskills)} bounded Archie runtime subskills together, from the one evidence package below. "
+        'Return one JSON object only; no markdown: {"results": {"<subskill id>": <answer>, ...}} with an answer for each of '
+        f"{', '.join(ids)}.\n"
+        "Each answer must contain status, affected_ids, observations, inferences, citations, confidence, alternatives, unresolved_fields, remediation, and proposal_fields. "
+        "proposal_fields must contain every declared key of that subskill with the declared type. confidence must be a JSON number from 0.0 to 1.0, or null when unassessed. "
+        "Use not_applicable only when supplied evidence establishes the domain does not apply. "
+        "Do not emit a calculation result, mutate an artifact, approve a value, or promote reviewed status. "
+        "Where a subskill's prerequisite is another subskill in this list, use your own answer for it.\n"
+        f"{listing}\n"
+        f"Validated prerequisite proposals: {_prompt_json(_compact_for_prompt(dependencies, stats))}\n"
+        f"Instructions:\n{compose_group_instructions(subskills)}\n"
+        f"Shared evidence package:\n{_prompt_json(_compact_for_prompt(evidence, stats))}"
+    )
 
 
 def _proposal_from_raw(subskill, raw, input_fp):
@@ -2225,7 +2418,10 @@ def _execute_subskill(subskill, project, dependencies, source_fp):
                                                     "it was skipped without an AI call."}]
         provider_kind = "skipped_no_relevant_pages"
     elif _case_file_route(project):
-        raw = _call_case_file_provider(subskill, project, dependencies, evidence, attempt_record)
+        if subskill["id"] in _GROUP_OF:
+            raw = _group_member_reply(subskill, project, dependencies, evidence, attempt_record, source_fp)
+        else:
+            raw = _call_case_file_provider(subskill, project, dependencies, evidence, attempt_record)
         if raw is None:
             proposal = _over_budget_proposal(subskill, input_fp, attempt_record["prompt_budget"])
             provider_kind = "prompt_budget_blocked"
@@ -2494,6 +2690,12 @@ def _run_worker(web, project, run_id, source_fp, catalog):
                         failures.add(skill_id)
                     _update_parent_stages(manifest, catalog, registry)
                     _write_manifest(run_path, manifest)
+            # Steps that make no AI call (built in code, or waiting on a confirmation) finish first, in their own
+            # batch: an AI group can then include every member whose outside prerequisites are such steps.
+            if case_file_route:
+                quick = [skill_id for skill_id in runnable if skill_id in _NO_CALL_TASKS]
+                if quick and len(quick) < len(runnable):
+                    runnable = quick
             room_ids = [item for item in runnable if subskill_defs[item]["parent"] == "rooms_geometry_gains"]
             if room_ids and not room_prepared:
                 with _project_lock(project["id"]):

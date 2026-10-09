@@ -80,9 +80,15 @@ def worth_a_call(subskill_id, project):
 
 def build(subskill_id, project):
     """(case file dict, [page image paths]) for one sub-skill."""
+    return build_for((subskill_id,), project)
+
+
+def build_for(subskill_ids, project):
+    """(case file dict, [page image paths]) for sub-skills answered together: the kinds of information any of them
+    works on, and as many key pages as the one that needs most."""
     root = Path(project["review_dir"])
     pages = {int(page): row for page, row in (read_json(root / pass1.RESULT_FILE).get("pages") or {}).items()}
-    kinds = set(SUBSKILL_KINDS.get(subskill_id, ()))
+    kinds = {kind for subskill_id in subskill_ids for kind in SUBSKILL_KINDS.get(subskill_id, ())}
     # One line per page ("19 | floor_plan | PROPOSED FLOOR LAYOUT | level | kinds"): the same facts at half the size.
     index = [" | ".join(str(part) for part in (page, row.get("page_type", ""), row.get("title", ""), row.get("level", ""),
                                                 ",".join(sorted({item.get("kind") for item in row.get("information", [])}))))
@@ -101,11 +107,11 @@ def build(subskill_id, project):
                             "pages": row["pages"], "evidence": row["evidence"], "conflicts": row.get("conflicts", {}),
                             "name_found_in_page_text": row.get("text_match")}
                            for row in results[kind].get("findings", [])]
-    limit = IMAGE_LIMIT.get(subskill_id, DEFAULT_IMAGES)
+    limit = max(IMAGE_LIMIT.get(subskill_id, DEFAULT_IMAGES) for subskill_id in subskill_ids)
     ranked = sorted(counts, key=lambda page: (-counts[page], TYPE_RANK.get(pages[page].get("page_type"), 4), page))[:limit]
     renders = {int(path.stem.split("-")[1]): path for path in (root / pass1.WORK_DIR / "pages").glob("p-*.png")}
     images = [renders[page] for page in ranked if page in renders]
-    case = {"job": job_context(project, room_types=subskill_id in ROOM_TYPE_TASKS),
+    case = {"job": job_context(project, room_types=bool(ROOM_TYPE_TASKS & set(subskill_ids))),
             "note": ("Pages are numbered as in the PDF; page_index lines are page | type | title | level | kinds. 'readings' are what an AI page-by-page pass found on each page; "
                      "'extracted' are values already read for these kinds. Attached images are the listed pages. Cite pages "
                      "for every value; treat readings as leads to check, not as approved values."),

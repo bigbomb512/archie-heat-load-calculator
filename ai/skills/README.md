@@ -13,3 +13,9 @@ is not sent. The skills and sub-skills themselves (tasks, inputs, prerequisites,
 A sub-skill's input fingerprint includes exactly the text it is sent, so editing one sub-skill's file re-runs that
 sub-skill (and the skills that depend on its result) on the next review; editing a playbook re-runs that parent's
 sub-skills; editing the shared policy re-runs every sub-skill.
+
+On the case-file route some sub-skills are answered together in one call (`_SKILL_GROUPS` in
+`backend/skill_workflow_service.py`): the shared policy, each playbook, the job details, page index and key pages
+are then sent once per group instead of once per sub-skill. Each member's answer is still checked, stored and
+fingerprinted on its own, so reuse and edits work per sub-skill. A member that can reuse its earlier result is
+left out of the call; a member left out of a reply, or a group prompt over budget, falls back to its own call.

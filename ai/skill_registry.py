@@ -79,6 +79,18 @@ def compose_subskill_instructions(parent_id, subskill):
     return "\n\n".join((shared, parent, task))
 
 
+def compose_group_instructions(subskills):
+    """Instructions for sub-skills answered in one call: the shared policy once, each parent playbook once, and
+    each sub-skill's own procedure under its name."""
+    catalog = load_catalog()
+    parts = [_read_instruction(instruction_path(catalog))]
+    for parent in dict.fromkeys(row["parent"] for row in subskills):
+        parts.append(f"Playbook for {parent}:\n" + _read_instruction(instruction_path(catalog, parent)))
+    for row in subskills:
+        parts.append(f"Procedure for {row['id']}:\n" + _read_instruction(instruction_path(catalog, row["parent"], row["id"])))
+    return "\n\n".join(parts)
+
+
 def vision_guidance():
     """Return shared extraction guidance; this performs no provider or network call."""
     catalog = load_catalog()

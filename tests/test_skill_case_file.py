@@ -80,11 +80,20 @@ class FakeProvider:
         self.images.append(list(image_paths))
         if self.error:
             raise self.error
-        subskill_id = prompt.split("Subskill: ", 1)[1].split(" ", 1)[0]
-        subskill = next(row for row in skills.load_subskill_registry()["subskills"] if row["id"] == subskill_id)
-        return {"status": "needs_review", "affected_ids": [], "observations": [], "inferences": [], "citations": [],
-                "confidence": None, "alternatives": [], "unresolved_fields": [], "remediation": [],
-                "proposal_fields": empty_typed_proposal(subskill)}
+        ids = called_skills(prompt)
+        replies = {}
+        for subskill_id in ids:
+            subskill = next(row for row in skills.load_subskill_registry()["subskills"] if row["id"] == subskill_id)
+            replies[subskill_id] = {"status": "needs_review", "affected_ids": [], "observations": [], "inferences": [], "citations": [],
+                                    "confidence": None, "alternatives": [], "unresolved_fields": [], "remediation": [],
+                                    "proposal_fields": empty_typed_proposal(subskill)}
+        return {"results": replies} if prompt.startswith("Perform these") else replies[ids[0]]
+
+
+def called_skills(prompt):
+    """The sub-skills one prompt asks for (several when a group is answered together)."""
+    import re
+    return re.findall(r"Subskill: (\w+) —", prompt)
 
 
 class CallTests(CaseFileTests):
@@ -157,6 +166,108 @@ class ReuseCarryTests(unittest.TestCase):
         self.assertIsNone(unmatched)
 
 
+class GroupTests(unittest.TestCase):
+    def setUp(self):
+        self.provider = FakeProvider()
+        skills.CASE_FILE_PROVIDER_FACTORY = lambda: self.provider
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        (self.root / "ai_input.json").write_text(json.dumps({"drawing_set": {"pages": [{"page": 5, "title": "EQUIPMENT SCHEDULE"}]}}))
+        (self.root / "drawing_coverage.json").write_text(json.dumps({"page_roles": [{"page": p} for p in (1, 5, 20, 26)]}))
+        (self.root / pass1.RESULT_FILE).write_text(json.dumps({"pages": {**READINGS, "3": {
+            "page_type": "reflected_ceiling_plan", "title": "RCP", "level": "Ground", "information": [
+                {"kind": "lighting", "what": "12 downlights", "evidence": "legend"},
+                {"kind": "people_occupancy", "what": "60 seats", "evidence": "furniture"},
+                {"kind": "operating_hours", "what": "Open 11-10", "evidence": "note"},
+                {"kind": "ceiling_height", "what": "Ceiling 2700", "evidence": "RCP note"}]}}}))
+        self.project = {"id": "group-" + self.root.name, "review_dir": str(self.root)}
+        self.prepared = patch.object(skills, "_ensure_room_evidence", return_value={"artifact_names": [], "candidate_count": 0, "model_input": {}})
+        self.prepared.start()
+
+    def tearDown(self):
+        self.prepared.stop()
+        skills.CASE_FILE_PROVIDER_FACTORY = None
+        skills._USAGE_STOPPED.clear()
+        self.temp.cleanup()
+
+    def run_review(self, action="start"):
+        if action == "start":
+            skills.start_after_reading(Web(), self.project)
+        else:
+            skills.post(Web(), self.project, {"action": "retry", "scope": "pdf_review"})
+        for _ in range(600):
+            if self.project["id"] not in skills._RUNNING:
+                break
+            time.sleep(0.05)
+        return json.loads((self.root / "skill_workflow_run.json").read_text())
+
+    def test_groups_only_hold_skills_whose_outside_dependencies_come_first(self):
+        registry = {row["id"]: row for row in skills.load_subskill_registry()["subskills"]}
+        scope = skills._scoped_subskill_ids(skills.load_subskill_registry(), set(skills.load_catalog()["enabled_skill_ids"]), "pdf_review")
+
+        def upstream(skill_id, seen=None):
+            seen = set() if seen is None else seen
+            for dep in registry[skill_id]["depends_on"]:
+                if dep not in seen:
+                    seen.add(dep)
+                    upstream(dep, seen)
+            return seen
+        for group, members in skills._SKILL_GROUPS.items():
+            self.assertLessEqual(set(members), scope, group)
+            for member in members:
+                for dep in set(registry[member]["depends_on"]) - set(members):
+                    self.assertFalse(upstream(dep) & set(members), f"{group}: {member} needs {dep}, which needs the group")
+
+    def test_a_review_asks_each_group_once_and_every_member_gets_its_own_checked_result(self):
+        manifest = self.run_review()
+        prompts = self.provider.prompts
+        asked = [skill_id for prompt in prompts for skill_id in called_skills(prompt)]
+        self.assertEqual(len(asked), len(set(asked)))                              # nothing asked twice
+        groups = [prompt for prompt in prompts if prompt.startswith("Perform these")]
+        self.assertTrue(groups)
+        self.assertLess(len(prompts), len(asked))                                  # fewer calls than skills
+        for member in skills._GROUP_OF:
+            if member in asked:
+                self.assertEqual(manifest["subskills"][member]["status"], "needs_review", member)
+                attempt = json.loads((self.root / manifest["subskills"][member]["attempt_ref"] / "raw_output.txt").read_text())
+                self.assertIn("proposal_fields", attempt)                          # its own reply, not the group's
+        gains = next(prompt for prompt in groups if "Subskill: equipment_evidence —" in prompt)
+        self.assertEqual(gains.count("### Role and authority"), 1)                 # shared rules once per call
+        self.assertIn('"results"', gains.split("\n", 1)[0])
+
+    def test_a_group_over_budget_or_missing_a_member_falls_back_to_one_call_each(self):
+        with patch.object(skills, "_GROUP_PROMPT_BUDGET_CHARS", 1_000):
+            self.run_review()
+        self.assertFalse([prompt for prompt in self.provider.prompts if prompt.startswith("Perform these")])
+        self.assertIn("equipment_evidence", [called_skills(prompt)[0] for prompt in self.provider.prompts])
+
+    def test_a_reply_leaving_out_a_member_asks_that_member_on_its_own(self):
+        original = FakeProvider.propose
+
+        def forgetful(provider, prompt, image_paths=()):
+            reply = original(provider, prompt, image_paths)
+            if "results" in reply:
+                reply["results"].pop("lighting_evidence", None)
+            return reply
+        with patch.object(FakeProvider, "propose", forgetful):
+            manifest = self.run_review()
+        solo = [prompt for prompt in self.provider.prompts if not prompt.startswith("Perform these")]
+        self.assertEqual([called_skills(prompt)[0] for prompt in solo].count("lighting_evidence"), 1)
+        self.assertEqual(manifest["subskills"]["lighting_evidence"]["status"], "needs_review")
+
+    def test_after_an_edit_to_one_member_only_it_and_what_depends_on_it_are_asked(self):
+        self.run_review()
+        before = len(self.provider.prompts)
+        real = skills.subskill_instructions_fingerprint
+        edited = lambda subskill: real(subskill) + ("x" if subskill["id"] == "equipment_evidence" else "")
+        with patch.object(skills, "subskill_instructions_fingerprint", edited):
+            self.run_review("retry")
+        asked = [skill_id for prompt in self.provider.prompts[before:] for skill_id in called_skills(prompt)]
+        self.assertEqual(set(asked), {"equipment_evidence", "schedule_evidence", "information_needs"})
+        self.assertTrue(any(prompt.startswith("Perform these") and "Subskill: schedule_evidence —" in prompt
+                            and "Subskill: equipment_evidence —" in prompt for prompt in self.provider.prompts[before:]))
+
+
 class RunTests(unittest.TestCase):
     def test_a_changed_builder_rebuilds_its_skill_and_unaffected_ai_skills_are_reused(self):
         provider = FakeProvider()
@@ -185,7 +296,7 @@ class RunTests(unittest.TestCase):
                 if not more:
                     break
                 after |= more
-            again = {prompt.split("Subskill: ", 1)[1].split(" ", 1)[0] for prompt in provider.prompts[before:]}
+            again = {skill_id for prompt in provider.prompts[before:] for skill_id in called_skills(prompt)}
             self.assertTrue(again)
             self.assertLessEqual(again, after)
         finally:
@@ -209,7 +320,7 @@ class RunTests(unittest.TestCase):
                         time.sleep(0.05)
                 self.assertNotEqual(started["status"], "blocked")
                 manifest = json.loads((root / "skill_workflow_run.json").read_text())
-            called = [prompt.split("Subskill: ", 1)[1].split(" ", 1)[0] for prompt in provider.prompts]
+            called = [skill_id for prompt in provider.prompts for skill_id in called_skills(prompt)]
             self.assertIn("equipment_evidence", called)
             needs = next(row for row in skills.load_subskill_registry()["subskills"] if row["id"] == "information_needs")
             self.assertTrue(all(called.index(dependency) < called.index("information_needs") for dependency in needs["depends_on"]
@@ -266,17 +377,17 @@ class ResumeTests(unittest.TestCase):
                 self.fail = {"equipment_evidence"}
 
             def propose(self, prompt, image_paths=()):
-                subskill_id = prompt.split("Subskill: ", 1)[1].split(" ", 1)[0]
-                if subskill_id in self.fail:
+                if set(called_skills(prompt)) & self.fail:          # the call asking for it fails (with its whole group)
                     self.prompts.append(prompt)
                     raise skills.SkillProviderError("codex_cli_failed", {"stderr_tail": "network down"})
                 return super().propose(prompt, image_paths)
 
         provider = FlakyProvider()
         skills.CASE_FILE_PROVIDER_FACTORY = lambda: provider
-        called = lambda prompts: [prompt.split("Subskill: ", 1)[1].split(" ", 1)[0] for prompt in prompts]
+        called = lambda prompts: [skill_id for prompt in prompts for skill_id in called_skills(prompt)]
         try:
-            with tempfile.TemporaryDirectory() as folder, \
+            # One skill failing on its own: answered one call per skill here (groups have their own tests).
+            with tempfile.TemporaryDirectory() as folder, patch.object(skills, "_GROUP_OF", {}), \
                     patch.object(skills, "_ensure_room_evidence", return_value={"artifact_names": [], "candidate_count": 0, "model_input": {}}):
                 root = Path(folder)
                 (root / "ai_input.json").write_text(json.dumps({"drawing_set": {"pages": [{"page": 5, "title": "EQUIPMENT SCHEDULE"}]}}))
@@ -357,15 +468,15 @@ class RecheckTests(unittest.TestCase):
                 self.bad = {"lighting_evidence"}
 
             def propose(self, prompt, image_paths=()):
-                subskill_id = prompt.split("Subskill: ", 1)[1].split(" ", 1)[0]
                 reply = super().propose(prompt, image_paths)
-                if subskill_id in self.bad:
-                    reply["proposal_fields"] = {"lighting": "not a list"}     # fails the type check
+                answers = reply["results"] if "results" in reply else {called_skills(prompt)[0]: reply}
+                for subskill_id in set(answers) & self.bad:
+                    answers[subskill_id]["proposal_fields"] = {"lighting": "not a list"}     # fails the type check
                 return reply
 
         provider = Provider()
         skills.CASE_FILE_PROVIDER_FACTORY = lambda: provider
-        called = lambda prompts: [prompt.split("Subskill: ", 1)[1].split(" ", 1)[0] for prompt in prompts]
+        called = lambda prompts: [skill_id for prompt in prompts for skill_id in called_skills(prompt)]
         try:
             with tempfile.TemporaryDirectory() as folder, \
                     patch.object(skills, "_ensure_room_evidence", return_value={"artifact_names": [], "candidate_count": 0, "model_input": {}}):
