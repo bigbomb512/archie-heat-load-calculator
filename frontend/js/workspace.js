@@ -896,7 +896,7 @@
       </section>` : `<p class="ws-banner" data-ws-op-done>${esc(state.opMessage || "")} No checks are waiting for a reply.</p>`;
     state.opMessage = "";
     return `<div class="ws-op" data-ws-operator-panel>
-      <div class="ws-op-head"><h3>AI task review <small>(for us)</small></h3>
+      <div class="ws-op-head"><h3>AI task review</h3>
         <span class="ws-fine" data-ws-op-time>${timed.length ? `${minutes(total)} spent on ${timed.length} check${timed.length === 1 ? "" : "s"} · about ${minutes(total / timed.length)} each` : ""}</span>
         ${params.get("operator") === "1" ? "" : `<button class="link-button" type="button" data-ws-operator-off>Hide the AI step</button>`}</div>
       ${card}
