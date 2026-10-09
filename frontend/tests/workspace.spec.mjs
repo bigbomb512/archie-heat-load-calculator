@@ -315,35 +315,57 @@ test("PDF review: consent starts the skills review and findings show page eviden
 });
 
 test("PDF review: evidence labels, missing-value editing, and conflict choice are explicit", async ({page}) => {
-  const decisions = [];
+  const decisions = [], values = {};
   const findings = [
     {id: "room_identity_use:rooms:0", subskill_id: "room_identity_use", field: "room use", target: "Shop",
       value: "shop", evidence: "supported", pages: [20], citations: [{page: 20, excerpt: "SHOP"}], status: "proposed", alternatives: []},
     {id: "room_identity_use:missing:ceiling_height:0", subskill_id: "ceiling_height_volume", field: "ceiling_height",
-      value: null, evidence: "missing", missing: true, pages: [], citations: [], status: "missing", alternatives: []},
+      value: null, units: "mm", evidence: "missing", missing: true, pages: [], citations: [], status: "missing", alternatives: []},
     {id: "room_identity_use:rooms:1", subskill_id: "room_identity_use", field: "room use", target: "Kitchen",
       value: "shop", evidence: "conflicting", pages: [20], citations: [{page: 20, excerpt: "KITCHEN"}], status: "proposed", alternatives: ["kitchen", "shop"]},
   ];
   const skill = () => ({status: "needs_review", read_only: false, stages: [], findings: findings.map(row => ({...row,
     status: decisions.includes(row.id) ? "accepted" : row.status}))});
   await mockJob(page, {status: () => baseStatus(), skill, vision: () => ({settings: {owner_opt_in: true, selected_group_ids: ["plans"]}, selection: {page_count: 1, group_count: 1}}),
-    onPost: (kind, body) => { if (kind === "skill" && body.action === "review_finding") { decisions.push(body.finding_id); return skill(); } return null; }});
+    onPost: (kind, body) => { if (kind === "skill" && body.action === "review_finding") { decisions.push(body.finding_id); values[body.finding_id] = body.value; return skill(); } return null; }});
   await page.goto("/#/job/job-1/drawings");
   await expect(page.locator("[data-ws-evidence-count]")).toContainText("1 supported · 1 missing · 1 conflicting");
   await expect(page.locator("[data-ws-finding='room_identity_use:rooms:0'] [data-ws-evidence]")).toHaveText("supported");
   const missing = page.locator("[data-ws-finding='room_identity_use:missing:ceiling_height:0']");
   await expect(missing.locator("[data-ws-finding-accept]")).toHaveCount(0);
-  await missing.locator("[data-ws-finding-edit]").fill("3.2");
+  await expect(missing.locator("[data-ws-finding-edit]")).toHaveValue("");          // nothing stray to save
+  await expect(missing.locator("pre")).toHaveText("No value identified");            // no unit on an absent value
   await missing.getByRole("button", {name: "Save value"}).click();
+  await expect(missing.getByRole("button", {name: "Type a value first"})).toBeVisible();
+  expect(decisions).not.toContain("room_identity_use:missing:ceiling_height:0");
+  await missing.locator("[data-ws-finding-edit]").fill("3.2");
+  await missing.locator("[data-ws-finding-save]").click();
   expect(decisions).toContain("room_identity_use:missing:ceiling_height:0");
+  expect(values["room_identity_use:missing:ceiling_height:0"]).toBe(3.2);           // a typed number stays a number
   // Reviewed findings drop out of the open count.
   await expect(page.locator("[data-ws-evidence-count]")).toHaveText("Open findings: 1 supported · 1 conflicting");
   const conflict = page.locator("[data-ws-finding='room_identity_use:rooms:1']");
   await expect(conflict.locator("[data-ws-finding-accept]")).toHaveCount(0);
   await conflict.getByRole("button", {name: "kitchen"}).evaluate(button => button.click());
-  await expect(conflict.locator("[data-ws-finding-edit]")).toHaveValue('"kitchen"');
+  await expect(conflict.locator("[data-ws-finding-edit]")).toHaveValue("kitchen");   // text shown as text
   await conflict.getByRole("button", {name: "Save chosen value"}).click();
   expect(decisions).toContain("room_identity_use:rooms:1");
+  expect(values["room_identity_use:rooms:1"]).toBe("kitchen");
+});
+
+test("PDF review: a missing address can be typed as plain text", async ({page}) => {
+  const values = {};
+  const findings = [{id: "address_confirmation:missing:confirmed_address:0", subskill_id: "address_confirmation",
+    field: "confirmed_address", value: null, evidence: "missing", missing: true, pages: [], citations: [], status: "missing", alternatives: []}];
+  const skill = () => ({status: "needs_review", read_only: false, stages: [], findings});
+  await mockJob(page, {status: () => baseStatus(), skill, vision: () => ({settings: {owner_opt_in: true}, selection: {page_count: 1, group_count: 1}}),
+    onPost: (kind, body) => { if (kind === "skill" && body.action === "review_finding") { values[body.finding_id] = body.value; return skill(); } return null; }});
+  await page.goto("/#/job/job-1/drawings");
+  const box = page.locator("[data-ws-finding-edit]");
+  await expect(box).toHaveAttribute("placeholder", "Type the value");
+  await box.fill("Shop G38/22 Lemon Tree Av, Melrose Park NSW 2114");
+  await page.getByRole("button", {name: "Save value"}).click();
+  await expect.poll(() => values["address_confirmation:missing:confirmed_address:0"]).toBe("Shop G38/22 Lemon Tree Av, Melrose Park NSW 2114");
 });
 
 test("PDF review: a missing or conflicting finding can be closed without a value", async ({page}) => {

@@ -665,8 +665,22 @@
     return String(value);
   }
 
+  // The edit box: empty for a missing value (so nothing stray can be saved), plain text for a text value, JSON for
+  // a number, list or record.
   function formatEditableFindingValue(value) {
-    return typeof value === "string" ? JSON.stringify(value) : formatFindingValue(value);
+    if (value == null || value === "") return "";
+    return typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  }
+
+  // What a typed edit means: text where the value is text or not yet known (a typed number is still a number), JSON
+  // where it is a number, list or record. Returns {value} or {error}.
+  function parsedFindingEdit(text, original) {
+    const typed = String(text ?? "").trim();
+    if (!typed) return {error: "Type a value first"};
+    if (typeof original === "string") return {value: typed};
+    try { return {value: JSON.parse(typed)}; } catch (_) {
+      return original == null ? {value: typed} : {error: "Enter a valid JSON value"};
+    }
   }
 
   function pdfReviewMarkup(review, vision) {
@@ -682,7 +696,7 @@
       const pages = row.pages?.length ? `Page${row.pages.length === 1 ? "" : "s"} ${row.pages.map(esc).join(", ")}` : "Page citation missing";
       const unresolved = row.unresolved_fields?.length ? `<p class="ws-fine">Still missing: ${esc(row.unresolved_fields.join(", "))}</p>` : "";
       const readOnly = !!review.read_only;
-      const editor = `<details open><summary>${row.evidence === "missing" ? "Enter the missing value" : row.evidence === "conflicting" ? "Choose or edit a reading" : "Edit proposed value"}</summary><textarea data-ws-finding-edit aria-label="Edit proposed value">${esc(formatEditableFindingValue(row.value))}</textarea></details>`;
+      const editor = `<details open><summary>${row.evidence === "missing" ? "Enter the missing value" : row.evidence === "conflicting" ? "Choose or edit a reading" : "Edit proposed value"}</summary><textarea data-ws-finding-edit aria-label="Edit proposed value"${row.evidence === "missing" ? ' placeholder="Type the value"' : ""}>${esc(formatEditableFindingValue(row.value))}</textarea></details>`;
       const choiceButtons = row.evidence === "conflicting" ? (row.alternatives || []).map((item, index) => `<li><button type="button" class="link-button" data-ws-conflict-pick="${index}">${esc(typeof item === "string" ? item : JSON.stringify(item))}</button></li>`).join("") : "";
       const reviewActions = readOnly ? `<p class="ws-fine">Read only — consent was withdrawn. Restore consent and retry before changing this finding.</p>`
         : row.status === "accepted" || row.status === "rejected" ? `<p class="ws-fine">${esc(row.status)}${row.reviewer ? ` by ${esc(row.reviewer)}` : ""}${row.status === "accepted" ? (row.input_applied ? " · used in the calculation draft" : " · saved as reviewed evidence; not yet connected to a calculation input") : ""}</p>`
@@ -691,7 +705,7 @@
         : `${editor}<div class="ws-actions"><button class="btn key" type="button" data-ws-finding-accept="${esc(row.id)}">Accept value</button><button class="btn ghost" type="button" data-ws-finding-reject="${esc(row.id)}">Reject</button></div>`;
       return `<article class="ws-skill-finding" data-ws-finding="${esc(row.id)}"><div class="ws-skill-finding-head"><b>${esc(row.field.replaceAll("_", " "))}</b><span>${esc(row.subskill_id.replaceAll("_", " "))}</span></div>
         <span class="ws-chip ws-evidence-${esc(row.evidence)}" data-ws-evidence>${esc(row.evidence)}</span>
-        <pre>${esc(formatFindingValue(row.value))}${row.units ? ` ${esc(row.units)}` : ""}</pre><p class="ws-fine">${esc(pages)}${row.confidence != null ? ` · confidence ${esc(row.confidence)}` : ""}</p>
+        <pre>${esc(formatFindingValue(row.value))}${row.units && row.value != null && row.value !== "" ? ` ${esc(row.units)}` : ""}</pre><p class="ws-fine">${esc(pages)}${row.confidence != null ? ` · confidence ${esc(row.confidence)}` : ""}</p>
         ${row.formula ? `<p class="ws-fine">Calculation: ${esc(row.formula)}</p>` : ""}${row.calculation ? `<p class="ws-fine">Working: ${esc(row.calculation)}</p>` : ""}${evidence ? `<details><summary>Evidence excerpts</summary><ul>${evidence}</ul></details>` : ""}
         ${inference ? `<details><summary>Why this is inferred</summary><ul>${inference}</ul></details>` : ""}
         ${unresolved}${reviewActions}</article>`;
@@ -722,8 +736,8 @@
       const item = review.findings?.find(row => row.id === finding?.dataset.wsFinding);
       const alternative = item?.alternatives?.[Number(button.dataset.wsConflictPick)];
       if (alternative !== undefined) {
-        finding.querySelector("[data-ws-finding-edit]").value = JSON.stringify(
-          alternative && typeof alternative === "object" && Object.hasOwn(alternative, "value") ? alternative.value : alternative, null, 2);
+        finding.querySelector("[data-ws-finding-edit]").value = formatEditableFindingValue(
+          alternative && typeof alternative === "object" && Object.hasOwn(alternative, "value") ? alternative.value : alternative);
         finding.dataset.wsConflictChosen = "true";
       }
     }));
@@ -759,8 +773,13 @@
       const findingId = accept ? button.dataset.wsFindingAccept : reject ? button.dataset.wsFindingReject : button.dataset.wsFindingSave;
       let value;
       if (accept || !reject) {
-        const text = button.closest("[data-ws-finding]").querySelector("[data-ws-finding-edit]")?.value;
-        if (text) { try { value = JSON.parse(text); } catch (_) { button.textContent = "Enter a valid JSON value"; return; } }
+        const box = button.closest("[data-ws-finding]").querySelector("[data-ws-finding-edit]");
+        const original = review.findings?.find(row => row.id === findingId)?.value;
+        if (box && (!accept || box.value.trim() !== formatEditableFindingValue(original).trim())) {
+          const edit = parsedFindingEdit(box.value, original);
+          if (edit.error) { button.textContent = edit.error; return; }
+          value = edit.value;
+        }
       }
       button.disabled = true;
       try {
