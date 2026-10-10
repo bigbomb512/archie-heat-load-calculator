@@ -31,14 +31,14 @@ TYPES = (
     ("cooking", r"\b(oven|fryer|burner|wok|grill|griddle|range|cooktop|stove|bbq|barbecue|salamander|steamer|bain marie|hot food|warmer|rice cooker|pizza|toaster|induction|hot plate|char ?grill|rotisserie|kebab|noodle cooker|pasta cooker|6 burner|4 burner)\b"),
     ("dishwashing", r"\b(dish ?washer|glass ?washer|pot ?washer|warewasher)\b"),
     ("hot_drinks", r"\b(coffee|espresso|boiler|hot water|urn|water dispenser|zip|kettle|grinder|blender)\b"),
-    ("electronics", r"\b(tv|television|screen|monitor|pos|computer|printer|terminal|eftpos|speaker|audio|amplifier|router|server|kiosk|touch ?screen)\b"),
+    ("electronics", r"\b(tv|television|screen|monitor|pos|computer|cpu|pc|desktop|printer|terminal|eftpos|speaker|audio|amplifier|router|server|kiosk|touch ?screen)\b"),
     ("signage", r"\b(sign|signage|light ?box|illuminated|neon|logo)\b"),
 )
 
 # Typical rated input (W) for types with a narrow range only, by a size word in the name when there is one.
 TYPICAL_W = {
     "electronics": ((r"\b(8\d|7\d|65) ?(inch|in|\")", 250), (r"\b(tv|television|screen|monitor)\b", 150),
-                    (r"\b(pos|terminal|eftpos|printer|computer)\b", 100), (r".", 100)),
+                    (r"\b(pos|terminal|eftpos|printer|computer|cpu|pc|desktop)\b", 100), (r".", 100)),
     "signage": ((r".", 100),),
     "refrigeration": ((r"\bice (maker|machine)\b", 800), (r"\b(3|three) ?door\b", 800), (r"\b(2|two|double) ?door\b", 600),
                       (r"\b(chest)\b", 300), (r"\b(underbench|under ?counter|ub)\b", 350), (r"\bdisplay\b", 1000),

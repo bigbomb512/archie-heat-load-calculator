@@ -58,6 +58,38 @@ class EquipmentReadingTests(unittest.TestCase):
         self.assertEqual(extraction.equipment_identity(small), extraction.equipment_identity(item("underbench fridge", size="1200W 700D")))
 
 
+class ScheduleCodeTests(unittest.TestCase):
+    def test_schedule_pages_are_found_by_type_or_title_and_their_codes_feed_the_plan_prompt(self):
+        pass1_pages = {"5": {"page_type": "floor_plan", "title": "EQUIPMENT SCHEDULE"}, "6": {"page_type": "schedule", "title": ""},
+                       "19": {"page_type": "floor_plan", "title": "PROPOSED FLOOR LAYOUT"}}
+        self.assertEqual(service.schedule_pages([5, 6, 19], pass1_pages), [5, 6])
+        codes = service.schedule_codes([(5, 0, [item("COMBI OVEN", code="E06"), item("Shelf")]), (6, 0, [item("Oven (dup)", code="E06"), item("UB FRIDGE", code="E21")])])
+        self.assertEqual(codes, {"E06": "COMBI OVEN", "E21": "UB FRIDGE"})
+        prompt = extraction.build_prompt(EQUIPMENT, 19, codes=codes)
+        self.assertIn("lists these codes: E06 COMBI OVEN; E21 UB FRIDGE.", prompt)
+        self.assertIn("Give no code for an item that matches none of them, or matches more than one.", prompt)
+        self.assertEqual(extraction.build_prompt(EQUIPMENT, 19), extraction.build_prompt(EQUIPMENT, 19, codes={}))
+        self.assertIn("lists these codes", extraction.batch_prompt(EQUIPMENT, [(19, 0, 1), (20, 0, 1)], codes))
+        # A page read with the codes is cached apart from one read without them.
+        image = Path(__file__)
+        self.assertNotEqual(service._cache_key(image, EQUIPMENT, "m", codes), service._cache_key(image, EQUIPMENT, "m"))
+        self.assertEqual(service._cache_key(image, EQUIPMENT, "m", None), service._cache_key(image, EQUIPMENT, "m"))
+
+
+class DuplicateHintTests(unittest.TestCase):
+    def test_an_uncoded_plan_label_points_at_the_one_or_two_scheduled_items_it_probably_is(self):
+        def row(name, code="", size=""):
+            return {"id": f"{code or name}:{size}", "value": {"code": code, "name": name, "size": size}}
+        findings = [row("UB FRIDGE", "E02", "1200x700"), row("UB FRIDGE", "E21", "1500x700"), row("WOK BURNER", "E27"),
+                    row("2 DOOR FRIDGE", "E05"), row("DRINK FRIDGE", "E13"), row("DISPLAY FRIDGE", "E31"),
+                    row("UB FR 1500", size="1500"),          # abbreviation and size -> E21 only
+                    row("WOK"),                               # -> E27
+                    row("UB FRIDGE"),                         # two sizes scheduled -> both offered
+                    row("FRIDGE"),                            # four fridges -> too vague, no hint
+                    row("Heat lamp")]                         # nothing scheduled
+        hints = {key: [match["value"]["code"] for match in value] for key, value in extraction.possible_duplicates(findings).items()}
+        self.assertEqual(hints, {"UB FR 1500:1500": ["E21"], "WOK:": ["E27"], "UB FRIDGE:": ["E02", "E21"]})
+
 class MergeTests(unittest.TestCase):
     def test_a_plan_label_without_a_code_folds_into_the_one_scheduled_item_of_that_name(self):
         readings = [
@@ -99,6 +131,14 @@ class MergeTests(unittest.TestCase):
         self.assertEqual((findings["Combi oven"]["evidence"], findings["Combi oven"]["pictures_only"]), ("supported", False))
         self.assertEqual((findings["Wall-mounted screen"]["evidence"], findings["Wall-mounted screen"]["pictures_only"]), ("inferred", True))
 
+    def test_sizes_agreeing_in_their_numbers_are_one_reading_and_different_numbers_still_conflict(self):
+        readings = [(5, 0, [item("Hot food station", code="E10", size="4900MM(W)X700MM(D)X850MM(H)"),
+                            item("UB freezer", code="E22", size="1200MM(W)X700MM(D)")]),
+                    (19, 0, [item("Hot food station", code="E10", size="4900X700"), item("UB freezer", code="E22", size="1500")])]
+        findings = {row["value"]["code"]: row for row in extraction.merge(EQUIPMENT, readings)}
+        self.assertEqual((findings["E10"]["value"]["size"], findings["E10"]["conflicts"]), ("4900MM(W)X700MM(D)X850MM(H)", {}))
+        self.assertEqual([option["value"] for option in findings["E22"]["conflicts"]["size"]], ["1200MM(W)X700MM(D)", "1500"])
+
     def test_overlapping_sections_of_one_page_take_the_largest_count(self):
         readings = [(9, 0, [item("Display fridge", quantity=2)]), (9, 1, [item("Display fridge", quantity=3)])]
         [finding] = extraction.merge(EQUIPMENT, readings)
@@ -127,6 +167,7 @@ class FakeReader:
         pages = [int(Path(path).stem.split("_")[1]) for path in image_paths]
         self.calls.extend(pages)
         self.batches = getattr(self, "batches", []) + [pages]
+        self.prompts = getattr(self, "prompts", []) + [prompt]
         if len(pages) > 1:
             # Several images in one call: one that would fail is left out of the reply (it's then read on its own).
             return {"images": {str(index): self.replies[page] for index, page in enumerate(pages, 1)
@@ -172,7 +213,10 @@ class ServiceTests(unittest.TestCase):
         pass1.PROVIDER_FACTORY = lambda: reader
         service.start(None, self.project)
         done = wait(self.project)
-        self.assertEqual((done["status"], done["pages"], reader.batches), ("done", [1, 3], [[1, 3]]))   # one call for both
+        # The schedule (page 1) is read first; the plan (page 3) is then read with the schedule's codes.
+        self.assertEqual((done["status"], done["pages"], reader.batches), ("done", [1, 3], [[1], [3]]))
+        self.assertNotIn("schedule lists these codes", reader.prompts[0])
+        self.assertIn("schedule lists these codes: E01 Combi oven.", reader.prompts[1])
         oven = next(row for row in done["findings"] if row["value"]["name"] == "Combi oven")
         self.assertEqual((oven["evidence"], oven["status"], oven["pages"]), ("conflicting", "proposed", [1, 3]))
         self.assertEqual(done["open"], 2)

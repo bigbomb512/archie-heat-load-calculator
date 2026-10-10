@@ -865,7 +865,7 @@ class SkillWorkflowTests(unittest.TestCase):
         self.assertEqual(result["remediation"][0], "keep me")
         self.assertIn("citation 2 has no usable page list", result["remediation"][-1])
         self.assertIn("citation 3 names no page or source", result["remediation"][-1])
-        self.assertIn("citation 4 is not an object", result["remediation"][-1])
+        self.assertIn("citation 4 is a sentence naming no page", result["remediation"][-1])
 
     def test_runtime_physical_pdf_page_citation_alias_is_accepted(self):
         registry = skills.load_subskill_registry()
@@ -896,7 +896,32 @@ class SkillWorkflowTests(unittest.TestCase):
         with self.assertRaises(Exception):
             skills._validate_subskill_output(task, {**json.loads(json.dumps(proposal)), "remediation": {"step": "x"}}, registry, allowed_pages={1})
 
-    def test_qualitative_or_percentage_confidence_is_downgraded_to_review(self):
+    def test_citations_written_as_sentences_count_by_the_page_they_name_and_still_must_be_in_the_set(self):
+        registry = skills.load_subskill_registry()
+        task = next(row for row in registry["subskills"] if row["id"] == "ceiling_height_volume")
+        base = {"subskill_id": task["id"], "subskill_version": task["version"], "status": "needs_review",
+            "affected_ids": [], "observations": [], "confidence": 0.5, "alternatives": [], "unresolved_fields": [],
+            "remediation": [], "input_fingerprint": "a" * 64,
+            "proposal_fields": {name: [] for name in task["proposal_fields"]}}
+        sentences = ["c1: p22: 'CH:3150MM' on the reflected ceiling plan", "pdf-a9ecdf45c556:p30 kitchen elevation",
+                     "General note with no page", "p99: a page outside this set"]
+        reply = {**base, "citations": sentences, "inferences": [
+            {"field": "heights[].height_mm", "value": 3150, "method": "printed ceiling height",
+             "citations": ["c1", "pdf-a9ecdf45c556:p30 kitchen elevation"]}]}
+        checked = skills._validate_subskill_output(task, json.loads(json.dumps(reply)), registry, allowed_pages={22, 30})
+        self.assertEqual([(row.get("id"), row["page"]) for row in checked["citations"]], [("c1", 22), (None, 30)])
+        self.assertEqual(checked["citations"][1]["source_document_id"], "pdf-a9ecdf45c556")
+        self.assertEqual(checked["inferences"][0]["citation_ids"], ["c1", "pdf-a9ecdf45c556:p30 kitchen elevation"])
+        self.assertIn("citation 3 is a sentence naming no page", checked["remediation"][-1])
+        self.assertIn("citation 4 cites pages not in the set: [99]", checked["remediation"][-1])
+        # A number whose references name no page of the set is still refused.
+        uncited = {**reply, "inferences": [{"field": "heights[].height_mm", "value": 2700, "method": "fallback",
+                                            "citations": ["task_evidence.ceiling_height_volume.heights", "p99"]}]}
+        with self.assertRaises(skills.SubskillValidationError):
+            skills._validate_subskill_output(task, json.loads(json.dumps(uncited)), registry, allowed_pages={22, 30})
+        self.assertEqual(skills._text_pages("Step 4 on page 21, see p.22 and pdf-ab12cd34:p23; map 5"), [21, 22, 23])
+
+
         registry = skills.load_subskill_registry()
         task = next(row for row in registry["subskills"] if row["id"] == "sheet_identity")
         proposal = {"subskill_id": task["id"], "subskill_version": task["version"], "status": "provisional",

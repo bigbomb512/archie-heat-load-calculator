@@ -130,22 +130,36 @@ EXTRACTORS = {
 }
 
 
-def build_prompt(extractor, page, section=None, sections=1):
-    return extractor["prompt"].format(where=_where(page, section, sections), noun="page" if sections == 1 else "section")
+def codes_note(codes):
+    """The schedule's codes, for reading the plans: a plan often labels an item by name only ("COMBI OVEN") where the
+    schedule gives it a code ("E06"), and without the code the two are listed as different items."""
+    if not codes:
+        return ""
+    listing = "; ".join(f"{code} {name}".strip() for code, name in sorted(codes.items()))[:4000]
+    return ("\nThis drawing set's equipment schedule lists these codes: " + listing + ".\nWhen an item on this image is "
+            "one of them (the same item by name, abbreviation or label, e.g. \"UB FR 1500\" for an underbench fridge "
+            "1500), give that code in \"code\" even if the code isn't printed beside it here, and its quantity as the "
+            "number shown on this image. Give no code for an item that matches none of them, or matches more than one.")
+
+
+def build_prompt(extractor, page, section=None, sections=1, codes=None):
+    return (extractor["prompt"].format(where=_where(page, section, sections), noun="page" if sections == 1 else "section")
+            + codes_note(codes))
 
 
 def _where(page, section=None, sections=1):
     return f"page {page}" if sections == 1 else f"section {section + 1} of {sections} of page {page} (sections overlap)"
 
 
-def batch_prompt(extractor, keys):
+def batch_prompt(extractor, keys, codes=None):
     """Several pages (or sections) read in one call, each its own full-size image read on its own; saves the fixed
     cost of a call (about 4,600 tokens) for every image after the first. keys = [(page, section, sections)]."""
     listing = "; ".join(f"image {index} is {_where(page, section, count)}" for index, (page, section, count) in enumerate(keys, 1))
     body = extractor["prompt"].format(where="the attached images", noun="image")
     return (f"{len(keys)} images are attached, one per page or section: {listing}. Read each image on its own, as if it "
             f"were the only one, following the instructions below; give each image's reply under its number:\n"
-            f'{{"images": {{"1": <that image\'s reply>, "2": ...}}}} and nothing else (JSON only, no prose, no code fence).\n\n{body}')
+            f'{{"images": {{"1": <that image\'s reply>, "2": ...}}}} and nothing else (JSON only, no prose, no code fence).\n\n{body}'
+            + codes_note(codes))
 
 
 def validate_reply(extractor, reply):
@@ -177,6 +191,48 @@ def _fingerprint(value):
 PICTURE_PAGE_TYPES = {"render_or_photo"}
 
 
+# Abbreviations seen on plan labels, for spotting a likely duplicate of a scheduled item ("UB FR 1500" = "UB FRIDGE").
+_LABEL_WORDS = {"ub": "underbench", "fr": "fridge", "frz": "freezer", "dr": "door", "disp": "dispenser",
+                "refrigerator": "fridge", "dw": "dishwasher", "m": "maker", "tiere": "tier"}
+_LABEL_STOP = {"the", "and", "with", "of", "x", "mm", "unit"}
+
+
+def _label_words(name):
+    words = set()
+    for word in normalise_name(name).split():
+        word = _LABEL_WORDS.get(word, word)
+        if word.isdigit() or word in _LABEL_STOP or len(word) < 2:
+            continue
+        words.add(word[:-1] if word.endswith("s") and len(word) > 3 else word)
+    return words
+
+
+def _label_sizes(value):
+    return set(re.findall(r"\d{3,4}", f"{value.get('name', '')} {value.get('size', '')}"))
+
+
+def possible_duplicates(findings, most=2):
+    """{finding id: [coded findings]} for each item read without a code whose wording (abbreviations expanded)
+    matches one or two scheduled items, with no clashing size: likely the same item labelled on a plan. A hint for
+    the operator only; nothing is merged."""
+    coded = [row for row in findings if row["value"].get("code")]
+    hints = {}
+    for row in findings:
+        if row["value"].get("code"):
+            continue
+        mine, sizes = _label_words(row["value"].get("name")), _label_sizes(row["value"])
+        if not mine:
+            continue
+        matches = []
+        for other in coded:
+            theirs, other_sizes = _label_words(other["value"].get("name")), _label_sizes(other["value"])
+            if (mine <= theirs or theirs <= mine) and not (sizes and other_sizes and not sizes & other_sizes):
+                matches.append(other)
+        if 0 < len(matches) <= most:
+            hints[row["id"]] = matches
+    return hints
+
+
 def _fold_uncoded(extractor, groups):
     """Fold an item read without a code into the one coded item of the same name (a plan labels "COMBI OVEN" where the
     schedule lists "E06 COMBI OVEN"): it is the same item, so listing it twice invites double counting. Folded readings
@@ -198,6 +254,22 @@ def _fold_uncoded(extractor, groups):
             folded.update(id(row) for row in rows)
             groups[targets.pop()].extend(rows)
     return folded
+
+
+def _same_sizes(options):
+    """Sizes that agree once their numbers are compared are one reading: "4900X700" on a plan and
+    "4900MM(W)X700MM(D)X850MM(H)" in the schedule read the same width and depth. The fullest text is kept, with every
+    page; sizes whose numbers differ ("1200" and "1500") stay separate."""
+    merged = []
+    for option in sorted(options, key=lambda row: -len(size_numbers(row["value"]).split("x"))):
+        numbers = size_numbers(option["value"]).split("x")
+        same = next((row for row in merged if numbers and numbers[0]
+                     and size_numbers(row["value"]).split("x")[:len(numbers)] == numbers), None)
+        if same:
+            same["pages"] = sorted(set(same["pages"]) | set(option["pages"]))
+        else:
+            merged.append({"value": option["value"], "pages": list(option["pages"])})
+    return sorted(merged, key=lambda row: row["pages"][0])
 
 
 def merge(extractor, readings, page_texts=None, page_types=None):
@@ -238,6 +310,8 @@ def merge(extractor, readings, page_texts=None, page_types=None):
                         match["pages"].append(page)
                     else:
                         options.append({"value": current, "pages": [page]})
+            if field == "size":
+                options = _same_sizes(options)
             if field in extractor["compared"] and len(options) > 1:
                 conflicts[field] = options
             value[field] = options[0]["value"] if options else (None if field in ("quantity", "under_hood") else "")

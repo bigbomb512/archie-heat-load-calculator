@@ -16,7 +16,7 @@ class TypeAndRatingTests(unittest.TestCase):
     def test_types_come_from_the_name_and_hoods_and_cold_rooms_are_not_equipment(self):
         cases = {"UB FRIDGE": "refrigeration", "2 door drink fridge": "refrigeration", "ICE MAKER": "refrigeration",
                  "Combi oven": "cooking", "6 BURNER": "cooking", "Pizza deck oven": "cooking", "DISHWASHER": "dishwashing",
-                 "Coffee machine": "hot_drinks", "75 INCH TV": "electronics", "POS": "electronics",
+                 "Coffee machine": "hot_drinks", "75 INCH TV": "electronics", "POS": "electronics", "CPU 2": "electronics",
                  "Illuminated sign": "signage", "RANGE HOOD": "exhaust_hood", "COOLROOM": "refrigerated_room",
                  "Freezer room": "refrigerated_room", "Pub table": "other"}
         self.assertEqual({name: heat.equipment_type(name) for name in cases}, cases)

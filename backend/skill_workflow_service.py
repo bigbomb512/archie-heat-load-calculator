@@ -913,6 +913,31 @@ def _validation_error(check, path, detail, code="subskill_output_invalid"):
     raise SubskillValidationError(code, check, path, detail)
 
 
+_PAGE_IN_TEXT = re.compile(r"(?<![a-z0-9])p(?:age|g)?\s?\.?\s?(\d{1,4})(?![\d.])", re.IGNORECASE)
+
+
+def _text_pages(text):
+    """The pages a citation sentence names ("p21", "page 21", "pdf-ab12:p22"), in order, without repeats."""
+    return list(dict.fromkeys(int(match) for match in _PAGE_IN_TEXT.findall(str(text))))
+
+
+def _cited_pages_allowed(text, allowed_pages):
+    pages = _text_pages(text)
+    return bool(pages) and (allowed_pages is None or all(page in allowed_pages for page in pages))
+
+
+def _text_citation(text):
+    """A citation written as a sentence, as a citation record: its id ("c1: …"), source document ("pdf-…"), the pages
+    it names and the sentence as the excerpt; None when it names no page."""
+    pages = _text_pages(text)
+    if not pages:
+        return None
+    label = re.match(r"\s*([A-Za-z]{1,3}\d{1,3})\s*:", text)
+    source = re.search(r"\b(pdf-[0-9a-f]{6,})\b", text)
+    return {**({"id": label.group(1)} if label else {}), **({"source_document_id": source.group(1)} if source else {}),
+            **({"page": pages[0]} if len(pages) == 1 else {"physical_pages": pages}), "excerpt": text.strip()[:400]}
+
+
 def _validate_subskill_output(subskill, result, registry, allowed_pages=None):
     envelope = set(registry["proposal_envelope"]["required"])
     if not isinstance(result, dict):
@@ -950,6 +975,13 @@ def _validate_subskill_output(subskill, result, registry, allowed_pages=None):
     # throw away a skill's findings and block every skill depending on it. Dropped citations are never trusted.
     kept, dropped = [], []
     for index, citation in enumerate(result["citations"]):
+        if isinstance(citation, str):
+            # Some models write a citation as a sentence ("c1: p21: 'Bar' on the floor finish plan"): the page it
+            # names makes it a citation like any other; a sentence naming no page is dropped.
+            citation = _text_citation(citation)
+            if citation is None:
+                dropped.append(f"citation {index + 1} is a sentence naming no page")
+                continue
         if not isinstance(citation, dict):
             dropped.append(f"citation {index + 1} is not an object")
             continue
@@ -971,13 +1003,21 @@ def _validate_subskill_output(subskill, result, registry, allowed_pages=None):
             dropped.append(f"citation {index + 1} cites pages not in the set: {unknown}")
             continue
         kept.append(citation)
+    result["citations"] = kept                       # converted sentences replace the originals
     if dropped:
-        result["citations"] = kept
         note = "Dropped " + "; ".join(dropped) + "."
         result["remediation"] = list(result.get("remediation") or []) + [note] if isinstance(result.get("remediation"), list) else [note]
+    kept_ids = {str(citation.get(key)) for citation in kept for key in ("id", "citation_id") if citation.get(key)}
     for index, inference in enumerate(result.get("inferences", [])):
         if not isinstance(inference, dict) or not inference.get("field"):
             _validation_error("inference_shape", f"inferences[{index}]", "Each inference must be an object with a field name.")
+        if not inference.get("citation_ids") and isinstance(inference.get("citations"), list):
+            # The same references under "citations" (ids, or sentences naming a page): only those naming a kept
+            # citation or a page of this case file count.
+            usable = [str(entry) for entry in inference["citations"] if isinstance(entry, (str, int))
+                      and (str(entry) in kept_ids or _cited_pages_allowed(str(entry), allowed_pages))]
+            if usable:
+                inference["citation_ids"] = usable
         value = inference.get("value")
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             if not inference.get("citation_ids") or not inference.get("method"):

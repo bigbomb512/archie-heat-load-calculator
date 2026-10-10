@@ -22,7 +22,7 @@ import subprocess
 import threading
 
 from ai import equipment_heat
-from ai.page_extraction import EXTRACTORS, batch_prompt, build_prompt, merge, normalise_name, tiles, validate_reply
+from ai.page_extraction import EXTRACTORS, batch_prompt, build_prompt, merge, normalise_name, possible_duplicates, tiles, validate_reply
 from backend import ai_provider, page_inventory_service as pass1
 from backend.job_runner import BackgroundJob, now, read_json, write_json
 
@@ -96,12 +96,34 @@ def page_texts(pdf, folder, pages):
     return texts
 
 
-def _cache_key(image, extractor, model):
+def _cache_key(image, extractor, model, codes=None):
     digest = hashlib.sha256(Path(image).read_bytes()).hexdigest()
-    return hashlib.sha256(f"{digest}|{extractor['version']}|{model}".encode()).hexdigest()[:32]
+    with_codes = "|" + hashlib.sha256(json.dumps(codes, sort_keys=True).encode()).hexdigest() if codes else ""
+    return hashlib.sha256(f"{digest}|{extractor['version']}|{model}{with_codes}".encode()).hexdigest()[:32]
 
 
-def read_sections(extractor, images, cache_dir, provider, workers=pass1.WORKERS, on_done=None, batch=None):
+def schedule_pages(pages, pass1_pages):
+    """The pages pass 1 found to be schedules (by type, or a title naming a schedule): read first, for their codes."""
+    found = []
+    for page in pages:
+        row = pass1_pages.get(str(page)) or {}
+        if row.get("page_type") == "schedule" or "schedule" in str(row.get("title") or "").casefold():
+            found.append(page)
+    return found
+
+
+def schedule_codes(readings):
+    """{code: name} from the schedule pages' items (the first name read for each code)."""
+    codes = {}
+    for _page, _section, items in readings:
+        for item in items:
+            code = str(item.get("code") or "").strip()
+            if code and code not in codes:
+                codes[code] = str(item.get("name") or "").strip()
+    return codes
+
+
+def read_sections(extractor, images, cache_dir, provider, workers=pass1.WORKERS, on_done=None, batch=None, codes=None):
     """Read every section (cached per section). Returns ([(page, section, items)], {"page.section": reason}, calls).
 
     Sections not in the cache are read a few per call (pass1.pass2_batch_size()), each its own full-size image; each
@@ -113,7 +135,7 @@ def read_sections(extractor, images, cache_dir, provider, workers=pass1.WORKERS,
     lock = threading.Lock()
 
     stopped = threading.Event()
-    path_of = lambda key: cache_dir / f"{_cache_key(images[key][0], extractor, model)}.json"
+    path_of = lambda key: cache_dir / f"{_cache_key(images[key][0], extractor, model, codes)}.json"
 
     def save(key, items, raw, together=None):
         page, section = key
@@ -127,7 +149,7 @@ def read_sections(extractor, images, cache_dir, provider, workers=pass1.WORKERS,
         if stopped.is_set():  # the plan's usage limit was hit: further calls would fail the same way
             return [(key, None, stopped.reason)], 0
         try:
-            reply, raw = provider.propose(build_prompt(extractor, page, section, count), image_paths=[image])
+            reply, raw = provider.propose(build_prompt(extractor, page, section, count, codes), image_paths=[image])
             items = validate_reply(extractor, reply)
         except pass1.UsageLimitReached as error:
             stopped.reason = str(error)
@@ -144,7 +166,7 @@ def read_sections(extractor, images, cache_dir, provider, workers=pass1.WORKERS,
         if stopped.is_set():
             return [(key, None, stopped.reason) for key in keys], 0
         try:
-            reply, raw = provider.propose(batch_prompt(extractor, [(page, section, images[(page, section)][1]) for page, section in keys]),
+            reply, raw = provider.propose(batch_prompt(extractor, [(page, section, images[(page, section)][1]) for page, section in keys], codes),
                                           image_paths=[images[key][0] for key in keys])
         except pass1.UsageLimitReached as error:
             stopped.reason = str(error)
@@ -256,6 +278,11 @@ def status(web, project, kind="equipment_appliances"):
                                             and equipment_heat.heat_w(decided) is not None)}
         findings.append({**row, **extra, "status": decision.get("status", "proposed"), "decided_value": decision.get("value"),
                          "reviewer": decision.get("reviewer", ""), "reviewed_at": decision.get("at", "")})
+    if kind == "equipment_appliances":
+        for row_id, matches in possible_duplicates(findings).items():
+            row = next(item for item in findings if item["id"] == row_id)
+            row["possibly_same_as"] = [{"id": match["id"], "label": f"{match['value'].get('code', '')} {match['value'].get('name', '')}".strip()}
+                                       for match in matches]
     open_count = sum(1 for row in findings if row["status"] == "proposed")
     return {**job, "problem": problem, "kind": kind, "label": extractor["label"], "pages": result.get("pages", []),
             "failures": result.get("failures", {}), "findings": findings, "open": open_count,
@@ -297,10 +324,23 @@ def start(web, project, data=None):
                 write_json(job_path, job)
 
             step("read", f"Reading {extractor['label'].lower()} from {len(pages)} pages")
-            readings, failures, calls = read_sections(extractor, images, root / WORK_DIR / "replies" / kind,
-                                                      ai_provider.recorded(provider, root, f"pass2:{kind}"), on_done=progress)
-            step("merge")
             pass1_pages = read_json(root / pass1.RESULT_FILE).get("pages") or {}
+            recorded = ai_provider.recorded(provider, root, f"pass2:{kind}")
+            cache = root / WORK_DIR / "replies" / kind
+            # The schedule pages are read first; the other pages are then read with the schedule's codes, so a plan
+            # label ("COMBI OVEN") comes back as the scheduled item (E06) instead of a second copy of it.
+            first = set(schedule_pages(pages, pass1_pages)) if kind == "equipment_appliances" else set()
+            ahead = {key: value for key, value in images.items() if key[0] in first}
+            rest = {key: value for key, value in images.items() if key[0] not in first}
+            readings, failures, calls = read_sections(extractor, ahead, cache, recorded,
+                                                      on_done=lambda done, _total: progress(done, len(images))) if ahead else ([], {}, 0)
+            codes = schedule_codes(readings)
+            more, more_failures, more_calls = read_sections(
+                extractor, rest, cache, recorded, codes=codes or None,
+                on_done=lambda done, _total: progress(len(ahead) + done, len(images))) if rest else ([], {}, 0)
+            readings, calls = sorted(readings + more, key=lambda row: (row[0], row[1])), calls + more_calls
+            failures = {**failures, **more_failures}
+            step("merge")
             findings = merge(extractor, readings, texts, {int(page): row.get("page_type") for page, row in pass1_pages.items()})
             results = read_json(root / RESULT_FILE)
             results[kind] = {"schema_version": 1, "extractor": extractor["version"],

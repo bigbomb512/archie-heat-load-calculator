@@ -606,6 +606,7 @@
         <summary><b>${value.code ? `${esc(value.code)} ` : ""}${esc(value.name)}</b> <span class="ws-chip ws-evidence-${esc(row.evidence)}">${esc(row.evidence)}</span>
         ${row.status !== "proposed" ? `<span class="ws-chip">${esc(row.status)}</span>` : ""}<br><span class="ws-fine">${facts} · p${row.pages.join(", p")}</span></summary>
         ${heatLine(row)}
+        ${row.possibly_same_as?.length && row.status === "proposed" ? `<p class="ws-fine is-warn" data-ws-eq-duplicate>Possibly the same as ${row.possibly_same_as.map(match => esc(match.label)).join(" or ")} from the schedule: if so, reject this one so it isn't counted twice.</p>` : ""}
         ${row.pictures_only ? `<p class="ws-fine">Seen only in renders or photos, so it shows design intent: check it against the plans.</p>` : ""}
         <ul>${row.citations.map(cite => `<li>Page ${esc(cite.page)}${cite.excerpt ? `: ${esc(cite.excerpt)}` : ""}</li>`).join("")}</ul>${check}${actions}</details></li>`;
     }).join("");

@@ -451,7 +451,8 @@ test("Drawings: equipment found in the drawings can be corrected, chosen between
     {id: "eq:fridge", value: value("UB FRIDGE", {code: "E21", quantity: 10}), pages: [5, 20], citations: [{page: 5, excerpt: ""}],
      conflicts: {quantity: [{value: 10, pages: [5]}, {value: 8, pages: [20]}]}, evidence: "conflicting", pictures_only: false, text_match: true, status: "proposed"},
     {id: "eq:screen", value: value("Wall-mounted screen"), pages: [9], citations: [{page: 9, excerpt: "render"}],
-     conflicts: {}, evidence: "inferred", pictures_only: true, text_match: false, status: "proposed"},
+     conflicts: {}, evidence: "inferred", pictures_only: true, text_match: false, status: "proposed",
+     possibly_same_as: [{id: "eq:tv", label: "E40 WALL TV"}, {id: "eq:tv2", label: "E41 MENU SCREEN"}]},
   ];
   const decisions = [];
   const run = () => ({status: "done", kind: "equipment_appliances", pages: [5, 9, 20], open: findings.length - decisions.length, rooms: ["Kitchen", "Shop"],
@@ -497,6 +498,8 @@ test("Drawings: equipment found in the drawings can be corrected, chosen between
   await screen.locator("summary").click();
   await expect(screen).toContainText("Seen only in renders or photos");
   await expect(screen.locator("[data-ws-eq-textcheck]")).toContainText("Not found in the page's text");
+  await expect(screen.locator("[data-ws-eq-duplicate]")).toHaveText("Possibly the same as E40 WALL TV or E41 MENU SCREEN from the schedule: if so, reject this one so it isn't counted twice.");
+  await expect(section.locator("[data-ws-eq='eq:oven'] [data-ws-eq-duplicate]")).toHaveCount(0);
   await screen.locator("[data-ws-eq-reject]").click();
   expect(decisions[2]).toMatchObject({finding_id: "eq:screen", decision: "rejected"});
   await expect(section.locator("[data-ws-equipment-status]")).toHaveText("3 items from 3 pages · all reviewed · 7200 W in the calculation (press Calculate to update).");

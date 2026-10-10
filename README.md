@@ -189,6 +189,13 @@ values) and `ARCHIE_AI_MODEL_SKILLS` (the skills and the needs list); on OpenRou
 `ARCHIE_PAGE_BATCH`, default 4). In tests on Butcher Buffet (2026-10-09/10) DeepSeek V4.1 Flash read pages and wrote
 the needs list well and very cheaply but missed equipment drawn on plans; Gemini 3.8 Flash read plan equipment well
 two pages per call.
+Equipment is read from the schedule pages first; the other pages are then read with the schedule's codes, so a plan
+label ("COMBI OVEN") comes back as the scheduled item (E06) instead of a second copy (Butcher Buffet on Gemini: 80
+items without the codes, 48 with them). An item still read without a code is marked on its card when it probably is
+one or two scheduled items, for the operator to reject; nothing is merged automatically. Sizes that agree in their
+numbers ("4900X700" on a plan, "4900MM(W)X700MM(D)X850MM(H)" in the schedule) are not reported as a disagreement.
+A skill's citations may be written as sentences naming the page ("c1: p21: …"): they count by that page, which must
+be in the job's case file; a number whose references name no page of the file is still refused.
 The APIs cap each reply at 16,000 tokens; `ARCHIE_MAX_OUTPUT_TOKENS` changes it. A model that thinks at length counts
 its thinking against the cap, so it may need more (DeepSeek V4.1 Flash used about 10,000 tokens of thinking per call).
 Every AI call is logged per job in `ai_usage.jsonl` (pass, provider, model, seconds, tokens where reported); the
