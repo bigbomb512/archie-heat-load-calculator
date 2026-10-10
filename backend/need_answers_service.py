@@ -12,6 +12,9 @@ Each item on the list has a kind. Kinds with an existing input route go straight
 - construction     -> the U-value of the external walls or the exposed roof, for one room or for every room
                       (construction_answers.json): a construction from the imported handbook table
                       (ai/construction_u_values.py) or a U-value typed from another source
+- unconditioned_temperature -> the design temperature of the unconditioned space beyond walls marked "Unconditioned
+                      space" on the Walls tab, for one room or every room (unconditioned_answers.json); without it those
+                      walls are not counted and the Results tab says so
 - exhaust          -> a room's kitchen exhaust rate (L/s) and how the exhausted air is replaced (exhaust_answers.json,
                       passed to the calculation model; see EXHAUST_METHODS)
 - opening_hours    -> the hours a room (or every room) is open on weekdays, Saturdays and Sundays/holidays
@@ -31,7 +34,9 @@ from ai.equipment_heat import printed_watts, proposal as heat_proposal
 
 GLAZING_FILE = "glazing_answers.json"
 CONSTRUCTION_FILE = "construction_answers.json"
-CONSTRUCTION_SURFACES = {"wall": "external walls", "roof": "exposed roof"}
+CONSTRUCTION_SURFACES = {"wall": "walls", "roof": "exposed roof"}   # walls: outside, and to unconditioned spaces
+UNCONDITIONED_FILE = "unconditioned_answers.json"
+UNCONDITIONED_RANGE = (10.0, 60.0)     # °C: from a cool basement to a sun-baked roof-top plant room
 EXHAUST_FILE = "exhaust_answers.json"
 # How the air a kitchen hood exhausts is replaced. "through_space" is the default (user decision 2026-10-08), also
 # used, and labelled as assumed, when the method isn't known.
@@ -55,6 +60,7 @@ APPLIED_KINDS = {
     "roof_above": {"label": "What is above the tenancy", "unit": "", "room": False, "choice": True},
     "glazing": {"label": "Glass performance (U-value and SHGC)", "unit": "", "room": "optional"},
     "construction": {"label": "Wall or roof construction (U-value)", "unit": "W/m²K", "room": "optional"},
+    "unconditioned_temperature": {"label": "Temperature of an unconditioned space beyond a wall", "unit": "°C", "room": "optional"},
     "exhaust": {"label": "Kitchen exhaust rate and make-up air", "unit": "L/s", "room": True},
     "opening_hours": {"label": "Opening hours", "unit": "", "room": "optional"},
 }
@@ -153,6 +159,8 @@ def apply(web, project, data):
         return _save_glazing(project, data, found["rooms"], reviewer)
     if kind == "construction":
         return _save_construction(project, data, found["rooms"], reviewer)
+    if kind == "unconditioned_temperature":
+        return _save_unconditioned(project, data, found["rooms"], reviewer)
     if kind == "exhaust":
         return _save_exhaust(project, data, found["rooms"], reviewer)
     if kind == "opening_hours":
@@ -305,6 +313,35 @@ def apply_constructions(root, proposal):
         surface["construction_source"] = (f"Answered by the operators ({answer.get('source') or 'source not given'}): "
                                           f"{answer.get('construction', '')}" + (f"; {answer['reference']}" if answer.get("reference") else ""))
     return proposal
+
+
+def _save_unconditioned(project, data, rooms, reviewer):
+    """The design temperature of the unconditioned space beyond a room's (or every room's) unconditioned walls."""
+    temperature = _in_range(data.get("value"), *UNCONDITIONED_RANGE, "temperature (°C)")
+    room = _room(data, rooms)["label"] if str(data.get("room") or "").strip() else ""
+    path = Path(project["review_dir"]) / UNCONDITIONED_FILE
+    stored = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {"all": None, "rooms": {}}
+    record = {"temperature_c": temperature, "space": " ".join(str(data.get("note") or "").split())[:160],
+              "source": str(data.get("source") or ""), "by": reviewer, "at": time.time()}
+    if room:
+        stored.setdefault("rooms", {})[room] = record
+    else:
+        stored["all"] = record
+    _write_answers(path, stored)
+    where = f"{room}'s" if room else "Every room's"
+    return {"applied": True, "summary": f"{where} walls to unconditioned spaces: {temperature:g} °C beyond them."}
+
+
+def unconditioned_temperature(root, room_label):
+    """The answered temperature (°C) and its record beyond a room's unconditioned walls: its own answer, else the
+    answer for every room; (None, None) when not answered."""
+    path = Path(root) / UNCONDITIONED_FILE
+    if not path.is_file():
+        return None, None
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    rooms = {str(label).casefold(): row for label, row in (stored.get("rooms") or {}).items()}
+    record = rooms.get(str(room_label or "").casefold()) or stored.get("all")
+    return (float(record["temperature_c"]), record) if record else (None, None)
 
 
 def _write_answers(path, stored):

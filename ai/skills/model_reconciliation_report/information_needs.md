@@ -32,7 +32,9 @@
   `room_area`, `ceiling_height`, `occupancy` (people), `lighting_load` (W),
   `equipment_rating` (an item's rated power), `roof_above` (what is above the
   tenancy), `opening_hours`, `glazing` (glass U-value and SHGC), `construction`
-  (the build-up and U-value of external walls or an exposed roof), `exhaust` (a
+  (the build-up and U-value of external walls or an exposed roof),
+  `unconditioned_temperature` (the design temperature of an unconditioned space
+  such as a plant room, store or loading dock beyond a wall), `exhaust` (a
   kitchen's hood exhaust rate and how its air is replaced), `boundary` (what is beyond a
   wall, floor or ceiling), or `other`. `room` is the room's name as it appears
   in the room proposals, or null when the need is not about one room.

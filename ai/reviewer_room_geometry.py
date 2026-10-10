@@ -11,7 +11,9 @@ SCHEMA_VERSION = 1
 # Image-coordinate snap radius: this is only a UI convenience, not proof that a
 # candidate is a room boundary. Keep it small on full-resolution plan renders.
 SNAP_TOLERANCE_PX = 8.0
-EDGE_BOUNDARIES = {"external", "mall", "adjacent_tenancy", "internal", "unknown"}
+# "unconditioned": an unconditioned space beyond the wall (plant room, store, loading dock, car park), whose temperature the
+# operators answer; conduction through the wall is then counted against that temperature.
+EDGE_BOUNDARIES = {"external", "mall", "adjacent_tenancy", "internal", "unconditioned", "unknown"}
 ROOF_EXPOSURES = {"exposed", "not_exposed", "unknown"}
 NORTH_SOURCES = {"reviewer_read_north_arrow", "reviewer_typed_page_up_bearing"}
 DECLARATION_SOURCES = {"reviewer", "ai_determined", "ai_fallback"}
@@ -46,7 +48,7 @@ def validate_envelope_classification(edges, roof, edge_count):
         if index in seen:
             raise ValueError("Envelope edge indices must be unique.")
         if boundary not in EDGE_BOUNDARIES:
-            raise ValueError("Envelope edge boundary must be external, mall, adjacent_tenancy, internal or unknown.")
+            raise ValueError("Envelope edge boundary must be external, mall, adjacent_tenancy, internal, unconditioned or unknown.")
         seen.add(index)
         values[index] = boundary
     roof = str(roof)

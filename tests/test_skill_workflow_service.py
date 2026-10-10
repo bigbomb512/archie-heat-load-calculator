@@ -881,6 +881,21 @@ class SkillWorkflowTests(unittest.TestCase):
         checked = skills._validate_subskill_output(task, proposal, registry, allowed_pages={19})
         self.assertEqual(checked["citations"][0]["physical_pdf_page"], 19)
 
+    def test_a_bare_sentence_for_a_list_field_is_kept_as_one_item_and_other_types_are_refused(self):
+        registry = skills.load_subskill_registry()
+        task = next(row for row in registry["subskills"] if row["id"] == "sheet_identity")
+        proposal = {"subskill_id": task["id"], "subskill_version": task["version"], "status": "needs_review",
+            "affected_ids": ["page:1"], "observations": "Title block reads 201.", "inferences": [],
+            "citations": [{"page": 1, "excerpt": "Title block"}], "confidence": 0.7, "alternatives": "",
+            "unresolved_fields": [], "remediation": "Provide the drawing register.", "input_fingerprint": "a" * 64,
+            "proposal_fields": {"page_identities": [{"physical_page": 1, "drawing_number": "201",
+                "title": "Floor Plan", "drawing_type": "floor_plan", "alternatives": []}]}}
+        checked = skills._validate_subskill_output(task, json.loads(json.dumps(proposal)), registry, allowed_pages={1})
+        self.assertEqual((checked["observations"], checked["alternatives"], checked["remediation"]),
+                         (["Title block reads 201."], [], ["Provide the drawing register."]))
+        with self.assertRaises(Exception):
+            skills._validate_subskill_output(task, {**json.loads(json.dumps(proposal)), "remediation": {"step": "x"}}, registry, allowed_pages={1})
+
     def test_qualitative_or_percentage_confidence_is_downgraded_to_review(self):
         registry = skills.load_subskill_registry()
         task = next(row for row in registry["subskills"] if row["id"] == "sheet_identity")

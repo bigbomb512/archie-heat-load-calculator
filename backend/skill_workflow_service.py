@@ -928,6 +928,10 @@ def _validate_subskill_output(subskill, result, registry, allowed_pages=None):
     if result.get("status") not in {"resolved", "provisional", "needs_review", "blocked", "excluded", "not_applicable"}:
         _validation_error("status_invalid", "status", "Expected one of the declared proposal statuses.")
     for key in ("citations", "affected_ids", "observations", "inferences", "alternatives", "unresolved_fields", "remediation"):
+        # Some models write a one-item list as a bare sentence ("remediation": "Provide ..."): that is the same answer,
+        # so it is kept as a one-item list. Any other type is still refused.
+        if isinstance(result.get(key), str):
+            result[key] = [result[key]] if result[key].strip() else []
         if not isinstance(result.get(key), list):
             _validation_error("envelope_field_type", key, "Expected a JSON array.")
     confidence = result.get("confidence")

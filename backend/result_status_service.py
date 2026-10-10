@@ -124,6 +124,14 @@ def gather(web, project):
             items.append(_item("assumed", room, f"Kitchen exhaust {answer.get('lps', 0):g} L/s assumed replaced through the "
                                                 "conditioned space (the make-up air arrangement wasn't given).", "drawings"))
 
+    # Walls to unconditioned spaces without the temperature beyond them: not counted until answered.
+    waiting = sorted({row.get("room_name") or "A room" for row in report.get("unresolved_room_inputs") or []
+                      if isinstance(row, dict) and str(row.get("component_id", "")).startswith("unconditioned_wall_temperature")})
+    if waiting:
+        items.append(_item("to_find", "Walls to unconditioned spaces", "Walls marked as facing an unconditioned space aren't counted: "
+                                                                        "answer that space's design temperature (What we need to find).",
+                           "drawings", ", ".join(waiting)))
+
     # Walls and roof on the preliminary U-values (no construction answered).
     components = (report.get("included_scope_peak") or {}).get("components") or {}
     if (components.get("envelope") or {}).get("total_kw"):

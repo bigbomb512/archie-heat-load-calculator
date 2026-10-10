@@ -200,7 +200,7 @@
           <label>Site address<input name="address" autocomplete="street-address" placeholder="Street, suburb, state" value="${esc(draft.address)}"></label>
           ${found && !draft.address ? `<p class="ws-found">Found on the drawings: <b>${esc(found)}</b> <button class="link-button" type="button" data-ws-use-found>Use this</button></p>` : ""}
           <label>Building type<select name="building_type">${BUILDING_TYPES.map(([value, label]) => `<option value="${value}" ${draft.building_type === value ? "selected" : ""}>${esc(label)}</option>`).join("")}</select></label>
-          <p class="ws-fine">Weather and sun: a generic Australian design day for now. Site-specific weather needs the AIRAH design data, which isn't connected yet.</p>`
+          <p class="ws-fine">Weather: once the site is confirmed, the design day comes from the nearest location in the AIRAH Technical Handbook (if its table is imported on this computer); until then a generic Australian design day is used. The Results tab says which.</p>`
           : `<fieldset><legend>What's above this tenancy?</legend>
             ${[["roof", "The roof"], ["floor", "Another floor or tenancy"], ["not_sure", "Not sure"]].map(([value, label]) =>
               `<label class="ws-radio"><input type="radio" name="above" value="${value}" ${draft.above === value ? "checked" : ""}> ${label}</label>`).join("")}
@@ -399,7 +399,7 @@
         ${items ? `<ul>${items}</ul>` : `<p class="ws-fine">No heat-load information on this page.</p>`}</details></li>`;
     }).join("");
     return `<section class="ws-page-reading" aria-label="Every page, read by AI" data-ws-page-reading><h3>Every page, read by AI</h3>
-      <label class="ws-check"><input type="checkbox" data-ws-page-reading-enabled ${reading.enabled ? "checked" : ""}> Read every page with AI (your ChatGPT sign-in, through the Codex CLI)</label>
+      <label class="ws-check"><input type="checkbox" data-ws-page-reading-enabled ${reading.enabled ? "checked" : ""}> Read every page with AI (the provider set up on this server: see "AI use for this job")</label>
       <p class="${["failed", "blocked", "interrupted"].includes(reading.status) && reading.enabled ? "ws-banner is-warn" : "ws-fine"}" role="status" data-ws-page-reading-status>${esc(statusText)}</p>
       ${canStart ? `<button class="btn ghost mini" type="button" data-ws-page-reading-start>${reading.status === "none" ? "Read the pages" : "Retry reading"}</button>` : ""}
       ${mainPlans}
@@ -463,7 +463,7 @@
       const listed = (options.constructions || {})[surface] || [];
       const construction = draft.construction_id ?? saved?.construction_id ?? "";
       const constructionFields = kind === "construction"
-        ? `<label>Surface ${select("data-ws-need-surface", [["wall", "External walls"], ["roof", "Exposed roof"]], surface, "choose")}</label>
+        ? `<label>Surface ${select("data-ws-need-surface", [["wall", "Walls (outside or to unconditioned spaces)"], ["roof", "Exposed roof"]], surface, "choose")}</label>
            <label>Rooms ${select("data-ws-need-room", (options.rooms || []).map(item => [item.label, `${item.label} only`]), room, "every room")}</label>
            <label>Construction ${select("data-ws-need-construction", listed.map(item => [item.id, item.label]), construction,
              listed.length ? "other (type its U-value)" : "type its U-value (handbook table not imported)")}</label>
@@ -485,6 +485,7 @@
           ${needsRoom ? `<label>Room ${select("data-ws-need-room", (options.rooms || []).map(item => [item.label, item.label]), room, "choose a room")}</label>` : ""}
           ${kind === "equipment_rating" ? `<label>Item ${select("data-ws-need-equipment", (options.equipment || []).map(item => [item.id, item.label]), draft.equipment_id ?? saved?.equipment_id ?? "", "choose the item")}</label>` : ""}
           ${glazingFields}${constructionFields}${hoursFields}
+          ${kind === "unconditioned_temperature" ? `<label>Rooms ${select("data-ws-need-room", (options.rooms || []).map(item => [item.label, `${item.label} only`]), room, "every room")}</label>` : ""}
           ${valueField}
           ${exhaustField}
           <label>From ${select("data-ws-need-source", ANSWER_SOURCES, draft.source ?? saved?.source ?? "", "choose")}</label>
@@ -1613,6 +1614,7 @@
     const prefixes = {
       roof_solar: "Sun on the roof", roof_exposure: "Roof (not checked yet)", unclassified_wall_boundaries: "Walls (not classified yet)",
       external_wall_orientation: "Sun on outside walls", external_wall_edge: "Outside walls",
+      unconditioned_wall_temperature: "Walls to unconditioned spaces (temperature needed)", unconditioned_wall_edge: "Walls to unconditioned spaces",
       area_only_walls: "Walls (no outline: area only)", area_only_roof: "Roof (no outline: area only)",
     };
     const groups = {
@@ -1777,7 +1779,8 @@
     const rows = envelopeRecords(roomId);
     return rows.find(row => row.trace_id === traceId) || rows[0] || null;
   }
-  const BOUNDARY_LABEL = {external: "Outside", mall: "Enclosed mall", adjacent_tenancy: "Neighbouring tenancy", internal: "Internal", unknown: "Not set"};
+  const BOUNDARY_LABEL = {external: "Outside", mall: "Enclosed mall", adjacent_tenancy: "Neighbouring tenancy", internal: "Internal",
+                          unconditioned: "Unconditioned space (plant room, store, dock)", unknown: "Not set"};
   const ROOF_LABEL = {exposed: "Exposed to the roof", not_exposed: "Another tenancy above", unknown: "Not set"};
   function sourceLabel(value) {
     return value === "reviewer" ? "Edited by you" : value === "ai_determined" ? "AI-determined"
@@ -1830,7 +1833,7 @@
     }
     const draft = trace ? state.envelopeDrafts[trace.trace_id] : {edges: [], roof: "unknown"};
     const draftBoundary = index => draft.edges.find(edge => edge.index === index)?.boundary || "unknown";
-    const colors = {external: "#d44", mall: "#8e44ad", adjacent_tenancy: "#e67e22", internal: "#3976a8", unknown: "#777"};
+    const colors = {external: "#d44", mall: "#8e44ad", adjacent_tenancy: "#e67e22", internal: "#3976a8", unconditioned: "#b8860b", unknown: "#777"};
     const outline = trace && page ? `<div class="ws-envelope-plan"><img src="${esc(page.preview_url)}" alt="Plan page ${trace.page}">
       <svg viewBox="0 0 ${page.image_width_px} ${page.image_height_px}" role="img" aria-label="${esc(selectedRoom?.label)} wall outline on page ${trace.page}">
       ${trace.points_image_px.slice(0, -1).map((point, i) => { const end = trace.points_image_px[i + 1];
@@ -1841,7 +1844,7 @@
       ${outlinedRooms.length ? `<label>Room <select data-ws-wall-room>${outlinedRooms.map(room => `<option value="${esc(room.room_id)}" ${room.room_id === state.wallsRoomId ? "selected" : ""}>${esc(room.label)}${room.level_name ? ` — ${esc(room.level_name)}` : ""}</option>`).join("")}</select></label>` : `<p>${roofTab ? "Add a room outline on the Walls tab before recording what is above it." : "Add room outlines on the Rooms tab to review walls and roof."}</p>`}
       ${traces.length > 1 ? `<label>Outline <select data-ws-wall-trace>${traces.map((row, i) => `<option value="${esc(row.trace_id)}" ${row.trace_id === trace?.trace_id ? "selected" : ""}>Page ${row.page} — part ${i + 1}</option>`).join("")}</select></label>` : ""}
       ${!roofTab && areaOnly.length ? `<section class="ws-area-only"><h3>Rooms without an outline</h3><p>Walls and roof aren't assessed until each room is measured.</p>${areaOnly.map(room => `<div>${esc(room.label)} — ${state.status?.traced_rooms?.[room.room_id]?.area_m2 ?? "Area only"} <button class="link-button" type="button" data-ws-measure-room="${esc(room.room_id)}">Measure on the plan</button></div>`).join("")}</section>` : ""}
-      ${trace ? `${roofTab ? "" : outline}${roofTab ? "" : `<div class="ws-envelope-legend" aria-label="Wall boundary colours"><span><i style="--wall:#d44"></i>Outside</span><span><i style="--wall:#8e44ad"></i>Enclosed mall</span><span><i style="--wall:#e67e22"></i>Neighbouring tenancy</span><span><i style="--wall:#3976a8"></i>Internal</span><span><i style="--wall:#777"></i>Not set</span></div><div class="ws-table-wrap"><table class="ws-table"><thead><tr><th>Wall</th><th>Length</th><th>Boundary</th><th>Source</th><th></th></tr></thead><tbody>
+      ${trace ? `${roofTab ? "" : outline}${roofTab ? "" : `<div class="ws-envelope-legend" aria-label="Wall boundary colours"><span><i style="--wall:#d44"></i>Outside</span><span><i style="--wall:#8e44ad"></i>Enclosed mall</span><span><i style="--wall:#e67e22"></i>Neighbouring tenancy</span><span><i style="--wall:#3976a8"></i>Internal</span><span><i style="--wall:#b8860b"></i>Unconditioned space</span><span><i style="--wall:#777"></i>Not set</span></div><div class="ws-table-wrap"><table class="ws-table"><thead><tr><th>Wall</th><th>Length</th><th>Boundary</th><th>Source</th><th></th></tr></thead><tbody>
         ${selectedEdges.map(edge => { const source = trace.edge_sources?.[String(edge.index)] || trace.envelope_declaration_source || trace.declaration_source || "";
           const length = summaryEdges.find(row => row.trace_id === trace.trace_id && row.index === edge.index)?.length_m ?? edge.length_m;
           const accepted = draft.accepted_edges?.includes(edge.index);

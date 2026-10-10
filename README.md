@@ -152,6 +152,15 @@ room. Answered external walls and exposed roofs use it; the others keep the prel
 0.5 W/m²K), which the Results tab lists as typical. The handbook has no sun-on-surface (sol-air) data, so sun on walls
 stays the preliminary pack's allowance and roof sun is not assessed until DA09 or ASHRAE data is available.
 
+## Walls to unconditioned spaces
+
+On the Walls tab a traced wall can face an "Unconditioned space (plant room, store, dock)". Neither the handbook nor
+the app supplies a temperature for such a space, so it is never guessed: the wall is left out, and the Results tab
+lists it as to find, until the operators answer "Temperature of an unconditioned space beyond a wall" (for every room
+or one room). The wall is then conducted against that temperature (area × U × (temperature beyond − room), no sun),
+using the answered wall construction or the preliminary wall U-value. Neighbouring tenancies, enclosed malls and
+internal walls stay excluded, as conditioned on both sides; refrigerated rooms are their own scope.
+
 ## Kitchen appliance heat (data sheets)
 
 The handbook has no table of appliance heat gains (that is AIRAH DA09 or ASHRAE Fundamentals ch. 18), so cooking,

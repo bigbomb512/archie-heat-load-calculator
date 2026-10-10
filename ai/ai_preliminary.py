@@ -1157,11 +1157,12 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
             candidate = deepcopy(surface)
             candidate["owner_room_id"] = target["room"].get("room_id", "")
             surface_candidates.append(candidate)
+            fixed_adjacent = surface.get("thermal_role") == "fixed_adjacent"
             ledger_rows.append({
                 "surface_id": candidate_id,
                 "physical_type": surface.get("physical_type", "wall"),
-                "thermal_role": "external",
-                "boundary_condition": "outside",
+                "thermal_role": "fixed_adjacent" if fixed_adjacent else "external",
+                "boundary_condition": surface.get("boundary_condition", "unconditioned_space") if fixed_adjacent else "outside",
                 "owner_room_id": target["room"].get("room_id", ""),
                 "owner_zone_id": target["room"].get("zone_id", ""),
                 "gross_area_m2": surface.get("gross_area_m2"),
@@ -1171,7 +1172,7 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                 "construction_id": surface.get("construction_id", ""),
                 "u_value_w_m2k": surface.get("u_value_w_m2k"),
                 "construction_source": surface.get("construction_source", ""),
-                "boundary_temperature_c": None,
+                "boundary_temperature_c": surface.get("boundary_temperature_c") if fixed_adjacent else None,
                 "evidence_refs": deepcopy(surface.get("evidence", [])),
                 "confidence": surface.get("confidence", 0.65),
                 "confidence_score": surface.get("confidence", 0.65),
@@ -1245,7 +1246,11 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
         # hourly adapter conservative: floors, partitions, ground-contact,
         # room-to-room, and unresolved boundaries need their reviewed coupling
         # or boundary method before they can contribute to draft conduction.
-        if (candidate.get("physical_type") not in {"wall", "roof", "ceiling"}
+        # A reviewer-traced wall to an unconditioned space, with the operators' answered temperature beyond it, is
+        # conducted against that temperature (no sun).
+        fixed_adjacent = (candidate.get("physical_type") == "wall" and candidate.get("thermal_role") == "fixed_adjacent"
+                          and candidate.get("reviewer_trace_id") and _number(candidate.get("boundary_temperature_c")) is not None)
+        if not fixed_adjacent and (candidate.get("physical_type") not in {"wall", "roof", "ceiling"}
                 or candidate.get("thermal_role") not in {"external", "outside", "outdoors"}
                 or candidate.get("external_exposure") != "external"):
             surface_summary["excluded"] += 1
@@ -1295,7 +1300,9 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
             exclusions.append({"room_id": room["room_id"], "component": "opaque envelope", "candidate_id": candidate["candidate_id"], "reason": "Net opaque area is not positive after opening coverage."})
             continue
         physical = candidate["physical_type"]
-        orientation = candidate.get("orientation", "") if candidate.get("orientation", "") in CARDINALS else "horizontal" if physical in {"roof", "ceiling"} else ""
+        fixed_adjacent = candidate.get("thermal_role") == "fixed_adjacent"
+        orientation = ("" if fixed_adjacent else candidate.get("orientation", "") if candidate.get("orientation", "") in CARDINALS
+                       else "horizontal" if physical in {"roof", "ceiling"} else "")
         solar_profile = envelope["cardinal_solar_profiles_w_m2"].get(orientation, [0] * 24)
         solar_peak = max(solar_profile)
         solar_schedule_id = f"prelim-solar-{candidate['candidate_id']}"
@@ -1322,6 +1329,9 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
             opaque["construction_id"] = candidate["resolved_construction_id"]
         if candidate.get("construction_source"):          # the operators' answered construction, not the pack's U-value
             opaque["source"] = candidate["construction_source"]
+        if fixed_adjacent:
+            opaque.update({"boundary_method": "fixed_adjacent_temperature", "boundary_temperature_c": float(candidate["boundary_temperature_c"]),
+                           "boundary_source": candidate.get("boundary_source", "")})
         opaque["area_derivation"] = deepcopy(opaque_by_id.get(candidate["candidate_id"], {}).get("area_derivation", {}))
         opaque["opaque_resolution_fingerprint"] = opaque_by_id.get(candidate["candidate_id"], {}).get("resolution_fingerprint", "")
         room["cooling_load"]["envelope_not_applicable"] = False

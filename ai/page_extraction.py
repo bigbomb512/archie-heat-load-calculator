@@ -151,7 +151,9 @@ def batch_prompt(extractor, keys):
 def validate_reply(extractor, reply):
     if not isinstance(reply, dict) or not isinstance(reply.get("items"), list):
         raise ValueError('The reply must be {"items": [...]}.')
-    return [extractor["validate_item"](row) for row in reply["items"]]
+    # An item with no name can't be identified or reviewed: it is dropped rather than losing the page's other items.
+    named = [row for row in reply["items"] if not (isinstance(row, dict) and not _text(row.get(extractor["name_field"]), 120))]
+    return [extractor["validate_item"](row) for row in named]
 
 
 def text_match(item, page_text, name_field="name"):
@@ -175,6 +177,29 @@ def _fingerprint(value):
 PICTURE_PAGE_TYPES = {"render_or_photo"}
 
 
+def _fold_uncoded(extractor, groups):
+    """Fold an item read without a code into the one coded item of the same name (a plan labels "COMBI OVEN" where the
+    schedule lists "E06 COMBI OVEN"): it is the same item, so listing it twice invites double counting. Folded readings
+    add their pages and quotes but no values (a plan label's count isn't the schedule's quantity). An uncoded name
+    matching no coded item, or several (two fridge sizes), stays its own finding. Returns the ids of folded rows."""
+    if extractor["kind"] != "equipment_appliances":
+        return set()
+    coded = {}
+    for identity, rows in groups.items():
+        if identity.startswith("code:"):
+            for name in {normalise_name(item.get("name")) for _page, _section, item in rows}:
+                coded.setdefault(name, set()).add(identity)
+    folded = set()
+    for identity in [key for key in groups if key.startswith("name:")]:
+        names = {normalise_name(item.get("name")) for _page, _section, item in groups[identity]}
+        targets = set().union(*(coded.get(name, set()) for name in names)) if names else set()
+        if len(targets) == 1:
+            rows = groups.pop(identity)
+            folded.update(id(row) for row in rows)
+            groups[targets.pop()].extend(rows)
+    return folded
+
+
 def merge(extractor, readings, page_texts=None, page_types=None):
     """Merge items from every page into findings.
 
@@ -188,14 +213,16 @@ def merge(extractor, readings, page_texts=None, page_types=None):
     for page, section, items in readings:
         for item in items:
             groups.setdefault(extractor["identity"](item), []).append((page, section, item))
+    folded = _fold_uncoded(extractor, groups)
     findings = []
     for identity, rows in sorted(groups.items()):
         value, conflicts = {}, {}
+        valued = [row for row in rows if id(row) not in folded]
         for field in extractor["fields"]:
             # Per page first: overlapping sections of one page can each show part of a count, so a
             # page's quantity is the largest its sections read; other fields keep every reading.
             per_page = {}
-            for page, _section, item in rows:
+            for page, _section, item in valued:
                 current = item.get(field)
                 if current in (None, ""):
                     continue

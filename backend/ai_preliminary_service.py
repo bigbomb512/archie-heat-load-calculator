@@ -124,6 +124,7 @@ def _sources(paths):
         # Answers from the What-we-need-to-find list that the model reads directly.
         "glazing_answers": ai_preliminary.fingerprint(_read(paths["root"] / "glazing_answers.json", {})),
         "construction_answers": ai_preliminary.fingerprint(_read(paths["root"] / "construction_answers.json", {})),
+        "unconditioned_answers": ai_preliminary.fingerprint(_read(paths["root"] / "unconditioned_answers.json", {})),
         "exhaust_answers": ai_preliminary.fingerprint(_read(paths["root"] / "exhaust_answers.json", {})),
         "hours_answers": ai_preliminary.fingerprint(_read(paths["root"] / "hours_answers.json", {})),
     }
@@ -588,6 +589,7 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
     """
     from backend.calculation_extraction_service import _room_geometry_skill_proposals
     from backend import reviewer_room_geometry_service
+    from backend import need_answers_service
 
     if isinstance(raw_proposal, list):
         proposal = {"rooms": deepcopy(raw_proposal)}
@@ -787,26 +789,53 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                                     "page": part.get("page"), "reviewer": boundary_label,
                                     "boundary_source": edge_evidence.get(index, {}).get("source", "")})
                             continue
-                        if boundary != "external":
+                        if boundary not in {"external", "unconditioned"}:
                             continue
+                        wall_id = "external_wall_edge" if boundary == "external" else "unconditioned_wall_edge"
+                        wall_name = "External wall" if boundary == "external" else "Wall to an unconditioned space"
                         if height_mm is None:
-                            assessment["not_assessed"].append({"component_id": f"external_wall_edge_{index}{part_component_suffix}",
-                                "component": "External wall area — not assessed",
+                            assessment["not_assessed"].append({"component_id": f"{wall_id}_{index}{part_component_suffix}",
+                                "component": f"{wall_name} area — not assessed",
                                 "reason": "Ceiling height unresolved; wall area cannot be derived.", "page": part.get("page")})
                             continue
                         if not mm_per_px or not isinstance(points, list) or index >= len(points) - 1:
-                            assessment["not_assessed"].append({"component_id": f"external_wall_edge_{index}{part_component_suffix}",
-                                "component": "External wall area — not assessed",
+                            assessment["not_assessed"].append({"component_id": f"{wall_id}_{index}{part_component_suffix}",
+                                "component": f"{wall_name} area — not assessed",
                                 "reason": "Calibrated trace edge length is unavailable; wall area cannot be derived.", "page": part.get("page")})
                             continue
                         length_m = math.dist(points[index], points[index + 1]) * mm_per_px / 1000.0
                         wall_area = length_m * height_mm / 1000.0
                         if wall_area <= 0 or not math.isfinite(wall_area):
-                            assessment["not_assessed"].append({"component_id": f"external_wall_edge_{index}{part_component_suffix}",
-                                "component": "External wall area — not assessed",
+                            assessment["not_assessed"].append({"component_id": f"{wall_id}_{index}{part_component_suffix}",
+                                "component": f"{wall_name} area — not assessed",
                                 "reason": "Calibrated trace edge produced no positive wall area.", "page": part.get("page")})
                             continue
                         if skip_walls:
+                            continue
+                        if boundary == "unconditioned":
+                            # Conducted against the operators' answered temperature of the space beyond; never guessed.
+                            temperature, answer = need_answers_service.unconditioned_temperature(paths["root"], room.get("label", ""))
+                            if temperature is None:
+                                assessment["not_assessed"].append({"component_id": f"unconditioned_wall_temperature_{index}{part_component_suffix}",
+                                    "component": "Walls to unconditioned spaces — temperature needed",
+                                    "reason": f"Wall {index + 1} faces an unconditioned space; answer that space's design temperature to count it.",
+                                    "page": part.get("page")})
+                                continue
+                            proposal["surfaces"].append({
+                                "surface_key": f"reviewer-trace:{part['trace_id']}:unconditioned-wall:{index}",
+                                "label": f"{room.get('label', 'Room')} wall {index + 1} to an unconditioned space",
+                                "owner_room_label": room.get("label", ""), "owner_level_name": room.get("level_name", ""),
+                                "physical_type": "wall", "thermal_role": "fixed_adjacent", "external_exposure": "",
+                                "boundary_condition": "unconditioned_space", "boundary_temperature_c": temperature,
+                                "boundary_source": (f"Answered by the operators ({answer.get('source') or 'source not given'})"
+                                                    + (f": {answer['space']}" if answer.get("space") else "")),
+                                "orientation": "", "gross_area_m2": wall_area, "opening_coverage": "not_applicable", "confidence": 0.65,
+                                "page": part.get("page"), "evidence": [citation],
+                                "reviewer_trace_id": part.get("trace_id", ""), "reviewer": declaration_reviewer,
+                                "verification_status": "provisional",
+                                "rationale": f"Reviewer-declared wall to an unconditioned space at {temperature:g} °C (operators' answer); conduction only, no sun.",
+                                "assumptions": ["answered_unconditioned_space_temperature"],
+                            })
                             continue
                         surface_key = f"reviewer-trace:{part['trace_id']}:wall:{index}"
                         orientation = ""

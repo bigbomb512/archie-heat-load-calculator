@@ -632,6 +632,28 @@ test("Drawings: a construction answer picks a handbook wall or roof, or takes a 
                                   value: "Insulated precast panel"});
 });
 
+test("Drawings: an unconditioned-space temperature is answered for every room or one room", async ({page}) => {
+  const posts = [];
+  const skill = () => ({status: "needs_review", stages: [], answers: {}, answer_options: {
+      kinds: [{id: "unconditioned_temperature", label: "Temperature of an unconditioned space beyond a wall", applied: true, unit: "°C"}],
+      rooms: [{label: "Kitchen", level: "Ground"}], equipment: [], above: []},
+    findings: [{id: "information_needs:needs:0", subskill_id: "information_needs", field: "needs", status: "proposed",
+      value: {target: "Plant room behind the kitchen", field: "temperature", answer_kind: "unconditioned_temperature", room: "Kitchen",
+              why: "The kitchen's north wall backs onto an unventilated plant room.", impact: "wall conduction", where_to_look: "site visit", pages: "5"}}]});
+  await mockJob(page, {status: () => baseStatus(), skill,
+    onPost: (kind, body) => { if (kind === "skill" && body.action === "answer_need") posts.push(body); return null; }});
+  await page.goto("/#/job/job-1/drawings");
+  const need = page.locator("[data-ws-need='information_needs:needs:0']");
+  await expect(need.locator("[data-ws-need-room]")).toHaveValue("Kitchen");                   // the need's room, or every room
+  await expect(need.locator("[data-ws-need-room] option").first()).toHaveText("every room");
+  await need.locator("[data-ws-need-value]").fill("38");
+  await need.locator("[data-ws-need-note]").fill("Plant room, unventilated");
+  await need.locator("[data-ws-need-source]").selectOption("site_visit");
+  await need.locator("[data-ws-need-save]").click();
+  await expect.poll(() => posts.length).toBe(1);
+  expect(posts[0]).toMatchObject({kind: "unconditioned_temperature", room: "Kitchen", value: "38", note: "Plant room, unventilated", source: "site_visit"});
+});
+
 test("Drawings: an exhaust answer takes the kitchen, its rate and how the air is replaced", async ({page}) => {
   const posts = [];
   const skill = () => ({status: "needs_review", stages: [], answers: {}, answer_options: {
@@ -1336,6 +1358,8 @@ test("Walls & roof: show the plan, accept an AI wall, edit boundaries and save t
   await expect(page.getByRole("row", {name: /Wall 1/})).toContainText("4.00 m");
   await page.getByRole("button", {name: "Accept AI"}).click();
   await page.locator('[data-ws-boundary="1"]').selectOption("adjacent_tenancy");
+  await expect(page.locator('[data-ws-boundary="3"] option[value="unconditioned"]')).toHaveText("Unconditioned space (plant room, store, dock)");
+  await page.locator('[data-ws-boundary="3"]').selectOption("unconditioned");
   await page.locator(".ws-subtab").filter({hasText: "Roof"}).click();
   await expect(page.locator("[data-ws-wall-room]")).toHaveValue(context.rooms[1].room_id);
   await page.locator("[data-ws-roof]").selectOption("not_exposed");
@@ -1348,7 +1372,7 @@ test("Walls & roof: show the plan, accept an AI wall, edit boundaries and save t
   expect(body.edges).toContainEqual({index: 1, boundary: "adjacent_tenancy"});
   // The backend keeps unchanged wall sources and marks only changed boundaries as reviewer decisions.
   expect(body.edges).toEqual([{index: 0, boundary: "external"}, {index: 1, boundary: "adjacent_tenancy"},
-    {index: 2, boundary: "internal"}, {index: 3, boundary: "unknown"}]);
+    {index: 2, boundary: "internal"}, {index: 3, boundary: "unconditioned"}]);
   await page.setViewportSize({width: 375, height: 812});
   await expect(page.locator("#wsSectionSelect")).toBeVisible();
   await expect(page.locator('#wsSectionSelect option[value="walls"]')).toContainText("Walls & roof");

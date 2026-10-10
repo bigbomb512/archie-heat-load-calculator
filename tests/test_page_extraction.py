@@ -39,6 +39,11 @@ class EquipmentReadingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             extraction.validate_reply(EQUIPMENT, {"equipment": []})
         self.assertEqual(extraction.validate_reply(EQUIPMENT, {"items": []}), [])
+        # A nameless item is dropped; it doesn't cost the page its other items. Other bad items still refuse the reply.
+        kept = extraction.validate_reply(EQUIPMENT, {"items": [{"name": "", "quantity": 2}, {"name": "  "}, {"name": "Oven", "quantity": 1}]})
+        self.assertEqual([row["name"] for row in kept], ["Oven"])
+        with self.assertRaises(ValueError):
+            extraction.validate_reply(EQUIPMENT, {"items": [{"name": "Oven", "quantity": -1}]})
 
     def test_the_prompt_names_the_page_or_section(self):
         self.assertIn("page 5 of", extraction.build_prompt(EQUIPMENT, 5))
@@ -54,6 +59,22 @@ class EquipmentReadingTests(unittest.TestCase):
 
 
 class MergeTests(unittest.TestCase):
+    def test_a_plan_label_without_a_code_folds_into_the_one_scheduled_item_of_that_name(self):
+        readings = [
+            (5, 0, [item("COMBI OVEN", code="E06", quantity=2, evidence="schedule E06"),
+                    item("UB FRIDGE", code="E21", size="1200"), item("UB FRIDGE", code="E22", size="1500")]),
+            (19, 0, [item("Combi oven", quantity=1, evidence="plan label"),     # same item, labelled on the plan
+                     item("UB fridge"),                                       # two scheduled fridges: ambiguous
+                     item("Wok burner")]),                                   # nothing scheduled by that name
+        ]
+        findings = {row["identity"]: row for row in extraction.merge(EQUIPMENT, readings)}
+        oven = findings[extraction.equipment_identity(item("x", code="E06"))]
+        self.assertEqual((oven["pages"], oven["value"]["quantity"], oven["conflicts"]), ([5, 19], 2, {}))
+        self.assertEqual([cite["excerpt"] for cite in oven["citations"]], ["schedule E06", "plan label"])
+        self.assertEqual(len(findings), 5)                      # E06, E21, E22, the unscheduled fridge label, wok burner
+        self.assertIn(extraction.equipment_identity(item("UB fridge")), findings)
+        self.assertIn(extraction.equipment_identity(item("Wok burner")), findings)
+
     def test_the_same_item_on_several_pages_is_one_finding_and_disagreement_is_conflicting(self):
         readings = [
             (5, 0, [item("Combi oven", code="E01", quantity=1, size="750x790", evidence="schedule row E01"),
