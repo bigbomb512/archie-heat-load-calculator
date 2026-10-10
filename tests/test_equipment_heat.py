@@ -33,7 +33,7 @@ class TypeAndRatingTests(unittest.TestCase):
         self.assertEqual((tv["rated_input_w"], tv["rated_source"], tv["heat_w"]), (250, heat.PLACEHOLDER, 500))
         oven = heat.proposal({"name": "Combi oven", "under_hood": None})
         self.assertIsNone(oven["heat_w"])
-        self.assertEqual(oven["needed"], ["rated power (from the spec sheet)", "whether it is under a hood"])
+        self.assertEqual(oven["needed"], ["rated power or heat to room (from the data sheet)", "whether it is under a hood"])
         hood = heat.proposal({"name": "Range hood"})
         self.assertIn("ventilation", hood["not_equipment"])
         self.assertIsNone(hood["heat_w"])

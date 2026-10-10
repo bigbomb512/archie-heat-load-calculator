@@ -5,7 +5,8 @@
                      a fitting without a quantity or wattage is recorded but not counted, and the summary says so;
 - equipment_evidence an equipment item -> the matching item of the equipment list the calculation reads (by code,
                      else by name), accepted with the drawing's quantity and rating, or a typical rating until a
-                     spec sheet is in (labelled as typical on the Results tab).
+                     spec sheet is in (labelled as typical on the Results tab); a data-sheet heat entered earlier
+                     is kept and used.
 
 A finding names its room in the app's format ("room-use:<level>:<label>"); when it names none, or a zone the app
 doesn't know, the operator picks the room on accepting. Press Calculate afterwards to update the result.
@@ -13,7 +14,7 @@ doesn't know, the operator picks the room on accepting. Press Calculate afterwar
 
 import re
 
-from ai.equipment_heat import proposal as heat_proposal
+from ai.equipment_heat import from_data_sheet as heat_from_data_sheet, proposal as heat_proposal
 from ai.internal_gains_resolution import _room_id
 from ai.page_extraction import normalise_name
 
@@ -103,7 +104,8 @@ def _apply_equipment(web, project, value, room, reviewer):
     # Name, code and size come from the page reading; a rating or factor entered earlier (e.g. from a spec sheet) is
     # kept unless this finding gives one.
     earlier = match.get("decided_value") or {}
-    item = {**match["value"], "room": room["label"]}
+    item = {**match["value"], "room": room["label"],
+            **{field: earlier[field] for field in ("sensible_to_room_w", "latent_to_room_w", "heat_reference") if earlier.get(field)}}
     if _number(value.get("quantity")):
         item["quantity"] = int(value["quantity"])
     typical = heat_proposal(item)
@@ -119,11 +121,16 @@ def _apply_equipment(web, project, value, room, reviewer):
     factor = next((number for number in (value.get("heat_to_space_factor"), earlier.get("heat_to_space_factor"))
                    if isinstance(number, (int, float)) and not isinstance(number, bool) and 0 <= number <= 1), None)
     item["heat_to_space_factor"] = float(factor) if factor is not None else typical["heat_to_space_factor"]
-    if not item["rated_input_w"] or item["heat_to_space_factor"] is None:
+    sheet = heat_from_data_sheet(item)
+    if not sheet and (not item["rated_input_w"] or item["heat_to_space_factor"] is None):
         return {"applied": False, "room": room["label"],
                 "summary": "Recorded; it has no rating or heat-to-room factor yet, so it isn't counted. Answer its rating in the needs list."}
     page_extraction_service.review(web, project, {"kind": "equipment_appliances", "finding_id": match["id"], "decision": "accepted",
                                                   "value": item, "reviewer": reviewer})
     label = f"{item.get('code') + ' ' if item.get('code') else ''}{item.get('name', '')}".strip()
+    if sheet:
+        return {"applied": True, "room": room["label"],
+                "summary": f"{label} in {room['label']}: {item.get('quantity') or 1} × {item['sensible_to_room_w']:g} W to the room "
+                           f"(data sheet entered earlier: {item.get('heat_reference')})."}
     return {"applied": True, "room": room["label"],
             "summary": f"{label} in {room['label']}: {item.get('quantity') or 1} × {item['rated_input_w']:g} W ({rating}) × {item['heat_to_space_factor']:g} to the room."}

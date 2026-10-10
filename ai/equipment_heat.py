@@ -7,6 +7,10 @@ The drawings name the equipment but rarely print its power. This step proposes, 
   dishwashing and hot-drink equipment vary too much and need the rating from the spec sheet;
 - a heat-to-room factor: the share of the rated input that ends up as heat in the room.
 
+An operator can instead enter the heat to the room straight from the manufacturer's data sheet (many combi ovens,
+dishwashers and hoods list their sensible and latent heat emission): sensible W each, moisture (latent) W each and
+where the figures come from. That replaces rating × factor for the item and is labelled as the data sheet's figure.
+
 Every typical value and factor here is a GENERIC PLACEHOLDER, labelled as such, until the licensed AIRAH DA09
 tables are available (user decision 2026-10-05). The operator sees and can change every number before it is
 used. No I/O.
@@ -15,6 +19,7 @@ used. No I/O.
 import re
 
 PLACEHOLDER = "generic placeholder (AIRAH DA09 pending)"
+DATA_SHEET = "data sheet heat to room, entered by the operator"
 
 # (type, pattern on the normalised name). First match wins, so the specific patterns come first.
 TYPES = (
@@ -102,7 +107,7 @@ def proposal(item):
         return {"type": kind, "quantity": quantity, "rated_input_w": None, "rated_source": "", "heat_to_space_factor": None,
                 "factor_source": "", "heat_w": None, "needed": [], "not_equipment": reason}
     if not rated:
-        needed.append("rated power (from the spec sheet)")
+        needed.append("rated power or heat to room (from the data sheet)")
     if factor is None:
         needed.append("heat-to-room factor")
     if kind == "cooking" and item.get("under_hood") is None:
@@ -116,11 +121,33 @@ def proposal(item):
     }
 
 
+def _each(value, field):
+    number = value.get(field)
+    return float(number) if isinstance(number, (int, float)) and not isinstance(number, bool) and number >= 0 else None
+
+
+def _quantity(value):
+    return value.get("quantity") if type(value.get("quantity")) is int and value.get("quantity") > 0 else 1
+
+
+def from_data_sheet(value):
+    """True when the operator entered the item's heat to the room from its data sheet."""
+    return bool(_each(value, "sensible_to_room_w"))
+
+
+def latent_w(value):
+    """Moisture (latent) heat into the room for an accepted item: only from a data-sheet entry, else 0."""
+    latent = _each(value, "latent_to_room_w") if from_data_sheet(value) else None
+    return round(_quantity(value) * latent) if latent else 0
+
+
 def heat_w(value):
-    """Heat into the room for an accepted item, or None when its rating or factor is missing."""
+    """Sensible heat into the room for an accepted item: the data sheet's figure when entered, else rating × factor;
+    None when neither is complete."""
+    if from_data_sheet(value):
+        return round(_quantity(value) * _each(value, "sensible_to_room_w"))
     try:
         rated, factor = float(value.get("rated_input_w")), float(value.get("heat_to_space_factor"))
     except (TypeError, ValueError):
         return None
-    quantity = value.get("quantity") if type(value.get("quantity")) is int and value.get("quantity") > 0 else 1
-    return round(quantity * rated * factor) if rated > 0 and 0 <= factor <= 1 else None
+    return round(_quantity(value) * rated * factor) if rated > 0 and 0 <= factor <= 1 else None

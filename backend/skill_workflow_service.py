@@ -3345,6 +3345,8 @@ def _answer_need(web, project, data):
         "room": data.get("room") or "", "equipment_id": data.get("equipment_id") or "", "answer": answer, "source": source,
         "note": " ".join(str(data.get("note") or "").split())[:300], "applied": result["applied"], "summary": result["summary"],
         "hours": data.get("hours") if isinstance(data.get("hours"), dict) else None,
+        **({"surface": str(data.get("surface") or ""), "construction_id": str(data.get("construction_id") or "")}
+           if data.get("kind") == "construction" else {}),
         "by": " ".join(str(data.get("reviewer") or "").split())[:80] or "Operator", "at": time.time()}
     _atomic_json(paths["root"] / ANSWERS_FILE, stored)
     response = _response(web, project)

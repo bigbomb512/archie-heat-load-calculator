@@ -279,6 +279,7 @@ def resolve(building, vision=None, proposal=None, room_use=None, pack=None,
             if rated and factor is not None and _has_citation(item):
                 equipment_records.append({"name": _text(item.get("name", item.get("model", "equipment"))), "quantity": qty,
                     "rated_input_w": rated, "heat_to_space_factor": factor,
+                    **({"latent_w": _positive(item.get("latent_w"))} if _positive(item.get("latent_w")) else {}),
                     "diversity": _positive(item.get("diversity_factor")) or _positive(profile.get("equipment_diversity")),
                     "origin": "direct_project_evidence", "confidence": .85, "evidence": _evidence(item),
                     "formula": "quantity × rated_input_w × heat_to_space_factor"})

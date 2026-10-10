@@ -250,6 +250,8 @@ def status(web, project, kind="equipment_appliances"):
             extra = {"heat": equipment_heat.proposal(row["value"]),
                      "suggested_room": suggested_room(row["value"].get("location"), room_names),
                      "accepted_heat_w": equipment_heat.heat_w(decided) if decision.get("status") == "accepted" else None,
+                     "accepted_latent_w": equipment_heat.latent_w(decided) if decision.get("status") == "accepted" else None,
+                     "from_data_sheet": decision.get("status") == "accepted" and equipment_heat.from_data_sheet(decided),
                      "in_calculation": bool(decision.get("status") == "accepted" and decided.get("room") in room_names
                                             and equipment_heat.heat_w(decided) is not None)}
         findings.append({**row, **extra, "status": decision.get("status", "proposed"), "decided_value": decision.get("value"),
@@ -319,6 +321,30 @@ def start(web, project, data=None):
     return {**status(web, project, kinds[0]), "deduplicated": bool(started.get("deduplicated"))}
 
 
+def _check_equipment_numbers(value):
+    """Rating, factor and the data sheet's heat to room, as numbers in range; a data-sheet figure names its source."""
+    for field, low, high in (("rated_input_w", 0, None), ("heat_to_space_factor", 0, 1),
+                             ("sensible_to_room_w", 0, None), ("latent_to_room_w", 0, None)):
+        if value.get(field) in (None, ""):
+            value[field] = None
+            continue
+        try:
+            number = float(value[field])
+        except (TypeError, ValueError):
+            raise ValueError(f"{field.replace('_', ' ')} must be a number.") from None
+        if number < low or (high is not None and number > high) or (field in {"rated_input_w", "sensible_to_room_w"} and number == 0):
+            raise ValueError({"rated_input_w": "Rated power must be above 0 W.",
+                              "heat_to_space_factor": "The heat-to-room factor must be between 0 and 1.",
+                              "sensible_to_room_w": "The heat to the room must be above 0 W.",
+                              "latent_to_room_w": "The moisture heat can't be negative."}[field])
+        value[field] = number
+    value["heat_reference"] = " ".join(str(value.get("heat_reference") or "").split())[:160]
+    if value["latent_to_room_w"] is not None and value["sensible_to_room_w"] is None:
+        raise ValueError("Enter the data sheet's heat to the room (sensible) with its moisture heat.")
+    if value["sensible_to_room_w"] is not None and not value["heat_reference"]:
+        raise ValueError("Say where the heat figure comes from (the data sheet's make and model).")
+
+
 def review(web, project, data):
     """Accept (optionally with an edited value), or reject, one finding of the current run."""
     kind = data.get("kind", "equipment_appliances")
@@ -338,17 +364,8 @@ def review(web, project, data):
             value = finding["value"]
         if not isinstance(value, dict) or not str(value.get("name", "")).strip():
             raise ValueError("An accepted item needs at least a name.")
-        for field, low, high in (("rated_input_w", 0, None), ("heat_to_space_factor", 0, 1)):
-            if value.get(field) in (None, ""):
-                value[field] = None
-                continue
-            try:
-                number = float(value[field])
-            except (TypeError, ValueError):
-                raise ValueError(f"{field.replace('_', ' ')} must be a number.") from None
-            if number < low or (high is not None and number > high) or (field == "rated_input_w" and number == 0):
-                raise ValueError("Rated power must be above 0 W." if field == "rated_input_w" else "The heat-to-room factor must be between 0 and 1.")
-            value[field] = number
+        if kind == "equipment_appliances":
+            _check_equipment_numbers(value)
     root = Path(project["review_dir"])
     decisions = read_json(root / DECISIONS_FILE)
     decisions.setdefault(kind, {})[finding["id"]] = {

@@ -455,9 +455,12 @@ test("Drawings: equipment found in the drawings can be corrected, chosen between
   ];
   const decisions = [];
   const run = () => ({status: "done", kind: "equipment_appliances", pages: [5, 9, 20], open: findings.length - decisions.length, rooms: ["Kitchen", "Shop"],
-    findings: findings.map(row => { const made = decisions.find(item => item.finding_id === row.id);
-      const heat = made?.value?.rated_input_w && made.value.room ? made.value.quantity * made.value.rated_input_w * made.value.heat_to_space_factor : null;
-      return made ? {...row, status: made.decision, decided_value: made.value || null, reviewer: "Sam", in_calculation: heat != null, accepted_heat_w: heat} : row; })});
+    findings: findings.map(row => { const made = decisions.findLast(item => item.finding_id === row.id);
+      const sheet = Boolean(made?.value?.sensible_to_room_w);
+      const heat = !made?.value?.room ? null : sheet ? made.value.quantity * made.value.sensible_to_room_w
+        : made.value.rated_input_w ? made.value.quantity * made.value.rated_input_w * made.value.heat_to_space_factor : null;
+      return made ? {...row, status: made.decision, decided_value: made.value || null, reviewer: "Sam", in_calculation: heat != null, accepted_heat_w: heat,
+                     from_data_sheet: sheet, accepted_latent_w: sheet ? made.value.quantity * (made.value.latent_to_room_w || 0) : 0} : row; })});
   await mockJob(page, {status: () => baseStatus(), extraction: run,
     onPost: (kind, body) => { if (kind === "extraction" && body.action === "review") { decisions.push(body); return run(); } return null; }});
   await page.goto("/#/job/job-1/drawings");
@@ -480,7 +483,7 @@ test("Drawings: equipment found in the drawings can be corrected, chosen between
   expect(decisions[0]).toMatchObject({finding_id: "eq:oven", decision: "accepted",
     value: {name: "COMBI OVEN", quantity: 2, under_hood: true, room: "Kitchen", rated_input_w: 18000, heat_to_space_factor: 0.2}});
   await expect(section.locator("[data-ws-equipment-status]")).toContainText("7200 W in the calculation");
-  await expect(section.locator("[data-ws-eq='eq:oven'] summary")).toContainText("accepted");
+  await expect(section.locator("[data-ws-eq='eq:oven'] > details > summary")).toContainText("accepted");
   const fridge = section.locator("[data-ws-eq='eq:fridge']");
   await fridge.locator("summary").click();
   await fridge.locator("[data-ws-eq-accept]").click();
@@ -497,6 +500,18 @@ test("Drawings: equipment found in the drawings can be corrected, chosen between
   await screen.locator("[data-ws-eq-reject]").click();
   expect(decisions[2]).toMatchObject({finding_id: "eq:screen", decision: "rejected"});
   await expect(section.locator("[data-ws-equipment-status]")).toHaveText("3 items from 3 pages · all reviewed · 7200 W in the calculation (press Calculate to update).");
+  // An accepted item can be changed: the data sheet's heat to the room replaces rated W × factor, and must say where it's from.
+  const change = section.locator("[data-ws-eq='eq:oven'] [data-ws-eq-change]");
+  await change.locator("summary").click();
+  await expect(change.locator("[data-ws-eq-field='rated_input_w']")).toHaveValue("18000");
+  await change.locator("[data-ws-eq-field='sensible_to_room_w']").fill("1500");
+  await change.locator("[data-ws-eq-field='latent_to_room_w']").fill("900");
+  await change.locator("[data-ws-eq-field='heat_reference']").fill("Maker X combi");
+  await change.locator("[data-ws-eq-accept]").click();
+  expect(decisions[3]).toMatchObject({finding_id: "eq:oven", decision: "accepted",
+    value: {quantity: 2, room: "Kitchen", sensible_to_room_w: 1500, latent_to_room_w: 900, heat_reference: "Maker X combi"}});
+  await expect(section.locator("[data-ws-eq='eq:oven'] [data-ws-eq-heat]"))
+    .toHaveText("In the calculation: 3000 W + 1800 W moisture into Kitchen (data sheet: Maker X combi, entered by the operator).");
 });
 
 test("Drawings: what we need to find lists only the gaps, with where to look, and puts answers into the calculation", async ({page}) => {
@@ -574,6 +589,47 @@ test("Drawings: a glass answer takes a U-value and SHGC for one room's windows o
   await need.locator("[data-ws-need-save]").click();
   await expect.poll(() => posts.length).toBe(1);
   expect(posts[0]).toMatchObject({kind: "glazing", room: "", u_value_w_m2k: "3.4", shgc: "0.32", value: "6.38 mm low-e laminated", source: "supplier"});
+});
+
+test("Drawings: a construction answer picks a handbook wall or roof, or takes a typed U-value", async ({page}) => {
+  const posts = [];
+  const skill = () => ({status: "needs_review", stages: [], answers: {}, answer_options: {
+      kinds: [{id: "construction", label: "Wall or roof construction (U-value)", applied: true, unit: "W/m²K"}],
+      rooms: [{label: "Shop", level: "Ground"}], equipment: [], above: [],
+      constructions: {wall: [{id: "masonry-walls:brick", label: "Brick — U 2 W/m²K (masonry walls)", u_value_w_m2k: 2}],
+                      roof: [{id: "flat-roofs:deck", label: "Metal deck, blanket — U 0.4 W/m²K (flat roofs)", u_value_w_m2k: 0.4}]}},
+    findings: [{id: "information_needs:needs:0", subskill_id: "information_needs", field: "needs", status: "proposed",
+      value: {target: "Roof over the shop", field: "roof_construction", answer_kind: "construction", room: null, why: "The section shows a roof but not its build-up.",
+              impact: "roof heat", where_to_look: "the architect's sections", pages: "31"}}]});
+  await mockJob(page, {status: () => baseStatus(), skill,
+    onPost: (kind, body) => { if (kind === "skill" && body.action === "answer_need") posts.push(body); return null; }});
+  await page.goto("/#/job/job-1/drawings");
+  const need = () => page.locator("[data-ws-need='information_needs:needs:0']");
+  await expect(need().locator("[data-ws-need-surface]")).toHaveValue("roof");                 // from the need's wording
+  await expect(need().locator("[data-ws-need-room]")).toHaveValue("");                        // every room unless one is chosen
+  await need().locator("[data-ws-need-source]").selectOption("standard_or_reference");
+  await need().locator("[data-ws-need-save]").click();
+  await expect(need().locator("[data-ws-need-save]")).toHaveText("Choose a construction or enter its U-value");
+  await need().locator("[data-ws-need-construction]").selectOption("flat-roofs:deck");
+  await expect(need().locator("[data-ws-need-u]")).toHaveCount(0);                            // the handbook gives the U-value
+  await need().locator("[data-ws-need-save]").click();
+  await expect.poll(() => posts.length).toBe(1);
+  expect(posts[0]).toMatchObject({kind: "construction", surface: "roof", construction_id: "flat-roofs:deck", room: "",
+                                  value: "Metal deck, blanket — U 0.4 W/m²K (flat roofs)", source: "standard_or_reference"});
+  // Walls from another source: no listed construction, a typed U-value and what it is.
+  await expect(need().locator("[data-ws-need-save]")).toBeEnabled();                          // the form has refreshed after saving
+  await need().locator("[data-ws-need-surface]").selectOption("wall");
+  await expect(need().locator("[data-ws-need-construction] option[value='masonry-walls:brick']")).toHaveCount(1);
+  await need().locator("[data-ws-need-construction]").selectOption("");
+  await expect(need().locator("[data-ws-need-u]")).toBeVisible();                             // a typed U-value is asked for
+  await need().locator("[data-ws-need-room]").selectOption("Shop");
+  await need().locator("[data-ws-need-u]").fill("0.45");
+  await need().locator("[data-ws-need-value]").fill("Insulated precast panel");
+  await need().locator("[data-ws-need-source]").selectOption("mechanical_drawings");
+  await need().locator("[data-ws-need-save]").click();
+  await expect.poll(() => posts.length).toBe(2);
+  expect(posts[1]).toMatchObject({kind: "construction", surface: "wall", construction_id: "", room: "Shop", u_value_w_m2k: "0.45",
+                                  value: "Insulated precast panel"});
 });
 
 test("Drawings: an exhaust answer takes the kitchen, its rate and how the air is replaced", async ({page}) => {

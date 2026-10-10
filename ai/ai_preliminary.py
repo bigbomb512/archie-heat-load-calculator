@@ -1015,7 +1015,7 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                                "rationale": f"Listed equipment gives {listed_w:.0f} W to the room, below the typical allowance of "
                                             f"{allowance_w:.0f} W for {area:g} m² of {profile['label']}; topped up to the allowance.",
                                "evidence": []})
-        heat_sources = [{"name": item.get("name", "Equipment"), "quantity": item.get("quantity", 1), "watts": round(item.get("rated_input_w", 0), 3), "kind": "other", "diversity_factor": item.get("diversity", profile["equipment_diversity"]), "space_gain_factor": item.get("heat_to_space_factor", profile["equipment_space_gain"]), "verification_status": "provisional", "source": item.get("origin", _source(profile_id))} for item in equipment_rows]
+        heat_sources = [{"name": item.get("name", "Equipment"), "quantity": item.get("quantity", 1), "watts": round(item.get("rated_input_w", 0), 3), "kind": "other", "diversity_factor": item.get("diversity", profile["equipment_diversity"]), "space_gain_factor": item.get("heat_to_space_factor", profile["equipment_space_gain"]), **({"latent_w": item["latent_w"]} if item.get("latent_w") else {}), "verification_status": "provisional", "source": item.get("origin", _source(profile_id))} for item in equipment_rows]
         requirements_zones.append({"zone_id": zone_id, "name": row["name"], "usage": profile["label"], "source_room_labels": [row["name"]],
                                    "area_m2": area, "occupancy": occupancy, "ceiling_height_mm": room_resolution.get("ceiling_height_mm"),
                                    "heat_sources": heat_sources,
@@ -1168,8 +1168,9 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                 "net_opaque_area_m2": None,
                 "opening_coverage_status": "not_applicable",
                 "linked_opening_ids": [],
-                "construction_id": "",
-                "u_value_w_m2k": None,
+                "construction_id": surface.get("construction_id", ""),
+                "u_value_w_m2k": surface.get("u_value_w_m2k"),
+                "construction_source": surface.get("construction_source", ""),
                 "boundary_temperature_c": None,
                 "evidence_refs": deepcopy(surface.get("evidence", [])),
                 "confidence": surface.get("confidence", 0.65),
@@ -1319,6 +1320,8 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
             opaque["u_value_w_m2k"] = candidate["resolved_u_value_w_m2k"]
         if candidate.get("resolved_construction_id"):
             opaque["construction_id"] = candidate["resolved_construction_id"]
+        if candidate.get("construction_source"):          # the operators' answered construction, not the pack's U-value
+            opaque["source"] = candidate["construction_source"]
         opaque["area_derivation"] = deepcopy(opaque_by_id.get(candidate["candidate_id"], {}).get("area_derivation", {}))
         opaque["opaque_resolution_fingerprint"] = opaque_by_id.get(candidate["candidate_id"], {}).get("resolution_fingerprint", "")
         room["cooling_load"]["envelope_not_applicable"] = False

@@ -139,6 +139,28 @@ dehumidification check. Results name the location and its distance from the site
 table, a generic Australian design day is used and labelled so. A released AIRAH DA09 pack, when imported, takes
 precedence. People's heat by activity and the supply fan's heat also come from the handbook (`config/ai_preliminary_assumption_pack.json`).
 
+The wall and roof U-values are imported the same way (to `~/.archie/airah_handbook_2007_u_values.json`, or
+`ARCHIE_U_VALUE_TABLE`):
+
+```bash
+python3 tools/import_airah_handbook_u_values.py ~/Downloads/AIRAH_Handbook.pdf
+```
+
+On the What-we-need-to-find list, a "Wall or roof construction (U-value)" answer picks one of the handbook's wall or
+roof constructions (roofs use the summer value) or takes a U-value typed from another source, for every room or one
+room. Answered external walls and exposed roofs use it; the others keep the preliminary U-values (walls 0.6, roof
+0.5 W/m²K), which the Results tab lists as typical. The handbook has no sun-on-surface (sol-air) data, so sun on walls
+stays the preliminary pack's allowance and roof sun is not assessed until DA09 or ASHRAE data is available.
+
+## Kitchen appliance heat (data sheets)
+
+The handbook has no table of appliance heat gains (that is AIRAH DA09 or ASHRAE Fundamentals ch. 18), so cooking,
+dishwashing and hot-drink equipment are not given typical ratings. On the Drawings tab, each equipment item takes its
+heat to the room from the manufacturer's data sheet (sensible W each, moisture W each, and the make and model it came
+from); this replaces rated W × the generic heat-to-room factor, adds the moisture to the room's latent load, and an
+accepted item can be changed later ("Change this item"). Results list kitchen appliances read from the drawings that
+are not yet in the calculation.
+
 ## AI provider for the PDF review
 
 Pass 1 (every page), pass 2 (values) and the skills use one AI provider, chosen when the server starts:

@@ -123,6 +123,7 @@ def _sources(paths):
         "preliminary_geometry_resolution": ai_preliminary.fingerprint(_preliminary_geometry(paths)),
         # Answers from the What-we-need-to-find list that the model reads directly.
         "glazing_answers": ai_preliminary.fingerprint(_read(paths["root"] / "glazing_answers.json", {})),
+        "construction_answers": ai_preliminary.fingerprint(_read(paths["root"] / "construction_answers.json", {})),
         "exhaust_answers": ai_preliminary.fingerprint(_read(paths["root"] / "exhaust_answers.json", {})),
         "hours_answers": ai_preliminary.fingerprint(_read(paths["root"] / "hours_answers.json", {})),
     }
@@ -353,7 +354,9 @@ def _with_accepted_equipment(paths, proposal):
     """Add each accepted pass-2 equipment item to its room, as cited equipment the internal-gains resolver uses.
 
     Only items accepted on the current reading, assigned to a room, with a rated input and a heat-to-room
-    factor are added. A room with any such item uses its listed equipment instead of the area-based allowance.
+    factor, or the heat to the room from the data sheet, are added. A data-sheet item enters as its sensible heat
+    (factor 1) with its moisture heat. A room with any such item uses its listed equipment instead of the
+    area-based allowance (never below its typical level).
     """
     from ai import equipment_heat
     from backend import page_extraction_service
@@ -366,10 +369,14 @@ def _with_accepted_equipment(paths, proposal):
         room = by_label.get(str(item.get("room") or "").strip().casefold())
         if room is None or equipment_heat.heat_w(item) is None:
             continue
+        sheet = equipment_heat.from_data_sheet(item)
         room.setdefault("equipment", []).append({
             "name": item.get("name"), "quantity": item.get("quantity") or 1,
-            "rated_input_w": item["rated_input_w"], "heat_to_space_factor": item["heat_to_space_factor"],
-            "source": "PDF review (accepted by the operator)",
+            "rated_input_w": item["sensible_to_room_w"] if sheet else item["rated_input_w"],
+            "heat_to_space_factor": 1.0 if sheet else item["heat_to_space_factor"],
+            **({"latent_w": item.get("latent_to_room_w") or 0} if sheet else {}),
+            "source": (f"Data sheet ({item.get('heat_reference')}), entered by the operator" if sheet
+                       else "PDF review (accepted by the operator)"),
             "evidence": [{"page": page, "excerpt": f"{item.get('code') or ''} {item.get('name')}".strip()} for page in item.get("pages", [])]})
     return proposal
 
@@ -923,7 +930,8 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
     if trace_review_issue:
         proposal["issues"].append(trace_review_issue)
     from backend import need_answers_service
-    return need_answers_service.apply_glazing(paths["root"], proposal)  # answered glass performance, where given
+    proposal = need_answers_service.apply_glazing(paths["root"], proposal)  # answered glass performance, where given
+    return need_answers_service.apply_constructions(paths["root"], proposal)  # answered wall and roof U-values
 
 
 def _queue_missing_research(paths, project, approved):

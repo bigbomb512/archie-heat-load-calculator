@@ -8,7 +8,7 @@ export default defineConfig({
     headless: true,
   },
   webServer: {
-    command: "cd .. && ARCHIE_PAGE_READING=off ARCHIE_DESIGN_WEATHER_TABLE=/nonexistent python3 -m backend.web_app --port 4173",
+    command: "cd .. && ARCHIE_PAGE_READING=off ARCHIE_DESIGN_WEATHER_TABLE=/nonexistent ARCHIE_U_VALUE_TABLE=/nonexistent python3 -m backend.web_app --port 4173",
     url: "http://127.0.0.1:4173",
     reuseExistingServer: false,
   },

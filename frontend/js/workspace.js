@@ -459,7 +459,18 @@
         ? `<label>Windows ${select("data-ws-need-room", (options.rooms || []).map(item => [item.label, `${item.label} only`]), room, "all windows")}</label>
            <label>U-value (W/m²K) <input data-ws-need-u inputmode="decimal" value="${esc(draft.u ?? "")}"></label>
            <label>SHGC <input data-ws-need-shgc inputmode="decimal" value="${esc(draft.shgc ?? "")}"></label>` : "";
-      const valueField = kind === "opening_hours" ? ""
+      const surface = draft.surface ?? saved?.surface ?? (/roof/i.test(`${value.target} ${value.field}`) ? "roof" : "wall");
+      const listed = (options.constructions || {})[surface] || [];
+      const construction = draft.construction_id ?? saved?.construction_id ?? "";
+      const constructionFields = kind === "construction"
+        ? `<label>Surface ${select("data-ws-need-surface", [["wall", "External walls"], ["roof", "Exposed roof"]], surface, "choose")}</label>
+           <label>Rooms ${select("data-ws-need-room", (options.rooms || []).map(item => [item.label, `${item.label} only`]), room, "every room")}</label>
+           <label>Construction ${select("data-ws-need-construction", listed.map(item => [item.id, item.label]), construction,
+             listed.length ? "other (type its U-value)" : "type its U-value (handbook table not imported)")}</label>
+           ${construction ? "" : `<label>U-value (W/m²K) <input data-ws-need-u inputmode="decimal" value="${esc(draft.u ?? "")}"></label>`}` : "";
+      const valueField = kind === "opening_hours" || (kind === "construction" && construction) ? ""
+        : kind === "construction"
+        ? `<label>Construction (as specified) <input data-ws-need-value value="${esc(draft.value ?? saved?.answer ?? "")}" placeholder="e.g. metal deck, R2.5 blanket, plasterboard"></label>`
         : kind === "glazing"
         ? `<label>Glass (as specified) <input data-ws-need-value value="${esc(draft.value ?? saved?.answer ?? "")}" placeholder="e.g. 6.38 mm clear laminated"></label>`
         : kind === "roof_above"
@@ -473,7 +484,7 @@
           <label>Kind ${select("data-ws-need-kind", kinds.map(item => [item.id, item.label + (item.applied ? "" : " (kept as a note)")]), kind, "choose")}</label>
           ${needsRoom ? `<label>Room ${select("data-ws-need-room", (options.rooms || []).map(item => [item.label, item.label]), room, "choose a room")}</label>` : ""}
           ${kind === "equipment_rating" ? `<label>Item ${select("data-ws-need-equipment", (options.equipment || []).map(item => [item.id, item.label]), draft.equipment_id ?? saved?.equipment_id ?? "", "choose the item")}</label>` : ""}
-          ${glazingFields}${hoursFields}
+          ${glazingFields}${constructionFields}${hoursFields}
           ${valueField}
           ${exhaustField}
           <label>From ${select("data-ws-need-source", ANSWER_SOURCES, draft.source ?? saved?.source ?? "", "choose")}</label>
@@ -497,17 +508,21 @@
         state.needDrafts[id] = {kind: field("kind")?.value, room: field("room")?.value, equipment_id: field("equipment")?.value,
                                 value: field("value")?.value, source: field("source")?.value, note: field("note")?.value,
                                 u: field("u")?.value, shgc: field("shgc")?.value, method: field("method")?.value,
+                                surface: field("surface")?.value, construction_id: field("construction")?.value,
                                 hours: Object.fromEntries([...item.querySelectorAll("[data-ws-need-hours]")].map(input => [input.dataset.wsNeedHours, input.value]))};
       };
       item.querySelectorAll("input, select").forEach(input => input.addEventListener("input", remember));
       // Changing the kind changes which fields the answer needs.
-      field("kind")?.addEventListener("change", () => { remember(); renderDrawings().catch(showTabError); });
+      ["kind", "surface", "construction"].forEach(name => field(name)?.addEventListener("change", () => { remember(); renderDrawings().catch(showTabError); }));
       field("save")?.addEventListener("click", async event => {
         const kind = field("kind").value, source = field("source").value;
         const hours = Object.fromEntries([...item.querySelectorAll("[data-ws-need-hours]")].map(input => [input.dataset.wsNeedHours, input.value.trim()]));
         if (kind === "opening_hours" && Object.values(hours).some(text => !text)) { event.target.textContent = "Enter all three (or closed)"; return; }
-        const value = field("value")?.value.trim() || (kind === "glazing" ? "glass as specified" : kind === "opening_hours" ? Object.values(hours).join(" / ") : "");
+        const chosen = kind === "construction" ? field("construction")?.selectedOptions?.[0] : null;
+        const value = field("value")?.value.trim() || (kind === "glazing" ? "glass as specified" : kind === "opening_hours" ? Object.values(hours).join(" / ")
+          : chosen?.value ? chosen.textContent.trim() : "");
         if (!kind) { event.target.textContent = "Choose the kind of answer"; return; }
+        if (kind === "construction" && !chosen?.value && !field("u")?.value.trim()) { event.target.textContent = "Choose a construction or enter its U-value"; return; }
         if (!value) { event.target.textContent = "Type the answer first"; return; }
         if (kind === "glazing" && (!field("u").value.trim() || !field("shgc").value.trim())) { event.target.textContent = "Enter the U-value and SHGC"; return; }
         if (!source) { event.target.textContent = "Say where it came from"; return; }
@@ -517,6 +532,8 @@
             room: field("room")?.value || "", equipment_id: field("equipment")?.value || "", note: field("note")?.value || "",
             ...(kind === "glazing" ? {u_value_w_m2k: field("u").value.trim(), shgc: field("shgc").value.trim()} : {}),
             ...(kind === "exhaust" ? {method: field("method").value} : {}),
+            ...(kind === "construction" ? {surface: field("surface").value, construction_id: field("construction").value,
+                                           u_value_w_m2k: field("u")?.value.trim() || ""} : {}),
             ...(kind === "opening_hours" ? {hours} : {}),
             reviewer: userName() || "Operator"});
           delete state.needDrafts[id];
@@ -534,14 +551,18 @@
   }
 
   const EQUIPMENT_EDIT = [["quantity", "Qty"], ["size", "Size"], ["model", "Model"], ["rated_power", "Printed power"], ["under_hood", "Under hood"],
-                          ["room", "Room"], ["rated_input_w", "Rated W (each)"], ["heat_to_space_factor", "Heat to room (0–1)"]];
+                          ["room", "Room"], ["rated_input_w", "Rated W (each)"], ["heat_to_space_factor", "Heat to room (0–1)"],
+                          ["sensible_to_room_w", "Data sheet: heat to room W (each)"], ["latent_to_room_w", "Data sheet: moisture W (each)"],
+                          ["heat_reference", "Data sheet: make and model"]];
+  const EQUIPMENT_NUMBERS = ["rated_input_w", "heat_to_space_factor", "sensible_to_room_w", "latent_to_room_w"];
 
   function heatLine(row) {
     const heat = row.heat || {};
     if (heat.not_equipment) return `<p class="ws-fine" data-ws-eq-heat>Not counted as equipment: ${esc(heat.not_equipment)}.</p>`;
     if (row.status === "accepted") return `<p class="ws-fine" data-ws-eq-heat>${row.in_calculation
-      ? `In the calculation: ${esc(Math.round(row.accepted_heat_w))} W into ${esc(row.decided_value?.room || "")}.`
-      : `Not in the calculation yet: it needs a room, a rated power and a heat-to-room factor.`}</p>`;
+      ? `In the calculation: ${esc(Math.round(row.accepted_heat_w))} W${row.accepted_latent_w ? ` + ${esc(Math.round(row.accepted_latent_w))} W moisture` : ""} into ${esc(row.decided_value?.room || "")}${
+          row.from_data_sheet ? ` (data sheet: ${esc(row.decided_value?.heat_reference || "")}, entered by the operator)` : ""}.`
+      : `Not in the calculation yet: it needs a room, and the heat to the room from the data sheet or a rated power and heat-to-room factor.`}</p>`;
     const parts = heat.rated_input_w ? `${heat.rated_input_w} W each (${esc(heat.rated_source)})` : "rated power not known";
     const factor = heat.heat_to_space_factor != null ? ` × ${heat.heat_to_space_factor} to the room (${esc(heat.factor_source)})` : "";
     return `<p class="ws-fine" data-ws-eq-heat>Proposed: ${parts}${factor}${heat.heat_w != null ? ` = ${esc(heat.heat_w)} W` : ""}.
@@ -564,18 +585,22 @@
       const check = row.text_match === false ? `<p class="ws-fine is-warn" data-ws-eq-textcheck>Not found in the page's text: check this reading on the page.</p>` : "";
       // Unsaved edits survive the tab's auto-refresh.
       const edits = state.eqEdits?.[row.id] || {};
-      const start = {...value, room: row.suggested_room || "", rated_input_w: row.heat?.rated_input_w ?? "", heat_to_space_factor: row.heat?.heat_to_space_factor ?? ""};
+      const start = row.status === "accepted" ? {...value}
+        : {...value, room: row.suggested_room || "", rated_input_w: row.heat?.rated_input_w ?? "", heat_to_space_factor: row.heat?.heat_to_space_factor ?? ""};
       const typed = field => field in edits ? edits[field] : field === "under_hood" ? (start.under_hood === null || start.under_hood === undefined ? "" : String(start.under_hood)) : shown(start[field]);
       const editor = EQUIPMENT_EDIT.map(([field, label]) => field === "under_hood"
         ? `<label>${label} <select data-ws-eq-field="under_hood"><option value="">not shown</option><option value="true" ${typed(field) === "true" ? "selected" : ""}>yes</option><option value="false" ${typed(field) === "false" ? "selected" : ""}>no</option></select></label>`
         : field === "room"
           ? `<label>${label} <select data-ws-eq-field="room"><option value="">choose a room</option>${(run.rooms || []).map(name => `<option ${typed(field) === name ? "selected" : ""}>${esc(name)}</option>`).join("")}</select></label>`
-          : `<label>${label} <input data-ws-eq-field="${field}" value="${esc(typed(field))}" ${["quantity", "rated_input_w", "heat_to_space_factor"].includes(field) ? 'inputmode="decimal"' : ""}></label>`).join("");
+          : `<label>${label} <input data-ws-eq-field="${field}" value="${esc(typed(field))}" ${["quantity", ...EQUIPMENT_NUMBERS].includes(field) ? 'inputmode="decimal"' : ""}></label>`).join("");
+      const sheetNote = `<p class="ws-fine">If the appliance's data sheet gives its heat to the room (sensible, and moisture/latent), enter those with its make and model: they replace rated W × factor.</p>`;
       const actions = row.status === "proposed"
-        ? `<div class="ws-eq-edit">${editor}</div>${conflicts ? `<p class="ws-fine">The pages disagree. Choose a reading or type the value:</p><ul>${conflicts}</ul>` : ""}
+        ? `<div class="ws-eq-edit">${editor}</div>${sheetNote}${conflicts ? `<p class="ws-fine">The pages disagree. Choose a reading or type the value:</p><ul>${conflicts}</ul>` : ""}
            <div class="ws-actions"><button class="btn key mini" type="button" data-ws-eq-accept>${row.conflicts && Object.keys(row.conflicts).length ? "Save chosen value" : "Accept"}</button>
            <button class="btn ghost mini" type="button" data-ws-eq-reject>Reject</button></div>`
-        : `<p class="ws-fine">${esc(row.status)}${row.reviewer ? ` by ${esc(row.reviewer)}` : ""}</p>`;
+        : `<p class="ws-fine">${esc(row.status)}${row.reviewer ? ` by ${esc(row.reviewer)}` : ""}</p>${row.status === "accepted"
+          ? `<details data-ws-eq-change data-ws-read-open="eqchange:${esc(row.id)}" ${state.readOpen?.has(`eqchange:${row.id}`) ? "open" : ""}><summary>Change this item</summary><div class="ws-eq-edit">${editor}</div>${sheetNote}
+             <div class="ws-actions"><button class="btn key mini" type="button" data-ws-eq-accept>Save changes</button></div></details>` : ""}`;
       return `<li class="ws-eq" data-ws-eq="${esc(row.id)}"><details data-ws-read-open="eq:${esc(row.id)}" ${state.readOpen?.has(`eq:${row.id}`) ? "open" : ""}>
         <summary><b>${value.code ? `${esc(value.code)} ` : ""}${esc(value.name)}</b> <span class="ws-chip ws-evidence-${esc(row.evidence)}">${esc(row.evidence)}</span>
         ${row.status !== "proposed" ? `<span class="ws-chip">${esc(row.status)}</span>` : ""}<br><span class="ws-fine">${facts} · p${row.pages.join(", p")}</span></summary>
@@ -621,13 +646,13 @@
             if (field === "quantity") {
               if (text && !/^\d+$/.test(text)) { button.textContent = "Quantity must be a whole number"; return; }
               value.quantity = text ? Number(text) : null;
-            } else if (field === "rated_input_w" || field === "heat_to_space_factor") {
+            } else if (EQUIPMENT_NUMBERS.includes(field)) {
               if (text && !Number.isFinite(Number(text))) { button.textContent = "Enter a number"; return; }
               value[field] = text ? Number(text) : null;
             } else if (field === "under_hood") value.under_hood = text === "" ? null : text === "true";
             else value[field] = text;
           }
-          if (Object.keys(finding.conflicts || {}).length && !chosen()) { button.textContent = "Choose a reading first"; return; }
+          if (finding.status === "proposed" && Object.keys(finding.conflicts || {}).length && !chosen()) { button.textContent = "Choose a reading first"; return; }
         }
         button.disabled = true;
         try {
@@ -1593,7 +1618,7 @@
     const groups = {
       extract_air: "Exhaust and make-up air (needs the rangehood and exhaust rates)", make_up_air: "Exhaust and make-up air (needs the rangehood and exhaust rates)",
       infiltration: "Air leakage through doors and gaps",
-      vapour_gain: "Moisture from cooking and dishwashing", steam_gain: "Moisture from cooking and dishwashing", process_latent_load: "Moisture from cooking and dishwashing",
+      vapour_gain: "Moisture from cooking and dishwashing (counted only where a data sheet’s moisture figure is entered)", steam_gain: "Moisture from cooking and dishwashing (counted only where a data sheet’s moisture figure is entered)", process_latent_load: "Moisture from cooking and dishwashing (counted only where a data sheet’s moisture figure is entered)",
       minimum_supply_air: "Air system design (supply, spill and transfer air) — set later by the engineer",
       spill_air: "Air system design (supply, spill and transfer air) — set later by the engineer",
       transfer_air: "Air system design (supply, spill and transfer air) — set later by the engineer",

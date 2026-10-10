@@ -9,6 +9,9 @@ Each item on the list has a kind. Kinds with an existing input route go straight
 - roof_above       -> the job's answer to what is above the tenancy (job_service, applied to every roof question)
 - glazing          -> the glass's U-value and SHGC for one room's windows, or for every window (glazing_answers.json,
                       applied to the windows when the calculation's proposal is prepared)
+- construction     -> the U-value of the external walls or the exposed roof, for one room or for every room
+                      (construction_answers.json): a construction from the imported handbook table
+                      (ai/construction_u_values.py) or a U-value typed from another source
 - exhaust          -> a room's kitchen exhaust rate (L/s) and how the exhausted air is replaced (exhaust_answers.json,
                       passed to the calculation model; see EXHAUST_METHODS)
 - opening_hours    -> the hours a room (or every room) is open on weekdays, Saturdays and Sundays/holidays
@@ -27,6 +30,8 @@ import time
 from ai.equipment_heat import printed_watts, proposal as heat_proposal
 
 GLAZING_FILE = "glazing_answers.json"
+CONSTRUCTION_FILE = "construction_answers.json"
+CONSTRUCTION_SURFACES = {"wall": "external walls", "roof": "exposed roof"}
 EXHAUST_FILE = "exhaust_answers.json"
 # How the air a kitchen hood exhausts is replaced. "through_space" is the default (user decision 2026-10-08), also
 # used, and labelled as assumed, when the method isn't known.
@@ -49,6 +54,7 @@ APPLIED_KINDS = {
     "equipment_rating": {"label": "Equipment rated power", "unit": "W", "room": True, "equipment": True},
     "roof_above": {"label": "What is above the tenancy", "unit": "", "room": False, "choice": True},
     "glazing": {"label": "Glass performance (U-value and SHGC)", "unit": "", "room": "optional"},
+    "construction": {"label": "Wall or roof construction (U-value)", "unit": "W/m²K", "room": "optional"},
     "exhaust": {"label": "Kitchen exhaust rate and make-up air", "unit": "L/s", "room": True},
     "opening_hours": {"label": "Opening hours", "unit": "", "room": "optional"},
 }
@@ -77,7 +83,15 @@ def options(web, project):
             "rooms": [{"label": label, "level": level} for label, level in room_rows],
             "equipment": equipment,
             "above": [{"id": key, "label": label} for key, label in job_service.ABOVE_CHOICES.items() if key],
-            "exhaust_methods": [{"id": key, "label": label} for key, label in EXHAUST_METHODS.items()]}
+            "exhaust_methods": [{"id": key, "label": label} for key, label in EXHAUST_METHODS.items()],
+            "constructions": _construction_choices()}
+
+
+def _construction_choices():
+    """The imported handbook's wall and roof constructions as answer options (empty lists without the table)."""
+    from ai import construction_u_values
+    table = construction_u_values.load_table()
+    return {surface: construction_u_values.choices(table, surface) for surface in CONSTRUCTION_SURFACES}
 
 
 def _number(value, unit_label):
@@ -137,6 +151,8 @@ def apply(web, project, data):
         return {"applied": True, "summary": f"Above the tenancy: {label}."}
     if kind == "glazing":
         return _save_glazing(project, data, found["rooms"], reviewer)
+    if kind == "construction":
+        return _save_construction(project, data, found["rooms"], reviewer)
     if kind == "exhaust":
         return _save_exhaust(project, data, found["rooms"], reviewer)
     if kind == "opening_hours":
@@ -228,6 +244,66 @@ def apply_glazing(root, proposal):
                                      + (f": {answer['glass']}" if answer.get("glass") else ""))
         opening["assumptions"] = [item for item in opening.get("assumptions", []) if item != "preliminary_glazing_profile"]
         opening["rationale"] = "Window geometry as entered; glass U-value and SHGC from the operators' answer."
+    return proposal
+
+
+def _save_construction(project, data, rooms, reviewer):
+    """The U-value of the external walls or the exposed roof: for one room (room given) or every room (no room).
+
+    Either a construction from the imported handbook table (construction_id) or a U-value typed from another source."""
+    from ai import construction_u_values
+    surface = str(data.get("surface") or "")
+    if surface not in CONSTRUCTION_SURFACES:
+        raise ValueError("Choose whether this is the walls or the roof.")
+    chosen = str(data.get("construction_id") or "")
+    if chosen:
+        row = construction_u_values.find(construction_u_values.load_table(), chosen)
+        if not row or row["surface"] != surface:
+            raise ValueError("Choose one of the listed constructions for this surface.")
+        u_value, construction = row["u_value_w_m2k"], row["name"]
+        reference = f"{construction_u_values.SOURCE}, {row['section'].lower()}"
+    else:
+        u_value = _in_range(data.get("u_value_w_m2k"), *construction_u_values.U_RANGE, "U-value (W/m²K)")
+        construction = " ".join(str(data.get("value") or "").split())[:160]
+        if not construction:
+            raise ValueError("Describe the construction the U-value is for.")
+        reference = ""
+    room = _room(data, rooms)["label"] if str(data.get("room") or "").strip() else ""
+    path = Path(project["review_dir"]) / CONSTRUCTION_FILE
+    stored = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    record = {"u_value_w_m2k": u_value, "construction_id": chosen, "construction": construction, "reference": reference,
+              "source": str(data.get("source") or ""), "by": reviewer, "at": time.time()}
+    target = stored.setdefault(surface, {"all": None, "rooms": {}})
+    if room:
+        target.setdefault("rooms", {})[room] = record
+    else:
+        target["all"] = record
+    _write_answers(path, stored)
+    where = f"{room}'s {CONSTRUCTION_SURFACES[surface]}" if room else f"every room's {CONSTRUCTION_SURFACES[surface]}"
+    return {"applied": True, "summary": f"{where[0].upper()}{where[1:]}: {construction}, U {u_value:g} W/m²K"
+                                        + (" (AIRAH Technical Handbook)." if chosen else ".")}
+
+
+def apply_constructions(root, proposal):
+    """Give each external wall and exposed roof the answered U-value: its room's answer, else the answer for every room.
+
+    Surfaces without an answer keep the assumption pack's preliminary U-value."""
+    path = Path(root) / CONSTRUCTION_FILE
+    if not path.is_file():
+        return proposal
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    for surface in proposal.get("surfaces", []) if isinstance(proposal, dict) else []:
+        if not isinstance(surface, dict) or surface.get("physical_type") not in CONSTRUCTION_SURFACES:
+            continue
+        answers = stored.get(surface["physical_type"]) or {}
+        rooms = {str(label).casefold(): row for label, row in (answers.get("rooms") or {}).items()}
+        answer = rooms.get(str(surface.get("owner_room_label", "")).casefold()) or answers.get("all")
+        if not answer:
+            continue
+        surface["u_value_w_m2k"] = answer["u_value_w_m2k"]
+        surface["construction_id"] = answer.get("construction_id") or f"answered-{surface['physical_type']}"
+        surface["construction_source"] = (f"Answered by the operators ({answer.get('source') or 'source not given'}): "
+                                          f"{answer.get('construction', '')}" + (f"; {answer['reference']}" if answer.get("reference") else ""))
     return proposal
 
 

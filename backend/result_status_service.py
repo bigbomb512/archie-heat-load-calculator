@@ -12,8 +12,9 @@ Read-only: it gathers from the result and the answer files and changes nothing.
 import json
 from pathlib import Path
 
-from ai.equipment_heat import PLACEHOLDER, proposal as heat_proposal
+from ai.equipment_heat import PLACEHOLDER, from_data_sheet, heat_w, proposal as heat_proposal
 
+KITCHEN_TYPES = {"cooking", "dishwashing", "hot_drinks"}
 ORDER = {"to_find": 0, "not_set": 1, "assumed": 2, "typical": 3, "placeholder": 4}
 # The calculation uses a room's own value only from these origins; anything else falls back to the room type's typical
 # value (ai.ai_preliminary._resolved_internal_value), so it is listed as typical.
@@ -87,17 +88,29 @@ def gather(web, project):
     # Equipment accepted with typical ratings or the generic heat-to-room factors.
     equipment = _read(root / "page_extraction.json", {}).get("equipment_appliances", {})
     decisions = _read(root / "page_extraction_decisions.json", {}).get("equipment_appliances", {})
-    typical_rating, generic_factor = [], []
+    typical_rating, generic_factor, uncounted = [], [], []
     for finding in equipment.get("findings", []):
         decision = decisions.get(finding.get("id"), {})
-        if decision.get("status") != "accepted" or decision.get("run") != equipment.get("run"):
-            continue
-        value, suggested = decision.get("value") or {}, heat_proposal(finding.get("value") or {})
+        if decision.get("run") != equipment.get("run"):
+            decision = {}
+        value, suggested = decision.get("value") or finding.get("value") or {}, heat_proposal(finding.get("value") or {})
         name = f"{value.get('code') + ' ' if value.get('code') else ''}{value.get('name', '')}".strip()
+        if decision.get("status") != "accepted" or heat_w(value) is None:
+            # Kitchen appliances read from the drawings but not in the calculation: their heat needs the data sheet.
+            if decision.get("status") != "rejected" and suggested["type"] in KITCHEN_TYPES:
+                uncounted.append(name)
+            continue
+        if from_data_sheet(value):
+            continue                                  # its heat is the data sheet's figure, not a typical value
         if suggested["rated_source"] == PLACEHOLDER and value.get("rated_input_w") == suggested["rated_input_w"]:
             typical_rating.append(name)
         if value.get("heat_to_space_factor") == suggested["heat_to_space_factor"]:
             generic_factor.append(name)
+    if uncounted:
+        items.append(_item("to_find", "Kitchen equipment", f"{len(uncounted)} kitchen appliance(s) on the drawings aren't in the "
+                                                           "calculation: enter each one's heat to the room from its data sheet "
+                                                           "(or its rated power and heat-to-room factor), or reject it.",
+                           "drawings", ", ".join(uncounted[:12])))
     if typical_rating:
         items.append(_item("typical", "Equipment", f"{len(typical_rating)} item(s) use a typical rating, not a spec-sheet one.", "drawings",
                            ", ".join(typical_rating[:12])))
@@ -111,8 +124,20 @@ def gather(web, project):
             items.append(_item("assumed", room, f"Kitchen exhaust {answer.get('lps', 0):g} L/s assumed replaced through the "
                                                 "conditioned space (the make-up air arrangement wasn't given).", "drawings"))
 
-    # Windows on generic glass.
+    # Walls and roof on the preliminary U-values (no construction answered).
     components = (report.get("included_scope_peak") or {}).get("components") or {}
+    if (components.get("envelope") or {}).get("total_kw"):
+        constructions = _read(root / "construction_answers.json", {})
+        unanswered = [label for surface, label in (("wall", "external walls"), ("roof", "exposed roof"))
+                      if not ((constructions.get(surface) or {}).get("all") or (constructions.get(surface) or {}).get("rooms"))]
+        if unanswered:
+            from ai.ai_preliminary import load_pack
+            opaque = load_pack()["preliminary_envelope"]["opaque_constructions"]
+            items.append(_item("typical", "Walls and roof", f"The {' and '.join(unanswered)} use the preliminary U-value (walls "
+                                                            f"{opaque['wall']['u_value_w_m2k']:g}, roof {opaque['roof']['u_value_w_m2k']:g} W/m²K): "
+                                                            "answer the construction to use its own.", "drawings"))
+
+    # Windows on generic glass.
     glazing = _read(root / "glazing_answers.json", {})
     if (components.get("glazing_solar") or components.get("glazing_conduction")) and not (glazing.get("all") or glazing.get("rooms")):
         items.append(_item("typical", "Windows", "Glass is generic single glazing (U 5.8, SHGC 0.45); its real type isn't known.", "drawings"))

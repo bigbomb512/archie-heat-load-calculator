@@ -54,9 +54,13 @@ def lighting_load(area_m2, lighting_w_m2, diversity_factor):
 def equipment_load(sources):
     total_kw = 0.0
     rows = []
+    latent_kw = 0.0
     for source in sources:
         gain_kw = source["quantity"] * source["watts"] * source["diversity_factor"] * source["space_gain_factor"] / 1000
+        # Moisture into the room, W each (e.g. from an appliance's data sheet); none unless given.
+        moisture_kw = source["quantity"] * float(source.get("latent_w") or 0) * source["diversity_factor"] / 1000
         total_kw += gain_kw
+        latent_kw += moisture_kw
         rows.append({
             "name": source["name"],
             "kind": source["kind"],
@@ -65,12 +69,15 @@ def equipment_load(sources):
             "heat_to_space_w_each": source["watts"],
             "diversity_factor": source["diversity_factor"],
             "space_gain_factor": source["space_gain_factor"],
+            **({"latent_w_each": source["latent_w"], "latent_kw": round(moisture_kw, 4)} if source.get("latent_w") else {}),
         })
     return contribution(
         "equipment_refrigeration",
         total_kw,
+        latent_kw,
         inputs={"sources": rows},
-        formula="quantity × heat-to-space W each × diversity × space-gain factor ÷ 1000",
+        formula="quantity × heat-to-space W each × diversity × space-gain factor ÷ 1000"
+                + (" (+ quantity × latent W each × diversity ÷ 1000)" if latent_kw else ""),
     )
 
 

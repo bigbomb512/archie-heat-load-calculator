@@ -164,6 +164,19 @@ def validate_choices(result):
             raise ValueError(f"Invalid {key.replace('_', ' ')}.")
 
 
+def _latent(source, index):
+    """A heat source's optional moisture (latent) heat into the room, W each: kept only when given and positive."""
+    if source.get("latent_w") in (None, "", 0):
+        return {}
+    try:
+        latent = float(source["latent_w"])
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"Heat source {index} latent heat must be a number.") from error
+    if latent < 0:
+        raise ValueError(f"Heat source {index} latent heat cannot be negative.")
+    return {"latent_w": latent}
+
+
 def validate_heat_sources(sources):
     if not isinstance(sources, list):
         raise ValueError("Heat sources must be a list.")
@@ -198,6 +211,7 @@ def validate_heat_sources(sources):
             "kind": validate_choice(source.get("kind", ""), HEAT_SOURCE_KINDS, f"Heat source {index} type"),
             "diversity_factor": optional_factor(source.get("diversity_factor"), f"Heat source {index} diversity factor"),
             "space_gain_factor": optional_factor(source.get("space_gain_factor"), f"Heat source {index} space-gain factor"),
+            **_latent(source, index),
             "verification_status": status,
             "source": source_note,
         })
