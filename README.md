@@ -193,4 +193,51 @@ The APIs cap each reply at 16,000 tokens; `ARCHIE_MAX_OUTPUT_TOKENS` changes it.
 its thinking against the cap, so it may need more (DeepSeek V4.1 Flash used about 10,000 tokens of thinking per call).
 Every AI call is logged per job in `ai_usage.jsonl` (pass, provider, model, seconds, tokens where reported); the
 Drawings tab shows the totals under "AI use for this job". The Codex CLI reports one combined token count per call;
-the APIs report input and output separately. No prices are stored: multiply the tokens by your provider's current rates.
+the APIs report input and output separately. OpenRouter also reports each call's US$ cost, which is shown and totalled;
+for the other APIs no prices are stored, so multiply the tokens by your provider's current rates.
+
+### Setting up a computer to use the team's OpenRouter account
+
+The AI key belongs to the computer that runs the Archie server, not to the person using the app: the browser never
+talks to the AI, the server does, with the key in its own environment. The server only listens on `127.0.0.1`, so
+each person who runs Archie on their own laptop needs a key on that laptop. Everyone can bill the same OpenRouter
+account; give each person their own key so their spending is visible and limited, and can be revoked on its own.
+
+1. **Account owner: make a key for the person.** On openrouter.ai, Settings → API Keys → Create Key. Name it after
+   the person (e.g. "Archie – Sam") and set a credit limit (e.g. US$5). It draws on the same account credit.
+2. **Hand the key over safely.** Type it in on their Mac yourself, read it out, or use a password manager's secure
+   share. Never send it by email, chat or text, and never put it in this repository or a project file.
+3. **On their Mac: store the key in the Keychain.** In Terminal (it asks for the key without showing it):
+
+   ```bash
+   security add-generic-password -a "$USER" -s openrouter -w
+   ```
+
+4. **On their Mac: add these lines to `~/.zshrc`** (open it with `open -e ~/.zshrc`). The first line reads the key from
+   the Keychain; the others choose OpenRouter and the tested model mix (DeepSeek V4.1 Flash to read pages and run the
+   skills, Gemini 3.8 Flash to read equipment two pages per call):
+
+   ```bash
+   export OPENROUTER_API_KEY="$(security find-generic-password -s openrouter -w 2>/dev/null)"
+   export ARCHIE_AI_PROVIDER=openrouter
+   export ARCHIE_AI_MODEL=deepseek/deepseek-v4.1-flash
+   export ARCHIE_AI_MODEL_PASS1=deepseek/deepseek-v4.1-flash
+   export ARCHIE_AI_MODEL_PASS2=google/gemini-3.8-flash
+   export ARCHIE_AI_MODEL_SKILLS=deepseek/deepseek-v4.1-flash
+   export ARCHIE_PASS2_BATCH=2
+   export ARCHIE_MAX_OUTPUT_TOKENS=48000
+   ```
+
+5. **Open a new Terminal window, then start Archie** with `./start_web` from the project folder. To check the key is
+   there without showing it:
+
+   ```bash
+   [ -n "$OPENROUTER_API_KEY" ] && echo "key found" || echo "key missing"
+   ```
+
+6. **Check in the app.** On a job's Drawings tab, "AI use for this job" names OpenRouter and the model, and shows the
+   cost of each job. A full review of Butcher Buffet (38 pages) cost about US$0.47 on this mix (2026-10-10).
+
+To go back to the ChatGPT subscription (Codex CLI), remove or comment out the `ARCHIE_AI_PROVIDER` line and open a new
+Terminal window. If a key leaks, delete it on OpenRouter; the other keys keep working. A single shared server with one
+key for everyone needs a login and a hosted machine, which is later work.
