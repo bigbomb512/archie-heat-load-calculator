@@ -9,6 +9,7 @@ import tempfile
 from copy import deepcopy
 from pathlib import Path
 
+from ai import design_weather
 from ai import ai_preliminary
 from ai import reviewer_room_geometry
 from ai import value_resolution as value_resolver
@@ -1232,6 +1233,8 @@ def _assemble(web, project, source="manual_placeholder"):
         ahu_resolution=ahu_artifact,
         plant_resolution=plant_artifact,
         process_exhaust=need_answers_service.process_exhaust(paths["root"]),
+        # The operators' imported design-temperature table (kept outside the repo): a confirmed site's design days.
+        design_weather_table=design_weather.load_table(),
         # The consolidated real-PDF workflow must not turn a missing measured
         # room area into an 80/100 m2 profile assumption.  Older direct
         # preview callers retain their explicit legacy fallback behavior.

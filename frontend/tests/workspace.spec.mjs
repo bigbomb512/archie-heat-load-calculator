@@ -679,6 +679,23 @@ test("Drawings: a failed or blocked page reading says why and offers a retry", a
   expect(posts[0]).toMatchObject({project_id: "job-1", action: "retry"});
 });
 
+test("Results: site design days, the humid-day check, fan heat and glass are shown", async ({page}) => {
+  const sited = {...report,
+    design_conditions_basis: {design_day: {site_specific: true, origin: "design_temperature_table_nearest_location",
+      label: "Summer design days for Sydney (14.4 km from the site): 31.1 °C dry bulb with 19.8 °C wet bulb, and 22.7 °C wet bulb with 29.5 °C dry bulb as a dehumidification check."}},
+    humid_day_check: {final_design_total_kw: 62.0, outside_air_kw: 27.7},
+    included_scope_peak: {...report.included_scope_peak, components: {...(report.included_scope_peak?.components || {}),
+      fan_heat: {total_kw: 0.6}, glazing_solar: {total_kw: 1.8}, glazing_conduction: {total_kw: 0.7}}}};
+  await mockJob(page, {status: () => baseStatus(), model: () => ({hourly_ai_preliminary_load_report: sited})});
+  await page.goto("/#/job/job-1/results");
+  await expect(page.locator("[data-ws-weather]")).toContainText("Summer design days for Sydney (14.4 km from the site)");
+  await expect(page.locator("[data-ws-humid-check]")).toContainText("62.0 kW (fresh air 27.7 kW)");
+  const included = page.locator("[data-ws-included]");
+  await expect(included).toContainText("Supply fan heat");
+  await expect(included).toContainText("Sun through glass");
+  await expect(included).toContainText("Glass (heat through it)");
+});
+
 test("Results: what the number still depends on is listed by kind, with the tab that fixes each, and a report header for printing", async ({page}) => {
   await mockJob(page, {status: () => baseStatus(), model: () => ({hourly_ai_preliminary_load_report: report})});
   await page.route("**/api/result-status**", route => route.fulfill({json: {calculated: true, job: {name: "Butcher Buffet", address: "Melrose Central"},

@@ -184,6 +184,10 @@ class ServiceTests(unittest.TestCase):
             self.assertEqual(service.batch_size(), 1)
         with patch.dict(os.environ, {"ARCHIE_PAGE_BATCH": "x"}):
             self.assertEqual(service.batch_size(), 4)
+        with patch.dict(os.environ, {"ARCHIE_PAGE_BATCH": "4", "ARCHIE_PASS2_BATCH": "2"}):
+            self.assertEqual((service.batch_size(), service.pass2_batch_size()), (4, 2))
+        with patch.dict(os.environ, {"ARCHIE_PAGE_BATCH": "3", "ARCHIE_PASS2_BATCH": ""}):
+            self.assertEqual(service.pass2_batch_size(), 3)                  # falls back to the page batch
 
     def test_a_second_start_joins_the_running_job(self):
         gate = threading.Event()

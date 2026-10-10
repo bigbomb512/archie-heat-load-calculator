@@ -104,7 +104,7 @@ def _cache_key(image, extractor, model):
 def read_sections(extractor, images, cache_dir, provider, workers=pass1.WORKERS, on_done=None, batch=None):
     """Read every section (cached per section). Returns ([(page, section, items)], {"page.section": reason}, calls).
 
-    Sections not in the cache are read a few per call (pass1.batch_size()), each its own full-size image; each
+    Sections not in the cache are read a few per call (pass1.pass2_batch_size()), each its own full-size image; each
     section's items are checked and cached on their own, and one left out of a reply is read again on its own."""
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -180,7 +180,7 @@ def read_sections(extractor, images, cache_dir, provider, workers=pass1.WORKERS,
             readings.append((key[0], key[1], cached["items"]))
         else:
             todo.append(key)
-    size = batch or pass1.batch_size()
+    size = batch or pass1.pass2_batch_size()
     chunks = [todo[index:index + size] for index in range(0, len(todo), size)]
     if on_done and readings:
         on_done(len(readings), len(images))

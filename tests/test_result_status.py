@@ -73,6 +73,17 @@ class GatherTests(unittest.TestCase):
         topped = [row for row in result["items"] if "topped up" in row["text"]]
         self.assertEqual([(row["kind"], row["topic"]) for row in topped], [("typical", "Shop")])
 
+    def test_design_days_from_the_nearest_listed_location_are_named(self):
+        with tempfile.TemporaryDirectory() as folder, patch.object(skill_workflow_service, "get", return_value={}), \
+                patch.object(job_service, "job_setup", return_value={"above": "roof"}):
+            write(folder, "hourly_ai_preliminary_load_report.json", {"design_conditions_basis": {"design_day": {
+                "site_specific": True, "origin": "design_temperature_table_nearest_location", "location": "Sydney",
+                "distance_km": 14.4, "far_from_site": False, "label": "Summer design days for Sydney"}}})
+            result = status.gather(None, {"id": "j", "review_dir": folder})
+        weather = [row for row in result["items"] if row["topic"] == "Weather"]
+        self.assertEqual([row["kind"] for row in weather], ["assumed"])
+        self.assertIn("Sydney, the nearest listed location (14.4 km)", weather[0]["text"])
+
     def test_a_job_with_nothing_calculated_or_answered_gives_only_what_it_can(self):
         with tempfile.TemporaryDirectory() as folder, patch.object(skill_workflow_service, "get", return_value={}), \
                 patch.object(job_service, "job_setup", return_value={"above": "roof"}):

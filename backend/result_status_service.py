@@ -50,6 +50,12 @@ def gather(web, project):
     basis = report.get("design_conditions_basis") or {}
     if basis.get("design_day") and not basis["design_day"].get("site_specific"):
         items.append(_item("placeholder", "Weather", "Generic Australian design day, not specific to this site (AIRAH DA09 pending).", "project"))
+    elif (basis.get("design_day") or {}).get("origin") == "design_temperature_table_nearest_location":
+        day = basis["design_day"]
+        items.append(_item("assumed", "Weather", f"Design days for {day.get('location', '')}, the nearest listed location "
+                                                 f"({day.get('distance_km', 0):g} km), from the AIRAH Technical Handbook (2007)"
+                                                 + ("; it is far from the site, so check it suits." if day.get("far_from_site") else "."),
+                           "project", day.get("label", "")))
     if basis.get("sun") and not basis["sun"].get("site_specific"):
         items.append(_item("placeholder", "Sun", "Generic sun values by façade direction, not specific to this site.", "project"))
     if basis.get("site") and not basis["site"].get("confirmed"):

@@ -1661,7 +1661,13 @@
     const hour = peak.display_hour ?? peak.hour;
     const factor = Number(peak.safety_factor || 1);
     const COMPONENTS = [["people", "People"], ["lighting", "Lighting"], ["equipment_refrigeration", "Equipment"],
-                        ["envelope", "Walls, roof and glazing"], ["outside_air", "Fresh air"], ["infiltration", "Air leakage"]];
+                        ["envelope", "Walls and roof"], ["glazing_conduction", "Glass (heat through it)"], ["glazing_solar", "Sun through glass"],
+                        ["outside_air", "Fresh air"], ["infiltration", "Air leakage"], ["fan_heat", "Supply fan heat"]];
+    const humid = report.humid_day_check;
+    const weather = basis.design_day?.site_specific
+      ? `<p class="ws-fine" data-ws-weather>${esc(basis.design_day.label || "Site design day.")}</p>${humid?.final_design_total_kw != null
+        ? `<p class="ws-fine" data-ws-humid-check>On the humid design day the load would be ${kw(humid.final_design_total_kw)} kW${humid.outside_air_kw != null ? ` (fresh air ${kw(humid.outside_air_kw)} kW)` : ""}: check the cooling coil can remove the fresh air's moisture.</p>` : ""}`
+      : `<p class="ws-fine" data-ws-weather>A generic Australian design day (not specific to this site yet). Confirm the site's location to use its design days.</p>`;
     const job = gaps?.job || {};
     const today = new Date().toLocaleDateString(undefined, {day: "numeric", month: "long", year: "numeric"});
     body.innerHTML = `<div class="ws-card ws-result" data-ws-results>
@@ -1684,7 +1690,7 @@
       ${excluded.length || refrigeration.length ? `<h3>Not included yet</h3><ul class="ws-list ws-bullets" data-ws-excluded>${excluded.map(line => `<li>${esc(line)}</li>`).join("")}
         ${refrigeration.map(item => `<li>${esc(item.room_name || "Cold room")} — refrigeration, sized separately</li>`).join("")}</ul>` : ""}
       ${gaps ? gapsMarkup(gaps) : ""}
-      ${basis.design_day ? `<h3>Weather used</h3><p class="ws-fine">A generic Australian design day (not specific to this site yet).</p>` : ""}
+      ${basis.design_day ? `<h3>Weather used</h3>${weather}` : ""}
       <div class="ws-actions ws-no-print">
         <button class="btn key" type="button" data-ws-print>Print or save as PDF</button>
         <button class="btn ghost" type="button" data-ws-csv>Download room loads (CSV)</button>

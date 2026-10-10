@@ -78,13 +78,20 @@ def _cache_key(image_path, model):
     return hashlib.sha256(f"{digest}|{PROMPT_VERSION}|{model}".encode()).hexdigest()[:32]
 
 
-def batch_size():
+def batch_size(setting="ARCHIE_PAGE_BATCH"):
     """Pages per call (ARCHIE_PAGE_BATCH, default 4). Each call costs about 4,600 tokens before any page; one page
     image about 2,300. Four pages per call cut a 38-page set from 38 calls to 10."""
+    fallback = 4 if setting == "ARCHIE_PAGE_BATCH" else batch_size()
     try:
-        return max(1, min(8, int(os.environ.get("ARCHIE_PAGE_BATCH", "4"))))
+        return max(1, min(8, int(os.environ.get(setting, "") or fallback)))
     except ValueError:
-        return 4
+        return fallback
+
+
+def pass2_batch_size():
+    """Equipment pages per call in pass 2 (ARCHIE_PASS2_BATCH, else ARCHIE_PAGE_BATCH). Gemini 3.8 Flash left two of
+    four pages out of one call and answered all of them two at a time."""
+    return batch_size("ARCHIE_PASS2_BATCH")
 
 
 def read_pages(images, cache_dir, provider, workers=WORKERS, on_page=None, batch=None):

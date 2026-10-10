@@ -52,6 +52,17 @@ TIMEOUT_S = 600
 # Replies are stored whole (a retry re-checks a stored reply instead of paying for a new one); this only guards size.
 MAX_REPLY_CHARS = 2_000_000
 MAX_OUTPUT_TOKENS = 16000
+
+
+def max_output_tokens():
+    """The reply cap sent to the APIs: ARCHIE_MAX_OUTPUT_TOKENS (1,000–200,000), else MAX_OUTPUT_TOKENS. A thinking
+    model's reasoning counts against it, so a model that thinks at length (e.g. DeepSeek V4.1 Flash, about 10,000
+    tokens of thinking for 4,000 of answer) needs a higher cap or its reply is cut off."""
+    try:
+        value = int(os.environ.get("ARCHIE_MAX_OUTPUT_TOKENS", "").strip() or MAX_OUTPUT_TOKENS)
+    except ValueError:
+        return MAX_OUTPUT_TOKENS
+    return max(1000, min(200000, value))
 _USAGE_LOCK = threading.Lock()
 
 
@@ -312,7 +323,7 @@ class OpenAIProvider(_HttpProvider):
 
 class DeepSeekProvider(OpenAIProvider):
     """The DeepSeek API: OpenAI-style chat completions at api.deepseek.com (ARCHIE_DEEPSEEK_BASE_URL to change it),
-    with page images sent inline. Replies are capped at MAX_OUTPUT_TOKENS (DeepSeek's default cap is lower than the
+    with page images sent inline. Replies are capped at max_output_tokens() (DeepSeek's default cap is lower than the
     longest replies here, such as the needs list)."""
     name, key_env = "deepseek", "DEEPSEEK_API_KEY"
 
@@ -320,7 +331,7 @@ class DeepSeekProvider(OpenAIProvider):
         return os.environ.get("ARCHIE_DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/") + "/chat/completions"
 
     def extra_body(self):
-        return {"max_tokens": MAX_OUTPUT_TOKENS}
+        return {"max_tokens": max_output_tokens()}
 
 
 class OpenRouterProvider(OpenAIProvider):
@@ -343,10 +354,13 @@ class OpenRouterProvider(OpenAIProvider):
         routing = {"data_collection": "deny", "require_parameters": True}
         if os.environ.get("ARCHIE_OPENROUTER_ZDR", "").strip() == "1":
             routing["zdr"] = True
-        hosts = [item.strip() for item in os.environ.get("ARCHIE_OPENROUTER_PROVIDERS", "").split(",") if item.strip()]
+        # Hosts for this step (ARCHIE_OPENROUTER_PROVIDERS_PASS1 / _PASS2 / _SKILLS), else for every step.
+        step = getattr(self, "step", "")
+        pinned = (os.environ.get(f"ARCHIE_OPENROUTER_PROVIDERS_{step}", "").strip() if step else "") or os.environ.get("ARCHIE_OPENROUTER_PROVIDERS", "")
+        hosts = [item.strip() for item in pinned.split(",") if item.strip()]
         if hosts:
             routing.update({"order": hosts, "allow_fallbacks": False})
-        body = {"max_tokens": MAX_OUTPUT_TOKENS, "provider": routing}
+        body = {"max_tokens": max_output_tokens(), "provider": routing}
         # How much a thinking model reasons before answering (low / medium / high); its thinking is billed as output.
         effort = os.environ.get("ARCHIE_OPENROUTER_REASONING", "").strip().lower()
         if effort in {"minimal", "low", "medium", "high"}:
@@ -362,7 +376,7 @@ class AnthropicProvider(_HttpProvider):
         content = [{"type": "image", "source": {"type": "base64", "media_type": media, "data": data}} for media, data in _image_parts(image_paths)]
         content.append({"type": "text", "text": str(prompt)})
         reply = self._post("https://api.anthropic.com/v1/messages", {"x-api-key": self.api_key, "anthropic-version": "2023-06-01"},
-                           {"model": self.model, "max_tokens": MAX_OUTPUT_TOKENS, "messages": [{"role": "user", "content": content}]})
+                           {"model": self.model, "max_tokens": max_output_tokens(), "messages": [{"role": "user", "content": content}]})
         text = "".join(part.get("text", "") for part in reply.get("content") or [] if isinstance(part, dict))
         usage = reply.get("usage") or {}
         raw = {"provider": self.name, "model": reply.get("model", self.model), "reply_text": text[:MAX_REPLY_CHARS],
@@ -397,8 +411,26 @@ def configured():
 SMALL_TASKS = frozenset({"pass1", "skill:sheet_identity", "skill:revision_scope", "skill:site_clue_extraction"})
 
 
+def step_of(task=""):
+    """The review step a task belongs to: PASS1 (what is on each page), PASS2 (values such as equipment) or SKILLS."""
+    task = str(task or "")
+    if task == "pass1":
+        return "PASS1"
+    if task.startswith("pass2"):
+        return "PASS2"
+    return "SKILLS" if task.startswith("skill") else ""
+
+
 def model_for(task=""):
-    """The model override for a task: the small model for SMALL_TASKS when one is set, else None (the default)."""
+    """The model override for a task, or None (the provider's default, ARCHIE_AI_MODEL).
+
+    A step can have its own model: ARCHIE_AI_MODEL_PASS1, ARCHIE_AI_MODEL_PASS2, ARCHIE_AI_MODEL_SKILLS (e.g. a cheap
+    reader for pages and skills, and a model that sees drawn symbols well for equipment). Otherwise the small model
+    (ARCHIE_AI_SMALL_MODEL) takes SMALL_TASKS when set."""
+    step = step_of(task)
+    chosen_model = os.environ.get(f"ARCHIE_AI_MODEL_{step}", "").strip() if step else ""
+    if chosen_model:
+        return chosen_model
     small = os.environ.get("ARCHIE_AI_SMALL_MODEL", "").strip()
     return small if small and task in SMALL_TASKS else None
 
@@ -407,6 +439,7 @@ def get(task=""):
     """The chosen provider, ready to call (raises ProviderUnavailable with the reason)."""
     model = model_for(task)
     provider = CLASSES[chosen()](model=model) if model else CLASSES[chosen()]()
+    provider.step = step_of(task)
     provider.check_signed_in()
     return provider
 

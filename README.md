@@ -123,6 +123,22 @@ Bootstrap creates only missing `project_context.json`,
 `calculator_input_overrides.json`, and `hourly_load_model.json`; existing
 authored files and private PDFs are not overwritten or copied.
 
+## Design weather (AIRAH Technical Handbook)
+
+Each computer that runs Archie imports the design-temperature table once from the operators' own copy of the AIRAH
+Technical Handbook (4th edition, 2007). The table is AIRAH's copyright, so it is kept outside the repository:
+
+```bash
+python3 tools/import_airah_handbook_design_temps.py ~/Downloads/AIRAH_Handbook.pdf
+```
+
+It is written to `~/.archie/airah_handbook_2007_design_temperatures.json` (or `ARCHIE_DESIGN_WEATHER_TABLE`). When a
+job's site is confirmed (Project tab), the calculation uses the nearest listed location: the design dry bulb with its
+coincident wet bulb sizes the load, and the design wet bulb with its coincident dry bulb is reported as a
+dehumidification check. Results name the location and its distance from the site. Without a confirmed site or the
+table, a generic Australian design day is used and labelled so. A released AIRAH DA09 pack, when imported, takes
+precedence. People's heat by activity and the supply fan's heat also come from the handbook (`config/ai_preliminary_assumption_pack.json`).
+
 ## AI provider for the PDF review
 
 Pass 1 (every page), pass 2 (values) and the skills use one AI provider, chosen when the server starts:
@@ -136,6 +152,14 @@ Pass 1 (every page), pass 2 (values) and the skills use one AI provider, chosen 
 | `openrouter` | `OPENROUTER_API_KEY` | `google/gemini-3.8-flash` unless set (any OpenRouter model ID that reads images). Hosts that store or train on prompts are excluded; `ARCHIE_OPENROUTER_PROVIDERS` pins the host, `ARCHIE_OPENROUTER_ZDR=1` requires zero data retention. Each call's US$ cost is logged and totalled. |
 
 For example `ARCHIE_AI_PROVIDER=anthropic ANTHROPIC_API_KEY=… ./start_web`. Nothing else changes when switching.
+Each step can use its own model: `ARCHIE_AI_MODEL_PASS1` (what is on each page), `ARCHIE_AI_MODEL_PASS2` (equipment
+values) and `ARCHIE_AI_MODEL_SKILLS` (the skills and the needs list); on OpenRouter, `ARCHIE_OPENROUTER_PROVIDERS_PASS1`
+(and `_PASS2`, `_SKILLS`) pins a step's hosts. `ARCHIE_PASS2_BATCH` sets equipment pages per call (else
+`ARCHIE_PAGE_BATCH`, default 4). In tests on Butcher Buffet (2026-10-09/10) DeepSeek V4.1 Flash read pages and wrote
+the needs list well and very cheaply but missed equipment drawn on plans; Gemini 3.8 Flash read plan equipment well
+two pages per call.
+The APIs cap each reply at 16,000 tokens; `ARCHIE_MAX_OUTPUT_TOKENS` changes it. A model that thinks at length counts
+its thinking against the cap, so it may need more (DeepSeek V4.1 Flash used about 10,000 tokens of thinking per call).
 Every AI call is logged per job in `ai_usage.jsonl` (pass, provider, model, seconds, tokens where reported); the
 Drawings tab shows the totals under "AI use for this job". The Codex CLI reports one combined token count per call;
 the APIs report input and output separately. No prices are stored: multiply the tokens by your provider's current rates.

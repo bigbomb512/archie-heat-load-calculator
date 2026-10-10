@@ -16,6 +16,7 @@ import re
 
 from ai.design_requirements import validate_design_requirements
 from ai.hourly_loads import build_hourly_load_model, calculate_hourly_load_report
+from ai import design_weather
 from ai import value_resolution as value_resolver
 from ai import model_input_resolution as shared_resolution
 from ai import room_use_resolution as room_use_resolver
@@ -605,7 +606,18 @@ def design_conditions_basis(resolution_artifact, site_location=None, pack_versio
     return {"design_day": design_day, "sun": sun, "site": site}
 
 
-def _scenario(pack, resolved=None, basis=None):
+def _scenario(pack, resolved=None, basis=None, site_days=None):
+    """The design days to calculate: the resolved (or preliminary) day, and with a site's design days both of them:
+    the dry-bulb day sizes the load, the humid day is a dehumidification check (see calculate)."""
+    if site_days:
+        days = []
+        for index, day in enumerate(site_days["days"]):
+            single = _scenario(pack, {**(resolved or {}), "weather_profile": {**((resolved or {}).get("weather_profile") or {}), "hours": day["hours"]}}, basis)
+            row = single["scenarios"][0]
+            row.update({"scenario_id": "ai_preliminary_cooling_day" if index == 0 else f"ai_preliminary_{day['day']}_day",
+                        "title": f"{site_days['location']} — {day['title']}"})
+            days.append(row)
+        return {"scenarios": days}
     scenario = deepcopy(pack["scenario"])
     resolved = resolved or {}
     for key in ("indoor_dry_bulb_c", "indoor_wet_bulb_c"):
@@ -780,10 +792,12 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
              preliminary_proposal=None, value_resolution=None, research_cache=None, source_pack_releases=None,
              site_location=None, site_design_weather=None, room_use_resolution=None, geometry_resolution=None,
              ceiling_volume_resolution=None, internal_gains_resolution=None, airflow_resolution=None, ahu_resolution=None,
-             plant_resolution=None, allow_area_fallbacks=True, process_exhaust=None):
+             plant_resolution=None, allow_area_fallbacks=True, process_exhaust=None, design_weather_table=None):
     """Return a materialized preliminary payload plus its transparent ledger.
 
     process_exhaust: answered kitchen exhaust per room name (lower case): {"lps", "method", "method_assumed"}.
+    design_weather_table: an imported design-temperature table (ai.design_weather.load_table()); with a confirmed
+    site and no cited site design day, the site's two summer design days come from its nearest listed location.
     """
     pack = load_pack()
     overrides = contractor_overrides or {}
@@ -848,6 +862,22 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
     )
     scenario_values = resolved_values["scenario"]
     conditions_basis = design_conditions_basis(resolution_artifact, site_location, pack["version"])
+    site_days = None
+    if not conditions_basis["design_day"]["site_specific"] and design_weather_table:
+        # No cited site design day (e.g. an approved DA09 pack): the nearest listed location's two summer design days.
+        site_days = design_weather.for_site(site_location, scenario_values["weather_profile"]["hours"], table=design_weather_table)
+    if site_days:
+        scenario_values = {**scenario_values, "weather_profile": {**scenario_values["weather_profile"], "hours": site_days["days"][0]["hours"]}}
+        distance = f"{site_days['distance_km']:g} km from the site"
+        conditions_basis["design_day"] = {
+            "site_specific": True, "origin": "design_temperature_table_nearest_location", "source": site_days["source"],
+            "location": site_days["location"], "state": site_days["state"], "distance_km": site_days["distance_km"],
+            "far_from_site": site_days["far"],
+            "days": [{key: day[key] for key in ("day", "title", "design_point")} for day in site_days["days"]],
+            "label": (f"Summer design days for {site_days['location']} ({distance}{', the nearest listed location — check it suits the site' if site_days['far'] else ''}): "
+                      f"{site_days['values']['db']:g} °C dry bulb with {site_days['values']['cwb']:g} °C wet bulb, and "
+                      f"{site_days['values']['wb']:g} °C wet bulb with {site_days['values']['cdb']:g} °C dry bulb as a dehumidification check. "
+                      f"Source: {site_days['source']}.")}
     active_rows, excluded_spaces = [], []
     excluded_spaces.extend({"room_name": issue.get("label", ""), "level": issue.get("level", ""),
                             "scope": issue.get("scope", "unresolved_scope"),
@@ -942,7 +972,19 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                 exhaust_note = ("Exhaust replaced by untempered make-up air at the hood: no cooling load on this system."
                                 if method == "untempered_makeup" else
                                 f"Exhaust {exhaust['lps']:g} L/s replaced by a tempered make-up air unit: its load belongs to that unit, not this system.")
-        cooling = {"people_sensible_w_per_person": people_sensible or profile["people_sensible_w"], "people_latent_w_per_person": people_latent or profile["people_latent_w"],
+        # Heat per person by the room's typical activity (kitchen work gives off far more moisture than dining); a
+        # value from the drawings or an operator's answer replaces it.
+        room_use = row.get("room_use_category") or (row.get("room_use_resolution") or {}).get("taxonomy_id") or row.get("taxonomy_id") or ""
+        activity = (pack.get("people_activity", {}).get("by_room_use", {}) or {}).get(room_use)
+        if activity and not (people_sensible and people_latent):
+            ledger.append({"room_id": room_id, "field": "people_activity", "value": activity["activity"],
+                           "origin": "controlled_preliminary_profile", "profile_id": profile_id, "confidence": 0.5,
+                           "confidence_band": confidence_band(0.5),
+                           "rationale": f"{activity['sensible_w']} W sensible + {activity['latent_w']} W latent per person "
+                                        f"({activity['activity']}): {pack['people_activity']['source']}.", "evidence": []})
+        default_sensible = activity["sensible_w"] if activity else profile["people_sensible_w"]
+        default_latent = activity["latent_w"] if activity else profile["people_latent_w"]
+        cooling = {"people_sensible_w_per_person": people_sensible or default_sensible, "people_latent_w_per_person": people_latent or default_latent,
                    "people_diversity_factor": people_diversity, "lighting_w_m2": lighting_w_m2,
                    "lighting_diversity_factor": lighting_diversity,
                    "outside_air_lps": outside_air,
@@ -1362,7 +1404,7 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
     surface_summary["excluded"] = surface_summary["discovered"] - surface_summary["included"] - surface_summary["blocked"]
     model["updated_at"] = now()
     model["source_requirements_updated_at"] = requirements["updated_at"]
-    material = {"requirements": requirements, "schedule_library": {"schema_version": 1, "updated_at": now(), "schedules": schedules}, "design_day_scenarios": _scenario(pack, scenario_values, conditions_basis), "hourly_load_model": model,
+    material = {"requirements": requirements, "schedule_library": {"schema_version": 1, "updated_at": now(), "schedules": schedules}, "design_day_scenarios": _scenario(pack, scenario_values, conditions_basis, site_days), "hourly_load_model": model,
                 "preliminary_policy": {"pack_version": pack["version"], "mode": "ai_preliminary", "surface_ids": sorted(accepted_surface_ids), "opening_ids": sorted(accepted_opening_ids)}}
     dependency_fingerprints = dict(source_fingerprints or {})
     dependency_fingerprints.update({"preliminary_pack": fingerprint(pack), "room_use_taxonomy": room_use_artifact["taxonomy_fingerprint"], "room_use_resolution": room_use_artifact["fingerprint"], "ceiling_volume_resolution": ceiling_artifact["fingerprint"], "internal_gains_resolution": internal_artifact.get("fingerprint", ""), "airflow_resolution": airflow_artifact.get("fingerprint", ""), "ahu_resolution": ahu_artifact.get("fingerprint", ""), "plant_resolution": plant_artifact.get("fingerprint", ""), "geometry_resolution": fingerprint(geometry_resolution or {}), "thermal_surface_ledger": opaque_resolution.get("fingerprint", ""), "vision_response": fingerprint(vision or {}), "building_evidence": fingerprint(building or {}), "contractor_overrides": fingerprint(overrides), "process_exhaust": fingerprint(process_exhaust),
@@ -1397,9 +1439,54 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
             "review_queue": sorted(review_queue, key=lambda item: (item["confidence"], item["room_id"], item["field"]))}
 
 
+def _with_fan_heat(peak, fan, safety_factor):
+    """A peak with the supply fan's heat added: a percentage of the room sensible heat (the sensible load without
+    outside air), and the safety allowance and design total recalculated."""
+    if not peak or not fan:
+        return peak, 0.0
+    components = peak.get("components") or {}
+    outside = (components.get("outside_air") or {}).get("sensible_kw") or 0.0
+    room_sensible = max(0.0, (peak.get("sensible_kw") or 0.0) - outside)
+    heat = round(room_sensible * fan["percent_of_room_sensible"] / 100, 4)
+    raw = round((peak.get("raw_coincident_total_kw", peak.get("total_kw")) or 0.0) + heat, 4)
+    factor = safety_factor if isinstance(safety_factor, (int, float)) and safety_factor > 0 else (peak.get("safety_factor") or 1.0)
+    updated = {**peak, "components": {**components, "fan_heat": {"sensible_kw": heat, "latent_kw": 0.0, "total_kw": heat}},
+               "sensible_kw": round((peak.get("sensible_kw") or 0.0) + heat, 4), "total_kw": round((peak.get("total_kw") or 0.0) + heat, 4),
+               "raw_coincident_total_kw": raw}
+    if peak.get("final_design_total_kw") is not None:
+        updated.update({"safety_allowance_kw": round(raw * (factor - 1), 4), "final_design_total_kw": round(raw * factor, 4),
+                        "design_total_kw": round(raw * factor, 4)})
+    return updated, heat
+
+
 def calculate(input_set, safety_factor_policy=None):
     material = input_set["material"]
+    # The cooling load is sized on the design day ("ai_preliminary_cooling_day": with a site's design days, the design
+    # dry bulb with its coincident wet bulb, the usual comfort basis). The humid design day (design wet bulb with its
+    # coincident dry bulb) is calculated alongside as a dehumidification check and reported, not used for the size: on
+    # Butcher Buffet the dry-bulb day gave 38.8 kW before the safety factor against the engineer's 39.6 kW, the humid
+    # day 56.4 kW, nearly all of the difference outside-air moisture.
     report = calculate_hourly_load_report(material["requirements"], material["schedule_library"], material["design_day_scenarios"], material["hourly_load_model"], ["ai_preliminary_cooling_day"], preliminary_policy=material.get("preliminary_policy"), safety_factor_policy=safety_factor_policy)
+    fan = load_pack().get("fan_heat")
+    report["included_scope_peak"], fan_kw = _with_fan_heat(report.get("included_scope_peak") or {}, fan, report.get("safety_factor"))
+    if fan_kw:
+        peak = report["included_scope_peak"]
+        report.update({key: peak[key] for key in ("raw_coincident_total_kw", "safety_allowance_kw", "final_design_total_kw") if key in peak})
+        report["fan_heat"] = {"kw": fan_kw, **fan}
+        report["excluded_components"] = sorted(set(report.get("excluded_components", []) + ["supply duct heat gain"]))
+        report["known_exclusions"] = [*report.get("known_exclusions", []), {
+            "room_id": "", "component_id": "duct_heat_gain", "component_type": "duct_heat",
+            "component": "Supply duct heat gain (matters where supply ducts run through an unconditioned roof space)",
+            "reason": "Not calculated: it depends on the duct route and insulation."}]
+    humid = next((row for row in material["design_day_scenarios"].get("scenarios", []) if row.get("scenario_id") == "ai_preliminary_humid_day"), None)
+    if humid:
+        check = calculate_hourly_load_report(material["requirements"], material["schedule_library"], material["design_day_scenarios"], material["hourly_load_model"], ["ai_preliminary_humid_day"], preliminary_policy=material.get("preliminary_policy"), safety_factor_policy=safety_factor_policy)
+        peak, _fan = _with_fan_heat(check.get("included_scope_peak") or {}, fan, check.get("safety_factor"))
+        report["humid_day_check"] = {"scenario_id": "ai_preliminary_humid_day", "title": humid.get("title", ""),
+                                     "raw_total_kw": peak.get("raw_coincident_total_kw", peak.get("total_kw")),
+                                     "final_design_total_kw": peak.get("final_design_total_kw", peak.get("design_total_kw")),
+                                     "latent_kw": peak.get("latent_kw"), "hour": peak.get("hour"),
+                                     "outside_air_kw": (peak.get("components", {}).get("outside_air") or {}).get("total_kw")}
     report["report_type"] = "hourly_ai_preliminary_cooling_load"
     report["status"] = "draft"
     report["project_peak"] = {}

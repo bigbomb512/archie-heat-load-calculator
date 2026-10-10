@@ -130,6 +130,13 @@ class HttpProviderTests(unittest.TestCase):
         self.assertEqual(captured[-1]["body"]["provider"], {"data_collection": "deny", "require_parameters": True, "zdr": True,
                                                            "order": ["deepinfra", "deepseek"], "allow_fallbacks": False})
         self.assertNotIn("reasoning", captured[-1]["body"])
+        self.assertEqual(captured[-1]["body"]["max_tokens"], ai_provider.MAX_OUTPUT_TOKENS)
+        with patch.dict(os.environ, {"ARCHIE_MAX_OUTPUT_TOKENS": "48000"}):
+            ai_provider.OpenRouterProvider(api_key="or-test", opener=opener(reply, captured)).propose("x")
+            self.assertEqual(captured[-1]["body"]["max_tokens"], 48000)
+        for setting, cap in (("500", 1000), ("999999", 200000), ("lots", ai_provider.MAX_OUTPUT_TOKENS)):
+            with patch.dict(os.environ, {"ARCHIE_MAX_OUTPUT_TOKENS": setting}):
+                self.assertEqual(ai_provider.max_output_tokens(), cap)
         with patch.dict(os.environ, {"ARCHIE_OPENROUTER_REASONING": "low"}):
             ai_provider.OpenRouterProvider(api_key="or-test", opener=opener(reply, captured)).propose("x")
         self.assertEqual(captured[-1]["body"]["reasoning"], {"effort": "low"})
@@ -267,6 +274,32 @@ class CodexCliTests(unittest.TestCase):
             self.assertIn(part, args)
         self.assertNotIn("--ignore-user-config", plain)
         self.assertNotIn("--model", plain)                          # the CLI reads the user's config itself
+
+    def test_each_step_can_have_its_own_model_and_hosts(self):
+        steps = {"ARCHIE_AI_MODEL_PASS1": "deepseek/deepseek-v4.1-flash", "ARCHIE_AI_MODEL_PASS2": "google/gemini-3.8-flash",
+                 "ARCHIE_AI_MODEL_SKILLS": "deepseek/deepseek-v4.1-flash", "ARCHIE_AI_SMALL_MODEL": "small-model"}
+        with patch.dict(os.environ, steps):
+            self.assertEqual(ai_provider.model_for("pass1"), "deepseek/deepseek-v4.1-flash")      # beats the small model
+            self.assertEqual(ai_provider.model_for("pass2"), "google/gemini-3.8-flash")
+            self.assertEqual(ai_provider.model_for("skill:equipment_evidence"), "deepseek/deepseek-v4.1-flash")
+            self.assertEqual(ai_provider.model_for("skill-group:internal_gains"), "deepseek/deepseek-v4.1-flash")
+            self.assertIsNone(ai_provider.model_for(""))
+        self.assertEqual([ai_provider.step_of(task) for task in ("pass1", "pass2", "skill:x", "skill-group:y", "other")],
+                         ["PASS1", "PASS2", "SKILLS", "SKILLS", ""])
+        captured = []
+        reply = {"choices": [{"message": {"content": "{}"}}], "usage": {}}
+        env = {"OPENROUTER_API_KEY": "or-test", "ARCHIE_AI_PROVIDER": "openrouter", "ARCHIE_OPENROUTER_PROVIDERS": "",
+               "ARCHIE_OPENROUTER_PROVIDERS_PASS1": "deepinfra,together", "ARCHIE_AI_MODEL_PASS1": "deepseek/deepseek-v4.1-flash"}
+        with patch.dict(os.environ, env), patch.object(ai_provider.OpenRouterProvider, "__init__",
+                                                       lambda provider, model=None, **kwargs: ai_provider._HttpProvider.__init__(
+                                                           provider, api_key="or-test", model=model, opener=opener(reply, captured))):
+            pass1 = ai_provider.get("pass1")
+            pass2 = ai_provider.get("pass2")
+            pass1.propose("x")
+            pass2.propose("x")
+        self.assertEqual((pass1.model, pass1.step, pass2.step), ("deepseek/deepseek-v4.1-flash", "PASS1", "PASS2"))
+        self.assertEqual(captured[0]["body"]["provider"]["order"], ["deepinfra", "together"])     # pinned for pass 1
+        self.assertNotIn("order", captured[1]["body"]["provider"])                                 # pass 2 routes freely
 
     def test_a_small_model_is_used_only_for_simple_tasks_and_only_when_set(self):
         with patch.dict(os.environ, {"ARCHIE_AI_SMALL_MODEL": ""}):

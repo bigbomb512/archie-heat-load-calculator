@@ -1024,6 +1024,13 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json({"error": str(error)}, 400)
         self.send_json(result)
 
+    def save_site_location_resolution(self):
+        try:
+            result = api_save_site_location_resolution(self)
+        except Exception as error:
+            return self.send_json(product_error(error), 400)
+        self.send_json(result)
+
     def save_site_design_weather_resolution(self):
         try:
             result = api_save_site_design_weather_resolution(self)
