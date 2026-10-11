@@ -47,7 +47,10 @@ def steps(web, project):
     jobs = [("reading every page", reading), ("reading the equipment", equipment), ("tracing the rooms", drawing),
             ("working through the drawings", review)]
     working = next((label for label, job in jobs if job.get("status") in BUSY), "")
-    stopped = next(((label, job) for label, job in jobs if job.get("status") in STOPPED), None)
+    # The skills review counts as stopped only when it failed or produced nothing; "blocked" with findings means one
+    # step waits for an answer (e.g. the old weather-source step), and everything else it found is ready.
+    stopped = next(((label, job) for label, job in jobs if job.get("status") in STOPPED
+                    and not (job is review and job.get("status") == "blocked" and findings)), None)
     if tabs.get("drawings", {}).get("state") == "needed":
         result.append(_step("ai", "Let the AI read your drawings", "Open the Drawings tab: Toki prepares the pages and the AI "
                             "reads every one (about 10–20 minutes). You can do the next steps meanwhile.", "needed",

@@ -90,10 +90,11 @@ _VALUE_TARGET_KEYWORDS = {
 _WORKFLOW_SCOPES = {
     "all": None,
     # PDF review is the "What we need to find" list and every skill it depends on (the scope is closed over
-    # prerequisites), plus the address and weather steps, which make no AI call. Skills whose results nothing reads
+    # prerequisites), plus the address step, which makes no AI call. The weather-source step is left out: the design
+    # weather comes from the Project tab's weather location, and that step only waited for a map-confirmed site. Skills whose results nothing reads
     # (airflow reconciliation, surface areas, shading, solar, zones, plant and coils) are left out: about a third of the
     # calls of a full review. Their findings never reached the calculation; "full_review" still runs them on request.
-    "pdf_review": frozenset({"information_needs", "address_confirmation", "weather_source_matching"}),
+    "pdf_review": frozenset({"information_needs", "address_confirmation"}),
     # Evidence discovery across every domain. Policy approval and final model reconciliation happen afterwards.
     "full_review": frozenset({
         "sheet_identity", "revision_scope", "page_relationships", "site_clue_extraction",
@@ -926,10 +927,16 @@ def _cited_pages_allowed(text, allowed_pages):
     return bool(pages) and (allowed_pages is None or all(page in allowed_pages for page in pages))
 
 
+_CASE_FILE_CITATION = re.compile(r"^\s*(?:[A-Za-z]{1,3}\d{1,3}\s*:\s*)?(task_evidence|case_file)\b", re.IGNORECASE)
+
+
 def _text_citation(text):
     """A citation written as a sentence, as a citation record: its id ("c1: …"), source document ("pdf-…"), the pages
-    it names and the sentence as the excerpt; None when it names no page."""
+    it names and the sentence as the excerpt. A sentence citing the case file Archie supplied ("task_evidence.…",
+    "case_file.…": its own defaults and readings) is a citation of that source. None when it names neither."""
     pages = _text_pages(text)
+    if not pages and _CASE_FILE_CITATION.match(text):
+        return {"source_document_id": "archie_case_file", "excerpt": text.strip()[:400]}
     if not pages:
         return None
     label = re.match(r"\s*([A-Za-z]{1,3}\d{1,3})\s*:", text)
@@ -1015,7 +1022,8 @@ def _validate_subskill_output(subskill, result, registry, allowed_pages=None):
             # The same references under "citations" (ids, or sentences naming a page): only those naming a kept
             # citation or a page of this case file count.
             usable = [str(entry) for entry in inference["citations"] if isinstance(entry, (str, int))
-                      and (str(entry) in kept_ids or _cited_pages_allowed(str(entry), allowed_pages))]
+                      and (str(entry) in kept_ids or _cited_pages_allowed(str(entry), allowed_pages)
+                           or _CASE_FILE_CITATION.match(str(entry)))]
             if usable:
                 inference["citation_ids"] = usable
         value = inference.get("value")
@@ -2909,7 +2917,13 @@ def _run_worker(web, project, run_id, source_fp, catalog):
                     failure_type = type(error).__name__
                     if failure_type not in {"ValueError", "TypeError", "RuntimeError", "OSError", "TimeoutExpired", "JSONDecodeError"}:
                         failure_type = "UnexpectedError"
-                    LOGGER.exception("Archie runtime subskill failed", extra={"subskill_id": skill_id, "failure_phase": failure_phase, "error_code": code})
+                    if isinstance(error, SubskillValidationError):
+                        # A reply the checks refused is an expected outcome (it is kept with the reason and retried),
+                        # not a crash: one line, no traceback.
+                        LOGGER.warning("Archie skill %s: reply refused (%s at %s: %s)", skill_id, validation.get("check"),
+                                       validation.get("path"), validation.get("detail"))
+                    else:
+                        LOGGER.exception("Archie runtime subskill failed", extra={"subskill_id": skill_id, "failure_phase": failure_phase, "error_code": code})
                     attempt_metadata["model"] = attempt_record.get("raw_record", {}).get("model", attempt_record.get("model", ""))
                     (Path(paths["root"]) / attempt_ref / "attempt.json").write_text(json.dumps(attempt_metadata, indent=2), encoding="utf-8")
                     with _project_lock(project["id"]):

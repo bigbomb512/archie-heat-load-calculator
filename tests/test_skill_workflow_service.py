@@ -67,8 +67,11 @@ class SkillWorkflowTests(unittest.TestCase):
         enabled = set(skills.load_catalog()["enabled_skill_ids"])
         selected = skills._scoped_subskill_ids(registry, enabled, "pdf_review")
         self.assertTrue({"information_needs", "room_boundaries_areas", "ceiling_height_volume", "surface_inventory",
-                         "glazing_properties", "outside_air", "process_exhaust", "sheet_identity", "address_confirmation",
-                         "weather_source_matching"}.issubset(selected))
+                         "glazing_properties", "outside_air", "process_exhaust", "sheet_identity", "address_confirmation"}
+                        .issubset(selected))
+        # The weather comes from the Project tab's weather location; the weather-source step only waited for a
+        # map-confirmed site and left the review "blocked".
+        self.assertNotIn("weather_source_matching", selected)
         # Nothing reads these skills' results, so the default review doesn't pay for them.
         for unused in ("airflow_deduplication", "infiltration", "make_up_air", "surface_area", "boundary_resolution", "shading",
                        "solar_source", "system_detection", "zone_ownership", "plant_detection", "coil_duty", "component_inputs"):
@@ -914,9 +917,15 @@ class SkillWorkflowTests(unittest.TestCase):
         self.assertEqual(checked["inferences"][0]["citation_ids"], ["c1", "pdf-a9ecdf45c556:p30 kitchen elevation"])
         self.assertIn("citation 3 is a sentence naming no page", checked["remediation"][-1])
         self.assertIn("citation 4 cites pages not in the set: [99]", checked["remediation"][-1])
-        # A number whose references name no page of the set is still refused.
+        # Archie's own case file (its defaults and readings) is a source: labelled, not a drawing page.
+        from_case_file = {**reply, "citations": ["task_evidence.schedules: controlled preliminary room-use profile"],
+                          "inferences": [{"field": "heights[].height_mm", "value": 2700, "method": "preliminary default",
+                                          "citations": ["task_evidence.ceiling_height_volume.heights"]}]}
+        checked = skills._validate_subskill_output(task, json.loads(json.dumps(from_case_file)), registry, allowed_pages={22, 30})
+        self.assertEqual(checked["citations"][0]["source_document_id"], "archie_case_file")
+        # A number whose references name neither a page of the set nor the case file is still refused.
         uncited = {**reply, "inferences": [{"field": "heights[].height_mm", "value": 2700, "method": "fallback",
-                                            "citations": ["task_evidence.ceiling_height_volume.heights", "p99"]}]}
+                                            "citations": ["schedule_evidence: controlled preliminary profiles", "p99"]}]}
         with self.assertRaises(skills.SubskillValidationError):
             skills._validate_subskill_output(task, json.loads(json.dumps(uncited)), registry, allowed_pages={22, 30})
         self.assertEqual(skills._text_pages("Step 4 on page 21, see p.22 and pdf-ab12cd34:p23; map 5"), [21, 22, 23])

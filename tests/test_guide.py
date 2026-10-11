@@ -58,6 +58,15 @@ class GuideTests(unittest.TestCase):
         self.assertEqual({row["id"]: row for row in guide(job(address="x", above="floor", weather="", locations=()))["steps"]}
                          ["address"]["state"], "done")
 
+    def test_a_review_blocked_on_one_step_but_with_findings_has_finished(self):
+        review = {"status": "blocked", "answers": {}, "issues": [{"reason": "Confirm the project address and design basis."}],
+                  "findings": [{"id": "f1", "subskill_id": "lighting_evidence", "field": "lighting", "status": "proposed"}]}
+        result = guide(job(address="1 Main St", above="floor"), review=review)
+        self.assertEqual({row["id"]: row for row in result["steps"]}["ai"]["state"], "done")
+        self.assertNotEqual(result["now"], "ai")
+        nothing = guide(job(address="1 Main St", above="floor"), review={**review, "findings": []})
+        self.assertEqual(nothing["now"], "ai")                                  # blocked before finding anything: stopped
+
     def test_after_the_ai_the_checks_go_in_order_then_calculate_before_the_optional_findings(self):
         review = {"status": "needs_review", "answers": {"n1": {}},
                   "findings": [{"id": "n1", "subskill_id": "information_needs", "field": "needs"},
