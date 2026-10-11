@@ -176,13 +176,16 @@ Pass 1 (every page), pass 2 (values) and the skills use one AI provider, chosen 
 
 | `ARCHIE_AI_PROVIDER` | Needs | Model (`ARCHIE_AI_MODEL`) |
 |---|---|---|
-| `codex_cli` (default) | The Codex CLI installed and signed in with ChatGPT (`codex login`) | the CLI's default |
+| `openrouter` (default) | `OPENROUTER_API_KEY` | the tested mix per step (below) unless `ARCHIE_AI_MODEL` or a step setting is given. Hosts that store or train on prompts are excluded; `ARCHIE_OPENROUTER_PROVIDERS` pins the host, `ARCHIE_OPENROUTER_ZDR=1` requires zero data retention. Each call's US$ cost is logged and totalled. Without the key the review stops and says so; it never falls back to another provider. |
+| `codex_cli` | The Codex CLI installed and signed in with ChatGPT (`codex login`); used only when chosen | the CLI's default |
 | `openai` | `OPENAI_API_KEY` | `gpt-5` unless set |
 | `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-5-5` unless set |
 | `deepseek` | `DEEPSEEK_API_KEY` | `deepseek-flash` unless set (DeepSeek's model that reads page images; `deepseek-v4-pro` is text only and can't read pages) |
-| `openrouter` | `OPENROUTER_API_KEY` | `google/gemini-3.8-flash` unless set (any OpenRouter model ID that reads images). Hosts that store or train on prompts are excluded; `ARCHIE_OPENROUTER_PROVIDERS` pins the host, `ARCHIE_OPENROUTER_ZDR=1` requires zero data retention. Each call's US$ cost is logged and totalled. |
 
-For example `ARCHIE_AI_PROVIDER=anthropic ANTHROPIC_API_KEY=… ./start_web`. Nothing else changes when switching.
+The team uses OpenRouter only (decided 2026-10-11): with just the key set, every step goes through OpenRouter on
+the tested model mix (DeepSeek V4.1 Flash reads the pages and runs the skills; Gemini 3.8 Flash reads the equipment,
+two pages per call; replies up to 48,000 tokens). Another provider is used only if `ARCHIE_AI_PROVIDER` names it,
+e.g. `ARCHIE_AI_PROVIDER=anthropic ANTHROPIC_API_KEY=… ./start_web`. Tests blank every AI key, so they never make paid calls.
 Each step can use its own model: `ARCHIE_AI_MODEL_PASS1` (what is on each page), `ARCHIE_AI_MODEL_PASS2` (equipment
 values) and `ARCHIE_AI_MODEL_SKILLS` (the skills and the needs list); on OpenRouter, `ARCHIE_OPENROUTER_PROVIDERS_PASS1`
 (and `_PASS2`, `_SKILLS`) pins a step's hosts. `ARCHIE_PASS2_BATCH` sets equipment pages per call (else
@@ -220,19 +223,11 @@ account; give each person their own key so their spending is visible and limited
    security add-generic-password -a "$USER" -s openrouter -w
    ```
 
-4. **On their Mac: add these lines to `~/.zshrc`** (open it with `open -e ~/.zshrc`). The first line reads the key from
-   the Keychain; the others choose OpenRouter and the tested model mix (DeepSeek V4.1 Flash to read pages and run the
-   skills, Gemini 3.8 Flash to read equipment two pages per call):
+4. **On their Mac: add this line to `~/.zshrc`** (open it with `open -e ~/.zshrc`). It reads the key from the
+   Keychain. OpenRouter and the tested model mix are Archie's defaults, so nothing else is needed:
 
    ```bash
    export OPENROUTER_API_KEY="$(security find-generic-password -s openrouter -w 2>/dev/null)"
-   export ARCHIE_AI_PROVIDER=openrouter
-   export ARCHIE_AI_MODEL=deepseek/deepseek-v4.1-flash
-   export ARCHIE_AI_MODEL_PASS1=deepseek/deepseek-v4.1-flash
-   export ARCHIE_AI_MODEL_PASS2=google/gemini-3.8-flash
-   export ARCHIE_AI_MODEL_SKILLS=deepseek/deepseek-v4.1-flash
-   export ARCHIE_PASS2_BATCH=2
-   export ARCHIE_MAX_OUTPUT_TOKENS=48000
    ```
 
 5. **Open a new Terminal window, then start Archie** with `./start_web` from the project folder. To check the key is
@@ -245,6 +240,5 @@ account; give each person their own key so their spending is visible and limited
 6. **Check in the app.** On a job's Drawings tab, "AI use for this job" names OpenRouter and the model, and shows the
    cost of each job. A full review of Butcher Buffet (38 pages) cost about US$0.47 on this mix (2026-10-10).
 
-To go back to the ChatGPT subscription (Codex CLI), remove or comment out the `ARCHIE_AI_PROVIDER` line and open a new
-Terminal window. If a key leaks, delete it on OpenRouter; the other keys keep working. A single shared server with one
+If a key leaks, delete it on OpenRouter; the other keys keep working. A single shared server with one
 key for everyone needs a login and a hosted machine, which is later work.

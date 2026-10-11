@@ -1,12 +1,15 @@
 """The AI provider for the PDF review (pass 1, pass 2 and the skills), chosen by a setting, and a usage log per job.
 
 Providers (ARCHIE_AI_PROVIDER):
-- codex_cli  (default) the Codex CLI signed in with the team's ChatGPT subscription; no API key.
+- openrouter (default; the team's choice, 2026-10-11) OpenRouter with the team's key (OPENROUTER_API_KEY). Without
+             other settings each step uses the tested model mix (OPENROUTER_STEP_MODELS: DeepSeek V4.1 Flash reads
+             the pages and runs the skills, Gemini 3.8 Flash reads equipment two pages per call, replies up to
+             48,000 tokens); see OpenRouterProvider for the data and host-pinning settings. Each call's cost in US
+             dollars is logged. Without the key the review stops and says so: it never falls back to another provider.
 - openai     the OpenAI API (OPENAI_API_KEY); model ARCHIE_AI_MODEL, default "gpt-5".
 - anthropic  the Anthropic API (ANTHROPIC_API_KEY); model ARCHIE_AI_MODEL, default "claude-sonnet-5-5".
 - deepseek   the DeepSeek API (DEEPSEEK_API_KEY); model ARCHIE_AI_MODEL, default "deepseek-flash" (reads images).
-- openrouter OpenRouter (OPENROUTER_API_KEY); model ARCHIE_AI_MODEL, default "google/gemini-3.8-flash"; see
-             OpenRouterProvider for the data and host-pinning settings. Each call's cost in US dollars is logged.
+- codex_cli  the Codex CLI signed in with a ChatGPT subscription; no API key. Used only when chosen explicitly.
 ARCHIE_AI_MODEL also picks the Codex CLI model (else the model in the signed-in user's Codex config). Switching
 provider changes nothing else: the same prompts, case files, caching, resume and usage-limit handling apply.
 
@@ -47,21 +50,30 @@ PROVIDERS = ("codex_cli", "openai", "anthropic", "deepseek", "openrouter")
 # deepseek-flash (DeepSeek-V4.1-Flash) is DeepSeek's model that reads images; deepseek-v4-pro is text only, so it can't
 # read pages (DeepSeek's pricing page, checked 2026-10-09).
 DEFAULT_MODELS = {"openai": "gpt-5", "anthropic": "claude-sonnet-5-5", "deepseek": "deepseek-flash",
-                  "openrouter": "google/gemini-3.8-flash"}
+                  "openrouter": "deepseek/deepseek-v4.1-flash"}
+DEFAULT_PROVIDER = "openrouter"
+# OpenRouter's model per review step unless ARCHIE_AI_MODEL_<STEP> or ARCHIE_AI_MODEL says otherwise (tested on
+# Butcher Buffet 2026-10-10: DeepSeek V4.1 Flash read pages and wrote the needs list well and cheaply but missed
+# equipment drawn on plans; Gemini 3.8 Flash read plan equipment well, two pages per call).
+OPENROUTER_STEP_MODELS = {"PASS1": "deepseek/deepseek-v4.1-flash", "PASS2": "google/gemini-3.8-flash",
+                          "SKILLS": "deepseek/deepseek-v4.1-flash"}
+# A thinking model's reasoning counts against the reply cap (DeepSeek V4.1 Flash thought about 10,000 tokens a call).
+OPENROUTER_MAX_OUTPUT_TOKENS = 48000
 TIMEOUT_S = 600
 # Replies are stored whole (a retry re-checks a stored reply instead of paying for a new one); this only guards size.
 MAX_REPLY_CHARS = 2_000_000
 MAX_OUTPUT_TOKENS = 16000
 
 
-def max_output_tokens():
+def max_output_tokens(default=MAX_OUTPUT_TOKENS):
     """The reply cap sent to the APIs: ARCHIE_MAX_OUTPUT_TOKENS (1,000–200,000), else MAX_OUTPUT_TOKENS. A thinking
     model's reasoning counts against it, so a model that thinks at length (e.g. DeepSeek V4.1 Flash, about 10,000
     tokens of thinking for 4,000 of answer) needs a higher cap or its reply is cut off."""
+    fallback = default
     try:
-        value = int(os.environ.get("ARCHIE_MAX_OUTPUT_TOKENS", "").strip() or MAX_OUTPUT_TOKENS)
+        value = int(os.environ.get("ARCHIE_MAX_OUTPUT_TOKENS", "").strip() or fallback)
     except ValueError:
-        return MAX_OUTPUT_TOKENS
+        return fallback
     return max(1000, min(200000, value))
 _USAGE_LOCK = threading.Lock()
 
@@ -360,7 +372,7 @@ class OpenRouterProvider(OpenAIProvider):
         hosts = [item.strip() for item in pinned.split(",") if item.strip()]
         if hosts:
             routing.update({"order": hosts, "allow_fallbacks": False})
-        body = {"max_tokens": max_output_tokens(), "provider": routing}
+        body = {"max_tokens": max_output_tokens(OPENROUTER_MAX_OUTPUT_TOKENS), "provider": routing}
         # How much a thinking model reasons before answering (low / medium / high); its thinking is billed as output.
         effort = os.environ.get("ARCHIE_OPENROUTER_REASONING", "").strip().lower()
         if effort in {"minimal", "low", "medium", "high"}:
@@ -389,8 +401,12 @@ CLASSES = {"codex_cli": CodexCliProvider, "openai": OpenAIProvider, "anthropic":
            "openrouter": OpenRouterProvider}
 
 
+def _chosen_name():
+    return os.environ.get("ARCHIE_AI_PROVIDER", DEFAULT_PROVIDER).strip().lower() or DEFAULT_PROVIDER
+
+
 def chosen():
-    name = os.environ.get("ARCHIE_AI_PROVIDER", "codex_cli").strip().lower() or "codex_cli"
+    name = _chosen_name()
     if name not in CLASSES:
         raise ProviderUnavailable(f"ARCHIE_AI_PROVIDER must be one of {', '.join(PROVIDERS)} (it is {name!r}).")
     return name
@@ -432,7 +448,12 @@ def model_for(task=""):
     if chosen_model:
         return chosen_model
     small = os.environ.get("ARCHIE_AI_SMALL_MODEL", "").strip()
-    return small if small and task in SMALL_TASKS else None
+    if small and task in SMALL_TASKS:
+        return small
+    # OpenRouter's tested mix, unless one model is set for every step.
+    if _chosen_name() == "openrouter" and step and not os.environ.get("ARCHIE_AI_MODEL", "").strip():
+        return OPENROUTER_STEP_MODELS.get(step)
+    return None
 
 
 def get(task=""):

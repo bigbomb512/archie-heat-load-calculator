@@ -41,7 +41,13 @@ def failing(code, body):
 class ChoiceTests(unittest.TestCase):
     def test_the_provider_is_a_setting_and_a_wrong_one_is_refused(self):
         with patch.dict(os.environ, {"ARCHIE_AI_PROVIDER": ""}):
-            self.assertEqual(ai_provider.chosen(), "codex_cli")
+            self.assertEqual(ai_provider.chosen(), "openrouter")              # the team's provider; no fallback to Codex
+        with patch.dict(os.environ, {"ARCHIE_AI_PROVIDER": "", "OPENROUTER_API_KEY": ""}):
+            self.assertFalse(ai_provider.configured())
+            with self.assertRaisesRegex(ai_provider.ProviderUnavailable, "OPENROUTER_API_KEY"):
+                ai_provider.get("pass1")
+        with patch.dict(os.environ, {"ARCHIE_AI_PROVIDER": "codex_cli"}):
+            self.assertEqual(ai_provider.chosen(), "codex_cli")                # only when chosen explicitly
         with patch.dict(os.environ, {"ARCHIE_AI_PROVIDER": "OpenAI"}):
             self.assertEqual(ai_provider.chosen(), "openai")
         with patch.dict(os.environ, {"ARCHIE_AI_PROVIDER": "gemini"}):
@@ -115,7 +121,7 @@ class HttpProviderTests(unittest.TestCase):
                            "prompt_tokens_details": {"cached_tokens": 1200}}}
         with patch.dict(os.environ, {"ARCHIE_AI_MODEL": "", "ARCHIE_OPENROUTER_ZDR": "", "ARCHIE_OPENROUTER_PROVIDERS": ""}):
             provider = ai_provider.OpenRouterProvider(api_key="or-test", opener=opener(reply, captured))
-            self.assertEqual(provider.model, "google/gemini-3.8-flash")
+            self.assertEqual(provider.model, "deepseek/deepseek-v4.1-flash")
             result, raw = provider.propose("Read this page.", [self.image])
         self.assertEqual(result, {"page_type": "schedule"})
         self.assertEqual(raw["usage"], {"input_tokens": 9000, "output_tokens": 700, "cached_input_tokens": 1200, "cost_usd": 0.0094})
@@ -130,7 +136,7 @@ class HttpProviderTests(unittest.TestCase):
         self.assertEqual(captured[-1]["body"]["provider"], {"data_collection": "deny", "require_parameters": True, "zdr": True,
                                                            "order": ["deepinfra", "deepseek"], "allow_fallbacks": False})
         self.assertNotIn("reasoning", captured[-1]["body"])
-        self.assertEqual(captured[-1]["body"]["max_tokens"], ai_provider.MAX_OUTPUT_TOKENS)
+        self.assertEqual(captured[-1]["body"]["max_tokens"], ai_provider.OPENROUTER_MAX_OUTPUT_TOKENS)   # room for thinking
         with patch.dict(os.environ, {"ARCHIE_MAX_OUTPUT_TOKENS": "48000"}):
             ai_provider.OpenRouterProvider(api_key="or-test", opener=opener(reply, captured)).propose("x")
             self.assertEqual(captured[-1]["body"]["max_tokens"], 48000)
@@ -301,10 +307,23 @@ class CodexCliTests(unittest.TestCase):
         self.assertEqual(captured[0]["body"]["provider"]["order"], ["deepinfra", "together"])     # pinned for pass 1
         self.assertNotIn("order", captured[1]["body"]["provider"])                                 # pass 2 routes freely
 
-    def test_a_small_model_is_used_only_for_simple_tasks_and_only_when_set(self):
-        with patch.dict(os.environ, {"ARCHIE_AI_SMALL_MODEL": ""}):
+    def test_openrouter_uses_the_tested_model_mix_unless_a_model_is_set(self):
+        clear = {"ARCHIE_AI_PROVIDER": "", "ARCHIE_AI_MODEL": "", "ARCHIE_AI_SMALL_MODEL": "",
+                 "ARCHIE_AI_MODEL_PASS1": "", "ARCHIE_AI_MODEL_PASS2": "", "ARCHIE_AI_MODEL_SKILLS": ""}
+        with patch.dict(os.environ, clear):
+            self.assertEqual([ai_provider.model_for(task) for task in ("pass1", "pass2:equipment_appliances", "skill:information_needs")],
+                             ["deepseek/deepseek-v4.1-flash", "google/gemini-3.8-flash", "deepseek/deepseek-v4.1-flash"])
+        with patch.dict(os.environ, {**clear, "ARCHIE_AI_MODEL_PASS2": "openai/gpt-x"}):
+            self.assertEqual(ai_provider.model_for("pass2:equipment_appliances"), "openai/gpt-x")
+        with patch.dict(os.environ, {**clear, "ARCHIE_AI_MODEL": "one/model"}):
+            self.assertIsNone(ai_provider.model_for("pass2:equipment_appliances"))   # one model for every step
+        with patch.dict(os.environ, {**clear, "ARCHIE_AI_PROVIDER": "anthropic"}):
             self.assertIsNone(ai_provider.model_for("pass1"))
-        with patch.dict(os.environ, {"ARCHIE_AI_SMALL_MODEL": "small-model"}):
+
+    def test_a_small_model_is_used_only_for_simple_tasks_and_only_when_set(self):
+        with patch.dict(os.environ, {"ARCHIE_AI_SMALL_MODEL": "", "ARCHIE_AI_PROVIDER": "codex_cli"}):
+            self.assertIsNone(ai_provider.model_for("pass1"))
+        with patch.dict(os.environ, {"ARCHIE_AI_SMALL_MODEL": "small-model", "ARCHIE_AI_PROVIDER": "codex_cli"}):
             self.assertEqual(ai_provider.model_for("pass1"), "small-model")
             self.assertEqual(ai_provider.model_for("skill:sheet_identity"), "small-model")
             for task in ("pass2", "skill:equipment_evidence", "skill:information_needs", ""):

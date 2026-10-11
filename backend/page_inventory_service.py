@@ -1,6 +1,6 @@
 """Pass 1 of the PDF review on the server: read every page of the job's PDF with the AI, a few pages per call.
 
-The AI is the provider chosen in backend.ai_provider (the Codex CLI with the team's ChatGPT sign-in by default).
+The AI is the provider chosen in backend.ai_provider (OpenRouter with the team's key by default).
 Each page is rendered to an image, sent on its own, and the checked reply is saved. Replies are
 cached by page image and prompt version, so a retry only reads the pages that failed and a
 re-analysis of the same PDF repeats nothing. Progress is in page_inventory_job.json; the
@@ -89,8 +89,12 @@ def batch_size(setting="ARCHIE_PAGE_BATCH"):
 
 
 def pass2_batch_size():
-    """Equipment pages per call in pass 2 (ARCHIE_PASS2_BATCH, else ARCHIE_PAGE_BATCH). Gemini 3.8 Flash left two of
-    four pages out of one call and answered all of them two at a time."""
+    """Equipment pages per call in pass 2 (ARCHIE_PASS2_BATCH, else ARCHIE_PAGE_BATCH; two on OpenRouter, the default
+    provider). Gemini 3.8 Flash left two of four pages out of one call and answered all of them two at a time."""
+    from backend import ai_provider
+    if not os.environ.get("ARCHIE_PASS2_BATCH", "").strip() and not os.environ.get("ARCHIE_PAGE_BATCH", "").strip() \
+            and ai_provider._chosen_name() == "openrouter":
+        return 2
     return batch_size("ARCHIE_PASS2_BATCH")
 
 

@@ -208,10 +208,10 @@ class ServiceTests(unittest.TestCase):
             service.start(None, self.project)
         self.assertIsNone(service.start_after_analysis(None, self.project))
         service.set_enabled(None, self.project, {"enabled": True})
-        with patch.object(service.shutil, "which", return_value=None):
+        with patch.dict("os.environ", {"ARCHIE_AI_PROVIDER": "", "OPENROUTER_API_KEY": ""}):
             blocked = service.start(None, self.project)
         self.assertEqual(blocked["status"], "blocked")
-        self.assertIn("isn't installed", blocked["problem"])
+        self.assertIn("No OPENROUTER_API_KEY is set on this server", blocked["problem"])   # never falls back to Codex
         with patch.dict("os.environ", {"ARCHIE_PAGE_READING": "off"}):
             self.assertIsNone(service.start_after_analysis(None, self.project))
         with self.assertRaisesRegex(ValueError, "PDF isn't available"):

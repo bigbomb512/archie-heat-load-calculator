@@ -3109,8 +3109,8 @@ def _response(web, project):
     read_only = not consent.get("owner_opt_in") and not _case_file_route(project)
     if read_only:
         visible_status = "blocked"
-        blocked_reason = ("Skills read the pages only after every page has been read (page reading on, and the Codex CLI "
-                          "installed and signed in).")
+        blocked_reason = ("Skills read the pages only after every page has been read (page reading on, and the AI "
+                          "provider set up on this server).")
     issues = [{"name": row["id"], "status": row["status"], "reason": public_text(_issue_reason(row))}
               for row in subskills if row["status"] in {"failed", "blocked"}]
     scan_state = safe.get("preparation", {}).get("scan_reading", {})
