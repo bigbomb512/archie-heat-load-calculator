@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+import unittest.mock
 
 from ai import ai_preliminary, design_weather, internal_gains_resolution, room_use_resolution
 from tools import import_airah_handbook_design_temps as importer
@@ -62,8 +63,31 @@ class DesignWeatherTests(unittest.TestCase):
         self.assertFalse(inside.exists())
 
 
+class ChosenLocationTests(unittest.TestCase):
+    def test_the_operators_choice_gives_its_design_days_and_a_suggestion_comes_from_the_site(self):
+        base = ai_preliminary.load_pack()["scenario"]["hours"]
+        days = design_weather.for_location("newcastle", base, TABLE)
+        self.assertEqual((days["location"], days["chosen"], days["distance_km"]), ("Newcastle", True, None))
+        self.assertEqual(days["days"][0]["hours"][15]["db"], 30.0)
+        self.assertIsNone(design_weather.for_location("Atlantis", base, TABLE))
+        self.assertEqual(design_weather.suggested_location("", SITE, TABLE), "Sydney")                    # nearest to the position
+        self.assertEqual(design_weather.suggested_location("12 Hunter St, Newcastle NSW 2300", None, TABLE), "Newcastle")
+        self.assertEqual(design_weather.suggested_location("2 Central Park Ave, Chippendale NSW", None, TABLE), "Sydney")
+        self.assertEqual(design_weather.suggested_location("1 Main Rd, Nowhere", None, TABLE), "")
+
+    def test_the_project_tab_choice_is_checked_when_saved(self):
+        from backend import job_service
+        with tempfile.TemporaryDirectory() as folder:
+            project = {"id": "j", "review_dir": folder}
+            with unittest.mock.patch.object(job_service, "_root", return_value=Path(folder)):
+                self.assertEqual(job_service.save_job_setup(project, {"weather_location": "mt.gambier"})["weather_location"], "Mt. Gambier")
+                with self.assertRaisesRegex(ValueError, "Choose a weather location from the list"):
+                    job_service.save_job_setup(project, {"weather_location": "Atlantis"})
+                self.assertEqual(job_service.save_job_setup(project, {"weather_location": ""})["weather_location"], "")
+
+
 class DraftDesignDayTests(unittest.TestCase):
-    def assembled(self, site, table):
+    def assembled(self, site, table, weather_location=""):
         building = {"spaces": [{"name": "Dining", "level_name": "Ground", "area_m2": 200, "evidence": [{"page": 2, "excerpt": "DINING"}]}]}
         room = {"kind": "room", "label": "Dining", "level_name": "Ground", "area_m2": 200, "preliminary_profile_id": "hospitality", "page": 2}
         proposal = {"rooms": [room]}
@@ -71,7 +95,7 @@ class DraftDesignDayTests(unittest.TestCase):
         gains = internal_gains_resolution.resolve(building, proposal=proposal, room_use=use, pack=ai_preliminary.load_pack(),
                                                   source_fingerprints={"proposal": "a"})
         return ai_preliminary.assemble(building, preliminary_proposal=proposal, room_use_resolution=use, internal_gains_resolution=gains,
-                                       site_location=site, design_weather_table=table)
+                                       site_location=site, design_weather_table=table, weather_location=weather_location)
 
     def test_a_confirmed_site_is_sized_on_the_dry_bulb_day_and_checked_on_the_humid_day(self):
         generic = self.assembled(SITE, None)
@@ -94,6 +118,14 @@ class DraftDesignDayTests(unittest.TestCase):
         self.assertFalse(generic["design_conditions_basis"]["design_day"]["site_specific"])
         unconfirmed = self.assembled({"location": SITE["location"]}, TABLE)
         self.assertEqual(len(unconfirmed["material"]["design_day_scenarios"]["scenarios"]), 1)
+
+
+    def test_a_location_chosen_on_the_project_tab_wins_and_is_labelled_so(self):
+        chosen = self.assembled({}, TABLE, weather_location="Newcastle")["design_conditions_basis"]["design_day"]
+        self.assertEqual((chosen["location"], chosen["origin"]), ("Newcastle", "design_temperature_table_chosen_location"))
+        self.assertIn("Newcastle (the weather location chosen on the Project tab)", chosen["label"])
+        over_site = self.assembled(SITE, TABLE, weather_location="Newcastle")["design_conditions_basis"]["design_day"]
+        self.assertEqual(over_site["location"], "Newcastle")                                    # the explicit choice wins
 
 
 if __name__ == "__main__":

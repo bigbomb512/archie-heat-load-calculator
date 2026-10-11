@@ -56,7 +56,10 @@ DEFAULT_PROVIDER = "openrouter"
 # Butcher Buffet 2026-10-10: DeepSeek V4.1 Flash read pages and wrote the needs list well and cheaply but missed
 # equipment drawn on plans; Gemini 3.8 Flash read plan equipment well, two pages per call).
 OPENROUTER_STEP_MODELS = {"PASS1": "deepseek/deepseek-v4.1-flash", "PASS2": "google/gemini-3.8-flash",
-                          "SKILLS": "deepseek/deepseek-v4.1-flash"}
+                          "SKILLS": "deepseek/deepseek-v4.1-flash",
+                          # The drawing tasks (scale, outlines, north, walls) read cropped plan images: the model
+                          # that read drawn symbols best.
+                          "DRAWINGS": "google/gemini-3.8-flash"}
 # A thinking model's reasoning counts against the reply cap (DeepSeek V4.1 Flash thought about 10,000 tokens a call).
 OPENROUTER_MAX_OUTPUT_TOKENS = 48000
 TIMEOUT_S = 600
@@ -428,12 +431,15 @@ SMALL_TASKS = frozenset({"pass1", "skill:sheet_identity", "skill:revision_scope"
 
 
 def step_of(task=""):
-    """The review step a task belongs to: PASS1 (what is on each page), PASS2 (values such as equipment) or SKILLS."""
+    """The review step a task belongs to: PASS1 (what is on each page), PASS2 (values such as equipment), SKILLS, or
+    DRAWINGS (the drawing tasks: scale, room outlines, north, walls, openings)."""
     task = str(task or "")
     if task == "pass1":
         return "PASS1"
     if task.startswith("pass2"):
         return "PASS2"
+    if task.startswith("drawing"):
+        return "DRAWINGS"
     return "SKILLS" if task.startswith("skill") else ""
 
 

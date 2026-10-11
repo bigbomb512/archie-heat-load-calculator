@@ -784,6 +784,57 @@ test("Drawings: before the skills have run, the needs list says when it will app
   await expect(page.locator("[data-ws-needs-status]")).toContainText("the list appears when they finish");
 });
 
+test("Project: the weather location is suggested from the address and saved with the job", async ({page}) => {
+  const posts = await mockJob(page, {status: () => baseStatus({address: "2 Central Park Ave, Chippendale NSW",
+    weather_location: "", weather_locations: ["Newcastle", "Sydney", "Wagga"], weather_suggestion: "Sydney"})});
+  await page.goto("/#/job/job-1/project/job-site");
+  const select = page.locator("[data-ws-weather-location]");
+  await expect(select).toHaveValue("Sydney");                                              // the suggestion, ready to save
+  await expect(page.locator("[data-ws-weather-note]")).toContainText("Suggested from the address: Sydney; press Save to use it.");
+  await select.selectOption("Newcastle");
+  await page.getByRole("button", {name: "Save"}).click();
+  await expect.poll(() => posts.find(([kind]) => kind === "setup")?.[1]?.weather_location).toBe("Newcastle");
+});
+
+test("Project: without the handbook table the weather note says a generic day is used", async ({page}) => {
+  await mockJob(page, {status: () => baseStatus()});
+  await page.goto("/#/job/job-1/project/job-site");
+  await expect(page.locator("[data-ws-weather-location]")).toHaveCount(0);
+  await expect(page.locator("[data-ws-weather-note]")).toContainText("generic Australian design day is used");
+});
+
+test("Next step: one plain instruction with one button on every tab, and the whole list of steps", async ({page}) => {
+  const step = (id, title, state, tab, subtab, label, extra = {}) => ({id, title, why: `Why ${id} matters.`, state, count: null,
+    action: {kind: "go", tab, subtab, label}, ...extra});
+  let guide = {now: "rooms", done: 3, total: 5, steps: [
+    step("ai", "The AI has read your drawings", "done", "drawings", "overview", "Show"),
+    step("address", "Confirm the site address", "done", "project", "job-site", "Show"),
+    step("above", "Say what is above the shop", "done", "project", "tenancy-context", "Show"),
+    step("rooms", "Check the rooms", "needed", "rooms", "room-details", "Check the rooms", {count: 2}),
+    {...step("calculate", "Calculate the cooling load", "needed", "results", "", "Calculate now"), action: {kind: "calculate", tab: "results", subtab: "", label: "Calculate now"}},
+  ]};
+  const posts = await mockJob(page, {status: () => baseStatus()});
+  await page.route("**/api/guide**", route => route.fulfill({json: guide}));
+  await page.goto("/#/job/job-1/project/job-site");
+  const card = page.locator("[data-ws-guide-now]");
+  await expect(card.locator("[data-ws-guide-title]")).toHaveText("Check the rooms (2)");
+  await expect(card).toContainText("Next step · 3 of 5 done");
+  await expect(card.locator("[data-ws-guide-why]")).toHaveText("Why rooms matters.");
+  await card.locator("[data-ws-guide-go]").click();                                   // one button: straight there
+  await expect(page).toHaveURL(/#\/job\/job-1\/rooms\/room-details$/);
+  await expect(page.locator("[data-ws-guide-here]")).toHaveText("You're in the right place: it's on this page, below.");
+  await page.locator("[data-ws-guide-all] summary").click();
+  await expect(page.locator("[data-ws-guide-step]")).toHaveCount(5);
+  await expect(page.locator("[data-ws-guide-step='rooms']")).toHaveClass(/is-now/);
+  await expect(page.locator("[data-ws-guide-step='address']")).toContainText("done");
+  // When calculating is next, the button calculates.
+  guide = {...guide, now: "calculate", done: 4};
+  await page.locator("[data-ws-tab='project']").click();
+  await expect(page.locator("[data-ws-guide-title]")).toHaveText("Calculate the cooling load");
+  await page.locator("[data-ws-guide-calculate]").click();
+  await expect.poll(() => posts.some(([kind]) => kind === "calculation")).toBeTruthy();
+});
+
 test("Drawings: a failed or blocked page reading says why and offers a retry", async ({page}) => {
   const posts = [];
   await mockJob(page, {status: () => baseStatus(),

@@ -790,7 +790,7 @@ def _legacy_surface_candidates(vision, rows):
 
 def assemble(building, vision=None, contractor_overrides=None, source_fingerprints=None, manual_placeholder_entities=None,
              preliminary_proposal=None, value_resolution=None, research_cache=None, source_pack_releases=None,
-             site_location=None, site_design_weather=None, room_use_resolution=None, geometry_resolution=None,
+             site_location=None, site_design_weather=None, room_use_resolution=None, geometry_resolution=None, weather_location="",
              ceiling_volume_resolution=None, internal_gains_resolution=None, airflow_resolution=None, ahu_resolution=None,
              plant_resolution=None, allow_area_fallbacks=True, process_exhaust=None, design_weather_table=None):
     """Return a materialized preliminary payload plus its transparent ledger.
@@ -865,12 +865,17 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
     site_days = None
     if not conditions_basis["design_day"]["site_specific"] and design_weather_table:
         # No cited site design day (e.g. an approved DA09 pack): the nearest listed location's two summer design days.
-        site_days = design_weather.for_site(site_location, scenario_values["weather_profile"]["hours"], table=design_weather_table)
+        # The operators' choice of listed location (Project tab) first; else the nearest to a confirmed site position.
+        base_hours = scenario_values["weather_profile"]["hours"]
+        site_days = (design_weather.for_location(weather_location, base_hours, design_weather_table) if weather_location else None) \
+            or design_weather.for_site(site_location, base_hours, table=design_weather_table)
     if site_days:
         scenario_values = {**scenario_values, "weather_profile": {**scenario_values["weather_profile"], "hours": site_days["days"][0]["hours"]}}
-        distance = f"{site_days['distance_km']:g} km from the site"
+        distance = ("the weather location chosen on the Project tab" if site_days.get("chosen")
+                    else f"{site_days['distance_km']:g} km from the site")
         conditions_basis["design_day"] = {
-            "site_specific": True, "origin": "design_temperature_table_nearest_location", "source": site_days["source"],
+            "site_specific": True, "source": site_days["source"],
+            "origin": "design_temperature_table_chosen_location" if site_days.get("chosen") else "design_temperature_table_nearest_location",
             "location": site_days["location"], "state": site_days["state"], "distance_km": site_days["distance_km"],
             "far_from_site": site_days["far"],
             "days": [{key: day[key] for key in ("day", "title", "design_point")} for day in site_days["days"]],

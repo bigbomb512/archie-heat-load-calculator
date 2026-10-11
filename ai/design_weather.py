@@ -126,3 +126,34 @@ def for_site(site_location, base_hours, table):
     name, values, km = nearest(location["latitude_deg"], location["longitude_deg"], table)
     return {"location": name, "state": LOCATIONS[name][2], "distance_km": round(km, 1), "far": km > FAR_KM,
             "values": values, "source": table["source"], "days": design_days(values, base_hours)}
+
+
+def for_location(name, base_hours, table):
+    """The design days of a listed location chosen by the operators (Project tab), or None when it isn't in the table."""
+    name = canonical(name)
+    values = ((table or {}).get("locations") or {}).get(name)
+    if not values:
+        return None
+    return {"location": name, "state": LOCATIONS[name][2], "distance_km": None, "far": False, "chosen": True,
+            "values": values, "source": table["source"], "days": design_days(values, base_hours)}
+
+
+STATE_CAPITALS = {"NSW": "Sydney", "VIC": "Melbourne", "QLD": "Brisbane", "SA": "Adelaide", "WA": "Perth", "TAS": "Hobart",
+                  "NT": "Darwin", "ACT": "Canberra"}
+
+
+def suggested_location(address, site_location=None, table=None):
+    """A first suggestion for the weather location: the nearest listed location to a confirmed site position; else a
+    listed town named in the address; else the capital of the state in the address; else "". The operator confirms."""
+    location = (site_location or {}).get("location", {}) if isinstance(site_location, dict) else {}
+    names = set(((table or {}).get("locations") or {}) or LOCATIONS)
+    if location.get("latitude_deg") is not None and location.get("longitude_deg") is not None and table:
+        return nearest(location["latitude_deg"], location["longitude_deg"], table)[0]
+    text = " ".join(str(address or "").replace(",", " ").split()).casefold()
+    for name in sorted(names, key=len, reverse=True):
+        if f" {name.casefold().rstrip('.')}" in f" {text}" and name not in STATE_CAPITALS.values():
+            return name
+    for state, capital in STATE_CAPITALS.items():
+        if f" {state.casefold()} " in f" {text} " and capital in names:
+            return capital
+    return ""

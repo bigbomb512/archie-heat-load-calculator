@@ -124,6 +124,7 @@ def _sources(paths):
         # Answers from the What-we-need-to-find list that the model reads directly.
         "glazing_answers": ai_preliminary.fingerprint(_read(paths["root"] / "glazing_answers.json", {})),
         "construction_answers": ai_preliminary.fingerprint(_read(paths["root"] / "construction_answers.json", {})),
+        "weather_location": str(_read(paths["root"] / "job_setup.json", {}).get("weather_location") or ""),
         "unconditioned_answers": ai_preliminary.fingerprint(_read(paths["root"] / "unconditioned_answers.json", {})),
         "exhaust_answers": ai_preliminary.fingerprint(_read(paths["root"] / "exhaust_answers.json", {})),
         "hours_answers": ai_preliminary.fingerprint(_read(paths["root"] / "hours_answers.json", {})),
@@ -1262,6 +1263,7 @@ def _assemble(web, project, source="manual_placeholder"):
         value_resolution=resolution, research_cache=validate_cache(_read(paths["research_cache"], empty_research_cache())),
         site_location=_read(paths["site_location"], {}),
         site_design_weather=_read(paths["site_design_weather"], {}),
+        weather_location=str(_read(paths["root"] / "job_setup.json", {}).get("weather_location") or ""),
         room_use_resolution=room_use,
         geometry_resolution=geometry,
         ceiling_volume_resolution=ceiling_artifact,

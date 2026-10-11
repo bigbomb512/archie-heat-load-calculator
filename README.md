@@ -132,8 +132,10 @@ Technical Handbook (4th edition, 2007). The table is AIRAH's copyright, so it is
 python3 tools/import_airah_handbook_design_temps.py ~/Downloads/AIRAH_Handbook.pdf
 ```
 
-It is written to `~/.archie/airah_handbook_2007_design_temperatures.json` (or `ARCHIE_DESIGN_WEATHER_TABLE`). When a
-job's site is confirmed (Project tab), the calculation uses the nearest listed location: the design dry bulb with its
+It is written to `~/.archie/airah_handbook_2007_design_temperatures.json` (or `ARCHIE_DESIGN_WEATHER_TABLE`). On the
+Project tab, **Weather location** picks the listed location for the job (suggested from the address's town or state,
+or from a confirmed map position); that choice is used first. Otherwise, when a job's site position is confirmed, the
+calculation uses the nearest listed location: the design dry bulb with its
 coincident wet bulb sizes the load, and the design wet bulb with its coincident dry bulb is reported as a
 dehumidification check. Results name the location and its distance from the site. Without a confirmed site or the
 table, a generic Australian design day is used and labelled so. A released AIRAH DA09 pack, when imported, takes
@@ -151,6 +153,15 @@ roof constructions (roofs use the summer value) or takes a U-value typed from an
 room. Answered external walls and exposed roofs use it; the others keep the preliminary U-values (walls 0.6, roof
 0.5 W/m²K), which the Results tab lists as typical. The handbook has no sun-on-surface (sol-air) data, so sun on walls
 stays the preliminary pack's allowance and roof sun is not assessed until DA09 or ASHRAE data is available.
+
+## Next step card
+
+Every tab of a job shows one **Next step** card (backend/guide_service.py, `/api/guide`): the step to do now in plain
+words, why it matters, and one button that goes exactly there (or calculates), with the job's whole list of steps
+underneath. The order is: the AI reads the drawings; the address and weather location; what is above the shop; rooms;
+walls; roof; windows; the questions the drawings don't answer; the equipment; calculate; the AI's other findings
+(optional); the result. The project steps can be done while the AI reads; the steps that check the AI's work wait
+for it.
 
 ## Walls to unconditioned spaces
 
@@ -197,6 +208,13 @@ label ("COMBI OVEN") comes back as the scheduled item (E06) instead of a second 
 items without the codes, 48 with them). An item still read without a code is marked on its card when it probably is
 one or two scheduled items, for the operator to reject; nothing is merged automatically. Sizes that agree in their
 numbers ("4900X700" on a plan, "4900MM(W)X700MM(D)X850MM(H)" in the schedule) are not reported as a disagreement.
+After the equipment, the AI answers the drawing tasks itself (backend/drawing_tasks_service.py): the scale from a
+printed dimension, the room names, the room outlines, north, what each wall faces, shopfront openings and kitchen
+equipment, in rounds (each step unlocks the next), each reply checked as a pasted one was. Coordinates are asked for
+on a 0–1000 grid and converted to pixels (vision models answer on that grid whatever the image size). The skills run
+when it finishes, so they see the traced rooms. On Butcher Buffet (2026-10-11) the AI's outlines came within 1–3 % of
+the Kitchen, Coolroom and Freezer areas; the Bar island was missed (so the Shop outline included it), and a full run
+cost about US$0.30. A task still refused after two tries waits for a person; the manual P0–P6 route remains.
 A skill's citations may be written as sentences naming the page ("c1: p21: …"): they count by that page, which must
 be in the job's case file; a number whose references name no page of the file is still refused.
 The APIs cap each reply at 16,000 tokens; `ARCHIE_MAX_OUTPUT_TOKENS` changes it. A model that thinks at length counts

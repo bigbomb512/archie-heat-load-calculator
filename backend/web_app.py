@@ -91,7 +91,7 @@ from ai.calculator_draft import DraftConflict
 from backend import draft_service
 from backend import evidence_fusion_service
 from backend import calculation_extraction_service
-from backend import vision_extraction_service, window_scan_service, site_orientation_service, site_location_service, site_design_weather_service, room_use_resolution_service, room_inference_service, reviewer_room_geometry_service, ceiling_volume_resolution_service, internal_gains_resolution_service, thermal_surface_resolution_service, airflow_resolution_service, ahu_resolution_service, plant_resolution_service, safety_factor_resolution_service, ai_preliminary_service, model_input_resolution_service, au_ventilation_rules_service, autonomous_tasks_service, job_service, page_preparation_service, calculation_service, page_inventory_service, page_extraction_service, ai_provider, result_status_service
+from backend import drawing_tasks_service, guide_service, vision_extraction_service, window_scan_service, site_orientation_service, site_location_service, site_design_weather_service, room_use_resolution_service, room_inference_service, reviewer_room_geometry_service, ceiling_volume_resolution_service, internal_gains_resolution_service, thermal_surface_resolution_service, airflow_resolution_service, ahu_resolution_service, plant_resolution_service, safety_factor_resolution_service, ai_preliminary_service, model_input_resolution_service, au_ventilation_rules_service, autonomous_tasks_service, job_service, page_preparation_service, calculation_service, page_inventory_service, page_extraction_service, ai_provider, result_status_service
 from backend import productization, test_mode_service, skill_workflow_service
 from backend import security
 from ai.ventilation import calculate_ventilation_report
@@ -388,6 +388,20 @@ class Handler(SimpleHTTPRequestHandler):
         if urlparse(self.path).path == "/api/ai-usage":
             try:
                 return self.send_json(api_ai_usage(self))
+            except security.SecurityError as error:
+                return self._send_security_error(error, 403)
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if urlparse(self.path).path == "/api/guide":
+            try:
+                return self.send_json(api_guide(self))
+            except security.SecurityError as error:
+                return self._send_security_error(error, 403)
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if urlparse(self.path).path == "/api/drawing-tasks":
+            try:
+                return self.send_json(api_drawing_tasks_status(self))
             except security.SecurityError as error:
                 return self._send_security_error(error, 403)
             except Exception as error:
@@ -752,6 +766,13 @@ class Handler(SimpleHTTPRequestHandler):
         if urlparse(self.path).path == "/api/job-calculation":
             try:
                 return self.send_json(api_start_calculation(self))
+            except security.SecurityError as error:
+                return self._send_security_error(error, 403)
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if urlparse(self.path).path == "/api/drawing-tasks":
+            try:
+                return self.send_json(api_drawing_tasks(self))
             except security.SecurityError as error:
                 return self._send_security_error(error, 403)
             except Exception as error:
@@ -4251,6 +4272,28 @@ def api_ai_usage(request):
     return {**ai_provider.usage_summary(project["review_dir"]), "provider": provider,
             "model": os.environ.get("ARCHIE_AI_MODEL", "") or ai_provider.DEFAULT_MODELS.get(provider, "default"),
             "configured": ai_provider.configured()}
+
+
+def api_guide(request):
+    """The job's steps in plain words with the one to do now (the workspace's Next step card)."""
+    query = parse_qs(urlparse(request.path).query)
+    return guide_service.steps(sys.modules[__name__], project_by_id(query.get("project_id", [""])[0]))
+
+
+def api_drawing_tasks_status(request):
+    query = parse_qs(urlparse(request.path).query)
+    return drawing_tasks_service.status(sys.modules[__name__], project_by_id(query.get("project_id", [""])[0]))
+
+
+def api_drawing_tasks(request):
+    """The AI answers the drawing tasks (scale, room outlines, north, walls, openings, kitchen equipment): start or retry."""
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    ensure_review_dir(project)
+    security.require_project_role(project, request._identity(), "editor")
+    if data.get("action", "start") in {"start", "retry"}:
+        return drawing_tasks_service.start(sys.modules[__name__], project, then_skills=True)   # the skills then see the new rooms
+    raise ValueError("Drawing tasks action must be start or retry.")
 
 
 def api_page_extraction_status(request):

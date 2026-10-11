@@ -426,12 +426,20 @@ def accepted(project, kind="equipment_appliances"):
 
 
 def _start_skills(web, project_id):
-    """The skills run last, each on its case file built from pass 1 and 2 (ideas 1 and 3)."""
+    """After the equipment: the AI answers the drawing tasks (scale, room outlines, walls…), then the skills run, each
+    on its case file built from pass 1 and 2, so the room skills see the traced rooms. Without a provider for the
+    drawing tasks, the skills start straight away."""
     if web is None:
         return
-    from backend import skill_workflow_service
+    from backend import drawing_tasks_service, skill_workflow_service
+    project = web.project_by_id(project_id)
     try:
-        skill_workflow_service.start_after_reading(web, web.project_by_id(project_id))
+        drawing_tasks_service.start(web, project, then_skills=True)
+        return
+    except ValueError:
+        pass
+    try:
+        skill_workflow_service.start_after_reading(web, project)
     except ValueError:
         pass
 

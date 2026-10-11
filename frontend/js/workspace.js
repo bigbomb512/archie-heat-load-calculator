@@ -12,6 +12,7 @@
   const body = document.getElementById("jobBody");
   const rail = document.getElementById("wsTabs");
   const subtabNav = document.getElementById("wsSubtabs");
+  const guideBox = document.getElementById("jobGuide");
   if (!root || !body || !rail) return;
 
   const TABS = [
@@ -77,6 +78,9 @@
     if (state.projectId !== projectId) return null;
     state.status = status;
     renderRail();
+    // Something changed (a save, a finished step): the Next step card moves on too.
+    clearTimeout(state.guideTimer);
+    state.guideTimer = setTimeout(() => renderGuide().catch(() => {}), 400);
     return status;
   }
 
@@ -172,8 +176,44 @@
       <div><h3>${esc(title)}</h3><p>${esc(detail)}</p></div></div>`;
   }
 
+  // ------------------------------------------------------------------ Next step
+  // One card on every tab: the step to do now in plain words, one button that goes exactly there (or calculates),
+  // and the whole list of steps for the job underneath (/api/guide).
+  const GUIDE_ICON = {done: "✓", needed: "●", error: "!", working: "◌", later: "○", optional: "○"};
+  async function renderGuide() {
+    if (!guideBox) return;
+    const projectId = state.projectId;
+    const guide = await getJson(`/api/guide?project_id=${encodeURIComponent(projectId)}`).catch(() => null);
+    if (!guide || state.projectId !== projectId) return;
+    const steps = guide.steps || [];
+    const now = steps.find(row => row.id === guide.now) || steps[steps.length - 1];
+    if (!now) { guideBox.hidden = true; return; }
+    const href = row => `#/job/${encodeURIComponent(projectId)}/${row.action.tab}${row.action.subtab ? `/${row.action.subtab}` : ""}`;
+    const here = now.action.kind === "go" && now.action.tab === state.tab && (!now.action.subtab || now.action.subtab === state.subtab);
+    const button = now.action.kind === "calculate"
+      ? `<button class="btn key" type="button" data-ws-guide-calculate>${esc(now.action.label)}</button>`
+      : now.state === "working"
+        ? `<a class="btn ghost" href="${href(now)}" data-ws-guide-go>${esc(now.action.label)}</a>`
+        : here ? `<p class="ws-guide-here" data-ws-guide-here>You're in the right place: it's on this page, below.</p>`
+          : `<a class="btn key" href="${href(now)}" data-ws-guide-go>${esc(now.action.label)} →</a>`;
+    const list = steps.map((row, index) => `<li class="is-${esc(row.state)}${row.id === now.id ? " is-now" : ""}" data-ws-guide-step="${esc(row.id)}">
+      <span class="ws-guide-icon" aria-hidden="true">${GUIDE_ICON[row.state] || "○"}</span>
+      <a href="${href(row)}">${index + 1}. ${esc(row.title)}</a>${row.count ? ` <small>(${esc(row.count)})</small>` : ""}
+      <small class="ws-guide-state">${esc({done: "done", needed: "to do", error: "stopped", working: "working", later: "later", optional: "optional"}[row.state] || "")}</small></li>`).join("");
+    guideBox.hidden = false;
+    guideBox.innerHTML = `<div class="ws-guide-now is-${esc(now.state)}" data-ws-guide-now="${esc(now.id)}">
+      <p class="ws-guide-kicker">Next step · ${esc(guide.done)} of ${esc(guide.total)} done</p>
+      <h2 data-ws-guide-title>${esc(now.title)}${now.count ? ` <small>(${esc(now.count)})</small>` : ""}</h2>
+      <p data-ws-guide-why>${esc(now.why)}</p>
+      <div class="ws-guide-actions">${button}</div>
+      <details data-ws-guide-all ${state.guideOpen ? "open" : ""}><summary>All steps for this job</summary><ol class="ws-guide-steps">${list}</ol></details></div>`;
+    guideBox.querySelector("[data-ws-guide-calculate]")?.addEventListener("click", () => { go(now.action.tab); calculate(); });
+    guideBox.querySelector("[data-ws-guide-all]")?.addEventListener("toggle", event => { state.guideOpen = event.target.open; });
+  }
+
   function renderTab() {
     clearTimeout(state.poll);
+    renderGuide().catch(() => {});
     renderRail();
     body.innerHTML = "";
     const tab = state.tab;
@@ -195,7 +235,8 @@
     const status = state.status || await loadStatus();
     if (!live(projectId, "project")) return;
     state.projectDraft = state.projectDraft || {name: status.name || "", address: status.address || "",
-      building_type: status.building_type || "", above: status.above || "", person: userName()};
+      building_type: status.building_type || "", above: status.above || "", person: userName(),
+      weather_location: status.weather_location || status.weather_suggestion || ""};
     const draft = state.projectDraft;
     const found = status.found_site;
     const jobSite = state.subtab !== "tenancy-context";
@@ -207,7 +248,12 @@
           <label>Site address<input name="address" autocomplete="street-address" placeholder="Street, suburb, state" value="${esc(draft.address)}"></label>
           ${found && !draft.address ? `<p class="ws-found">Found on the drawings: <b>${esc(found)}</b> <button class="link-button" type="button" data-ws-use-found>Use this</button></p>` : ""}
           <label>Building type<select name="building_type">${BUILDING_TYPES.map(([value, label]) => `<option value="${value}" ${draft.building_type === value ? "selected" : ""}>${esc(label)}</option>`).join("")}</select></label>
-          <p class="ws-fine">Weather: once the site is confirmed, the design day comes from the nearest location in the AIRAH Technical Handbook (if its table is imported on this computer); until then a generic Australian design day is used. The Results tab says which.</p>`
+          ${(status.weather_locations || []).length ? `<label>Weather location <select name="weather_location" data-ws-weather-location>
+              <option value="">Not chosen (generic Australian design day)</option>${status.weather_locations.map(name =>
+                `<option ${draft.weather_location === name ? "selected" : ""}>${esc(name)}</option>`).join("")}</select></label>
+            <p class="ws-fine" data-ws-weather-note>The summer design weather comes from this location in the AIRAH Technical Handbook: choose the listed place nearest the site.${
+              status.weather_suggestion && !status.weather_location ? ` Suggested from the address: <b>${esc(status.weather_suggestion)}</b>; press Save to use it.` : ""}</p>`
+            : `<p class="ws-fine" data-ws-weather-note>Weather: the AIRAH handbook's design temperatures aren't imported on this computer, so a generic Australian design day is used (see the README to import them).</p>`}`
           : `<fieldset><legend>What's above this tenancy?</legend>
             ${[["roof", "The roof"], ["floor", "Another floor or tenancy"], ["not_sure", "Not sure"]].map(([value, label]) =>
               `<label class="ws-radio"><input type="radio" name="above" value="${value}" ${draft.above === value ? "checked" : ""}> ${label}</label>`).join("")}
@@ -232,8 +278,10 @@
       line.textContent = "Saving…";
       try {
         state.status = await sendJson("/api/job-setup", {project_id: projectId, name: draft.name,
-          address: draft.address, building_type: draft.building_type, above: draft.above, edited_by: userName()});
+          address: draft.address, building_type: draft.building_type, above: draft.above, edited_by: userName(),
+          ...(form.elements.weather_location ? {weather_location: draft.weather_location} : {})});
         renderRail();
+        renderGuide().catch(() => {});
         line.textContent = "Saved.";
       } catch (error) { line.textContent = `Could not save: ${error.message}`; line.classList.add("is-error"); line.setAttribute("role", "alert"); }
     });
@@ -296,12 +344,13 @@
     }
     let status = await loadStatus();
     if (!live(projectId, "drawings")) return;
-    const [review, vision, reading, equipment, usage] = await Promise.all([
+    const [review, vision, reading, equipment, usage, drawingTasks] = await Promise.all([
       getJson(`/api/skill-workflow?project_id=${encodeURIComponent(projectId)}`),
       getJson(`/api/vision-extraction?project_id=${encodeURIComponent(projectId)}`),
       getJson(`/api/page-reading?project_id=${encodeURIComponent(projectId)}`).catch(() => null),
       getJson(`/api/page-extraction?project_id=${encodeURIComponent(projectId)}&kind=equipment_appliances`).catch(() => null),
       getJson(`/api/ai-usage?project_id=${encodeURIComponent(projectId)}`).catch(() => null),
+      getJson(`/api/drawing-tasks?project_id=${encodeURIComponent(projectId)}`).catch(() => null),
     ]);
     if (!live(projectId, "drawings")) return;
     state.skillReview = review;
@@ -319,11 +368,13 @@
       && !["accepted", "rejected"].includes(row.status)).length;
     // One line for where the PDF review is, in the order its three steps run.
     const drawingMessage = busy(reading)
-      ? "Step 1 of 3: reading every page with AI. You can carry on with the other tabs meanwhile."
+      ? "Step 1 of 4: reading every page with AI. You can carry on with the other tabs meanwhile."
       : busy(equipment)
-        ? "Step 2 of 3: reading the equipment from the pages that show it."
+        ? "Step 2 of 4: reading the equipment from the pages that show it."
+        : busy(drawingTasks)
+          ? `Step 3 of 4: the AI is finding the scale and tracing the rooms${drawingTasks.step_label ? ` (${drawingTasks.step_label.toLowerCase()})` : ""}.`
         : busy(review)
-          ? "Step 3 of 3: working through the drawings. You can carry on with the other tabs meanwhile."
+          ? "Step 4 of 4: working through the drawings. You can carry on with the other tabs meanwhile."
           : review.status === "failed"
             ? "The PDF review didn't finish. The reason is on Findings; retry below, or use the manual fallback on Pages & AI."
             : review.status === "blocked"
@@ -361,7 +412,7 @@
       : subtab === "findings" ? pdfReviewMarkup(review, vision)
       : subtab === "pages" ? `${reading ? pageReadingMarkup(reading) : ""}${pagesMarkup()}${usage ? usageMarkup(usage) : ""}
           ${reviewCoverageMarkup(review)}${fallback}`
-      : overviewMarkup(projectId, {steps, review, reading, equipment, usage, openNeeds, openFindings, equipmentOpen,
+      : overviewMarkup(projectId, {steps, review, reading, equipment, usage, drawingTasks, openNeeds, openFindings, equipmentOpen,
           message: operatorMode() && pendingReview ? `${done} of ${checks.total} manual checks resolved. Answer the remaining checks on Pages & AI.` : drawingMessage});
     body.innerHTML = `<div class="ws-card" data-ws-drawings data-ws-drawings-subtab="${esc(subtab)}">
       <h2>${esc(TABS.find(row => row.id === "drawings").subtabs.find(row => row.id === subtab)?.label === "Overview" ? "Drawing analysis" : TABS.find(row => row.id === "drawings").subtabs.find(row => row.id === subtab)?.label || "Drawing analysis")}</h2>
@@ -388,7 +439,12 @@
     if (tasks) wireOperator(projectId, tasks);
     // The workspace refreshes itself; this detailed view must keep a half-pasted reply.
     // Refresh while a step runs. Open manual checks don't: they only change when someone pastes a reply.
-    if (busy(review) || busy(reading) || busy(equipment))
+    body.querySelector("[data-ws-drawing-tasks-retry]")?.addEventListener("click", async event => {
+      event.target.disabled = true;
+      try { await sendJson("/api/drawing-tasks", {project_id: projectId, action: "retry"}); await renderDrawings(); }
+      catch (error) { event.target.disabled = false; event.target.textContent = `Couldn't start: ${error.message}`; }
+    });
+    if (busy(review) || busy(reading) || busy(equipment) || busy(drawingTasks))
       state.poll = setTimeout(function refresh() {
         if (!live(projectId, "drawings")) return;
         // Don't redraw under someone typing a correction; try again shortly.
@@ -451,7 +507,7 @@
     ["mechanical_drawings", "Mechanical drawings"], ["landlord", "Landlord / base building"], ["standard_or_reference", "Standard or reference"], ["other", "Other"]];
 
   function overviewMarkup(projectId, info) {
-    const {reading, equipment, review, usage} = info;
+    const {reading, equipment, review, usage, drawingTasks} = info;
     const busy = row => ["queued", "running"].includes(row?.status);
     const failed = row => ["failed", "blocked", "interrupted"].includes(row?.status);
     const step = (label, row, detail) => {
@@ -469,6 +525,7 @@
     const actions = [
       canRead ? `<button class="btn key mini" type="button" data-ws-page-reading-start>${reading.status === "none" ? "Read the pages" : "Retry reading the pages"}</button>` : "",
       failed(equipment) ? `<button class="btn ghost mini" type="button" data-ws-equipment-retry>Retry reading the equipment</button>` : "",
+      failed(drawingTasks) ? `<button class="btn ghost mini" type="button" data-ws-drawing-tasks-retry>Retry the drawing tasks</button>` : "",
       ["failed", "blocked", "stale"].includes(review.status) ? `<button class="btn ghost mini" type="button" data-ws-skill-retry ${review.read_only ? "disabled" : ""}>Retry PDF review</button>` : "",
     ].join("");
     const total = usage?.total || {};
@@ -477,11 +534,13 @@
       <ol class="ws-steps" aria-label="PDF review steps">
         ${step("Pages read", reading, reading?.read ? `${reading.read} of ${reading.page_count} pages` : "Done")}
         ${step("Equipment read", equipment, equipment?.findings ? `${equipment.findings.length} items` : "Done")}
+        ${step("Rooms traced by AI", drawingTasks, drawingTasks?.answered != null ? `${drawingTasks.answered} drawing task${drawingTasks.answered === 1 ? "" : "s"} done` : "Done")}
         ${step("Drawings worked through", review, `${(review.findings || []).length} findings`)}
       </ol>
       <p data-ws-checks role="status">${esc(info.message)}</p>
       ${failed(reading) && reading.problem ? `<p class="ws-banner is-warn">${esc(reading.problem)}</p>` : ""}
       ${failed(equipment) && equipment.problem ? `<p class="ws-banner is-warn">${esc(equipment.problem)}</p>` : ""}
+      ${failed(drawingTasks) && drawingTasks.error ? `<p class="ws-banner is-warn">The AI couldn't finish tracing the rooms: ${esc(drawingTasks.error)}</p>` : ""}
       ${review.blocked_reason ? `<p class="ws-banner is-warn" role="status">${esc(review.blocked_reason)}</p>` : ""}
       <h3>What needs you</h3>
       ${asks ? `<ul class="ws-needs-you" data-ws-needs-you>${asks}</ul>` : `<p class="ws-fine" data-ws-needs-you>Nothing here needs you right now.${busy(review) || busy(reading) || busy(equipment) ? " More appears as the review runs." : ""}</p>`}

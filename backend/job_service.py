@@ -59,6 +59,18 @@ def job_setup(project):
     return setup if isinstance(setup, dict) else {}
 
 
+def _weather_choice(root, setup, address):
+    """The weather location the job uses (chosen on the Project tab), the listed locations to choose from (the
+    imported handbook table; empty when it isn't imported on this computer) and a suggestion from the site."""
+    from ai import design_weather
+    table = design_weather.load_table()
+    site = _read(root / "site_location_resolution.json", {})
+    return {"weather_location": setup.get("weather_location", ""),
+            "weather_locations": sorted((table or {}).get("locations") or {}),
+            "weather_suggestion": design_weather.suggested_location(address, site if site.get("confirmed_address") else None, table)
+            if table else ""}
+
+
 def save_job_setup(project, data):
     current = job_setup(project)
     updated = dict(current)
@@ -70,6 +82,12 @@ def save_job_setup(project, data):
         if value and value not in BUILDING_TYPES:
             raise ValueError("Choose a building type from the list.")
         updated["building_type"] = value
+    if "weather_location" in data:
+        from ai import design_weather
+        value = design_weather.canonical(data.get("weather_location")) if str(data.get("weather_location") or "").strip() else ""
+        if str(data.get("weather_location") or "").strip() and not value:
+            raise ValueError("Choose a weather location from the list.")
+        updated["weather_location"] = value
     if "above" in data:
         value = str(data.get("above") or "")
         if value not in ABOVE_CHOICES:
@@ -531,6 +549,7 @@ def status(web, project):
         "name": setup.get("name") or str(project.get("name") or "").removesuffix(".pdf"),
         "address": address, "found_site": found_site,
         "building_type": setup.get("building_type", ""), "above": setup.get("above", ""),
+        **_weather_choice(root, setup, address or found_site),
         "total_kw": total, "result_stale": bool(total is not None and stale),
         "drawings_confirmed": confirmed, "checks": progress,
         "rooms": {"total": len(candidates), "included": len(included), "with_area": len(with_area)},
