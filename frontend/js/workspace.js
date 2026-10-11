@@ -19,7 +19,13 @@
       {id: "job-site", key: "job_site", label: "Job & site"},
       {id: "tenancy-context", key: "tenancy_context", label: "Tenancy context"},
     ]},
-    {id: "drawings", label: "Drawings"},
+    {id: "drawings", label: "Drawings", subtabs: [
+      {id: "overview", key: "overview", label: "Overview"},
+      {id: "to-find", key: "to_find", label: "To find"},
+      {id: "equipment", key: "equipment", label: "Equipment"},
+      {id: "findings", key: "findings", label: "Findings"},
+      {id: "pages", key: "pages", label: "Pages & AI"},
+    ]},
     {id: "rooms", label: "Rooms", subtabs: [
       {id: "room-details", key: "room_details", label: "Room details"},
       {id: "measurements", key: "measurements", label: "Measurements"},
@@ -125,14 +131,15 @@
   function renderSubtabs() {
     const main = TABS.find(row => row.id === state.tab);
     if (!subtabNav || !main?.subtabs) { if (subtabNav) { subtabNav.hidden = true; subtabNav.innerHTML = ""; } return; }
-    const childStatuses = state.status?.subtabs?.[main.id] || {};
+    const childStatuses = (main.id === "drawings" ? state.drawingsNav?.[state.projectId] : state.status?.subtabs?.[main.id]) || {};
     subtabNav.hidden = false;
     subtabNav.innerHTML = main.subtabs.map(child => {
       const info = childStatuses[child.key] || {state: "todo"};
       const current = child.id === state.subtab;
-      return `<a class="ws-subtab is-${esc(info.state)}" href="#/job/${encodeURIComponent(state.projectId)}/${main.id}/${child.id}"
-        aria-label="${esc(child.label)}, ${esc(STATE_TEXT[info.state] || "Not yet")}" ${current ? 'aria-current="page"' : ""}><span class="ws-subtab-status" aria-hidden="true"></span>${esc(child.label)}
-        <small class="ws-subtab-state">${esc(STATE_TEXT[info.state] || "Not yet")}</small></a>`;
+      const label = `${child.label}${info.count ? ` (${info.count})` : ""}`;
+      return `<a class="ws-subtab is-${esc(info.state)}" href="#/job/${encodeURIComponent(state.projectId)}/${main.id}/${child.id}" data-ws-subtab="${esc(child.id)}"
+        aria-label="${esc(label)}, ${esc(STATE_TEXT[info.state] || "Not yet")}" ${current ? 'aria-current="page"' : ""}><span class="ws-subtab-status" aria-hidden="true"></span>${esc(label)}
+        <small class="ws-subtab-state">${esc((main.id === "drawings" && info.detail) || STATE_TEXT[info.state] || "Not yet")}</small></a>`;
     }).join("");
   }
 
@@ -312,39 +319,57 @@
       && !["accepted", "rejected"].includes(row.status)).length;
     // One line for where the PDF review is, in the order its three steps run.
     const drawingMessage = busy(reading)
-      ? "Step 1 of 3: reading every page with AI. You can continue with the room information below."
+      ? "Step 1 of 3: reading every page with AI. You can carry on with the other tabs meanwhile."
       : busy(equipment)
         ? "Step 2 of 3: reading the equipment from the pages that show it."
         : busy(review)
-          ? "Step 3 of 3: the skills are working through the drawings. You can continue with the room information below."
+          ? "Step 3 of 3: working through the drawings. You can carry on with the other tabs meanwhile."
           : review.status === "failed"
-            ? "PDF review failed before it could finish. See the reason below, then retry or use the manual fallback."
+            ? "The PDF review didn't finish. The reason is on Findings; retry below, or use the manual fallback on Pages & AI."
             : review.status === "blocked"
-              ? "PDF review is blocked. See what is needed below, then retry or use the manual fallback."
+              ? "Part of the PDF review is waiting for something (shown on Findings). Everything else it found is ready to review."
               : review.status === "needs_review" || openReview
-                ? `PDF review has finished. Some findings below still need our review${openNeeds ? `, and ${openNeeds} item${openNeeds === 1 ? " is" : "s are"} still to find` : ""}.`
+                ? `The PDF review has finished. Some of what it found still needs your review${openNeeds ? `, and ${openNeeds} item${openNeeds === 1 ? " is" : "s are"} still to find` : ""}.`
                 : openNeeds
-                  ? `PDF review has finished. ${openNeeds} item${openNeeds === 1 ? " is" : "s are"} still to find.`
+                  ? `The PDF review has finished. ${openNeeds} item${openNeeds === 1 ? " is" : "s are"} still to find.`
                   : "Drawing analysis is complete. Review any items marked To do or Review in Rooms, Walls & roof, and Windows.";
     const fallback = operatorMode() ? "" : `<details class="ws-page-reading" data-ws-fallback><summary>Manual fallback (P0–P6)</summary>
       <p class="ws-fine">For when the AI provider is unavailable, or to check a step by hand: each check is a prompt you paste into ChatGPT, with the reply pasted back.
       ${pendingReview ? `${checks.waiting + checks.blocked} manual check${checks.waiting + checks.blocked === 1 ? " is" : "s are"} open.` : ""}</p>
       <div class="ws-actions">${pendingReview ? `<button class="btn ghost mini" type="button" data-ws-operator-on>Open the manual checks</button>` : ""}
       <button class="btn ghost mini" type="button" data-ws-manual-fallback>${pendingReview ? "Set up the checks again" : "Set up the manual checks"}</button></div></details>`;
-    body.innerHTML = `<div class="ws-card" data-ws-drawings>
-      <h2>Drawing analysis</h2>
-      <p class="ws-hint">The PDF review runs in three steps: every page is read, the equipment is read, then the skills work through the drawings and list what we still need to find. Nothing changes the calculation until we accept or answer it.</p>
-      <p data-ws-checks role="status">${esc(operatorMode() && pendingReview ? `${done} of ${checks.total} manual checks resolved. Answer the remaining checks below.` : drawingMessage)}</p>
-      ${reading ? pageReadingMarkup(reading) : ""}
-      ${equipment && (equipment.status !== "none" || equipment.findings?.length) ? equipmentMarkup(equipment) : ""}
-      ${needsMarkup(review)}
-      ${pdfReviewMarkup(review, vision)}
+    // One sub-tab at a time: the overview says what needs you; each list has its own sub-tab.
+    const skillFindings = (review.findings || []).filter(row => row.subskill_id !== "information_needs");
+    const openFindings = skillFindings.filter(row => !["accepted", "rejected"].includes(row.status)).length;
+    const equipmentOpen = equipment?.open || 0;
+    const stepState = row => busy(row) ? "working" : ["failed", "blocked", "interrupted"].includes(row?.status) ? "error"
+      : row?.status === "done" || ["needs_review", "complete", "done"].includes(row?.status) ? "done" : "todo";
+    (state.drawingsNav ||= {})[projectId] = {
+      overview: {state: busy(review) || busy(reading) || busy(equipment) ? "working" : openNeeds || openReview ? "check" : "done"},
+      to_find: {state: openNeeds ? "needed" : "done", count: openNeeds, detail: openNeeds ? "To answer" : "Complete"},
+      equipment: {state: busy(equipment) ? "working" : equipmentOpen ? "check" : "done", count: equipmentOpen, detail: equipmentOpen ? "To review" : stepState(equipment) === "todo" ? "Not yet" : "Complete"},
+      findings: {state: busy(review) ? "working" : openFindings ? "check" : stepState(review) === "error" ? "error" : "done", count: openFindings,
+                 detail: openFindings ? "To review" : STATE_TEXT[busy(review) ? "working" : "done"]},
+      pages: {state: stepState(reading) === "error" ? "error" : busy(reading) ? "working" : "done", detail: reading?.read ? `${reading.read} read` : "Details"},
+    };
+    renderSubtabs();
+    const subtab = state.subtab || "overview";
+    const steps = {reading, equipment, review};
+    const content = subtab === "to-find" ? needsMarkup(review)
+      : subtab === "equipment" ? (equipment && (equipment.status !== "none" || equipment.findings?.length) ? equipmentMarkup(equipment)
+        : `<p class="ws-fine" data-ws-equipment-none>The equipment is read after every page has been read.</p>`)
+      : subtab === "findings" ? pdfReviewMarkup(review, vision)
+      : subtab === "pages" ? `${reading ? pageReadingMarkup(reading) : ""}${pagesMarkup()}${usage ? usageMarkup(usage) : ""}
+          ${reviewCoverageMarkup(review)}${fallback}`
+      : overviewMarkup(projectId, {steps, review, reading, equipment, usage, openNeeds, openFindings, equipmentOpen,
+          message: operatorMode() && pendingReview ? `${done} of ${checks.total} manual checks resolved. Answer the remaining checks on Pages & AI.` : drawingMessage});
+    body.innerHTML = `<div class="ws-card" data-ws-drawings data-ws-drawings-subtab="${esc(subtab)}">
+      <h2>${esc(TABS.find(row => row.id === "drawings").subtabs.find(row => row.id === subtab)?.label === "Overview" ? "Drawing analysis" : TABS.find(row => row.id === "drawings").subtabs.find(row => row.id === subtab)?.label || "Drawing analysis")}</h2>
       ${tasks ? operatorMarkup(tasks) : ""}
-      ${pagesMarkup()}
-      ${usage ? usageMarkup(usage) : ""}
-      ${fallback}
+      ${content}
       ${nextButton("drawings")}</div>`;
     wireCommon();
+    wireReadOpen(projectId);
     wirePages(projectId);
     wirePdfReview(projectId, review, vision);
     wireNeeds(projectId);
@@ -425,6 +450,98 @@
   const ANSWER_SOURCES = [["spec_sheet", "Spec sheet"], ["supplier", "Supplier"], ["client", "Client"], ["site_visit", "Site visit"],
     ["mechanical_drawings", "Mechanical drawings"], ["landlord", "Landlord / base building"], ["standard_or_reference", "Standard or reference"], ["other", "Other"]];
 
+  function overviewMarkup(projectId, info) {
+    const {reading, equipment, review, usage} = info;
+    const busy = row => ["queued", "running"].includes(row?.status);
+    const failed = row => ["failed", "blocked", "interrupted"].includes(row?.status);
+    const step = (label, row, detail) => {
+      const stateName = busy(row) ? "working" : failed(row) ? "error" : row && row.status !== "none" && row.status !== "not_started" ? "done" : "todo";
+      return `<li class="ws-step is-${stateName}" data-ws-step><span class="ws-subtab-status" aria-hidden="true"></span><b>${esc(label)}</b>
+        <small>${esc(busy(row) ? "Working…" : failed(row) ? "Didn't finish" : stateName === "done" ? detail : "Not yet")}</small></li>`;
+    };
+    const link = (child, text) => `<a href="#/job/${encodeURIComponent(projectId)}/drawings/${child}" data-ws-overview-link="${child}">${text}</a>`;
+    const asks = [
+      info.openNeeds ? `<li>${link("to-find", `${info.openNeeds} thing${info.openNeeds === 1 ? "" : "s"} to find`)}: answers from the client, spec sheets or a site visit.</li>` : "",
+      info.equipmentOpen ? `<li>${link("equipment", `${info.equipmentOpen} equipment item${info.equipmentOpen === 1 ? "" : "s"} to review`)}: accept, correct or reject what was read from the drawings.</li>` : "",
+      info.openFindings ? `<li>${link("findings", `${info.openFindings} finding${info.openFindings === 1 ? "" : "s"} to review`)}: values the skills read or worked out.</li>` : "",
+    ].join("");
+    const canRead = reading && reading.enabled && !busy(reading) && reading.status !== "done";
+    const actions = [
+      canRead ? `<button class="btn key mini" type="button" data-ws-page-reading-start>${reading.status === "none" ? "Read the pages" : "Retry reading the pages"}</button>` : "",
+      failed(equipment) ? `<button class="btn ghost mini" type="button" data-ws-equipment-retry>Retry reading the equipment</button>` : "",
+      ["failed", "blocked", "stale"].includes(review.status) ? `<button class="btn ghost mini" type="button" data-ws-skill-retry ${review.read_only ? "disabled" : ""}>Retry PDF review</button>` : "",
+    ].join("");
+    const total = usage?.total || {};
+    return `<section data-ws-drawings-overview>
+      <p class="ws-hint">Toki reads every page, then the equipment, then works through the drawings and lists what it still needs. Nothing changes the calculation until you accept or answer it.</p>
+      <ol class="ws-steps" aria-label="PDF review steps">
+        ${step("Pages read", reading, reading?.read ? `${reading.read} of ${reading.page_count} pages` : "Done")}
+        ${step("Equipment read", equipment, equipment?.findings ? `${equipment.findings.length} items` : "Done")}
+        ${step("Drawings worked through", review, `${(review.findings || []).length} findings`)}
+      </ol>
+      <p data-ws-checks role="status">${esc(info.message)}</p>
+      ${failed(reading) && reading.problem ? `<p class="ws-banner is-warn">${esc(reading.problem)}</p>` : ""}
+      ${failed(equipment) && equipment.problem ? `<p class="ws-banner is-warn">${esc(equipment.problem)}</p>` : ""}
+      ${review.blocked_reason ? `<p class="ws-banner is-warn" role="status">${esc(review.blocked_reason)}</p>` : ""}
+      <h3>What needs you</h3>
+      ${asks ? `<ul class="ws-needs-you" data-ws-needs-you>${asks}</ul>` : `<p class="ws-fine" data-ws-needs-you>Nothing here needs you right now.${busy(review) || busy(reading) || busy(equipment) ? " More appears as the review runs." : ""}</p>`}
+      ${actions ? `<div class="ws-actions">${actions}</div>` : ""}
+      ${total.calls ? `<p class="ws-fine">AI use so far: ${esc(Number(total.calls).toLocaleString())} calls${total.cost_usd ? ` · US$${Number(total.cost_usd).toFixed(2)}` : ""}. ${link("pages", "Details")}</p>` : ""}
+    </section>`;
+  }
+
+  function reviewCoverageMarkup(review) {
+    const stages = (review.stages || []).map(stage => `<li><span>${esc(stage.label)}</span><b>${esc(stage.status.replaceAll("_", " "))}</b></li>`).join("");
+    const reviewed = (review.subskills || []).map(row => {
+      const item = row.evidence_reviewed || {};
+      const pagesText = item.pages?.length ? `pages ${item.pages.map(esc).join(", ")}` : "no page evidence sent";
+      return `<li>${esc(SKILL_NAMES[row.id] || row.id.replaceAll("_", " "))}: ${pagesText} · ${esc(row.status.replaceAll("_", " "))}${item.provider ? ` · ${esc(item.provider)}` : ""}${item.model ? ` / ${esc(item.model)}` : ""}</li>`;
+    }).join("");
+    if (!stages && !reviewed) return "";
+    return `<section class="ws-page-reading" data-ws-review-coverage><h3>How the drawings were worked through</h3>
+      ${stages ? `<details data-ws-read-open="stages" ${state.readOpen?.has("stages") ? "open" : ""}><summary>Skill progress</summary><ul class="ws-list">${stages}</ul></details>` : ""}
+      ${reviewed ? `<details data-ws-read-open="coverage" ${state.readOpen?.has("coverage") ? "open" : ""}><summary>Pages each skill looked at</summary><ul>${reviewed}</ul></details>` : ""}</section>`;
+  }
+
+  // Plain names for the skills' topics, and for the IDs a need names.
+  const SKILL_NAMES = {room_identity_use: "Rooms and their use", room_boundaries_areas: "Room outlines and areas",
+    ceiling_height_volume: "Ceiling heights", occupancy_seating: "People and seats", lighting_evidence: "Lighting",
+    equipment_evidence: "Equipment", schedule_evidence: "Opening hours", outside_air: "Outside air", process_exhaust: "Kitchen exhaust",
+    surface_inventory: "Walls, floors and roof", construction_matching: "Constructions", cross_sheet_opening_match: "Windows and doors",
+    glazing_properties: "Glass", exposure_orientation: "Orientation and sun", site_clue_extraction: "Site clues",
+    address_confirmation: "Address", weather_source_matching: "Weather", sheet_identity: "Drawing sheets", revision_scope: "Revisions",
+    page_relationships: "Links between pages"};
+
+  function plainTarget(text) {
+    const value = String(text ?? "");
+    const room = value.match(/^room(?:-use)?:[^:]*:(.+)$/);
+    if (room) return room[1].replaceAll("-", " ").replace(/^./, letter => letter.toUpperCase());
+    const item = value.match(/^pdf-[0-9a-f]+(?::(p\d+|[\w.-]+))?(?::(.+))?$/);
+    if (item) return [item[2]?.replaceAll("-", " "), item[1]].filter(Boolean).join(" · ") || "The drawing set";
+    return value;
+  }
+
+  // A finding's value in one short line: what it is (its name or reference), then its set values; nothing empty.
+  function briefValue(value) {
+    if (value === null || value === undefined || value === "") return "";
+    if (typeof value !== "object") return String(value).replace(/\s+/g, " ").trim();
+    if (Array.isArray(value)) return value.length ? `${value.length} item${value.length === 1 ? "" : "s"}: ${value.slice(0, 3).map(briefValue).join("; ")}` : "";
+    const naming = ["label", "name", "original_label", "target", "fixture_id", "opening_id", "equipment_id", "room_id", "owner_id", "surface_id"];
+    const name = naming.map(key => value[key]).find(item => typeof item === "string" && item.trim());
+    const facts = Object.entries(value).filter(([key, item]) => !naming.includes(key) && !key.endsWith("_id") && !key.endsWith("_ids")
+        && item !== null && item !== "" && typeof item !== "object")
+      .map(([key, item]) => `${key.replaceAll("_", " ")} ${item}`);
+    return [name ? plainTarget(name) : "", ...facts].filter(Boolean).join(" · ");
+  }
+
+  function wireReadOpen() {
+    // The tab refreshes itself while checks run; keep what someone opened open across refreshes.
+    if (state.readOpenProject !== state.projectId) { state.readOpen = new Set(); state.readOpenProject = state.projectId; }
+    body.querySelectorAll("[data-ws-read-open]").forEach(details => details.addEventListener("toggle", () => {
+      if (details.open) state.readOpen.add(details.dataset.wsReadOpen); else state.readOpen.delete(details.dataset.wsReadOpen);
+    }));
+  }
+
   function needsMarkup(review) {
     const rows = (review.findings || []).filter(row => row.subskill_id === "information_needs");
     const needs = rows.filter(row => row.field === "needs" && row.value && typeof row.value === "object");
@@ -439,7 +556,7 @@
     const open = needs.filter(row => !answerFor(row)).length;
     const options = review.answer_options || {};
     const kinds = options.kinds || [];
-    const items = needs.map(row => {
+    const entries = needs.map(row => {
       const value = row.value, saved = answerFor(row);
       const draft = state.needDrafts?.[row.id] || {};
       const kind = draft.kind ?? saved?.kind ?? (kinds.some(item => item.id === value.answer_kind) ? value.answer_kind : "other");
@@ -476,7 +593,9 @@
         : kind === "roof_above"
         ? `<label>Answer ${select("data-ws-need-value", (options.above || []).map(item => [item.id, item.label]), draft.value ?? saved?.answer ?? "", "choose")}</label>`
         : `<label>Answer${kindRow.unit ? ` (${esc(kindRow.unit)})` : ""} <input data-ws-need-value value="${esc(draft.value ?? saved?.answer ?? "")}"></label>`;
-      return `<li class="ws-need" data-ws-need="${esc(row.id)}"><b>${esc(value.target || "")}${value.field ? ` · ${esc(String(value.field).replaceAll("_", " "))}` : ""}</b>
+      const opened = state.readOpen?.has(`need:${row.id}`);
+      const html = `<li class="ws-need" data-ws-need="${esc(row.id)}"><details data-ws-read-open="need:${esc(row.id)}" ${opened ? "open" : ""}>
+        <summary><b>${esc(plainTarget(value.target))}${value.field ? ` · ${esc(String(value.field).replaceAll("_", " "))}` : ""}</b>${saved ? ` <span class="ws-chip">answered</span>` : ""}</summary>
         <p class="ws-fine">${esc(value.why || "")}${value.impact ? ` <b>Impact:</b> ${esc(value.impact)}.` : ""}${value.where_to_look ? ` <b>Usually found in:</b> ${esc(value.where_to_look)}.` : ""}${value.pages ? ` <span>Pages looked at: ${esc(value.pages)}</span>` : ""}</p>
         ${saved ? `<p class="ws-fine" data-ws-need-answer><b>Answer:</b> ${esc(saved.answer)} <span>(${esc(source)}${saved.by ? `, ${esc(saved.by)}` : ""})</span>
           <br><span data-ws-need-applied class="${saved.applied ? "" : "is-warn"}">${saved.applied ? `In the calculation: ${esc(saved.summary)} Press Calculate to update the result.` : esc(saved.summary || "Kept as a note.")}</span></p>` : ""}
@@ -490,13 +609,22 @@
           ${exhaustField}
           <label>From ${select("data-ws-need-source", ANSWER_SOURCES, draft.source ?? saved?.source ?? "", "choose")}</label>
           <label>Note <input data-ws-need-note value="${esc(draft.note ?? saved?.note ?? "")}" placeholder="optional"></label>
-          <button class="btn ${saved ? "ghost" : "key"} mini" type="button" data-ws-need-save>${saved ? "Update" : "Save answer"}</button></div></li>`;
-    }).join("");
+          <button class="btn ${saved ? "ghost" : "key"} mini" type="button" data-ws-need-save>${saved ? "Update" : "Save answer"}</button></div></details></li>`;
+      return {html, answered: !!saved, group: kinds.find(item => item.id === value.answer_kind)?.label || "Other"};
+    });
+    // Unanswered items grouped by what kind of answer they need (most first); answered ones together at the end.
+    const groups = {};
+    for (const item of entries.filter(row => !row.answered)) (groups[item.group] ||= []).push(item.html);
+    const answeredItems = entries.filter(row => row.answered).map(row => row.html).join("");
+    const items = Object.entries(groups).sort((a, b) => b[1].length - a[1].length).map(([label, rows]) =>
+      `<h4 class="ws-group-head" data-ws-need-group>${esc(label)} <small>(${rows.length})</small></h4><ul class="ws-read-pages">${rows.join("")}</ul>`).join("")
+      + (answeredItems ? `<h4 class="ws-group-head" data-ws-need-group>Answered <small>(${entries.filter(row => row.answered).length})</small></h4><ul class="ws-read-pages">${answeredItems}</ul>` : "");
     const worked = inferred.map(row => `<li>${esc(row.value.target || "")}${row.value.field ? ` · ${esc(String(row.value.field).replaceAll("_", " "))}` : ""}: <b>${esc(row.value.value ?? "")}${row.value.unit ? ` ${esc(row.value.unit)}` : ""}</b>
       <span class="ws-fine">— ${esc(row.value.method || "")}${row.value.pages ? ` (pages ${esc(row.value.pages)})` : ""}</span></li>`).join("");
     return `<section class="ws-page-reading" aria-label="What we need to find" data-ws-needs><h3>What we need to find</h3>
       <p class="ws-fine" data-ws-needs-status>${needs.length ? `${needs.length} item${needs.length === 1 ? "" : "s"} the drawings don't give${open ? ` · ${open} still to find` : " · all answered"}.` : "Nothing to find: the drawings cover what the calculation needs."}</p>
-      ${items ? `<ul class="ws-read-pages">${items}</ul>` : ""}
+      ${needs.length ? `<p class="ws-fine">Click an item to see why it's needed and to answer it.</p>` : ""}
+      ${items}
       ${worked ? `<details data-ws-read-open="worked" ${state.readOpen?.has("worked") ? "open" : ""}><summary>Worked out from the drawings (${inferred.length})</summary><ul>${worked}</ul></details>` : ""}</section>`;
   }
 
@@ -577,7 +705,7 @@
       : `${run.findings.length} item${run.findings.length === 1 ? "" : "s"} from ${run.pages.length} page${run.pages.length === 1 ? "" : "s"}${run.open ? ` · ${run.open} to review` : " · all reviewed"}${
           run.findings.some(row => row.in_calculation) ? ` · ${Math.round(run.findings.reduce((sum, row) => sum + (row.in_calculation ? row.accepted_heat_w : 0), 0))} W in the calculation (press Calculate to update)` : ""}.`;
     const shown = value => value === null || value === undefined || value === "" ? "" : value === true ? "yes" : value === false ? "no" : String(value);
-    const rows = run.findings.map(row => {
+    const cards = run.findings.map(row => {
       const value = row.decided_value || row.value;
       const facts = [value.quantity != null ? `×${value.quantity}` : "", value.size, value.model, value.rated_power || "power not printed",
                      value.under_hood === true ? "under hood" : "", row.in_calculation ? `${Math.round(row.accepted_heat_w)} W in ${value.room}` : ""].filter(Boolean).map(esc).join(" · ");
@@ -609,13 +737,20 @@
         ${row.possibly_same_as?.length && row.status === "proposed" ? `<p class="ws-fine is-warn" data-ws-eq-duplicate>Possibly the same as ${row.possibly_same_as.map(match => esc(match.label)).join(" or ")} from the schedule: if so, reject this one so it isn't counted twice.</p>` : ""}
         ${row.pictures_only ? `<p class="ws-fine">Seen only in renders or photos, so it shows design intent: check it against the plans.</p>` : ""}
         <ul>${row.citations.map(cite => `<li>Page ${esc(cite.page)}${cite.excerpt ? `: ${esc(cite.excerpt)}` : ""}</li>`).join("")}</ul>${check}${actions}</details></li>`;
-    }).join("");
+    });
+    // To review first, then what has been decided; each card opens when clicked.
+    const group = (label, status) => {
+      const rows = run.findings.map((row, index) => row.status === status ? cards[index] : "").join("");
+      const count = run.findings.filter(row => row.status === status).length;
+      return count ? `<h4 class="ws-group-head" data-ws-eq-group="${status}">${label} <small>(${count})</small></h4><ul class="ws-read-pages">${rows}</ul>` : "";
+    };
+    const rows = group("To review", "proposed") + group("Accepted", "accepted") + group("Rejected", "rejected");
     const canRetry = ["failed", "blocked", "interrupted"].includes(run.status);
     return `<section class="ws-page-reading" aria-label="Equipment found in the drawings" data-ws-equipment><h3>Equipment found in the drawings</h3>
       <p class="ws-fine">Read from every page that shows equipment. These are proposals: accept, correct or reject each one. Power ratings are only what the drawings print.</p>
       <p class="${canRetry ? "ws-banner is-warn" : "ws-fine"}" role="status" data-ws-equipment-status>${esc(statusText)}</p>
       ${canRetry ? `<button class="btn ghost mini" type="button" data-ws-equipment-retry>Retry reading the equipment</button>` : ""}
-      ${rows ? `<ul class="ws-read-pages">${rows}</ul>` : ""}</section>`;
+      ${rows}</section>`;
   }
 
   function wireEquipment(projectId, run) {
@@ -670,11 +805,6 @@
   }
 
   function wirePageReading(projectId) {
-    // The tab refreshes itself while checks run; keep the pages someone opened open across refreshes.
-    if (state.readOpenProject !== projectId) { state.readOpen = new Set(); state.readOpenProject = projectId; }
-    body.querySelectorAll("[data-ws-read-open]").forEach(details => details.addEventListener("toggle", () => {
-      if (details.open) state.readOpen.add(details.dataset.wsReadOpen); else state.readOpen.delete(details.dataset.wsReadOpen);
-    }));
     body.querySelector("[data-ws-page-reading-enabled]")?.addEventListener("change", async event => {
       event.target.disabled = true;
       try { await sendJson("/api/page-reading", {project_id: projectId, action: "set_enabled", enabled: event.target.checked}); await renderDrawings(); }
@@ -712,13 +842,12 @@
   }
 
   function pdfReviewMarkup(review, vision) {
-    const stages = (review.stages || []).map(stage => `<li><span>${esc(stage.label)}</span><b>${esc(stage.status.replaceAll("_", " "))}</b></li>`).join("");
     const reviewFindings = (review.findings || []).filter(row => row.subskill_id !== "information_needs");
     const openCounts = reviewFindings.filter(row => !["accepted", "rejected"].includes(row.status)).reduce((counts, row) => {
       counts[row.evidence] = (counts[row.evidence] || 0) + 1; return counts;
     }, {});
     const evidenceCount = Object.entries(openCounts).map(([name, count]) => `${count} ${name}`).join(" · ");
-    const findings = reviewFindings.map(row => {
+    const cards = reviewFindings.map(row => {
       const evidence = (row.citations || []).map(citation => `<li>Page ${esc(citation.page ?? "?")}${citation.excerpt ? `: ${esc(citation.excerpt)}` : ""}</li>`).join("");
       const inference = (row.inferences || []).map(item => `<li>${esc(typeof item === "string" ? item : JSON.stringify(item))}</li>`).join("");
       const pages = row.pages?.length ? `Page${row.pages.length === 1 ? "" : "s"} ${row.pages.map(esc).join(", ")}` : "Page citation missing";
@@ -736,31 +865,38 @@
         : row.evidence === "missing" ? `${editor}${roomPicker}<div class="ws-actions"><button class="btn key" type="button" data-ws-finding-save="${esc(row.id)}">Save value</button><button class="btn ghost" type="button" data-ws-finding-reject="${esc(row.id)}">Leave missing</button></div>`
         : row.evidence === "conflicting" ? `${editor}${roomPicker}${choiceButtons ? `<p class="ws-fine">Choose a conflicting reading or edit the value:</p><ul>${choiceButtons}</ul>` : ""}<div class="ws-actions"><button class="btn key" type="button" data-ws-finding-save="${esc(row.id)}">Save chosen value</button><button class="btn ghost" type="button" data-ws-finding-reject="${esc(row.id)}">Reject</button></div>`
         : `${editor}${roomPicker}<div class="ws-actions"><button class="btn key" type="button" data-ws-finding-accept="${esc(row.id)}">Accept value</button><button class="btn ghost" type="button" data-ws-finding-reject="${esc(row.id)}">Reject</button></div>`;
-      return `<article class="ws-skill-finding" data-ws-finding="${esc(row.id)}"><div class="ws-skill-finding-head"><b>${esc(row.field.replaceAll("_", " "))}</b><span>${esc(row.subskill_id.replaceAll("_", " "))}</span></div>
-        <span class="ws-chip ws-evidence-${esc(row.evidence)}" data-ws-evidence>${esc(row.evidence)}</span>
+      const decided = ["accepted", "rejected"].includes(row.status);
+      const brief = briefValue(row.value);
+      return `<article class="ws-skill-finding" data-ws-finding="${esc(row.id)}"><details data-ws-read-open="finding:${esc(row.id)}" ${state.readOpen?.has(`finding:${row.id}`) ? "open" : ""}>
+        <summary><b>${esc(row.field.replaceAll("_", " "))}</b> <span class="ws-fine">${esc(brief.length > 90 ? `${brief.slice(0, 90)}…` : brief || "no value")}</span>
+        <span class="ws-chip ws-evidence-${esc(row.evidence)}" data-ws-evidence>${esc(row.evidence)}</span>${decided ? ` <span class="ws-chip">${esc(row.status)}</span>` : ""}</summary>
         <pre>${esc(formatFindingValue(row.value))}${row.units && row.value != null && row.value !== "" ? ` ${esc(row.units)}` : ""}</pre><p class="ws-fine">${esc(pages)}${row.confidence != null ? ` · confidence ${esc(row.confidence)}` : ""}</p>
         ${row.formula ? `<p class="ws-fine">Calculation: ${esc(row.formula)}</p>` : ""}${row.calculation ? `<p class="ws-fine">Working: ${esc(row.calculation)}</p>` : ""}${evidence ? `<details><summary>Evidence excerpts</summary><ul>${evidence}</ul></details>` : ""}
         ${inference ? `<details><summary>Why this is inferred</summary><ul>${inference}</ul></details>` : ""}
-        ${unresolved}${reviewActions}</article>`;
+        ${unresolved}${reviewActions}</details></article>`;
+    });
+    // Grouped by topic, the topics with findings to review first; inside a topic, those to review first.
+    const topics = {};
+    reviewFindings.forEach((row, index) => (topics[row.subskill_id] ||= []).push({row, html: cards[index]}));
+    const open = rows => rows.filter(item => !["accepted", "rejected"].includes(item.row.status)).length;
+    const findings = Object.entries(topics).sort((a, b) => (open(b[1]) > 0) - (open(a[1]) > 0) || b[1].length - a[1].length).map(([id, rows]) => {
+      const waiting = open(rows);
+      const ordered = [...rows].sort((a, b) => (["accepted", "rejected"].includes(a.row.status)) - (["accepted", "rejected"].includes(b.row.status)));
+      return `<details class="ws-finding-topic" data-ws-finding-topic="${esc(id)}" data-ws-read-open="topic:${esc(id)}" ${state.readOpen?.has(`topic:${id}`) ? "open" : ""}>
+        <summary><b>${esc(SKILL_NAMES[id] || id.replaceAll("_", " "))}</b> <small>${waiting ? `${waiting} to review · ` : ""}${rows.length} finding${rows.length === 1 ? "" : "s"}</small></summary>
+        <div class="ws-skill-findings">${ordered.map(item => item.html).join("")}</div></details>`;
     }).join("");
+    const issues = (review.issues || []).map(item => `<li><b>${esc(SKILL_NAMES[item.name] || item.name.replaceAll("_", " "))} (${esc(item.status)})</b>${item.reason ? `: ${esc(item.reason)}` : ""}</li>`).join("");
     const retry = ["failed", "blocked", "stale", "needs_review"].includes(review.status)
       ? `<button class="btn ghost mini" type="button" data-ws-skill-retry ${review.read_only ? "disabled" : ""}>Retry PDF review</button>` : "";
-    const evidenceReviewed = review.subskills || [];
-    const issues = (review.issues || []).map(item => `<li><b>${esc(item.name.replaceAll("_", " "))} (${esc(item.status)})</b>${item.reason ? `: ${esc(item.reason)}` : ""}</li>`).join("");
-    const reviewedSummary = evidenceReviewed.map(row => {
-      const item = row.evidence_reviewed || {};
-      const pagesText = item.pages?.length ? `pages ${item.pages.map(esc).join(", ")}` : "no page evidence sent";
-      return `<li>${esc(row.id.replaceAll("_", " "))}: ${pagesText} · ${esc(row.status.replaceAll("_", " "))}${item.provider ? ` · ${esc(item.provider)}` : ""}${item.model ? ` / ${esc(item.model)}` : ""}</li>`;
-    }).join("");
     return `<section class="ws-pdf-review" aria-label="Findings from the skills" data-ws-pdf-review><h3>Findings from the skills</h3>
       <p class="ws-fine">Values the skills read or worked out for rooms, gains, walls, glazing, airflow and plant, each with its pages. They are proposals: accept, edit or reject each one.</p>
       ${review.blocked_reason ? `<p class="ws-banner is-warn" role="status">${esc(review.blocked_reason)}</p>` : ""}
       ${issues ? `<p class="ws-banner is-warn" role="alert"><b>Some parts of this review did not finish.</b><ul>${issues}</ul></p>` : ""}
-      <p class="ws-fine" role="status" data-ws-pdf-review-status>${esc(review.status.replaceAll("_", " "))}${review.remediation ? ` · ${esc(review.remediation)}` : ""}</p>
+      <p class="ws-fine" role="status" data-ws-pdf-review-status>Review status: ${esc({needs_review: "finished, findings to review", completed: "finished",
+        blocked: "blocked (see above)", failed: "didn't finish", running: "running", queued: "starting", stale: "out of date: retry"}[review.status] || review.status.replaceAll("_", " "))}.</p>
       ${evidenceCount ? `<p data-ws-evidence-count>Open findings: ${esc(evidenceCount)}</p>` : ""}
-      ${reviewedSummary ? `<details><summary>Evidence reviewed by each skill</summary><ul>${reviewedSummary}</ul></details>` : ""}
-      ${stages ? `<details><summary>Skill progress and coverage</summary><ul class="ws-list">${stages}</ul></details>` : ""}
-      ${findings ? `<div class="ws-skill-findings">${findings}</div>` : ""}${retry}</section>`;
+      ${findings ? `<p class="ws-fine">Open a topic, then a finding, to see its evidence and accept, edit or reject it.</p>${findings}` : ""}${retry}</section>`;
   }
 
   function wirePdfReview(projectId, review, vision) {

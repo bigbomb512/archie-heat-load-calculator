@@ -288,3 +288,24 @@ polyline.ws-dim, polyline.ws-dim2 { fill: none; stroke-dasharray: 10 6; }
 /* Room choice on a PDF review finding that sets an input */
 .ws-finding-room { display: block; margin: 0.4rem 0; }
 .ws-finding-room select { margin-left: 0.4rem; max-width: 100%; }
+
+/* Drawings: overview steps, grouped lists and topic rows (one sub-tab at a time). */
+.ws-steps { list-style: none; display: flex; flex-wrap: wrap; gap: 10px; padding: 0; margin: 12px 0; }
+.ws-step { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; min-width: 0; }
+.ws-step small { color: var(--text-2); }
+.ws-step.is-done .ws-subtab-status { background: #2a8050; }
+.ws-step.is-todo .ws-subtab-status { background: var(--line); }
+.ws-step.is-error .ws-subtab-status { background: #a3281a; }
+.ws-needs-you { padding-left: 1.1rem; margin: 6px 0 12px; }
+.ws-needs-you li { margin: 4px 0; }
+.ws-group-head { margin: 16px 0 4px; font-size: .95rem; }
+.ws-group-head small { color: var(--text-2); font-weight: normal; }
+.ws-finding-topic { border-top: 1px solid var(--line-soft); padding: 8px 0; }
+.ws-finding-topic > summary { cursor: pointer; }
+.ws-finding-topic > summary small { color: var(--text-2); margin-left: 6px; }
+.ws-skill-finding > details > summary { cursor: pointer; overflow-wrap: anywhere; }
+.ws-need > details > summary { cursor: pointer; overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .ws-subtabs { overflow-x: auto; margin-left: 16px; margin-right: 16px; }
+  .ws-subtab { flex: 0 0 auto; }
+}

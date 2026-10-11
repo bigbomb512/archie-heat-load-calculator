@@ -129,6 +129,23 @@ async function mockJob(page, {status, model = () => ({room_scope: scope}), onPos
   return posts;
 }
 
+// The Drawings tab shows one sub-tab at a time; a question, a topic of findings and a finding each open when clicked.
+async function openNeed(need) {
+  const details = need.locator("details").first();
+  if (await details.getAttribute("open") === null) await need.locator("summary").first().click();
+  await expect(details).toHaveAttribute("open", "");
+  return need;
+}
+async function openFinding(page, id) {
+  const card = page.locator(`[data-ws-finding='${id}']`);
+  const topic = page.locator("[data-ws-finding-topic]").filter({has: card});
+  if (await topic.getAttribute("open") === null) await topic.locator(":scope > summary").click();
+  const details = card.locator("details").first();
+  if (await details.getAttribute("open") === null) await card.locator("summary").first().click();
+  await expect(details).toHaveAttribute("open", "");
+  return card;
+}
+
 async function openJob(page, path = "/") {
   await page.goto(path);
   await page.locator("[data-open='job-1']").click();
@@ -247,6 +264,11 @@ test("Drawings: shows analysis status, keeps page changes available on request, 
   // Open manual checks don't take over the status line; they wait in the fallback section.
   await expect(page.locator("[data-ws-checks]")).not.toContainText("Toki team");
   await expect(page.locator("[data-ws-checks]")).not.toContainText("of 11 checks");
+  await expect(page.locator("[data-ws-subtab]")).toHaveText([/Overview/, /To find/, /Equipment/, /Findings/, /Pages & AI/]);
+  await page.setViewportSize({width: 375, height: 812});                           // five sub-tabs on a phone: no sideways page scroll
+  expect(await page.evaluate(() => document.body.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.setViewportSize({width: 1280, height: 800});
+  await page.locator("[data-ws-subtab='pages']").click();
   await expect(page.locator("[data-ws-fallback] summary")).toHaveText("Manual fallback (P0–P6)");
   await expect(page.locator("[data-ws-tab='drawings'] .ws-tab-icon")).toHaveText("◌");
   await expect(page.locator("[data-ws-operator-panel]")).toHaveCount(0);
@@ -272,7 +294,8 @@ test("Drawings: finished but unreviewed equipment or findings are not called com
   await mockJob(page, {status: () => baseStatus(), skill: () => ({status: "completed", stages: [], findings: [], subskills: []}),
     extraction: () => ({status: "done", findings: [{id: "eq:1", value: {name: "TV"}, pages: [9], citations: [], conflicts: {}, evidence: "supported", status: "proposed"}], pages: [9], open: 1})});
   await page.goto("/#/job/job-1/drawings");
-  await expect(page.locator("[data-ws-checks]")).toContainText("Some findings below still need our review");
+  await expect(page.locator("[data-ws-checks]")).toContainText("Some of what it found still needs your review");
+  await expect(page.locator("[data-ws-needs-you]")).toContainText("1 equipment item to review");
   await expect(page.locator("[data-ws-checks]")).not.toContainText("complete");
 });
 
@@ -305,11 +328,13 @@ test("PDF review: consent starts the skills review and findings show page eviden
       return null;
     }});
   consented = true;   // findings come from the skills once every page has been read; there is no separate consent box
-  await page.goto("/#/job/job-1/drawings");
+  await page.goto("/#/job/job-1/drawings/findings");
   await expect(page.locator("[data-ws-pdf-consent]")).toHaveCount(0);
   await expect(page.locator("[data-ws-pdf-review] h3")).toHaveText("Findings from the skills");
   await expect(page.locator(".ws-skill-finding")).toContainText("Shop");
   await expect(page.locator(".ws-skill-finding")).toContainText("Page 20: Shop 42 m2");
+  await expect(page.locator("[data-ws-finding-topic='room_boundaries_areas'] > summary")).toHaveText(/Room outlines and areas\s+1 to review · 1 finding/);
+  await openFinding(page, "room_boundaries_areas:geometry_candidates:0");
   await page.getByRole("button", {name: "Accept value"}).click();
   await expect(page.locator(".ws-skill-finding")).toContainText("accepted");
 });
@@ -328,8 +353,9 @@ test("PDF review: evidence labels, missing-value editing, and conflict choice ar
     status: decisions.includes(row.id) ? "accepted" : row.status}))});
   await mockJob(page, {status: () => baseStatus(), skill, vision: () => ({settings: {owner_opt_in: true, selected_group_ids: ["plans"]}, selection: {page_count: 1, group_count: 1}}),
     onPost: (kind, body) => { if (kind === "skill" && body.action === "review_finding") { decisions.push(body.finding_id); values[body.finding_id] = body.value; return skill(); } return null; }});
-  await page.goto("/#/job/job-1/drawings");
+  await page.goto("/#/job/job-1/drawings/findings");
   await expect(page.locator("[data-ws-evidence-count]")).toContainText("1 supported · 1 missing · 1 conflicting");
+  await openFinding(page, "room_identity_use:missing:ceiling_height:0");
   await expect(page.locator("[data-ws-finding='room_identity_use:rooms:0'] [data-ws-evidence]")).toHaveText("supported");
   const missing = page.locator("[data-ws-finding='room_identity_use:missing:ceiling_height:0']");
   await expect(missing.locator("[data-ws-finding-accept]")).toHaveCount(0);
@@ -344,7 +370,7 @@ test("PDF review: evidence labels, missing-value editing, and conflict choice ar
   expect(values["room_identity_use:missing:ceiling_height:0"]).toBe(3.2);           // a typed number stays a number
   // Reviewed findings drop out of the open count.
   await expect(page.locator("[data-ws-evidence-count]")).toHaveText("Open findings: 1 supported · 1 conflicting");
-  const conflict = page.locator("[data-ws-finding='room_identity_use:rooms:1']");
+  const conflict = await openFinding(page, "room_identity_use:rooms:1");
   await expect(conflict.locator("[data-ws-finding-accept]")).toHaveCount(0);
   await conflict.getByRole("button", {name: "kitchen"}).evaluate(button => button.click());
   await expect(conflict.locator("[data-ws-finding-edit]")).toHaveValue("kitchen");   // text shown as text
@@ -365,8 +391,8 @@ test("PDF review: accepting a seat count asks for its room and says what it set"
                         : {...seats, status: "proposed"}]});
   await mockJob(page, {status: () => baseStatus(), skill, vision: () => ({settings: {owner_opt_in: true}, selection: {page_count: 1, group_count: 1}}),
     onPost: (kind, body) => { if (kind === "skill" && body.action === "review_finding") { sent.push(body); accepted = true; return skill(); } return null; }});
-  await page.goto("/#/job/job-1/drawings");
-  const finding = page.locator("[data-ws-finding='occupancy_seating:occupancy:0']");
+  await page.goto("/#/job/job-1/drawings/findings");
+  const finding = await openFinding(page, "occupancy_seating:occupancy:0");
   const picker = finding.locator("[data-ws-finding-room]");
   await expect(picker).toHaveValue("");                                       // no room named: the operator chooses
   await picker.selectOption("Shop");
@@ -383,7 +409,8 @@ test("PDF review: a missing address can be typed as plain text", async ({page}) 
   const skill = () => ({status: "needs_review", read_only: false, stages: [], findings});
   await mockJob(page, {status: () => baseStatus(), skill, vision: () => ({settings: {owner_opt_in: true}, selection: {page_count: 1, group_count: 1}}),
     onPost: (kind, body) => { if (kind === "skill" && body.action === "review_finding") { values[body.finding_id] = body.value; return skill(); } return null; }});
-  await page.goto("/#/job/job-1/drawings");
+  await page.goto("/#/job/job-1/drawings/findings");
+  await openFinding(page, "address_confirmation:missing:confirmed_address:0");
   const box = page.locator("[data-ws-finding-edit]");
   await expect(box).toHaveAttribute("placeholder", "Type the value");
   await box.fill("Shop G38/22 Lemon Tree Av, Melrose Park NSW 2114");
@@ -403,10 +430,10 @@ test("PDF review: a missing or conflicting finding can be closed without a value
     status: rejected.includes(row.id) ? "rejected" : row.status}))});
   await mockJob(page, {status: () => baseStatus(), skill, vision: () => ({settings: {owner_opt_in: true}, selection: {page_count: 1, group_count: 1}}),
     onPost: (kind, body) => { if (kind === "skill" && body.action === "review_finding" && body.decision === "rejected") { rejected.push(body.finding_id); return skill(); } return null; }});
-  await page.goto("/#/job/job-1/drawings");
-  await page.locator("[data-ws-finding='surface_area:missing:area:0']").getByRole("button", {name: "Leave missing"}).click();
+  await page.goto("/#/job/job-1/drawings/findings");
+  await (await openFinding(page, "surface_area:missing:area:0")).getByRole("button", {name: "Leave missing"}).click();
   await expect(page.locator("[data-ws-finding='surface_area:missing:area:0']")).toContainText("rejected");
-  await page.locator("[data-ws-finding='room_identity_use:rooms:1']").getByRole("button", {name: "Reject"}).click();
+  await (await openFinding(page, "room_identity_use:rooms:1")).getByRole("button", {name: "Reject"}).click();
   expect(rejected).toEqual(["surface_area:missing:area:0", "room_identity_use:rooms:1"]);
   await expect(page.locator("[data-ws-evidence-count]")).toHaveCount(0);
 });
@@ -420,7 +447,7 @@ test("Drawings: every page read by AI shows main plans per level and what each p
   const posts = [];
   await mockJob(page, {status: () => baseStatus(), reading: () => state,
     onPost: (kind, body) => { if (kind === "reading") { posts.push(body); if (body.action === "set_enabled") state = {...state, enabled: body.enabled}; return state; } return null; }});
-  await page.goto("/#/job/job-1/drawings");
+  await page.goto("/#/job/job-1/drawings/pages");
   const section = page.locator("[data-ws-page-reading]");
   await expect(section.locator("[data-ws-main-plans]")).toHaveText("Main floor plan: Ground p2 · Mezzanine p3");
   await expect(section.locator("[data-ws-page-reading-status]")).toHaveText("Read all 2 pages in 4 min.");
@@ -464,7 +491,7 @@ test("Drawings: equipment found in the drawings can be corrected, chosen between
                      from_data_sheet: sheet, accepted_latent_w: sheet ? made.value.quantity * (made.value.latent_to_room_w || 0) : 0} : row; })});
   await mockJob(page, {status: () => baseStatus(), extraction: run,
     onPost: (kind, body) => { if (kind === "extraction" && body.action === "review") { decisions.push(body); return run(); } return null; }});
-  await page.goto("/#/job/job-1/drawings");
+  await page.goto("/#/job/job-1/drawings/equipment");
   const section = page.locator("[data-ws-equipment]");
   await expect(section.locator("[data-ws-equipment-status]")).toHaveText("3 items from 3 pages · 3 to review.");
   const oven = section.locator("[data-ws-eq='eq:oven']");
@@ -542,9 +569,14 @@ test("Drawings: what we need to find lists only the gaps, with where to look, an
         summary: applied ? "E06 COMBI OVEN in Kitchen: 18000 W each × 1 × 0.2 to the room." : "Kept as a note (other); not used by the calculation yet."};
       return skill(); } return null; }});
   await page.goto("/#/job/job-1/drawings");
+  await expect(page.locator("[data-ws-needs-you]")).toContainText("2 things to find");
+  await page.locator("[data-ws-overview-link='to-find']").click();
+  await expect(page).toHaveURL(/drawings\/to-find$/);
   const section = page.locator("[data-ws-needs]");
   await expect(section.locator("[data-ws-needs-status]")).toHaveText("2 items the drawings don't give · 2 still to find.");
-  const oven = section.locator("[data-ws-need='information_needs:needs:0']");
+  await expect(section.locator("[data-ws-need-group]")).toHaveText([/Equipment rated power\s*\(1\)/, /Other\s*\(1\)/]);
+  await expect(section.locator("[data-ws-need='information_needs:needs:0'] summary")).toHaveText("E06 Combi oven · rated input w");
+  const oven = await openNeed(section.locator("[data-ws-need='information_needs:needs:0']"));
   await expect(oven).toContainText("Usually found in: equipment spec sheet or supplier quote.");
   await expect(oven.locator("[data-ws-need-kind]")).toHaveValue("equipment_rating");      // the skill's kind
   await expect(oven.locator("[data-ws-need-room]")).toHaveValue("Kitchen");                // and room
@@ -557,7 +589,7 @@ test("Drawings: what we need to find lists only the gaps, with where to look, an
   expect(posts[0]).toMatchObject({action: "answer_need", finding_id: "information_needs:needs:0", kind: "equipment_rating", room: "Kitchen",
                                   equipment_id: "eq:oven", value: "18 kW", source: "spec_sheet"});
   await expect(section.locator("[data-ws-need='information_needs:needs:0'] [data-ws-need-applied]")).toContainText("In the calculation: E06 COMBI OVEN in Kitchen");
-  const note = section.locator("[data-ws-need='information_needs:needs:1']");
+  const note = await openNeed(section.locator("[data-ws-need='information_needs:needs:1']"));
   await expect(note.locator("[data-ws-need-room]")).toHaveCount(0);                        // a note isn't tied to a room
   await note.locator("[data-ws-need-value]").fill("Landlord supplies chilled water");
   await note.locator("[data-ws-need-source]").selectOption("landlord");
@@ -566,6 +598,8 @@ test("Drawings: what we need to find lists only the gaps, with where to look, an
   await expect(section.locator("[data-ws-needs-status]")).toHaveText("2 items the drawings don't give · all answered.");
   await section.getByText("Worked out from the drawings (1)").click();
   await expect(section).toContainText("Shop · ceiling height: 3.2 m — Section A ceiling line (pages 31)");
+  await expect(section.locator("[data-ws-need-group]").last()).toHaveText(/Answered\s*\(2\)/);
+  await page.locator("[data-ws-subtab='findings']").click();
   await expect(page.locator("[data-ws-finding='information_needs:needs:0']")).toHaveCount(0);
   await expect(page.locator("[data-ws-finding='equipment_evidence:equipment:0']")).toHaveCount(1);
 });
@@ -580,8 +614,8 @@ test("Drawings: a glass answer takes a U-value and SHGC for one room's windows o
               impact: "shopfront sun load", where_to_look: "the shopfront supplier or the client", pages: "26"}}]});
   await mockJob(page, {status: () => baseStatus(), skill,
     onPost: (kind, body) => { if (kind === "skill" && body.action === "answer_need") posts.push(body); return null; }});
-  await page.goto("/#/job/job-1/drawings");
-  const need = page.locator("[data-ws-need='information_needs:needs:0']");
+  await page.goto("/#/job/job-1/drawings/to-find");
+  const need = await openNeed(page.locator("[data-ws-need='information_needs:needs:0']"));
   await expect(need.locator("[data-ws-need-room]")).toHaveValue("");                      // all windows unless a room is chosen
   await need.locator("[data-ws-need-source]").selectOption("supplier");
   await need.locator("[data-ws-need-save]").click();
@@ -606,8 +640,9 @@ test("Drawings: a construction answer picks a handbook wall or roof, or takes a 
               impact: "roof heat", where_to_look: "the architect's sections", pages: "31"}}]});
   await mockJob(page, {status: () => baseStatus(), skill,
     onPost: (kind, body) => { if (kind === "skill" && body.action === "answer_need") posts.push(body); return null; }});
-  await page.goto("/#/job/job-1/drawings");
+  await page.goto("/#/job/job-1/drawings/to-find");
   const need = () => page.locator("[data-ws-need='information_needs:needs:0']");
+  await openNeed(need());
   await expect(need().locator("[data-ws-need-surface]")).toHaveValue("roof");                 // from the need's wording
   await expect(need().locator("[data-ws-need-room]")).toHaveValue("");                        // every room unless one is chosen
   await need().locator("[data-ws-need-source]").selectOption("standard_or_reference");
@@ -645,8 +680,8 @@ test("Drawings: an unconditioned-space temperature is answered for every room or
               why: "The kitchen's north wall backs onto an unventilated plant room.", impact: "wall conduction", where_to_look: "site visit", pages: "5"}}]});
   await mockJob(page, {status: () => baseStatus(), skill,
     onPost: (kind, body) => { if (kind === "skill" && body.action === "answer_need") posts.push(body); return null; }});
-  await page.goto("/#/job/job-1/drawings");
-  const need = page.locator("[data-ws-need='information_needs:needs:0']");
+  await page.goto("/#/job/job-1/drawings/to-find");
+  const need = await openNeed(page.locator("[data-ws-need='information_needs:needs:0']"));
   await expect(need.locator("[data-ws-need-room]")).toHaveValue("Kitchen");                   // the need's room, or every room
   await expect(need.locator("[data-ws-need-room] option").first()).toHaveText("every room");
   await need.locator("[data-ws-need-value]").fill("38");
@@ -669,8 +704,8 @@ test("Drawings: an exhaust answer takes the kitchen, its rate and how the air is
               impact: "make-up air, likely several kW", where_to_look: "the mechanical drawings or the kitchen supplier", pages: "20"}}]});
   await mockJob(page, {status: () => baseStatus(), skill,
     onPost: (kind, body) => { if (kind === "skill" && body.action === "answer_need") posts.push(body); return null; }});
-  await page.goto("/#/job/job-1/drawings");
-  const need = page.locator("[data-ws-need='information_needs:needs:0']");
+  await page.goto("/#/job/job-1/drawings/to-find");
+  const need = await openNeed(page.locator("[data-ws-need='information_needs:needs:0']"));
   await expect(need.locator("[data-ws-need-room]")).toHaveValue("Kitchen");
   await expect(need.locator("[data-ws-need-method] option").first()).toHaveText("not known (assume through the conditioned space)");
   await need.locator("[data-ws-need-value]").fill("1200");
@@ -689,8 +724,8 @@ test("Drawings: opening hours are entered per day type, for every room or one ro
               impact: "when the peak falls", where_to_look: "the client", pages: ""}}]});
   await mockJob(page, {status: () => baseStatus(), skill,
     onPost: (kind, body) => { if (kind === "skill" && body.action === "answer_need") posts.push(body); return null; }});
-  await page.goto("/#/job/job-1/drawings");
-  const need = page.locator("[data-ws-need='information_needs:needs:0']");
+  await page.goto("/#/job/job-1/drawings/to-find");
+  const need = await openNeed(page.locator("[data-ws-need='information_needs:needs:0']"));
   await expect(need.locator("[data-ws-need-room]")).toHaveValue("");                        // every room unless one is chosen
   await need.locator("[data-ws-need-hours='weekday']").fill("11-22");
   await need.locator("[data-ws-need-source]").selectOption("client");
@@ -715,8 +750,8 @@ test("Drawings: a wall-boundary answer opens the Walls tab on that room with the
               impact: "wall conduction", where_to_look: "a site visit or the centre plan", pages: "20"}}]});
   await mockJob(page, {status: () => baseStatus(), geometry: () => context, skill,
     onPost: (kind, body) => kind === "skill" && body.action === "answer_need" ? {...skill(), open_tab: "walls"} : null});
-  await page.goto("/#/job/job-1/drawings");
-  const need = page.locator("[data-ws-need='information_needs:needs:0']");
+  await page.goto("/#/job/job-1/drawings/to-find");
+  const need = await openNeed(page.locator("[data-ws-need='information_needs:needs:0']"));
   await need.locator("[data-ws-need-value]").fill("East wall faces the neighbouring tenancy");
   await need.locator("[data-ws-need-source]").selectOption("site_visit");
   await need.locator("[data-ws-need-save]").click();
@@ -733,6 +768,8 @@ test("Drawings: AI use for the job is shown by pass, with the provider", async (
     total: {calls: 75, failed: 2, usage_limit_hits: 1, tokens: 512000, seconds: 900, calls_without_token_count: 0},
     by_pass: {"pass 1 (pages)": {calls: 38, failed: 0, tokens: 254000, seconds: 320}, "skills": {calls: 37, failed: 2, tokens: 258000, seconds: 580}}}}));
   await page.goto("/#/job/job-1/drawings");
+  await expect(page.locator("[data-ws-drawings-overview]")).toContainText("AI use so far: 75 calls.");
+  await page.locator("[data-ws-overview-link='pages']").click();
   const usage = page.locator("[data-ws-ai-usage]");
   await expect(usage.locator("summary")).toHaveText("AI use for this job: 75 calls · 512,000 tokens · 15 min · 2 failed");
   await usage.locator("summary").click();
@@ -743,7 +780,7 @@ test("Drawings: AI use for the job is shown by pass, with the provider", async (
 
 test("Drawings: before the skills have run, the needs list says when it will appear", async ({page}) => {
   await mockJob(page, {status: () => baseStatus(), skill: () => ({status: "running", stages: [], findings: []})});
-  await page.goto("/#/job/job-1/drawings");
+  await page.goto("/#/job/job-1/drawings/to-find");
   await expect(page.locator("[data-ws-needs-status]")).toContainText("the list appears when they finish");
 });
 
@@ -754,10 +791,14 @@ test("Drawings: a failed or blocked page reading says why and offers a retry", a
                      page_count: 38, read: 36, failed: 2, main_plans: {}, pages: []}),
     onPost: (kind, body) => { if (kind === "reading") posts.push(body); return null; }});
   await page.goto("/#/job/job-1/drawings");
-  await expect(page.locator("[data-ws-page-reading-status]")).toContainText("2 of 38 pages couldn't be read");
-  await expect(page.locator("[data-ws-page-reading-status]")).toHaveClass(/is-warn/);
+  // The overview says why and offers the retry; Pages & AI has the details.
+  await expect(page.locator("[data-ws-drawings-overview] .ws-banner").filter({hasText: "pages couldn't be read"})).toContainText("2 of 38 pages couldn't be read");
+  await expect(page.locator("[data-ws-step]").first()).toHaveClass(/is-error/);
   await page.locator("[data-ws-page-reading-start]").click();
   expect(posts[0]).toMatchObject({project_id: "job-1", action: "retry"});
+  await page.goto("/#/job/job-1/drawings/pages");
+  await expect(page.locator("[data-ws-page-reading-status]")).toContainText("2 of 38 pages couldn't be read");
+  await expect(page.locator("[data-ws-page-reading-status]")).toHaveClass(/is-warn/);
 });
 
 test("Results: site design days, the humid-day check, fan heat and glass are shown", async ({page}) => {
@@ -851,7 +892,7 @@ test("PDF review browser states on a temporary Butcher Buffet copy", async ({pag
     await page.route("**/api/projects", route => route.fulfill({json: [{id: "job-1", name: source.name, pages: source.pages, relevant: 3, analysed: true}]}));
     await page.route("**/api/analysis?id=job-1", route => route.fulfill({json: {...analysis, name: source.name, filename: source.name, file_name: source.name}}));
     await page.route("**/api/job-status**", route => route.fulfill({json: baseStatus({name: source.name})}));
-    await page.goto("/#/job/job-1/drawings");
+    await page.goto("/#/job/job-1/drawings/findings");
     await expect(page.locator("[data-ws-pdf-review-status]")).toContainText("blocked");
     await page.screenshot({path: join(screenshots, "01-bb-no-consent.png"), fullPage: true});
 
@@ -875,17 +916,18 @@ test("PDF review browser states on a temporary Butcher Buffet copy", async ({pag
           status: "proposed", alternatives: ["clear", "low-e"]},
       ], subskills: [{id: "room_identity_use", status: "needs_review", evidence_reviewed: {pages: [20, 23], provider: "test-provider", model: "test-model"}}]};
     await page.reload();
+    await expect(page.locator("[data-ws-subtab='findings']")).toContainText("Findings (4)");
     await expect(page.locator("[data-ws-evidence-count]")).toContainText("supported");
     await expect(page.locator("[data-ws-evidence-count]")).toContainText("inferred");
     await expect(page.locator("[data-ws-evidence-count]")).toContainText("missing");
     await expect(page.locator("[data-ws-evidence-count]")).toContainText("conflicting");
-    await expect(page.locator("[data-ws-checks]")).toContainText("PDF review has finished. Some findings below still need our review.");
-    await expect(page.locator("[data-ws-checks]")).not.toContainText("Drawing analysis is complete");
     await page.screenshot({path: join(screenshots, "03-bb-findings.png"), fullPage: true});
-
-    await page.locator(`[data-ws-finding='${roomUse.id}']`).getByRole("button", {name: "Accept value"}).click();
+    await (await openFinding(page, roomUse.id)).getByRole("button", {name: "Accept value"}).click();
     await expect(page.locator(`[data-ws-finding='${roomUse.id}']`)).toContainText("accepted");
     expect(accepted).toBe(true);
+    await page.locator("[data-ws-subtab='overview']").click();
+    await expect(page.locator("[data-ws-checks]")).toContainText("The PDF review has finished. Some of what it found still needs your review.");
+    await expect(page.locator("[data-ws-checks]")).not.toContainText("Drawing analysis is complete");
     expect(posts.some(([kind]) => kind === "calculation")).toBe(false);
     await page.screenshot({path: join(screenshots, "04-bb-room-use-accepted.png"), fullPage: true});
   } finally {
@@ -895,7 +937,7 @@ test("PDF review browser states on a temporary Butcher Buffet copy", async ({pag
 
 test("PDF review: manual P0–P6 is an explicit fallback, not an automatic second review", async ({page}) => {
   const posts = await mockJob(page, {status: () => baseStatus()});
-  await page.goto("/#/job/job-1/drawings");
+  await page.goto("/#/job/job-1/drawings/pages");
   await expect(page.locator("[data-ws-manual-fallback]")).not.toBeVisible();      // tucked into the fallback section
   await page.locator("[data-ws-fallback] summary").click();
   await expect(page.locator("[data-ws-manual-fallback]")).toBeVisible();
@@ -908,7 +950,7 @@ test("PDF review: manual P0–P6 is an explicit fallback, not an automatic secon
 test("Drawings: a saved page selection is shown after reopening the job", async ({ page }) => {
   await mockJob(page, {status: () => baseStatus()});
   await page.route("**/api/analysis?id=job-1", route => route.fulfill({json: {...analysis, selected_pages: [20]}}));
-  await page.goto("/#/job/job-1/drawings");
+  await page.goto("/#/job/job-1/drawings/pages");
   await page.locator(".ws-page-controls summary").click();
   await expect(page.locator("[data-ws-pages] li")).toHaveCount(1);
   await expect(page.locator("[data-ws-pages]")).toContainText("Page 20");
@@ -924,7 +966,7 @@ test("Drawings: changing the pages used runs one server job, and switching tabs 
     else if (job.status === "running" && ++polls >= 3) job = {...job, step: "drawings", step_label: "Preparing the drawings"};
     return job;
   }});
-  await page.goto("/#/job/job-1/drawings");
+  await page.goto("/#/job/job-1/drawings/pages");
   await page.locator(".ws-page-controls summary").click();
   await expect(page.locator("[data-ws-use-pages]")).toHaveCount(0);
   await page.locator("[data-ws-page='27']").uncheck();
@@ -1005,7 +1047,7 @@ test("AI step: ?operator=1 opens the checks one at a time, in order; a bad reply
     },
   });
   await page.goto("/?operator=1#/job/job-1");
-  await expect(page).toHaveURL(/#\/job\/job-1\/drawings$/);
+  await expect(page).toHaveURL(/#\/job\/job-1\/drawings\/overview$/);
   await expect(page.locator("#vJob")).toBeVisible();
   await expect(page.locator("[data-ws-operator-off]")).toHaveCount(0);   // always on with ?operator=1
   const task = page.locator("[data-ws-op-task]");
