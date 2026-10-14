@@ -19,7 +19,6 @@ Nothing is written into the project; the output folder is a scratch area.
 
 import argparse
 import json
-import math
 from pathlib import Path
 
 import pdfplumber

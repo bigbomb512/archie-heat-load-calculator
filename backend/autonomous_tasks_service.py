@@ -14,7 +14,7 @@ from urllib.parse import quote
 import uuid
 
 from ai import autonomous_task_scoring, autonomous_tasks, reviewer_room_geometry, room_outline, kitchen_equipment
-from backend import productization, reviewer_room_geometry_service, site_location_service, calculation_extraction_service, page_analysis_cache
+from backend import productization, reviewer_room_geometry_service, calculation_extraction_service, page_analysis_cache
 from backend.vision_extraction_service import _atomic_json
 
 ACCURACY_PATH = Path(__file__).resolve().parents[1] / "evaluations" / "autonomous" / "accuracy.json"

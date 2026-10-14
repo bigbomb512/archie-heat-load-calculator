@@ -1426,7 +1426,11 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                   "verification_status": "provisional",
                   "source": (_source(profile_id) + "; reviewer-declared boundary" if candidate.get("reviewer_trace_id")
                              else _source(profile_id) + "; AI preliminary surface classification"),
-                  "preliminary_assumption": True, "source_pages": candidate["evidence"], "orientation": orientation}
+                  "preliminary_assumption": True, "source_pages": candidate["evidence"], "evidence": deepcopy(candidate.get("evidence", [])),
+                  "confidence": candidate.get("confidence"), "calculation_method": "surface area × U-value × boundary-to-room temperature difference",
+                  "supported_uncertainty_ranges": deepcopy(candidate.get("supported_uncertainty_ranges", [])),
+                  "solar_method": "area × directional solar × solar-gain factor × shading",
+                  "orientation": orientation}
         if candidate.get("reviewer_trace_id"):
             opaque.update({"reviewer_trace_id": candidate.get("reviewer_trace_id"),
                            "reviewer": candidate.get("reviewer", ""),
@@ -1440,7 +1444,7 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
             opaque["source"] = candidate["construction_source"]
         if fixed_adjacent:
             supplied_temperature = _number(candidate.get("boundary_temperature_c", candidate.get("adjacent_temperature_c")))
-            if physical == "floor" and role in {"room_to_room", "internal_floor", "unresolved"}:
+            if physical == "floor" and role in {"room_to_room", "internal_floor"}:
                 supplied_temperature = scenario_values["indoor_dry_bulb_c"]
                 source = "Phase 1 default: adjacent internal floor is assumed to be within the conditioned building at the room setpoint."
                 phase1_assumptions.append({"room_id": room["room_id"], "component": "internal floor boundary",
@@ -1450,8 +1454,11 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                 # neglected for cooling estimates unless average outdoor temperature exceeds the indoor design condition.
                 supplied_temperature = scenario_values["indoor_dry_bulb_c"]
                 source = "ASHRAE Handbook—HVAC Applications, nonresidential cooling loads: ground-contact floor sensible transfer may be neglected except in hot climates."
+                opaque["boundary_citations"] = [{"reference": "ASHRAE Handbook—HVAC Applications, Nonresidential Cooling Loads",
+                    "excerpt": "The preliminary ground-contact floor method neglects sensible transfer except in hot climates."}]
                 phase1_assumptions.append({"room_id": room["room_id"], "component": "ground-contact floor",
-                    "reason": "Floor construction and area were retained; its cooling contribution is assumed zero under the preliminary ground-floor rule. The generic weather input does not include annual mean temperature for the hot-climate exception."})
+                    "method": "ASHRAE preliminary ground-contact floor rule", "contribution_kw": 0.0,
+                    "reason": "The drawing identifies a ground-contact floor. Its cooling contribution is set to zero under the cited preliminary rule; annual mean temperature was unavailable to check the hot-climate exception."})
             elif supplied_temperature is not None:
                 source = candidate.get("boundary_source", "AI-read adjacent-space temperature")
             else:
@@ -1504,7 +1511,11 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                        "orientation": opening_orientation, "shading_category": opening["shading_category"], "preliminary_assumption": True,
                        "source": (opening.get("glazing_source") if answered_u and answered_shgc else
                                   _source(opening.get("glazing_choice") or profile_id) + "; preliminary assumption-pack glazing U-value and SHGC"),
-                       "citations": [], "source_pages": opening["evidence"]}
+                       "citations": deepcopy(opening.get("citations", [])), "source_pages": opening["evidence"],
+                       "evidence": deepcopy(opening.get("evidence", opening["evidence"])),
+                       "supported_uncertainty_ranges": deepcopy(opening.get("supported_uncertainty_ranges", [])),
+                       "confidence": opening.get("confidence"),
+                       "calculation_method": "U-value × opening area × temperature difference; solar gain uses corrected glass area × SHGC × incident solar × shading"}
             room["cooling_load"]["glazing_surfaces"].append(glazing)
             accepted_opening_ids.add(opening["candidate_id"])
             surface_summary["openings_included"] += 1
@@ -1619,21 +1630,11 @@ def _base_room_load_input_set(input_set):
     scoped = deepcopy(input_set)
     material = scoped["material"]
     phase1_assumptions = deepcopy(scoped.get("phase1_assumptions", []))
-    floor_u = load_pack()["preliminary_envelope"]["opaque_constructions"]["floor"]["u_value_w_m2k"]
-    indoor_temperature = material["requirements"]["indoor_cooling_setpoint_c"]
     for room in material["hourly_load_model"].get("rooms", []):
         if not any(surface.get("kind") == "floor" for surface in room["cooling_load"].get("envelope_surfaces", [])):
-            room["cooling_load"].setdefault("envelope_surfaces", []).append({
-                "surface_id": f"phase1-floor-{room['room_id']}", "kind": "floor", "orientation": "internal",
-                "area_m2": room["area_m2"], "u_value_w_m2k": floor_u, "solar_design_w_m2": 0,
-                "solar_gain_factor": 0, "shading_factor": 1, "boundary_method": "fixed_adjacent_temperature",
-                "boundary_temperature_c": indoor_temperature, "verification_status": "provisional",
-                "preliminary_assumption": True,
-                "source": f"{_source('floor')}; AI Phase 1 default: floor footprint uses the room area and is treated as an internal/ground-contact surface with no net cooling contribution.",
-                "source_pages": [],
-            })
             phase1_assumptions.append({"room_id": room["room_id"], "component": "floor boundary",
-                "reason": "The drawing did not resolve the floor boundary. AI used the room area and the generic floor construction; the preliminary cooling contribution is assumed zero for an internal or ground-contact floor."})
+                "status": "unresolved", "value": None, "contribution_kw": None,
+                "reason": "The drawing did not resolve the floor construction and boundary temperature. No floor load was calculated; it is excluded from the subtotal rather than treated as zero."})
         room["occupancy"] = 0
         room["heat_sources"] = [{
             "source_id": f"{room['room_id']}-phase1-zero-gains",
@@ -1662,6 +1663,134 @@ def _base_room_load_input_set(input_set):
         })
     scoped["phase1_assumptions"] = phase1_assumptions
     return scoped
+
+
+def _phase1_supported_load_range(surface):
+    """Propagate only cited input bounds to a per-surface peak-hour range."""
+    ranges = surface.get("supported_uncertainty_ranges", [])
+    if not isinstance(ranges, list) or not ranges:
+        return None
+    by_field = {str(item.get("field")): item for item in ranges if isinstance(item, dict)}
+    area = _number(surface.get("area_m2", surface.get("explicit_opening_area_m2")))
+    if not area or area <= 0:
+        return None
+    is_glazing = isinstance(surface.get("window"), dict)
+    window = surface.get("window", {}) if is_glazing else {}
+    base_values = {
+        "area_m2": area,
+        "u_value_w_m2k": _number(surface.get("u_value_w_m2k", window.get("u_value_w_m2k"))),
+        "shgc": _number(window.get("shgc")) if is_glazing else None,
+    }
+
+    def contribution_bounds(value, fields):
+        value = float(value or 0)
+        low_factor = high_factor = 1.0
+        citations = []
+        methods = []
+        for field in fields:
+            bound = by_field.get(field)
+            base = base_values.get(field)
+            if not bound or base is None or base <= 0:
+                continue
+            low, high = _number(bound.get("low")), _number(bound.get("high"))
+            if low is None or high is None or low < 0 or high < low or not low <= base <= high:
+                continue
+            ratios = (low / base, high / base)
+            low_factor *= min(ratios)
+            high_factor *= max(ratios)
+            methods.append(str(bound.get("method") or ""))
+            citations.extend(item for item in bound.get("citations", []) if isinstance(item, dict))
+        scaled = (value * low_factor, value * high_factor)
+        return min(scaled), max(scaled), methods, citations
+
+    conduction_fields = ["area_m2", "u_value_w_m2k"]
+    solar_fields = ["area_m2", "shgc"] if is_glazing else ["area_m2"]
+    low_conduction, high_conduction, conduction_methods, conduction_citations = contribution_bounds(
+        surface.get("conduction_kw"), conduction_fields)
+    low_solar, high_solar, solar_methods, solar_citations = contribution_bounds(
+        surface.get("solar_kw"), solar_fields)
+    low, high = low_conduction + low_solar, high_conduction + high_solar
+    midpoint = float(surface.get("total_kw") or 0)
+    if high - low < max(0.01, abs(midpoint) * 0.1):
+        return None
+    citations = {(item.get("page"), item.get("excerpt", "")): item
+                 for item in (*conduction_citations, *solar_citations)}
+    methods = list(dict.fromkeys(method for method in (*conduction_methods, *solar_methods) if method))
+    return {"low_kw": round(low, 4), "high_kw": round(high, 4),
+            "basis": "per-surface contribution at the room design peak hour",
+            "method": "; ".join(methods), "citations": list(citations.values())}
+
+
+def _phase1_surface_audit(report, material):
+    """Attach each room/surface's inputs, evidence, method, and peak contribution."""
+    scenarios = report.get("scenario_results", []) if isinstance(report.get("scenario_results"), list) else []
+    design = scenarios[0] if scenarios and isinstance(scenarios[0], dict) else {}
+    result_rooms = {str(row.get("room_id")): row for row in design.get("rooms", []) if isinstance(row, dict)}
+    model_rooms = {str(row.get("room_id")): row for row in material.get("hourly_load_model", {}).get("rooms", [])
+                   if isinstance(row, dict)}
+    audit = []
+    for room_id, room in model_rooms.items():
+        cooling = room.get("cooling_load", {})
+        by_surface = {}
+        for kind, collection in (("opaque", cooling.get("envelope_surfaces", [])),
+                                 ("glazing", cooling.get("glazing_surfaces", []))):
+            for surface in collection if isinstance(collection, list) else []:
+                if not isinstance(surface, dict) or not surface.get("surface_id"):
+                    continue
+                window = surface.get("window", {}) if isinstance(surface.get("window"), dict) else {}
+                by_surface[str(surface["surface_id"])] = {
+                    "room_id": room_id, "room_name": room.get("name", ""),
+                    "surface_id": str(surface["surface_id"]), "surface_type": surface.get("kind", kind),
+                    "area_m2": surface.get("area_m2", surface.get("explicit_opening_area_m2")),
+                    "opening_area_m2": surface.get("explicit_opening_area_m2"),
+                    "u_value_w_m2k": surface.get("u_value_w_m2k", window.get("u_value_w_m2k")),
+                    "shgc": window.get("shgc"), "orientation": surface.get("orientation", ""),
+                    "boundary_method": surface.get("boundary_method", ""),
+                    "boundary_temperature_c": surface.get("boundary_temperature_c"),
+                    "boundary_source": surface.get("boundary_source", ""),
+                    "construction_id": surface.get("construction_id", ""),
+                    "source": " · ".join(str(value) for value in (surface.get("source", ""), surface.get("boundary_source", "")) if value),
+                    "citations": deepcopy(surface.get("citations") or surface.get("boundary_citations", [])),
+                    "evidence": deepcopy(surface.get("evidence", surface.get("source_pages", []))),
+                    "confidence": surface.get("confidence"),
+                    "verification_status": surface.get("verification_status", "provisional"),
+                    "preliminary_assumption": bool(surface.get("preliminary_assumption")),
+                    "method": surface.get("calculation_method", ""),
+                    "solar_method": surface.get("solar_method", "") if kind == "opaque" else "",
+                    "supported_uncertainty_ranges": deepcopy(surface.get("supported_uncertainty_ranges", [])),
+                    "conduction_kw": 0.0, "solar_kw": 0.0,
+                }
+        result_room = result_rooms.get(room_id, {})
+        peak = result_room.get("peak", {}) if isinstance(result_room.get("peak"), dict) else {}
+        components = peak.get("components", {}) if isinstance(peak.get("components"), dict) else {}
+        for component_name, component in components.items():
+            if not isinstance(component, dict):
+                continue
+            is_solar = component_name in {"solar", "glazing_solar"}
+            is_window = component_name in {"glazing_conduction", "glazing_solar"}
+            field = "solar_kw" if is_solar else "conduction_kw"
+            for input_row in component.get("input_rows", []) if isinstance(component.get("input_rows"), list) else []:
+                if not isinstance(input_row, dict):
+                    continue
+                if is_window:
+                    surface = by_surface.get(str(input_row.get("surface_id", "")))
+                    if surface:
+                        surface[field] = round(surface[field] + float(input_row.get("contribution_sensible_kw", 0) or 0), 4)
+                    continue
+                for item in input_row.get("surfaces", []) if isinstance(input_row.get("surfaces"), list) else []:
+                    if not isinstance(item, dict):
+                        continue
+                    surface = by_surface.get(str(item.get("surface_id", "")))
+                    if surface:
+                        surface[field] = round(surface[field] + float(item.get("gain_kw", 0) or 0), 4)
+        for surface in by_surface.values():
+            surface["total_kw"] = round(surface["conduction_kw"] + surface["solar_kw"], 4)
+            surface["peak_hour"] = peak.get("display_hour", peak.get("hour"))
+            supported_range = _phase1_supported_load_range(surface)
+            if supported_range:
+                surface["supported_load_range_kw"] = supported_range
+            audit.append(surface)
+    return audit
 
 
 def calculate(input_set, safety_factor_policy=None, scope="full"):
@@ -1717,16 +1846,33 @@ def calculate(input_set, safety_factor_policy=None, scope="full"):
     report["provenance"] = shared_resolution.build_report_provenance(report, input_set.get("value_resolution", {}))
     report["excluded_components"] = sorted(set(report.get("excluded_components", []) + [item["component"] for item in input_set["exclusions"]]))
     if scope == "phase1_base_room":
+        report["phase1_surface_audit"] = _phase1_surface_audit(report, material)
         report["excluded_components"] = sorted(set(report["excluded_components"] + [
             "people and occupancy", "lighting", "equipment and plug loads", "ventilation and outside air",
             "infiltration", "process air and internal moisture", "supply fan and duct heat",
         ]))
-        # A Phase 1 default floor makes the hourly model calculable, but must not
-        # stand in for the drawing's wall/roof boundary inventory. Keep the
-        # subtotal available while marking rooms with no non-floor boundary
-        # evidence incomplete.
+        # An unresolved floor is not silently converted into a zero-load surface.
         for room in material.get("hourly_load_model", {}).get("rooms", []):
             cooling = room.get("cooling_load", {})
+            has_floor = any(surface.get("kind") == "floor" for surface in cooling.get("envelope_surfaces", [])
+                            if isinstance(surface, dict))
+            if not has_floor:
+                record = {
+                    "room_id": room.get("room_id", ""), "room_name": room.get("name", ""),
+                    "component_id": "phase1_floor_boundary", "component_type": "envelope",
+                    "component": "Floor boundary", "value": None, "unit": "kW",
+                    "source": "AI drawing review", "citations": [], "verification_status": "unresolved",
+                    "reason": "Floor construction or boundary temperature was not resolved. Its contribution is excluded from the subtotal, not assumed to be zero.",
+                }
+                if not any(row.get("room_id") == record["room_id"] and row.get("component_id") == record["component_id"]
+                           for row in report.get("unresolved_room_inputs", []) if isinstance(row, dict)):
+                    report.setdefault("unresolved_room_inputs", []).append(record)
+                coverage = next((row for row in report.get("scope_summary", {}).get("room_input_coverage", [])
+                                 if row.get("room_id") == record["room_id"]), None)
+                if coverage is not None:
+                    coverage.setdefault("not_assessed", []).append(record)
+                    coverage["status"] = "incomplete"
+                report.setdefault("scope_summary", {})["complete_scope"] = False
             has_nonfloor_boundary = any(
                 surface.get("kind") != "floor"
                 for surface in cooling.get("envelope_surfaces", [])
@@ -1740,7 +1886,7 @@ def calculate(input_set, safety_factor_policy=None, scope="full"):
                 "component": "Wall, roof and opening boundary inventory",
                 "value": None, "unit": "", "source": "AI drawing review",
                 "citations": [], "verification_status": "provisional",
-                "reason": "No non-floor room boundary was resolved from the drawings; the AI Phase 1 subtotal uses the room floor assumption only until wall, roof and opening boundaries are identified.",
+                "reason": "No wall, roof or opening boundary was resolved from the drawings; this room's subtotal contains only other resolved envelope contributions.",
             }
             if not any(row.get("room_id") == record["room_id"] and row.get("component_id") == record["component_id"]
                        for row in report.get("unresolved_room_inputs", []) if isinstance(row, dict)):

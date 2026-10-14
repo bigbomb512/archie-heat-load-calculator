@@ -741,6 +741,37 @@ def _current_high_confidence_skill_rows(paths, subskill_id, field_name, decision
     return selected, citations
 
 
+def _supported_uncertainty_range(row, field, citations, point_value=None):
+    """Return a cited numeric interval from a skill inference, if it is complete.
+
+    Intervals are deliberately optional. Confidence scores are not converted
+    into guessed error bars; a range is shown only when the skill supplied
+    finite bounds, a method, and citations that resolve to this source set.
+    """
+    inferences = row.get("_numeric_inferences", {}) if isinstance(row, dict) else {}
+    inference = inferences.get(field) if isinstance(inferences, dict) else None
+    interval = inference.get("uncertainty_range") if isinstance(inference, dict) else None
+    if not isinstance(interval, dict):
+        return None
+    try:
+        low, high = float(interval.get("low")), float(interval.get("high"))
+        point = float(point_value if point_value is not None else inference.get("value"))
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(value) for value in (low, high, point)) or low < 0 or high < low:
+        return None
+    if not low - 1e-9 <= point <= high + 1e-9:
+        return None
+    method = str(interval.get("method") or "").strip()
+    citation_ids = interval.get("citation_ids")
+    if not method or not isinstance(citation_ids, list) or not citation_ids:
+        return None
+    supported_citations = [deepcopy(citations[str(item)]) for item in citation_ids if str(item) in citations]
+    if len(supported_citations) != len({str(item) for item in citation_ids}) or not supported_citations:
+        return None
+    return {"low": low, "high": high, "method": method, "citations": supported_citations}
+
+
 def _pixel_rectangle(inference):
     """Return a validated axis-aligned pixel rectangle and its scale from a cited inference."""
     if not isinstance(inference, dict) or not str(inference.get("method") or "").strip():
@@ -970,6 +1001,22 @@ def _merge_phase1_skill_proposals(paths, proposal):
             # to gross area. Exclude uncertain mixed-opening walls until that
             # solver can represent a bounded opaque-area estimate safely.
             continue
+        supported_ranges = []
+        area_range_field = "net_opaque_area_m2" if net_area is not None else "gross_area_m2"
+        area_range_point = net_area if net_area is not None else gross_area
+        # Gross-area bounds can be reused for the opaque area only when no
+        # opening subtraction is needed. Otherwise retain only a range the
+        # drawing skill explicitly gave for net opaque area.
+        if area_range_field == "gross_area_m2" and opening_area not in (None, 0):
+            area_range_field = ""
+        area_range = (_supported_uncertainty_range(area_record, area_range_field, area_citations, area_range_point)
+                      if area_range_field else None)
+        if area_range:
+            supported_ranges.append({"field": "area_m2", **area_range})
+        u_value = ai_preliminary._number(construction.get("u_value_w_m2k"))
+        u_range = _supported_uncertainty_range(construction, "u_value_w_m2k", construction_citations, u_value)
+        if u_range:
+            supported_ranges.append({"field": "u_value_w_m2k", **u_range})
         row = {
             "surface_key": surface_id, "label": str(raw.get("label") or surface_id),
             "owner_room_id": owner.get("room_id", ""), "owner_room_label": owner_label,
@@ -980,7 +1027,7 @@ def _merge_phase1_skill_proposals(paths, proposal):
             "orientation": str(raw.get("orientation") or "").upper(),
             "gross_area_m2": gross_area, "net_opaque_area_m2": net_area,
             "opening_coverage": opening_coverage, "construction_id": str(construction.get("assembly_id") or ""),
-            "u_value_w_m2k": ai_preliminary._number(construction.get("u_value_w_m2k")),
+            "u_value_w_m2k": u_value, "supported_uncertainty_ranges": supported_ranges,
             "confidence": confidence, "page": evidence[0]["page"], "evidence": evidence,
             "rationale": ("Cited AI surface inventory joined to draft area, construction and boundary findings; "
                           "contiguous full-height opening coverage was checked from the shared elevation pixel geometry."
@@ -1043,6 +1090,18 @@ def _merge_phase1_skill_proposals(paths, proposal):
             evidence.extend(deepcopy(item) for item in host.get("evidence", []) if isinstance(item, dict))
         if not evidence:
             continue
+        supported_ranges = []
+        area_range = _supported_uncertainty_range(prop, "opening_area_m2", property_citations, opening_area)
+        if area_range:
+            supported_ranges.append({"field": "area_m2", **area_range})
+        u_value = ai_preliminary._number(prop.get("u_value_w_m2k"))
+        u_range = _supported_uncertainty_range(prop, "u_value_w_m2k", property_citations, u_value)
+        if u_range:
+            supported_ranges.append({"field": "u_value_w_m2k", **u_range})
+        shgc = ai_preliminary._number(prop.get("solar_property")) if prop.get("solar_property_type") == "shgc" else None
+        shgc_range = _supported_uncertainty_range(prop, "solar_property", property_citations, shgc) if shgc is not None else None
+        if shgc_range:
+            supported_ranges.append({"field": "shgc", **shgc_range})
         opening = {
             "opening_key": opening_id, "label": str(prop.get("label") or opening_id),
             "owner_room_id": owner.get("room_id", ""), "owner_room_label": owner.get("label", ""),
@@ -1051,10 +1110,10 @@ def _merge_phase1_skill_proposals(paths, proposal):
             "explicit_glass_area_m2": ai_preliminary._number(prop.get("glass_area_m2")),
             "external_exposure": exposure_value,
             "orientation": orientation, "shading_category": "unshaded", "glazing_choice": prop.get("glazing_choice"),
-            "u_value_w_m2k": ai_preliminary._number(prop.get("u_value_w_m2k")),
-            "shgc": ai_preliminary._number(prop.get("solar_property")) if prop.get("solar_property_type") == "shgc" else None,
+            "u_value_w_m2k": u_value, "shgc": shgc,
             "glazing_source": str(prop.get("source_id") or "Cited PDF glazing property"),
             "confidence": confidence, "page": evidence[0]["page"], "evidence": evidence,
+            "supported_uncertainty_ranges": supported_ranges,
             "assumptions": ["ai_skill_opening_proposal", "unshaded"],
         }
         proposal.setdefault("openings", []).append(opening)
@@ -1407,14 +1466,9 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                             "reviewer_trace_id": part.get("trace_id", ""), "reviewer": declaration_reviewer,
                             "verification_status": "provisional",
                             "rationale": ("Reviewer-declared external boundary edge; outward orientation derived from the calibrated polygon winding and page north."
-                                          if orientation else "Reviewer-declared external boundary edge; façade orientation is unknown, so conduction only is included and no façade solar is applied."),
-                            "assumptions": ([] if orientation else ["unknown_orientation_conduction_only"]),
+                                          if orientation else "Reviewer-declared external boundary edge; no north reference is available, so the documented west-facing preliminary solar profile is used."),
+                            "assumptions": ([] if orientation else ["unknown_orientation_west_facing_solar_estimate"]),
                         })
-                        if not orientation:
-                            assessment["not_assessed"].append({"component_id": f"external_wall_orientation_{index}{part_component_suffix}",
-                                "component": "external walls — orientation not assessed (no façade solar)",
-                                "reason": f"External wall edge {index + 1} is included for conduction, but orientation and façade solar were not assessed.",
-                                "page": part.get("page")})
                         for opening in wall_openings:
                             height = opening["head_height_m"] - opening["sill_height_m"]
                             proposal.setdefault("openings", []).append({
@@ -1432,11 +1486,6 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                                 "rationale": "Reviewer-entered opening geometry; glazing U-value and SHGC are preliminary assumption-pack values.",
                                 "assumptions": ["preliminary_glazing_profile", "reviewer_cited_elevation_geometry"],
                             })
-                            if not orientation:
-                                assessment["not_assessed"].append({"component_id": f"glazing_solar_{opening['opening_id']}",
-                                    "component": "Glazing sun — orientation not assessed",
-                                    "reason": "Glazing conduction is included; glazing solar gain is omitted because page north is not declared.",
-                                    "page": opening["elevation_page"]})
                     if part_unknown_edges:
                         assessment["not_assessed"].append({
                             "component_id": f"unclassified_wall_boundaries{part_component_suffix}",
@@ -1638,6 +1687,9 @@ def _workspace_report(report):
         "room_names": [{"room_id": room_id, "name": name} for room_id, name in sorted(names.items())],
         "room_peaks": _room_peaks(report),
         "preliminary_surface_summary": report.get("preliminary_surface_summary", {}),
+        "phase1_automation_note": str(report.get("phase1_automation_note", "")),
+        "phase1_surface_audit": [item for item in (report.get("phase1_surface_audit", []) or [])[:200]
+                                 if isinstance(item, dict)],
         "phase1_assumptions": [{**item, "room_name": names.get(str(item.get("room_id", "")), "")}
                                 for item in (report.get("phase1_assumptions", []) or [])[:30] if isinstance(item, dict)],
         "design_conditions_basis": report.get("design_conditions_basis", {}),

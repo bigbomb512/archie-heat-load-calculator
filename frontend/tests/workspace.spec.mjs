@@ -453,7 +453,8 @@ test("Drawings: every page read by AI shows main plans per level and what each p
   await page.goto("/#/job/job-1/drawings/pages");
   const section = page.locator("[data-ws-page-reading]");
   await expect(section.locator("[data-ws-main-plans]")).toHaveText("Main floor plan: Ground p2 · Mezzanine p3");
-  await expect(section.locator("[data-ws-page-reading-status]")).toHaveText("Read all 2 pages in 4 min.");
+  await expect(section.locator("[data-ws-page-reading-status]")).toHaveText("Read 2 of 3 pages; 1 couldn't be read. Review continued from the pages already read.");
+  await expect(section.getByRole("button", {name: "Retry reading"})).toBeVisible();
   await section.getByText("What's on each page (2 of 3 read)").click();
   await expect(section.locator("[data-ws-read-page='1']")).toContainText("not read: usage limit reached");
   await section.locator("[data-ws-read-page='2'] summary").click();
@@ -545,6 +546,18 @@ test("Drawings: equipment found in the drawings can be corrected, chosen between
     value: {quantity: 2, room: "Kitchen", sensible_to_room_w: 1500, latent_to_room_w: 900, heat_reference: "Maker X combi"}});
   await expect(section.locator("[data-ws-eq='eq:oven'] [data-ws-eq-heat]"))
     .toHaveText("In the calculation: 3000 W + 1800 W moisture into Kitchen (data sheet: Maker X combi, entered by the operator).");
+});
+
+test("Drawings: partial equipment reading keeps its findings and offers a retry", async ({page}) => {
+  const posts = [];
+  await mockJob(page, {status: () => baseStatus(), extraction: () => ({status: "done", kind: "equipment_appliances",
+    pages: [5, 20], findings: [], open: 0, failures: {"5.0": "usage limit reached"}}),
+    onPost: (kind, body) => { if (kind === "extraction") posts.push(body); return null; }});
+  await page.goto("/#/job/job-1/drawings/equipment");
+  const section = page.locator("[data-ws-equipment]");
+  await expect(section.locator("[data-ws-equipment-status]")).toContainText("1 page sections couldn't be read; other findings continued");
+  await section.getByRole("button", {name: "Retry reading the equipment"}).click();
+  expect(posts[0]).toMatchObject({project_id: "job-1", action: "retry"});
 });
 
 test("Drawings: what we need to find lists only the gaps, with where to look, and puts answers into the calculation", async ({page}) => {
@@ -927,6 +940,29 @@ test("Results: a stale Phase 1 base load is labelled and can be recalculated", a
   await page.goto("/#/job/job-1/results");
   await expect(page.locator("[data-ws-phase1-stale]")).toContainText("Drawing inputs changed since this Phase 1 result");
   await expect(page.locator("[data-ws-calculate-base]")).toHaveText("Recalculate Phase 1 base load");
+});
+
+test("Results: Phase 1 exposes the surface evidence and load audit", async ({page}) => {
+  await mockJob(page, {status: () => baseStatus(), model: () => ({
+    phase1_base_room_load_report: {
+      status: "draft", included_scope_peak: {final_design_total_kw: 4.2},
+      room_peaks: [{name: "Shop", design_total_kw: 4.2}],
+      phase1_automation_note: "One page read failed; the other drawing evidence was used.",
+      phase1_surface_audit: [{room_name: "Shop", surface_type: "opaque_wall", surface_id: "wall-1",
+        area_m2: 12, u_value_w_m2k: 0.6, orientation: "W", conduction_kw: 0.2, solar_kw: 0.8, total_kw: 1.0,
+        method: "area × U-value × temperature difference", source: "AI preliminary assumption pack",
+        evidence: [{page: 5, excerpt: "External wall"}], confidence: 0.82,
+        supported_load_range_kw: {low_kw: 0.7, high_kw: 1.3, basis: "at room design peak hour", method: "printed dimension rounding"}}],
+    },
+  })});
+  await page.goto("/#/job/job-1/results");
+  await expect(page.locator("[data-ws-phase1-exceptions]")).toContainText("One page read failed");
+  const audit = page.locator("[data-ws-phase1-surfaces]");
+  await expect(audit).toContainText("Surface inputs and load · 1");
+  await audit.locator("summary").click();
+  await expect(audit).toContainText("Conduction 0.2 kW");
+  await expect(audit).toContainText("Supported range 0.7–1.3 kW");
+  await expect(audit).toContainText("Evidence: p. 5: External wall");
 });
 
 test("PDF review browser states on a temporary Butcher Buffet copy", async ({page}) => {

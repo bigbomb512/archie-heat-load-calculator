@@ -29,6 +29,11 @@ external lookup is a separate consented, allowlisted service operation.
    `inferences` (interpretation or derivation). Every inference has field,
    value, unit, method, formula, unrounded operands, confidence, and citation
    IDs. Do not turn absence into zero.
+   When source evidence supports a meaningful numeric interval, an inference
+   may include `uncertainty_range: {low, high, method, citation_ids}`. Cite
+   the evidence for both bounds and keep the point value inside them. Do not
+   manufacture ranges from confidence scores or generic guesses; omit the
+   range when the documents do not support bounds.
 3. Preserve alternatives, conflicts, scope, assumptions, unresolved fields,
    affected stable component IDs, confidence, and remediation. Never silently
    choose between incompatible evidence.

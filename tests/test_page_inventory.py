@@ -138,21 +138,33 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual((again["status"], again["calls"]), ("done", 0))
         self.assertEqual(sorted(reader.calls), [1, 2, 3])
 
-    def test_a_failed_page_fails_the_run_keeps_the_others_and_retry_reads_only_it(self):
+    def test_partial_page_read_keeps_successes_and_retry_reads_only_the_failed_pages(self):
         reader = FakeReader({1: self.plan, 2: RuntimeError("Codex CLI failed (exit 1): usage limit reached"), 3: {"page_type": "bad"}})
         service.PROVIDER_FACTORY = lambda: reader
         service.start(None, self.project)
-        failed = wait(self.project)
-        self.assertEqual((failed["status"], failed["read"], failed["failed"]), ("failed", 1, 2))
-        self.assertIn("2 of 3 pages couldn't be read (pages 2, 3)", failed["problem"])
-        self.assertIn("usage limit reached", failed["problem"])
-        self.assertEqual([row["status"] for row in failed["pages"]], ["read", "failed", "failed"])
+        partial = wait(self.project)
+        self.assertEqual((partial["status"], partial["read"], partial["failed"], partial["partial"]), ("done", 1, 2, True))
+        self.assertEqual(partial["problem"], "")
+        self.assertIn("usage limit reached", partial["pages"][1]["reason"])
+        self.assertEqual([row["status"] for row in partial["pages"]], ["read", "failed", "failed"])
         reader.replies.update({2: self.schedule, 3: {"page_type": "render_or_photo"}})
         service.start(None, self.project, {"action": "retry"})
         done = wait(self.project)
         self.assertEqual((done["status"], done["read"]), ("done", 3))
         self.assertEqual(reader.calls.count(1), 1)                     # never read again
         self.assertEqual(reader.batches[-1], [2, 3])                    # the retry reads only the failed pages, together
+
+    def test_partial_page_read_starts_pass2_with_available_evidence(self):
+        reader = FakeReader({1: self.plan, 2: RuntimeError("temporary provider error"), 3: {"page_type": "bad"}})
+        service.PROVIDER_FACTORY = lambda: reader
+        class Web:
+            def project_by_id(self, _project_id): return service_test.project
+        service_test = self
+        with patch("backend.page_extraction_service.start_after_pass1") as continue_review:
+            service.start(Web(), self.project)
+            partial = wait(self.project)
+        self.assertEqual((partial["status"], partial["read"], partial["failed"]), ("done", 1, 2))
+        continue_review.assert_called_once_with(unittest.mock.ANY, self.project)
 
     def test_an_unreadable_batch_reply_reads_each_page_on_its_own(self):
         reader = FakeReader({1: self.plan, 2: self.schedule, 3: {"page_type": "render_or_photo"}})
@@ -169,6 +181,48 @@ class ServiceTests(unittest.TestCase):
         done = wait(self.project)
         self.assertEqual((done["status"], done["read"]), ("done", 3))
         self.assertEqual(sorted(reader.calls), [1, 2, 3])                  # each page once more, on its own
+
+    def test_transient_single_page_connection_failure_is_retried(self):
+        reader = FakeReader({1: self.plan})
+        original = reader.propose
+        attempts = []
+
+        def transient_once(prompt, image_paths=()):
+            attempts.append(True)
+            if len(attempts) == 1:
+                raise RuntimeError("Remote end closed connection without response")
+            return original(prompt, image_paths)
+
+        reader.propose = transient_once
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(service, "TRANSIENT_RETRY_DELAYS", (0, 0)):
+            image = Path(folder) / "p-1.png"
+            image.write_bytes(b"page")
+            readings, failures, calls = service.read_pages({1: image}, Path(folder) / "replies", reader,
+                                                            workers=1, batch=1)
+        self.assertEqual((set(readings), failures, calls, len(attempts)), ({1}, {}, 2, 2))
+
+    def test_transient_batch_connection_failure_is_recovered_page_by_page(self):
+        reader = FakeReader({1: self.plan, 2: self.schedule, 3: {"page_type": "render_or_photo"}})
+        original = reader.propose
+        failed_batch = []
+
+        def transient_batch(prompt, image_paths=()):
+            if len(image_paths) > 1 and not failed_batch:
+                failed_batch.append(True)
+                raise RuntimeError("Remote end closed connection without response")
+            return original(prompt, image_paths)
+
+        reader.propose = transient_batch
+        with tempfile.TemporaryDirectory() as folder, \
+                patch.object(service, "TRANSIENT_RETRY_DELAYS", (0, 0)):
+            images = {}
+            for page in (1, 2, 3):
+                image = Path(folder) / f"p-{page}.png"
+                image.write_bytes(bytes([page]))
+                images[page] = image
+            readings, failures, calls = service.read_pages(images, Path(folder) / "replies", reader, workers=1, batch=3)
+        self.assertEqual((set(readings), failures, calls), ({1, 2, 3}, {}, 4))
 
     def test_pages_are_read_several_per_call_and_cached_one_by_one(self):
         reader = FakeReader({1: self.plan, 2: self.schedule, 3: {"page_type": "render_or_photo"}})

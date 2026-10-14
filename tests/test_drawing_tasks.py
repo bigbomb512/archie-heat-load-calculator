@@ -4,6 +4,7 @@ refused reply is tried once more with its reason; a task that keeps failing stop
 import json
 from pathlib import Path
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -60,6 +61,27 @@ class FakeProvider:
 
 
 class DrawingTaskTests(unittest.TestCase):
+    def test_provider_limit_keeps_the_drawing_job_reviewable_and_starts_independent_skills(self):
+        class App:
+            def __init__(self, project): self.project = project
+            def project_by_id(self, _project_id): return self.project
+
+        with tempfile.TemporaryDirectory() as folder:
+            project = {"id": "limit", "review_dir": folder}
+            app = App(project)
+            limited = ai_provider.UsageLimitReached("The AI usage limit is reached; retry after reset.")
+            with patch.object(drawing.ai_provider, "configured", return_value=True), \
+                    patch.object(drawing, "answer_all", side_effect=limited), \
+                    patch("backend.skill_workflow_service.start_after_reading") as start_skills:
+                drawing.start(app, project, then_skills=True)
+                deadline = time.monotonic() + 5
+                while drawing._JOB.key(project) in drawing._JOB.running and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                state = drawing.status(app, project)
+            self.assertEqual((state["status"], state["provider_limited"]), ("done", True))
+            self.assertIn("retry after the limit resets", state["warning"])
+            start_skills.assert_called_once_with(app, project)
+
     def test_rounds_unlock_the_next_tasks_a_refused_reply_is_retried_once_with_its_reason_and_calls_are_logged(self):
         with tempfile.TemporaryDirectory() as folder:
             fake, prompts = FakeTasks(folder), []

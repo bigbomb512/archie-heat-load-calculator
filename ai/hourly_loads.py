@@ -22,7 +22,7 @@ from ai.envelope_method_gates import dynamic_thermal_mass_gate_is_approved as dy
 from ai.thermal_mass import calculate_first_order_rc
 from ai.solar_radiation import absorbed_solar_gain_kw, facade_irradiance, validate_solar_radiation_source
 from ai.room_coupling import empty_room_coupling_method_gate, room_coupling_gate_is_approved, solve_dynamic_partition, validate_room_coupling_method_gate
-from ai.moisture_loads import empty_moisture_method_gate, moisture_gain, moisture_method_gate_is_approved, validate_moisture_method_gate
+from ai.moisture_loads import empty_moisture_method_gate, moisture_gain, validate_moisture_method_gate
 from ai.site_design_conditions import validate_citations
 from ai.cooling_readiness import assess_cooling_readiness, room_component_issues, topology_issues
 
@@ -1695,7 +1695,11 @@ def combine_components(contributions):
         if "schedule_factor" in item:
             current["schedule_factors"].append(item["schedule_factor"])
         if item.get("inputs") is not None:
-            current["input_rows"].append(deepcopy(item["inputs"]))
+            input_row = deepcopy(item["inputs"])
+            input_row["contribution_sensible_kw"] = item.get("sensible_kw", 0.0)
+            input_row["contribution_latent_kw"] = item.get("latent_kw", 0.0)
+            input_row["contribution_total_kw"] = item.get("total_kw", 0.0)
+            current["input_rows"].append(input_row)
             current.setdefault("inputs", deepcopy(item["inputs"]))
         if item.get("formula"):
             current.setdefault("formula", item["formula"])

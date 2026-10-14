@@ -15,6 +15,7 @@ from backend.job_runner import BackgroundJob
 
 JOB_FILE = "calculation_job.json"
 STEPS = [("answers", "Applying available project information"),
+         ("evidence", "Resolving Phase 1 drawing evidence"),
          ("model", "Building the model from your rooms"),
          ("rooms", "Resolving room scope from drawing evidence"),
          ("inputs", "Resolving calculation inputs and assumptions"),
@@ -54,7 +55,7 @@ def _resolve_inputs(web, project_id):
     from backend import ai_preliminary_service, model_input_resolution_service, skill_workflow_service
     project = web.project_by_id(project_id)
     manifest = ai_preliminary_service._read(Path(project["review_dir"]) / "skill_workflow_run.json", {})
-    reviewing = (manifest.get("scope") == "pdf_review" and manifest.get("status") in {"queued", "running"}
+    reviewing = (manifest.get("scope") in {"pdf_review", "phase1_envelope"} and manifest.get("status") in {"queued", "running"}
                  and project_id in skill_workflow_service._RUNNING)
     if reviewing:
         deadline = time.monotonic() + WORKFLOW_TIMEOUT_S
@@ -64,6 +65,51 @@ def _resolve_inputs(web, project_id):
             time.sleep(1)
     # Evidence exceptions are listed by the resolver itself; they don't stop it (as in the engineer screen).
     model_input_resolution_service.post(web, web.project_by_id(project_id), {"action": "resolve"})
+
+
+def _phase1_evidence_state(web, project):
+    """Run or join the scoped envelope review when the project has consented to AI use."""
+    from backend import ai_preliminary_service, skill_workflow_service
+
+    paths = skill_workflow_service._project_paths(project)
+    manifest = ai_preliminary_service._read(paths["manifest"], {})
+    settings = ai_preliminary_service._read(paths["root"] / "vision_extraction_settings.json", {})
+    if not (settings.get("owner_opt_in") or skill_workflow_service._case_file_route(project)):
+        return "AI drawing review was not started because project consent or an enabled case-file route is unavailable."
+
+    current_fingerprint = skill_workflow_service._source_fingerprint(paths, skill_workflow_service.load_catalog())
+    terminal = {"completed", "needs_review", "failed", "blocked", "stale", "provisional"}
+    if (manifest.get("scope") == "phase1_envelope"
+            and manifest.get("source_fingerprint") == current_fingerprint
+            and manifest.get("status") in terminal):
+        return ""
+
+    started = skill_workflow_service.post(web, project, {
+        "action": "start", "scope": "phase1_envelope", "automatic": True,
+    })
+    if isinstance(started, dict):
+        started_manifest = started.get("manifest", {}) if isinstance(started.get("manifest"), dict) else {}
+        started_scope = started_manifest.get("scope") or started.get("scope")
+        started_status = started_manifest.get("status") or started.get("status")
+        if started_scope == "phase1_envelope" and started_status in {"blocked", "failed"}:
+            return "The Phase 1 drawing review could not run; the calculation used saved evidence and lists its exceptions."
+    deadline = time.monotonic() + WORKFLOW_TIMEOUT_S
+    while True:
+        manifest = ai_preliminary_service._read(paths["manifest"], {})
+        current_scope = manifest.get("scope")
+        queued_phase1 = manifest.get("queued_automatic_scope") == "phase1_envelope"
+        active = (project["id"] in skill_workflow_service._RUNNING
+                  or queued_phase1
+                  or (current_scope == "phase1_envelope" and manifest.get("status") in {"queued", "running"}))
+        if not active:
+            if current_scope == "phase1_envelope" and manifest.get("status") in terminal:
+                if manifest.get("status") in {"failed", "blocked", "stale"}:
+                    return "The Phase 1 drawing review had unresolved tasks; the calculation used saved evidence and lists its exceptions."
+                return ""
+            return "The Phase 1 drawing review did not start; the calculation used saved evidence and lists its exceptions."
+        if time.monotonic() >= deadline:
+            return "The Phase 1 drawing review exceeded its wait limit; the calculation used saved evidence and lists its exceptions."
+        time.sleep(1)
 
 
 def start(web, project, data):
@@ -80,6 +126,11 @@ def start(web, project, data):
         step("answers")
         if job_service.job_setup(project).get("above"):
             job_service.apply_roof_answer(web, project)
+
+        phase1_note = ""
+        if phase == "phase1_base_room":
+            step("evidence")
+            phase1_note = _phase1_evidence_state(web, project)
 
         def model_and_calculate():
             step("model")
@@ -110,6 +161,9 @@ def start(web, project, data):
         project["updated_at"] = __import__("ai.ai_preliminary", fromlist=["now"]).now()
         web.update_project(project)
         report = ai_preliminary_service._read(paths["base_report"] if phase == "phase1_base_room" else paths["report"], {})
+        if phase1_note and phase == "phase1_base_room":
+            report["phase1_automation_note"] = phase1_note
+            ai_preliminary_service._write(paths["base_report"], report)
         peak = report.get("included_scope_peak") or {}
         return {"phase": phase, "total_kw": peak.get("final_design_total_kw", peak.get("design_total_kw")),
                 "inputs_resolved": resolved, "excluded_rooms": report.get("excluded_spaces", [])}

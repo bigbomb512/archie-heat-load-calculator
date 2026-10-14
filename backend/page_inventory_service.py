@@ -7,8 +7,8 @@ re-analysis of the same PDF repeats nothing. Progress is in page_inventory_job.j
 readings are in page_inventory.json.
 
 It starts by itself after PDF analysis unless the job's page reading is switched off. If the
-Codex CLI is missing or not signed in, the job is shown as blocked; if any page fails, the run
-is failed (the pages that were read are kept) and Retry reads the rest.
+provider is unavailable, the job is shown as blocked. When some pages fail, successful readings
+are kept and downstream review continues from them; Retry reads only the pages that failed.
 """
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -16,9 +16,9 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import threading
+import time
 
 from ai.page_inventory import PROMPT_VERSION, batch_prompt, build_prompt, packet_from_readings, main_plan_pages, validate_reply
 from backend import ai_provider
@@ -31,6 +31,8 @@ WORK_DIR = "page_inventory"
 DPI = 100
 WORKERS = 4
 PAGE_TIMEOUT_S = 300
+TRANSIENT_READ_RETRIES = 2
+TRANSIENT_RETRY_DELAYS = (1, 3)
 STEPS = [("render", "Preparing page images"), ("read", "Reading pages")]
 _JOB = BackgroundJob(JOB_FILE, STEPS, "archie-page-inventory",
                      "Reading the pages stopped before it finished (the server was restarted). Retry to read the rest.")
@@ -45,6 +47,14 @@ PageReadingUnavailable = ai_provider.ProviderUnavailable
 UsageLimitReached = ai_provider.UsageLimitReached
 CodexCliPageReader = ai_provider.CodexCliProvider
 _usage_limit_message = ai_provider.usage_limit_message
+
+
+def _transient_connection_error(error):
+    message = " ".join(str(error).split()).casefold()
+    return any(marker in message for marker in (
+        "remote end closed connection", "remote disconnected", "connection reset",
+        "connection aborted", "connection closed", "timed out", "temporary failure",
+    ))
 
 
 def _provider(task="pass1"):
@@ -119,17 +129,23 @@ def read_pages(images, cache_dir, provider, workers=WORKERS, on_page=None, batch
     def one(page, image):
         if stopped.is_set():
             return [(page, None, stopped.reason)], 0
-        try:
-            reply, raw = provider.propose(prompt, image_paths=[image])
-            reading = validate_reply(reply)
-        except UsageLimitReached as error:
-            stopped.reason = str(error)
-            stopped.set()
-            return [(page, None, str(error))], 1
-        except Exception as error:
-            return [(page, None, " ".join(str(error).split())[:400] or error.__class__.__name__)], 1
-        save(page, image, reading, raw)
-        return [(page, reading, None)], 1
+        calls = 0
+        for attempt in range(TRANSIENT_READ_RETRIES + 1):
+            try:
+                calls += 1
+                reply, raw = provider.propose(prompt, image_paths=[image])
+                reading = validate_reply(reply)
+                save(page, image, reading, raw)
+                return [(page, reading, None)], calls
+            except UsageLimitReached as error:
+                stopped.reason = str(error)
+                stopped.set()
+                return [(page, None, str(error))], calls
+            except Exception as error:
+                if attempt < TRANSIENT_READ_RETRIES and _transient_connection_error(error):
+                    time.sleep(TRANSIENT_RETRY_DELAYS[attempt])
+                    continue
+                return [(page, None, " ".join(str(error).split())[:400] or error.__class__.__name__)], calls
 
     def several(pages):
         if len(pages) == 1:
@@ -145,6 +161,15 @@ def read_pages(images, cache_dir, provider, workers=WORKERS, on_page=None, batch
         except Exception as error:
             if "JSON" in str(error):          # the reply itself was unreadable: read each page on its own instead
                 reply, raw = {}, {}
+            elif _transient_connection_error(error):
+                # A broken batch connection does not fail every page at once.
+                # Retry each uncached page independently and retain successful readings.
+                results, made = [], 1
+                for page in pages:
+                    rows, extra = one(page, images[page])
+                    results.extend(rows)
+                    made += extra
+                return results, made
             else:
                 reason = " ".join(str(error).split())[:400] or error.__class__.__name__
                 return [(page, None, reason) for page in pages], 1
@@ -265,16 +290,18 @@ def start(web, project, data=None):
             "failures": {str(page): reason for page, reason in sorted(failures.items())},
             "packet": packet_from_readings(readings, len(images)),
         })
-        if not failures:
-            # Every page is read: pass 2 reads the values of each kind from the pages flagged for it.
+        if readings and web is not None:
+            # Pass 2 and drawing review can use successful pages; one unreadable sheet must not
+            # discard independent evidence from the rest of the drawing set.
             from backend import page_extraction_service
             page_extraction_service.start_after_pass1(web, web.project_by_id(project_id) if web else project)
-        if failures:
+        if failures and not readings:
             pages = ", ".join(str(page) for page in sorted(failures))
             first = failures[min(failures)]
-            raise RuntimeError(f"{len(failures)} of {len(images)} pages couldn't be read (pages {pages}). "
+            raise RuntimeError(f"None of {len(images)} pages could be read (pages {pages}). "
                                f"First reason: {first} Retry to read them.")
-        return {"pages_read": len(readings), "calls": calls}
+        return {"pages_read": len(readings), "calls": calls, "partial": bool(failures),
+                "failed_pages": sorted(failures), "failure_reasons": failures}
 
     started = _JOB.start(web, project, fields, work)
     return {**status(web, project), "deduplicated": bool(started.get("deduplicated"))}

@@ -37,7 +37,10 @@ _JOB = BackgroundJob(JOB_FILE, STEPS, "archie-drawing-tasks",
 
 
 def status(web, project):
-    return _JOB.status(project)
+    job = _JOB.status(project)
+    if job.get("provider_limited"):
+        job["warning"] = "The drawing provider's usage limit was reached. Unanswered tasks are saved; retry after the limit resets."
+    return job
 
 
 def start(web, project, then_skills=True):
@@ -47,7 +50,14 @@ def start(web, project, then_skills=True):
 
     def work(web, project_id, step):
         current = web.project_by_id(project_id) if web is not None else project
-        result = answer_all(web, current, step)
+        try:
+            result = answer_all(web, current, step)
+        except ai_provider.UsageLimitReached as error:
+            # Stop further provider calls, but let the independent skill review
+            # continue from page readings, vectors, and saved drawing evidence.
+            result = {"answered": 0, "refused": len(_waiting(Path(current["review_dir"]))),
+                      "rounds": 0, "calls": 0, "provider_limited": True,
+                      "warning": str(error)[:500]}
         if then_skills and web is not None:
             step("skills")
             from backend import skill_workflow_service

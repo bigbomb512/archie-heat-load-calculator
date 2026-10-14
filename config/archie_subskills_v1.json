@@ -434,6 +434,7 @@
       "constraints": [
         "Retain gross and net separately.",
         "Subtract each opening exactly once.",
+        "When the drawing gives supported bounds for a numeric area, include them as an uncertainty_range on the corresponding cited inference; never derive bounds from confidence alone.",
         "Incomplete opening coverage blocks only its host wall."
       ],
       "handoff": "thermal_surface_ledger",
@@ -514,6 +515,7 @@
       },
       "constraints": [
         "If an opening register or sighting list is absent, use the attached PDF pages to propose visible openings with cited page-specific stable IDs.",
+        "When cited construction evidence supports a numeric U-value interval, include it as an uncertainty_range on that inference; do not invent a range.",
         "Do not merge repeated tags across levels/revisions without corroboration.",
         "Do not silently select between competing owners.",
         "Keep unmatched sightings visible."
@@ -541,6 +543,7 @@
       },
       "constraints": [
         "Visual-only values are draft provisional, never reviewed.",
+        "When a cited schedule or source supports bounds for opening area, U-value, or SHGC, include the bounds as uncertainty_range on that inference; do not infer bounds from confidence.",
         "Do not invent product ratings.",
         "Do not set both SHGC and transmission active for one system."
       ],

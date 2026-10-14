@@ -326,13 +326,13 @@ def resolve_opaque_envelope(ledger, opening_register=None, value_resolution=None
             if not item.get("adjacent_room_id"):
                 blockers.append("adjacent_room_missing")
         elif physical == "floor" and role == "unresolved" and resolution_mode == "preliminary_ai_estimate":
-            # A plan-supported floor footprint can remain in the draft even
-            # when the drawing does not identify what is below it. The Phase 1
-            # assembler treats this as an internal floor at room setpoint
-            # (zero cooling transfer) and records that lower-bound assumption.
+            # A plan-supported floor may remain a provisional estimate when
+            # the drawing does not identify what is below it. The Phase 1
+            # assembler supplies the labelled adjacent-space estimate from
+            # the selected weather profile; it must not silently become zero.
             item["boundary_method"] = "fixed_adjacent_temperature"
             item.setdefault("assumptions", []).append(
-                "Unresolved floor boundary treated as conditioned-adjacent at room setpoint for the Phase 1 draft; floor cooling load is zero until the below-floor condition is known."
+                "Unresolved floor boundary uses a labelled adjacent-space temperature estimate derived from the selected weather profile; this is provisional and not a zero-load assumption."
             )
         else:
             blockers.append("boundary_method_unresolved")

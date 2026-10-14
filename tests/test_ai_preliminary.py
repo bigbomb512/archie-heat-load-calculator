@@ -94,12 +94,14 @@ def main():
               for name in ("people", "lighting", "equipment_refrigeration", "outside_air", "infiltration")))
     projected = _base_room_load_input_set(direct)
     projected_room = projected["material"]["hourly_load_model"]["rooms"][0]
-    check("Phase 1 adds a transparent floor default without changing the source model",
-          any(surface.get("kind") == "floor" for surface in projected_room["cooling_load"].get("envelope_surfaces", []))
-          and any(row.get("component") == "floor boundary" for row in projected["phase1_assumptions"])
+    check("Phase 1 leaves an unsupported floor contribution unresolved instead of forcing it to zero",
+          not any(surface.get("kind") == "floor" for surface in projected_room["cooling_load"].get("envelope_surfaces", []))
+          and any(row.get("component") == "floor boundary" and row.get("contribution_kw") is None
+                  for row in projected["phase1_assumptions"])
           and all(surface.get("kind") != "floor" for surface in rooms[0]["cooling_load"].get("envelope_surfaces", [])))
     check("floor-only Phase 1 subtotal does not claim complete envelope coverage",
           not base_report["scope_summary"]["complete_scope"]
+          and any(row.get("component_id") == "phase1_floor_boundary" for row in base_report["unresolved_room_inputs"])
           and any(row.get("component_id") == "phase1_boundary_inventory" for row in base_report["unresolved_room_inputs"]))
     check("Phase 1 projection does not mutate the Phase 2 input model",
           original_internal == [(room["occupancy"], room["cooling_load"]["lighting_w_m2"], room["cooling_load"]["outside_air_lps"], len(room["heat_sources"])) for room in rooms])
@@ -178,6 +180,13 @@ def main():
     envelope_report = calculate(preliminary_envelope)
     peak_components = envelope_report["included_scope_peak"]["components"]
     check("preliminary report keeps opaque and glazing solar components separate", "envelope" in peak_components and "glazing_conduction" in peak_components and "glazing_solar" in peak_components)
+    phase1_envelope_report = calculate(preliminary_envelope, scope="phase1_base_room")
+    surface_audit = phase1_envelope_report["phase1_surface_audit"]
+    check("Phase 1 reports per-surface evidence, method, and conduction/solar contribution",
+          {row["surface_id"] for row in surface_audit} ==
+          {surface["surface_id"] for surface in prelim_room["cooling_load"]["envelope_surfaces"] + prelim_room["cooling_load"]["glazing_surfaces"]}
+          and all(row.get("method") and row.get("source") and "conduction_kw" in row and "solar_kw" in row
+                  for row in surface_audit))
     default_window = prelim_room["cooling_load"]["glazing_surfaces"][0]["window"]
     answered = deepcopy(proposal)
     answered["openings"][0].update({"u_value_w_m2k": 3.0, "shgc": 0.3, "glazing_source": "Answered by the operators (spec_sheet): low-e"})

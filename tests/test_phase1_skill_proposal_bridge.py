@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ai.ai_preliminary import _space_rows, assemble, validate_placeholder_proposal
+from ai.ai_preliminary import _space_rows, assemble, calculate, validate_placeholder_proposal
 from backend import skill_workflow_service
 from backend.ai_preliminary_service import (
     _complete_opening_coverage,
@@ -17,10 +17,26 @@ from backend.ai_preliminary_service import (
     _paths,
     _prepare_preliminary_proposal,
     _proposal_with_skill_findings,
+    _supported_uncertainty_range,
 )
 
 
 class Phase1SkillProposalBridgeTests(unittest.TestCase):
+    def test_uncertainty_range_requires_in_range_point_method_and_resolved_citations(self):
+        row = {"_numeric_inferences": {"area_m2": {
+            "value": 10, "method": "dimensioned plan", "citation_ids": ["area-page"],
+            "uncertainty_range": {"low": 9, "high": 11, "method": "printed dimension rounding",
+                                  "citation_ids": ["area-page"]},
+        }}}
+        citations = {"area-page": {"page": 2, "excerpt": "Room dimensions"}}
+        accepted = _supported_uncertainty_range(row, "area_m2", citations, 10)
+        self.assertEqual((accepted["low"], accepted["high"]), (9, 11))
+        self.assertEqual(accepted["citations"][0]["page"], 2)
+        self.assertIsNone(_supported_uncertainty_range(row, "area_m2", {}, 10))
+        self.assertIsNone(_supported_uncertainty_range(row, "area_m2", citations, 12))
+        row["_numeric_inferences"]["area_m2"]["uncertainty_range"]["method"] = ""
+        self.assertIsNone(_supported_uncertainty_range(row, "area_m2", citations, 10))
+
     def test_cited_enclosed_sanitary_room_links_to_its_calibrated_area_as_a_draft(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -161,6 +177,39 @@ class Phase1SkillProposalBridgeTests(unittest.TestCase):
             }, "c-glazing")
             write_skill("exposure_orientation", "exposures", [], "c-orientation")
 
+            def add_inferences(skill_id, rows):
+                path = proposal_dir / f"{skill_id}.json"
+                artifact = json.loads(path.read_text())
+                artifact["inferences"] = rows
+                path.write_text(json.dumps(artifact))
+
+            add_inferences("surface_area", [{
+                "field": "wall-a.net_opaque_area_m2", "value": 8, "method": "dimensioned host minus scheduled opening",
+                "citation_ids": ["c-area"], "uncertainty_range": {
+                    "low": 7, "high": 9, "method": "printed dimension rounding", "citation_ids": ["c-area"],
+                },
+            }])
+            add_inferences("construction_matching", [{
+                "field": "wall-a.u_value_w_m2k", "value": 1.5, "method": "matched wall schedule assembly",
+                "citation_ids": ["c-construction"], "uncertainty_range": {
+                    "low": 1.4, "high": 1.6, "method": "schedule-listed assembly range", "citation_ids": ["c-construction"],
+                },
+            }])
+            add_inferences("glazing_properties", [
+                {"field": "window-1.opening_area_m2", "value": 2, "method": "scheduled opening width by height",
+                 "citation_ids": ["c-glazing"], "uncertainty_range": {
+                     "low": 1.8, "high": 2.2, "method": "schedule dimension rounding", "citation_ids": ["c-glazing"],
+                 }},
+                {"field": "window-1.u_value_w_m2k", "value": 2.6, "method": "window schedule performance value",
+                 "citation_ids": ["c-glazing"], "uncertainty_range": {
+                     "low": 2.4, "high": 2.8, "method": "schedule-listed performance range", "citation_ids": ["c-glazing"],
+                 }},
+                {"field": "window-1.solar_property", "value": 0.42, "method": "window schedule SHGC",
+                 "citation_ids": ["c-glazing"], "uncertainty_range": {
+                     "low": 0.36, "high": 0.48, "method": "schedule-listed SHGC range", "citation_ids": ["c-glazing"],
+                 }},
+            ])
+
             proposal = {"rooms": [{"kind": "room", "room_id": "shop", "label": "Shop",
                                     "level_name": "Ground", "area_m2": 20, "page": 1,
                                     "preliminary_profile_id": "retail", "space_scope": "comfort_hvac",
@@ -173,10 +222,14 @@ class Phase1SkillProposalBridgeTests(unittest.TestCase):
             self.assertEqual(merged["surfaces"][0]["opening_coverage"], "complete")
             self.assertTrue(any(item.get("excerpt") == "East wall" for item in merged["surfaces"][0]["evidence"]))
             self.assertEqual(merged["surfaces"][0]["u_value_w_m2k"], 1.5)
+            self.assertEqual({row["field"] for row in merged["surfaces"][0]["supported_uncertainty_ranges"]},
+                             {"area_m2", "u_value_w_m2k"})
             self.assertEqual(len(merged["openings"]), 1)
             self.assertEqual(merged["openings"][0]["opening_area_m2"], 2)
             self.assertEqual(merged["openings"][0]["external_exposure"], "external")
             self.assertEqual(merged["openings"][0]["shgc"], 0.42)
+            self.assertEqual({row["field"] for row in merged["openings"][0]["supported_uncertainty_ranges"]},
+                             {"area_m2", "u_value_w_m2k", "shgc"})
             self.assertTrue(all(row["evidence"] for row in [*merged["surfaces"], *merged["openings"]]))
 
             result = assemble({"spaces": [{"id": "shop", "name": "Shop", "level_name": "Ground",
@@ -186,6 +239,13 @@ class Phase1SkillProposalBridgeTests(unittest.TestCase):
             self.assertEqual(len(room["cooling_load"]["envelope_surfaces"]), 1, result["exclusions"])
             self.assertEqual(len(room["cooling_load"]["glazing_surfaces"]), 1)
             self.assertEqual(room["cooling_load"]["glazing_surfaces"][0]["window"]["u_value_w_m2k"], 2.6)
+            self.assertTrue(room["cooling_load"]["envelope_surfaces"][0]["supported_uncertainty_ranges"])
+            self.assertTrue(room["cooling_load"]["glazing_surfaces"][0]["supported_uncertainty_ranges"])
+            report = calculate(result, scope="phase1_base_room")
+            reported_ranges = {row["surface_id"]: row.get("supported_load_range_kw")
+                               for row in report["phase1_surface_audit"]}
+            self.assertTrue(reported_ranges[room["cooling_load"]["envelope_surfaces"][0]["surface_id"]])
+            self.assertTrue(reported_ranges[room["cooling_load"]["glazing_surfaces"][0]["surface_id"]])
 
     def test_scale_traced_full_height_openings_can_complete_a_host_without_manual_acceptance(self):
         def inference(points, value, citation_id):

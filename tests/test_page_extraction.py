@@ -281,16 +281,17 @@ class ServiceTests(unittest.TestCase):
         again = wait(self.project)
         self.assertEqual((again["open"], service.accepted(self.project)), (2, []))
 
-    def test_a_failed_section_fails_the_run_and_without_pass_1_nothing_starts(self):
+    def test_a_failed_section_keeps_findings_starts_drawing_review_and_without_pass_1_nothing_starts(self):
         reader = FakeReader({1: RuntimeError("usage limit reached"), 3: {"items": []}})
         pass1.PROVIDER_FACTORY = lambda: reader
-        service.start(None, self.project)
-        failed = wait(self.project)
-        self.assertEqual(failed["status"], "failed")
-        self.assertIn("1 of 2 page sections couldn't be read (pages 1)", failed["problem"])
-        self.assertIn("usage limit reached", failed["problem"])
+        with mock.patch.object(service, "_start_skills") as start_skills:
+            service.start(None, self.project)
+            partial = wait(self.project)
+        self.assertEqual((partial["status"], partial["partial"], len(partial["failures"])), ("done", True, 1))
+        self.assertIn("usage limit reached", partial["failures"]["1.0"])
+        start_skills.assert_called_once_with(None, self.project["id"])
         (Path(self.project["review_dir"]) / pass1.RESULT_FILE).write_text("{}")
-        with self.assertRaisesRegex(ValueError, "Read every page first"):
+        with self.assertRaisesRegex(ValueError, "Read some pages first"):
             service.start(None, self.project)
 
 

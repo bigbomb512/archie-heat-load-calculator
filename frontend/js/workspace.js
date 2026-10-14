@@ -513,10 +513,11 @@
     const running = ["queued", "running"].includes(reading.status);
     const statusText = !reading.enabled ? "Switched off for this job. Pages are only sorted by the app's own rules."
       : running ? (reading.page_count ? `Reading page ${reading.pages_done || 0} of ${reading.page_count}…` : `${reading.step_label || "Starting"}…`)
+      : reading.status === "done" && reading.failed ? `Read ${reading.read} of ${reading.page_count} pages; ${reading.failed} couldn't be read. Review continued from the pages already read.`
       : reading.status === "done" ? `Read all ${reading.read} pages${reading.seconds ? ` in ${reading.seconds < 60 ? `${Math.round(reading.seconds)} s` : `${Math.round(reading.seconds / 60)} min`}` : ""}.`
       : reading.status === "failed" || reading.status === "blocked" || reading.status === "interrupted" ? reading.problem || "Page reading didn't finish."
       : "Not read yet.";
-    const canStart = reading.enabled && !running && reading.status !== "done";
+    const canStart = reading.enabled && !running && (reading.status !== "done" || reading.failed > 0);
     const levels = Object.entries(reading.main_plans || {});
     const mainPlans = levels.length ? `<p data-ws-main-plans>Main floor plan: ${levels.map(([level, pages]) =>
       `${esc(level ? level[0].toUpperCase() + level.slice(1) : "")}${level ? " " : ""}${pages.map(page => `p${page}`).join(", ")}`).join(" · ")}</p>` : "";
@@ -530,7 +531,7 @@
     }).join("");
     return `<section class="ws-page-reading" aria-label="Every page, read by AI" data-ws-page-reading><h3>Every page, read by AI</h3>
       <label class="ws-check"><input type="checkbox" data-ws-page-reading-enabled ${reading.enabled ? "checked" : ""}> Read every page with AI (the provider set up on this server: see "AI use for this job")</label>
-      <p class="${["failed", "blocked", "interrupted"].includes(reading.status) && reading.enabled ? "ws-banner is-warn" : "ws-fine"}" role="status" data-ws-page-reading-status>${esc(statusText)}</p>
+      <p class="${(["failed", "blocked", "interrupted"].includes(reading.status) || reading.failed > 0) && reading.enabled ? "ws-banner is-warn" : "ws-fine"}" role="status" data-ws-page-reading-status>${esc(statusText)}</p>
       ${canStart ? `<button class="btn ghost mini" type="button" data-ws-page-reading-start>${reading.status === "none" ? "Read the pages" : "Retry reading"}</button>` : ""}
       ${mainPlans}
       ${rows ? `<details data-ws-read-open="list" ${state.readOpen?.has("list") ? "open" : ""}><summary>What's on each page (${reading.read} of ${reading.page_count} read)</summary><ul class="ws-read-pages">${rows}</ul></details>` : ""}</section>`;
@@ -590,6 +591,7 @@
       ${failed(reading) && reading.problem ? `<p class="ws-banner is-warn">${esc(reading.problem)}</p>` : ""}
       ${failed(equipment) && equipment.problem ? `<p class="ws-banner is-warn">${esc(equipment.problem)}</p>` : ""}
       ${failed(drawingTasks) && drawingTasks.error ? `<p class="ws-banner is-warn">The AI couldn't finish tracing the rooms: ${esc(drawingTasks.error)}</p>` : ""}
+      ${drawingTasks?.warning ? `<p class="ws-banner is-warn">${esc(drawingTasks.warning)}</p>` : ""}
       ${review.blocked_reason ? `<p class="ws-banner is-warn" role="status">${esc(review.blocked_reason)}</p>` : ""}
       <h3>What needs you</h3>
       ${asks ? `<ul class="ws-needs-you" data-ws-needs-you>${asks}</ul>` : `<p class="ws-fine" data-ws-needs-you>Nothing here needs you right now.${busy(review) || busy(reading) || busy(equipment) ? " More appears as the review runs." : ""}</p>`}
@@ -810,7 +812,7 @@
     const running = ["queued", "running"].includes(run.status);
     const statusText = running ? (run.section_count ? `Reading equipment: ${run.sections_done || 0} of ${run.section_count} pages…` : `${run.step_label || "Starting"}…`)
       : ["failed", "blocked", "interrupted"].includes(run.status) ? run.problem || "Reading the equipment didn't finish."
-      : `${run.findings.length} item${run.findings.length === 1 ? "" : "s"} from ${run.pages.length} page${run.pages.length === 1 ? "" : "s"}${run.open ? ` · ${run.open} to review` : " · all reviewed"}${
+      : `${run.findings.length} item${run.findings.length === 1 ? "" : "s"} from ${run.pages.length} page${run.pages.length === 1 ? "" : "s"}${Object.keys(run.failures || {}).length ? ` · ${Object.keys(run.failures).length} page sections couldn't be read; other findings continued` : ""}${run.open ? ` · ${run.open} to review` : " · all reviewed"}${
           run.findings.some(row => row.in_calculation) ? ` · ${Math.round(run.findings.reduce((sum, row) => sum + (row.in_calculation ? row.accepted_heat_w : 0), 0))} W in the calculation (press Calculate to update)` : ""}.`;
     const shown = value => value === null || value === undefined || value === "" ? "" : value === true ? "yes" : value === false ? "no" : String(value);
     const cards = run.findings.map(row => {
@@ -853,7 +855,7 @@
       return count ? `<h4 class="ws-group-head" data-ws-eq-group="${status}">${label} <small>(${count})</small></h4><ul class="ws-read-pages">${rows}</ul>` : "";
     };
     const rows = group("To review", "proposed") + group("Accepted", "accepted") + group("Rejected", "rejected");
-    const canRetry = ["failed", "blocked", "interrupted"].includes(run.status);
+    const canRetry = ["failed", "blocked", "interrupted"].includes(run.status) || Object.keys(run.failures || {}).length > 0;
     return `<section class="ws-page-reading" aria-label="Equipment found in the drawings" data-ws-equipment><h3>Equipment found in the drawings</h3>
       <p class="ws-fine">Clear items verified against the drawing text are accepted automatically. Review conflicting, inferred or unverified readings. Power ratings are only what the drawings print.</p>
       <p class="${canRetry ? "ws-banner is-warn" : "ws-fine"}" role="status" data-ws-equipment-status>${esc(statusText)}</p>
@@ -1951,10 +1953,34 @@
     const basePeak = baseReport.included_scope_peak || {};
     const baseTotal = basePeak.final_design_total_kw ?? basePeak.design_total_kw;
     const baseRooms = baseReport.room_peaks || [];
-    const baseExceptions = [...(baseReport.blocked_reasons || []),
+    const baseExceptions = [...(baseReport.phase1_automation_note ? [baseReport.phase1_automation_note] : []),
+      ...(baseReport.blocked_reasons || []),
       ...(baseReport.excluded_spaces || []).map(row => `${row.room_name || "Room"}${row.level ? ` (${row.level})` : ""}: ${row.reason || "not included"}`),
       ...(baseReport.unresolved_room_inputs || []).map(row => `${row.room_name || "Envelope"}${row.component ? ` · ${row.component}` : ""}: ${row.reason || "not resolved"}`)];
     const baseAssumptions = (baseReport.phase1_assumptions || []).map(row => `${row.room_name || row.room_id || "Project"}${row.component ? ` · ${row.component}` : ""}: ${row.reason || "preliminary assumption"}`);
+    const baseSurfaces = baseReport.phase1_surface_audit || [];
+    const baseSurfaceMarkup = baseSurfaces.length ? `<details data-ws-phase1-surfaces><summary>Surface inputs and load · ${baseSurfaces.length}</summary>
+      <ul class="ws-list ws-bullets">${baseSurfaces.map(row => {
+        const supportedRange = row.supported_load_range_kw;
+        const evidence = [...(Array.isArray(row.evidence) ? row.evidence : []), ...(Array.isArray(row.citations) ? row.citations : []),
+          ...(Array.isArray(supportedRange?.citations) ? supportedRange.citations : [])];
+        const refs = [...new Set(evidence.map(item => {
+          if (typeof item === "number") return `p. ${item}`;
+          if (!item || typeof item !== "object") return "";
+          const page = item.page || item.physical_page;
+          return page ? `p. ${page}${item.excerpt ? `: ${item.excerpt}` : ""}` : (item.excerpt || item.reference || "");
+        }).filter(Boolean))];
+        const confidence = row.confidence != null && Number.isFinite(Number(row.confidence)) ? ` · confidence ${Math.round(Number(row.confidence) * 100)}%` : "";
+        const geometry = row.area_m2 == null ? "area unresolved" : `${Number(row.area_m2).toFixed(2)} m²`;
+        const properties = [row.u_value_w_m2k == null ? "" : `U ${row.u_value_w_m2k} W/m²K`,
+          row.shgc == null ? "" : `SHGC ${row.shgc}`, row.orientation || ""].filter(Boolean).join(" · ");
+        const rangeMarkup = supportedRange && Number.isFinite(Number(supportedRange.low_kw)) && Number.isFinite(Number(supportedRange.high_kw))
+          ? `<br><b>Supported range ${kw(supportedRange.low_kw)}–${kw(supportedRange.high_kw)} kW</b> · ${esc(supportedRange.basis || "at room design peak hour")}${supportedRange.method ? ` · ${esc(supportedRange.method)}` : ""}`
+          : "";
+        return `<li><b>${esc(row.room_name || row.room_id || "Room")} · ${esc(row.surface_type || "surface")}</b> — ${esc(geometry)}${properties ? ` · ${esc(properties)}` : ""}<br>
+          Conduction ${kw(row.conduction_kw)} kW · solar ${kw(row.solar_kw)} kW · net ${kw(row.total_kw)} kW${confidence}${rangeMarkup}<br>
+          <span class="ws-fine">${esc(row.method || "Method not recorded")}${row.solar_method ? ` · Solar: ${esc(row.solar_method)}` : ""}${row.source ? ` · ${esc(row.source)}` : ""}${refs.length ? ` · Evidence: ${esc(refs.join("; "))}` : " · No page citation recorded"}</span></li>`;
+      }).join("")}</ul></details>` : "";
     const baseMarkup = `<section class="ws-phase-result" data-ws-phase1-result><h2>Phase 1 · AI base room load</h2>
       ${baseReportStale ? `<p class="ws-banner is-warn" data-ws-phase1-stale>Drawing inputs changed since this Phase 1 result. Recalculate it to update the base load.</p>` : ""}
       ${baseTotal == null ? `<p>${baseReport.status === "blocked" ? "AI could not calculate a base load for this drawing yet." : "Not calculated yet. AI will calculate the envelope and window load for each resolved room."}</p>
@@ -1964,6 +1990,7 @@
          <ul class="ws-list" data-ws-phase1-rooms>${baseRooms.map(room => `<li><span>${esc(room.name)}</span><b>${kw(room.design_total_kw)} kW</b></li>`).join("")}</ul>
          <p class="ws-fine">People, lights, equipment, ventilation, infiltration and fan or duct heat are added in Phase 2.</p>
          ${baseReportStale ? `<button class="btn key" type="button" data-ws-calculate-base>Recalculate Phase 1 base load</button>` : ""}
+         ${baseSurfaceMarkup}
          ${baseAssumptions.length ? `<h3>AI assumptions used</h3><ul class="ws-list ws-bullets" data-ws-phase1-assumptions>${baseAssumptions.slice(0, 10).map(item => `<li>${esc(item)}</li>`).join("")}</ul>` : ""}
          ${baseExceptions.length ? `<h3>Phase 1 exceptions</h3><ul class="ws-list ws-bullets" data-ws-phase1-exceptions>${baseExceptions.slice(0, 8).map(item => `<li>${esc(item)}</li>`).join("")}</ul>` : ""}`}</section>`;
     const peak = report.included_scope_peak || {};

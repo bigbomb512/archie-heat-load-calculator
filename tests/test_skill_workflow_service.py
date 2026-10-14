@@ -1080,6 +1080,47 @@ class SkillWorkflowTests(unittest.TestCase):
             self.assertEqual(list(decisions), ["site_clue_extraction:site_candidates:0"])
             self.assertEqual(decisions["site_clue_extraction:site_candidates:0"]["reviewer"], "AI evidence gate")
 
+    def test_phase1_cited_numeric_inferences_are_auto_used_and_malformed_rows_are_isolated(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "drawing_coverage.json").write_text(json.dumps({"page_roles": [{"page": 8}]}))
+            proposal_root = root / "skill_workflow_runs" / "run-1" / "proposals"
+            proposal_root.mkdir(parents=True)
+            proposal = {"subskill_id": "glazing_properties", "status": "needs_review",
+                "citations": [{"id": "c1", "page": 8, "excerpt": "Window schedule: double glazing"},
+                              {"id": "c2", "page": 8, "excerpt": "Unambiguous second window row"}],
+                "inferences": [{"field": "properties", "target": "opening-1", "value": 2.4,
+                                "method": "matched the window type to the cited schedule row", "citation_ids": ["c1"]},
+                               {"field": "properties", "target": "opening-2", "value": 3.2,
+                                "citation_ids": ["c2"]}],
+                "alternatives": [], "unresolved_fields": [], "confidence": 0.82,
+                "proposal_fields": {"properties": [
+                    {"opening_id": "opening-1", "u_value_w_m2k": 2.4, "confidence": 0.82, "citation_ids": ["c1"]},
+                    {"opening_id": "opening-2", "u_value_w_m2k": 3.2, "confidence": 0.95, "citation_ids": ["c2"]},
+                ]}}
+            (proposal_root / "glazing_properties.json").write_text(json.dumps(proposal))
+            manifest = {"run_id": "run-1", "source_fingerprint": "a" * 64, "scope": "phase1_envelope", "subskills": {}}
+            self.assertEqual(skills._auto_review_confident_findings(root, manifest), 1)
+            decisions = json.loads((root / "skill_review_decisions.json").read_text())["decisions"]
+            self.assertEqual(list(decisions), ["glazing_properties:properties:0"])
+            self.assertEqual(decisions["glazing_properties:properties:0"]["usage_scope"], "phase1_draft_only")
+
+    def test_provider_call_retries_one_transient_transport_failure(self):
+        calls = []
+        attempt = {}
+
+        def provider():
+            calls.append(True)
+            if len(calls) == 1:
+                raise ConnectionResetError("Remote end closed connection without response")
+            return {"ok": True}
+
+        with patch.object(skills, "_TRANSIENT_PROVIDER_RETRY_DELAY_S", 0):
+            result = skills._provider_call_with_retry(provider, attempt)
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(attempt["transport_retries"], 1)
+
     def test_unresolved_fields_do_not_require_a_separate_accept_or_reject_decision(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

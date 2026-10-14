@@ -11,6 +11,14 @@ from backend import ai_preliminary_service
 
 
 class PhaseOneCalculationTests(unittest.TestCase):
+    def test_workspace_report_exposes_surface_audit_and_automation_note(self):
+        compact = ai_preliminary_service._workspace_report({
+            "phase1_automation_note": "One evidence task could not be read.",
+            "phase1_surface_audit": [{"room_id": "room-a", "surface_id": "wall-a", "total_kw": 1.2}],
+        })
+        self.assertEqual(compact["phase1_automation_note"], "One evidence task could not be read.")
+        self.assertEqual(compact["phase1_surface_audit"][0]["surface_id"], "wall-a")
+
     def test_missing_area_and_geometry_diagnostics_merge_by_room(self):
         input_set = assemble(
             {"spaces": [{"name": "Kitchen", "level_name": "Level 1", "area": "",

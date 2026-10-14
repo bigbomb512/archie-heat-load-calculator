@@ -354,7 +354,7 @@ def start(web, project, data=None):
     if not pdf.is_file():
         raise ValueError("The job's PDF isn't available on this computer, so its pages can't be read.")
     if not read_json(root / pass1.RESULT_FILE).get("pages"):
-        raise ValueError("Read every page first (pass 1); pass 2 reads the pages it flags.")
+        raise ValueError("Read some pages first (pass 2 reads the pages it flags).")
     try:
         provider = pass1._provider("pass2")
     except pass1.PageReadingUnavailable as error:
@@ -407,10 +407,8 @@ def start(web, project, data=None):
                 pages_failed = sorted({int(key.split(".")[0]) for key in failures})
                 problems.append(f"{extractor['label']}: {len(failures)} of {len(images)} page sections couldn't be read "
                                 f"(pages {', '.join(map(str, pages_failed))}). First reason: {failures[min(failures)]}")
-        if problems:
-            raise RuntimeError(" ".join(problems) + " Retry to read them.")
         _start_skills(web, project_id)
-        return {"kinds": totals}
+        return {"kinds": totals, "partial": bool(problems), "problems": problems}
 
     started = _JOB.start(web, project, {"kinds": kinds, "sections_done": 0, "section_count": 0}, work)
     return {**status(web, project, kinds[0]), "deduplicated": bool(started.get("deduplicated"))}

@@ -65,7 +65,7 @@ class OpaqueEnvelopeResolutionTests(unittest.TestCase):
         self.assertFalse(result["surfaces"][0]["thermal_eligible"])
         self.assertIn("boundary_temperature_missing", result["surfaces"][0]["unresolved_fields"])
 
-    def test_preliminary_unresolved_floor_is_kept_as_zero_cooling_lower_bound(self):
+    def test_preliminary_unresolved_floor_uses_a_labelled_boundary_estimate_not_zero(self):
         ledger = self._ledger("not_applicable")
         ledger["surfaces"][0].update({
             "surface_id": "floor-1", "physical_type": "floor", "thermal_role": "unresolved",
@@ -79,7 +79,8 @@ class OpaqueEnvelopeResolutionTests(unittest.TestCase):
         row = result["surfaces"][0]
         self.assertTrue(row["thermal_eligible"])
         self.assertEqual(row["boundary_method"], "fixed_adjacent_temperature")
-        self.assertTrue(any("floor cooling load is zero" in value for value in row["assumptions"]))
+        self.assertTrue(any("labelled adjacent-space temperature estimate" in value and "not a zero-load" in value
+                            for value in row["assumptions"]))
 
 
 if __name__ == "__main__":

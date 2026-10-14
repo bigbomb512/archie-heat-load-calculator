@@ -195,7 +195,9 @@ class GroupTests(unittest.TestCase):
 
     def run_review(self, action="start"):
         if action == "start":
-            skills.start_after_reading(Web(), self.project)
+            # These cases exercise the broad "What we need to find" review.
+            # The automatic post-reading route now starts the focused Phase 1 run.
+            skills.post(Web(), self.project, {"action": "start", "scope": "pdf_review"})
         else:
             skills.post(Web(), self.project, {"action": "retry", "scope": "pdf_review"})
         for _ in range(600):
@@ -272,6 +274,31 @@ class GroupTests(unittest.TestCase):
 
 
 class RunTests(unittest.TestCase):
+    def test_automatic_post_reading_run_is_scoped_to_phase1_envelope(self):
+        provider = FakeProvider()
+        skills.CASE_FILE_PROVIDER_FACTORY = lambda: provider
+        try:
+            with tempfile.TemporaryDirectory() as folder, \
+                    patch.object(skills, "_ensure_room_evidence", return_value={"artifact_names": [], "candidate_count": 0, "model_input": {}}):
+                root = Path(folder)
+                (root / "ai_input.json").write_text(json.dumps({"drawing_set": {"pages": [{"page": 5, "title": "PLAN"}]}}))
+                (root / "drawing_coverage.json").write_text(json.dumps({"page_roles": [{"page": 1}, {"page": 5}]}))
+                (root / pass1.RESULT_FILE).write_text(json.dumps({"pages": READINGS}))
+                project = {"id": "automatic-phase1-" + root.name, "review_dir": str(root)}
+                skills.start_after_reading(Web(), project)
+                deadline = time.monotonic() + 30
+                while project["id"] in skills._RUNNING and time.monotonic() < deadline:
+                    time.sleep(0.05)
+                manifest = json.loads((root / "skill_workflow_run.json").read_text())
+            called = {skill_id for prompt in provider.prompts for skill_id in called_skills(prompt)}
+            self.assertEqual(manifest["scope"], "phase1_envelope")
+            self.assertIn("room_boundaries_areas", called)
+            self.assertIn("construction_matching", called)
+            self.assertNotIn("equipment_evidence", called)
+            self.assertEqual(manifest["subskills"]["equipment_evidence"]["status"], "not_in_scope")
+        finally:
+            skills.CASE_FILE_PROVIDER_FACTORY = None
+
     def test_a_changed_room_boundary_instruction_calls_ai_and_unaffected_ai_skills_are_reused(self):
         provider = FakeProvider()
         skills.CASE_FILE_PROVIDER_FACTORY = lambda: provider
@@ -284,7 +311,7 @@ class RunTests(unittest.TestCase):
                 (root / pass1.RESULT_FILE).write_text(json.dumps({"pages": READINGS}))
                 project = {"id": "rebuild-" + root.name, "review_dir": str(root)}
                 wait = lambda: [time.sleep(0.05) for _ in range(600) if project["id"] in skills._RUNNING]
-                skills.start_after_reading(Web(), project); wait()
+                skills.post(Web(), project, {"action": "start", "scope": "pdf_review"}); wait()
                 before = len(provider.prompts)
                 real = skills.subskill_instructions_fingerprint
                 edited = lambda subskill: real(subskill) + ("x" if subskill["id"] == "room_boundaries_areas" else "")
@@ -319,7 +346,7 @@ class RunTests(unittest.TestCase):
                 project = {"id": "case-file-run-" + root.name, "review_dir": str(root)}
                 # Room detection runs before the room skills; it needs a real analysed job, so it is stood in for here.
                 with patch.object(skills, "_ensure_room_evidence", return_value={"artifact_names": [], "candidate_count": 0, "model_input": {}}):
-                    started = skills.start_after_reading(Web(), project)
+                    started = skills.post(Web(), project, {"action": "start", "scope": "pdf_review"})
                     deadline = time.monotonic() + 30
                     while project["id"] in skills._RUNNING and time.monotonic() < deadline:
                         time.sleep(0.05)
@@ -400,7 +427,7 @@ class ResumeTests(unittest.TestCase):
                 (root / "drawing_coverage.json").write_text(json.dumps({"page_roles": [{"page": 5, "title": "EQUIPMENT SCHEDULE"}]}))
                 (root / pass1.RESULT_FILE).write_text(json.dumps({"pages": READINGS}))
                 project = {"id": "resume-" + root.name, "review_dir": str(root)}
-                skills.start_after_reading(Web(), project)
+                skills.post(Web(), project, {"action": "start", "scope": "pdf_review"})
                 self.run_to_end(project)
                 first = json.loads((root / "skill_workflow_run.json").read_text())
                 self.assertEqual(first["status"], "failed")
@@ -492,8 +519,7 @@ class RecheckTests(unittest.TestCase):
                 (root / pass1.RESULT_FILE).write_text(json.dumps({"pages": {**READINGS, "3": {"page_type": "reflected_ceiling_plan",
                     "information": [{"kind": "lighting", "what": "12 downlights", "evidence": "legend"}]}}}))
                 project = {"id": "recheck-" + root.name, "review_dir": str(root)}
-                run = lambda action: (skills.post(Web(), project, {"action": action, "scope": "pdf_review"}) if action == "retry"
-                                      else skills.start_after_reading(Web(), project))
+                run = lambda action: skills.post(Web(), project, {"action": action, "scope": "pdf_review"})
                 wait = lambda: [time.sleep(0.05) for _ in range(600) if project["id"] in skills._RUNNING]
                 run("start"); wait()
                 first = json.loads((root / "skill_workflow_run.json").read_text())

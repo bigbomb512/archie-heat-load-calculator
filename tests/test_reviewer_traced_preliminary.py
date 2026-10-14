@@ -283,12 +283,14 @@ def main():
         room = assembled["material"]["hourly_load_model"]["rooms"][0]
         wall = next(surface for surface in room["cooling_load"]["envelope_surfaces"] if surface["kind"] == "opaque_wall")
         report = ai_preliminary.calculate(assembled)
-        check("external reviewer edge uses calibrated length times resolved ceiling height",
-              abs(wall["area_m2"] - 0.3) < 1e-9 and wall["orientation"] == ""
-              and wall["u_value_w_m2k"] == ai_preliminary.load_pack()["profiles"]["retail"]["wall_u_w_m2k"])
-        check("included unknown-orientation walls are explicitly not assessed for façade solar",
-              any(item.get("component") == "external walls — orientation not assessed (no façade solar)"
-                  for item in assembled["exclusions"])
+        check("external reviewer edge uses calibrated area and the disclosed west-facing solar fallback",
+              abs(wall["area_m2"] - 0.3) < 1e-9 and wall["orientation"] == "W"
+              and wall["u_value_w_m2k"] == ai_preliminary.load_pack()["profiles"]["retail"]["wall_u_w_m2k"]
+              and any(row.get("component") == "wall orientation" for row in assembled["phase1_assumptions"]))
+        check("west-facing orientation estimate is disclosed while unrelated boundary gaps remain reviewable",
+              not any(item.get("component") == "external walls — orientation not assessed (no façade solar)"
+                      for item in assembled["exclusions"])
+              and any(item.get("component") == "wall orientation" for item in assembled["phase1_assumptions"])
               and not report["scope_summary"]["complete_scope"])
 
     with tempfile.TemporaryDirectory() as folder:
@@ -443,11 +445,12 @@ def main():
         opaque = next(surface for surface in room["cooling_load"]["envelope_surfaces"] if surface["kind"] == "opaque_wall")
         glazing = room["cooling_load"]["glazing_surfaces"]
         report = ai_preliminary.calculate(assembled)
-        check("shopfront opening reduces its host wall and is included as glazing without north",
+        check("shopfront opening reduces its host wall and uses the disclosed west-facing solar estimate",
               abs(opaque["area_m2"] - (4.0 * 3.75 - 2.025 * 2.65)) < 1e-8
-              and len(glazing) == 1 and glazing[0]["orientation"] == ""
-              and any(item.get("component") == "Glazing sun — orientation not assessed"
-                      for item in report["unresolved_room_inputs"]))
+              and len(glazing) == 1 and glazing[0]["orientation"] == "W"
+              and any(item.get("component") == "wall orientation" for item in assembled["phase1_assumptions"])
+              and not any(item.get("component") == "Glazing sun — orientation not assessed"
+                          for item in report["unresolved_room_inputs"]))
         reviewer_surface = next(surface for surface in prepared["surfaces"] if surface.get("physical_type") == "wall")
         reviewer_surface["opening_coverage"] = "reviewer_entered"
         prepared["openings"] = [row for row in prepared["openings"] if row.get("host_surface_key") == reviewer_surface["surface_key"]]

@@ -41,6 +41,8 @@ _MAX_WORKERS = 4
 _GEOMETRY_VECTOR_DPI = 180
 LOGGER = logging.getLogger(__name__)
 _ROOM_WAIT_SECONDS = 180
+_TRANSIENT_PROVIDER_RETRIES = 1
+_TRANSIENT_PROVIDER_RETRY_DELAY_S = 0.5
 _TERMINAL = {"completed", "failed", "blocked", "stale"}
 _SAFE_SUBSKILL_ERROR_CODES = {
     "subskill_execution_failed", "subskill_output_invalid", "subskill_citation_unknown_page",
@@ -113,7 +115,8 @@ _WORKFLOW_SCOPES = {
     # openings needed for a room-by-room base envelope calculation. This keeps
     # equipment, occupancy, airflow, and plant discovery out of the run.
     "phase1_envelope": frozenset({
-        "sheet_identity", "revision_scope", "page_relationships", "room_identity_use",
+        "sheet_identity", "revision_scope", "page_relationships", "site_clue_extraction",
+        "address_confirmation", "weather_source_matching", "room_identity_use",
         "room_boundaries_areas", "ceiling_height_volume", "surface_inventory", "surface_area",
         "construction_matching", "boundary_resolution", "cross_sheet_opening_match",
         "glazing_properties", "exposure_orientation", "shading",
@@ -1967,6 +1970,42 @@ class SkillProviderError(RuntimeError):
         self.raw_record = raw_record or {}
 
 
+def _transient_provider_failure(error):
+    """Only retry transport/server failures that are safe to repeat unchanged."""
+    code = str(getattr(error, "code", ""))
+    if code == "skill_provider_usage_limit":
+        return False
+    if code.startswith("skill_provider_http_error_"):
+        try:
+            return int(code.rsplit("_", 1)[-1]) in {408, 429, 500, 502, 503, 504}
+        except ValueError:
+            return False
+    message = " ".join(str(error).split()).casefold()
+    return any(marker in message for marker in (
+        "remote end closed connection", "remote disconnected", "connection reset",
+        "connection aborted", "connection closed", "timed out", "temporary failure",
+        "name or service not known", "network is unreachable",
+    ))
+
+
+def _provider_call_with_retry(call, attempt_record):
+    """Retry one interrupted request once; leave auth, budget, and content errors alone."""
+    retries = 0
+    while True:
+        try:
+            result = call()
+            if retries:
+                attempt_record["transport_retries"] = retries
+            return result
+        except Exception as error:
+            if retries >= _TRANSIENT_PROVIDER_RETRIES or not _transient_provider_failure(error):
+                if retries:
+                    attempt_record["transport_retries"] = retries
+                raise
+            retries += 1
+            time.sleep(_TRANSIENT_PROVIDER_RETRY_DELAY_S)
+
+
 class OpenAISkillProposalProvider:
     """Focused reasoning over the shared, consented extraction package."""
     def __init__(self, api_key, model):
@@ -2550,7 +2589,8 @@ def _call_skill_provider(subskill, project, dependencies, evidence, attempt_reco
             return None
         provider = provider_factory()
         try:
-            provider_result = provider.propose(prompt, image_paths=images)
+            provider_result = _provider_call_with_retry(
+                lambda: provider.propose(prompt, image_paths=images), attempt_record)
         except Exception as error:
             attempt_record["raw_record"] = getattr(error, "raw_record", {}) or {"provider": provider_label, "reply_text": ""}
             attempt_record["raw_record"].setdefault("provider", provider_label)
@@ -2713,7 +2753,8 @@ def _send_case_file_prompt(project, purpose, prompt, images, attempt_record):
     attempt_record["model"] = model
     provider = ai_provider.recorded(provider, project["review_dir"], purpose)
     try:
-        result = provider.propose(prompt, image_paths=[str(path) for path in images])
+        result = _provider_call_with_retry(
+            lambda: provider.propose(prompt, image_paths=[str(path) for path in images]), attempt_record)
     except ai_provider.UsageLimitReached as error:
         _USAGE_STOPPED[key] = str(error)
         attempt_record["raw_record"] = {"provider": "codex_case_file", "model": model, "reply_text": ""}
@@ -3507,8 +3548,22 @@ def _run_worker(web, project, run_id, source_fp, catalog):
                                  "remediation": "Review the workflow status and retry the failed evidence stage."})
                 _write_manifest(run_path, manifest)
     finally:
+        queued_scope = ""
+        with _project_lock(project["id"]):
+            manifest = _read(run_path, {})
+            queued_scope = str(manifest.get("queued_automatic_scope") or "")
         with _LOCK:
             _RUNNING.discard(project["id"])
+        if queued_scope in _WORKFLOW_SCOPES:
+            try:
+                post(web, project, {"action": "start", "scope": queued_scope, "automatic": True})
+            except Exception:
+                with _project_lock(project["id"]):
+                    manifest = _read(run_path, {})
+                    manifest.pop("queued_automatic_scope", None)
+                    manifest.pop("queued_automatic_source_fingerprint", None)
+                    _write_manifest(run_path, manifest)
+                LOGGER.exception("Queued Archie skill workflow could not start", extra={"scope": queued_scope})
 
 
 def _response(web, project):
@@ -3843,11 +3898,12 @@ def _equipment_evidence_mirror_indices(root, proposal):
 
 
 def _auto_review_confident_findings(root, manifest):
-    """Persist only high-confidence, directly cited, unambiguous row decisions.
+    """Persist safe evidence-gate decisions without treating them as engineering approval.
 
-    The confidence must belong to the row (or its matching inference), and its
-    citation must name a page and excerpt. Missing, conflicting and input-setting
-    rows remain in the operator queue.
+    Ordinary PDF-review findings retain the strict direct-reading rule. Phase 1
+    envelope findings may also be auto-used when every numeric inference has a
+    method and a valid citation, its row is unambiguous, and its confidence is
+    at least 0.70. The resulting draft remains provisional and source-bound.
     """
     run_id = manifest.get("run_id", "")
     source_fp = manifest.get("source_fingerprint", "")
@@ -3864,6 +3920,8 @@ def _auto_review_confident_findings(root, manifest):
     for proposal_path in proposal_root.glob("*.json"):
         proposal = _read(proposal_path, {})
         subskill_id = proposal.get("subskill_id") or proposal_path.stem
+        phase1_scope = (manifest.get("scope") == "phase1_envelope"
+                        and subskill_id in _WORKFLOW_SCOPES["phase1_envelope"])
         if proposal.get("status") in {"failed", "blocked", "not_applicable"}:
             continue
         mirror_indices = _equipment_evidence_mirror_indices(root, proposal)
@@ -3881,12 +3939,21 @@ def _auto_review_confident_findings(root, manifest):
                 existing = decisions.get(finding_id, {})
                 if _decision_is_current(existing, manifest, source_fp, subskill_id):
                     continue
-                if finding_inputs_service.applies({"subskill_id": subskill_id, "field": field}):
+                if (finding_inputs_service.applies({"subskill_id": subskill_id, "field": field})
+                        and not phase1_scope):
                     continue
                 target = _finding_target(value)
                 matching = _finding_inferences(proposal, field, target, proposal_row_count)
-                if matching or value.get("formula") or value.get("calculation"):
+                if (matching or value.get("formula") or value.get("calculation")) and not phase1_scope:
                     continue
+                if phase1_scope and matching:
+                    # The output validator drops malformed numeric inferences;
+                    # re-check the exact finding before recording an automatic
+                    # decision so a dropped/partial inference can never qualify.
+                    if any(not str(item.get("method") or "").strip()
+                           or not isinstance(item.get("citation_ids"), list)
+                           or not item.get("citation_ids") for item in matching):
+                        continue
                 unresolved = proposal.get("unresolved_fields", [])
                 if any(_finding_unresolved(field, target, index, item) for item in unresolved):
                     continue
@@ -3897,11 +3964,14 @@ def _auto_review_confident_findings(root, manifest):
                 if not citations or not any(row.get("page") in allowed_pages and row.get("excerpt") for row in citations):
                     continue
                 confidence = _finding_confidence(proposal, value, matching, proposal_row_count)
-                if confidence is None or confidence < 0.85:
+                minimum_confidence = 0.70 if phase1_scope and (matching or value.get("formula") or value.get("calculation")) else 0.85
+                if confidence is None or confidence < minimum_confidence:
                     continue
                 decisions[finding_id] = {"status": "accepted", "value": value, "reviewer": "AI evidence gate",
                     "updated_at": time.time(), "run_id": run_id, "source_fingerprint": source_fp,
-                    "auto_review": "high_confidence_direct_citation"}
+                    "auto_review": "phase1_cited_method_and_consistency_gate" if phase1_scope and matching
+                                   else "high_confidence_direct_citation",
+                    "usage_scope": "phase1_draft_only" if phase1_scope else "general_evidence_review"}
                 added += 1
     if added:
         _atomic_json(decisions_path, artifact)
@@ -3993,10 +4063,11 @@ def _blocked_manifest(catalog, source_fp, scope, reason, code):
 
 
 def start_after_reading(web, project):
-    """Pass 1 (and pass 2, when it has kinds to read) finished: run the skills on their case files."""
+    """Pass 1, pass 2 and drawing tasks finished: run the Phase 1 envelope skills."""
     if web is None or not _case_file_route(project) or not _project_paths(project)["ai_input"].exists():
-        return None
-    return post(web, project, {"action": "start", "scope": "pdf_review", "automatic": True})
+        if web is None or not _project_paths(project)["ai_input"].exists():
+            return None
+    return post(web, project, {"action": "start", "scope": "phase1_envelope", "automatic": True})
 
 
 def start_after_analysis(web, project):
@@ -4163,8 +4234,17 @@ def post(web, project, data):
             # A retry repeats the interrupted or failed run's own scope.
             scope = existing["scope"]
         if project["id"] in _RUNNING:
+            running_manifest = _read(paths["manifest"], {})
+            if (data.get("automatic") is True and scope == "phase1_envelope"
+                    and (running_manifest.get("scope") != scope
+                         or running_manifest.get("source_fingerprint") != source_fp)):
+                running_manifest["queued_automatic_scope"] = scope
+                running_manifest["queued_automatic_source_fingerprint"] = source_fp
+                _write_manifest(paths["manifest"], running_manifest)
             response = _response(web, project)
             response["deduplicated"] = True
+            if running_manifest.get("queued_automatic_scope"):
+                response["queued_scope"] = running_manifest["queued_automatic_scope"]
             return response
         # A persisted `running` manifest without a live in-process worker is
         # an interrupted run (for example, after a local server restart). Do
