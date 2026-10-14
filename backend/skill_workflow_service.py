@@ -76,7 +76,7 @@ _LINE_ROLE_CODES = {"possible_wall_or_dimension": "W", "vector_context": "C"}
 # The room-boundary task is the one task that must see a plan's full vector
 # line index to cite real line IDs, so it carries a larger explicit budget.
 # Room boundaries carries the plan's vector geometry, which it needs to propose outlines.
-_TASK_PROMPT_BUDGET_CHARS = {"room_boundaries_areas": 130_000}
+_TASK_PROMPT_BUDGET_CHARS = {"room_boundaries_areas": 180_000}
 # Skills on the case-file route also carry the job section and the readings; still a hard cap (about 30,000 tokens).
 _CASE_FILE_PROMPT_BUDGET_CHARS = 120_000
 _ACCEPTED_GEOMETRY_STATUSES = frozenset({"geometry_confirmed", "ai_estimated"})
@@ -109,6 +109,15 @@ _WORKFLOW_SCOPES = {
     }),
     "rooms_only": frozenset({"sheet_identity", "revision_scope", "page_relationships",
                              "room_identity_use", "room_boundaries_areas", "ceiling_height_volume"}),
+    # Phase 1 envelope evidence: room geometry plus the physical surfaces and
+    # openings needed for a room-by-room base envelope calculation. This keeps
+    # equipment, occupancy, airflow, and plant discovery out of the run.
+    "phase1_envelope": frozenset({
+        "sheet_identity", "revision_scope", "page_relationships", "room_identity_use",
+        "room_boundaries_areas", "ceiling_height_volume", "surface_inventory", "surface_area",
+        "construction_matching", "boundary_resolution", "cross_sheet_opening_match",
+        "glazing_properties", "exposure_orientation", "shading",
+    }),
 }
 _DOMAIN_ARTIFACTS = (
     "room_use_resolution.json", "geometry_resolution.json", "ceiling_volume_resolution.json",
@@ -485,7 +494,7 @@ _CODE_MAPPED_TASKS = frozenset({"sheet_identity", "revision_scope", "page_relati
 # so a rebuild re-runs everything after the task, even when the rebuilt result is the same. The document-mapping
 # tasks are therefore left out: they come before nearly every skill, and adding the marker re-ran a whole review
 # (about 400,000 tokens on Butcher Buffet) to rebuild identical results. A change to their builder needs a re-read.
-_CODE_BUILT_VERSIONS = {"room_boundaries_areas": "traced_rooms_v1"}
+_CODE_BUILT_VERSIONS = {}
 # A page link is kept only when a printed reference supports it (the playbook's rule); links proposed from shared
 # roles or terminology are left out, as the AI version did.
 _PRINTED_LINK_WORDS = ("callout", "reference", "section mark", "detail mark", "tag", "drawing index", "see dwg", "see drawing")
@@ -534,6 +543,125 @@ def _traced_rooms_proposal(subskill, project, input_fp):
             "inferences": [], "citations": citations, "confidence": None, "alternatives": [],
             "unresolved_fields": unresolved, "remediation": [], "input_fingerprint": input_fp,
             "proposal_fields": {"geometry_candidates": candidates}, "artifact_names": []}
+
+
+def _printed_tenant_finish_area(project, dependencies):
+    """Sum uniquely tagged floor-finish areas for an AI-identified connected tenancy.
+
+    This is intentionally narrow: it requires a whole-tenancy candidate, an AI
+    room-identity proposal that classifies that tenant as conditioned, and at
+    least two distinct TLxx area labels in the main floor-plan viewport. The
+    result remains an area-only estimate and never supplies wall geometry.
+    """
+    paths = _project_paths(project)
+    run = _read(paths["root"] / "ai_preliminary_run.json", {})
+    rooms = (run.get("local_room_inference_proposal") or {}).get("rooms", [])
+    tenant = next((row for row in rooms if isinstance(row, dict)
+                   and row.get("zone_role") == "whole_tenancy_candidate"), None)
+    if not tenant or not tenant.get("room_id"):
+        return None
+    identity = (dependencies.get("room_identity_use") or {}).get("proposal", {})
+    identity_rows = (identity.get("proposal_fields") or {}).get("rooms", [])
+    identity_row = next((row for row in identity_rows if isinstance(row, dict)
+                         and row.get("room_id") == tenant["room_id"]), None)
+    if not identity_row or identity_row.get("taxonomy_id") not in {"dining", "hospitality", "retail"}:
+        return None
+    spatial = _read(paths["spatial"], {})
+    pages = {row.get("page"): row for row in spatial.get("pages", []) if isinstance(row, dict)}
+    page_number = next((page for page in tenant.get("source_pages", []) if page in pages), None)
+    page = pages.get(page_number, {})
+    if not isinstance(page_number, int) or not page:
+        return None
+    bottom_bands = [row.get("bbox", [0, 0, 0, 0])[1] for row in page.get("title_blocks", [])
+                    if isinstance(row, dict) and row.get("region") == "bottom_band"
+                    and isinstance(row.get("bbox"), list) and len(row["bbox"]) == 4]
+    bottom_y = min(bottom_bands) if bottom_bands else float(page.get("height", 0)) * 0.80
+    page_width = float(page.get("width", 0) or 0)
+    items = [row for row in page.get("standalone_text_items", []) if isinstance(row, dict)
+             and isinstance(row.get("bbox"), list) and len(row["bbox"]) == 4]
+    areas = []
+    for item in items:
+        match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*m(?:2|²)\s*", str(item.get("text", "")), re.I)
+        if not match:
+            continue
+        bbox = item["bbox"]
+        if page_width and bbox[2] > page_width * 0.82 or bbox[3] >= bottom_y:
+            continue
+        x_mid, y_mid = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
+        tags = []
+        for tag in items:
+            if str(tag.get("text", "")).strip().casefold() != "tl":
+                continue
+            tb = tag["bbox"]
+            tx_mid, ty_mid = (tb[0] + tb[2]) / 2, (tb[1] + tb[3]) / 2
+            if not (0 <= bbox[0] - tb[2] <= 60 and abs(y_mid - ty_mid) <= 18):
+                continue
+            numbers = [candidate for candidate in items if re.fullmatch(r"\s*0?\d{2}\s*", str(candidate.get("text", "")))]
+            code = next((str(candidate["text"]).strip().lstrip("0") or "0" for candidate in numbers
+                         if abs(((candidate["bbox"][0] + candidate["bbox"][2]) / 2) - tx_mid) <= 18
+                         and abs(((candidate["bbox"][1] + candidate["bbox"][3]) / 2) - ty_mid) <= 18), None)
+            if code:
+                tags.append(f"TL{int(code):02d}")
+        if len(set(tags)) != 1:
+            continue
+        areas.append({"tag": tags[0], "area_m2": float(match.group(1)), "page": page_number,
+                      "excerpt": f"{tags[0]} {match.group(1)} m²", "bbox": bbox})
+    unique = {row["tag"]: row for row in areas}
+    if len(unique) < 2:
+        return None
+    if len({row["area_m2"] for row in unique.values()}) != len(unique):
+        return None
+    values = sorted(unique.values(), key=lambda row: row["tag"])
+    return {"room_id": tenant["room_id"], "label": tenant.get("label", "Cafe"),
+            "level": tenant.get("level_name", ""), "page": page_number,
+            "area_m2": round(sum(row["area_m2"] for row in values), 6), "areas": values}
+
+
+def _augment_printed_tenant_area(subskill, project, dependencies, proposal):
+    """Preserve a validated sum of printed, tagged finish areas as a tenant area estimate."""
+    if not isinstance(proposal, dict) or proposal.get("status") not in {"needs_review", "provisional", "resolved"}:
+        return proposal
+    fields = proposal.get("proposal_fields", {}) if isinstance(proposal, dict) else {}
+    candidates = fields.get("geometry_candidates", []) if isinstance(fields, dict) else []
+    area = _printed_tenant_finish_area(project, dependencies)
+    if not area or any(isinstance(row, dict) and row.get("room_id") == area["room_id"]
+                       and isinstance(row.get("area_m2"), (int, float)) and row.get("area_m2") > 0
+                       for row in candidates):
+        return proposal
+    citations = [{"id": f"tenant-finish-{index + 1}", "page": row["page"],
+                  "excerpt": row["excerpt"]} for index, row in enumerate(area["areas"])]
+    values = [row["area_m2"] for row in area["areas"]]
+    formula = " + ".join(f"{value:g} m²" for value in values) + f" = {area['area_m2']:g} m²"
+    candidate = {
+        "room_id": area["room_id"], "label": area["label"], "page": area["page"], "level": area["level"],
+        "boundary_ref": None, "boundary_points_px": [], "boundary_points_mm": [], "coordinate_units": "area_only",
+        "wall_ids": [], "walls": [], "dimension_ids": [], "dimensions": [], "dimension_links": [],
+        "scale_mm_per_px": None, "area_m2": area["area_m2"], "formula": formula,
+        "calibration": {"source": "printed_floor_finish_area_sum", "status": "provisional",
+                        "assumption": "The distinct TL-tagged floor-finish regions shown on the connected cafe plan cover the whole tenancy.",
+                        "area_operands": [{"tag": row["tag"], "area_m2": row["area_m2"], "page": row["page"]}
+                                          for row in area["areas"]]},
+        "source_crop": "Main floor plan: tagged TL finish regions", "independent_witnesses": [],
+        "confidence": 0.86, "citations": citations,
+        "conflicts": [], "unresolved_fields": ["closed_tenancy_perimeter", "wall_and_opening_geometry"],
+        "alternatives": [],
+    }
+    fields["geometry_candidates"] = [*candidates, candidate]
+    proposal["proposal_fields"] = fields
+    proposal["affected_ids"] = list(dict.fromkeys([*proposal.get("affected_ids", []), area["room_id"]]))
+    proposal["citations"] = [*proposal.get("citations", []), *citations]
+    proposal.setdefault("observations", []).append({"description": "The parent cafe zone area is the sum of its uniquely tagged floor-finish areas; functional Counter, Food Preparation and Kiosk labels are not separate room areas.",
+        "citation_ids": [row["id"] for row in citations]})
+    proposal.setdefault("inferences", []).append({"field": f"geometry_candidates[{area['room_id']}].area_m2",
+        "value": area["area_m2"], "unit": "m²", "method": "Summed the distinct printed TL finish areas shown within the AI-identified connected cafe tenancy; perimeter remains unresolved.",
+        "formula": formula, "unrounded_operands": values, "confidence": 0.86,
+        "citation_ids": [row["id"] for row in citations]})
+    proposal["unresolved_fields"] = list(proposal.get("unresolved_fields", [])) + [
+        "Whole-tenant area is available from the printed finish areas; the closed perimeter and envelope surfaces still need geometry resolution."]
+    proposal["remediation"] = list(proposal.get("remediation", [])) + [
+        "Use the provisional tenant area now; resolve the perimeter, exterior boundaries, and openings to complete Phase 1 envelope loads."]
+    return _validate_subskill_output(subskill, proposal, load_subskill_registry(),
+                                     allowed_pages=_consented_page_ids(_project_paths(project)))
 
 
 def _document_map_proposal(subskill, project, input_fp):
@@ -964,6 +1092,14 @@ def _validate_subskill_output(subskill, result, registry, allowed_pages=None):
         # so it is kept as a one-item list. Any other type is still refused.
         if isinstance(result.get(key), str):
             result[key] = [result[key]] if result[key].strip() else []
+        if key == "remediation" and isinstance(result.get(key), dict):
+            # A common model shape is {error_code, next_action}. Keep the actionable instruction
+            # instead of rejecting an otherwise usable proposal over this envelope field.
+            details = result[key]
+            action = details.get("next_action") or details.get("message")
+            if action:
+                code = str(details.get("error_code") or "").strip()
+                result[key] = [f"{code}: {action}" if code else str(action)]
         if not isinstance(result.get(key), list):
             _validation_error("envelope_field_type", key, "Expected a JSON array.")
     confidence = result.get("confidence")
@@ -1015,21 +1151,39 @@ def _validate_subskill_output(subskill, result, registry, allowed_pages=None):
         note = "Dropped " + "; ".join(dropped) + "."
         result["remediation"] = list(result.get("remediation") or []) + [note] if isinstance(result.get("remediation"), list) else [note]
     kept_ids = {str(citation.get(key)) for citation in kept for key in ("id", "citation_id") if citation.get(key)}
+    skills_by_id = {row["id"]: row for row in registry.get("subskills", [])
+                    if isinstance(row, dict) and row.get("id")}
+
+    def names_skill(text):
+        for skill_id in skills_by_id:
+            if re.match(rf"\s*{re.escape(skill_id)}[-_:][a-z0-9][a-z0-9._:-]*\s*$", text):
+                # Finding IDs are generated per item (for example, "cold-display")
+                # and cannot be checked against proposal field names here.
+                return True
+        return False
+    inferences, uncited = [], []
     for index, inference in enumerate(result.get("inferences", [])):
         if not isinstance(inference, dict) or not inference.get("field"):
             _validation_error("inference_shape", f"inferences[{index}]", "Each inference must be an object with a field name.")
         if not inference.get("citation_ids") and isinstance(inference.get("citations"), list):
-            # The same references under "citations" (ids, or sentences naming a page): only those naming a kept
-            # citation or a page of this case file count.
+            # The same references under "citations": a kept citation's id, a sentence naming a page of this case file,
+            # Archie's case file, or another skill's finding ("equipment_evidence-cold-display").
             usable = [str(entry) for entry in inference["citations"] if isinstance(entry, (str, int))
                       and (str(entry) in kept_ids or _cited_pages_allowed(str(entry), allowed_pages)
-                           or _CASE_FILE_CITATION.match(str(entry)))]
+                           or _CASE_FILE_CITATION.match(str(entry)) or names_skill(str(entry)))]
             if usable:
                 inference["citation_ids"] = usable
         value = inference.get("value")
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
-            if not inference.get("citation_ids") or not inference.get("method"):
-                _validation_error("numeric_inference_citation", f"inferences[{index}]", "Numeric inference needs citation_ids and a method.", "subskill_numeric_inference_uncited")
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and (not inference.get("citation_ids") or not inference.get("method")):
+            # An uncited number is dropped (and noted), not allowed to throw away the rest of the reply: one such line
+            # used to fail the whole "What we need to find" list.
+            uncited.append(f"inference {index + 1} ({inference.get('field')})")
+            continue
+        inferences.append(inference)
+    if uncited:
+        result["inferences"] = inferences
+        result["remediation"] = list(result.get("remediation") or []) + [
+            "Dropped numbers given without a source or method: " + "; ".join(uncited) + "."]
     def contains_numeric(value):
         if isinstance(value, dict):
             return any(contains_numeric(item) for key, item in value.items()
@@ -1143,10 +1297,29 @@ def _consented_page_ids(paths):
             return {row.get("page") for row in _page_rows(_read(paths["coverage"], {})) if isinstance(row.get("page"), int)} \
                 or {int(page) for page in (_read(paths["root"] / "page_inventory.json", {}).get("pages") or {})}
         return set()
-    groups = select_page_groups(_read(paths["ai_input"], {}), _read(paths["coverage"], {}))
+    groups = select_page_groups(_read(paths["ai_input"], {}), _read(paths["coverage"], {}),
+                                _read(paths["root"] / "page_inventory.json", {}))
     selected_ids = set(settings.get("selected_group_ids", [])) or {row["group_id"] for row in groups}
-    return {page.get("page") for group in groups if group.get("group_id") in selected_ids
-            for page in group.get("pages", []) if isinstance(page.get("page"), int)}
+    allowed = {page.get("page") for group in groups if group.get("group_id") in selected_ids
+               for page in group.get("pages", []) if isinstance(page.get("page"), int)}
+    if "plan_geometry" in selected_ids:
+        # Keep an explicitly dimensioned setout sheet available to room skills
+        # even when the context ranker spends its page quota on other plans.
+        # The page inventory is the source that distinguishes real plans from
+        # pages whose OCR title was mistaken for a plan (renders/schedules).
+        from backend import page_inventory_service
+        inventory = _read(paths["root"] / page_inventory_service.RESULT_FILE, {}).get("pages", {})
+        if isinstance(inventory, dict):
+            for page, record in inventory.items():
+                if not isinstance(record, dict) or record.get("page_type") != "floor_plan":
+                    continue
+                if record.get("floor_plan_kind") != "dimension_setout":
+                    continue
+                try:
+                    allowed.add(int(page))
+                except (TypeError, ValueError):
+                    continue
+    return allowed
 
 
 def _safe_page_index(paths, allowed_pages):
@@ -1199,6 +1372,41 @@ def _shared_evidence_packet(subskill, project):
         "air_side_candidates": result.get("air_side_candidates", []) if isinstance(result, dict) else [],
         "plant_candidates": result.get("plant_candidates", []) if isinstance(result, dict) else [],
     }
+    if subskill["id"] == "surface_area":
+        # This task gets its detailed boundary, opening, and height evidence
+        # from prerequisite proposals. Keep its page index to plans and
+        # vertical/opening evidence; finish and equipment schedules otherwise
+        # push a complete area derivation just over the provider budget.
+        inventory = _read(paths["root"] / "page_inventory.json", {}).get("pages", {})
+        relevant_types = {"floor_plan", "reflected_ceiling_plan", "elevation", "section", "detail",
+                          "construction_or_detail", "opening_schedule", "window_schedule"}
+        relevant_pages = {int(page) for page, record in inventory.items()
+                          if str(page).isdigit() and isinstance(record, dict)
+                          and (record.get("page_type") in relevant_types
+                               or any(term in str(record.get("title", "")).casefold()
+                                      for term in ("window schedule", "opening schedule")))}
+        shared["page_index"] = [row for row in shared["page_index"] if row.get("page") in relevant_pages]
+    indexed_fact_kinds = {
+        "ceiling_height_volume": {"ceiling_height", "room_geometry"},
+        "surface_area": {"ceiling_height", "room_geometry"},
+        "construction_matching": {"materials_construction"},
+        "cross_sheet_opening_match": {"windows_glazing"},
+        "glazing_properties": {"windows_glazing", "materials_construction"},
+        "exposure_orientation": {"windows_glazing", "location_orientation"},
+    }.get(subskill["id"], set())
+    if indexed_fact_kinds:
+        inventory = _read(paths["root"] / "page_inventory.json", {}).get("pages", {})
+        shared["indexed_fact_evidence"] = [
+            {"page": int(page), "drawing_number": record.get("drawing_number", ""),
+             "title": record.get("title", ""), "information": [
+                 {"kind": item.get("kind"), "what": item.get("what"), "evidence": item.get("evidence")}
+                 for item in record.get("information", []) if isinstance(item, dict)
+                 and item.get("kind") in indexed_fact_kinds]}
+            for page, record in inventory.items()
+            if str(page).isdigit() and int(page) in allowed_pages and isinstance(record, dict)
+            and any(isinstance(item, dict) and item.get("kind") in indexed_fact_kinds
+                    for item in record.get("information", []))
+        ]
     if subskill["id"] == "room_boundaries_areas":
         # Room-boundary inference must see the detected room identities and the
         # actual dimension/vector evidence that the deterministic geometry
@@ -1239,10 +1447,20 @@ def _shared_evidence_packet(subskill, project):
                 linked_pages.add(right)
             if right in room_pages and left in allowed:
                 linked_pages.add(left)
+        from backend import page_inventory_service
+        inventory = _read(paths["root"] / page_inventory_service.RESULT_FILE, {}).get("pages", {})
+        dimensioned_plan_ids = set()
+        for raw_page, record in inventory.items() if isinstance(inventory, dict) else []:
+            if isinstance(record, dict) and record.get("page_type") == "floor_plan" and record.get("floor_plan_kind") == "dimension_setout":
+                try:
+                    dimensioned_plan_ids.add(int(raw_page))
+                except (TypeError, ValueError):
+                    continue
         role_priority = {"main_floor_plan": 0, "primary_geometry_plan": 0, "floor_plan": 1,
                          "supporting_geometry_plan": 2, "dimension_plan": 2}
         geometry_page_rows.sort(key=lambda row: (
             0 if row.get("page") in linked_pages else 1,
+            0 if row.get("page") in dimensioned_plan_ids else 1,
             role_priority.get(row.get("proposed_role"), 3),
             0 if row.get("scale_status") == "confirmed" else 1,
             row.get("page", 0),
@@ -1265,7 +1483,7 @@ def _shared_evidence_packet(subskill, project):
             primary_geometry_page = any(
                 item.get("page") == page.get("page") and item.get("page") in allowed
                 and (item.get("proposed_role") in {"main_floor_plan", "primary_geometry_plan"}
-                     or "dimension plan" in str(item.get("title", "")).casefold())
+                     or item.get("page") in dimensioned_plan_ids)
                 for item in geometry_page_rows
             )
             vector_pages.append({
@@ -1280,7 +1498,12 @@ def _shared_evidence_packet(subskill, project):
                 # pages need only their dimensions/labels and are not used for
                 # primary boundary tracing. Whole-pixel coordinates are well
                 # inside the resolver's endpoint-matching tolerance.
-                "line_candidates": [_compact_line(row) for row in (lines if primary_geometry_page else lines[:0])],
+                # Some vector plans contain thousands of dimension, furniture,
+                # and hatch strokes. The attached plan image supplies complete
+                # visual context; keep the strongest 350 indexed wall/context
+                # lines per primary sheet so room-boundary prompts stay within
+                # budget without losing stable vector IDs for validation.
+                "line_candidates": [_compact_line(row) for row in (lines[:350] if primary_geometry_page else lines[:0])],
                 "dimension_candidates": [_compact_dimension(row) for row in page.get("dimension_candidates", [])[:80]
                                          if isinstance(row, dict)],
                 "room_label_candidates": page.get("room_label_candidates", [])[:100],
@@ -1293,8 +1516,18 @@ def _shared_evidence_packet(subskill, project):
             if isinstance(page, dict) and page.get("page") in geometry_page_numbers
         ]
         spatial = _read(paths["spatial"], {})
+        vector_dimension_pages = {
+            page.get("page") for page in vector_pages
+            if isinstance(page.get("dimension_candidates"), list) and page.get("dimension_candidates")
+        }
         shared["spatial_room_evidence"] = [
-            {**{key: page.get(key) for key in ("page", "detected_type", "scale_candidates", "dimension_candidates")},
+            {**{key: page.get(key) for key in ("page", "detected_type", "scale_candidates")},
+             # The vector index and dimension-wall matches already carry the
+             # dimension values and spans for these pages. Repeating the OCR
+             # dimension list here doubled the largest part of the prompt on
+             # multi-sheet plans and could block the entire geometry task.
+             **({"dimension_candidates": page.get("dimension_candidates", [])}
+                if page.get("page") not in vector_dimension_pages else {}),
              "room_label_schema": "Each label is [text, x0, y0, x1, y1] in whole PDF points from the spatial OCR page.",
              "room_label_candidates": [_compact_label(item) for item in page.get("room_label_candidates", []) or []
                                        if isinstance(item, dict)]}
@@ -1306,6 +1539,51 @@ def _shared_evidence_packet(subskill, project):
             for row in coverage.get("page_roles", [])
             if isinstance(row, dict) and row.get("page") in geometry_page_numbers
         ]
+    elif subskill["id"] == "surface_inventory":
+        # Surface rows must anchor to the same page coordinate frame as the AI
+        # room traces. Without the stable vector IDs and frame, the model can
+        # see an edge but cannot register its geometry_ref to the boundary.
+        from backend import page_inventory_service
+        inventory = _read(paths["root"] / page_inventory_service.RESULT_FILE, {}).get("pages", {})
+        geometry_pages = []
+        for raw_page, record in inventory.items() if isinstance(inventory, dict) else []:
+            try:
+                page = int(raw_page)
+            except (TypeError, ValueError):
+                continue
+            if page not in allowed_pages or not isinstance(record, dict):
+                continue
+            if record.get("page_type") == "floor_plan" and (
+                    record.get("floor_plan_kind") == "proposed_layout"
+                    or record.get("drawing_number") == "01.01"
+                    or "layout plan" in str(record.get("title", "")).casefold()):
+                geometry_pages.append((0, page, record))
+            elif record.get("page_type") == "floor_plan" and record.get("floor_plan_kind") == "dimension_setout":
+                geometry_pages.append((1, page, record))
+        geometry_pages.sort(key=lambda row: (row[0], row[1]))
+        vectors = _read(paths["vector"], {})
+        vector_by_page = {row.get("page"): row for row in
+                          (vectors.get("geometry_key_points", {}).get("pages", []) or []) if isinstance(row, dict)}
+        shared["surface_geometry_pages"] = []
+        # The boundary solver already gets complete dimension evidence from
+        # the setout sheets. Surface inventory needs stable physical-edge IDs
+        # on the primary plan, so keep that vector index small enough to fit
+        # beside its full inventory and attached image frames.
+        for _rank, page, record in geometry_pages[:1]:
+            vector = vector_by_page.get(page, {})
+            lines = [row for row in vector.get("line_candidates", []) if isinstance(row, dict)]
+            lines.sort(key=lambda row: (
+                0 if any(word in str(row.get("candidate_role_hint", "")).casefold()
+                         for word in ("wall", "partition", "boundary")) else 1,
+                -(float(row.get("length_px", 0) or 0)), str(row.get("candidate_id", "")),
+            ))
+            shared["surface_geometry_pages"].append({
+                "page": page, "drawing_number": record.get("drawing_number", ""),
+                "title": record.get("title", ""),
+                "coordinate_frame": vector.get("coordinate_systems", {}).get("image_px", {}),
+                "line_schema": "Each line is [candidate_id, x1, y1, x2, y2, role] in full-page canonical image pixels; use candidate IDs verbatim.",
+                "line_candidates": [_compact_line(row) for row in lines[:120]],
+            })
     shared = _only_cited_pages(shared, allowed_pages)
     # Keep worker context bounded. Text/crops should already have been ranked
     # by the shared evidence pass; never pass local source paths or secrets.
@@ -1346,7 +1624,169 @@ def _relevant_consented_images(subskill, project, limit=4, render_dir=None):
              "image_path": image.get("path", image.get("image_path", ""))}
             for image in source_images if isinstance(image, dict) and image.get("page") in allowed_pages
         ]}]}
+    if subskill["id"] in {"room_identity_use", "room_boundaries_areas"} and any(
+            isinstance(group, dict) and group.get("group_id") == "plan_geometry" for group in manifest.get("groups", [])):
+        # The selected plan-geometry group can omit a true dimensioned sheet
+        # when the global page quota is filled by other plans. Supplement it
+        # from page inventory, which distinguishes plans from render/schedule
+        # sheets that happen to share an OCR title.
+        from backend import page_inventory_service
+        ai_input = _read(paths["ai_input"], {})
+        page_rows = {row.get("page"): row for row in ai_input.get("drawing_set", {}).get("pages", []) if isinstance(row, dict)}
+        source_images = {row.get("page"): row for row in ai_input.get("source_files", {}).get("page_images", [])
+                         if isinstance(row, dict)}
+        inventory = _read(paths["root"] / page_inventory_service.RESULT_FILE, {}).get("pages", {})
+        existing = {page.get("page") for group in manifest.get("groups", []) if isinstance(group, dict)
+                    for page in group.get("pages", []) if isinstance(page, dict)}
+        supplemental = []
+        for raw_page, record in inventory.items() if isinstance(inventory, dict) else []:
+            try:
+                page = int(raw_page)
+            except (TypeError, ValueError):
+                continue
+            if (page not in allowed_pages or page in existing or not isinstance(record, dict)
+                    or record.get("page_type") != "floor_plan" or record.get("floor_plan_kind") != "dimension_setout"):
+                continue
+            image = source_images.get(page, {})
+            if image:
+                supplemental.append({**page_rows.get(page, {}), **image, "page": page,
+                                     "image_path": image.get("path", image.get("image_path", "")),
+                                     "title": record.get("title") or page_rows.get(page, {}).get("title", "")})
+        if supplemental:
+            plan_group = next(group for group in manifest["groups"] if group.get("group_id") == "plan_geometry")
+            plan_group["pages"] = [*plan_group.get("pages", []), *supplemental]
+    if subskill["id"] == "surface_inventory":
+        # Surface inventory is the initializer for the thermal surface ledger,
+        # so it must see the evidence types needed to create that inventory.
+        # Page-group quotas often retain only the setout sheet; supplement the
+        # consented dimension, ceiling, façade, and section pages from inventory.
+        from backend import page_inventory_service
+        ai_input = _read(paths["ai_input"], {})
+        page_rows = {row.get("page"): row for row in ai_input.get("drawing_set", {}).get("pages", []) if isinstance(row, dict)}
+        source_images = {row.get("page"): row for row in ai_input.get("source_files", {}).get("page_images", [])
+                         if isinstance(row, dict)}
+        inventory = _read(paths["root"] / page_inventory_service.RESULT_FILE, {}).get("pages", {})
+        def surface_page_rank(item):
+            page, record = item
+            kind = record.get("page_type")
+            floor_kind = record.get("floor_plan_kind")
+            number = str(record.get("drawing_number") or "")
+            title = str(record.get("title") or "").casefold()
+            if (kind == "floor_plan" and
+                    (floor_kind == "proposed_layout" or "layout plan" in title or number == "01.01")):
+                return (0, page)
+            if floor_kind == "dimension_setout":
+                return (1, page)
+            if kind == "reflected_ceiling_plan":
+                return (2, page)
+            if kind == "elevation" and ("shopfront" in title or number == "02.01"):
+                return (3, page)
+            if kind == "section" and number in {"02.02", "02.03"}:
+                return (4, page)
+            return (9, page)
+        surface_pages = []
+        for raw_page, record in inventory.items() if isinstance(inventory, dict) else []:
+            try:
+                page = int(raw_page)
+            except (TypeError, ValueError):
+                continue
+            if page in allowed_pages and isinstance(record, dict) and surface_page_rank((page, record))[0] < 9:
+                surface_pages.append((page, record))
+        surface_pages.sort(key=surface_page_rank)
+        existing = {page.get("page") for group in manifest.get("groups", []) if isinstance(group, dict)
+                    for page in group.get("pages", []) if isinstance(page, dict)}
+        supplemental = []
+        for page, record in surface_pages:
+            image = source_images.get(page, {})
+            if page in existing or not image:
+                continue
+            supplemental.append({**page_rows.get(page, {}), **image, "page": page,
+                                 "image_path": image.get("path", image.get("image_path", "")),
+                                 "title": record.get("title") or page_rows.get(page, {}).get("title", "")})
+        if supplemental:
+            manifest.setdefault("groups", []).append({"group_id": "surface_inventory_context", "pages": supplemental})
     pinned_pages = []
+    if subskill["id"] in {"surface_area", "cross_sheet_opening_match", "glazing_properties"}:
+        # Opening matching needs both a plan host edge and its elevation/schedule
+        # witness. The broad consent groups can otherwise spend the image quota
+        # on unrelated sections (which previously gave the matcher only pages
+        # 41–42 and left every host ID null).
+        from backend import page_inventory_service
+        ai_input = _read(paths["ai_input"], {})
+        page_rows = {row.get("page"): row for row in ai_input.get("drawing_set", {}).get("pages", [])
+                     if isinstance(row, dict)}
+        source_images = {row.get("page"): row for row in ai_input.get("source_files", {}).get("page_images", [])
+                         if isinstance(row, dict)}
+        inventory = _read(paths["root"] / page_inventory_service.RESULT_FILE, {}).get("pages", {})
+        rank_rows = []
+        for raw_page, record in inventory.items() if isinstance(inventory, dict) else []:
+            try:
+                page = int(raw_page)
+            except (TypeError, ValueError):
+                continue
+            if page not in allowed_pages or not isinstance(record, dict):
+                continue
+            title = str(record.get("title") or "").casefold()
+            page_type = record.get("page_type")
+            info = record.get("information", [])
+            has_opening_schedule = page_type in {"schedule", "window_schedule", "opening_schedule"} and any(isinstance(item, dict) and
+                (item.get("kind") == "windows_glazing" or
+                 (item.get("kind") == "room_geometry" and "door" in str(item.get("what", "")).casefold()))
+                for item in info)
+            if subskill["id"] == "surface_area" and page_type == "floor_plan" and ("layout plan" in title or record.get("drawing_number") == "01.01"):
+                rank = 0
+            elif subskill["id"] == "surface_area" and page_type == "floor_plan" and record.get("floor_plan_kind") == "dimension_setout":
+                # Prefer the 01.02 setout page. The 01.03 dimensions sheet can
+                # carry a conflicting scale annotation for its main viewport;
+                # the shopfront elevation has its own independently confirmed
+                # scale and is more useful for opening heights in this packet.
+                rank = 1 if str(record.get("drawing_number") or "") == "01.02" else 4
+            elif subskill["id"] == "surface_area" and page_type == "reflected_ceiling_plan":
+                rank = 2
+            elif subskill["id"] == "surface_area" and page_type == "elevation" and ("shopfront" in title or record.get("drawing_number") == "02.01"):
+                rank = 3
+            elif subskill["id"] == "surface_area" and page_type == "section" and record.get("drawing_number") in {"02.02", "02.03"}:
+                rank = 4
+            elif page_type == "floor_plan" and ("layout plan" in title or record.get("drawing_number") == "01.01"):
+                rank = 0
+            elif page_type == "floor_plan" and record.get("floor_plan_kind") == "dimension_setout":
+                rank = 1 if subskill["id"] == "cross_sheet_opening_match" else 2
+            elif page_type == "elevation" and ("shopfront" in title or record.get("drawing_number") == "02.01"):
+                rank = 2 if subskill["id"] == "cross_sheet_opening_match" else 0
+            elif has_opening_schedule:
+                rank = (3 if subskill["id"] == "cross_sheet_opening_match" else
+                        5 if subskill["id"] == "surface_area" else 1)
+            elif subskill["id"] == "cross_sheet_opening_match" and page_type == "section" and record.get("drawing_number") in {"02.02", "02.03"}:
+                rank = 4
+            else:
+                continue
+            image = source_images.get(page, {})
+            image_path = Path(str(image.get("path", image.get("image_path", "")))) if image else None
+            if image_path is not None and not image_path.is_absolute():
+                image_path = (paths["root"] / image_path).resolve()
+            if image_path is None or not image_path.is_file():
+                continue
+            rank_rows.append((rank, page, record))
+        rank_rows.sort(key=lambda row: (row[0], row[1]))
+        wanted = rank_rows[:(5 if subskill["id"] == "cross_sheet_opening_match" else 4)]
+        existing = {page.get("page") for group in manifest.get("groups", []) if isinstance(group, dict)
+                    for page in group.get("pages", []) if isinstance(page, dict)}
+        supplemental = []
+        for rank, page, record in wanted:
+            if page not in pinned_pages:
+                pinned_pages.append(page)
+            image = source_images.get(page, {})
+            if page in existing or not image:
+                continue
+            image_path = Path(str(image.get("path", image.get("image_path", ""))))
+            if not image_path.is_absolute():
+                image_path = (paths["root"] / image_path).resolve()
+            supplemental.append({**page_rows.get(page, {}), **image, "page": page,
+                "image_path": str(image_path),
+                "title": record.get("title") or page_rows.get(page, {}).get("title", ""),
+                "relevance": 1.0})
+        if supplemental:
+            manifest.setdefault("groups", []).append({"group_id": "opening_match_context", "pages": supplemental})
     if subskill["id"] in {"room_identity_use", "room_boundaries_areas"}:
         coverage = _read(paths["coverage"], {})
         page_rows = [row for row in coverage.get("page_roles", []) if isinstance(row, dict) and row.get("page") in allowed_pages]
@@ -1366,7 +1806,8 @@ def _relevant_consented_images(subskill, project, limit=4, render_dir=None):
                         key=lambda row: row.get("page", 0))
         floor_layout_page_ids = {row.get("page") for row in layout}
         dimension = sorted((row for row in page_rows if row.get("geometry_eligible") is not False
-                            and "dimension plan" in title_text(row)), key=lambda row: row.get("page", 0))
+                            and any(term in title_text(row) for term in ("dimension plan", "dimensioned top view plan"))),
+                           key=lambda row: row.get("page", 0))
         dimension_page_ids = {row.get("page") for row in dimension}
         primary = sorted((row for row in page_rows if row.get("geometry_eligible") is not False
                           and row.get("proposed_role") in {"main_floor_plan", "primary_geometry_plan"}),
@@ -1387,6 +1828,28 @@ def _relevant_consented_images(subskill, project, limit=4, render_dir=None):
                 page = evidence.get("page") if isinstance(evidence, dict) else None
                 if page in allowed_pages and page not in pinned_pages:
                     pinned_pages.append(page)
+    if subskill["id"] == "surface_inventory":
+        inventory = _read(paths["root"] / "page_inventory.json", {}).get("pages", {})
+        ranked_pages = []
+        for raw_page, record in inventory.items() if isinstance(inventory, dict) else []:
+            try:
+                page = int(raw_page)
+            except (TypeError, ValueError):
+                continue
+            if page not in allowed_pages or not isinstance(record, dict):
+                continue
+            kind, title, number = record.get("page_type"), str(record.get("title") or "").casefold(), str(record.get("drawing_number") or "")
+            rank = ((0, page) if kind == "floor_plan" and
+                    (record.get("floor_plan_kind") == "proposed_layout" or "layout plan" in title or number == "01.01") else
+                    (1, page) if record.get("floor_plan_kind") == "dimension_setout" else
+                    (2, page) if kind == "reflected_ceiling_plan" else
+                    (3, page) if kind == "elevation" and ("shopfront" in title or number == "02.01") else
+                    (4, page) if kind == "section" and number in {"02.02", "02.03"} else None)
+            if rank is not None:
+                ranked_pages.append((rank, page))
+        for _rank, page in sorted(ranked_pages):
+            if page not in pinned_pages:
+                pinned_pages.append(page)
     needles = set(re.findall(r"[a-z0-9]+", (subskill["id"] + " " + subskill["task"] + " " + " ".join(subskill["inputs"])).lower()))
     preferred_groups = {
         "sheet_identity": ["plan_geometry", "opening_elevation", "ceiling_lighting", "visual_cross_check"],
@@ -1645,6 +2108,22 @@ def _task_view(subskill_id, artifact_name, row):
     """A record as one task needs it: an internal-gains room keeps only the fields that task uses."""
     if artifact_name == "internal_gains_resolution.json" and subskill_id in _GAINS_FIELDS and isinstance(row.get("fields"), dict):
         return {**row, "fields": {key: row["fields"][key] for key in _GAINS_FIELDS[subskill_id] if key in row["fields"]}}
+    if artifact_name == "geometry_resolution.json" and subskill_id == "surface_area":
+        # Area derivation needs the actual closed room trace and its scale
+        # operands, not unrelated OCR room labels, witness IDs, or resolver
+        # bookkeeping. This also leaves prompt room for matched opening areas.
+        value = row.get("value", {}) if isinstance(row.get("value"), dict) else {}
+        if row.get("kind") == "ai_room_geometry":
+            geometry_keys = ("room_identity_id", "label", "boundary_points_px", "coordinate_units",
+                             "area_px2", "area_m2", "source_page", "level_name", "proof_status",
+                             "confidence_score", "resolution_mode", "calibration", "derivation")
+            return {"source_artifact": artifact_name, "entity_id": row.get("entity_id"),
+                    "kind": row.get("kind"), "label": row.get("label"),
+                    "value": {key: value[key] for key in geometry_keys if key in value},
+                    "source": row.get("source"), "confidence": row.get("confidence"),
+                    "unresolved_fields": row.get("unresolved_fields", [])}
+        return {key: row[key] for key in ("source_artifact", "entity_id", "kind", "label", "value",
+                 "geometry_status", "source", "confidence", "unresolved_fields") if key in row}
     return row
 
 
@@ -1657,6 +2136,8 @@ def _generic_record_relevant(subskill_id, artifact_name, row):
     targets the task owns when a target vocabulary is declared for it.
     """
     if artifact_name == "geometry_resolution.json":
+        if subskill_id == "surface_area":
+            return row.get("kind") == "ai_room_geometry"
         if row.get("kind") in _UNVALIDATED_GEOMETRY_KINDS:
             return row.get("geometry_status") in _ACCEPTED_GEOMETRY_STATUSES
         return True
@@ -1752,7 +2233,7 @@ def _citation_line(citation):
 _PREREQUISITES_WITHOUT_CITATIONS = frozenset({"information_needs"})
 
 
-def _compact_dependencies(dependencies, citations=True):
+def _compact_dependencies(dependencies, citations=True, consumer_id=None):
     """Pass prerequisites as their validated proposal content only, with citations shortened to page and quote."""
     result = {}
     for key, value in (dependencies or {}).items():
@@ -1763,6 +2244,31 @@ def _compact_dependencies(dependencies, citations=True):
             content.pop("citations", None)
         elif isinstance(content.get("citations"), list):
             content["citations"] = [_citation_line(citation) for citation in content["citations"]]
+        if consumer_id == "surface_area":
+            # Area derivation needs IDs, ownership, geometry references, and
+            # evidence locations from its prerequisites. Exclude review prose
+            # and unrelated glazing ratings so long drawings stay within a
+            # responsive AI request while preserving every source reference.
+            fields = content.get("proposal_fields")
+            if isinstance(fields, dict):
+                row_keys = {
+                    "surface_inventory": ("surfaces", ("surface_id", "type", "thermal_role", "owner_ids",
+                        "adjacent_space", "geometry_ref", "confidence", "citations")),
+                    "cross_sheet_opening_match": ("matches", ("opening_id", "sighting_ids", "room_id",
+                        "host_wall_id", "match_basis", "confidence", "citations")),
+                    "glazing_properties": ("properties", ("opening_id", "opening_area_m2", "confidence", "citations")),
+                }
+                if key in row_keys:
+                    list_name, keep = row_keys[key]
+                    rows = fields.get(list_name)
+                    fields = {list_name: [
+                        {name: row[name] for name in keep if name in row}
+                        for row in rows if isinstance(row, dict)]} if isinstance(rows, list) else {list_name: []}
+                    content["proposal_fields"] = fields
+                    content.pop("citations", None)
+                    content.pop("unresolved_fields", None)
+                    if key == "glazing_properties" and proposal.get("inferences"):
+                        content["inferences"] = proposal["inferences"]
         result[key] = {"status": value.get("status", proposal.get("status", "")) if isinstance(value, dict) else "",
                        "proposal": content}
     return result
@@ -1787,7 +2293,8 @@ def _bounded_proposal_prompt(subskill, dependencies, evidence, image_frames=(), 
     stats = {}
     compact_evidence = _compact_for_prompt(evidence, stats)
     compact_dependencies = _compact_for_prompt(_compact_dependencies(
-        dependencies, citations=subskill["id"] not in _PREREQUISITES_WITHOUT_CITATIONS), stats)
+        dependencies, citations=subskill["id"] not in _PREREQUISITES_WITHOUT_CITATIONS,
+        consumer_id=subskill["id"]), stats)
     prompt = _proposal_prompt(subskill, compact_dependencies, compact_evidence, image_frames=image_frames)
     budget = _prompt_budget_chars(subskill["id"], case_file=case_file)
     sections = {"prerequisites": len(json.dumps(compact_dependencies, ensure_ascii=False, allow_nan=False))}
@@ -1836,7 +2343,11 @@ def _proposal_prompt(subskill, dependencies, evidence, image_frames=()):
     return (
         "Perform exactly one bounded Archie runtime subskill. Return one JSON object only; no markdown.\n"
         "The object must contain status, affected_ids, observations, inferences, citations, confidence, alternatives, unresolved_fields, remediation, and proposal_fields. "
-        "proposal_fields must contain every declared key with the declared type. confidence must be a JSON number from 0.0 to 1.0, or null when unassessed. "
+        "Envelope types are strict: affected_ids is string[], observations/inferences/citations/alternatives are arrays, "
+        "unresolved_fields and remediation are arrays, confidence is a number from 0.0 to 1.0 or null, and proposal_fields is an object. "
+        "For remediation, return string[]; if you draft a structured object with next_action, put that action in a one-item string array. "
+        "proposal_fields must contain every declared key with the declared type. "
+        "For each non-empty object in a proposal_fields list, include item-level confidence (0.0-1.0) and row-specific citations with page and excerpt; do not copy one page citation across unrelated rows. "
         "Use not_applicable only when supplied evidence establishes the domain does not apply. "
         "Do not emit a calculation result, mutate an artifact, approve a value, or promote reviewed status.\n"
         f"Parent skill: {parent['id']} — {parent['purpose']}\n"
@@ -1889,12 +2400,19 @@ def _attached_image_coordinate_frames(images, project):
         systems = page.get("coordinate_systems", {}) if isinstance(page, dict) else {}
         canonical = systems.get("image_px", {}) if isinstance(systems, dict) else {}
         width, height = canonical.get("image_width"), canonical.get("image_height")
-        if not all(isinstance(value, (int, float)) and value > 0 for value in (width, height, render_width, render_height)):
-            continue
+        # Fresh analyses may not have vector_geometry.json yet. The selected skill image is
+        # then the full-page page-inventory render (not a crop), so it can serve as its own
+        # canonical frame and preserve the printed-page calibration for draft estimates.
+        if not all(isinstance(value, (int, float)) and value > 0 for value in (width, height)):
+            width, height = render_width, render_height
+            frame_source = "attached_full_page_render"
+        else:
+            frame_source = "vector_geometry"
         crop_bbox = image.get("crop_bbox_canonical_px")
         crop_bbox = crop_bbox if isinstance(crop_bbox, list) and len(crop_bbox) == 4 else [0.0, 0.0, float(width), float(height)]
         frame = {
             "physical_page": image["page"],
+            "frame_source": frame_source,
             "attached_render_px": [render_width, render_height],
             "canonical_vector_image_px": [width, height],
             "canonical_crop_bbox_px": crop_bbox,
@@ -2006,7 +2524,11 @@ def _call_skill_provider(subskill, project, dependencies, evidence, attempt_reco
     Returns the raw provider proposal, or None when the scoped prompt is over
     budget; in that case no provider object is created and nothing is sent.
     """
-    image_limit = 4 if subskill["id"] in {"room_identity_use", "room_boundaries_areas"} else 2
+    image_limit = (7 if subskill["id"] == "surface_inventory" else
+                   4 if subskill["id"] == "surface_area" else
+                   5 if subskill["id"] == "cross_sheet_opening_match" else
+                   3 if subskill["id"] == "glazing_properties" else
+                   4 if subskill["id"] in {"room_identity_use", "room_boundaries_areas"} else 2)
     with tempfile.TemporaryDirectory(prefix="archie-skill-pages-") as render_dir:
         images = _relevant_consented_images(subskill, project, limit=image_limit, render_dir=render_dir)
         settings = _read(Path(project["review_dir"]) / "vision_extraction_settings.json", {})
@@ -2016,7 +2538,9 @@ def _call_skill_provider(subskill, project, dependencies, evidence, attempt_reco
         if not images and not _has_page_evidence(evidence):
             attempt_record["raw_record"] = {"provider": "none", "reply_text": ""}
             return _NO_EVIDENCE_PAGES
-        frames = _attached_image_coordinate_frames(images, project) if subskill["id"] == "room_boundaries_areas" else ()
+        frames = (_attached_image_coordinate_frames(images, project)
+                  if subskill["id"] in {"room_boundaries_areas", "surface_inventory", "surface_area",
+                                        "cross_sheet_opening_match", "glazing_properties"} else ())
         prompt, budget = _bounded_proposal_prompt(subskill, dependencies, evidence, image_frames=frames)
         model = settings.get("model") or os.environ.get("ARCHIE_VISION_MODEL", "gpt-5")
         attempt_record.update({"prompt": prompt, "images": images, "prompt_budget": budget,
@@ -2137,9 +2661,14 @@ def _call_case_file_provider(subskill, project, dependencies, evidence, attempt_
     """Ask the AI for one sub-skill with its case file. Returns the raw proposal, or None when over budget."""
     from backend import skill_case_file
     case, images = skill_case_file.build(subskill["id"], project)
+    image_rows = [{"page": page, "path": str(path)} for page, path in zip(case["attached_pages"], images)]
+    frames = (_attached_image_coordinate_frames(image_rows, project)
+              if subskill["id"] in {"room_boundaries_areas", "surface_inventory", "surface_area",
+                                    "cross_sheet_opening_match", "glazing_properties"} else ())
     # The case file carries the page index, so the shared evidence's copy of it is left out (every call is smaller).
     evidence = {key: value for key, value in evidence.items() if key != "page_index"}
-    prompt, budget = _bounded_proposal_prompt(subskill, dependencies, {**evidence, "case_file": case}, case_file=True)
+    prompt, budget = _bounded_proposal_prompt(subskill, dependencies, {**evidence, "case_file": case},
+                                               image_frames=frames, case_file=True)
     # Still over the cap: shrink the case file step by step (the job section and the key pages always stay).
     trimmed = []
     for part in ("readings", "page_index", "extracted"):
@@ -2148,7 +2677,8 @@ def _call_case_file_provider(subskill, project, dependencies, evidence, attempt_
         if case.get(part):
             case = {**case, part: [] if isinstance(case[part], list) else {}}
             trimmed.append(part)
-            prompt, budget = _bounded_proposal_prompt(subskill, dependencies, {**evidence, "case_file": case}, case_file=True)
+            prompt, budget = _bounded_proposal_prompt(subskill, dependencies, {**evidence, "case_file": case},
+                                                       image_frames=frames, case_file=True)
     if trimmed:
         budget["case_file_trimmed"] = trimmed
     attempt_record.update({"prompt": prompt, "images": [{"page": page, "path": str(path)} for page, path in zip(case["attached_pages"], images)],
@@ -2334,6 +2864,9 @@ def _ask_group(group, members, project, manifest, attempt_record):
         task_evidence[member] = packet.get("task_evidence", {})
         evidence.update({key: value for key, value in packet.items() if key not in {"task_evidence", "page_index"}})
     case, images = skill_case_file.build_for(members, project)
+    if set(members) & {"surface_inventory", "surface_area", "cross_sheet_opening_match", "glazing_properties"}:
+        image_rows = [{"page": page, "path": str(path)} for page, path in zip(case.get("attached_pages", []), images)]
+        evidence["attached_image_coordinate_frames"] = _attached_image_coordinate_frames(image_rows, project)
     build = lambda case: _group_prompt([registry[member] for member in members], _compact_dependencies(dependencies),
                                        {**evidence, "task_evidence": task_evidence, "case_file": case})
     prompt, trimmed = build(case), []
@@ -2385,6 +2918,7 @@ def _group_prompt(subskills, dependencies, evidence):
         f"{', '.join(ids)}.\n"
         "Each answer must contain status, affected_ids, observations, inferences, citations, confidence, alternatives, unresolved_fields, remediation, and proposal_fields. "
         "proposal_fields must contain every declared key of that subskill with the declared type. confidence must be a JSON number from 0.0 to 1.0, or null when unassessed. "
+        "For each non-empty object in a proposal_fields list, include item-level confidence (0.0-1.0) and row-specific citations with page and excerpt; do not copy one page citation across unrelated rows. "
         "Use not_applicable only when supplied evidence establishes the domain does not apply. "
         "Do not emit a calculation result, mutate an artifact, approve a value, or promote reviewed status. "
         "Where a subskill's prerequisite is another subskill in this list, use your own answer for it.\n"
@@ -2453,6 +2987,13 @@ def _execute_subskill(subskill, project, dependencies, source_fp):
             "remediation": ["Confirm the project address and design basis, then run the location resolver."],
             "input_fingerprint": input_fp, "proposal_fields": {"weather_candidates": []}, "artifact_names": []}
         provider_kind = "confirmation_dependency"
+    elif codex_test_mode and subskill["id"] in _CODE_MAPPED_TASKS:
+        # Keep the real workflow's deterministic page mapping in the Codex
+        # integration test too. Sending exhaustive cross-sheet link candidates
+        # to the model made this test-only path exceed the prompt budget and
+        # blocked unrelated room geometry work.
+        proposal = _document_map_proposal(subskill, project, input_fp)
+        provider_kind = "page_reading_by_code"
     elif codex_test_mode:
         raw = _call_skill_provider(subskill, project, dependencies, evidence, attempt_record,
                                    CodexCliSkillProposalProvider, "codex_cli")
@@ -2491,9 +3032,6 @@ def _execute_subskill(subskill, project, dependencies, source_fp):
     elif _case_file_route(project) and subskill["id"] in _CODE_MAPPED_TASKS:
         proposal = _document_map_proposal(subskill, project, input_fp)
         provider_kind = "page_reading_by_code"
-    elif _case_file_route(project) and subskill["id"] == "room_boundaries_areas":
-        proposal = _traced_rooms_proposal(subskill, project, input_fp)
-        provider_kind = "traced_rooms_by_code"
     elif _case_file_route(project) and not _worth_a_call(subskill, project):
         # No page shows anything this skill works on: not applicable, without spending an AI call.
         proposal = _not_applicable_proposal(subskill, input_fp)
@@ -2546,6 +3084,8 @@ def _execute_subskill(subskill, project, dependencies, source_fp):
             "alternatives": [], "unresolved_fields": list(subskill["proposal_fields"]) if has_evidence else [],
             "remediation": ["Enable the already-consented AI extraction before asking this skill to interpret project evidence."] if has_evidence else [],
             "input_fingerprint": input_fp, "proposal_fields": _empty_fields(subskill), "artifact_names": []}
+    if subskill["id"] == "room_boundaries_areas":
+        proposal = _augment_printed_tenant_area(subskill, project, dependencies, proposal)
     proposal["input_fingerprint"] = input_fp
     if subskill["id"] == "policy_source":
         for policy in proposal.get("proposal_fields", {}).get("policy", []):
@@ -2951,6 +3491,7 @@ def _run_worker(web, project, run_id, source_fp, catalog):
                 manifest["status"] = "blocked"
             else:
                 manifest["status"] = "completed"
+            _auto_review_confident_findings(paths["root"], manifest)
             if manifest["status"] == "completed" and _has_open_findings(paths, manifest):
                 manifest["status"] = "needs_review"
             if manifest["status"] in {"needs_review", "failed", "blocked"}:
@@ -3072,9 +3613,6 @@ def _response(web, project):
                                            if isinstance(value.get(key), int))
                         for key in ("source_pages", "evidence_page_ids"):
                             cited_pages.extend(item for item in value.get(key, []) if isinstance(item, int)) if isinstance(value.get(key), list) else None
-                    cited_pages.extend(row.get("page", row.get("physical_pdf_page", row.get("physical_page")))
-                                       for row in proposal.get("citations", []) if isinstance(row, dict)
-                                       and isinstance(row.get("page", row.get("physical_pdf_page", row.get("physical_page"))), int))
                     cited_pages = sorted(set(cited_pages))
                     target = _finding_target(value)
                     matching_inferences = _finding_inferences(proposal, field, target, len(proposal_rows))
@@ -3085,6 +3623,8 @@ def _response(web, project):
                     if not calculation and matching_inferences:
                         calculation = matching_inferences[0].get("calculation", "")
                     citations = _finding_citations(proposal, value, cited_pages, len(proposal_rows))
+                    if not cited_pages:
+                        cited_pages = sorted({row["page"] for row in citations if row.get("page") is not None})
                     row_alternatives = _row_alternatives(proposal.get("alternatives", []), value, len(proposal_rows))
                     evidence_label = _finding_evidence(value, field, cited_pages, matching_inferences, formula, calculation,
                                                        value.get("alternatives", row_alternatives) if isinstance(value, dict) else row_alternatives)
@@ -3101,11 +3641,17 @@ def _response(web, project):
                         "citations": citations, "inferences": inference_text,
                         "input_applied": input_applied,
                         "formula": formula, "calculation": calculation,
-                        "confidence": proposal.get("confidence"),
+                        "confidence": _finding_confidence(proposal, value, matching_inferences, len(proposal_rows)),
                         "alternatives": value.get("alternatives", row_alternatives) if isinstance(value, dict) else row_alternatives,
                         "unresolved_fields": proposal.get("unresolved_fields", []),
                         "applied_summary": decision.get("applied_summary", ""), "applied_room": decision.get("applied_room", ""),
                         "reviewer": decision.get("reviewer", ""), "reviewed_at": decision.get("updated_at", "")})
+    equipment_proposal = _read(proposal_root / "equipment_evidence.json", {})
+    mirrored_equipment_indices = _equipment_evidence_mirror_indices(paths["root"], equipment_proposal)
+    if mirrored_equipment_indices:
+        findings = [row for row in findings if not (
+            row.get("subskill_id") == "equipment_evidence" and row.get("field") == "equipment"
+            and row.get("id") in {f"equipment_evidence:equipment:{index}" for index in mirrored_equipment_indices})]
     case_file = _case_file_route(project)
     findings = [row for row in findings if not _hidden_finding(row, case_file)]
     from backend import finding_inputs_service
@@ -3227,15 +3773,35 @@ def _finding_inferences(proposal, field, target, proposal_row_count):
 
 def _finding_citations(proposal, value, pages, proposal_row_count):
     refs = []
+    citation_rows = proposal.get("citations", []) if isinstance(proposal.get("citations"), list) else []
+    citation_index = {}
+    for citation in citation_rows:
+        if isinstance(citation, dict):
+            for key in ("id", "citation_id"):
+                if citation.get(key):
+                    citation_index.setdefault(str(citation[key]), []).append(citation)
     if isinstance(value, dict):
         source = value.get("citations", value.get("evidence", []))
         if isinstance(source, list):
-            refs.extend(source)
+            for item in source:
+                if isinstance(item, dict):
+                    refs.append(item)
+                elif isinstance(item, (str, int)):
+                    matches = citation_index.get(str(item), [])
+                    if len(matches) == 1:
+                        refs.extend(matches)
+        citation_ids = value.get("citation_ids", [])
+        if isinstance(citation_ids, list):
+            for citation_id in citation_ids:
+                matches = citation_index.get(str(citation_id), [])
+                if len(matches) == 1:
+                    refs.extend(matches)
         if value.get("excerpt"):
             refs.append({"page": value.get("page") or value.get("physical_page"), "excerpt": value["excerpt"]})
-    source = proposal.get("citations", [])
-    if isinstance(source, list) and (proposal_row_count <= 1 or not refs):
-        refs.extend(source)
+    # A citation on the proposal envelope can support a single result. For a list,
+    # copying every envelope citation onto every row creates misleading evidence.
+    if proposal_row_count <= 1 and not refs:
+        refs.extend(citation_rows)
     seen, output = set(), []
     for row in refs:
         if not isinstance(row, dict):
@@ -3251,6 +3817,95 @@ def _finding_citations(proposal, value, pages, proposal_row_count):
     if not output and pages:
         output = [{"page": page, "excerpt": ""} for page in pages]
     return output
+
+
+def _finding_confidence(proposal, value, matching_inferences, proposal_row_count):
+    """Use item-level confidence; a whole-list score cannot certify every row."""
+    candidates = [value.get("confidence")] if isinstance(value, dict) else []
+    candidates.extend(item.get("confidence") for item in matching_inferences)
+    if proposal_row_count == 1:
+        candidates.append(proposal.get("confidence"))
+    return next((float(candidate) for candidate in candidates
+                 if isinstance(candidate, (int, float)) and not isinstance(candidate, bool)
+                 and math.isfinite(candidate) and 0 <= candidate <= 1), None)
+
+
+def _equipment_evidence_mirror_indices(root, proposal):
+    """Equipment names also reviewed in the dedicated equipment tab belong in that queue once."""
+    if proposal.get("subskill_id") != "equipment_evidence":
+        return set()
+    from ai.page_extraction import normalise_name
+    extraction = _read(Path(root) / "page_extraction.json", {}).get("equipment_appliances", {})
+    names = {normalise_name(row.get("value", {}).get("name")) for row in extraction.get("findings", [])
+             if isinstance(row, dict) and isinstance(row.get("value"), dict)}
+    return {index for index, row in enumerate(proposal.get("proposal_fields", {}).get("equipment", []))
+            if isinstance(row, dict) and normalise_name(row.get("name")) in names and normalise_name(row.get("name"))}
+
+
+def _auto_review_confident_findings(root, manifest):
+    """Persist only high-confidence, directly cited, unambiguous row decisions.
+
+    The confidence must belong to the row (or its matching inference), and its
+    citation must name a page and excerpt. Missing, conflicting and input-setting
+    rows remain in the operator queue.
+    """
+    run_id = manifest.get("run_id", "")
+    source_fp = manifest.get("source_fingerprint", "")
+    proposal_root = Path(root) / "skill_workflow_runs" / str(run_id) / "proposals"
+    if not run_id or not source_fp or not proposal_root.is_dir():
+        return 0
+    decisions_path = Path(root) / "skill_review_decisions.json"
+    artifact = _read(decisions_path, {"schema_version": 1, "decisions": {}})
+    decisions = artifact.setdefault("decisions", {})
+    added = 0
+    allowed_pages = {row.get("page") for row in _page_rows(
+        _read(Path(root) / "drawing_coverage.json", {})) if isinstance(row.get("page"), int)}
+    from backend import finding_inputs_service
+    for proposal_path in proposal_root.glob("*.json"):
+        proposal = _read(proposal_path, {})
+        subskill_id = proposal.get("subskill_id") or proposal_path.stem
+        if proposal.get("status") in {"failed", "blocked", "not_applicable"}:
+            continue
+        mirror_indices = _equipment_evidence_mirror_indices(root, proposal)
+        fields = proposal.get("proposal_fields", {})
+        proposal_row_count = sum(len(raw) if isinstance(raw, list) else int(raw is not None)
+                                 for raw in fields.values()) if isinstance(fields, dict) else 0
+        for field, raw in fields.items() if isinstance(fields, dict) else ():
+            rows = raw if isinstance(raw, list) else ([raw] if raw is not None else [])
+            for index, value in enumerate(rows):
+                if not isinstance(value, dict) or not _finding_has_value(value):
+                    continue
+                if subskill_id == "equipment_evidence" and field == "equipment" and index in mirror_indices:
+                    continue
+                finding_id = f"{subskill_id}:{field}:{index}"
+                existing = decisions.get(finding_id, {})
+                if _decision_is_current(existing, manifest, source_fp, subskill_id):
+                    continue
+                if finding_inputs_service.applies({"subskill_id": subskill_id, "field": field}):
+                    continue
+                target = _finding_target(value)
+                matching = _finding_inferences(proposal, field, target, proposal_row_count)
+                if matching or value.get("formula") or value.get("calculation"):
+                    continue
+                unresolved = proposal.get("unresolved_fields", [])
+                if any(_finding_unresolved(field, target, index, item) for item in unresolved):
+                    continue
+                alternatives = _row_alternatives(proposal.get("alternatives", []), value, proposal_row_count)
+                if alternatives:
+                    continue
+                citations = _finding_citations(proposal, value, [], proposal_row_count)
+                if not citations or not any(row.get("page") in allowed_pages and row.get("excerpt") for row in citations):
+                    continue
+                confidence = _finding_confidence(proposal, value, matching, proposal_row_count)
+                if confidence is None or confidence < 0.85:
+                    continue
+                decisions[finding_id] = {"status": "accepted", "value": value, "reviewer": "AI evidence gate",
+                    "updated_at": time.time(), "run_id": run_id, "source_fingerprint": source_fp,
+                    "auto_review": "high_confidence_direct_citation"}
+                added += 1
+    if added:
+        _atomic_json(decisions_path, artifact)
+    return added
 
 
 def _row_alternatives(alternatives, value, row_count):
@@ -3310,24 +3965,19 @@ def _has_open_findings(paths, manifest):
         if proposal.get("status") in {"failed", "blocked", "not_applicable"}:
             continue
         subskill = proposal.get("subskill_id", path.stem)
+        mirror_indices = _equipment_evidence_mirror_indices(paths["root"], proposal)
         for field, raw in proposal.get("proposal_fields", {}).items():
             rows = raw if isinstance(raw, list) else [raw]
             for index, value in enumerate(rows):
                 if not _finding_has_value(value):
                     continue
+                if subskill == "equipment_evidence" and field == "equipment" and index in mirror_indices:
+                    continue
                 decision = decisions.get(f"{subskill}:{field}:{index}", {})
                 if not _decision_is_current(decision, manifest, manifest.get("source_fingerprint"), subskill) or decision.get("status") not in {"accepted", "rejected"}:
                     return True
-        unresolved = list(proposal.get("unresolved_fields", []))
-        for field, raw in proposal.get("proposal_fields", {}).items():
-            empty = raw is None or raw == "" or raw == [] or raw == {}
-            if empty and not any(_unresolved_matches(field, item) for item in unresolved):
-                unresolved.append({"field": field})
-        for index, missing in enumerate(unresolved):
-            field = str(missing.get("field", "unknown field") if isinstance(missing, dict) else missing)
-            decision = decisions.get(f"{subskill}:missing:{field}:{index}", {})
-            if not _decision_is_current(decision, manifest, manifest.get("source_fingerprint"), subskill) or decision.get("status") not in {"accepted", "rejected"}:
-                return True
+        # Missing evidence is reported as a grouped gap, not a decision the
+        # operator must accept or reject once per field.
     return False
 
 

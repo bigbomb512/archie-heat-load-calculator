@@ -60,6 +60,19 @@ class RankedContextTests(unittest.TestCase):
         self.assertIn(1, selected)
         self.assertNotIn(2, selected)
 
+    def test_indexed_finish_schedule_overrides_wrong_plan_role(self):
+        page = {"page": 23, "drawing_number": "00.04a", "title": "Dimensioned Top View Plan",
+                "structured_content": {"markdown": "Casa Nova Gosford Finishes Schedules 00.04a"}}
+        coverage = {"page_roles": [{"page": 23, "proposed_role": "supporting_geometry_plan",
+                                     "selection": "supporting_context", "relevance": {"room_geometry": 0.7}}]}
+        inventory = {"pages": {"23": {"page_type": "schedule", "title": "Finishes Schedules",
+                                         "drawing_number": "00.04a", "information": [
+                                             {"kind": "materials_construction", "what": "FT1 engineered timber floor."}]}}}
+        groups = select_page_groups({"drawing_set": {"pages": [page]}}, coverage, inventory)
+        schedule = next(group for group in groups if group["group_id"] == "schedules_and_construction")
+        self.assertEqual([(row["page"], row["role"]) for row in schedule["pages"]], [(23, "material_schedule")])
+        self.assertNotIn("plan_geometry", {group["group_id"] for group in groups})
+
     def test_selection_summary_reports_only_main_context_pages(self):
         pages = self.pages[:2]
         coverage = {"page_roles": [role(1, "room_geometry", 0.9), role(2, "openings_windows", 0.9, identity="ambiguous")]}

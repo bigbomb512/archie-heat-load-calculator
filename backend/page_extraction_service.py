@@ -20,6 +20,7 @@ from pathlib import Path
 import struct
 import subprocess
 import threading
+import time
 
 from ai import equipment_heat
 from ai.page_extraction import EXTRACTORS, batch_prompt, build_prompt, merge, normalise_name, possible_duplicates, tiles, validate_reply
@@ -31,10 +32,21 @@ RESULT_FILE = "page_extraction.json"
 DECISIONS_FILE = "page_extraction_decisions.json"
 WORK_DIR = "page_extraction"
 DPI = 150
+TRANSIENT_READ_RETRIES = 2
+TRANSIENT_RETRY_DELAYS = (1, 3)
 STEPS = [("pages", "Choosing the pages"), ("read", "Reading values"), ("merge", "Merging across pages")]
 _JOB = BackgroundJob(JOB_FILE, STEPS, "archie-page-extraction",
                      "Reading values stopped before it finished (the server was restarted). Retry to read the rest.")
 _RUNNING = _JOB.running
+
+
+def _transient_connection_error(error):
+    """Whether an AI request failed in a way that is usually safe to retry unchanged."""
+    message = " ".join(str(error).split()).casefold()
+    return any(marker in message for marker in (
+        "remote end closed connection", "remote disconnected", "connection reset",
+        "connection aborted", "connection closed", "timed out", "temporary failure",
+    ))
 
 
 def png_size(path):
@@ -148,17 +160,22 @@ def read_sections(extractor, images, cache_dir, provider, workers=pass1.WORKERS,
         image, count = images[key]
         if stopped.is_set():  # the plan's usage limit was hit: further calls would fail the same way
             return [(key, None, stopped.reason)], 0
-        try:
-            reply, raw = provider.propose(build_prompt(extractor, page, section, count, codes), image_paths=[image])
-            items = validate_reply(extractor, reply)
-        except pass1.UsageLimitReached as error:
-            stopped.reason = str(error)
-            stopped.set()
-            return [(key, None, str(error))], 1
-        except Exception as error:
-            return [(key, None, " ".join(str(error).split())[:400] or error.__class__.__name__)], 1
+        for attempt in range(TRANSIENT_READ_RETRIES + 1):
+            try:
+                reply, raw = provider.propose(build_prompt(extractor, page, section, count, codes), image_paths=[image])
+                items = validate_reply(extractor, reply)
+                break
+            except pass1.UsageLimitReached as error:
+                stopped.reason = str(error)
+                stopped.set()
+                return [(key, None, str(error))], attempt + 1
+            except Exception as error:
+                if attempt < TRANSIENT_READ_RETRIES and _transient_connection_error(error):
+                    time.sleep(TRANSIENT_RETRY_DELAYS[attempt])
+                    continue
+                return [(key, None, " ".join(str(error).split())[:400] or error.__class__.__name__)], attempt + 1
         save(key, items, raw)
-        return [(key, items, None)], 1
+        return [(key, items, None)], attempt + 1
 
     def several(keys):
         if len(keys) == 1:
@@ -175,6 +192,15 @@ def read_sections(extractor, images, cache_dir, provider, workers=pass1.WORKERS,
         except Exception as error:
             if "JSON" in str(error):          # the reply itself was unreadable: read each image on its own instead
                 reply, raw = {}, {}
+            elif _transient_connection_error(error):
+                # The connection failed before a batch reply arrived. Recover each section on its own, with bounded
+                # retries; do not make the operator retry the whole uncached batch manually.
+                results, made = [], 1
+                for key in keys:
+                    rows, extra = one(key)
+                    results.extend(rows)
+                    made += extra
+                return results, made
             else:
                 reason = " ".join(str(error).split())[:400] or error.__class__.__name__
                 return [(key, None, reason) for key in keys], 1
@@ -235,6 +261,34 @@ def _extractor(kind):
     if kind not in EXTRACTORS:
         raise ValueError(f"No extractor for {kind!r}. Available: {', '.join(sorted(EXTRACTORS))}.")
     return EXTRACTORS[kind]
+
+
+def _auto_accept_clear_findings(root, kind, result):
+    """Record clear text-backed equipment readings as accepted; leave uncertain rows for the operator."""
+    if kind != "equipment_appliances":
+        return 0
+    run = result.get("run")
+    if not run:
+        return 0
+    decisions = read_json(Path(root) / DECISIONS_FILE)
+    rows = decisions.setdefault(kind, {})
+    accepted = 0
+    for finding in result.get("findings", []):
+        if (finding.get("evidence") != "supported" or finding.get("text_match") is not True
+                or finding.get("pictures_only") or finding.get("conflicts")):
+            continue
+        previous = rows.get(finding["id"], {})
+        if previous.get("run") == run:
+            continue
+        rows[finding["id"]] = {
+            "status": "accepted", "value": finding["value"], "run": run,
+            "reviewer": "AI (text verified)", "source": "ai_high_confidence",
+            "reason": "The item is supported by the drawing text and has no conflicting readings.", "at": now(),
+        }
+        accepted += 1
+    if accepted:
+        write_json(Path(root) / DECISIONS_FILE, decisions)
+    return accepted
 
 
 def rooms(project):
@@ -347,6 +401,7 @@ def start(web, project, data=None):
                              "run": run_fingerprint(extractor, project, images), "read_at": now(), "pages": pages,
                              "sections": len(images), "failures": failures, "findings": findings}
             write_json(root / RESULT_FILE, results)
+            _auto_accept_clear_findings(root, kind, results[kind])
             totals[kind] = {"findings": len(findings), "calls": calls}
             if failures:
                 pages_failed = sorted({int(key.split(".")[0]) for key in failures})

@@ -182,8 +182,8 @@
     {
       "id": "room_identity_use",
       "parent": "rooms_geometry_gains",
-      "version": 1,
-      "task": "Identify distinct conditioned and process spaces from room labels, partitions, furniture, fixtures, equipment, finishes, and adjacency clues. Preserve original labels and classify only into the controlled room-use taxonomy.",
+      "version": 2,
+      "task": "Identify physical conditioned rooms and process spaces from the plan, while distinguishing them from counters, kiosks, seating, and other functions inside an open tenancy. Preserve printed room labels and classify actual spaces only into the controlled room-use taxonomy.",
       "inputs": [
         "ranked_plan_pages",
         "room_labels",
@@ -199,6 +199,8 @@
       },
       "constraints": [
         "Do not merge distinct rooms because labels are similar.",
+        "Do not treat a counter island, floor-mounted kiosk, fixture, or work function as a separate room unless physical partitions or an explicit HVAC boundary establish a distinct space.",
+        "When the primary plan identifies a cafe/coffee tenancy and shows an open fitout, treat its connected tenant perimeter as the parent conditioned zone; retain counters, kiosk, food preparation and seating as functional annotations unless individually enclosed.",
         "Do not infer numerical loads or schedules from room type.",
         "Keep kitchen process scope separate; exclude refrigeration/plant from comfort scope."
       ],
@@ -208,8 +210,8 @@
     {
       "id": "room_boundaries_areas",
       "parent": "rooms_geometry_gains",
-      "version": 5,
-      "task": "Resolve a measured floor-area candidate for every in-scope room or conditioned zone the evidence supports. Use the current-revision primary dimensioned plan. Trace the inside-face boundary and build its polygon in millimetres using written dimension chains; do not use pixel-scaled area on a sheet that says not to scale. The dimension_wall_matches index is a convenience, not a gate: when the rendered PDF crop visibly shows the numeric dimension and its extension/witness lines, you may transcribe that printed dimension into a candidate record with a stable dimension ID, value_mm, physical page, crop/bounding box, and excerpt. Link it to a wall only when the printed extension/witness lines visibly terminate at that wall's inside faces, or derive a wall length from a complete cited chain whose operands and signed relationship are explicit. Return ordered boundary_points_mm, coordinate_units='mm', ordered wall IDs, a wall record for every segment, and dimension links sufficient for the resolver to verify every edge length and recompute the shoelace area. Do not merely copy an AI-reported area. If a dimension chain does not close or leaves any material edge unmeasured, preserve the candidate as unresolved. Return each room independently; one blocked room must not suppress another supported area.",
+      "version": 11,
+      "task": "Resolve floor area for each physical conditioned room or zone on the current-revision primary plan. Distinguish thermal spaces from counters, kiosks, seating, and other functional labels. Where one tenant fitout is visibly open and connected, resolve one whole tenancy zone rather than fabricating room boundaries around its functional areas. Prefer a printed room area, then a complete inside-face boundary measured from written dimensions and dimension chains. If those are unavailable, use a directly traced closed boundary with the confirmed main-viewport scale and supplied PDF page-size calibration to produce a PRELIMINARY AI ESTIMATE. This is authorized even when the drawing says not to scale: retain that note as a caveat, do not describe the area as measured or construction-accurate, and list it for review. Never use an inset/detail scale or infer scale from appearance. For dimensioned geometry, return ordered boundary_points_mm and cited dimension links. For a scale estimate, return ordered boundary_points_px, coordinate_units='px', exact calibration operands, scale_mm_per_px, source page/crop, confidence, and reported area only as a check. The resolver recomputes area from polygon and deterministic scale. Printed dimensions take precedence; preserve conflicts and flag review. Return each independently supportable physical zone; one unresolved zone must not suppress others.",
       "inputs": [
         "ranked_plan_pages",
         "dimension_plans",
@@ -231,16 +233,17 @@
       "constraints": [
         "Never derive area from visual proportion, furniture size, tile count, or an unrelated dimension.",
         "Use exact normalized room IDs/labels supplied in room_candidates; distinguish a room from a functional subarea and do not double-count nested/overlapping zones.",
-        "Use only current-revision dimensioned plan pages for primary geometry; finish/RCP pages support identity or independent witness only.",
+        "Use only current-revision plan pages for primary geometry. A finish-area schedule may also provide an area-only witness for the whole tenant when the plan shows its regions cover that connected zone; do not use it to create separate thermal rooms.",
         "Where a room opens into a connected zone, resolve one parent zone's complete non-overlapping boundary or explicitly mark the subarea non-counting; never invent a closure.",
         "Visually read dimensions only when the printed value and its extension/witness relationship are legible; include a crop/bounding box and transcription excerpt.",
-        "Every polygon edge must be measured by a direct dimension or explicit cited dimension-chain derivation; unmeasured return/offset/column edges block that room.",
+        "Dimension-based polygons require a cited measurement for every edge. Scale-derived preliminary polygons require a directly traced closed boundary, confirmed main-viewport scale, and exact supplied PDF page-size calibration; missing or ambiguous boundary ownership still blocks that room.",
         "Reject open, self-intersecting, branched, duplicate, or competing loops.",
-        "The deterministic resolver recomputes area from boundary_points_mm; never trust area_m2 supplied by the AI.",
-        "A room with incomplete geometry remains an explicit unresolved candidate naming the missing dimension, edge, boundary ownership, or level."
+        "The deterministic resolver recomputes area from polygon coordinates and validated calibration; never trust area_m2 supplied by the AI.",
+        "A room with incomplete polygon geometry remains an explicit unresolved candidate. If a whole-tenant area is directly supported by a complete set of printed floor-finish areas, it may still be returned as an area-only estimate with formula, addends, page citations, and unresolved boundary fields.",
+        "For every scale-derived area, state that it is a draft estimate, cite the printed scale and page, and repeat any source note advising not to scale. Do not claim engineering accuracy."
       ],
       "handoff": "geometry_resolution.json",
-      "failure": "Block only the affected room. Identify the exact missing edge, dimension chain, boundary owner, revision, or level; do not substitute pixel scaling or generic area fallback."
+      "failure": "Block only the affected room when no closed, confidently traced boundary or eligible calibration exists. Identify the exact missing edge, boundary owner, revision, or level; do not substitute an arbitrary scale or generic area fallback."
     },
     {
       "id": "ceiling_height_volume",
@@ -377,8 +380,8 @@
     {
       "id": "surface_inventory",
       "parent": "opaque_envelope",
-      "version": 1,
-      "task": "Inventory physical walls, roofs, floors, ceilings, and partitions with room/zone ownership, adjacency, thermal role, and cited drawing geometry.",
+      "version": 4,
+      "task": "Initialize or reconcile the physical wall, roof, floor, ceiling, and partition inventory from cited room geometry, primary layout and setout plans, sections, and elevations. Reconcile each candidate edge to a closed room or tenancy boundary before assigning room/zone ownership; record geometry references and distinguish known thermal roles from unresolved exposure or adjacency.",
       "inputs": [
         "room_geometry",
         "plans",
@@ -387,16 +390,22 @@
         "thermal_surface_ledger"
       ],
       "depends_on": [
-        "room_boundaries_areas",
-        "page_relationships"
+        "page_relationships",
+        "room_boundaries_areas"
       ],
       "proposal_fields": {
         "surfaces": "array<{surface_id:string,type:string,thermal_role:string,owner_ids:string[],adjacent_space:string|null,geometry_ref:string|null}>"
       },
       "constraints": [
+        "The thermal surface ledger is an optional prior inventory, not a prerequisite. If it is absent or empty, create stable proposed surface IDs from the cited room boundary and physical sheet evidence so downstream area, construction, and boundary tasks have records to resolve.",
+        "Use the primary layout plan together with setout/dimension plans to map physical edges to room-boundary candidates. A plan label such as Bar, Kitchen, Staff, or Amenities is not by itself a room polygon; use the supplied boundary candidate and preserve its identity/level conflicts.",
         "Use one canonical record for shared boundaries.",
+        "For a cited closed room boundary, trace each physical edge as a proposed wall/partition surface and use the boundary edge or vector ID in geometry_ref. Use stable room-use IDs from the supplied room and geometry records in owner_ids when the page relationship supports them, even if the upstream room geometry is provisional; preserve ownership conflicts and unresolved fields. Do not report area from the surface trace.",
+        "Use thermal_role='unresolved' and adjacent_space=null when the supplied evidence cannot establish exposure or adjacency; do not leave a visible surface out solely because its thermal role is unresolved.",
+        "For a fenestrated shopfront, create the full physical wall-plane host with gross extent including the doors and glazing; do not substitute an opaque-components-only row for that host. Split curved and straight planes only when the drawings establish the distinction.",
         "Do not create surfaces from legends, title blocks, or 3D-only objects.",
-        "Do not invent missing geometry."
+        "Do not invent missing geometry; distinguish directly visible surfaces from boundary-trace-derived draft surfaces and keep their confidence and citations attached.",
+        "When relevant plan, ceiling, elevation, or section evidence is present, return needs_review with the visible and boundary-derived surface rows plus unresolved coverage notes. Use blocked only when the packet contains no relevant physical surface evidence at all."
       ],
       "handoff": "thermal_surface_ledger",
       "failure": "Retain expected-but-unseen surfaces as unresolved coverage issues."
@@ -404,21 +413,23 @@
     {
       "id": "surface_area",
       "parent": "opaque_envelope",
-      "version": 1,
-      "task": "Derive gross and net surface areas from validated geometry and resolved height, then subtract only confirmed openings with complete host-wall coverage.",
+      "version": 5,
+      "task": "Propose cited draft gross and net surface areas from drawing dimensions and calibrated AI-traced geometry; use matched glazing-area proposals, subtract openings only when host coverage is complete, and retain nulls and limitations where evidence is incomplete.",
       "inputs": [
         "surface_inventory.proposal",
         "geometry_resolution.json",
         "ceiling_volume_resolution.json",
-        "opening_register"
+        "opening_register",
+        "glazing_properties.proposal"
       ],
       "depends_on": [
         "surface_inventory",
         "ceiling_height_volume",
-        "cross_sheet_opening_match"
+        "cross_sheet_opening_match",
+        "glazing_properties"
       ],
       "proposal_fields": {
-        "areas": "array<{surface_id:string,gross_area_m2:number|null,opening_area_m2:number,net_opaque_area_m2:number|null,formula:string|null}>"
+        "areas": "array<{surface_id:string,gross_area_m2:number|null,opening_area_m2:number|null,net_opaque_area_m2:number|null,opening_coverage:string,formula:string|null}>"
       },
       "constraints": [
         "Retain gross and net separately.",
@@ -458,8 +469,8 @@
     {
       "id": "boundary_resolution",
       "parent": "opaque_envelope",
-      "version": 1,
-      "task": "Classify each surface boundary as outdoor, ground-contact, fixed adjacent, or dynamic room-to-room and attach its eligible cited temperature source.",
+      "version": 2,
+      "task": "Classify each surface boundary as outdoor, ground-contact, fixed adjacent, or dynamic room-to-room from the cited drawings. Boundary classification can proceed without resolved design weather; attach an eligible cited temperature source only when one is available.",
       "inputs": [
         "surface_inventory.proposal",
         "adjacency_evidence",
@@ -467,14 +478,14 @@
         "ground_or_adjacent_source_records"
       ],
       "depends_on": [
-        "surface_inventory",
-        "weather_source_matching"
+        "surface_inventory"
       ],
       "proposal_fields": {
         "boundaries": "array<{surface_id:string,method:string,adjacent_owner:string|null,temperature_c:number|null,source_id:string|null}>"
       },
       "constraints": [
-        "Outdoor uses selected design weather only.",
+        "Do not block physical boundary classification because a design-weather source is unresolved.",
+        "Outdoor temperature uses selected design weather only; leave temperature null when unavailable.",
         "Do not assign a generic adjacent-space temperature.",
         "Room coupling requires both owners and its method gate."
       ],
@@ -484,22 +495,25 @@
     {
       "id": "cross_sheet_opening_match",
       "parent": "openings_glazing_solar",
-      "version": 1,
-      "task": "Match opening sightings across plans, elevations, sections, schedules, and photos using tags, level, host wall, sequence, and landmarks; retain competing matches.",
+      "version": 2,
+      "task": "Create draft opening sightings from attached plans/elevations when needed, then match them across plans, elevations, sections, schedules, and photos using tags, level, host wall, sequence, and landmarks; retain competing matches.",
       "inputs": [
         "opening_sightings",
         "page_relationships.proposal",
         "room_geometry",
-        "thermal_surface_ledger"
+        "thermal_surface_ledger",
+        "surface_inventory.proposal"
       ],
       "depends_on": [
         "room_boundaries_areas",
-        "page_relationships"
+        "page_relationships",
+        "surface_inventory"
       ],
       "proposal_fields": {
         "matches": "array<{opening_id:string,sighting_ids:string[],room_id:string|null,host_wall_id:string|null,match_basis:string,confidence:number}>"
       },
       "constraints": [
+        "If an opening register or sighting list is absent, use the attached PDF pages to propose visible openings with cited page-specific stable IDs.",
         "Do not merge repeated tags across levels/revisions without corroboration.",
         "Do not silently select between competing owners.",
         "Keep unmatched sightings visible."
@@ -510,7 +524,7 @@
     {
       "id": "glazing_properties",
       "parent": "openings_glazing_solar",
-      "version": 1,
+      "version": 4,
       "task": "Resolve opening area, glass area, overall-window U-value, and exactly one solar property (SHGC or transmission) from cited schedules, supplier sources, released packs, or explicit provisional visual class.",
       "inputs": [
         "cross_sheet_opening_match.proposal",

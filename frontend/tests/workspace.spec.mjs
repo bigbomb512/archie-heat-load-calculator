@@ -140,6 +140,8 @@ async function openFinding(page, id) {
   const card = page.locator(`[data-ws-finding='${id}']`);
   const topic = page.locator("[data-ws-finding-topic]").filter({has: card});
   if (await topic.getAttribute("open") === null) await topic.locator(":scope > summary").click();
+  const missingGroup = card.locator("xpath=ancestor::details[contains(@class, 'ws-finding-missing')]");
+  if (await missingGroup.count() && await missingGroup.getAttribute("open") === null) await missingGroup.locator(":scope > summary").click();
   const details = card.locator("details").first();
   if (await details.getAttribute("open") === null) await card.locator("summary").first().click();
   await expect(details).toHaveAttribute("open", "");
@@ -290,11 +292,11 @@ test("Drawings: shows analysis status, keeps page changes available on request, 
   await expect(page.locator("[data-ws-operator-panel]")).toHaveCount(0);
 });
 
-test("Drawings: finished but unreviewed equipment or findings are not called complete", async ({page}) => {
+test("Drawings: optional skill suggestions do not block Phase 1, while equipment stays a Phase 2 task", async ({page}) => {
   await mockJob(page, {status: () => baseStatus(), skill: () => ({status: "completed", stages: [], findings: [], subskills: []}),
     extraction: () => ({status: "done", findings: [{id: "eq:1", value: {name: "TV"}, pages: [9], citations: [], conflicts: {}, evidence: "supported", status: "proposed"}], pages: [9], open: 1})});
   await page.goto("/#/job/job-1/drawings");
-  await expect(page.locator("[data-ws-checks]")).toContainText("Some of what it found still needs your review");
+  await expect(page.locator("[data-ws-checks]")).toContainText("Phase 1 does not require accepting each drawing suggestion");
   await expect(page.locator("[data-ws-needs-you]")).toContainText("1 equipment item to review");
   await expect(page.locator("[data-ws-checks]")).not.toContainText("complete");
 });
@@ -330,10 +332,10 @@ test("PDF review: consent starts the skills review and findings show page eviden
   consented = true;   // findings come from the skills once every page has been read; there is no separate consent box
   await page.goto("/#/job/job-1/drawings/findings");
   await expect(page.locator("[data-ws-pdf-consent]")).toHaveCount(0);
-  await expect(page.locator("[data-ws-pdf-review] h3")).toHaveText("Findings from the skills");
+  await expect(page.locator("[data-ws-pdf-review] h3")).toHaveText("AI findings and suggestions");
   await expect(page.locator(".ws-skill-finding")).toContainText("Shop");
   await expect(page.locator(".ws-skill-finding")).toContainText("Page 20: Shop 42 m2");
-  await expect(page.locator("[data-ws-finding-topic='room_boundaries_areas'] > summary")).toHaveText(/Room outlines and areas\s+1 to review · 1 finding/);
+  await expect(page.locator("[data-ws-finding-topic='room_boundaries_areas'] > summary")).toHaveText(/Room outlines and areas\s+1 optional · 1 finding/);
   await openFinding(page, "room_boundaries_areas:geometry_candidates:0");
   await page.getByRole("button", {name: "Accept value"}).click();
   await expect(page.locator(".ws-skill-finding")).toContainText("accepted");
@@ -354,7 +356,8 @@ test("PDF review: evidence labels, missing-value editing, and conflict choice ar
   await mockJob(page, {status: () => baseStatus(), skill, vision: () => ({settings: {owner_opt_in: true, selected_group_ids: ["plans"]}, selection: {page_count: 1, group_count: 1}}),
     onPost: (kind, body) => { if (kind === "skill" && body.action === "review_finding") { decisions.push(body.finding_id); values[body.finding_id] = body.value; return skill(); } return null; }});
   await page.goto("/#/job/job-1/drawings/findings");
-  await expect(page.locator("[data-ws-evidence-count]")).toContainText("1 supported · 1 missing · 1 conflicting");
+  await expect(page.locator("[data-ws-evidence-count]")).toHaveText("Open findings: 1 supported · 1 conflicting");
+  await expect(page.locator(".ws-finding-missing > summary")).toContainText("1 unresolved field · no decision needed");
   await openFinding(page, "room_identity_use:missing:ceiling_height:0");
   await expect(page.locator("[data-ws-finding='room_identity_use:rooms:0'] [data-ws-evidence]")).toHaveText("supported");
   const missing = page.locator("[data-ws-finding='room_identity_use:missing:ceiling_height:0']");
@@ -819,6 +822,11 @@ test("Next step: one plain instruction with one button on every tab, and the who
   const card = page.locator("[data-ws-guide-now]");
   await expect(card.locator("[data-ws-guide-title]")).toHaveText("Check the rooms (2)");
   await expect(card).toContainText("Next step · 3 of 5 done");
+  await expect(card).toContainText("Phase 1 of 2 · AI base room load");
+  await expect(card.locator("[data-ws-phase-card]")).toHaveCount(2);
+  await expect(card.locator("[data-ws-phase-card='base-room']")).toContainText("AI reads the drawings");
+  await expect(card.locator("[data-ws-phase-card='base-room']")).toContainText("Only genuine exceptions need your input");
+  await expect(card.locator("[data-ws-phase-card='room-loads']")).toContainText("people, lights, equipment, ventilation and airflow");
   await expect(card.locator("[data-ws-guide-why]")).toHaveText("Why rooms matters.");
   await card.locator("[data-ws-guide-go]").click();                                   // one button: straight there
   await expect(page).toHaveURL(/#\/job\/job-1\/rooms\/room-details$/);
@@ -831,6 +839,8 @@ test("Next step: one plain instruction with one button on every tab, and the who
   guide = {...guide, now: "calculate", done: 4};
   await page.locator("[data-ws-tab='project']").click();
   await expect(page.locator("[data-ws-guide-title]")).toHaveText("Calculate the cooling load");
+  await expect(page.locator("[data-ws-guide-now]")).toContainText("Phase 2 of 2 · Operating loads and results");
+  await expect(page.locator("[data-ws-guide-phase='room-loads']")).toHaveText("Phase 2: Operating loads and results");
   await page.locator("[data-ws-guide-calculate]").click();
   await expect.poll(() => posts.some(([kind]) => kind === "calculation")).toBeTruthy();
 });
@@ -898,15 +908,25 @@ test("Results: what the number still depends on is listed by kind, with the tab 
   await expect(page).toHaveURL(/#\/job\/job-1\/walls/);
 });
 
-test("Results: open PDF review findings are clearly excluded from the displayed number", async ({page}) => {
+test("Results: open drawing suggestions are clearly non-blocking for Phase 1", async ({page}) => {
   await mockJob(page, {status: () => baseStatus(),
     skill: () => ({status: "needs_review", findings: [
       {id: "a", status: "proposed", evidence: "supported"}, {id: "b", status: "missing", evidence: "missing"},
       {id: "c", status: "accepted", evidence: "supported"},
     ]}), model: () => ({hourly_ai_preliminary_load_report: report})});
   await page.goto("/#/job/job-1/results");
-  await expect(page.locator("[data-ws-open-findings]")).toContainText("2 PDF review findings are still open");
-  await expect(page.locator("[data-ws-open-findings]")).toContainText("We have not used these values in this number");
+  await expect(page.locator("[data-ws-open-findings]")).toContainText("2 additional drawing suggestions are available");
+  await expect(page.locator("[data-ws-open-findings]")).toContainText("They do not block the AI's Phase 1 base load");
+});
+
+test("Results: a stale Phase 1 base load is labelled and can be recalculated", async ({page}) => {
+  await mockJob(page, {status: () => baseStatus(), model: () => ({
+    phase1_base_room_load_report: {status: "done", included_scope_peak: {design_total_kw: 4.2}, room_peaks: []},
+    phase1_base_room_load_report_stale: true,
+  })});
+  await page.goto("/#/job/job-1/results");
+  await expect(page.locator("[data-ws-phase1-stale]")).toContainText("Drawing inputs changed since this Phase 1 result");
+  await expect(page.locator("[data-ws-calculate-base]")).toHaveText("Recalculate Phase 1 base load");
 });
 
 test("PDF review browser states on a temporary Butcher Buffet copy", async ({page}) => {
@@ -967,17 +987,17 @@ test("PDF review browser states on a temporary Butcher Buffet copy", async ({pag
           status: "proposed", alternatives: ["clear", "low-e"]},
       ], subskills: [{id: "room_identity_use", status: "needs_review", evidence_reviewed: {pages: [20, 23], provider: "test-provider", model: "test-model"}}]};
     await page.reload();
-    await expect(page.locator("[data-ws-subtab='findings']")).toContainText("Findings (4)");
+    await expect(page.locator("[data-ws-subtab='findings']")).toContainText("Findings (3)");
     await expect(page.locator("[data-ws-evidence-count]")).toContainText("supported");
     await expect(page.locator("[data-ws-evidence-count]")).toContainText("inferred");
-    await expect(page.locator("[data-ws-evidence-count]")).toContainText("missing");
+    await expect(page.locator("[data-ws-finding-missing]")).toContainText("1 unresolved field · no decision needed");
     await expect(page.locator("[data-ws-evidence-count]")).toContainText("conflicting");
     await page.screenshot({path: join(screenshots, "03-bb-findings.png"), fullPage: true});
     await (await openFinding(page, roomUse.id)).getByRole("button", {name: "Accept value"}).click();
     await expect(page.locator(`[data-ws-finding='${roomUse.id}']`)).toContainText("accepted");
     expect(accepted).toBe(true);
     await page.locator("[data-ws-subtab='overview']").click();
-    await expect(page.locator("[data-ws-checks]")).toContainText("The PDF review has finished. Some of what it found still needs your review.");
+    await expect(page.locator("[data-ws-checks]")).toContainText("The AI review has finished. Phase 1 does not require accepting each drawing suggestion");
     await expect(page.locator("[data-ws-checks]")).not.toContainText("Drawing analysis is complete");
     expect(posts.some(([kind]) => kind === "calculation")).toBe(false);
     await page.screenshot({path: join(screenshots, "04-bb-room-use-accepted.png"), fullPage: true});
@@ -1252,7 +1272,7 @@ test("Calculate runs one server job with the person's room choices, shows its st
   await expect(page.locator("#wsTotal")).toHaveText("34.1");
   const starts = posts.filter(([kind]) => kind === "calculation");
   expect(starts).toHaveLength(1);
-  expect(starts[0][1]).toEqual({project_id: "job-1", reviewer: "Operator",
+  expect(starts[0][1]).toEqual({project_id: "job-1", reviewer: "Operator", phase: "full",
     include: {"room-use:unassigned-level:shop": true}});
   expect(posts.filter(([kind]) => kind === "model")).toHaveLength(0);   // the browser no longer drives the steps
   await expect(page.locator("[data-ws-room-loads]")).toContainText("Kitchen");
@@ -1266,6 +1286,49 @@ test("Calculate runs one server job with the person's room choices, shows its st
   await expect(excluded).toContainText("Walls (no outline: area only) — Kitchen");
   await expect(excluded).toContainText("Walls (not classified yet) — Shop");
   await expect(excluded.locator("li", {hasText: /^Walls, roof and glazing/})).toHaveCount(0);
+});
+
+test("Phase 1 calculates the AI base room load without requiring manually entered areas", async ({page}) => {
+  let calculated = false;
+  const posts = await mockJob(page, {
+    status: () => baseStatus({rooms: {total: 1, included: 0, with_area: 0}}),
+    model: () => ({hourly_ai_preliminary_load_report: {}, phase1_base_room_load_report: calculated ? {
+      included_scope_peak: {final_design_total_kw: 4.2}, room_peaks: [{name: "Shop", design_total_kw: 4.2}],
+    } : {}}),
+    calculation: kind => { if (kind === "start") calculated = true; return {status: "done", phase: "phase1_base_room", total_kw: 4.2}; },
+  });
+  await page.route("**/api/guide**", route => route.fulfill({json: {now: "base_load", done: calculated ? 8 : 7, total: 13, steps: [
+    {id: "ai", title: "The AI has read your drawings", why: "", state: "done", action: {kind: "go", tab: "drawings", subtab: "overview", label: "Show"}},
+    {id: "base_load", title: "Calculate the Phase 1 base load", why: "AI calculates each room.", state: calculated ? "done" : "needed",
+      action: {kind: calculated ? "go" : "calculate_base", tab: "results", subtab: "", label: calculated ? "Show" : "Calculate base load"}},
+  ]}}));
+  await page.goto("/#/job/job-1/results");
+  await expect.poll(() => posts.some(([kind]) => kind === "calculation")).toBeTruthy();
+  expect(posts.find(([kind]) => kind === "calculation")[1]).toMatchObject({project_id: "job-1", phase: "phase1_base_room"});
+  await expect(page.locator("[data-ws-phase1-result]")).toContainText("Phase 1 · AI base room load");
+  await expect(page.locator("[data-ws-phase1-rooms]")).toContainText("Shop");
+  await expect(page.locator("[data-ws-phase1-rooms]")).toContainText("4.2 kW");
+});
+
+test("Phase 1 automatically recalculates a stale base report", async ({page}) => {
+  let calculated = false;
+  const posts = await mockJob(page, {
+    status: () => baseStatus(),
+    model: () => ({phase1_base_room_load_report: calculated ? {
+      included_scope_peak: {final_design_total_kw: 4.2}, room_peaks: [{name: "Shop", design_total_kw: 4.2}],
+    } : {included_scope_peak: {final_design_total_kw: 3.8}, room_peaks: [{name: "Shop", design_total_kw: 3.8}]},
+    phase1_base_room_load_report_stale: !calculated}),
+    calculation: kind => { if (kind === "start") calculated = true; return {status: "done", phase: "phase1_base_room", total_kw: 4.2}; },
+  });
+  await page.route("**/api/guide**", route => route.fulfill({json: {now: calculated ? "result" : "base_load", done: calculated ? 8 : 7, total: 13, steps: [
+    {id: "ai", title: "The AI has read your drawings", why: "", state: "done", action: {kind: "go", tab: "drawings", subtab: "overview", label: "Show"}},
+    {id: "base_load", title: "Calculate the Phase 1 base load", why: "Drawing inputs changed.", state: calculated ? "done" : "needed",
+      action: {kind: calculated ? "go" : "calculate_base", tab: "results", subtab: "", label: calculated ? "Show" : "Calculate base load"}},
+  ]}}));
+  await page.goto("/#/job/job-1/project");
+  await expect.poll(() => posts.some(([kind]) => kind === "calculation")).toBeTruthy();
+  expect(posts.filter(([kind]) => kind === "calculation")).toHaveLength(1);
+  expect(posts.find(([kind]) => kind === "calculation")[1]).toMatchObject({project_id: "job-1", phase: "phase1_base_room"});
 });
 
 test("Calculate: reopening a job mid-calculation shows the progress; a failure shows its reason", async ({ page }) => {

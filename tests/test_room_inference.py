@@ -48,6 +48,18 @@ def main():
         {"text": "Service Counter 01.01 13 m²", "status": "possible_room_or_area_label"},
     ]}]})
     check("standalone plan labels keep identifiers and explicit areas", {(row["label"], row.get("area_m2")) for row in detailed["rooms"]} == {("Office", 9.0), ("Service Counter", 13.0)})
+    food_preparation = next(row for row in detailed["rooms"] if row["label"] == "Service Counter")
+    check("multiword room IDs use the same slug as room-use resolution",
+          food_preparation["room_id"] == room_inference.room_identity("Service Counter", "Level 2"))
+    cafe = room_inference.infer({"drawing_set": {"pages": [{"page": 30, "title": "Proposed Floor Plan",
+        "detected_type": "floor_plan", "plan_role": "main_floor_plan", "level_name": "Ground",
+        "structured_content": {"markdown": "CHAMBERS COFFEE LG TENANCY 04"}}]}}, {}, {"pages": [
+            {"page": 30, "room_label_candidates": [{"text": label, "status": "possible_room_or_area_label"}
+             for label in ("Counter", "Food Preparation", "Kiosk")]}
+        ]})
+    cafe_zone = next(row for row in cafe["rooms"] if row.get("zone_role") == "whole_tenancy_candidate")
+    check("coffee-tenancy plans add one parent conditioned-zone identity for boundary tracing",
+          cafe_zone["label"] == "Cafe" and cafe_zone["room_id"] == room_inference.room_identity("Cafe", "Ground"))
     non_plan = room_inference.infer({"drawing_set": {"pages": [{"page": 9, "detected_type": "electrical_or_fire", "plan_role": "main_floor_plan"}]}}, {}, {"pages": [{"page": 9, "room_label_candidates": [{"text": "Plant room 9.6 m²", "status": "possible_room_or_area_label"}]}]})
     check("page classification prevents false plan role from originating rooms", not non_plan["rooms"])
     rcp = room_inference.infer({"drawing_set": {"pages": [{"page": 12, "detected_type": "reflected_ceiling_plan", "plan_role": "reflected_ceiling_plan"}]}}, {}, {"pages": [{"page": 12, "room_label_candidates": [{"text": label, "status": "possible_room_or_area_label"} for label in ("Bar", "Kitchen", "Shop", "Coolroom", "Freezer")]}]})

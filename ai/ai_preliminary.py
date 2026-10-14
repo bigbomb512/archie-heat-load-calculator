@@ -30,10 +30,9 @@ PACK_VERSION = "au-preliminary-v3"
 LEGACY_PACK_VERSIONS = {"au-preliminary-v2"}
 PROFILE_IDS = {"retail", "office", "hospitality", "storage", "residential", "generic_conditioned_room"}
 SPACE_SCOPES = {"comfort_hvac", "comfort_hvac_with_process_exception", "refrigeration_process", "unresolved_scope", "not_a_room"}
-# The proposal/ledger contract retains the complete opaque inventory.  The
-# preliminary hourly adapter currently materializes only externally exposed
-# wall/roof/ceiling surfaces; floors, partitions, and other boundaries remain
-# visible ledger records until their approved boundary method is available.
+# The proposal/ledger contract retains every opaque boundary. Phase 1 applies
+# a controlled preliminary rule to floors and adjacent spaces, while the
+# reviewed calculator keeps its engineer-approved boundary gates.
 OPAQUE_TYPES = {"wall", "roof", "floor", "ceiling", "partition"}
 CARDINALS = {"N", "E", "S", "W"}
 SHADING_CATEGORIES = {"unshaded", "partial", "deep"}
@@ -176,7 +175,7 @@ def build_local_codex_handoff(project, building, vision=None, fusion=None, sourc
         "response_contract": {
             "proposal": {
                 "rooms": "source-linked room candidates: kind, label, level_name, geometry {boundary_points_px or ordered wall_ids, walls, dimensions, dimension_wall_links, scale_mm_per_px, source_crop}, area_m2 only when explicitly cited, ceiling_height_mm, ceiling_scope, ceiling_applies_to, ceiling_evidence, ceiling_datum_operands, room_use_category, preliminary_profile_id, confidence, page, rationale, alternatives",
-                "surfaces": "source-linked external wall, roof, or ceiling candidates",
+            "surfaces": "source-linked room boundary candidates: external or internal walls, floors, roofs and ceilings; classify boundary as external, ground_contact, fixed_adjacent, room_to_room, roof_void, ceiling_below_roof, internal_floor or unresolved, and cite drawing evidence",
                 "openings": "source-linked opening candidates linked to a proposed host surface",
                 "issues": "unresolved, conflicting, or intentionally excluded components",
             },
@@ -277,6 +276,40 @@ def _combined_evidence(*values):
     return rows
 
 
+def _dedupe_excluded_spaces(rows):
+    """Merge multiple reasons/evidence for one excluded room into one review item."""
+    merged, by_identity = [], {}
+    for raw in rows:
+        if not isinstance(raw, dict):
+            continue
+        item = deepcopy(raw)
+        key = _room_identity(item.get("room_name", ""), item.get("level", ""))
+        existing = by_identity.get(key)
+        if existing is None:
+            item["evidence"] = _combined_evidence(item)
+            item["reasons"] = [item["reason"]] if item.get("reason") else []
+            by_identity[key] = item
+            merged.append(item)
+            continue
+        existing["evidence"] = _combined_evidence(existing, item)
+        reasons = existing.setdefault("reasons", [])
+        reason = str(item.get("reason", "")).strip()
+        if reason and reason not in reasons:
+            reasons.append(reason)
+        existing["reason"] = " ".join(reasons)
+        scopes = existing.setdefault("scope_candidates", [existing.get("scope")] if existing.get("scope") else [])
+        scope = item.get("scope")
+        if scope and scope not in scopes:
+            scopes.append(scope)
+        resolved_scopes = [candidate for candidate in scopes
+                            if candidate in SPACE_SCOPES and candidate != "unresolved_scope"]
+        existing["scope"] = resolved_scopes[0] if len(resolved_scopes) == 1 else (
+            "unresolved_scope" if len(resolved_scopes) > 1 else existing.get("scope", "unresolved_scope"))
+        if len(scopes) <= 1:
+            existing.pop("scope_candidates", None)
+    return merged
+
+
 def _vision_rooms(vision, manual_entities=None):
     rows = vision.get("result", {}).get("auto_extraction", {}).get("entities", []) if isinstance(vision, dict) else []
     rows = list(rows) + list(manual_entities or [])
@@ -313,6 +346,7 @@ def _space_rows(building, vision, manual_entities=None, geometry_resolution=None
                      "area_quality_label": ai.get("area_quality_label", ""),
                      "reviewer_trace_id": ai.get("reviewer_trace_id", ""),
                      "geometry_proof_id": ai.get("geometry_proof_id", ""),
+                     "geometry_identity_id": str(ai.get("geometry_identity_id") or ""),
                      "profile_id": ai.get("preliminary_profile_id", ""), "confidence": _confidence(ai.get("confidence", space.get("confidence"))),
                      "scope": ai.get("space_scope", _scope_from_label(name)), "evidence": evidence, "ai": ai})
     for ai in vision_rooms:
@@ -330,6 +364,7 @@ def _space_rows(building, vision, manual_entities=None, geometry_resolution=None
                      "area_quality_label": ai.get("area_quality_label", ""),
                      "reviewer_trace_id": ai.get("reviewer_trace_id", ""),
                      "geometry_proof_id": ai.get("geometry_proof_id", ""),
+                     "geometry_identity_id": str(ai.get("geometry_identity_id") or ""),
                      "profile_id": ai.get("preliminary_profile_id", ""), "confidence": _confidence(ai.get("confidence")),
                      "scope": ai.get("space_scope", _scope_from_label(name)), "evidence": _evidence_refs(ai) or [{"page": ai.get("page"), "drawing_number": ai.get("drawing_number", ""), "excerpt": ai.get("excerpt", name)}], "ai": ai})
     if not rows:
@@ -339,8 +374,9 @@ def _space_rows(building, vision, manual_entities=None, geometry_resolution=None
 
 
 def _apply_geometry_area_resolution(rows, geometry_resolution):
-    """Use only active normalized geometry areas in the draft-only path."""
+    """Use active normalized geometry areas, preferring canonical room identity."""
     candidates = {}
+    candidates_by_identity = {}
     for entity in (geometry_resolution or {}).get("entities", []):
         if not isinstance(entity, dict) or entity.get("kind") != "area" or entity.get("geometry_status") not in {"ai_estimated", "geometry_confirmed"}:
             continue
@@ -351,8 +387,19 @@ def _apply_geometry_area_resolution(rows, geometry_resolution):
             continue
         key = _room_identity(label, level)
         candidates.setdefault(key, []).append((area, entity, value))
+        identity_id = str(value.get("room_identity_id") or "").strip()
+        if identity_id:
+            candidates_by_identity.setdefault(identity_id, []).append((area, entity, value))
     for row in rows:
-        matches = candidates.get(_room_identity(row["name"], row["level"]), [])
+        identity_id = room_use_resolver.room_identity(row["name"], row["level"])
+        geometry_identity_id = str(row.get("geometry_identity_id") or
+                                    (row.get("ai", {}).get("geometry_identity_id")
+                                     if isinstance(row.get("ai"), dict) else "") or "").strip()
+        matches = candidates_by_identity.get(geometry_identity_id, []) if geometry_identity_id else []
+        if not matches:
+            matches = candidates_by_identity.get(identity_id, [])
+        if not matches:
+            matches = candidates.get(_room_identity(row["name"], row["level"]), [])
         # Multiple proofs are a geometry conflict even if they happen to
         # calculate to the same rounded area.  Choosing one would hide a
         # competing boundary or source and make the draft look more certain
@@ -365,7 +412,8 @@ def _apply_geometry_area_resolution(rows, geometry_resolution):
         row["geometry_proof_id"] = value.get("geometry_proof_id") or entity.get("entity_id", "")
         row["geometry_mode"] = "preliminary_ai_estimate" if entity.get("geometry_status") == "ai_estimated" else "engineering_reviewed"
         row["geometry_evidence"] = {"page": entity.get("source", {}).get("page"), "drawing_number": entity.get("source", {}).get("drawing_number", ""),
-                                    "derivation": deepcopy(value.get("derivation", {}))}
+                                    "derivation": deepcopy(value.get("derivation", {})),
+                                    "review_warnings": deepcopy(value.get("review_warnings", entity.get("review_warnings", [])))}
     return rows
 
 
@@ -525,6 +573,11 @@ def validate_manual_placeholder_entities(raw):
             "ceiling_datum_operands": deepcopy(item.get("ceiling_datum_operands", {})) if isinstance(item.get("ceiling_datum_operands", {}), dict) else {},
             "ceiling_conflicts": list(ceiling_conflicts),
             "geometry": deepcopy(item.get("geometry", {})) if isinstance(item.get("geometry", {}), dict) else {},
+            # Stable source identity lets an inferred display label (for
+            # example, "Upper western WC") join its validated area candidate.
+            # The area still has to be independently active in the geometry
+            # resolver; this identifier alone never admits geometry.
+            "geometry_identity_id": str(item.get("geometry_identity_id", "")).strip(),
             "area_origin": str(item.get("area_origin", "")) if str(item.get("area_origin", "")) in {"pdf_evidence", "printed (read from image)", "edited", "reviewer_traced", "ai_geometry", "ai_determined"} else "",
             "area_verification_status": "provisional",
             "area_quality_label": str(((item.get("reviewer_traced_area") or {}).get("ai_quality_label") if isinstance(item.get("reviewer_traced_area"), dict) else "") or item.get("area_quality_label", "")),
@@ -803,6 +856,7 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
     overrides = contractor_overrides or {}
     process_exhaust = process_exhaust or {}
     rooms, zones, floors, ledger, exclusions, schedules = [], [], [], [], [], []
+    phase1_assumptions = []
     floor_ids, zone_ids = {}, set()
     requirements_zones = []
     proposal = validate_placeholder_proposal(preliminary_proposal if preliminary_proposal is not None else (manual_placeholder_entities or {}))
@@ -1028,11 +1082,26 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
         zones.append({"zone_id": zone_id, "name": row["name"], "floor_id": floor_id, "ceiling_height_mm": room_resolution.get("ceiling_height_mm"),
                       "verification_status": "provisional", "source": _source("topology"), "citations": []})
         ledger.extend([
-            {"room_id": room_id, "field": "area_m2", "value": area, "origin": area_origin, "verification_status": row.get("area_verification_status", "provisional"), "quality_label": row.get("area_quality_label", ""), "profile_id": profile_id, "confidence": score, "confidence_band": confidence_band(score), "rationale": ("Current calibrated reviewer trace; provisional until the room area is accepted in the calculator draft." if area_origin == "reviewer_traced" else "AI-determined calibrated room outline; provisional until reviewed." if area_origin == "ai_determined" else "Normalized geometry proof when available; otherwise a direct PDF value or controlled profile fallback."), "evidence": row["evidence"], "geometry_proof_id": row.get("geometry_proof_id", ""), "reviewer_trace_id": row.get("reviewer_trace_id", ""), "geometry_mode": row.get("geometry_mode", ""), "derivation": row.get("geometry_evidence", {}).get("derivation", {})},
+            {"room_id": room_id, "field": "area_m2", "value": area, "origin": area_origin, "verification_status": row.get("area_verification_status", "provisional"), "quality_label": row.get("area_quality_label", ""), "profile_id": profile_id, "confidence": score, "confidence_band": confidence_band(score), "rationale": ("Current calibrated reviewer trace; provisional until the room area is accepted in the calculator draft." if area_origin == "reviewer_traced" else "AI-determined calibrated room outline; provisional until reviewed." if area_origin == "ai_determined" else "Closed AI-traced boundary scaled from the confirmed main viewport; preliminary estimate only and not a measured construction area." if row.get("geometry_mode") == "preliminary_ai_estimate" else "Normalized geometry proof when available; otherwise a direct PDF value or controlled profile fallback."), "evidence": row["evidence"], "geometry_proof_id": row.get("geometry_proof_id", ""), "reviewer_trace_id": row.get("reviewer_trace_id", ""), "geometry_mode": row.get("geometry_mode", ""), "derivation": row.get("geometry_evidence", {}).get("derivation", {}), "review_warnings": row.get("geometry_evidence", {}).get("review_warnings", [])},
             {"room_id": room_id, "field": "ceiling_height_mm", "value": room_resolution.get("ceiling_height_mm"), "origin": room_resolution.get("ceiling_height_origin", "unresolved"), "profile_id": profile_id, "confidence": room_resolution.get("ceiling_height_confidence", 0.0), "confidence_band": confidence_band(room_resolution.get("ceiling_height_confidence", 0.0)), "rationale": room_resolution.get("ceiling_height_rationale", "Ceiling-height resolver."), "evidence": room_resolution.get("ceiling_height_evidence", []), "derivation": room_resolution.get("volume_derivation", {})},
             {"room_id": room_id, "field": "room_profile", "value": profile_id, "origin": "ai_profile", "profile_id": profile_id, "confidence": row["confidence"], "confidence_band": confidence_band(row["confidence"]), "rationale": "AI proposal when valid; otherwise label-based controlled profile selection.", "evidence": row["evidence"]},
             {"room_id": room_id, "field": "space_scope", "value": row["scope"], "origin": "ai_profile", "profile_id": profile_id, "confidence": row["confidence"], "confidence_band": confidence_band(row["confidence"]), "rationale": "AI preliminary scope classification.", "evidence": row["evidence"]},
         ])
+        if row.get("geometry_mode") == "preliminary_ai_estimate":
+            derivation = (row.get("geometry_evidence") or {}).get("derivation", {})
+            printed_finish_sum = isinstance(derivation, dict) and derivation.get("method") == "printed_floor_finish_area_sum"
+            phase1_assumptions.append({
+                "room_id": room_id,
+                "component": "room area",
+                "value_m2": area,
+                "method": ("sum of distinct printed floor-finish areas" if printed_finish_sum
+                           else "closed AI-traced boundary × confirmed main-viewport PDF scale"),
+                "source_page": (row.get("geometry_evidence") or {}).get("page"),
+                "assumption": ("Preliminary area estimate; assumes all distinct tagged floor-finish regions cover the connected tenancy. The perimeter and envelope areas remain unresolved."
+                               if printed_finish_sum else
+                               "Preliminary AI estimate only; not a measured or construction-accurate area. Check any source drawing note advising not to scale."),
+                "review_warnings": (row.get("geometry_evidence") or {}).get("review_warnings", []),
+            })
         exclusions.extend({"room_id": room_id, "component": component, "reason": reason} for component, reason in (
             ("opaque envelope", "No structurally valid surface geometry and boundary area was available for the preliminary model."),
             ("glazing and façade solar", "No resolved reviewed/AI opening geometry, external exposure, orientation, and cited property set was available."),
@@ -1152,7 +1221,14 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
         # them alongside the normalized ledger records even when that ledger
         # is otherwise authoritative for AI/PDF surface proposals.
         for surface in effective_proposal.get("surfaces", []):
-            if not isinstance(surface, dict) or not surface.get("reviewer_trace_id"):
+            if not isinstance(surface, dict):
+                continue
+            # A current skill-derived preliminary candidate complements the
+            # visual surface ledger. Do not duplicate a surface already
+            # normalized from vision, matched by its stable source identity.
+            source_key = str(surface.get("surface_key") or surface.get("candidate_id") or "")
+            if any(source_key in {str(row.get("surface_id") or ""), str(row.get("ai_surface_id") or "")}
+                   for row in geometry_rows if isinstance(row, dict)):
                 continue
             owner = _find_owner(active_rows, surface.get("owner_room_label", ""), surface.get("owner_level_name", ""))
             target = room_rows.get(_room_identity(owner["name"], owner["level"]), {}) if owner else {}
@@ -1162,6 +1238,32 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
             candidate = deepcopy(surface)
             candidate["owner_room_id"] = target["room"].get("room_id", "")
             surface_candidates.append(candidate)
+            if not surface.get("reviewer_trace_id"):
+                fixed_adjacent = surface.get("thermal_role") == "fixed_adjacent"
+                ledger_rows.append({
+                    "surface_id": candidate_id,
+                    "ai_surface_id": source_key,
+                    "physical_type": surface.get("physical_type", "wall"),
+                    "thermal_role": surface.get("thermal_role", "unresolved"),
+                    "boundary_condition": surface.get("boundary_condition") or ("outside" if surface.get("external_exposure") == "external" else "unresolved"),
+                    "owner_room_id": target["room"].get("room_id", ""),
+                    "owner_zone_id": target["room"].get("zone_id", ""),
+                    "gross_area_m2": surface.get("gross_area_m2"),
+                    "net_opaque_area_m2": surface.get("net_opaque_area_m2"),
+                    "opening_coverage_status": surface.get("opening_coverage", "not_applicable"),
+                    "linked_opening_ids": [opening.get("candidate_id") for opening in effective_proposal.get("openings", [])
+                                           if isinstance(opening, dict) and opening.get("host_surface_key") in {source_key, candidate_id}],
+                    "construction_id": surface.get("construction_id", ""),
+                    "u_value_w_m2k": surface.get("u_value_w_m2k"),
+                    "construction_source": surface.get("construction_source", "AI skill proposal"),
+                    "boundary_temperature_c": surface.get("boundary_temperature_c") if fixed_adjacent else None,
+                    "evidence_refs": deepcopy(surface.get("evidence", [])),
+                    "confidence": surface.get("confidence", 0.0),
+                    "confidence_score": surface.get("confidence", 0.0),
+                    "assumptions": deepcopy(surface.get("assumptions", [])),
+                    "status": "ai_estimated", "area_basis": "high_confidence_skill_proposal",
+                })
+                continue
             fixed_adjacent = surface.get("thermal_role") == "fixed_adjacent"
             ledger_rows.append({
                 "surface_id": candidate_id,
@@ -1247,20 +1349,17 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
             surface_summary["blocked"] += 1
             exclusions.append({"room_id": f"room-{owner['key']}" if owner else "", "component": "opaque envelope", "reason": "; ".join(errors), "candidate_id": candidate.get("candidate_id", "")})
             continue
-        # Preserve the complete ledger, but keep the existing preliminary
-        # hourly adapter conservative: floors, partitions, ground-contact,
-        # room-to-room, and unresolved boundaries need their reviewed coupling
-        # or boundary method before they can contribute to draft conduction.
-        # A reviewer-traced wall to an unconditioned space, with the operators' answered temperature beyond it, is
-        # conducted against that temperature (no sun).
-        fixed_adjacent = (candidate.get("physical_type") == "wall" and candidate.get("thermal_role") == "fixed_adjacent"
-                          and candidate.get("reviewer_trace_id") and _number(candidate.get("boundary_temperature_c")) is not None)
-        if not fixed_adjacent and (candidate.get("physical_type") not in {"wall", "roof", "ceiling"}
-                or candidate.get("thermal_role") not in {"external", "outside", "outdoors"}
-                or candidate.get("external_exposure") != "external"):
+        physical = candidate.get("physical_type")
+        role = candidate.get("thermal_role")
+        floor_boundary = physical == "floor" and role in {
+            "ground_contact", "internal_floor", "room_to_room", "fixed_adjacent", "unresolved"
+        }
+        fixed_adjacent = role == "fixed_adjacent" or floor_boundary
+        externally_exposed = role in {"external", "outside", "outdoors"} and candidate.get("external_exposure") == "external"
+        if not (floor_boundary or fixed_adjacent or (physical in {"wall", "roof", "ceiling", "floor"} and externally_exposed)):
             surface_summary["excluded"] += 1
             exclusions.append({"room_id": f"room-{owner['key']}", "component": "opaque envelope", "candidate_id": candidate.get("candidate_id", ""),
-                               "reason": "Surface is retained in the thermal ledger but its non-external boundary is outside the preliminary hourly envelope policy."})
+                               "reason": "Surface boundary could not be assigned by the Phase 1 preliminary boundary policy."})
             continue
         target = room_rows[_room_identity(owner["name"], owner["level"])]
         candidate = deepcopy(candidate)
@@ -1293,10 +1392,8 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
         gross = candidate["gross_area_m2"]
         net = candidate.get("net_opaque_area_m2")
         if openings and candidate.get("opening_coverage") not in {"complete", "reviewer_entered"}:
-            surface_summary["blocked"] += 1
-            exclusions.append({"room_id": room["room_id"], "component": "opaque envelope", "candidate_id": candidate["candidate_id"],
-                               "reason": "Opening coverage is incomplete; opaque host area is excluded to prevent wall/window double counting."})
-            continue
+            phase1_assumptions.append({"room_id": room["room_id"], "component": "wall opening coverage",
+                "reason": "Known window areas were subtracted; remaining host area is treated as opaque because the drawing does not confirm every opening."})
         if openings:
             net = gross - sum(item["opening_area_m2"] for item in openings)
         net = net if net is not None else gross
@@ -1305,9 +1402,15 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
             exclusions.append({"room_id": room["room_id"], "component": "opaque envelope", "candidate_id": candidate["candidate_id"], "reason": "Net opaque area is not positive after opening coverage."})
             continue
         physical = candidate["physical_type"]
-        fixed_adjacent = candidate.get("thermal_role") == "fixed_adjacent"
-        orientation = ("" if fixed_adjacent else candidate.get("orientation", "") if candidate.get("orientation", "") in CARDINALS
-                       else "horizontal" if physical in {"roof", "ceiling"} else "")
+        role = candidate.get("thermal_role")
+        fixed_adjacent = role == "fixed_adjacent" or (physical == "floor" and role in {
+            "ground_contact", "internal_floor", "room_to_room", "unresolved"
+        })
+        orientation = ("" if fixed_adjacent or physical == "floor" else candidate.get("orientation", "") if candidate.get("orientation", "") in CARDINALS
+                       else "horizontal" if physical in {"roof", "ceiling"} else "W" if physical == "wall" else "")
+        if physical == "wall" and not fixed_adjacent and candidate.get("orientation") not in CARDINALS:
+            phase1_assumptions.append({"room_id": room["room_id"], "component": "wall orientation",
+                "reason": "No north reference was resolved; the west-facing solar profile is used as the conservative preliminary orientation."})
         solar_profile = envelope["cardinal_solar_profiles_w_m2"].get(orientation, [0] * 24)
         solar_peak = max(solar_profile)
         solar_schedule_id = f"prelim-solar-{candidate['candidate_id']}"
@@ -1315,8 +1418,9 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
             operating = _profile_schedule(profile_id)
             schedules.append(_schedule_with_values(solar_schedule_id, f"Preliminary {orientation} façade solar profile", [round(operating[hour] * solar_profile[hour] / solar_peak, 6) for hour in range(24)], _source(f"solar-{orientation}")))
             room["schedule_assignments"]["solar"][candidate["candidate_id"]] = solar_schedule_id
-        opaque = {"surface_id": candidate["candidate_id"], "kind": "roof" if physical == "roof" else "ceiling" if physical == "ceiling" else "opaque_wall",
-                  "orientation": orientation, "area_m2": net, "u_value_w_m2k": profile["roof_u_w_m2k"] if physical in {"roof", "ceiling"} else profile["wall_u_w_m2k"],
+        floor_u = envelope["opaque_constructions"]["floor"]["u_value_w_m2k"]
+        opaque = {"surface_id": candidate["candidate_id"], "kind": "floor" if physical == "floor" else "roof" if physical == "roof" else "ceiling" if physical == "ceiling" else "opaque_wall",
+                  "orientation": orientation, "area_m2": net, "u_value_w_m2k": floor_u if physical == "floor" else profile["roof_u_w_m2k"] if physical in {"roof", "ceiling"} else profile["wall_u_w_m2k"],
                   "solar_design_w_m2": solar_peak, "solar_gain_factor": envelope["opaque_solar_gain_factor"] if solar_peak else 0,
                   "shading_factor": 1, "boundary_method": "external", "boundary_temperature_c": None, "construction_id": "",
                   "verification_status": "provisional",
@@ -1335,8 +1439,33 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
         if candidate.get("construction_source"):          # the operators' answered construction, not the pack's U-value
             opaque["source"] = candidate["construction_source"]
         if fixed_adjacent:
-            opaque.update({"boundary_method": "fixed_adjacent_temperature", "boundary_temperature_c": float(candidate["boundary_temperature_c"]),
-                           "boundary_source": candidate.get("boundary_source", "")})
+            supplied_temperature = _number(candidate.get("boundary_temperature_c", candidate.get("adjacent_temperature_c")))
+            if physical == "floor" and role in {"room_to_room", "internal_floor", "unresolved"}:
+                supplied_temperature = scenario_values["indoor_dry_bulb_c"]
+                source = "Phase 1 default: adjacent internal floor is assumed to be within the conditioned building at the room setpoint."
+                phase1_assumptions.append({"room_id": room["room_id"], "component": "internal floor boundary",
+                    "reason": "No adjacent-space temperature was shown; the adjacent side is assumed to match the room setpoint."})
+            elif physical == "floor" and role == "ground_contact":
+                # ASHRAE's nonresidential cooling guidance allows sensible transfer through a ground-contact floor to be
+                # neglected for cooling estimates unless average outdoor temperature exceeds the indoor design condition.
+                supplied_temperature = scenario_values["indoor_dry_bulb_c"]
+                source = "ASHRAE Handbook—HVAC Applications, nonresidential cooling loads: ground-contact floor sensible transfer may be neglected except in hot climates."
+                phase1_assumptions.append({"room_id": room["room_id"], "component": "ground-contact floor",
+                    "reason": "Floor construction and area were retained; its cooling contribution is assumed zero under the preliminary ground-floor rule. The generic weather input does not include annual mean temperature for the hot-climate exception."})
+            elif supplied_temperature is not None:
+                source = candidate.get("boundary_source", "AI-read adjacent-space temperature")
+            else:
+                outdoor_hours = scenario_values.get("weather_profile", {}).get("hours", [])
+                adjacent_profile = [round(float(point["db"]) - 3, 2) for point in outdoor_hours if _number(point.get("db")) is not None]
+                if len(adjacent_profile) != 24:
+                    adjacent_profile = [round(float(point["db"]) - 3, 2) for point in pack["scenario"]["hours"]]
+                supplied_temperature = adjacent_profile[14]
+                source = "ASHRAE Handbook—HVAC Applications, nonresidential cooling loads: conventional unconditioned adjacent-space temperature estimate from outdoor temperature minus 3 K."
+                opaque["boundary_temperature_profile"] = {"values": adjacent_profile, "source": source, "citations": []}
+                phase1_assumptions.append({"room_id": room["room_id"], "component": "adjacent-space boundary",
+                    "reason": "No adjacent-space temperature was specified; the hourly outdoor temperature minus 3 K is used as the standard buffer-space estimate."})
+            opaque.update({"boundary_method": "fixed_adjacent_temperature", "boundary_temperature_c": float(supplied_temperature),
+                           "boundary_source": source})
         opaque["area_derivation"] = deepcopy(opaque_by_id.get(candidate["candidate_id"], {}).get("area_derivation", {}))
         opaque["opaque_resolution_fingerprint"] = opaque_by_id.get(candidate["candidate_id"], {}).get("resolution_fingerprint", "")
         room["cooling_load"]["envelope_not_applicable"] = False
@@ -1432,7 +1561,8 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                                      "manual_placeholder_entities": dependency_fingerprints.get("manual_placeholder_entities", fingerprint(manual_entities)),
                                      "ai_preliminary_proposal": dependency_fingerprints.get("ai_preliminary_proposal", fingerprint(preliminary_proposal if preliminary_proposal is not None else manual_entities)),
                                      "value_resolution": resolution_artifact["fingerprint"]})
-    input_fingerprint = content_fingerprint({"material": material, "ledger": ledger, "exclusions": exclusions, "dependencies": dependency_fingerprints})
+    input_fingerprint = content_fingerprint({"material": material, "ledger": ledger, "exclusions": exclusions,
+                                             "phase1_assumptions": phase1_assumptions, "dependencies": dependency_fingerprints})
     review_queue = [item for item in ledger if item["confidence"] < 0.8]
     # High-confidence draft geometry may be usable after deterministic shape
     # and scale validation, while its level/vector/dimension caveats still need
@@ -1450,10 +1580,12 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                 "confidence_band": "medium", "rationale": "Draft area is scale-calibrated, but geometry review warnings remain.",
                 "review_warnings": warnings, "evidence": [entity.get("source", {})],
             })
+    excluded_spaces = _dedupe_excluded_spaces(excluded_spaces)
     return {"schema_version": 1, "status": "draft", "label": "AI preliminary estimate — not engineering reviewed or validated", "created_at": now(), "input_fingerprint": input_fingerprint,
             "pack": {"pack_id": pack["pack_id"], "version": pack["version"], "fingerprint": fingerprint(pack)}, "dependency_fingerprints": dependency_fingerprints,
             "material": material, "materialized_fields": ledger, "resolved_value_records": resolution_artifact["records"], "exclusions": exclusions, "excluded_spaces": excluded_spaces,
-            "surface_summary": surface_summary, "design_conditions_basis": conditions_basis, "proposal": effective_proposal, "opaque_envelope_resolution": opaque_resolution, "room_use_resolution": room_use_artifact, "ceiling_volume_resolution": ceiling_artifact, "internal_gains_resolution": internal_artifact, "airflow_resolution": airflow_artifact, "ahu_resolution": ahu_artifact, "plant_resolution": plant_artifact, "geometry_resolution": deepcopy(geometry_resolution or {}), "value_resolution": resolution_artifact,
+            "surface_summary": surface_summary, "phase1_assumptions": phase1_assumptions,
+            "design_conditions_basis": conditions_basis, "proposal": effective_proposal, "opaque_envelope_resolution": opaque_resolution, "room_use_resolution": room_use_artifact, "ceiling_volume_resolution": ceiling_artifact, "internal_gains_resolution": internal_artifact, "airflow_resolution": airflow_artifact, "ahu_resolution": ahu_artifact, "plant_resolution": plant_artifact, "geometry_resolution": deepcopy(geometry_resolution or {}), "value_resolution": resolution_artifact,
             "review_queue": sorted(review_queue, key=lambda item: (item["confidence"], item["room_id"], item["field"]))}
 
 
@@ -1477,7 +1609,66 @@ def _with_fan_heat(peak, fan, safety_factor):
     return updated, heat
 
 
-def calculate(input_set, safety_factor_policy=None):
+def _base_room_load_input_set(input_set):
+    """Project a normal preliminary input set onto the Phase 1 envelope scope.
+
+    Keep the same validated room geometry, boundary surfaces, design weather,
+    and hourly calculation method. Zero only the Phase 2 gains and air paths.
+    The source input set is never mutated.
+    """
+    scoped = deepcopy(input_set)
+    material = scoped["material"]
+    phase1_assumptions = deepcopy(scoped.get("phase1_assumptions", []))
+    floor_u = load_pack()["preliminary_envelope"]["opaque_constructions"]["floor"]["u_value_w_m2k"]
+    indoor_temperature = material["requirements"]["indoor_cooling_setpoint_c"]
+    for room in material["hourly_load_model"].get("rooms", []):
+        if not any(surface.get("kind") == "floor" for surface in room["cooling_load"].get("envelope_surfaces", [])):
+            room["cooling_load"].setdefault("envelope_surfaces", []).append({
+                "surface_id": f"phase1-floor-{room['room_id']}", "kind": "floor", "orientation": "internal",
+                "area_m2": room["area_m2"], "u_value_w_m2k": floor_u, "solar_design_w_m2": 0,
+                "solar_gain_factor": 0, "shading_factor": 1, "boundary_method": "fixed_adjacent_temperature",
+                "boundary_temperature_c": indoor_temperature, "verification_status": "provisional",
+                "preliminary_assumption": True,
+                "source": f"{_source('floor')}; AI Phase 1 default: floor footprint uses the room area and is treated as an internal/ground-contact surface with no net cooling contribution.",
+                "source_pages": [],
+            })
+            phase1_assumptions.append({"room_id": room["room_id"], "component": "floor boundary",
+                "reason": "The drawing did not resolve the floor boundary. AI used the room area and the generic floor construction; the preliminary cooling contribution is assumed zero for an internal or ground-contact floor."})
+        room["occupancy"] = 0
+        room["heat_sources"] = [{
+            "source_id": f"{room['room_id']}-phase1-zero-gains",
+            "name": "Phase 2 equipment excluded",
+            "quantity": 0,
+            "watts": 0,
+            "kind": "other",
+            "diversity_factor": 1,
+            "space_gain_factor": 1,
+            "verification_status": "confirmed",
+            "source": "Phase 1 scope rule: equipment is added in Phase 2.",
+        }]
+        room.setdefault("schedule_assignments", {})["equipment"] = {}
+        room["unapproved_components"] = []
+        cooling = room["cooling_load"]
+        cooling.update({
+            "people_sensible_w_per_person": 0,
+            "people_latent_w_per_person": 0,
+            "people_diversity_factor": 1,
+            "lighting_w_m2": 0,
+            "lighting_diversity_factor": 1,
+            "outside_air_lps": 0,
+            "outside_air_source": "Phase 1 scope rule: ventilation is added in Phase 2.",
+            "outside_air_verification_status": "not_applicable",
+            "source": "Phase 1 envelope-only calculation.",
+        })
+    scoped["phase1_assumptions"] = phase1_assumptions
+    return scoped
+
+
+def calculate(input_set, safety_factor_policy=None, scope="full"):
+    if scope not in {"full", "phase1_base_room"}:
+        raise ValueError("Calculation scope must be full or phase1_base_room.")
+    if scope == "phase1_base_room":
+        input_set = _base_room_load_input_set(input_set)
     material = input_set["material"]
     # The cooling load is sized on the design day ("ai_preliminary_cooling_day": with a site's design days, the design
     # dry bulb with its coincident wet bulb, the usual comfort basis). The humid design day (design wet bulb with its
@@ -1485,7 +1676,7 @@ def calculate(input_set, safety_factor_policy=None):
     # Butcher Buffet the dry-bulb day gave 38.8 kW before the safety factor against the engineer's 39.6 kW, the humid
     # day 56.4 kW, nearly all of the difference outside-air moisture.
     report = calculate_hourly_load_report(material["requirements"], material["schedule_library"], material["design_day_scenarios"], material["hourly_load_model"], ["ai_preliminary_cooling_day"], preliminary_policy=material.get("preliminary_policy"), safety_factor_policy=safety_factor_policy)
-    fan = load_pack().get("fan_heat")
+    fan = load_pack().get("fan_heat") if scope == "full" else None
     report["included_scope_peak"], fan_kw = _with_fan_heat(report.get("included_scope_peak") or {}, fan, report.get("safety_factor"))
     if fan_kw:
         peak = report["included_scope_peak"]
@@ -1496,7 +1687,7 @@ def calculate(input_set, safety_factor_policy=None):
             "room_id": "", "component_id": "duct_heat_gain", "component_type": "duct_heat",
             "component": "Supply duct heat gain (matters where supply ducts run through an unconditioned roof space)",
             "reason": "Not calculated: it depends on the duct route and insulation."}]
-    humid = next((row for row in material["design_day_scenarios"].get("scenarios", []) if row.get("scenario_id") == "ai_preliminary_humid_day"), None)
+    humid = next((row for row in material["design_day_scenarios"].get("scenarios", []) if row.get("scenario_id") == "ai_preliminary_humid_day"), None) if scope == "full" else None
     if humid:
         check = calculate_hourly_load_report(material["requirements"], material["schedule_library"], material["design_day_scenarios"], material["hourly_load_model"], ["ai_preliminary_humid_day"], preliminary_policy=material.get("preliminary_policy"), safety_factor_policy=safety_factor_policy)
         peak, _fan = _with_fan_heat(check.get("included_scope_peak") or {}, fan, check.get("safety_factor"))
@@ -1505,13 +1696,17 @@ def calculate(input_set, safety_factor_policy=None):
                                      "final_design_total_kw": peak.get("final_design_total_kw", peak.get("design_total_kw")),
                                      "latent_kw": peak.get("latent_kw"), "hour": peak.get("hour"),
                                      "outside_air_kw": (peak.get("components", {}).get("outside_air") or {}).get("total_kw")}
-    report["report_type"] = "hourly_ai_preliminary_cooling_load"
+    report["report_type"] = ("hourly_ai_preliminary_phase1_base_room_load" if scope == "phase1_base_room"
+                             else "hourly_ai_preliminary_cooling_load")
+    report["calculation_phase"] = 1 if scope == "phase1_base_room" else 2
     report["status"] = "draft"
     report["project_peak"] = {}
-    report["label"] = "AI preliminary estimate — not engineering reviewed or validated"
+    report["label"] = ("Phase 1 AI preliminary base room load — envelope only; not engineering reviewed or validated"
+                       if scope == "phase1_base_room" else "AI preliminary estimate — not engineering reviewed or validated")
     report["preliminary_input_set_fingerprint"] = input_set["input_fingerprint"]
     report["assumption_coverage"] = {"field_count": len(input_set["materialized_fields"]), "low_confidence_count": len(input_set["review_queue"]), "excluded_component_count": len(input_set["exclusions"])}
     report["preliminary_surface_summary"] = deepcopy(input_set.get("surface_summary", {}))
+    report["phase1_assumptions"] = deepcopy(input_set.get("phase1_assumptions", [])) if scope == "phase1_base_room" else []
     report["design_conditions_basis"] = deepcopy(input_set.get("design_conditions_basis")
                                                  or design_conditions_basis(input_set.get("value_resolution", {})))
     report["value_resolution"] = deepcopy(input_set.get("value_resolution", {}))
@@ -1521,6 +1716,41 @@ def calculate(input_set, safety_factor_policy=None):
     report["review_queue"] = deepcopy(input_set["review_queue"])
     report["provenance"] = shared_resolution.build_report_provenance(report, input_set.get("value_resolution", {}))
     report["excluded_components"] = sorted(set(report.get("excluded_components", []) + [item["component"] for item in input_set["exclusions"]]))
+    if scope == "phase1_base_room":
+        report["excluded_components"] = sorted(set(report["excluded_components"] + [
+            "people and occupancy", "lighting", "equipment and plug loads", "ventilation and outside air",
+            "infiltration", "process air and internal moisture", "supply fan and duct heat",
+        ]))
+        # A Phase 1 default floor makes the hourly model calculable, but must not
+        # stand in for the drawing's wall/roof boundary inventory. Keep the
+        # subtotal available while marking rooms with no non-floor boundary
+        # evidence incomplete.
+        for room in material.get("hourly_load_model", {}).get("rooms", []):
+            cooling = room.get("cooling_load", {})
+            has_nonfloor_boundary = any(
+                surface.get("kind") != "floor"
+                for surface in cooling.get("envelope_surfaces", [])
+                if isinstance(surface, dict)
+            ) or bool(cooling.get("glazing_surfaces"))
+            if has_nonfloor_boundary:
+                continue
+            record = {
+                "room_id": room.get("room_id", ""), "room_name": room.get("name", ""),
+                "component_id": "phase1_boundary_inventory", "component_type": "envelope",
+                "component": "Wall, roof and opening boundary inventory",
+                "value": None, "unit": "", "source": "AI drawing review",
+                "citations": [], "verification_status": "provisional",
+                "reason": "No non-floor room boundary was resolved from the drawings; the AI Phase 1 subtotal uses the room floor assumption only until wall, roof and opening boundaries are identified.",
+            }
+            if not any(row.get("room_id") == record["room_id"] and row.get("component_id") == record["component_id"]
+                       for row in report.get("unresolved_room_inputs", []) if isinstance(row, dict)):
+                report.setdefault("unresolved_room_inputs", []).append(record)
+            coverage = next((row for row in report.get("scope_summary", {}).get("room_input_coverage", [])
+                             if row.get("room_id") == record["room_id"]), None)
+            if coverage is not None:
+                coverage.setdefault("not_assessed", []).append(record)
+                coverage["status"] = "incomplete"
+            report.setdefault("scope_summary", {})["complete_scope"] = False
     room_names = {room.get("room_id"): room.get("name", "")
                   for room in material.get("hourly_load_model", {}).get("rooms", []) if isinstance(room, dict)}
     coverage_rows = report.get("scope_summary", {}).get("room_input_coverage", [])
@@ -1553,9 +1783,23 @@ def calculate(input_set, safety_factor_policy=None):
                 "source": item.get("reviewer") or "Reviewer-declared boundary",
                 "reviewer_trace_id": item.get("reviewer_trace_id", ""),
             })
-    warning = "Envelope and listed air-side loads were not assessed; the total excludes them and understates the load."
-    if report.get("unresolved_room_inputs") and warning not in report["warnings"]:
-        report["warnings"].append(warning)
+    unresolved_envelope = any(
+        isinstance(item, dict) and item.get("component_type") == "envelope"
+        for item in report.get("unresolved_room_inputs", [])
+    )
+    if scope == "phase1_base_room":
+        warning = ("Phase 1 includes resolved envelope loads only; some room boundaries remain unassessed. "
+                   "Phase 2 internal-gain and air-side loads are excluded."
+                   if unresolved_envelope else
+                   "Phase 1 is an envelope-only subtotal; Phase 2 internal-gain and air-side loads are excluded.")
+        report.setdefault("warnings", []).append(warning)
+    elif report.get("unresolved_room_inputs"):
+        report.setdefault("warnings", []).append(
+            "Some envelope or air-side inputs remain unassessed; the calculated total excludes those loads."
+        )
+    report["warnings"] = list(dict.fromkeys(
+        str(item) for item in report.get("warnings", []) if str(item).strip()
+    ))
     report["input_fingerprints"].update(input_set["dependency_fingerprints"])
     report["input_fingerprints"]["ai_preliminary_input_set"] = input_set["input_fingerprint"]
     return report

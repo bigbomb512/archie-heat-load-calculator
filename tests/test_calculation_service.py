@@ -11,9 +11,9 @@ from unittest.mock import patch
 from backend import ai_preliminary_service, calculation_service as service, job_service
 
 SCOPE = {"candidate_fingerprint": "fp", "candidates": [
-    {"key": "kitchen", "area_m2": 104.9, "include": True},
-    {"key": "shop", "area_m2": 216.1, "include": True},
-    {"key": "store", "area_m2": None, "include": False}]}
+    {"key": "kitchen", "area_m2": 104.9, "include": True, "status": "calculated"},
+    {"key": "shop", "area_m2": 216.1, "include": True, "status": "calculated"},
+    {"key": "store", "area_m2": None, "include": False, "status": "no_area"}]}
 
 
 class FakeWeb:
@@ -59,7 +59,7 @@ class CalculationJobTests(unittest.TestCase):
                 patch.object(ai_preliminary_service, "_room_scope_state", return_value=SCOPE),
                 patch.object(ai_preliminary_service, "_confirm_room_scope",
                              side_effect=lambda paths, data: self.calls.append(("rooms", data["reviewer"], data["candidate_fingerprint"], data["rows"]))),
-                patch.object(ai_preliminary_service, "_calculate", side_effect=lambda web, project: self.calls.append("calculate")),
+                patch.object(ai_preliminary_service, "_calculate", side_effect=lambda web, project, scope="full": self.calls.append(("calculate", scope))),
                 patch.object(job_service, "apply_roof_answer", side_effect=lambda web, project: self.calls.append("answers")),
                 patch.object(service, "_resolve_inputs", side_effect=lambda web, project_id: self.calls.append("inputs"))]
 
@@ -86,8 +86,8 @@ class CalculationJobTests(unittest.TestCase):
         self.assertEqual(rooms[:3], ("rooms", "Sam", "fp"))
         # Shop unticked; the store has no area, so it can't be cooled even when ticked; the kitchen keeps the default.
         self.assertEqual(rooms[3], [{"key": "kitchen", "include": True, "reason": ""},
-                                    {"key": "shop", "include": False, "reason": "Not cooled"},
-                                    {"key": "store", "include": False, "reason": "Not cooled"}])
+                                    {"key": "shop", "include": False, "reason": "Excluded by room selection."},
+                                    {"key": "store", "include": False, "reason": "AI could not resolve a supported room use or area."}])
 
     def test_missing_reviewer_defaults_to_operator(self):
         job_service.save_job_setup(self.web.project, {"above": "floor"})
@@ -96,7 +96,7 @@ class CalculationJobTests(unittest.TestCase):
         self.assertEqual(done["requested_by"], "Operator")
         rooms = next(call for call in self.calls if isinstance(call, tuple) and call[0] == "rooms")
         self.assertEqual(rooms[1], "Operator")
-        self.assertEqual(self.calls[3], "calculate")
+        self.assertEqual(self.calls[3], ("calculate", "full"))
         self.assertEqual(self.web.updated, 1)
 
     def test_missing_inputs_are_prepared_on_the_server_then_the_steps_run_again(self):
@@ -111,6 +111,13 @@ class CalculationJobTests(unittest.TestCase):
         self.assertEqual((failed["status"], failed["step"]), ("failed", "model"))
         self.assertIn("Analyse the PDF", failed["error"])
         self.assertNotIn("inputs", self.calls)
+
+    def test_phase_one_calculates_from_ai_resolved_rooms_without_waiting_for_manual_room_confirmation(self):
+        _, done = self.run_job({"phase": "phase1_base_room"})
+        self.assertEqual(done["status"], "done")
+        self.assertEqual(done["phase"], "phase1_base_room")
+        self.assertNotIn("rooms", [call[0] if isinstance(call, tuple) else call for call in self.calls])
+        self.assertIn(("calculate", "phase1_base_room"), self.calls)
 
     def test_input_resolution_never_starts_a_skills_run_with_or_without_consent(self):
         from backend import model_input_resolution_service, skill_workflow_service

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Runtime room-use findings enter resolvers only after current-run acceptance."""
+"""High-confidence current room-use findings enter the draft; decisions still override them."""
 
 import json
 from pathlib import Path
@@ -11,6 +11,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from backend import skill_workflow_service
 from backend.ai_preliminary_service import _proposal_for_resolution
+from ai import ai_preliminary
+
+
+class GeometryAreaIdentityTests(unittest.TestCase):
+    def test_geometry_area_joins_short_plan_label_by_canonical_room_identity(self):
+        rows = [{"name": "Bar", "level": "Unassigned level", "area_m2": None}]
+        geometry = {"entities": [{
+            "kind": "area", "label": "Connected tenancy including bar and process strip",
+            "level_candidate": "Unassigned level", "geometry_status": "ai_estimated",
+            "value": {"area_m2": 211.04, "room_identity_id": "room-use:unassigned-level:bar",
+                      "derivation": {"formula": "shoelace × calibrated scale"},
+                      "review_warnings": ["short label maps to full tenancy zone"]},
+            "source": {"page": 32, "drawing_number": "01.01"},
+        }]}
+        result = ai_preliminary._apply_geometry_area_resolution(rows, geometry)
+        self.assertEqual(result[0]["area_m2"], 211.04)
+        self.assertEqual(result[0]["area_origin"], "ai_geometry")
+        self.assertIn("short label maps to full tenancy zone", result[0]["geometry_evidence"]["review_warnings"])
 
 
 class AcceptedSkillBridgeTests(unittest.TestCase):
@@ -74,15 +92,25 @@ class AcceptedSkillBridgeTests(unittest.TestCase):
     def _proposal(self):
         return _proposal_for_resolution(self.paths)
 
-    def test_unaccepted_findings_leave_room_use_identical_to_no_skill_run(self):
+    def test_high_confidence_cited_findings_enter_before_manual_acceptance(self):
         manifest = self.root / "skill_workflow_run.json"
-        baseline = json.dumps(self._proposal(), sort_keys=True)
-        self.assertNotIn("room_use_category", self._proposal()["rooms"][0])
-        self.assertEqual(json.dumps(self._proposal(), sort_keys=True), baseline)
+        proposal = self._proposal()
+        self.assertEqual(proposal["rooms"][0]["room_use_category"], "dining")
+        self.assertEqual(proposal["rooms"][0]["confidence"], .9)
+        self.assertTrue(proposal["rooms"][1]["non_counting_functional_subarea"])
+        self.assertEqual(proposal["rooms"][2]["room_use_category"], "kitchen")
         manifest.unlink()
-        no_run = json.dumps(self._proposal(), sort_keys=True)
+        without_current_run = self._proposal()
+        self.assertTrue(all("room_use_category" not in row for row in without_current_run["rooms"]))
         manifest.write_text(json.dumps({"run_id": self.run_id, "status": "needs_review", "source_fingerprint": self.source_fingerprint}))
-        self.assertEqual(json.dumps(self._proposal(), sort_keys=True), no_run)
+        self.assertEqual(json.dumps(self._proposal(), sort_keys=True), json.dumps(proposal, sort_keys=True))
+
+    def test_cited_room_identity_can_seed_a_room_missing_from_the_local_detector(self):
+        self.run_path.write_text(json.dumps({"local_room_inference_proposal": {"rooms": []}}))
+        rooms = self._proposal()["rooms"]
+        self.assertEqual([row["label"] for row in rooms], ["Shop", "Bar", "Kitchen"])
+        self.assertEqual([row["room_use_category"] for row in rooms], ["dining", "dining", "kitchen"])
+        self.assertTrue(all(row["page"] == 19 and row["evidence"] for row in rooms))
 
     def test_accepted_finding_is_used(self):
         self._decision(0, "accepted")

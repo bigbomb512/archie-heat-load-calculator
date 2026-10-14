@@ -3,6 +3,7 @@
 from copy import deepcopy
 import json
 import hashlib
+import re
 from pathlib import Path
 
 from ai.calculation_extraction import EXTRACTOR_VERSION, evidence_input_fingerprints, extract_calculation_input_evidence, _canonical_evidence, _fingerprint
@@ -20,6 +21,34 @@ def _write(path, value):
     stage = path.with_name(path.name + ".stage")
     stage.write_text(json.dumps(value, indent=2, allow_nan=False), encoding="utf-8")
     stage.replace(path)
+
+
+def _confirm_skill_main_viewport_scale(calibration, printed_scale, page_width_mm, image_width_px):
+    """Rebuild the skill's scale calibration from PDF and page-register facts.
+
+    The skill may describe the scale it used, but only the page register's
+    main scale, PDF physical width, and canonical full-page image width are
+    used to authorize a draft area. The model's reported area or scale factor
+    is never trusted for this conversion.
+    """
+    result = deepcopy(calibration) if isinstance(calibration, dict) else {}
+    page_match = re.search(r"1\s*:\s*(\d+(?:\.\d+)?)", str(printed_scale or ""))
+    model_match = re.search(r"1\s*:\s*(\d+(?:\.\d+)?)", str(result.get("printed_scale") or ""))
+    if (not page_match or not model_match or page_match.group(1) != model_match.group(1)
+            or not isinstance(page_width_mm, (int, float)) or page_width_mm <= 0
+            or not isinstance(image_width_px, (int, float)) or image_width_px <= 0):
+        return result, None
+    denominator = float(page_match.group(1))
+    scale = float(page_width_mm) * denominator / float(image_width_px)
+    result.update({
+        "confirmed_main_viewport_scale": str(printed_scale),
+        "pdf_physical_page_width_mm": float(page_width_mm),
+        "canonical_image_width_px": float(image_width_px),
+        "scale_formula": f"{float(page_width_mm):g}*{denominator:g}/{float(image_width_px):g}",
+        "scale_mm_per_px": scale,
+        "scale_source": "confirmed_main_viewport_scale",
+    })
+    return result, scale
 
 
 def _paths(root):
@@ -60,6 +89,22 @@ def _room_geometry_skill_proposals(root):
         return []
     proposal_path = root / "skill_workflow_runs" / str(run_id) / "proposals" / "room_boundaries_areas.json"
     proposal = _read(proposal_path)
+    coverage = _read(root / "drawing_coverage.json", {})
+    vector = _read(root / "vector_geometry.json", {})
+    coverage_by_page = {row.get("page"): row for row in coverage.get("pages", []) if isinstance(row, dict)}
+    vector_pages = vector.get("geometry_key_points", {}).get("pages", [])
+    vector_by_page = {row.get("page"): row for row in vector_pages if isinstance(row, dict)}
+    pdf_widths = {}
+    source_pdf = _read(root / "ai_input.json", {}).get("source_files", {}).get("pdf")
+    if source_pdf:
+        try:
+            import pdfplumber
+            with pdfplumber.open(source_pdf) as pdf:
+                for page_number in {row.get("page") for row in proposal.get("proposal_fields", {}).get("geometry_candidates", []) if isinstance(row, dict)}:
+                    if isinstance(page_number, int) and 0 < page_number <= len(pdf.pages):
+                        pdf_widths[page_number] = pdf.pages[page_number - 1].width * 25.4 / 72.0
+        except (OSError, RuntimeError, ValueError):
+            pdf_widths = {}
     review = _read(root / "skill_review_decisions.json", {})
     decisions = review.get("decisions", {}) if isinstance(review, dict) else {}
     fields = proposal.get("proposal_fields", {}) if isinstance(proposal, dict) else {}
@@ -67,13 +112,28 @@ def _room_geometry_skill_proposals(root):
     result = []
     for index, row in enumerate(rows if isinstance(rows, list) else []):
         decision = decisions.get(f"room_boundaries_areas:geometry_candidates:{index}", {})
-        if (decision.get("status") != "accepted" or decision.get("run_id") != run_id
-                or decision.get("source_fingerprint") != current_source_fingerprint):
+        if (decision.get("status") in {"accepted", "rejected"}
+                and (decision.get("run_id") != run_id
+                     or decision.get("source_fingerprint") != current_source_fingerprint)):
             continue
+        if decision.get("status") == "rejected":
+            continue
+        # Phase 1 is an AI-preliminary calculation. Its deterministic geometry
+        # validator can safely consume the current AI proposal without waiting
+        # for manual acceptance; unclosed, low-confidence, conflicting or
+        # uncalibrated proposals remain blocked by that validator. A current
+        # explicit review decision still overrides or excludes the proposal.
         row = decision.get("value", row)
         if not isinstance(row, dict):
             continue
         page = row.get("page")
+        calibration = deepcopy(row.get("calibration", {})) if isinstance(row.get("calibration"), dict) else {}
+        page_meta = coverage_by_page.get(page, {})
+        vector_meta = vector_by_page.get(page, {})
+        image_meta = vector_meta.get("coordinate_systems", {}).get("image_px", {}) if isinstance(vector_meta, dict) else {}
+        calibration, calibrated_scale = _confirm_skill_main_viewport_scale(
+            calibration, page_meta.get("main_scale"), pdf_widths.get(page), image_meta.get("image_width"),
+        )
         geometry = {
             "boundary_points_px": row.get("boundary_points_px") or [],
             "boundary_points_mm": row.get("boundary_points_mm") or [],
@@ -83,15 +143,20 @@ def _room_geometry_skill_proposals(root):
             "dimension_wall_links": row.get("dimension_links") or [],
             "walls": row.get("walls") or [],
             "dimensions": row.get("dimensions") or [],
-            "scale_mm_per_px": row.get("scale_mm_per_px"),
-            "scale_source": (row.get("calibration") or {}).get("source", "skill_linked_dimensions"),
+            "scale_mm_per_px": calibrated_scale or row.get("scale_mm_per_px"),
+            "scale_source": calibration.get("scale_source") or (row.get("calibration") or {}).get("source", "skill_linked_dimensions"),
             # Preserve the complete calibration record. The geometry resolver
             # uses this to distinguish a confirmed main-plan viewport scale
             # from an unverified visual scale before admitting a draft area.
-            "calibration": deepcopy(row.get("calibration", {})) if isinstance(row.get("calibration"), dict) else {},
+            "calibration": calibration,
             "independent_witnesses": row.get("independent_witnesses") or [],
             "source_crop": row.get("source_crop") or "",
             "area_m2": row.get("area_m2"),
+            # Some area-only candidates are valid from a printed schedule even
+            # when no polygon can be supplied. Preserve the auditable arithmetic
+            # through the resolver handoff; without it the resolver correctly
+            # rejects an unaudited numeric inference.
+            "formula": row.get("formula") or "",
         }
         source_pages = row.get("source_pages") or ([page] if isinstance(page, int) and page > 0 else [])
         source_pages = list(dict.fromkeys(value for value in source_pages if isinstance(value, int) and value > 0))

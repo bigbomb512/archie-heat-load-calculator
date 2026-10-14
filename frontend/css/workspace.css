@@ -317,17 +317,33 @@ polyline.ws-dim, polyline.ws-dim2 { fill: none; stroke-dasharray: 10 6; }
 .ws-guide-now.is-error { border-color: #a3281a; }
 .ws-guide-now.is-working { border-color: var(--line); }
 .ws-guide-now.is-done { border-color: #2a8050; }
-.ws-guide-kicker { margin: 0 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-2); }
+.ws-guide-kicker { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; margin: 0 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-2); }
 .ws-guide-now h2 { margin: 0 0 6px; font-size: 1.35rem; }
 .ws-guide-now h2 small { font-size: .9rem; color: var(--text-2); font-weight: normal; }
 .ws-guide-now > p { margin: 0 0 12px; max-width: 70ch; }
 .ws-guide-actions { margin-bottom: 8px; }
 .ws-guide-actions .btn { display: inline-block; text-decoration: none; }
 .ws-guide-here { margin: 0; font-weight: 600; color: #2a8050; }
+.ws-guide-phases { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 14px 0; }
+.ws-guide-phase { min-width: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--ui-radius-control); background: var(--ui-white); }
+.ws-guide-phase.is-current { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+.ws-guide-phase.is-complete { border-color: #2a8050; }
+.ws-guide-phase-kicker { margin: 0 0 3px; color: var(--text-2); font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+.ws-guide-phase h3 { margin: 0 0 4px; font-size: 14px; }
+.ws-guide-phase > p:not(.ws-guide-phase-kicker) { margin: 0 0 6px; color: var(--text-2); font-size: 12px; line-height: 1.45; }
+.ws-guide-phase > small { color: var(--text-2); font-size: 11px; }
 .ws-guide-steps { list-style: none; padding: 0; margin: 8px 0 0; }
+.ws-guide-group-title { margin: 12px 0 4px; padding-top: 8px; border-top: 1px solid var(--line-soft); font-size: 12px; }
+.ws-guide-group-title:first-child { margin-top: 4px; border-top: 0; }
 .ws-guide-steps li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; padding: 3px 0; }
 .ws-guide-steps li.is-now a { font-weight: 700; }
 .ws-guide-steps li.is-done a, .ws-guide-steps li.is-later a { color: var(--text-2); }
 .ws-guide-icon { width: 1.2em; text-align: center; }
 .ws-guide-state { color: var(--text-2); }
-@media (max-width: 760px) { .ws-guide { margin: 12px 16px 0; } }
+.ws-phase-result { margin: 0 0 20px; padding: 16px; border: 1px solid var(--line); border-radius: var(--ui-radius-control); background: var(--ui-white); }
+.ws-phase-result h2 { margin: 0 0 8px; font-size: 1.15rem; }
+.ws-phase-result p { margin: 6px 0; }
+@media (max-width: 760px) {
+  .ws-guide { margin: 12px 16px 0; }
+  .ws-guide-phases { grid-template-columns: 1fr; }
+}

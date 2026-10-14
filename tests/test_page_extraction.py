@@ -7,6 +7,7 @@ import shutil
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 from ai import page_extraction as extraction
 from backend import page_extraction_service as service, page_inventory_service as pass1
@@ -207,6 +208,36 @@ class ServiceTests(unittest.TestCase):
         pass1.PROVIDER_FACTORY = None
         self.temp.cleanup()
 
+    def test_clear_text_backed_equipment_is_accepted_but_uncertain_rows_stay_for_review(self):
+        run = "current-run"
+        rows = [
+            {"id": "clear", "value": {"name": "Oven"}, "evidence": "supported", "text_match": True,
+             "pictures_only": False, "conflicts": {}},
+            {"id": "conflict", "value": {"name": "Freezer"}, "evidence": "conflicting", "text_match": True,
+             "pictures_only": False, "conflicts": {"quantity": []}},
+            {"id": "inferred", "value": {"name": "Display"}, "evidence": "inferred", "text_match": True,
+             "pictures_only": False, "conflicts": {}},
+            {"id": "unverified", "value": {"name": "POS"}, "evidence": "supported", "text_match": False,
+             "pictures_only": False, "conflicts": {}},
+            {"id": "operator-rejected", "value": {"name": "TV"}, "evidence": "supported", "text_match": True,
+             "pictures_only": False, "conflicts": {}},
+        ]
+        decisions_path = Path(self.project["review_dir"]) / service.DECISIONS_FILE
+        decisions_path.write_text(json.dumps({"equipment_appliances": {
+            "operator-rejected": {"status": "rejected", "run": run, "reviewer": "Operator"}}}))
+
+        accepted = service._auto_accept_clear_findings(self.project["review_dir"], "equipment_appliances",
+                                                       {"run": run, "findings": rows})
+        saved = json.loads(decisions_path.read_text())["equipment_appliances"]
+
+        self.assertEqual(accepted, 1)
+        self.assertEqual(saved["clear"]["status"], "accepted")
+        self.assertEqual(saved["clear"]["source"], "ai_high_confidence")
+        self.assertEqual(saved["operator-rejected"]["status"], "rejected")
+        self.assertNotIn("conflict", saved)
+        self.assertNotIn("inferred", saved)
+        self.assertNotIn("unverified", saved)
+
     def test_only_flagged_pages_are_read_findings_are_proposals_and_a_rerun_calls_nothing(self):
         reader = FakeReader({1: {"items": [{"name": "Combi oven", "code": "E01", "quantity": 1}]},
                              3: {"items": [{"name": "Combi oven", "code": "E01", "quantity": 2}, {"name": "TV", "quantity": 1}]}})
@@ -264,6 +295,36 @@ class ServiceTests(unittest.TestCase):
 
 
 class UsageLimitTests(unittest.TestCase):
+    def test_transient_connection_closes_retry_one_section_and_fall_back_from_a_failed_batch(self):
+        class DropsOnceReader:
+            model = "fake"
+
+            def __init__(self):
+                self.calls = []
+
+            def propose(self, prompt, image_paths=()):
+                self.calls.append(list(image_paths))
+                if len(self.calls) == 1:
+                    raise RuntimeError("Remote end closed connection without response")
+                return {"items": []}, {"provider": "fake"}
+
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(service.time, "sleep"):
+            images = {}
+            for page in (5, 6):
+                path = Path(folder) / f"page_{page:03d}.png"
+                path.write_bytes(bytes([page]))
+                images[(page, 0)] = (path, 1)
+            reader = DropsOnceReader()
+            readings, failures, calls = service.read_sections(EQUIPMENT, {key: images[key] for key in ((5, 0),)},
+                                                                Path(folder) / "single", reader, workers=1)
+            self.assertEqual(([(page, items) for page, _section, items in readings], failures, calls, len(reader.calls)),
+                             ([(5, [])], {}, 2, 2))
+
+            reader = DropsOnceReader()
+            readings, failures, calls = service.read_sections(EQUIPMENT, images, Path(folder) / "batch", reader,
+                                                                workers=1, batch=2)
+            self.assertEqual((len(readings), failures, calls, len(reader.calls)), (2, {}, 3, 3))
+
     def test_after_the_usage_limit_no_more_sections_are_sent(self):
         class LimitedReader:
             model, calls = "fake", []

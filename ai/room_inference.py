@@ -16,7 +16,7 @@ from ai.room_use_resolution import room_identity
 from ai.drawing_coverage import has_current_level_classification
 
 
-VERSION = "local-room-inference-v4"
+VERSION = "local-room-inference-v6"
 PLAN_ROLES = {
     "main_floor_plan", "primary_geometry_plan", "supporting_geometry_plan",
     "uncertain_top_down_context", "reflected_ceiling_plan", "reflected_ceiling",
@@ -286,10 +286,6 @@ def room_label_items(spatial_page):
     return _spatial_label_items(spatial_page)
 
 
-def _label_key(label):
-    return re.sub(r"[^a-z0-9]", "", str(label or "").casefold())
-
-
 def _geometry_rows(page, page_number):
     """Return structured geometry candidates already attached to a page.
 
@@ -378,7 +374,7 @@ def infer(ai_input, coverage=None, spatial_ocr=None, vector_geometry=None, visio
     vision_by_page = _vision_geometry_pages(vision_response)
 
     def add_candidate(label, level, number, evidence, confidence=0.68, geometry=None, metadata=None):
-        key = room_identity(_label_key(label), level)
+        key = room_identity(label, level)
         row = candidates.setdefault(key, {
             "kind": "room", "room_id": key, "label": label, "level_name": level,
             "source_pages": [], "evidence": [], "confidence": 0.0,
@@ -440,7 +436,7 @@ def infer(ai_input, coverage=None, spatial_ocr=None, vector_geometry=None, visio
             level = _level(page)
             # Treat spelling variants such as "cool room" and "coolroom" as
             # one candidate while retaining the clearest display label.
-            key = room_identity(_label_key(label), level)
+            key = room_identity(label, level)
             # Explicit plan/RCP text gives a useful draft clue; requiring a
             # boundary/area witness for high confidence is intentional.
             confidence = 0.68
@@ -461,6 +457,34 @@ def infer(ai_input, coverage=None, spatial_ocr=None, vector_geometry=None, visio
                 row["geometry"] = {"area_m2": area, "formula": "explicit_room_area", "operands": {"value_m2": area}}
                 row["unresolved_fields"] = [field for field in row["unresolved_fields"] if field != "room_area"]
             row["confidence"] = max(row["confidence"], min(0.82, confidence))
+
+    # A fitout drawing may label only counters, kiosks and work functions while
+    # the actual conditioned space is the enclosing tenant. When the primary
+    # floor plan itself identifies a cafe/coffee tenancy, seed that physical
+    # zone identity so downstream geometry inference can trace its perimeter.
+    # Functional labels remain available as annotations and are not promoted
+    # to independent rooms by this rule.
+    for page in candidate_pages:
+        role = str(page.get("plan_role") or page.get("proposed_role") or "").casefold()
+        if role not in {"main_floor_plan", "primary_geometry_plan"}:
+            continue
+        page_text = " ".join((
+            str(page.get("title") or ""),
+            str((page.get("structured_content") or {}).get("markdown", "")),
+        ))
+        if not (re.search(r"\btenanc(?:y|ies)\b", page_text, re.I)
+                and re.search(r"\b(?:cafe|café|coffee)\b", page_text, re.I)):
+            continue
+        level = _level(page)
+        evidence = {"page": page.get("page"), "drawing_number": page.get("drawing_number", ""),
+                    "title": page.get("title", ""),
+                    "excerpt": "Primary plan/title block identifies a coffee or cafe tenancy.",
+                    "view_type": page.get("detected_type", page.get("plan_role", ""))}
+        row = add_candidate("Cafe", level, page.get("page"), evidence, confidence=0.86)
+        row["rationale"] = ("The current primary plan identifies a coffee/cafe tenancy. This candidate represents its "
+                            "whole connected tenant zone; counters, kiosks and work functions are not separate rooms "
+                            "without physical partitions or an explicit HVAC boundary.")
+        row["zone_role"] = "whole_tenancy_candidate"
     rows = []
     for row in sorted(candidates.values(), key=lambda item: item["room_id"]):
         row["source_pages"] = sorted(row["source_pages"])

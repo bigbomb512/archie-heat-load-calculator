@@ -97,7 +97,7 @@ def main():
         "source_pages": [20], "confidence_score": 0.87,
         "unresolved_fields": ["level", "precise_vector_boundary", "independent_dimension_cross_check"],
         "geometry": {"boundary_points_px": [[10, 10], [30, 10], [30, 20], [10, 20], [10, 10]],
-            "scale_mm_per_px": 50.0, "scale_source": "confirmed_main_viewport_scale",
+            "scale_mm_per_px": 50.0, "scale_source": "ai_cited_scale",
             "calibration": {"confirmed_main_viewport_scale": "1:100", "canonical_image_width_px": 745,
                             "pdf_physical_page_width_mm": 420.1583333333}}}
     preliminary_geometry = build_geometry_resolution(
@@ -106,7 +106,11 @@ def main():
     )
     estimated = [item for item in preliminary_geometry["entities"]
                  if item.get("kind") == "ai_room_geometry" and item.get("geometry_status") == "ai_estimated"]
-    check("confirmed-scale high-confidence AI boundary creates draft area", bool(estimated) and estimated[0]["value"]["area_m2"] == 0.5)
+    expected_scale = 420.1583333333 * 100 / 745
+    expected_area = round(200 * expected_scale ** 2 / 1_000_000, 6)
+    check("confirmed PDF dimensions override an AI-provided pixel scale", bool(estimated) and estimated[0]["value"]["area_m2"] == expected_area
+          and estimated[0]["value"]["scale_source"] == "confirmed_main_viewport_scale")
+    check("scale-derived room area is explicitly marked as a draft estimate", bool(estimated) and "scale_derived_preliminary_area" in estimated[0].get("review_warnings", []))
     check("draft geometry keeps level/vector/dimension gaps as warnings", bool(estimated) and {"level", "precise_vector_boundary", "independent_dimension_cross_check"}.issubset(set(estimated[0].get("review_warnings", []))))
     reviewed_geometry = build_geometry_resolution(
         ai, scaled_coverage, scaled_building, ocr, {}, resolution_mode="engineering_reviewed",

@@ -174,7 +174,7 @@ def _surface_area(row, ceiling_by_room=None):
     return None, {}
 
 
-def _resolve_surface_area(row, openings, ceiling_by_room=None):
+def _resolve_surface_area(row, openings, ceiling_by_room=None, allow_incomplete_opening_coverage=False):
     gross, derivation = _surface_area(row, ceiling_by_room)
     if gross is None:
         return None, None, {}, ["surface_area_unresolved"]
@@ -191,7 +191,8 @@ def _resolve_surface_area(row, openings, ceiling_by_room=None):
         if net is not None:
             return gross, net, {**derivation, "gross_area_m2": gross, "net_area_m2": net}, []
         return gross, None, derivation, ["opening_coverage_missing"]
-    if coverage not in {"confirmed", "reviewer_entered"}:
+    incomplete_coverage = coverage not in {"confirmed", "reviewer_entered"}
+    if incomplete_coverage and not allow_incomplete_opening_coverage:
         return gross, None, derivation, ["opening_coverage_incomplete"]
     area_rows, missing = [], []
     for opening_id in linked_ids:
@@ -214,7 +215,9 @@ def _resolve_surface_area(row, openings, ceiling_by_room=None):
     if net <= 0:
         return gross, None, derivation, ["opening_area_exceeds_gross_area"]
     return gross, net, {**derivation, "gross_area_m2": gross, "net_area_m2": net, "openings": area_rows,
-                        "formula": "gross_surface_area − sum(confirmed_opening_areas)"}, []
+                        "formula": "gross_surface_area − sum(known_opening_areas)",
+                        **({"warning": "Other openings may be uncounted; remaining host area is treated as opaque."}
+                           if incomplete_coverage else {})}, []
 
 
 def resolve_opaque_envelope(ledger, opening_register=None, value_resolution=None, source_pack=None,
@@ -267,8 +270,13 @@ def resolve_opaque_envelope(ledger, opening_register=None, value_resolution=None
             value = _override_value(override, field)
             if value is not None:
                 item[field] = deepcopy(value)
-        gross, net, derivation, area_issues = _resolve_surface_area(item, openings, ceiling_by_room)
+        gross, net, derivation, area_issues = _resolve_surface_area(
+            item, openings, ceiling_by_room,
+            allow_incomplete_opening_coverage=resolution_mode == "preliminary_ai_estimate",
+        )
         item["gross_area_m2"], item["net_opaque_area_m2"], item["area_derivation"] = gross, net, derivation
+        if derivation.get("warning"):
+            item.setdefault("assumptions", []).append(derivation["warning"])
         blockers.extend(area_issues)
         if net is not None:
             item["area_m2"] = net
@@ -317,6 +325,15 @@ def resolve_opaque_envelope(ledger, opening_register=None, value_resolution=None
             item["boundary_method"] = "room_to_room_dynamic"
             if not item.get("adjacent_room_id"):
                 blockers.append("adjacent_room_missing")
+        elif physical == "floor" and role == "unresolved" and resolution_mode == "preliminary_ai_estimate":
+            # A plan-supported floor footprint can remain in the draft even
+            # when the drawing does not identify what is below it. The Phase 1
+            # assembler treats this as an internal floor at room setpoint
+            # (zero cooling transfer) and records that lower-bound assumption.
+            item["boundary_method"] = "fixed_adjacent_temperature"
+            item.setdefault("assumptions", []).append(
+                "Unresolved floor boundary treated as conditioned-adjacent at room setpoint for the Phase 1 draft; floor cooling load is zero until the below-floor condition is known."
+            )
         else:
             blockers.append("boundary_method_unresolved")
         item["construction_id"], item["u_value_w_m2k"], item["property_origin"] = construction, u_value, source

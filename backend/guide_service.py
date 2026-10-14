@@ -6,7 +6,9 @@ steps that check the AI's work wait while the AI is still reading the drawings, 
 meanwhile. Read-only: it gathers from the job status and the review's own status files and changes nothing.
 """
 
-from backend import drawing_tasks_service, job_service, page_extraction_service, page_inventory_service, skill_workflow_service
+from pathlib import Path
+
+from backend import ai_preliminary_service, drawing_tasks_service, job_service, page_extraction_service, page_inventory_service, skill_workflow_service
 
 BUSY = {"queued", "running"}
 STOPPED = {"failed", "blocked", "interrupted"}
@@ -32,6 +34,17 @@ def steps(web, project):
         review = skill_workflow_service.get(web, project)
     except Exception:
         review = {}
+    base_report = ai_preliminary_service._read(Path(project["review_dir"]) / "phase1_base_room_load_report.json", {})
+    current_set = ai_preliminary_service._read(Path(project["review_dir"]) / "ai_preliminary_input_set.json", {})
+    saved_building_evidence = ai_preliminary_service._read(Path(project["review_dir"]) / "building_evidence.json", {})
+    try:
+        base_current = (base_report.get("preliminary_input_set_fingerprint")
+                        and base_report.get("preliminary_input_set_fingerprint") == current_set.get("input_fingerprint")
+                        and not ai_preliminary_service._stale_reasons(ai_preliminary_service._paths(project), current_set))
+    except (OSError, KeyError, TypeError, ValueError):
+        base_current = False
+    base_peak = (base_report.get("included_scope_peak") or {}) if isinstance(base_report, dict) else {}
+    base_has_result = base_current and isinstance(base_peak.get("final_design_total_kw", base_peak.get("design_total_kw")), (int, float))
     findings = review.get("findings") or []
     answers = review.get("answers") or {}
     needs = [row for row in findings if row.get("subskill_id") == "information_needs" and row.get("field") == "needs"]
@@ -69,45 +82,36 @@ def steps(web, project):
         result.append(_step("ai", "The AI has read your drawings", "Pages, equipment and rooms are read.", "done",
                             "drawings", "overview", "Show"))
     ai_ready = result[0]["state"] == "done"
+    phase1_can_run = ai_ready or (bool(saved_building_evidence) and not working)
 
     # 2. The project: the address (for the weather) and what is above the shop (for the roof).
     site = subtabs.get("project", {}).get("job_site", {})
     found = status.get("found_site") or ""
     weather_ready = bool(status.get("weather_location")) or not status.get("weather_locations")
-    if not status.get("address"):
-        why = (f"The drawings give it as “{found}”. Check it, choose its weather location and save, so the right summer "
-               "weather is used." if found else "Type the job's address and choose its weather location, so the right "
-               "summer weather is used for the load.")
-        result.append(_step("address", "Confirm the site address", why, "needed", "project", "job-site", "Check the address"))
-    elif not weather_ready:
-        suggestion = status.get("weather_suggestion") or ""
-        result.append(_step("address", "Choose the weather location", (f"Suggested from the address: {suggestion}. " if suggestion
-                            else "") + "The summer design weather comes from the nearest listed location in the AIRAH "
-                            "handbook; until you choose, a generic Australian day is used.", "needed", "project", "job-site",
-                            "Choose the weather location"))
-    else:
-        result.append(_step("address", "Confirm the site address", f"Saved: {status['address']}"
-                            + (f"; weather from {status['weather_location']}." if status.get("weather_location") else "."),
-                            "done", "project", "job-site", "Show"))
+    address_detail = (f"AI found “{found}”; it will use {status.get('weather_location') or status.get('weather_suggestion') or 'the labelled generic design day'} for Phase 1."
+                      if found or status.get("weather_location") or status.get("weather_suggestion") else
+                      "AI will use the labelled generic design day if the PDF does not identify a site.")
+    result.append(_step("address", "Resolve the site and design weather", address_detail,
+                        "done" if ai_ready else "later", "project", "job-site", "Show"))
     tenancy = subtabs.get("project", {}).get("tenancy_context", {})
-    result.append(_step("above", "Say what is above the shop", "The roof, or another floor or tenancy? It decides whether "
-                        "heat comes in through the roof.", "done" if tenancy.get("state") == "done" else "needed",
-                        "project", "tenancy-context", "Answer"))
+    result.append(_step("above", "Resolve the room above", "AI uses the drawing evidence; if it is not shown, the Phase 1 result labels the boundary assumption.",
+                        "done" if ai_ready or tenancy.get("state") == "done" else "later",
+                        "project", "tenancy-context", "Show"))
 
     # 3. Rooms, walls, roof and windows: check what the AI found.
     rooms = subtabs.get("rooms", {})
     room_details, measurements = rooms.get("room_details", {}), rooms.get("measurements", {})
     if room_details.get("state") in {"needed", "check"}:
-        result.append(_step("rooms", "Check the rooms", f"{room_details.get('detail')} Each room's use sets its people, "
-                            "lights and equipment.", "needed", "rooms", "room-details", "Check the rooms",
+        result.append(_step("rooms", "Resolve rooms and areas", f"AI uses room labels, outlines and printed dimensions. {room_details.get('detail') or ''} Unresolved rooms are listed as exceptions; resolved rooms proceed automatically.",
+                            "done" if ai_ready else "later", "rooms", "room-details", "Show",
                             room_details.get("count"), needs_ai=True))
     elif measurements.get("state") in {"needed", "check"}:
-        result.append(_step("rooms", "Check the room sizes", f"{measurements.get('detail')} Areas come from the AI's "
-                            "outlines or printed figures.", "needed", "rooms", "measurements", "Check the sizes",
+        result.append(_step("rooms", "Resolve rooms and areas", f"AI uses room outlines and printed dimensions. {measurements.get('detail') or ''} Unresolved rooms are listed as exceptions; resolved rooms proceed automatically.",
+                            "done" if ai_ready else "later", "rooms", "measurements", "Show",
                             measurements.get("count"), needs_ai=True))
     else:
-        result.append(_step("rooms", "Check the rooms", room_details.get("detail") or "Rooms are ready.",
-                            "done" if tabs.get("rooms", {}).get("state") == "done" else "later", "rooms", "room-details",
+        result.append(_step("rooms", "Resolve rooms and areas", room_details.get("detail") or "AI has resolved the rooms and areas available from the drawings.",
+                            "done" if ai_ready or tabs.get("rooms", {}).get("state") == "done" else "later", "rooms", "room-details",
                             "Show", needs_ai=True))
     walls = subtabs.get("walls", {})
     for step_id, key, title, why in (
@@ -115,13 +119,23 @@ def steps(web, project):
                                                   "coming through it."),
             ("roof", "roof", "Check the roof", "Whether the roof is above each room decides the heat through the ceiling.")):
         row = walls.get(key, {})
-        state = {"needed": "needed", "check": "needed", "done": "done"}.get(row.get("state"), "later")
-        result.append(_step(step_id, title, f"{row.get('detail') or ''} {why}".strip(), state, "walls", key,
-                            title, row.get("count"), needs_ai=True))
+        result.append(_step(step_id, "Resolve the " + key, f"AI reads the drawing evidence. {row.get('detail') or why} Any unsupported boundary or material is labelled in the base-load result.",
+                            "done" if ai_ready or row.get("state") == "done" else "later", "walls", key,
+                            "Show", row.get("count"), needs_ai=True))
     windows = tabs.get("windows", {})
-    result.append(_step("windows", "Check the windows", f"{windows.get('detail') or ''} Glass lets in sun and heat."
-                        .strip(), {"check": "needed", "needed": "needed", "done": "done"}.get(windows.get("state"), "later"),
-                        "windows", "", "Check the windows", needs_ai=True))
+    result.append(_step("windows", "Resolve window area and material", f"AI reads window schedules and plan evidence. {windows.get('detail') or 'If material is not specified, the documented default or omission is shown in the result.'}",
+                        "done" if ai_ready or windows.get("state") == "done" else "later",
+                        "windows", "", "Show", needs_ai=True))
+
+    base_why = "AI calculates each resolved room's envelope and window load. People, lights, equipment and air loads are excluded until Phase 2."
+    if not ai_ready and phase1_can_run:
+        base_why = "The full AI review stopped, but its saved drawing evidence is available. Calculate the base load from what was read; the result will list anything still unresolved."
+    if base_current and not base_has_result:
+        reasons = base_report.get("blocked_reasons") or []
+        base_why = "Phase 1 could not calculate a room load yet. " + (str(reasons[0]) if reasons else "The AI could not resolve a room with both a supported use and area; see the room exceptions.")
+    result.append(_step("base_load", "Calculate the Phase 1 base load", base_why,
+                        "done" if base_has_result else "error" if base_current else "needed" if phase1_can_run else "later", "results", "",
+                        "Calculate base load" if not base_current else "Retry base load", kind="calculate_base", needs_ai=True))
 
     # 4. What the drawings don't give, and the AI's readings to confirm.
     result.append(_step("questions", "Answer what the drawings don't say",
@@ -152,8 +166,11 @@ def steps(web, project):
                         "done" if results_tab.get("state") == "done" else "later", "results", "", "Show the result"))
 
     # The step to do now: the first one needing you whose inputs exist; else wait for the AI; else read the result.
-    now = next((row["id"] for row in result if row["state"] in {"needed", "error"} and (ai_ready or not row["needs_ai"]
-                                                                                       or row["id"] == "ai")), "")
+    base_step = next((row for row in result if row["id"] == "base_load"), {})
+    now = "base_load" if phase1_can_run and result[0]["state"] == "error" and base_step.get("state") == "needed" else ""
+    if not now:
+        now = next((row["id"] for row in result if row["state"] in {"needed", "error"} and (ai_ready or not row["needs_ai"]
+                                                                                           or row["id"] == "ai")), "")
     if not now and result[0]["state"] == "working":
         now = "ai"
     if not now:

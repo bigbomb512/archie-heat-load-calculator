@@ -62,6 +62,28 @@ class SkillWorkflowTests(unittest.TestCase):
                 {"id": "b", "version": 1, "purpose": "b", "depends_on": ["a"], "subskills": [], "output_contract": "a", "resolver_handoff": "b"},
             ], "enabled_skill_ids": ["a"], "pilot_skill_ids": ["a"]})
 
+    def test_selected_plan_geometry_scope_includes_real_dimension_setout_sheet(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            project = self.project(root)
+            (root / "ai_input.json").write_text(json.dumps({"drawing_set": {"pages": [
+                {"page": 1, "title": "Layout Plan", "structured_content": {"markdown": "Layout Plan"}},
+                {"page": 2, "title": "Dimensioned Top View Plan", "structured_content": {"markdown": "Dimensions Plan"}},
+            ]}}), encoding="utf-8")
+            (root / "drawing_coverage.json").write_text(json.dumps({"page_roles": [
+                {"page": 1, "proposed_role": "main_floor_plan", "geometry_eligible": True},
+            ]}), encoding="utf-8")
+            (root / "vision_extraction_settings.json").write_text(json.dumps({
+                "owner_opt_in": True, "selected_group_ids": ["plan_geometry"]}), encoding="utf-8")
+            (root / "page_inventory.json").write_text(json.dumps({"pages": {
+                "2": {"page_type": "floor_plan", "floor_plan_kind": "dimension_setout"},
+                "3": {"page_type": "schedule", "floor_plan_kind": "dimension_setout"},
+            }}), encoding="utf-8")
+
+            allowed = skills._consented_page_ids(skills._project_paths(project))
+
+        self.assertEqual(allowed, {1, 2})
+
     def test_pdf_review_scope_is_the_needs_list_and_what_it_depends_on_but_not_final_policy(self):
         registry = skills.load_subskill_registry()
         enabled = set(skills.load_catalog()["enabled_skill_ids"])
@@ -175,7 +197,7 @@ class SkillWorkflowTests(unittest.TestCase):
             (Path(folder) / "spatial_ocr.json").write_text(json.dumps({"pages": [1]}))
             self.assertNotEqual(skills._source_fingerprint(paths, catalog), settings_changed)
 
-    def test_rejecting_a_missing_finding_closes_it(self):
+    def test_missing_findings_do_not_block_workflow_completion(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             project = self.project(folder)
@@ -186,10 +208,6 @@ class SkillWorkflowTests(unittest.TestCase):
             proposals.mkdir(parents=True)
             (proposals / "ceiling_height_volume.json").write_text(json.dumps({"subskill_id": "ceiling_height_volume",
                 "status": "needs_review", "proposal_fields": {"heights": []}, "unresolved_fields": []}))
-            self.assertTrue(skills._has_open_findings(paths, manifest))
-            decision = {"status": "rejected", "run_id": "r1", "source_fingerprint": fp}
-            (root / "skill_review_decisions.json").write_text(json.dumps(
-                {"decisions": {"ceiling_height_volume:missing:heights:0": decision}}))
             self.assertFalse(skills._has_open_findings(paths, manifest))
 
     def test_withdrawn_consent_makes_findings_read_only(self):
@@ -240,7 +258,7 @@ class SkillWorkflowTests(unittest.TestCase):
         finally:
             skills._run_worker = original_worker
 
-    def test_skill_findings_are_reviewed_before_geometry_enters_calculation(self):
+    def test_current_ai_geometry_proposal_enters_preliminary_calculation_before_manual_review(self):
         from backend.calculation_extraction_service import _room_geometry_skill_proposals
 
         with tempfile.TemporaryDirectory() as folder:
@@ -254,11 +272,13 @@ class SkillWorkflowTests(unittest.TestCase):
             proposal_dir = root / "skill_workflow_runs" / run_id / "proposals"
             proposal_dir.mkdir(parents=True)
             candidate = {"room_id": "room-1", "label": "Shop", "page": 1, "boundary_points_mm": [[0, 0], [4000, 0], [4000, 3000], [0, 3000], [0, 0]],
-                         "area_m2": 12, "source_pages": [1]}
+                         "area_m2": 12, "formula": "4 m × 3 m = 12 m²", "source_pages": [1]}
             (proposal_dir / "room_boundaries_areas.json").write_text(json.dumps({"subskill_id": "room_boundaries_areas",
                 "proposal_fields": {"geometry_candidates": [candidate]}, "citations": [{"page": 1, "excerpt": "Shop"}]}), encoding="utf-8")
             before = _room_geometry_skill_proposals(root)
-            self.assertEqual(before, [])
+            self.assertEqual(len(before), 1)
+            self.assertEqual(before[0]["geometry"]["area_m2"], 12)
+            self.assertEqual(before[0]["geometry"]["formula"], "4 m × 3 m = 12 m²")
             with patch("backend.calculation_extraction_service.post", return_value={}) as build:
                 result = skills.post(Web(), project, {"action": "review_finding", "finding_id": "room_boundaries_areas:geometry_candidates:0",
                     "decision": "accepted", "value": {**candidate, "area_m2": 13}, "reviewer": "Operator"})
@@ -436,17 +456,26 @@ class SkillWorkflowTests(unittest.TestCase):
                 "conflicts": [], "unresolved_fields": [], "alternatives": []}
             (proposal_dir / "room_boundaries_areas.json").write_text(json.dumps({"proposal_fields": {"geometry_candidates": [candidate]},
                 "citations": [{"page": 2, "excerpt": "Dining layout"}, {"page": 3, "excerpt": "Dimension plan"}]}), encoding="utf-8")
-            (root / "skill_review_decisions.json").write_text(json.dumps({"decisions": {
-                "room_boundaries_areas:geometry_candidates:0": {"status": "accepted", "value": candidate, "run_id": run_id,
-                    "source_fingerprint": source_fp}}}), encoding="utf-8")
-
             adapted = _room_geometry_skill_proposals(root)
 
-        self.assertEqual(len(adapted), 1)
+        self.assertEqual(len(adapted), 1)  # Phase 1 can use current AI proposals before manual review.
         self.assertEqual(adapted[0]["geometry"]["scale_mm_per_px"], 300)
         self.assertEqual(adapted[0]["geometry"]["dimension_wall_links"][0]["target_wall_id"], "w1")
         self.assertEqual(adapted[0]["source_pages"], [2, 3])
         self.assertEqual({row["page"] for row in adapted[0]["evidence"]}, {2, 3})
+
+    def test_skill_scale_is_recomputed_only_when_printed_scale_matches_page_register(self):
+        from backend.calculation_extraction_service import _confirm_skill_main_viewport_scale
+
+        calibration = {"printed_scale": "1:75", "scale_mm_per_px": 999,
+                       "pdf_physical_page_width_mm": 1, "canonical_image_width_px": 2}
+        confirmed, scale = _confirm_skill_main_viewport_scale(calibration, "1:75", 420, 2977)
+        self.assertAlmostEqual(scale, 420 * 75 / 2977)
+        self.assertAlmostEqual(confirmed["scale_mm_per_px"], scale)
+        self.assertEqual(confirmed["confirmed_main_viewport_scale"], "1:75")
+        mismatch, rejected_scale = _confirm_skill_main_viewport_scale(calibration, "1:5", 420, 2977)
+        self.assertIsNone(rejected_scale)
+        self.assertNotIn("confirmed_main_viewport_scale", mismatch)
 
     def test_room_geometry_skill_receives_room_profiles_and_dimensioned_plan_evidence(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -468,13 +497,16 @@ class SkillWorkflowTests(unittest.TestCase):
             (root / "vector_geometry.json").write_text(json.dumps({"geometry_key_points": {"pages": [
                 {"page": 20, "coordinate_systems": {"plan_px": {"plan_viewport_bbox_px": [1, 2, 30, 40]}}, "line_candidates": [
                     {"candidate_id": "P20-W1", "start_px": [1, 1], "end_px": [20, 1], "length_px": 19, "candidate_role_hint": "possible_wall_or_dimension"},
+                    *[{"candidate_id": f"P20-C{index}", "start_px": [index, 1], "end_px": [index + 1, 1],
+                       "length_px": 1, "candidate_role_hint": "vector_context"} for index in range(399)],
                 ], "dimension_candidates": [{"candidate_id": "P20-D1", "value_mm": 19000}]},
             ]}}), encoding="utf-8")
             (root / "dimension_wall_matches.json").write_text(json.dumps({"pages": [
                 {"page": 20, "summary": {"dimension_text_count": 1}, "dimension_span_candidates": [{"dimension_candidate_id": "P20-D1", "value_mm": 19000}]},
             ]}), encoding="utf-8")
             (root / "spatial_ocr.json").write_text(json.dumps({"pages": [
-                {"page": 20, "scale_candidates": [{"text": "1:100"}], "room_label_candidates": []},
+                {"page": 20, "scale_candidates": [{"text": "1:100"}],
+                 "dimension_candidates": [{"candidate_id": "OCR-D1", "value_mm": 19000}], "room_label_candidates": []},
             ]}), encoding="utf-8")
 
             subskill = next(row for row in skills.load_subskill_registry()["subskills"] if row["id"] == "room_boundaries_areas")
@@ -483,9 +515,11 @@ class SkillWorkflowTests(unittest.TestCase):
         self.assertEqual(evidence["room_candidates"][0]["preliminary_profile_id"], "hospitality")
         self.assertEqual(evidence["room_candidates"][0]["room_id"], "room-use:unassigned-level:bar")
         self.assertEqual(evidence["vector_geometry_pages"][0]["page"], 20)
+        self.assertEqual(len(evidence["vector_geometry_pages"][0]["line_candidates"]), 350)
         self.assertEqual(evidence["vector_geometry_pages"][0]["line_candidates"][0][0], "P20-W1")
         self.assertEqual(evidence["dimension_evidence"][0]["dimension_span_candidates"][0]["value_mm"], 19000)
         self.assertEqual(evidence["spatial_room_evidence"][0]["scale_candidates"][0]["text"], "1:100")
+        self.assertNotIn("dimension_candidates", evidence["spatial_room_evidence"][0])
 
     def test_preliminary_proposal_joins_room_use_profile_and_geometry_candidate(self):
         from backend import ai_preliminary_service
@@ -542,7 +576,7 @@ class SkillWorkflowTests(unittest.TestCase):
                     if state["status"] in {"needs_review", "completed", "failed", "blocked"}:
                         break
                     time.sleep(0.01)
-                self.assertEqual(state["status"], "needs_review")
+                self.assertEqual(state["status"], "completed")
                 self.assertEqual(len(state["stages"]), 10)
                 self.assertEqual(state["stages"][0]["label"], "Drawing set and page mapping")
                 self.assertEqual(state["stages"][2]["label"], "Rooms, geometry, and gains")
@@ -640,7 +674,7 @@ class SkillWorkflowTests(unittest.TestCase):
                     if state["status"] in {"failed", "blocked", "needs_review", "completed"}:
                         break
                     time.sleep(0.01)
-                self.assertEqual(state["status"], "needs_review")
+                self.assertEqual(state["status"], "completed")
                 self.assertGreaterEqual(max_active, 2)
                 self.assertEqual(observed_dependencies["room_boundaries_areas"].get("room_identity_use"), "resolved")
                 self.assertEqual(observed_dependencies["schedule_evidence"].get("lighting_evidence"), "resolved")
@@ -782,6 +816,109 @@ class SkillWorkflowTests(unittest.TestCase):
                 selected = skills._relevant_consented_images(subskill, project, limit=4)
             self.assertEqual([row["page"] for row in selected], [19, 20, 21, 22])
 
+    def test_surface_inventory_images_include_layout_setout_ceiling_shopfront_and_sections(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            page_dir = root / "vision_extraction_runs" / "test" / "pages"
+            page_dir.mkdir(parents=True)
+            existing_image = page_dir / "page-33.png"
+            existing_image.write_bytes(b"page")
+            manifest = page_dir.parent / "request_manifest.json"
+            manifest.write_text(json.dumps({"groups": [{"group_id": "plan_geometry", "pages": [
+                {"page": 33, "title": "Setout Plan", "image_path": str(existing_image)}]}]}), encoding="utf-8")
+            (root / "vision_extraction_job.json").write_text(json.dumps({"manifest_path": str(manifest)}), encoding="utf-8")
+            image_rows, inventory_rows = [], {}
+            for number, title, page_type, floor_kind, drawing_number in [
+                (32, "Layout Plan", "floor_plan", "proposed_layout", "01.01"),
+                (33, "Setout Plan", "floor_plan", "dimension_setout", "01.02"),
+                (34, "Dimensions Plan", "floor_plan", "dimension_setout", "01.03"),
+                (36, "Reflected Ceiling Plan", "reflected_ceiling_plan", "", "01.05"),
+                (40, "Shopfront Elevation", "elevation", "", "02.01"),
+                (41, "Section", "section", "", "02.02"),
+                (42, "Section", "section", "", "02.03"),
+            ]:
+                image = root / "thumbnails" / f"page_{number:03}.png"
+                image.parent.mkdir(parents=True, exist_ok=True)
+                image.write_bytes(b"page")
+                image_rows.append({"page": number, "path": str(image), "title": title})
+                inventory_rows[str(number)] = {"title": title, "page_type": page_type,
+                    "floor_plan_kind": floor_kind, "drawing_number": drawing_number}
+            (root / "ai_input.json").write_text(json.dumps({
+                "drawing_set": {"pages": [{"page": row["page"], "title": row["title"]} for row in image_rows]},
+                "source_files": {"page_images": image_rows}}), encoding="utf-8")
+            (root / "page_inventory.json").write_text(json.dumps({"pages": inventory_rows}), encoding="utf-8")
+            project = {"id": "surface-inventory-image-order", "review_dir": str(root)}
+            subskill = {"id": "surface_inventory", "task": "inventory wall and envelope surfaces",
+                        "inputs": ["plans", "sections", "elevations"]}
+            with patch.object(skills, "_consented_page_ids", return_value={32, 33, 34, 36, 40, 41, 42}):
+                selected = skills._relevant_consented_images(subskill, project, limit=7)
+            self.assertEqual([row["page"] for row in selected], [32, 33, 34, 36, 40, 41, 42])
+
+    def test_opening_match_images_pin_plan_setout_shopfront_and_door_schedule(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            pages_dir = root / "thumbnails"
+            pages_dir.mkdir()
+            rows = [
+                (27, "Finishes Schedules", "schedule", "", "00.04e", [{"kind": "room_geometry", "what": "Internal door D1: sliding door, 850 clear."}]),
+                (32, "Layout Plan", "floor_plan", "proposed_layout", "01.01", [{"kind": "windows_glazing", "what": "Segmented shopfront glazing."}]),
+                (33, "Setout Plan", "floor_plan", "dimension_setout", "01.02", [{"kind": "windows_glazing", "what": "Two entrance door sets."}]),
+                (34, "Dimensions Plan", "floor_plan", "dimension_setout", "01.03", [{"kind": "windows_glazing", "what": "Glazing follows the frontage."}]),
+                (36, "Reflected Ceiling Plan", "reflected_ceiling_plan", "", "01.05", []),
+                (40, "Shopfront Elevation", "elevation", "", "02.01", [{"kind": "windows_glazing", "what": "Framed glazing and entrance openings."}]),
+                (41, "Section", "section", "", "02.02", []),
+            ]
+            image_rows, inventory_rows = [], {}
+            for number, title, page_type, floor_kind, drawing_number, information in rows:
+                image = pages_dir / f"page-{number}.png"
+                image.write_bytes(b"page")
+                image_rows.append({"page": number, "path": str(image), "title": title})
+                inventory_rows[str(number)] = {"title": title, "page_type": page_type,
+                    "floor_plan_kind": floor_kind, "drawing_number": drawing_number,
+                    "information": information}
+            (root / "ai_input.json").write_text(json.dumps({
+                "drawing_set": {"pages": [{"page": row[0], "title": row[1]} for row in rows]},
+                "source_files": {"page_images": image_rows}}), encoding="utf-8")
+            (root / "page_inventory.json").write_text(json.dumps({"pages": inventory_rows}), encoding="utf-8")
+            project = {"id": "opening-match-image-order", "review_dir": str(root)}
+            subskill = {"id": "cross_sheet_opening_match", "task": "match plan openings to elevations",
+                        "inputs": ["opening sightings", "plans", "elevations"]}
+            with patch.object(skills, "_consented_page_ids", return_value={27, 32, 33, 34, 36, 40, 41}):
+                selected = skills._relevant_consented_images(subskill, project, limit=5)
+            self.assertEqual([row["page"] for row in selected], [32, 33, 34, 40, 27])
+            area = next(row for row in skills.load_subskill_registry()["subskills"] if row["id"] == "surface_area")
+            with patch.object(skills, "_consented_page_ids", return_value={27, 32, 33, 34, 36, 40, 41}):
+                area_selected = skills._relevant_consented_images(area, project, limit=4)
+            self.assertEqual([row["page"] for row in area_selected], [32, 33, 36, 40])
+            glazing = next(row for row in skills.load_subskill_registry()["subskills"] if row["id"] == "glazing_properties")
+            with patch.object(skills, "_consented_page_ids", return_value={27, 32, 33, 34, 36, 40, 41}):
+                glazing_selected = skills._relevant_consented_images(glazing, project, limit=3)
+            self.assertEqual([row["page"] for row in glazing_selected], [32, 40, 27])
+
+    def test_surface_area_dependency_packet_keeps_ids_and_citations_but_drops_unused_glazing_fields(self):
+        dependencies = {
+            "surface_inventory": {"status": "needs_review", "proposal": {"status": "needs_review",
+                "proposal_fields": {"surfaces": [{"surface_id": "wall-1", "type": "wall", "owner_ids": ["room-1"],
+                    "geometry_ref": "edge-a", "citations": [{"page": 3, "excerpt": "north wall"}], "irrelevant": "large"}]},
+                "unresolved_fields": ["lots of unrelated review text"]}},
+            "cross_sheet_opening_match": {"status": "needs_review", "proposal": {"status": "needs_review",
+                "proposal_fields": {"matches": [{"opening_id": "win-1", "host_wall_id": "wall-1",
+                    "room_id": "room-1", "citations": [{"page": 4, "excerpt": "window"}], "irrelevant": "large"}]}}},
+            "glazing_properties": {"status": "needs_review", "proposal": {"status": "needs_review",
+                "inferences": [{"field": "properties.win-1.opening_area_m2", "value": 2.0,
+                    "method": "scale-derived rectangle", "citation_ids": ["c4"]}],
+                "proposal_fields": {"properties": [{"opening_id": "win-1", "opening_area_m2": 2.0,
+                    "glass_area_m2": 1.7, "u_value_w_m2k": 2.3, "solar_property": 0.4,
+                    "citations": [{"page": 4, "excerpt": "window"}]}]}}},
+        }
+        compact = skills._compact_dependencies(dependencies, consumer_id="surface_area")
+        self.assertEqual(compact["surface_inventory"]["proposal"]["proposal_fields"]["surfaces"][0]["surface_id"], "wall-1")
+        self.assertEqual(compact["cross_sheet_opening_match"]["proposal"]["proposal_fields"]["matches"][0]["host_wall_id"], "wall-1")
+        glazing = compact["glazing_properties"]["proposal"]["proposal_fields"]["properties"][0]
+        self.assertEqual(glazing["opening_area_m2"], 2.0)
+        self.assertNotIn("u_value_w_m2k", glazing)
+        self.assertEqual(compact["glazing_properties"]["proposal"]["inferences"][0]["method"], "scale-derived rectangle")
+
     def test_selected_skill_pages_use_high_resolution_pdf_render_when_requested(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -822,6 +959,160 @@ class SkillWorkflowTests(unittest.TestCase):
                 {"id": "frame-test", "review_dir": str(root)})
         self.assertEqual(frames[0]["canonical_vector_image_px"], [745, 527])
         self.assertEqual(frames[0]["attached_to_canonical_scale"], [0.25, 527 / 2108])
+
+    def test_room_geometry_prompt_uses_full_page_render_when_vector_geometry_is_absent(self):
+        import struct
+        from unittest.mock import MagicMock
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            image = root / "full-page.png"
+            image.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\x0dIHDR" + struct.pack(">II", 3000, 2100))
+            (root / "drawing_coverage.json").write_text(json.dumps({"page_roles": [
+                {"page": 1, "main_scale": "1:50"}
+            ]}), encoding="utf-8")
+            (root / "ai_input.json").write_text(json.dumps({"source_files": {"pdf": str(root / "source.pdf")}}), encoding="utf-8")
+            page = MagicMock(width=1190.55, height=841.89)
+            document = MagicMock()
+            document.__enter__.return_value = document
+            document.pages = [page]
+            with patch("pdfplumber.open", return_value=document):
+                frames = skills._attached_image_coordinate_frames([{"page": 1, "path": image}],
+                    {"id": "frame-no-vector", "review_dir": str(root)})
+        self.assertEqual(len(frames), 1)
+        self.assertEqual(frames[0]["frame_source"], "attached_full_page_render")
+        self.assertEqual(frames[0]["canonical_image_width_px"], 3000)
+        self.assertAlmostEqual(frames[0]["scale_mm_per_canonical_px"], (1190.55 * 25.4 / 72 * 50) / 3000)
+
+    def test_case_file_room_geometry_prompt_includes_attached_image_frames(self):
+        subskill = next(row for row in skills.load_subskill_registry()["subskills"]
+                        if row["id"] == "room_boundaries_areas")
+        case = {"attached_pages": [1], "page_index": [], "readings": [], "extracted": [], "job": {}}
+        image = Path("/tmp/full-page.png")
+        expected_frame = {"physical_page": 1, "frame_source": "attached_full_page_render",
+                          "canonical_image_width_px": 3000, "scale_mm_per_canonical_px": 7.0}
+        attempt = {"evidence_pages": []}
+        with patch("backend.skill_case_file.build", return_value=(case, [image])), \
+             patch.object(skills, "_attached_image_coordinate_frames", return_value=[expected_frame]), \
+             patch.object(skills, "_send_case_file_prompt", side_effect=lambda _p, _purpose, prompt, _images, _attempt:
+                          prompt):
+            prompt = skills._call_case_file_provider(subskill, {"id": "case-frame-test", "review_dir": "/tmp"},
+                {}, {}, attempt)
+        self.assertIn(json.dumps(expected_frame, ensure_ascii=False), prompt)
+        self.assertEqual(attempt["images"][0]["page"], 1)
+
+    def test_structured_remediation_does_not_reject_otherwise_valid_proposal(self):
+        registry = skills.load_subskill_registry()
+        subskill = next(row for row in registry["subskills"] if row["id"] == "room_boundaries_areas")
+        result = {"subskill_id": subskill["id"], "subskill_version": subskill["version"], "status": "needs_review",
+            "affected_ids": [], "observations": [], "inferences": [], "citations": [], "confidence": None,
+            "alternatives": [], "unresolved_fields": [], "remediation": {
+                "error_code": "GEOMETRY_EVIDENCE_INCOMPLETE", "next_action": "Supply the primary-plan image."},
+            "input_fingerprint": "a" * 64, "proposal_fields": {"geometry_candidates": []}}
+        validated = skills._validate_subskill_output(subskill, result, registry)
+        self.assertEqual(validated["remediation"], ["GEOMETRY_EVIDENCE_INCOMPLETE: Supply the primary-plan image."])
+
+    def test_connected_cafe_finish_areas_form_cited_area_only_candidate(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            project = {"id": "printed-finish-area-test", "review_dir": str(root)}
+            (root / "ai_preliminary_run.json").write_text(json.dumps({"local_room_inference_proposal": {"rooms": [
+                {"room_id": "room-use:ground:cafe", "label": "Cafe", "level_name": "Ground",
+                 "source_pages": [1], "zone_role": "whole_tenancy_candidate"}
+            ]}}), encoding="utf-8")
+            items = [
+                {"text": "TL", "bbox": [100, 100, 110, 110]}, {"text": "02", "bbox": [100, 111, 110, 121]},
+                {"text": "40.73m2", "bbox": [115, 102, 145, 112]},
+                {"text": "TL", "bbox": [200, 200, 210, 210]}, {"text": "03", "bbox": [200, 211, 210, 221]},
+                {"text": "20.71m2", "bbox": [215, 202, 245, 212]},
+            ]
+            (root / "spatial_ocr.json").write_text(json.dumps({"pages": [{"page": 1, "width": 1000, "height": 700,
+                "title_blocks": [{"region": "bottom_band", "bbox": [0, 600, 1000, 700]}],
+                "standalone_text_items": items}]}), encoding="utf-8")
+            dependencies = {"room_identity_use": {"proposal": {"proposal_fields": {"rooms": [
+                {"room_id": "room-use:ground:cafe", "taxonomy_id": "dining"}
+            ]}}}}
+            area = skills._printed_tenant_finish_area(project, dependencies)
+            self.assertEqual(area["area_m2"], 61.44)
+            subskill = next(row for row in skills.load_subskill_registry()["subskills"]
+                            if row["id"] == "room_boundaries_areas")
+            proposal = {"subskill_id": subskill["id"], "subskill_version": subskill["version"],
+                "status": "needs_review", "affected_ids": [], "observations": [], "inferences": [],
+                "citations": [], "confidence": 0.7, "alternatives": [], "unresolved_fields": [],
+                "remediation": [], "input_fingerprint": "b" * 64,
+                "proposal_fields": {"geometry_candidates": []}}
+            with patch.object(skills, "_consented_page_ids", return_value={1}):
+                augmented = skills._augment_printed_tenant_area(subskill, project, dependencies, proposal)
+        candidate = augmented["proposal_fields"]["geometry_candidates"][0]
+        self.assertEqual(candidate["room_id"], "room-use:ground:cafe")
+        self.assertEqual(candidate["area_m2"], 61.44)
+        self.assertEqual(candidate["calibration"]["source"], "printed_floor_finish_area_sum")
+        self.assertEqual(candidate["boundary_points_px"], [])
+        self.assertEqual({row["page"] for row in augmented["citations"]}, {1})
+
+    def test_list_findings_keep_row_citations_and_auto_accept_only_individually_confident_rows(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "drawing_coverage.json").write_text(json.dumps({"page_roles": [
+                {"page": 4, "identity_status": "confirmed"},
+                {"page": 5, "identity_status": "confirmed"},
+            ]}))
+            proposal_root = root / "skill_workflow_runs" / "run-1" / "proposals"
+            proposal_root.mkdir(parents=True)
+            proposal = {"subskill_id": "site_clue_extraction", "status": "needs_review", "confidence": .99,
+                "citations": [{"id": "c1", "page": 4, "excerpt": "Shop entry from George Street"},
+                              {"id": "c2", "page": 5, "excerpt": "North elevation"}],
+                "inferences": [], "alternatives": [], "unresolved_fields": [],
+                "proposal_fields": {"site_candidates": [
+                    {"candidate": "George Street", "confidence": .91, "citation_ids": ["c1"]},
+                    {"candidate": "North elevation", "confidence": .84, "citation_ids": ["c2"]},
+                    {"candidate": "Uncited guess", "confidence": .99},
+                ]}}
+            (proposal_root / "site_clue_extraction.json").write_text(json.dumps(proposal))
+            manifest = {"run_id": "run-1", "source_fingerprint": "a" * 64, "subskills": {}}
+            cited = skills._finding_citations(proposal, proposal["proposal_fields"]["site_candidates"][0], [], 3)
+            uncited = skills._finding_citations(proposal, proposal["proposal_fields"]["site_candidates"][2], [], 3)
+            self.assertEqual(cited, [{"page": 4, "excerpt": "Shop entry from George Street"}])
+            self.assertEqual(uncited, [])
+            self.assertEqual(skills._finding_confidence(proposal, proposal["proposal_fields"]["site_candidates"][0], [], 3), .91)
+            self.assertEqual(skills._finding_confidence(proposal, proposal["proposal_fields"]["site_candidates"][2], [], 3), .99)
+            self.assertEqual(skills._auto_review_confident_findings(root, manifest), 1)
+            decisions = json.loads((root / "skill_review_decisions.json").read_text())["decisions"]
+            self.assertEqual(list(decisions), ["site_clue_extraction:site_candidates:0"])
+            self.assertEqual(decisions["site_clue_extraction:site_candidates:0"]["reviewer"], "AI evidence gate")
+
+    def test_unresolved_fields_do_not_require_a_separate_accept_or_reject_decision(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            proposals = root / "skill_workflow_runs" / "run-1" / "proposals"
+            proposals.mkdir(parents=True)
+            (proposals / "construction_matching.json").write_text(json.dumps({
+                "subskill_id": "construction_matching", "status": "needs_review",
+                "proposal_fields": {"constructions": []},
+                "unresolved_fields": [{"field": "wall construction", "reason": "No assembly schedule."}]}))
+            paths = {"root": root}
+            manifest = {"run_id": "run-1", "source_fingerprint": "a" * 64}
+            self.assertFalse(skills._has_open_findings(paths, manifest))
+
+    def test_skill_equipment_already_in_equipment_queue_is_not_a_second_open_finding(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            proposals = root / "skill_workflow_runs" / "run-1" / "proposals"
+            proposals.mkdir(parents=True)
+            (root / "page_extraction.json").write_text(json.dumps({"equipment_appliances": {"findings": [
+                {"id": "equipment_appliances:1", "value": {"name": "2D UB FREEZER"}}]}}))
+            proposal = {"subskill_id": "equipment_evidence", "status": "needs_review",
+                "proposal_fields": {"equipment": [
+                    {"name": "2D UB FREEZER", "equipment_id": "pdf:p1:freezer"},
+                    {"name": "Cold display", "equipment_id": "pdf:p1:display"}]},
+                "unresolved_fields": []}
+            (proposals / "equipment_evidence.json").write_text(json.dumps(proposal))
+            self.assertEqual(skills._equipment_evidence_mirror_indices(root, proposal), {0})
+            paths = {"root": root}
+            manifest = {"run_id": "run-1", "source_fingerprint": "a" * 64}
+            self.assertTrue(skills._has_open_findings(paths, manifest))  # the unique item still needs review
+            proposal["proposal_fields"]["equipment"].pop()
+            (proposals / "equipment_evidence.json").write_text(json.dumps(proposal))
+            self.assertFalse(skills._has_open_findings(paths, manifest))
 
     def test_numeric_proposals_need_citations_and_provider_values_are_draft_only(self):
         registry = skills.load_subskill_registry()
@@ -923,11 +1214,24 @@ class SkillWorkflowTests(unittest.TestCase):
                                           "citations": ["task_evidence.ceiling_height_volume.heights"]}]}
         checked = skills._validate_subskill_output(task, json.loads(json.dumps(from_case_file)), registry, allowed_pages={22, 30})
         self.assertEqual(checked["citations"][0]["source_document_id"], "archie_case_file")
-        # A number whose references name neither a page of the set nor the case file is still refused.
-        uncited = {**reply, "inferences": [{"field": "heights[].height_mm", "value": 2700, "method": "fallback",
-                                            "citations": ["schedule_evidence: controlled preliminary profiles", "p99"]}]}
-        with self.assertRaises(skills.SubskillValidationError):
-            skills._validate_subskill_output(task, json.loads(json.dumps(uncited)), registry, allowed_pages={22, 30})
+        # Another skill's finding is a source too ("equipment_evidence-cold-display").
+        from_skill = {**reply, "inferences": [{"field": "cold_display_rated_input_w", "value": 900, "method": "equipment finding",
+                                               "citations": ["equipment_evidence-cold-display"]}]}
+        checked = skills._validate_subskill_output(task, json.loads(json.dumps(from_skill)), registry, allowed_pages={22, 30})
+        self.assertEqual(checked["inferences"][0]["citation_ids"], ["equipment_evidence-cold-display"])
+        # A skill ID prefix alone is not proof of a cited finding.
+        from_unknown_skill_finding = {**reply, "inferences": [{"field": "cold_display_rated_input_w", "value": 900,
+            "method": "equipment finding", "citations": ["unknown_skill-invented-field"]}]}
+        checked = skills._validate_subskill_output(task, json.loads(json.dumps(from_unknown_skill_finding)), registry,
+            allowed_pages={22, 30})
+        self.assertEqual(checked["inferences"], [])
+        # A number citing nothing usable is dropped and noted; the rest of the reply is kept (it used to fail the
+        # whole "What we need to find" list).
+        uncited = {**reply, "inferences": [*reply["inferences"], {"field": "guess_w", "value": 2700, "method": "estimate",
+                                                                  "citations": ["general knowledge", "p99"]}]}
+        checked = skills._validate_subskill_output(task, json.loads(json.dumps(uncited)), registry, allowed_pages={22, 30})
+        self.assertEqual([row["field"] for row in checked["inferences"]], ["heights[].height_mm"])
+        self.assertIn("Dropped numbers given without a source or method: inference 2 (guess_w).", checked["remediation"][-1])
         self.assertEqual(skills._text_pages("Step 4 on page 21, see p.22 and pdf-ab12cd34:p23; map 5"), [21, 22, 23])
 
 
@@ -1085,7 +1389,7 @@ class SkillWorkflowTests(unittest.TestCase):
         self.assertEqual(report["budget_chars"], 80_000)
         self.assertGreaterEqual(report["dropped_provenance_keys"], 3)
         self.assertEqual(report["truncated_strings"], 1)
-        self.assertEqual(skills._prompt_budget_chars("room_boundaries_areas"), 130_000)
+        self.assertEqual(skills._prompt_budget_chars("room_boundaries_areas"), 180_000)
         with patch.dict("os.environ", {"ARCHIE_SKILL_PROMPT_MAX_CHARS": "5000"}):
             self.assertEqual(skills._prompt_budget_chars("room_boundaries_areas"), 5000)
         self.assertEqual(skills._compact_line({"candidate_id": "P20-VLINE-1", "start_px": [10.4, 20.6], "end_px": [99.5, 20.6],
@@ -1295,13 +1599,151 @@ class SkillWorkflowTests(unittest.TestCase):
                     "room_boundaries_areas", "ceiling_height_volume"}
         self.assertEqual(set(executed[:len(expected)]), expected)
         self.assertEqual(manifest["scope"], "rooms_only")
-        self.assertEqual(state["status"], "needs_review")
+        self.assertEqual(state["status"], "completed")
         self.assertEqual({key for key, row in manifest["subskills"].items() if row["status"] != "not_in_scope"}, expected)
         self.assertEqual(manifest["skills"]["plant_hydraulics"]["status"], "not_in_scope")
         self.assertEqual(reused["run_id"], state["run_id"])
         self.assertNotEqual(full_run["run_id"], state["run_id"])
         self.assertEqual(full_manifest["scope"], "all")
         self.assertFalse(any(row["status"] == "not_in_scope" for row in full_manifest["subskills"].values()))
+
+    def test_phase1_envelope_scope_covers_envelope_evidence_without_phase2_tasks(self):
+        catalog = skills.load_catalog()
+        registry = skills.load_subskill_registry()
+        selected = skills._scoped_subskill_ids(registry, set(catalog["enabled_skill_ids"]), "phase1_envelope")
+        self.assertTrue({
+            "room_boundaries_areas", "ceiling_height_volume", "surface_inventory", "surface_area",
+            "construction_matching", "boundary_resolution", "cross_sheet_opening_match",
+            "glazing_properties", "exposure_orientation", "shading",
+        }.issubset(selected))
+        self.assertTrue({"sheet_identity", "revision_scope", "page_relationships", "room_identity_use"}.issubset(selected))
+        self.assertTrue({"equipment_evidence", "occupancy_seating", "lighting_evidence", "outside_air",
+                         "infiltration", "plant_detection", "coil_duty"}.isdisjoint(selected))
+        by_id = {row["id"]: row for row in registry["subskills"]}
+        # Opening-to-wall matching must wait for the surface inventory so it
+        # can use the same stable wall IDs that the area resolver consumes.
+        self.assertIn("surface_inventory", by_id["cross_sheet_opening_match"].get("depends_on", []))
+        self.assertIn("cross_sheet_opening_match", by_id["surface_area"].get("depends_on", []))
+        self.assertIn("glazing_properties", by_id["surface_area"].get("depends_on", []))
+        self.assertIn("surface_inventory", by_id["boundary_resolution"].get("depends_on", []))
+        self.assertNotIn("weather_source_matching", by_id["boundary_resolution"].get("depends_on", []))
+        inventory_rules = " ".join(by_id["surface_inventory"].get("constraints", []))
+        self.assertIn("full physical wall-plane host", inventory_rules)
+        self.assertEqual(by_id["surface_area"]["version"], 5)
+        self.assertEqual(by_id["glazing_properties"]["version"], 4)
+
+    def test_construction_packet_includes_consented_indexed_material_schedule_evidence(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            project = self.project(root)
+            (root / "ai_input.json").write_text(json.dumps({"drawing_set": {"pages": [
+                {"page": 23, "title": "Dimensioned Top View Plan",
+                 "structured_content": {"markdown": "Casa Nova Gosford Finishes Schedules 00.04a"}},
+            ]}}), encoding="utf-8")
+            (root / "drawing_coverage.json").write_text(json.dumps({"page_roles": [
+                {"page": 23, "proposed_role": "supporting_geometry_plan", "selection": "supporting_context",
+                 "relevance": {"room_geometry": 0.7}},
+            ]}), encoding="utf-8")
+            (root / "page_inventory.json").write_text(json.dumps({"pages": {"23": {
+                "page_type": "schedule", "title": "Finishes Schedules", "drawing_number": "00.04a",
+                "information": [{"kind": "materials_construction", "what": "FT1 engineered timber floor.",
+                                 "evidence": "Floor schedule, FT1 row."}],
+            }}}), encoding="utf-8")
+            proposal, _ = skills._shared_evidence_packet({"id": "construction_matching"}, project)
+            self.assertEqual(proposal["indexed_fact_evidence"], [{
+                "page": 23, "drawing_number": "00.04a", "title": "Finishes Schedules",
+                "information": [{"kind": "materials_construction", "what": "FT1 engineered timber floor.",
+                                 "evidence": "Floor schedule, FT1 row."}],
+            }])
+
+    def test_ceiling_packet_includes_indexed_height_facts_with_source_pages(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            project = self.project(root)
+            (root / "ai_input.json").write_text(json.dumps({"drawing_set": {"pages": [
+                {"page": 36, "title": "Reflected Ceiling Plan",
+                 "structured_content": {"markdown": "Casa Nova reflected ceiling plan"}},
+            ]}}), encoding="utf-8")
+            (root / "drawing_coverage.json").write_text(json.dumps({"page_roles": [
+                {"page": 36, "proposed_role": "reflected_ceiling_plan", "selection": "primary_context",
+                 "relevance": {"ceiling_lighting": 0.9}},
+            ]}), encoding="utf-8")
+            (root / "page_inventory.json").write_text(json.dumps({"pages": {"36": {
+                "page_type": "reflected_ceiling_plan", "title": "Reflected Ceiling Plan", "drawing_number": "01.05",
+                "information": [{"kind": "ceiling_height", "what": "Main dining area has open ceiling at 3200 mm.",
+                                 "evidence": "RCP 3200 marker."}],
+            }}}), encoding="utf-8")
+            proposal, _ = skills._shared_evidence_packet({"id": "ceiling_height_volume"}, project)
+            self.assertEqual(proposal["indexed_fact_evidence"][0]["page"], 36)
+            self.assertEqual(proposal["indexed_fact_evidence"][0]["information"][0]["what"],
+                             "Main dining area has open ceiling at 3200 mm.")
+
+    def test_surface_area_packet_omits_unrelated_finish_schedule_index_rows(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            project = self.project(root)
+            pages = [
+                {"page": 23, "title": "Finishes Schedules", "drawing_number": "00.04a",
+                 "structured_content": {"markdown": "Finishes Schedules"}},
+                {"page": 36, "title": "Reflected Ceiling Plan", "drawing_number": "01.05",
+                 "structured_content": {"markdown": "Reflected Ceiling Plan"}},
+            ]
+            (root / "ai_input.json").write_text(json.dumps({"drawing_set": {"pages": pages}}), encoding="utf-8")
+            (root / "drawing_coverage.json").write_text(json.dumps({"page_roles": [
+                {"page": 23, "proposed_role": "supporting_geometry_plan", "selection": "supporting_context"},
+                {"page": 36, "proposed_role": "reflected_ceiling_plan", "selection": "primary_context"},
+            ]}), encoding="utf-8")
+            (root / "page_inventory.json").write_text(json.dumps({"pages": {
+                "23": {"page_type": "schedule", "title": "Finishes Schedules"},
+                "36": {"page_type": "reflected_ceiling_plan", "title": "Reflected Ceiling Plan"},
+            }}), encoding="utf-8")
+            packet, _ = skills._shared_evidence_packet({"id": "surface_area"}, project)
+            page_numbers = {row["page"] for row in packet["page_index"]}
+            self.assertIn(36, page_numbers)
+            self.assertNotIn(23, page_numbers)
+
+    def test_surface_inventory_prompt_receives_coordinate_frames(self):
+        captured = {}
+        class Provider:
+            def propose(self, prompt, image_paths=()):
+                captured["prompt"] = prompt
+                return {"status": "needs_review"}
+
+        with tempfile.TemporaryDirectory() as folder:
+            image = Path(folder) / "page.png"
+            image.write_bytes(b"image")
+            expected_frame = {"physical_page": 32, "canonical_image_width_px": 2977,
+                              "coordinate_transform": "canonical_x = attached_x"}
+            def bounded(_subskill, _dependencies, _evidence, image_frames=()):
+                captured["frames"] = image_frames
+                return "prompt with frames", {"status": "within_budget"}
+            with patch.object(skills, "_relevant_consented_images", return_value=[{"page": 32, "path": image}]), \
+                 patch.object(skills, "_attached_image_coordinate_frames", return_value=[expected_frame]), \
+                 patch.object(skills, "_bounded_proposal_prompt", side_effect=bounded):
+                attempt = {}
+                skills._call_skill_provider({"id": "surface_inventory"}, {"id": "frames", "review_dir": folder},
+                    {}, {}, attempt, Provider, "test")
+        self.assertEqual(captured["prompt"], "prompt with frames")
+        self.assertEqual(captured["frames"], [expected_frame])
+
+    def test_grouped_surface_inventory_prompt_receives_coordinate_frames(self):
+        expected_frame = {"physical_page": 1, "canonical_image_width_px": 3000,
+                          "coordinate_transform": "canonical_x = attached_x"}
+        captured = {}
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            project = self.project(root)
+            (root / "skill_workflow_run.json").write_text(json.dumps({"run_id": "frame-group", "subskills": {}}), encoding="utf-8")
+            case = {"attached_pages": [1], "readings": [], "page_index": [], "extracted": [], "job": {}}
+            def send(_project, _purpose, prompt, _images, _record):
+                captured["prompt"] = prompt
+                return {"results": {}}
+            with patch("backend.skill_case_file.build_for", return_value=(case, [Path("/tmp/page.png")])), \
+                 patch.object(skills, "_attached_image_coordinate_frames", return_value=[expected_frame]), \
+                 patch.object(skills, "_send_case_file_prompt", side_effect=send):
+                skills._ask_group("opaque_envelope", ["surface_inventory", "construction_matching"],
+                    project, {"run_id": "frame-group", "subskills": {}}, {})
+        self.assertIn('"canonical_image_width_px":3000', captured["prompt"])
 
     def test_consented_ai_worker_uses_focused_instructions_and_downgrades_to_draft(self):
         original_factory, original_groups = skills.SKILL_PROVIDER_FACTORY, skills.select_page_groups

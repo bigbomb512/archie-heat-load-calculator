@@ -7,7 +7,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ai.ai_preliminary import (
-    assemble, build_local_codex_handoff, calculate, empty_local_codex_response,
+    _base_room_load_input_set, assemble, build_local_codex_handoff, calculate, empty_local_codex_response,
     provider_eligibility, validate_manual_placeholder_entities, validate_placeholder_proposal,
 )
 from ai import safety_factor_resolution
@@ -34,7 +34,8 @@ def main():
     geometry_resolution = {"entities": [{
         "kind": "area", "entity_id": "geometry-proof-retail", "label": "Retail tenancy", "level_candidate": "Level 1",
         "geometry_status": "ai_estimated", "source": {"page": 3, "drawing_number": "A-101"},
-        "value": {"area_m2": 50.0, "geometry_proof_id": "geometry-proof-retail", "derivation": {
+        "value": {"area_m2": 50.0, "geometry_proof_id": "geometry-proof-retail",
+            "review_warnings": ["scale_derived_preliminary_area"], "derivation": {
             "formula": "shoelace_area_px2 × (mm_per_px²) ÷ 1,000,000", "operands": {"polygon_area_px2": 5000, "mm_per_px": 100},
         }},
     }]}
@@ -42,6 +43,10 @@ def main():
     geometry_room = next(row for row in geometry_model["material"]["hourly_load_model"]["rooms"] if row["name"] == "Retail tenancy")
     geometry_field = next(row for row in geometry_model["materialized_fields"] if row["room_id"] == geometry_room["room_id"] and row["field"] == "area_m2")
     check("normalized AI geometry proof supplies a draft-only room area", geometry_room["area_m2"] == 50.0 and geometry_field["origin"] == "ai_geometry" and geometry_field["geometry_proof_id"] == "geometry-proof-retail")
+    check("scale-derived room area caveat reaches Phase 1 assumptions",
+          any(row.get("component") == "room area" and row.get("assumption", "").startswith("Preliminary AI estimate only")
+              and "scale_derived_preliminary_area" in row.get("review_warnings", [])
+              for row in geometry_model["phase1_assumptions"]))
     ai_trace = assemble({"spaces": [{"name": "Shop", "level_name": "Ground", "area": "", "evidence": [{"page": 20}]}]},
         preliminary_proposal={"rooms": [{"kind": "room", "label": "Shop", "level_name": "Ground", "area_m2": 216.1,
             "preliminary_profile_id": "generic_conditioned_room", "space_scope": "comfort_hvac", "confidence": 0.6,
@@ -72,12 +77,38 @@ def main():
     check("preliminary report lists unassessed room components and undercount warning",
           all(any(row["room_id"] == room_id and row["component_type"] == "infiltration" for row in unresolved)
               for room_id in room_ids)
-          and "Envelope and listed air-side loads were not assessed; the total excludes them and understates the load." in report["warnings"])
+          and "Some envelope or air-side inputs remain unassessed; the calculated total excludes those loads." in report["warnings"])
     check("AI preliminary unapproved components are provisional and never falsely confirmed absent",
           all(component["calculation_status"] == "not_assessed"
               and component["verification_status"] == "provisional"
               and component["source"] == "Excluded from AI preliminary model pending a project-specific method."
               for room in rooms for component in room["unapproved_components"]))
+    original_internal = [(room["occupancy"], room["cooling_load"]["lighting_w_m2"], room["cooling_load"]["outside_air_lps"], len(room["heat_sources"])) for room in rooms]
+    base_report = calculate(direct, scope="phase1_base_room")
+    base_components = (base_report.get("included_scope_peak") or {}).get("components", {})
+    check("Phase 1 uses a separately labelled envelope-only calculation",
+          base_report["calculation_phase"] == 1 and base_report["report_type"] == "hourly_ai_preliminary_phase1_base_room_load"
+          and base_report["included_scope_peak"])
+    check("Phase 1 excludes all people, lighting, equipment and outside-air gains",
+          all((base_components.get(name) or {}).get("total_kw", 0) == 0
+              for name in ("people", "lighting", "equipment_refrigeration", "outside_air", "infiltration")))
+    projected = _base_room_load_input_set(direct)
+    projected_room = projected["material"]["hourly_load_model"]["rooms"][0]
+    check("Phase 1 adds a transparent floor default without changing the source model",
+          any(surface.get("kind") == "floor" for surface in projected_room["cooling_load"].get("envelope_surfaces", []))
+          and any(row.get("component") == "floor boundary" for row in projected["phase1_assumptions"])
+          and all(surface.get("kind") != "floor" for surface in rooms[0]["cooling_load"].get("envelope_surfaces", [])))
+    check("floor-only Phase 1 subtotal does not claim complete envelope coverage",
+          not base_report["scope_summary"]["complete_scope"]
+          and any(row.get("component_id") == "phase1_boundary_inventory" for row in base_report["unresolved_room_inputs"]))
+    check("Phase 1 projection does not mutate the Phase 2 input model",
+          original_internal == [(room["occupancy"], room["cooling_load"]["lighting_w_m2"], room["cooling_load"]["outside_air_lps"], len(room["heat_sources"])) for room in rooms])
+    try:
+        calculate(direct, scope="unknown")
+    except ValueError as error:
+        check("unsupported calculation scopes are rejected", "scope must be full or phase1_base_room" in str(error))
+    else:
+        check("unsupported calculation scopes are rejected", False)
     from ai import ceiling_volume_resolution
     infiltration_room_id = ceiling_volume_resolution.room_identity("Retail tenancy", "Level 1")
     with_infiltration = assemble({"spaces": [building()["spaces"][0]]}, airflow_resolution={"records": [{
@@ -189,7 +220,7 @@ def main():
     fully_assessed_report = calculate(fully_assessed)
     check("fully assessed envelope and reviewer-declared component absences omit the undercount warning",
           not fully_assessed_report["unresolved_room_inputs"]
-          and "Envelope and listed air-side loads were not assessed; the total excludes them and understates the load."
+          and "Some envelope or air-side inputs remain unassessed; the calculated total excludes those loads."
           not in fully_assessed_report["warnings"])
     refrigeration = assemble({"spaces": [{"name": "Cool Room", "level_name": "Level 1", "area": 10, "evidence": [{"page": 2}]}]})
     check("cool rooms are refrigeration exceptions rather than comfort-HVAC rooms", not refrigeration["material"]["hourly_load_model"]["rooms"] and refrigeration["excluded_spaces"][0]["scope"] == "refrigeration_process")
@@ -199,7 +230,9 @@ def main():
     no_orientation_model = assemble({"spaces": []}, preliminary_proposal=no_orientation)
     no_orientation_report = calculate(no_orientation_model)
     no_orientation_components = no_orientation_report["included_scope_peak"]["components"]
-    check("unknown façade orientation keeps glazing conduction but excludes solar", "glazing_conduction" in no_orientation_components and "glazing_solar" not in no_orientation_components)
+    check("unknown façade orientation uses a visible west-facing solar assumption",
+          "glazing_conduction" in no_orientation_components and "glazing_solar" in no_orientation_components
+          and any(row.get("component") == "wall orientation" for row in no_orientation_model["phase1_assumptions"]))
     invalid = validate_placeholder_proposal({"rooms": [placeholder[0]], "surfaces": [{"label": "Unowned wall", "gross_area_m2": 10}]})
     check("malformed surface remains a proposed exclusion instead of crashing assembly", invalid["surfaces"][0]["validation_errors"])
     geometry_only = {

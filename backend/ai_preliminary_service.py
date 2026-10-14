@@ -67,6 +67,7 @@ def _paths(project):
         "sets": root / "ai_preliminary_input_sets",
         "current_set": root / "ai_preliminary_input_set.json",
         "report": root / "hourly_ai_preliminary_load_report.json",
+        "base_report": root / "phase1_base_room_load_report.json",
         "codex_handoff": root / "codex_preliminary_handoff.json",
         "codex_response": root / "codex_preliminary_response.json",
         "value_resolution": root / "value_resolution.json",
@@ -99,12 +100,29 @@ def _sources(paths):
         artifact = _read(path, default)
         return artifact.get("fingerprint") or ai_preliminary.fingerprint(artifact)
 
+    skill_manifest = _read(paths["root"] / "skill_workflow_run.json", {})
+    skill_run_id = skill_manifest.get("run_id")
+    skill_proposal_dir = (paths["root"] / "skill_workflow_runs" / str(skill_run_id) / "proposals"
+                          if skill_run_id else None)
+    phase1_skill_proposals = {}
+    if skill_proposal_dir:
+        for skill_id in ("room_identity_use", "room_boundaries_areas", "surface_inventory", "surface_area",
+                         "construction_matching", "boundary_resolution", "cross_sheet_opening_match",
+                         "glazing_properties", "exposure_orientation"):
+            phase1_skill_proposals[skill_id] = _read(skill_proposal_dir / f"{skill_id}.json", {})
+
     return {
         "building_evidence": ai_preliminary.fingerprint(_read(paths["building"], {})),
         "vision_response": ai_preliminary.fingerprint(_read(paths["vision"], {})),
         "evidence_fusion": ai_preliminary.fingerprint(_read(paths["fusion"], {})),
         "manual_placeholder_entities": ai_preliminary.fingerprint(run.get("manual_placeholder_entities", [])),
         "ai_preliminary_proposal": ai_preliminary.fingerprint(proposal),
+        "phase1_skill_proposals": ai_preliminary.fingerprint({
+            "source_fingerprint": skill_manifest.get("source_fingerprint", ""),
+            "run_id": skill_run_id,
+            "proposals": phase1_skill_proposals,
+            "decisions": _read(paths["root"] / "skill_review_decisions.json", {}).get("decisions", {}),
+        }),
         "research_cache": ai_preliminary.fingerprint(_read(paths["research_cache"], empty_research_cache())),
         "value_resolution_state": value_resolver.fingerprint(state),
         "site_location_resolution": ai_preliminary.fingerprint(_read(paths["site_location"], {})),
@@ -383,6 +401,24 @@ def _with_accepted_equipment(paths, proposal):
     return proposal
 
 
+def _skill_room_display_label(finding):
+    """Turn a cited room-scope description into a display label when the plan has no text label."""
+    label = str(finding.get("original_label") or finding.get("label") or "").strip()
+    if label:
+        return label
+    scope = str(finding.get("scope") or "").strip()
+    scope = re.split(r"[.;]", scope, maxsplit=1)[0]
+    scope = re.sub(r"^(?:candidate|enclosed)\s+", "", scope, flags=re.IGNORECASE)
+    scope = re.split(r"\s+(?:with|including|containing)\s+", scope, maxsplit=1, flags=re.IGNORECASE)[0]
+    scope = re.sub(r"\b(?:compartment|space|room|area)\s*$", "", scope, flags=re.IGNORECASE)
+    scope = re.sub(r"\baccess/lobby\b", "lobby", scope, flags=re.IGNORECASE)
+    scope = re.sub(r"\s+", " ", scope).strip(" -,:;")
+    if not scope:
+        return ""
+    words = scope.split()
+    return " ".join("WC" if word.casefold() == "wc" else word.capitalize() for word in words)
+
+
 def _proposal_with_skill_findings(paths):
     run = _read(paths["run"], {})
     proposal = room_proposal(run, paths["root"])
@@ -408,23 +444,108 @@ def _proposal_with_skill_findings(paths):
     identity_proposal = _read(skill_dir / "room_identity_use.json", {})
     fields = identity_proposal.get("proposal_fields", {}) if isinstance(identity_proposal, dict) else {}
     identity_rows = fields.get("rooms", []) if isinstance(fields, dict) else []
+    citations = {
+        str(row.get("citation_id") or row.get("id")): row for row in identity_proposal.get("citations", [])
+        if isinstance(row, dict) and (row.get("citation_id") or row.get("id"))
+    } if isinstance(identity_proposal, dict) else {}
+    citations_by_page = {}
+    for citation in citations.values():
+        page = citation.get("physical_pdf_page") or citation.get("physical_page") or citation.get("page")
+        if isinstance(page, int):
+            citations_by_page.setdefault(page, citation)
+    inference_by_id = {}
+    for inference in identity_proposal.get("inferences", []) if isinstance(identity_proposal, dict) else []:
+        if not isinstance(inference, dict):
+            continue
+        match = re.search(r"rooms\[([^\]]+)\]", str(inference.get("field", "")))
+        if match:
+            inference_by_id.setdefault(match.group(1), []).append(inference)
+    envelope_confidence = identity_proposal.get("confidence") if isinstance(identity_proposal, dict) else None
+    try:
+        envelope_confidence = float(envelope_confidence)
+    except (TypeError, ValueError):
+        envelope_confidence = 0.0
+    taxonomy_ids = set(room_use_resolution.load_taxonomy()["categories"])
+    from backend.calculation_extraction_service import _room_geometry_skill_proposals
+    geometry_candidates = {
+        str(row.get("room_id")): row for row in _room_geometry_skill_proposals(paths["root"])
+        if isinstance(row, dict) and row.get("room_id")
+    }
+    # Only add an identity-only sanitary room to the preliminary model when
+    # the same current geometry run produced one active, calibrated area for
+    # that exact stable room ID.  This prevents furniture/function labels from
+    # becoming duplicate rooms and keeps unclosed boundaries out.
+    active_area_by_identity = {}
+    possible_sanitary_geometry_ids = {
+        str(row.get("room_id")): row for row in (identity_rows if isinstance(identity_rows, list) else [])
+        if isinstance(row, dict) and not row.get("taxonomy_id")
+        and any(term in str(row.get("scope") or "").casefold()
+                for term in ("wc", "toilet", "bathroom", "sanitary", "lobby", "amenities"))
+        and str(row.get("room_id") or "") in geometry_candidates
+    }
+    if possible_sanitary_geometry_ids:
+        geometry = _preliminary_geometry(paths)
+        for entity in geometry.get("entities", []) if isinstance(geometry, dict) else []:
+            if not isinstance(entity, dict) or entity.get("kind") != "area" or entity.get("geometry_status") not in {"ai_estimated", "geometry_confirmed"}:
+                continue
+            value = entity.get("value") if isinstance(entity.get("value"), dict) else {}
+            identity_id = str(value.get("room_identity_id") or "").strip()
+            area = ai_preliminary._number(value.get("area_m2"))
+            if identity_id and area and area > 0:
+                active_area_by_identity.setdefault(identity_id, []).append((entity, value))
     accepted_rows = []
     for index, suggested in enumerate(identity_rows if isinstance(identity_rows, list) else []):
         if not isinstance(suggested, dict):
             continue
         decision = decisions.get(f"room_identity_use:rooms:{index}", {})
-        if (decision.get("status") != "accepted" or decision.get("run_id") != run_id
-                or decision.get("source_fingerprint") != current_source_fingerprint):
+        current_decision = (decision.get("run_id") == run_id
+                            and decision.get("source_fingerprint") == current_source_fingerprint)
+        if current_decision and decision.get("status") == "rejected":
             continue
-        accepted_value = decision.get("value", suggested)
-        if isinstance(accepted_value, dict):
-            accepted_rows.append((index, accepted_value))
+        finding = decision.get("value", suggested) if current_decision and decision.get("status") == "accepted" else suggested
+        room_id = str(finding.get("room_id", ""))
+        supporting = inference_by_id.get(room_id, [])
+        inference_confidence = max((float(item.get("confidence", 0)) for item in supporting
+                                    if isinstance(item.get("confidence"), (int, float))), default=0.0)
+        confidence = finding.get("confidence", inference_confidence or envelope_confidence)
+        try:
+            confidence = float(confidence)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        evidence_pages = finding.get("evidence_page_ids", [])
+        has_source = isinstance(evidence_pages, list) and any(
+            isinstance(page, int) and page in citations_by_page for page in evidence_pages
+        )
+        category = finding.get("taxonomy_id")
+        geometry_candidate = geometry_candidates.get(room_id)
+        active_area = active_area_by_identity.get(room_id, [])
+        scope_text = str(finding.get("scope") or "").casefold()
+        sanitary_scope = any(term in scope_text for term in ("wc", "toilet", "bathroom", "sanitary", "lobby", "amenities"))
+        can_draft_sanitary_room = (
+            not category and sanitary_scope and confidence >= 0.65 and has_source
+            and geometry_candidate is not None and len(active_area) == 1
+        )
+        if not (current_decision and decision.get("status") == "accepted"):
+            if not can_draft_sanitary_room and (confidence < 0.8 or category not in taxonomy_ids or not has_source):
+                continue
+        if isinstance(finding, dict):
+            finding = deepcopy(finding)
+            if can_draft_sanitary_room:
+                geometry_value = active_area[0][1]
+                geometry_confidence = ai_preliminary._number(
+                    geometry_candidate.get("confidence_score", geometry_candidate.get("confidence"))
+                )
+                area_confidence = ai_preliminary._number(geometry_value.get("confidence_score"))
+                draft_confidence = min(confidence, geometry_confidence or confidence, area_confidence or confidence)
+                finding["_draft_category"] = "ancillary_conditioned"
+                finding["_draft_label"] = _skill_room_display_label(finding)
+                finding["_draft_level"] = str(finding.get("level") or geometry_value.get("level_name") or "Unassigned level")
+                finding["_draft_confidence"] = draft_confidence
+            else:
+                finding["_draft_confidence"] = confidence
+            accepted_rows.append((index, finding))
     if not accepted_rows:
         return proposal
-    citations = {
-        row.get("citation_id"): row for row in identity_proposal.get("citations", [])
-        if isinstance(row, dict) and row.get("citation_id")
-    } if isinstance(identity_proposal, dict) else {}
     rooms_by_id = {
         str(row.get("room_id")): row for row in proposal["rooms"]
         if isinstance(row, dict) and row.get("room_id")
@@ -433,16 +554,8 @@ def _proposal_with_skill_findings(paths):
         str(row.get("label", "")).strip().casefold(): row for row in proposal["rooms"]
         if isinstance(row, dict) and row.get("label")
     }
-    inference_by_id = {}
-    for inference in identity_proposal.get("inferences", []) if isinstance(identity_proposal, dict) else []:
-        if not isinstance(inference, dict):
-            continue
-        match = re.search(r"rooms\[([^\]]+)\]", str(inference.get("field", "")))
-        if match:
-            inference_by_id.setdefault(match.group(1), []).append(inference)
     unresolved_fields = identity_proposal.get("unresolved_fields", []) if isinstance(identity_proposal, dict) else []
-    from backend.calculation_extraction_service import _room_geometry_skill_proposals
-    candidates = _room_geometry_skill_proposals(paths["root"])
+    candidates = list(geometry_candidates.values())
     accepted_room_ids = set()
     for index, finding in accepted_rows:
         if not isinstance(finding, dict):
@@ -451,20 +564,58 @@ def _proposal_with_skill_findings(paths):
         accepted_room_ids.add(room_id)
         row = rooms_by_id.get(room_id) or rooms_by_label.get(str(finding.get("original_label", "")).strip().casefold())
         if not row:
-            continue
+            source_refs = []
+            for cited in finding.get("citations", []) if isinstance(finding.get("citations"), list) else []:
+                if not isinstance(cited, dict):
+                    continue
+                page = cited.get("physical_pdf_page") or cited.get("physical_page") or cited.get("page")
+                if isinstance(page, int):
+                    source_refs.append({"page": page, "drawing_number": cited.get("drawing_identity", ""),
+                                        "title": cited.get("title", ""),
+                                        "excerpt": cited.get("visual_evidence") or cited.get("excerpt") or ""})
+            for citation_ref in finding.get("evidence_page_ids", []):
+                citation = citations.get(str(citation_ref)) or citations_by_page.get(citation_ref)
+                if not citation:
+                    continue
+                page = citation.get("physical_pdf_page") or citation.get("physical_page") or citation.get("page")
+                if isinstance(page, int):
+                    source_refs.append({"page": page, "drawing_number": citation.get("drawing_identity", ""),
+                                        "title": citation.get("title", ""), "excerpt": citation.get("excerpt_or_crop", "")})
+            if not source_refs:
+                continue
+            label = str(finding.get("_draft_label") or finding.get("original_label") or finding.get("label") or "").strip()
+            if not label:
+                continue
+            row = {"kind": "room", "room_id": room_id, "label": label,
+                   "level_name": finding.get("_draft_level") or finding.get("level") or "Unassigned level",
+                   "page": source_refs[0]["page"], "source_pages": [item["page"] for item in source_refs],
+                   "evidence": source_refs, "identity_source": "current_cited_room_identity_skill",
+                   "geometry_identity_id": room_id, "direct_label_verified": False}
+            proposal.setdefault("rooms", []).append(row)
+            rooms_by_id[room_id] = row
+            rooms_by_label[label.casefold()] = row
         row.setdefault("room_id", room_id)
         row.setdefault("level_name", finding.get("level") or "Unassigned level")
-        category = finding.get("taxonomy_id")
+        category = finding.get("_draft_category") or finding.get("taxonomy_id")
         supporting_inferences = inference_by_id.get(room_id, [])
         taxonomy_inference = next((item for item in supporting_inferences if item.get("field", "").endswith(".taxonomy_id")), None)
         inferred_value = taxonomy_inference.get("value") if isinstance(taxonomy_inference, dict) else None
         if category:
             row["room_use_category"] = category
-            row["room_use_rationale"] = str(taxonomy_inference.get("method", "Skill interpretation of cited room evidence.")) if taxonomy_inference else "Skill-selected controlled room-use category."
-            row["confidence"] = taxonomy_inference.get("confidence", row.get("confidence", 0.65)) if taxonomy_inference else row.get("confidence", 0.65)
+            row["room_use_rationale"] = (
+                "AI identifies this as an amenity from the cited WC/toilet/lobby plan evidence; inclusion in comfort-HVAC scope is a provisional Phase 1 assumption because the drawing does not establish conditioning."
+                if finding.get("_draft_category") else
+                str(taxonomy_inference.get("method", "Skill interpretation of cited room evidence.")) if taxonomy_inference else
+                "Skill-selected controlled room-use category."
+            )
+            row["confidence"] = finding.get("_draft_confidence", row.get("confidence", 0.65))
+            if finding.get("_draft_category"):
+                row["geometry_identity_id"] = room_id
+                row["direct_label_verified"] = False
+                row["room_use_assumption"] = "Assumed comfort-conditioned for this draft; confirm only if the HVAC drawings show it is exhaust-only or otherwise unconditioned."
         evidence = row.get("evidence") if isinstance(row.get("evidence"), list) else []
         for citation_id in finding.get("evidence_page_ids", []):
-            citation = citations.get(f"c{citation_id}")
+            citation = citations.get(str(citation_id)) or citations_by_page.get(citation_id)
             if citation:
                 ref = {"page": citation.get("physical_pdf_page"), "drawing_number": citation.get("drawing_identity", ""),
                        "title": citation.get("title", ""), "excerpt": citation.get("excerpt_or_crop", "")}
@@ -506,6 +657,408 @@ def _proposal_with_skill_findings(paths):
                         "title": citation.get("title", ""), "excerpt": f"Seating schedule: {seat_match.group(1)} seats."}]
                     break
             break
+    return proposal
+
+
+def _current_high_confidence_skill_rows(paths, subskill_id, field_name, decisions, *, min_confidence=0.6):
+    """Read current, sufficiently confident skill rows for the Phase 1 draft only.
+
+    A current explicit rejection wins. Otherwise high-confidence rows may feed
+    the draft; the existing geometry/material validators still decide whether
+    the row can contribute to a room load.
+    """
+    manifest = _read(paths["root"] / "skill_workflow_run.json", {})
+    run_id = manifest.get("run_id")
+    if not run_id:
+        return [], {}
+    from backend import skill_workflow_service
+    source_fp = skill_workflow_service._source_fingerprint(
+        skill_workflow_service._project_paths({"id": "", "review_dir": str(paths["root"])}),
+        skill_workflow_service.load_catalog(),
+    )
+    if manifest.get("source_fingerprint") != source_fp:
+        return [], {}
+    subskill_state = manifest.get("subskills", {}).get(subskill_id, {})
+    if subskill_state.get("status") not in {"running", "provisional", "needs_review", "resolved", "completed"}:
+        return [], {}
+    path = paths["root"] / "skill_workflow_runs" / str(run_id) / "proposals" / f"{subskill_id}.json"
+    raw = _read(path, {})
+    confidence = raw.get("confidence")
+    try:
+        confidence = float(confidence)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    citations = {}
+    for citation in raw.get("citations", []) if isinstance(raw.get("citations"), list) else []:
+        if not isinstance(citation, dict):
+            continue
+        citation_id = str(citation.get("citation_id") or citation.get("id") or "")
+        page = next((citation.get(key) for key in ("physical_pdf_page", "physical_page", "page", "source_page")
+                     if isinstance(citation.get(key), int)), None)
+        if citation_id and page:
+            citations[citation_id] = {
+                "page": page,
+                "drawing_identity": str(citation.get("drawing_identity") or ""),
+                "excerpt": str(citation.get("excerpt_or_crop") or citation.get("excerpt") or citation.get("title") or ""),
+                "visual_evidence": str(citation.get("visual_evidence") or citation.get("crop_description") or ""),
+            }
+    inference_by_target = {}
+    for inference in raw.get("inferences", []) if isinstance(raw.get("inferences"), list) else []:
+        if not isinstance(inference, dict):
+            continue
+        target_field = str(inference.get("field") or "")
+        if "." not in target_field:
+            continue
+        target_id, inferred_field = target_field.rsplit(".", 1)
+        inference_by_target.setdefault(target_id, {})[inferred_field] = deepcopy(inference)
+    fields = raw.get("proposal_fields", {})
+    rows = fields.get(field_name, []) if isinstance(fields, dict) else []
+    selected = []
+    for index, suggested in enumerate(rows if isinstance(rows, list) else []):
+        if not isinstance(suggested, dict):
+            continue
+        decision = decisions.get(f"{subskill_id}:{field_name}:{index}", {})
+        current_decision = (decision.get("run_id") == run_id and decision.get("source_fingerprint") == source_fp)
+        if current_decision and decision.get("status") == "rejected":
+            continue
+        row = decision.get("value", suggested) if current_decision and decision.get("status") == "accepted" else suggested
+        row_confidence = row.get("confidence", confidence) if isinstance(row, dict) else confidence
+        try:
+            row_confidence = float(row_confidence)
+        except (TypeError, ValueError):
+            row_confidence = confidence
+        # These findings feed a draft calculation, not an accepted ledger value.
+        # Domain-specific callers may admit cited scale traces below the general
+        # threshold; their original confidence remains attached to the result.
+        if not (current_decision and decision.get("status") == "accepted") and row_confidence < min_confidence:
+            continue
+        if isinstance(row, dict):
+            row = deepcopy(row)
+            target_id = str(row.get("surface_id") or row.get("opening_id") or "")
+            if target_id and target_id in inference_by_target:
+                row["_numeric_inferences"] = inference_by_target[target_id]
+            selected.append((index, row, row_confidence))
+    return selected, citations
+
+
+def _pixel_rectangle(inference):
+    """Return a validated axis-aligned pixel rectangle and its scale from a cited inference."""
+    if not isinstance(inference, dict) or not str(inference.get("method") or "").strip():
+        return None
+    operands = inference.get("unrounded_operands", {})
+    points = operands.get("boundary_points_px") if isinstance(operands, dict) else None
+    if not isinstance(points, list) or len(points) != 4:
+        return None
+    try:
+        xs = [float(point[0]) for point in points]
+        ys = [float(point[1]) for point in points]
+        scale_x = float(operands["scale_x_m_per_px"])
+        scale_y = float(operands["scale_y_m_per_px"])
+    except (KeyError, TypeError, ValueError, IndexError):
+        return None
+    if not all(math.isfinite(value) for value in (*xs, *ys, scale_x, scale_y)) or min(scale_x, scale_y) <= 0:
+        return None
+    if len({round(value, 5) for value in xs}) != 2 or len({round(value, 5) for value in ys}) != 2:
+        return None
+    if abs(scale_x - scale_y) > max(scale_x, scale_y) * 0.01:
+        return None
+    left, right, top, bottom = min(xs), max(xs), min(ys), max(ys)
+    if right <= left or bottom <= top:
+        return None
+    computed = (right - left) * scale_x * (bottom - top) * scale_y
+    try:
+        reported = float(inference.get("value"))
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(reported) or abs(computed - reported) > max(0.05, computed * 0.01):
+        return None
+    return {"left": left, "right": right, "top": top, "bottom": bottom,
+            "scale_x": scale_x, "scale_y": scale_y, "area_m2": computed}
+
+
+def _complete_opening_coverage(area_rows, opening_matches, opening_properties, *, area_citations, property_citations):
+    """Derive a complete host opening total only from a contiguous, cited, full-height pixel trace."""
+    properties_by_id = {str(row.get("opening_id")): (row, score)
+                        for _, row, score in opening_properties if row.get("opening_id")}
+    matches_by_host = {}
+    for _, match, score in opening_matches:
+        host_id = str(match.get("host_wall_id") or "")
+        opening_id = str(match.get("opening_id") or "")
+        if host_id and opening_id:
+            matches_by_host.setdefault(host_id, []).append((match, score))
+
+    derived = {}
+    for _, area_row, area_score in area_rows:
+        host_id = str(area_row.get("surface_id") or "")
+        gross = ai_preliminary._number(area_row.get("gross_area_m2"))
+        host_inference = (area_row.get("_numeric_inferences") or {}).get("gross_area_m2")
+        host_rect = _pixel_rectangle(host_inference)
+        host_inference_citations = host_inference.get("citation_ids", []) if isinstance(host_inference, dict) else []
+        host_sources = [area_citations.get(str(item)) for item in host_inference_citations]
+        host_sources = [item for item in host_sources if item]
+        if not host_id or gross is None or gross <= 0 or not host_rect or not host_sources:
+            continue
+        host_page = host_sources[0]["page"]
+        host_drawing = host_sources[0]["drawing_identity"]
+        if not host_drawing or any(item["page"] != host_page or item["drawing_identity"] != host_drawing for item in host_sources):
+            continue
+        host_matches = matches_by_host.get(host_id, [])
+        if not host_matches:
+            continue
+        openings = []
+        all_citation_ids = list(area_row.get("citation_ids", []))
+        confidence = float(area_score)
+        for match, match_score in host_matches:
+            opening_id = str(match.get("opening_id") or "")
+            prop_and_score = properties_by_id.get(opening_id)
+            if not prop_and_score:
+                openings = []
+                break
+            prop, prop_score = prop_and_score
+            opening_area = ai_preliminary._number(prop.get("opening_area_m2"))
+            inference = (prop.get("_numeric_inferences") or {}).get("opening_area_m2")
+            rect = _pixel_rectangle(inference)
+            inference_citations = inference.get("citation_ids", []) if isinstance(inference, dict) else []
+            sources = [property_citations.get(str(item)) for item in inference_citations]
+            sources = [item for item in sources if item]
+            source_id = str(prop.get("source_id") or "").casefold()
+            if (opening_area is None or opening_area <= 0 or not rect or not sources
+                    or not re.search(r"elevation[-_ ]?1", source_id)
+                    or any(item["page"] != host_page or item["drawing_identity"] != host_drawing for item in sources)):
+                openings = []
+                break
+            if (abs(rect["top"] - host_rect["top"]) > 2 or abs(rect["bottom"] - host_rect["bottom"]) > 2
+                    or abs(rect["scale_x"] - host_rect["scale_x"]) > host_rect["scale_x"] * 0.01
+                    or abs(rect["scale_y"] - host_rect["scale_y"]) > host_rect["scale_y"] * 0.01
+                    or rect["left"] < host_rect["left"] - 2 or rect["right"] > host_rect["right"] + 2
+                    or abs(rect["area_m2"] - opening_area) > max(0.05, opening_area * 0.01)):
+                openings = []
+                break
+            openings.append((rect, opening_area))
+            confidence = min(confidence, float(match_score), float(prop_score))
+            all_citation_ids.extend(prop.get("citation_ids", []))
+            all_citation_ids.extend(inference_citations)
+        if len(openings) != len(host_matches):
+            continue
+        openings.sort(key=lambda pair: pair[0]["left"])
+        for (previous, _), (current, _) in zip(openings, openings[1:]):
+            gap = current["left"] - previous["right"]
+            if gap < -2 or gap > 2:
+                openings = []
+                break
+        if not openings:
+            continue
+        first, last = openings[0][0], openings[-1][0]
+        host_width = host_rect["right"] - host_rect["left"]
+        if (first["left"] - host_rect["left"] > host_width * 0.05
+                or host_rect["right"] - last["right"] > host_width * 0.05):
+            continue
+        opening_area_total = sum(area for _, area in openings)
+        pixel_union_area = ((last["right"] - first["left"]) * host_rect["scale_x"]
+                            * (host_rect["bottom"] - host_rect["top"]) * host_rect["scale_y"])
+        if abs(pixel_union_area - opening_area_total) > max(0.1, opening_area_total * 0.01):
+            continue
+        net_area = gross - opening_area_total
+        if net_area <= 0:
+            continue
+        derived_row = deepcopy(area_row)
+        derived_row.update({
+            "opening_area_m2": round(opening_area_total, 2),
+            "net_opaque_area_m2": round(net_area, 2),
+            "opening_coverage": "complete",
+            "confidence": confidence,
+            "citation_ids": sorted({str(item) for item in all_citation_ids if item}),
+            "formula": (f"{area_row.get('formula') or 'host gross area'}; subtract {len(openings)} matched, contiguous, full-height opening areas "
+                        "whose cited pixel rectangles share the same elevation-1 coordinate frame"),
+            "_coverage_method": "cited_contiguous_full_height_pixel_rectangles",
+        })
+        derived[host_id] = (derived_row, confidence)
+    return derived
+
+
+def _merge_phase1_skill_proposals(paths, proposal):
+    """Join validated high-confidence envelope and opening skill findings into the draft."""
+    review = _read(paths["root"] / "skill_review_decisions.json", {})
+    decisions = review.get("decisions", {}) if isinstance(review, dict) else {}
+    room_rows = [row for row in proposal.get("rooms", []) if isinstance(row, dict)]
+    rooms_by_id = {str(row.get("room_id")): row for row in room_rows if row.get("room_id")}
+    rooms_by_label = {str(row.get("label", "")).strip().casefold(): row for row in room_rows if row.get("label")}
+    surfaces, surface_citations = _current_high_confidence_skill_rows(paths, "surface_inventory", "surfaces", decisions)
+    areas, area_citations = _current_high_confidence_skill_rows(
+        paths, "surface_area", "areas", decisions, min_confidence=0.5,
+    )
+    constructions, construction_citations = _current_high_confidence_skill_rows(paths, "construction_matching", "constructions", decisions)
+    boundaries, boundary_citations = _current_high_confidence_skill_rows(paths, "boundary_resolution", "boundaries", decisions)
+    matches, match_citations = _current_high_confidence_skill_rows(paths, "cross_sheet_opening_match", "matches", decisions)
+    properties, property_citations = _current_high_confidence_skill_rows(
+        paths, "glazing_properties", "properties", decisions, min_confidence=0.55,
+    )
+    complete_coverage = _complete_opening_coverage(
+        areas, matches, properties, area_citations=area_citations, property_citations=property_citations,
+    )
+    areas_by_id = {str(row.get("surface_id")): (row, score) for _, row, score in areas if row.get("surface_id")}
+    areas_by_id.update(complete_coverage)
+    construction_by_id = {str(row.get("surface_id")): (row, score) for _, row, score in constructions if row.get("surface_id")}
+    boundary_by_id = {str(row.get("surface_id")): (row, score) for _, row, score in boundaries if row.get("surface_id")}
+
+    def evidence_for(row, citations, page_fallback=None):
+        evidence = [deepcopy(item) for item in row.get("evidence", []) if isinstance(item, dict) and item.get("page")]
+        row_citations = row.get("citations", [])
+        if isinstance(row_citations, list):
+            evidence.extend({"page": item.get("page"), "drawing_number": item.get("drawing_identity", ""),
+                             "excerpt": item.get("excerpt") or item.get("excerpt_or_crop") or item.get("crop_description", "")}
+                            for item in row_citations if isinstance(item, dict) and isinstance(item.get("page"), int))
+        ids = row.get("citation_ids", [])
+        if isinstance(ids, list):
+            evidence.extend(deepcopy(citations[str(item)]) for item in ids if str(item) in citations)
+        if not evidence:
+            page = row.get("page") or page_fallback
+            if isinstance(page, int):
+                evidence.append({"page": page, "excerpt": str(row.get("excerpt") or row.get("label") or row.get("surface_id") or "AI skill finding")})
+        unique = {(item.get("page"), item.get("excerpt", "")): item for item in evidence}
+        return list(unique.values())
+
+    existing_surface_keys = {str(row.get("surface_key") or row.get("candidate_id") or "") for row in proposal.get("surfaces", []) if isinstance(row, dict)}
+    surface_lookup = {}
+    for _, raw, inventory_score in surfaces:
+        surface_id = str(raw.get("surface_id") or "").strip()
+        if not surface_id or surface_id in existing_surface_keys:
+            continue
+        owners = raw.get("owner_ids", [])
+        owners = owners if isinstance(owners, list) else [owners]
+        owner = next((rooms_by_id.get(str(value)) for value in owners if str(value) in rooms_by_id), None)
+        if owner is None:
+            owner = next((rooms_by_label.get(str(value).strip().casefold()) for value in owners
+                          if str(value).strip().casefold() in rooms_by_label), None)
+        if owner is None or len(owners) != 1:
+            continue
+        area_record, area_score = areas_by_id.get(surface_id, ({}, inventory_score))
+        construction, construction_score = construction_by_id.get(surface_id, ({}, inventory_score))
+        boundary, boundary_score = boundary_by_id.get(surface_id, ({}, inventory_score))
+        physical_type = str(raw.get("type") or raw.get("physical_type") or "").casefold()
+        if physical_type in {"opaque_wall", "external_wall"}:
+            physical_type = "wall"
+        if physical_type not in {"wall", "roof", "floor", "ceiling", "partition"}:
+            continue
+        thermal_role = str(boundary.get("method") or raw.get("thermal_role") or "unresolved").casefold()
+        if thermal_role in {"outdoor", "outside", "outdoors"}:
+            thermal_role = "external"
+        gross_area = ai_preliminary._number(area_record.get("gross_area_m2"))
+        if gross_area is None:
+            gross_area = ai_preliminary._number(raw.get("gross_area_m2", raw.get("area_m2")))
+        if gross_area is None or gross_area <= 0:
+            continue
+        evidence = evidence_for(raw, surface_citations)
+        evidence.extend(evidence_for(area_record, area_citations))
+        evidence.extend(evidence_for(construction, construction_citations))
+        evidence.extend(evidence_for(boundary, boundary_citations))
+        if not evidence:
+            continue
+        owner_label = str(owner.get("label") or raw.get("owner_label") or "")
+        owner_level = str(owner.get("level_name") or raw.get("level") or "Unassigned level")
+        confidence = min(inventory_score, area_score, construction_score, boundary_score)
+        opening_area = ai_preliminary._number(area_record.get("opening_area_m2"))
+        net_area = ai_preliminary._number(area_record.get("net_opaque_area_m2"))
+        opening_coverage = str(area_record.get("opening_coverage") or "unknown").casefold()
+        if physical_type in {"floor", "ceiling", "roof"} and opening_coverage == "unknown":
+            # Phase 1's opening subtraction applies to wall-hosted doors and
+            # glazing. Horizontal penetrations are outside this surface-area
+            # contract and must not make a measured floor/ceiling disappear.
+            opening_coverage = "not_applicable"
+        if physical_type == "wall" and (opening_area is None or net_area is None) and opening_coverage not in {"complete", "reviewer_entered", "not_applicable"}:
+            # The opaque-wall solver currently falls back from a null net area
+            # to gross area. Exclude uncertain mixed-opening walls until that
+            # solver can represent a bounded opaque-area estimate safely.
+            continue
+        row = {
+            "surface_key": surface_id, "label": str(raw.get("label") or surface_id),
+            "owner_room_id": owner.get("room_id", ""), "owner_room_label": owner_label,
+            "owner_level_name": owner_level, "physical_type": physical_type,
+            "thermal_role": thermal_role,
+            "external_exposure": "external" if thermal_role == "external" else str(raw.get("external_exposure") or ""),
+            "boundary_condition": str(boundary.get("adjacent_owner") or raw.get("adjacent_space") or "outside" if thermal_role == "external" else "unresolved"),
+            "orientation": str(raw.get("orientation") or "").upper(),
+            "gross_area_m2": gross_area, "net_opaque_area_m2": net_area,
+            "opening_coverage": opening_coverage, "construction_id": str(construction.get("assembly_id") or ""),
+            "u_value_w_m2k": ai_preliminary._number(construction.get("u_value_w_m2k")),
+            "confidence": confidence, "page": evidence[0]["page"], "evidence": evidence,
+            "rationale": ("Cited AI surface inventory joined to draft area, construction and boundary findings; "
+                          "contiguous full-height opening coverage was checked from the shared elevation pixel geometry."
+                          if area_record.get("_coverage_method") == "cited_contiguous_full_height_pixel_rectangles"
+                          else "Cited AI surface inventory joined to draft area, construction and boundary findings; provisional calculation input."),
+            "assumptions": (["ai_skill_surface_proposal"] +
+                            (["cited_contiguous_full_height_pixel_rectangles"]
+                             if area_record.get("_coverage_method") == "cited_contiguous_full_height_pixel_rectangles" else [])),
+            "conflicts": [],
+        }
+        proposal.setdefault("surfaces", []).append(row)
+        existing_surface_keys.add(surface_id)
+        surface_lookup[surface_id] = row
+
+    exposures, exposure_citations = _current_high_confidence_skill_rows(paths, "exposure_orientation", "exposures", decisions)
+    properties_by_id = {str(row.get("opening_id")): (row, score) for _, row, score in properties if row.get("opening_id")}
+    exposures_by_id = {str(row.get("opening_id")): (row, score) for _, row, score in exposures if row.get("opening_id")}
+    existing_opening_keys = {str(row.get("opening_key") or row.get("candidate_id") or "") for row in proposal.get("openings", []) if isinstance(row, dict)}
+    for _, match, match_score in matches:
+        opening_id = str(match.get("opening_id") or "").strip()
+        if not opening_id or opening_id in existing_opening_keys:
+            continue
+        prop, prop_score = properties_by_id.get(opening_id, ({}, match_score))
+        exposure, exposure_score = exposures_by_id.get(opening_id, ({}, match_score))
+        host_id = str(match.get("host_wall_id") or "")
+        host = surface_lookup.get(host_id) or next((row for row in proposal.get("surfaces", [])
+            if isinstance(row, dict) and str(row.get("surface_key") or row.get("candidate_id") or "") == host_id), None)
+        owner = rooms_by_id.get(str(match.get("room_id") or ""))
+        if owner is None and host:
+            owner = rooms_by_label.get(str(host.get("owner_room_label") or "").strip().casefold())
+        if owner is None or host is None:
+            continue
+        opening_area = ai_preliminary._number(prop.get("opening_area_m2"))
+        if opening_area is None or opening_area <= 0:
+            continue
+        exposure_value = str(exposure.get("exposure") or "").casefold()
+        if exposure_value not in {"external", "outdoor", "outside", "outdoors", "internal"}:
+            host_exposure = str(host.get("external_exposure") or "").casefold()
+            host_role = str(host.get("thermal_role") or "").casefold()
+            if host_exposure == "external" or host_role in {"external", "outdoor", "outside", "outdoors"}:
+                exposure_value = "external"
+                # An opening inherits the host boundary only when there is no
+                # explicit, current opening-level classification. Carry the
+                # host's confidence and source evidence with that inference.
+                exposure_score = min(match_score, float(host.get("confidence") or match_score))
+            else:
+                exposure_value = "unresolved"
+        confidence = min(match_score, prop_score, exposure_score)
+        # Draft proposals with cited scale-derived areas may score below 0.8.
+        # Keep them provisional and visible so the model can produce its
+        # automated Phase 1 estimate without treating the result as accepted.
+        if confidence < 0.55:
+            continue
+        azimuth = ai_preliminary._number(exposure.get("azimuth_deg"))
+        orientation = ("N", "E", "S", "W")[int(((azimuth or 0) % 360 + 45) // 90) % 4] if azimuth is not None else ""
+        evidence = evidence_for(match, match_citations)
+        evidence.extend(evidence_for(prop, property_citations))
+        evidence.extend(evidence_for(exposure, exposure_citations))
+        if exposure_value == "external" and not exposure.get("exposure"):
+            evidence.extend(deepcopy(item) for item in host.get("evidence", []) if isinstance(item, dict))
+        if not evidence:
+            continue
+        opening = {
+            "opening_key": opening_id, "label": str(prop.get("label") or opening_id),
+            "owner_room_id": owner.get("room_id", ""), "owner_room_label": owner.get("label", ""),
+            "owner_level_name": owner.get("level_name", "Unassigned level"),
+            "host_surface_key": host_id, "opening_area_m2": opening_area,
+            "explicit_glass_area_m2": ai_preliminary._number(prop.get("glass_area_m2")),
+            "external_exposure": exposure_value,
+            "orientation": orientation, "shading_category": "unshaded", "glazing_choice": prop.get("glazing_choice"),
+            "u_value_w_m2k": ai_preliminary._number(prop.get("u_value_w_m2k")),
+            "shgc": ai_preliminary._number(prop.get("solar_property")) if prop.get("solar_property_type") == "shgc" else None,
+            "glazing_source": str(prop.get("source_id") or "Cited PDF glazing property"),
+            "confidence": confidence, "page": evidence[0]["page"], "evidence": evidence,
+            "assumptions": ["ai_skill_opening_proposal", "unshaded"],
+        }
+        proposal.setdefault("openings", []).append(opening)
+        existing_opening_keys.add(opening_id)
     return proposal
 
 
@@ -908,8 +1461,20 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
             room["page"] = geometry_row.get("page") or room.get("page")
             room["evidence"] = ai_preliminary._combined_evidence(room, geometry_row)
             room["geometry_candidate_status"] = "proposed"
+            geometry_area = ai_preliminary._number(room["geometry"].get("area_m2"))
+            calibration = room["geometry"].get("calibration", {})
+            if (geometry_area and geometry_area > 0
+                    and calibration.get("source") == "printed_floor_finish_area_sum"):
+                # Keep a cited, arithmetic-checked area-only tenant candidate
+                # eligible for the preliminary load draft. Its empty boundary
+                # still prevents this value from fabricating wall or window
+                # areas; those remain explicit envelope unknowns.
+                room["area_m2"] = geometry_area
+                room["area_origin"] = "ai_geometry"
+                room["area_verification_status"] = "provisional"
     if envelope_assessments:
         proposal["envelope_assessments"] = envelope_assessments
+    proposal = _merge_phase1_skill_proposals(paths, proposal)
     # A room explicitly outside the comfort-HVAC scope cannot contribute any
     # reviewer-traced or provider-proposed envelope surface to this subtotal.
     excluded_rooms = [row for row in proposal["rooms"] if isinstance(row, dict)
@@ -1058,15 +1623,23 @@ def _workspace_report(report):
     assumption_coverage = report.get("assumption_coverage")
     assumption_coverage = assumption_coverage if isinstance(assumption_coverage, dict) else {}
     return {
+        "status": report.get("status", "not_calculated"),
+        "report_type": report.get("report_type", ""),
+        "calculation_phase": report.get("calculation_phase"),
+        "blocked_reasons": [str(item) for item in (report.get("blocked_reasons", []) or [])[:5]],
         "label": report.get("label", ""),
         "included_scope_peak": report.get("included_scope_peak", {}),
         "assumption_coverage": {"low_confidence_count": assumption_coverage.get("low_confidence_count")},
         "review_queue": [{key: row.get(key) for key in queue_fields} for row in review_queue[:8] if isinstance(row, dict)],
         "unresolved_room_inputs": rows.get("unresolved_room_inputs", []),
         "known_exclusions": rows.get("known_exclusions", []),
+        "excluded_spaces": [{key: item.get(key) for key in ("room_name", "level", "scope", "reason") if item.get(key) is not None}
+                            for item in (report.get("excluded_spaces", []) or [])[:30] if isinstance(item, dict)],
         "room_names": [{"room_id": room_id, "name": name} for room_id, name in sorted(names.items())],
         "room_peaks": _room_peaks(report),
         "preliminary_surface_summary": report.get("preliminary_surface_summary", {}),
+        "phase1_assumptions": [{**item, "room_name": names.get(str(item.get("room_id", "")), "")}
+                                for item in (report.get("phase1_assumptions", []) or [])[:30] if isinstance(item, dict)],
         "design_conditions_basis": report.get("design_conditions_basis", {}),
         "refrigeration_process_exclusions": [{key: item.get(key) for key in ("room_name", "reason") if item.get(key) is not None}
                                               for item in report.get("refrigeration_process_exclusions", [])
@@ -1101,11 +1674,14 @@ def _response(web, project, response_view="full", check_freshness=None):
     settings = _settings(paths)
     input_set = _read(paths["current_set"], {})
     report = _read(paths["report"], {})
+    base_report = _read(paths["base_report"], {})
     stale_reasons = _stale_reasons(paths, input_set) if check_freshness else []
+    base_report_stale = bool(base_report and (stale_reasons or
+                                base_report.get("preliminary_input_set_fingerprint") != input_set.get("input_fingerprint")))
     run = _read(paths["run"], {})
     value_resolution = _resolution(paths)
     link_names = ({"codex_handoff", "codex_response"} if response_view == "workspace" else
-                  {"settings", "run", "model", "current_set", "report", "codex_handoff", "codex_response", "value_resolution", "room_use", "room_scope", "ceiling_volume", "internal_gains", "airflow", "ahu_resolution", "plant_resolution", "safety_factor_resolution"})
+                  {"settings", "run", "model", "current_set", "report", "base_report", "codex_handoff", "codex_response", "value_resolution", "room_use", "room_scope", "ceiling_volume", "internal_gains", "airflow", "ahu_resolution", "plant_resolution", "safety_factor_resolution"})
     artifact_links = {name: web.safe_link(path) for name, path in paths.items()
                       if name in link_names and path.exists()}
     if response_view == "workspace":
@@ -1114,6 +1690,8 @@ def _response(web, project, response_view="full", check_freshness=None):
         return {
             "id": project["id"], "settings": settings, "run": workspace_run,
             "hourly_ai_preliminary_load_report": _workspace_report(report),
+            "phase1_base_room_load_report": _workspace_report(base_report),
+            "phase1_base_room_load_report_stale": base_report_stale,
             "status": ("stale" if stale_reasons else ("current" if input_set else "not_calculated"))
                       if check_freshness else "freshness_pending",
             "freshness_pending": not check_freshness,
@@ -1127,6 +1705,8 @@ def _response(web, project, response_view="full", check_freshness=None):
         "id": project["id"], "settings": settings, "run": run,
         "model": _read(paths["model"], {}), "input_set": input_set,
         "hourly_ai_preliminary_load_report": report,
+        "phase1_base_room_load_report": base_report,
+        "phase1_base_room_load_report_stale": base_report_stale,
         "status": "stale" if stale_reasons else ("current" if input_set else "not_calculated"),
         "stale_reasons": stale_reasons,
         "provider_configured": bool(os.environ.get("OPENAI_API_KEY")),
@@ -1231,8 +1811,11 @@ def _assemble(web, project, source="manual_placeholder"):
     building, vision = _read(paths["building"], {}), _read(paths["vision"], {})
     if not building:
         raise ValueError("Analyse the PDF before assembling an AI preliminary model.")
-    existing_run = _read(paths["run"], {})
-    proposal = room_proposal(existing_run, paths["root"])
+    # Use the same current skill findings that feed room-use resolution.
+    # Previously assembly kept the base detector's shorter room list, so
+    # newly inferred enclosed spaces could be classified but never get into
+    # the room-by-room Phase 1 proposal.
+    proposal = _proposal_for_resolution(paths)
     room_use = _resolve_room_uses(paths, persist=True)
     geometry = _preliminary_geometry(paths)
     ceiling_artifact = _resolve_ceiling_volumes(paths, persist=True)
@@ -1311,7 +1894,7 @@ def _assemble(web, project, source="manual_placeholder"):
     return input_set
 
 
-def _calculate(web, project):
+def _calculate(web, project, scope="full"):
     paths = _paths(project)
     input_set = _read(paths["current_set"], {})
     if not input_set:
@@ -1328,14 +1911,40 @@ def _calculate(web, project):
     missing = [label for label, path in required.items() if not path.exists()]
     if missing:
         raise ValueError("Cannot calculate the preliminary load yet. Missing required artifacts: " + ", ".join(missing) + ".")
-    try:
-        confirmed_set, confirmed_rooms, confirmation_summary = room_scope_confirmation.apply(
-            input_set, _read(paths["room_scope"], None), _room_use_artifact(paths))
-    except ValueError as error:
-        raise RoomScopeNotConfirmed(str(error)) from error
+    if scope == "phase1_base_room":
+        candidates = room_scope_confirmation.candidates(input_set, _room_use_artifact(paths))
+        has_calculable_room = any(row["status"] == "calculated" and row.get("area_m2") is not None
+                                  for row in candidates)
+        if has_calculable_room:
+            rows = [{"key": row["key"], "include": row["status"] == "calculated" and row.get("area_m2") is not None,
+                     "reason": "AI did not resolve a supported room use or area; excluded from this subtotal."
+                     if row["status"] != "calculated" or row.get("area_m2") is None else ""}
+                    for row in candidates]
+            try:
+                _confirm_room_scope(paths, {"reviewer": "AI Phase 1 scope resolver", "rows": rows,
+                                            "candidate_fingerprint": room_scope_confirmation.candidate_fingerprint(candidates),
+                                            "note": "Automatically included resolved rooms with areas; unresolved candidates remain listed as exceptions."})
+            except ValueError as error:
+                raise RoomScopeNotConfirmed(str(error)) from error
+        if has_calculable_room:
+            try:
+                confirmed_set, confirmed_rooms, confirmation_summary = room_scope_confirmation.apply(
+                    input_set, _read(paths["room_scope"], None), _room_use_artifact(paths))
+            except ValueError as error:
+                raise RoomScopeNotConfirmed(str(error)) from error
+        else:
+            confirmed_set, confirmed_rooms = input_set, []
+            confirmation_summary = {"reviewer": "AI Phase 1 scope resolver", "confirmed_at": ai_preliminary.now(),
+                                    "note": "No rooms had both a resolved use and area; see the room exceptions."}
+    else:
+        try:
+            confirmed_set, confirmed_rooms, confirmation_summary = room_scope_confirmation.apply(
+                input_set, _read(paths["room_scope"], None), _room_use_artifact(paths))
+        except ValueError as error:
+            raise RoomScopeNotConfirmed(str(error)) from error
     policy_artifact = _read(paths["safety_factor_resolution"], safety_factor_resolution.empty_safety_factor_resolution())
     policy = safety_factor_resolution.policy_for(policy_artifact, "cooling", preliminary=True)
-    report = ai_preliminary.calculate(confirmed_set, safety_factor_policy=policy)
+    report = ai_preliminary.calculate(confirmed_set, safety_factor_policy=policy, scope=scope)
     report["confirmed_rooms"] = confirmed_rooms
     report["room_scope_confirmation"] = confirmation_summary
     # Provenance is attached at render time; it does not change any hourly
@@ -1347,7 +1956,7 @@ def _calculate(web, project):
         report["provenance"] = shared_resolution.build_report_provenance(report, register)
     except (OSError, TypeError, ValueError):
         report["provenance"] = {"schema_version": 1, "register_fingerprint": "", "by_component_id": {}, "governing_components": []}
-    _write(paths["report"], report)
+    _write(paths["base_report"] if scope == "phase1_base_room" else paths["report"], report)
     return report
 
 

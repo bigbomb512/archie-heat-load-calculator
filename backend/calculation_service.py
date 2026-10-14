@@ -14,11 +14,11 @@ from pathlib import Path
 from backend.job_runner import BackgroundJob
 
 JOB_FILE = "calculation_job.json"
-STEPS = [("answers", "Applying your answers"),
+STEPS = [("answers", "Applying available project information"),
          ("model", "Building the model from your rooms"),
-         ("rooms", "Confirming the rooms to cool"),
-         ("inputs", "Preparing the inputs (room uses, heights, people and equipment)"),
-         ("calculate", "Calculating the cooling load")]
+         ("rooms", "Resolving room scope from drawing evidence"),
+         ("inputs", "Resolving calculation inputs and assumptions"),
+         ("calculate", "Calculating the room load")]
 _JOB = BackgroundJob(JOB_FILE, STEPS, "archie-calculation",
                      "The calculation stopped before it finished (the server was restarted). Press Calculate again.")
 _RUNNING = _JOB.running
@@ -38,13 +38,14 @@ def _include_map(data):
 
 
 def _rows(scope, include):
-    """Cooled rooms: the person's ticks, else the drawing default; a room without an area can't be cooled."""
+    """Include AI-resolved comfort rooms with area; unresolved use/area stays an exception."""
     rows = []
     for row in scope.get("candidates") or []:
-        has_area = row.get("area_m2") is not None
+        calculable = row.get("status") == "calculated" and row.get("area_m2") is not None
         chosen = include.get(row.get("key"))
-        cooled = has_area and (chosen if chosen is not None else bool(row.get("include") or has_area))
-        rows.append({"key": row.get("key"), "include": cooled, "reason": "" if cooled else "Not cooled"})
+        cooled = calculable and (chosen if chosen is not None else bool(row.get("include", True)))
+        reason = "" if cooled else ("AI could not resolve a supported room use or area." if not calculable else "Excluded by room selection.")
+        rows.append({"key": row.get("key"), "include": cooled, "reason": reason})
     return rows
 
 
@@ -68,6 +69,9 @@ def _resolve_inputs(web, project_id):
 def start(web, project, data):
     include = _include_map(data)
     reviewer = " ".join(str(data.get("reviewer") or "").split())[:80] or "Operator"
+    phase = data.get("phase", "full")
+    if phase not in {"phase1_base_room", "full"}:
+        raise ValueError("Calculation phase must be phase1_base_room or full.")
 
     def work(web, project_id, step):
         from backend import ai_preliminary_service, job_service
@@ -83,13 +87,14 @@ def start(web, project, data):
             step("rooms")
             input_set = ai_preliminary_service._read(paths["current_set"], {})
             scope = ai_preliminary_service._room_scope_state(paths, input_set)
-            rows = _rows(scope, include)
-            if not any(row["include"] for row in rows):
-                raise ValueError("No room has an area yet. Add room areas on the Rooms tab, then calculate.")
-            ai_preliminary_service._confirm_room_scope(paths, {"reviewer": reviewer, "rows": rows,
-                                                                "candidate_fingerprint": scope.get("candidate_fingerprint", "")})
+            if phase == "full":
+                rows = _rows(scope, include)
+                if not any(row["include"] for row in rows):
+                    raise ValueError("No room has an area yet. The AI could not resolve a room area from the drawings.")
+                ai_preliminary_service._confirm_room_scope(paths, {"reviewer": reviewer, "rows": rows,
+                                                                    "candidate_fingerprint": scope.get("candidate_fingerprint", "")})
             step("calculate")
-            ai_preliminary_service._calculate(web, web.project_by_id(project_id))
+            ai_preliminary_service._calculate(web, web.project_by_id(project_id), scope=phase)
 
         resolved = False
         try:
@@ -104,8 +109,9 @@ def start(web, project, data):
         project = web.project_by_id(project_id)
         project["updated_at"] = __import__("ai.ai_preliminary", fromlist=["now"]).now()
         web.update_project(project)
-        report = ai_preliminary_service._read(paths["report"], {})
+        report = ai_preliminary_service._read(paths["base_report"] if phase == "phase1_base_room" else paths["report"], {})
         peak = report.get("included_scope_peak") or {}
-        return {"total_kw": peak.get("final_design_total_kw", peak.get("design_total_kw")), "inputs_resolved": resolved}
+        return {"phase": phase, "total_kw": peak.get("final_design_total_kw", peak.get("design_total_kw")),
+                "inputs_resolved": resolved, "excluded_rooms": report.get("excluded_spaces", [])}
 
-    return _JOB.start(web, project, {"requested_by": reviewer}, work)
+    return _JOB.start(web, project, {"requested_by": reviewer, "phase": phase}, work)

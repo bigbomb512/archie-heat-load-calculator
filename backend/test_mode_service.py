@@ -231,7 +231,7 @@ def _prepare_codex_skill_inputs(project, run):
     paths = _project_paths(project)
     ai_input = _read(paths["ai_input"], {})
     coverage = _read(paths["coverage"], {})
-    groups = select_page_groups(ai_input, coverage)
+    groups = select_page_groups(ai_input, coverage, _read(paths["root"] / "page_inventory.json", {}))
     workspace = paths["root"]
     selected_ids = [row["group_id"] for row in groups]
     _atomic_json(workspace / "vision_extraction_settings.json", {

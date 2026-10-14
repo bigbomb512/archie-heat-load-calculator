@@ -35,6 +35,24 @@ class GeometryResolutionTests(unittest.TestCase):
         self.assertTrue(polygon_is_simple(square))
         self.assertIsNone(polygon_area([[0, 0], [10, 0], [0, 0]]))
 
+    def test_complete_printed_floor_finish_sum_can_supply_area_without_inventing_a_boundary(self):
+        ai = {"source_pdf": "cafe.pdf", "drawing_set": {"pages": [{"page": 1,
+            "title": "Proposed Floor Plan", "detected_type": "floor_plan", "drawing_number": "301",
+            "level_name": "Ground", "structured_content": {"markdown": "Cafe tenancy"}}]}}
+        coverage = build_drawing_coverage(ai)
+        proposal = {"room_id": "room-use:ground:cafe", "label": "Cafe", "level_name": "Ground",
+            "page": 1, "source_pages": [1], "confidence": 0.9,
+            "evidence": [{"page": 1, "excerpt": "TL 02: 40.73 m²; TL 03: 20.71 m²"}],
+            "geometry": {"area_m2": 61.44, "formula": "40.73 m² + 20.71 m² = 61.44 m²",
+                "calibration": {"source": "printed_floor_finish_area_sum"}}}
+        result = build_geometry_resolution(ai, coverage, {}, room_proposals=[proposal])
+        areas = [row for row in result["entities"] if row.get("kind") == "area"]
+        self.assertEqual(len(areas), 1)
+        self.assertEqual(areas[0]["geometry_status"], "ai_estimated")
+        self.assertEqual(areas[0]["value"]["area_m2"], 61.44)
+        self.assertEqual(areas[0]["level_candidate"], "Ground")
+        self.assertNotIn("boundary_points_px", areas[0]["value"])
+
     def test_all_page_roles_are_capability_mapped(self):
         ai = {"source_pdf": "drawing.pdf", "drawing_set": {"pages": [
             {"page": 1, "title": "Dimension Plan", "detected_type": "floor_plan", "drawing_number": "202", "structured_content": {"markdown": ""}},

@@ -67,6 +67,33 @@ class AiPrimaryGeometryTests(unittest.TestCase):
         self.assertEqual(candidate["geometry_mode"], "preliminary_ai_estimate")
         self.assertTrue(candidate["derivation"]["formula"])
 
+    def test_calibrated_preliminary_trace_keeps_conflicts_as_warnings(self):
+        ai, coverage, building, _vision = fixture()
+        coverage["pages"][0]["proposed_role"] = "main_floor_plan"
+        candidate = {
+            "room_id": "room-use:level-1:shop", "label": "Connected tenancy including counter zone",
+            "level_name": "Unassigned level", "page": 1, "source_pages": [1],
+            "confidence_score": 0.76, "confidence": "medium",
+            "unresolved_fields": ["Conditioning ownership", "Curve trace needs checking"],
+            "conflicts": ["Short room label does not identify the connected tenancy boundary."],
+            "geometry": {
+                "boundary_points_px": [[0, 0], [100, 0], [100, 50], [0, 50], [0, 0]],
+                "scale_mm_per_px": 1, "coordinate_units": "px",
+                "calibration": {"confirmed_main_viewport_scale": "1:1",
+                    "canonical_image_width_px": 100, "pdf_physical_page_width_mm": 100},
+            },
+        }
+        result = build_geometry_resolution(ai, coverage, building, vision_response={},
+            resolution_mode="preliminary_ai_estimate", room_proposals=[candidate])
+        area = next(row for row in result["entities"] if row["kind"] == "area")
+        self.assertEqual(area["geometry_status"], "ai_estimated")
+        self.assertEqual(area["value"]["area_m2"], 0.005)
+        self.assertEqual(area["value"]["room_identity_id"], "room-use:level-1:shop")
+        self.assertIn("confidence_below_engineering_threshold", area["value"]["review_warnings"])
+        self.assertIn("reported_conflict: Short room label does not identify the connected tenancy boundary.",
+                      area["value"]["review_warnings"])
+        self.assertFalse(any(row["geometry_status"] == "geometry_confirmed" for row in result["entities"]))
+
     def test_engineering_reviewed_mode_does_not_trust_ai_alone(self):
         ai, coverage, building, vision = fixture("engineering_reviewed")
         result = build_geometry_resolution(ai, coverage, building, vision_response=vision)

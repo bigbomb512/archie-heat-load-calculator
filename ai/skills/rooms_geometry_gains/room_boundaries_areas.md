@@ -8,6 +8,13 @@
   scale; ignore title-block and inset-detail scales. Prefer explicit room-area
   notation, otherwise trace an ordered closed polygon along the room's actual
   inside-face boundary.
+- If no complete printed dimension chain is available, use the confirmed
+  main-viewport scale and PDF page-size calibration supplied in the coordinate
+  frame to calculate a preliminary AI-estimated area from a directly traced,
+  closed polygon. This is authorized even when a sheet says "do not scale";
+  identify that note in the proposal and label the area as an unverified draft
+  estimate. Never call it a measured or construction-accurate area. Printed
+  dimensions take precedence and any disagreement must be reported.
 - Resolve physical thermal zones, not every functional label as a separate
   area. If a bar, buffet, and customer seating are continuous and not divided
   by a physical partition, return one connected hospitality-zone polygon and
@@ -16,6 +23,30 @@
   system boundary supports separate ownership. At a doorway, close the room
   polygon at the threshold and record that area convention instead of leaving
   an artificial open loop.
+- When a fitout plan presents one visibly open tenant space with functional
+  labels such as counter, kiosk, and food preparation, prefer one whole-tenant
+  conditioned zone unless physical partitions or an explicit HVAC boundary
+  establish separate zones. Printed finish-schedule areas may corroborate the
+  traced total when their extents and schedule entries are legible; do not
+  mistake different finishes for separate rooms.
+- For a whole-tenant candidate, trace the closed inside-face perimeter shown
+  on the primary floor plan, including connected open areas around islands and
+  counters. Assume doors, windows, and sliding doors are closed; close the
+  boundary at their wall opening/threshold. Do not require an individually
+  labelled room outline when the connected tenancy perimeter is clear.
+- When the primary plan explicitly shows a confirmed scale and full-page
+  coordinate calibration, trace that visible perimeter and return the ordered
+  polygon with the exact scale operands. Do not leave geometry empty solely
+  because every perimeter segment is not individually dimensioned; retain the
+  preliminary estimate and site-verification caveat.
+- If the plan clearly shows that labeled floor-finish regions together cover
+  the entire connected tenancy, and the finish legend gives an area for each,
+  use the sum as the tenancy's preliminary floor area even if the plan does
+  not print one room-area label. Return the exact addends, formula, both page
+  citations, and the assumption that the schedule covers the whole tenant.
+  Treat different finishes as regions of one thermal zone unless physical
+  partitions or an HVAC boundary prove otherwise. Keep the area distinct from
+  the gross wall-to-wall rectangle and report any available dimension check.
 - Calibrate image/vector coordinates only with the main viewport scale or
   dimensions whose extension lines, witness marks, or explicit references
   measure the traced wall segment. Do not use unrelated dimensions, another

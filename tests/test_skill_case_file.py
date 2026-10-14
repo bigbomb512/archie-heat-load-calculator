@@ -266,13 +266,13 @@ class GroupTests(unittest.TestCase):
         with patch.object(skills, "subskill_instructions_fingerprint", edited):
             self.run_review("retry")
         asked = [skill_id for prompt in self.provider.prompts[before:] for skill_id in called_skills(prompt)]
-        self.assertEqual(set(asked), {"equipment_evidence", "schedule_evidence", "information_needs"})
+        self.assertEqual(set(asked), {"equipment_evidence", "schedule_evidence", "outside_air", "information_needs"})
         self.assertTrue(any(prompt.startswith("Perform these") and "Subskill: schedule_evidence —" in prompt
                             and "Subskill: equipment_evidence —" in prompt for prompt in self.provider.prompts[before:]))
 
 
 class RunTests(unittest.TestCase):
-    def test_a_changed_builder_rebuilds_its_skill_and_unaffected_ai_skills_are_reused(self):
+    def test_a_changed_room_boundary_instruction_calls_ai_and_unaffected_ai_skills_are_reused(self):
         provider = FakeProvider()
         skills.CASE_FILE_PROVIDER_FACTORY = lambda: provider
         try:
@@ -286,10 +286,12 @@ class RunTests(unittest.TestCase):
                 wait = lambda: [time.sleep(0.05) for _ in range(600) if project["id"] in skills._RUNNING]
                 skills.start_after_reading(Web(), project); wait()
                 before = len(provider.prompts)
-                with patch.dict(skills._CODE_BUILT_VERSIONS, {"room_boundaries_areas": "traced_rooms_v2"}):
+                real = skills.subskill_instructions_fingerprint
+                edited = lambda subskill: real(subskill) + ("x" if subskill["id"] == "room_boundaries_areas" else "")
+                with patch.object(skills, "subskill_instructions_fingerprint", edited):
                     skills.post(Web(), project, {"action": "retry", "scope": "pdf_review"}); wait()
                 manifest = json.loads((root / "skill_workflow_run.json").read_text())
-            self.assertFalse(manifest["subskills"]["room_boundaries_areas"].get("reused_from"))   # rebuilt by the new builder
+            self.assertFalse(manifest["subskills"]["room_boundaries_areas"].get("reused_from"))   # requested from AI again
             self.assertTrue(manifest["subskills"]["equipment_evidence"].get("reused_from"))       # AI result kept
             # Only skills after it are asked again (a prerequisite's fingerprint is part of each dependant's inputs).
             registry = {row["id"]: row for row in skills.load_subskill_registry()["subskills"]}
@@ -300,7 +302,7 @@ class RunTests(unittest.TestCase):
                     break
                 after |= more
             again = {skill_id for prompt in provider.prompts[before:] for skill_id in called_skills(prompt)}
-            self.assertTrue(again)
+            self.assertIn("room_boundaries_areas", again)
             self.assertLessEqual(again, after)
         finally:
             skills.CASE_FILE_PROVIDER_FACTORY = None
@@ -332,8 +334,9 @@ class RunTests(unittest.TestCase):
             self.assertLess(called.index("room_identity_use"), called.index("equipment_evidence"))
             self.assertEqual(manifest["subskills"]["information_needs"]["status"], "needs_review")
             self.assertNotIn("address_confirmation", called)               # confirmation stays with the operators
-            # Document mapping (from the page reading) and room boundaries (from traced outlines) are built in code.
-            self.assertFalse({"sheet_identity", "revision_scope", "page_relationships", "room_boundaries_areas"} & set(called))
+            # Document mapping stays deterministic; room boundaries are traced by AI from page evidence.
+            self.assertFalse({"sheet_identity", "revision_scope", "page_relationships"} & set(called))
+            self.assertIn("room_boundaries_areas", called)
             self.assertEqual(manifest["subskills"]["sheet_identity"]["status"], "needs_review")
             # Skills the needs list doesn't depend on aren't part of the default review and make no call.
             self.assertFalse({"plant_detection", "circuit_mapping", "pump_inputs", "airflow_deduplication", "surface_area",

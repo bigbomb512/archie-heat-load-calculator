@@ -95,8 +95,8 @@ def _recover_interrupted(paths):
     return job
 
 
-def _available(ai_input, coverage):
-    return select_page_groups(ai_input, coverage)
+def _available(ai_input, coverage, page_inventory=None):
+    return select_page_groups(ai_input, coverage, page_inventory)
 
 
 def _context_selection(ai_input, coverage):
@@ -109,7 +109,8 @@ def _response(web, project):
     job = _recover_interrupted(paths)
     ai_input = _read(paths["ai_input"], {})
     coverage = _read(paths["coverage"], {})
-    groups = _available(ai_input, coverage) if ai_input else []
+    page_inventory = _read(paths["root"] / "page_inventory.json", {})
+    groups = _available(ai_input, coverage, page_inventory) if ai_input else []
     context_selection = _context_selection(ai_input, coverage) if ai_input else {}
     settings = _settings(paths)
     return {
@@ -357,7 +358,8 @@ def _start(web, project, data, retry=False):
     if not ai_input:
         raise ValueError("Analyse and confirm the architect packet before starting AI extraction.")
     settings = _save_settings(paths, data.get("settings", {}))
-    groups = _available(ai_input, coverage)
+    page_inventory = _read(paths["root"] / "page_inventory.json", {})
+    groups = _available(ai_input, coverage, page_inventory)
     summary = selection_summary(settings, groups)
     _assert_startable(settings, groups, summary)
     previous = _recover_interrupted(paths)

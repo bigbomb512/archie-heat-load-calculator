@@ -11,6 +11,7 @@ from copy import deepcopy
 import hashlib
 import json
 import math
+import re
 
 from ai.geometry_review import normalise_vision
 from ai.drawing_coverage import has_current_level_classification
@@ -328,6 +329,19 @@ def _validate_ai_room(item, resolution_mode, page_by_number, room_entities):
         # Pixel geometry requires an explicit eligible calibration. Never use
         # visual proportion alone as a measurement.
         scale = item.get("scale_mm_per_px")
+        calibration = item.get("calibration") if isinstance(item.get("calibration"), dict) else {}
+        # When the page-frame builder has verified the printed main-viewport
+        # scale and PDF page dimensions, recompute mm/px here. This prevents an
+        # AI-provided conversion factor from changing the draft area.
+        scale_text = str(calibration.get("confirmed_main_viewport_scale") or "")
+        scale_match = re.search(r"1\s*:\s*(\d+(?:\.\d+)?)", scale_text)
+        image_width = calibration.get("canonical_image_width_px")
+        page_width_mm = calibration.get("pdf_physical_page_width_mm")
+        if (scale_match and isinstance(image_width, (int, float)) and image_width > 0
+                and isinstance(page_width_mm, (int, float)) and page_width_mm > 0):
+            scale = page_width_mm * float(scale_match.group(1)) / image_width
+            item["scale_mm_per_px"] = scale
+            item["scale_source"] = "confirmed_main_viewport_scale"
         if scale is not None and (not isinstance(scale, (int, float)) or not math.isfinite(scale) or scale <= 0):
             reasons.append("scale_calibration")
         if scale is None:
@@ -380,7 +394,10 @@ def _validate_ai_room(item, resolution_mode, page_by_number, room_entities):
     if resolution_mode == "engineering_reviewed" and not independent:
         reasons.append("independent_geometry_witness")
     high = _confidence_is_high(item)
-    if resolution_mode == "preliminary_ai_estimate" and not high:
+    confidence_score = item.get("confidence_score")
+    draft_confidence = (high or isinstance(confidence_score, (int, float))
+                        and math.isfinite(confidence_score) and confidence_score >= 0.70)
+    if resolution_mode == "preliminary_ai_estimate" and not draft_confidence:
         reasons.append("high_confidence_ai_required")
     # A closed, high-confidence polygon on an explicitly scaled main viewport
     # is useful as a draft geometry estimate even when vector-loop extraction
@@ -394,19 +411,46 @@ def _validate_ai_room(item, resolution_mode, page_by_number, room_entities):
         and calibration.get("pdf_physical_page_width_mm")
     )
     provisional_warnings = set()
-    if (resolution_mode == "preliminary_ai_estimate" and high and confirmed_viewport_scale
-            and polygon_is_simple(points) and area and area > 0 and not item.get("conflicts")):
+    hard_boundary_conflicts = {
+        "competing_same_page_boundary",
+    }
+    conflict_text = [str(value) for value in (item.get("conflicts") or [])]
+    has_hard_boundary_conflict = any(value in hard_boundary_conflicts for value in conflict_text)
+    draft_geometry_is_calibrated = (
+        resolution_mode == "preliminary_ai_estimate" and draft_confidence and confirmed_viewport_scale
+        and polygon_is_simple(points) and area and area > 0 and not has_hard_boundary_conflict
+    )
+    if draft_geometry_is_calibrated:
         provisional_warnings = {"precise_vector_boundary", "independent_dimension_cross_check",
-                                "exact_wall_vector_provenance", "resolver_area"}
+                                "exact_wall_vector_provenance", "resolver_area",
+                                "scale_derived_preliminary_area"}
+        if not high:
+            provisional_warnings.add("confidence_below_engineering_threshold")
+        # The closed polygon and confirmed scale can support a preliminary area
+        # while identity, scope, dimension-reading, or source-label concerns
+        # remain explicit warnings. They still prevent engineering approval.
+        provisional_warnings.update({"geometry_conflict", "room_identity", "room_identity_conflict",
+                                     "room_label_spatial_link", "dimension_consistency",
+                                     "high_confidence_ai_required"})
+        provisional_warnings.update(str(value) for value in (item.get("unresolved_fields") or []))
         # An unassigned floor is permitted only as an explicit draft identity
         # when the source drawing set has not established a named level.
         if str(level).strip().casefold() in {"unassigned level", "", "unassigned"}:
             provisional_warnings.update({"level", "verified_level"})
     review_warnings = sorted(set(reasons).intersection(provisional_warnings))
+    if draft_geometry_is_calibrated:
+        review_warnings = sorted(set(review_warnings) | {"scale_derived_preliminary_area"})
+        if not high:
+            review_warnings = sorted(set(review_warnings) | {"confidence_below_engineering_threshold"})
     if "resolver_area" in review_warnings:
         review_warnings[review_warnings.index("resolver_area")] = "area_recomputed_by_resolver"
         review_warnings = sorted(set(review_warnings))
     reasons = sorted(set(reasons).difference(provisional_warnings))
+    if has_hard_boundary_conflict:
+        reasons.append("geometry_conflict")
+    if draft_geometry_is_calibrated and conflict_text:
+        review_warnings = sorted(set(review_warnings) | {f"reported_conflict: {value}" for value in conflict_text})
+    reasons = sorted(set(reasons))
     return points, area, reasons, independent, review_warnings, coordinate_units
 
 
@@ -1034,6 +1078,32 @@ def build_geometry_resolution(ai_input, coverage=None, building=None, spatial_oc
         coordinate_units = str(geometry.get("coordinate_units", "mm" if geometry.get("boundary_points_mm") else "px")).casefold()
         wall_ids = geometry.get("wall_ids") or geometry.get("ordered_wall_ids") or []
         if not points and not wall_ids:
+            # A complete printed finish-area schedule can support a provisional
+            # whole-tenant area even when a polygon cannot yet be resolved. It
+            # must carry the exact formula, a recognized source, and page-linked
+            # evidence; this does not create wall geometry or surface areas.
+            calibration = geometry.get("calibration") if isinstance(geometry.get("calibration"), dict) else {}
+            area_source = str(calibration.get("source", ""))
+            try:
+                area_m2 = float(geometry.get("area_m2"))
+            except (TypeError, ValueError):
+                area_m2 = 0.0
+            evidence = proposal.get("evidence") if isinstance(proposal.get("evidence"), list) else []
+            page = proposal.get("page")
+            formula = str(geometry.get("formula") or "").strip()
+            if (area_source == "printed_floor_finish_area_sum" and area_m2 > 0 and formula and evidence
+                    and isinstance(page, int) and page in page_by_number):
+                witnesses = [add_witness(item.get("page"), label, "printed_finish_area",
+                    item.get("excerpt", ""), "skill_printed_floor_finish_area_sum",
+                    proposal.get("confidence", "unknown"), role=page_by_number.get(item.get("page"), {}).get("proposed_role", ""))
+                    for item in evidence if isinstance(item, dict) and isinstance(item.get("page"), int)
+                    and item.get("page") in page_by_number]
+                add_entity(page, proposal.get("label") or proposal.get("room_label") or "", "area",
+                    {"area_m2": area_m2, "derivation": {"method": area_source, "formula": formula,
+                     "calibration": calibration, "independent_witnesses": geometry.get("independent_witnesses", [])}},
+                    "ai_estimated", area_source, proposal.get("confidence", "unknown"),
+                    witness_ids=[row.get("witness_id") for row in witnesses],
+                    level=proposal.get("level_name") or proposal.get("level") or "Unassigned level")
             continue
         source_pages = proposal.get("source_pages") or ([proposal.get("page")] if proposal.get("page") is not None else [])
         primary_page = source_pages[0] if source_pages else proposal.get("page")
@@ -1159,6 +1229,12 @@ def build_geometry_resolution(ai_input, coverage=None, building=None, spatial_oc
             "geometry_confirmed" if active else "geometry_review_required"
         )
         value = {
+            # Skill room IDs are the canonical room-use identity when the
+            # displayed physical-zone label differs from a short plan label
+            # (for example, a connected tenancy labelled "Bar" in the PDF).
+            # Keep the mapping auditable so the preliminary model can join the
+            # area while preserving the label discrepancy as a warning.
+            "room_identity_id": item.get("room_geometry_id", ""),
             "boundary_points_px": points if coordinate_units == "px" else [],
             "boundary_points_mm": points if coordinate_units == "mm" else [],
             "coordinate_units": coordinate_units,
@@ -1193,6 +1269,7 @@ def build_geometry_resolution(ai_input, coverage=None, building=None, spatial_oc
             "confidence_score": item.get("confidence_score"),
             "resolution_mode": resolution_mode,
             "scale_source": item.get("scale_source", "ai_cited_scale"),
+            "calibration": deepcopy(item.get("calibration", {})) if isinstance(item.get("calibration"), dict) else {},
             "derivation": {
                 "formula": ("shoelace_area_mm2 ÷ 1,000,000" if coordinate_units == "mm" else
                             "shoelace_area_px2 × (mm_per_px²) ÷ 1,000,000"),
@@ -1259,7 +1336,8 @@ def build_geometry_resolution(ai_input, coverage=None, building=None, spatial_oc
             "dimension_ids": item.get("dimension_ids", []),
             "wall_bindings": value.get("wall_bindings", []),
             "dimension_bindings": value.get("dimension_bindings", []),
-            "calibration": {"mm_per_px": item.get("scale_mm_per_px"), "source": value.get("scale_source"),
+            "calibration": {**(deepcopy(item.get("calibration", {})) if isinstance(item.get("calibration"), dict) else {}),
+                            "mm_per_px": item.get("scale_mm_per_px"), "source": value.get("scale_source"),
                             "operands": value.get("derivation", {}).get("operands", {})},
             "area_m2": value.get("area_m2"),
             "independent_witness_ids": value.get("independent_witness_ids", []),

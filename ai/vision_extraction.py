@@ -282,7 +282,7 @@ def validate_settings(raw):
     return result
 
 
-def select_page_groups(ai_input, coverage):
+def select_page_groups(ai_input, coverage, page_inventory=None):
     """Create stable, capability-aware request groups from the complete register.
 
     Older coverage artifacts contain only ``proposed_role``; those remain
@@ -294,26 +294,61 @@ def select_page_groups(ai_input, coverage):
     selected_pages = set(context["main_context_pages"])
     context_by_page = {row["page"]: row for row in context["pages"]}
     roles = coverage.get("page_roles", []) if isinstance(coverage, dict) else []
+    inventory_pages = (page_inventory.get("pages", page_inventory)
+                       if isinstance(page_inventory, dict) else {})
+    inventory_pages = {int(page): row for page, row in inventory_pages.items()
+                       if str(page).isdigit() and isinstance(row, dict)}
+    role_by_page = {row.get("page"): row for row in roles if isinstance(row, dict)}
+
+    def indexed_schedule_role(page):
+        record = inventory_pages.get(page, {})
+        if record.get("page_type") not in {"schedule", "material_schedule", "equipment_schedule", "lighting_schedule",
+                                             "construction_or_detail", "detail"}:
+            return ""
+        descriptor = " ".join([str(record.get("title") or ""), str(record.get("drawing_number") or ""),
+                               *[str(item.get("what") or "") for item in record.get("information", [])
+                                 if isinstance(item, dict)]]).casefold()
+        if record.get("page_type") == "equipment_schedule" or "equipment schedule" in descriptor:
+            return "equipment_schedule"
+        if record.get("page_type") == "lighting_schedule" or "lighting schedule" in descriptor:
+            return "lighting_schedule"
+        if record.get("page_type") == "construction_or_detail" or "construction detail" in descriptor:
+            return "construction_or_detail"
+        if record.get("page_type") == "detail":
+            return "detail"
+        if record.get("page_type") == "material_schedule" or any(term in descriptor for term in
+                ("finish schedule", "finishes schedule", "material schedule", "wall finish", "floor finish")):
+            return "material_schedule"
+        return "schedule"
+
+    # OCR title errors can classify a finish schedule as a plan and hide it
+    # from the schedule/construction consent group. The indexed page type and
+    # schedule contents are stronger evidence for this routing decision.
+    indexed_schedule_pages = [page for page in sorted(inventory_pages)
+                              if indexed_schedule_role(page) and page in role_by_page]
+    selected_pages.update(indexed_schedule_pages[:8])
     grouped = []
     for group_id, accepted_roles in ROLE_GROUPS.items():
         members = []
         for role in roles:
             page = role.get("page")
-            if role.get("proposed_role") not in accepted_roles or page not in pages or page not in selected_pages:
+            indexed_role = indexed_schedule_role(page)
+            effective_role = indexed_role or role.get("proposed_role")
+            if effective_role not in accepted_roles or page not in pages or page not in selected_pages:
                 continue
             source = pages[page]
             selection = role.get("selection", "")
             # Keep ambiguous pages in the dedicated exception appendix rather
             # than duplicating them in a normal role group. This ensures the
             # provider sees the page with its uncertainty clearly labelled.
-            if selection in {"reference_only", "ranked_exception"}:
+            if selection in {"reference_only", "ranked_exception"} and not indexed_role:
                 continue
             members.append({
                 "page": page,
                 "drawing_number": role.get("resolved_drawing_number") or source.get("drawing_number", ""),
                 "drawing_number_candidates": (role.get("identity") or {}).get("drawing_number_candidates", []),
                 "title": source.get("title", ""),
-                "role": role.get("proposed_role"),
+                "role": effective_role,
                 "level_name": role.get("level_name") or source.get("level_name", ""),
                 "structured_text": str(source.get("structured_content", {}).get("markdown", ""))[:12000],
                 "capability_map": role.get("capability_map", {}),

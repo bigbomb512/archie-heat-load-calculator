@@ -46,7 +46,7 @@
   const state = {projectId: null, analysis: null, status: null, tab: "project", subtab: "", active: false, engineer: false,
                  include: new Map(), poll: null, busy: new Set(), message: "", pageReviewOpen: false, envelopeCtx: null,
                  wallsRoomId: "", wallsTraceId: "", windowsRoomId: "", windowsTraceId: "",
-                 projectDraft: null, envelopeDrafts: {}, skillReview: null, visionSettings: null};
+                 projectDraft: null, envelopeDrafts: {}, skillReview: null, visionSettings: null, phase1Auto: new Map()};
 
   const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
   const kw = value => (value == null || !isFinite(value)) ? "—" : Number(value).toFixed(1);
@@ -180,34 +180,82 @@
   // One card on every tab: the step to do now in plain words, one button that goes exactly there (or calculates),
   // and the whole list of steps for the job underneath (/api/guide).
   const GUIDE_ICON = {done: "✓", needed: "●", error: "!", working: "◌", later: "○", optional: "○"};
+  const GUIDE_PHASES = [
+    {id: "base-room", title: "Phase 1", name: "AI base room load", detail: "AI reads the drawings, resolves each room’s area and envelope, then calculates its base heat load. Only genuine exceptions need your input.",
+      stepIds: ["ai", "address", "above", "rooms", "walls", "roof", "windows", "base_load"]},
+    {id: "room-loads", title: "Phase 2", name: "Operating loads and results", detail: "Add people, lights, equipment, ventilation and airflow, then calculate each room’s complete load.",
+      stepIds: ["questions", "equipment", "calculate", "findings", "result"]},
+  ];
+  function guidePhaseForStep(stepId) { return GUIDE_PHASES.find(phase => phase.stepIds.includes(stepId)) || GUIDE_PHASES[1]; }
+  function guidePhaseState(phase, steps, nowId) {
+    const rows = steps.filter(row => phase.stepIds.includes(row.id) && row.state !== "optional");
+    if (rows.length && rows.every(row => row.state === "done")) return "Complete";
+    if (phase.stepIds.includes(nowId)) return "In progress";
+    if (rows.some(row => row.state === "error")) return "Stopped";
+    if (rows.some(row => ["needed", "working"].includes(row.state))) return "Up next";
+    return "Not started";
+  }
   async function renderGuide() {
     if (!guideBox) return;
     const projectId = state.projectId;
     const guide = await getJson(`/api/guide?project_id=${encodeURIComponent(projectId)}`).catch(() => null);
     if (!guide || state.projectId !== projectId) return;
     const steps = guide.steps || [];
-    const now = steps.find(row => row.id === guide.now) || steps[steps.length - 1];
+    let now = steps.find(row => row.id === guide.now) || steps[steps.length - 1];
     if (!now) { guideBox.hidden = true; return; }
+    if (now.id === "base_load" && now.state === "needed" && now.action?.kind === "calculate_base") {
+      const autoState = state.phase1Auto.get(projectId);
+      if (autoState === "running" || autoState === "checking") {
+        now = {...now, state: "working", action: {...now.action, label: "Calculating Phase 1 base load"}};
+      } else if (autoState === "failed") {
+        now = {...now, action: {...now.action, label: "Retry Phase 1 base load"}};
+      } else if (autoState !== "deferred") {
+        // A previously completed report can become stale after drawing inputs
+        // change. In that case the guide returns to `needed`; run Phase 1 again.
+        state.phase1Auto.set(projectId, "checking");
+        setTimeout(() => autoStartPhase1(projectId), 0);
+      }
+    }
+    const activePhase = guidePhaseForStep(now.id);
     const href = row => `#/job/${encodeURIComponent(projectId)}/${row.action.tab}${row.action.subtab ? `/${row.action.subtab}` : ""}`;
     const here = now.action.kind === "go" && now.action.tab === state.tab && (!now.action.subtab || now.action.subtab === state.subtab);
-    const button = now.action.kind === "calculate"
-      ? `<button class="btn key" type="button" data-ws-guide-calculate>${esc(now.action.label)}</button>`
+    const button = ["calculate", "calculate_base"].includes(now.action.kind)
+      ? `<button class="btn key" type="button" data-ws-guide-calculate${now.state === "working" ? " disabled" : ""}>${esc(now.action.label)}</button>`
       : now.state === "working"
         ? `<a class="btn ghost" href="${href(now)}" data-ws-guide-go>${esc(now.action.label)}</a>`
         : here ? `<p class="ws-guide-here" data-ws-guide-here>You're in the right place: it's on this page, below.</p>`
           : `<a class="btn key" href="${href(now)}" data-ws-guide-go>${esc(now.action.label)} →</a>`;
-    const list = steps.map((row, index) => `<li class="is-${esc(row.state)}${row.id === now.id ? " is-now" : ""}" data-ws-guide-step="${esc(row.id)}">
-      <span class="ws-guide-icon" aria-hidden="true">${GUIDE_ICON[row.state] || "○"}</span>
-      <a href="${href(row)}">${index + 1}. ${esc(row.title)}</a>${row.count ? ` <small>(${esc(row.count)})</small>` : ""}
-      <small class="ws-guide-state">${esc({done: "done", needed: "to do", error: "stopped", working: "working", later: "later", optional: "optional"}[row.state] || "")}</small></li>`).join("");
+    const phaseCards = GUIDE_PHASES.map(phase => {
+      const status = guidePhaseState(phase, steps, now.id);
+      const current = phase.id === activePhase.id;
+      const phaseSteps = steps.filter(row => phase.stepIds.includes(row.id));
+      const complete = phaseSteps.filter(row => row.state === "done").length;
+      const required = phaseSteps.filter(row => row.state !== "optional").length;
+      return `<article class="ws-guide-phase${current ? " is-current" : ""}${status === "Complete" ? " is-complete" : ""}" data-ws-phase-card="${phase.id}"${current ? ' aria-current="step"' : ""}>
+        <p class="ws-guide-phase-kicker">${phase.title}</p><h3>${phase.name}</h3><p>${phase.detail}</p>
+        <small>${esc(status)}${required ? ` · ${complete} of ${required} steps done` : ""}</small></article>`;
+    }).join("");
+    const list = GUIDE_PHASES.map(phase => {
+      const phaseRows = steps.map((row, index) => ({row, index})).filter(({row}) => phase.stepIds.includes(row.id));
+      if (!phaseRows.length) return "";
+      const items = phaseRows.map(({row, index}) => `<li class="is-${esc(row.state)}${row.id === now.id ? " is-now" : ""}" data-ws-guide-step="${esc(row.id)}" data-ws-phase="${phase.id}">
+        <span class="ws-guide-icon" aria-hidden="true">${GUIDE_ICON[row.state] || "○"}</span>
+        <a href="${href(row)}">${index + 1}. ${esc(row.title)}</a>${row.count ? ` <small>(${esc(row.count)})</small>` : ""}
+        <small class="ws-guide-state">${esc({done: "done", needed: "to do", error: "stopped", working: "working", later: "later", optional: "optional"}[row.state] || "")}</small></li>`).join("");
+      return `<section class="ws-guide-step-group"><h3 class="ws-guide-group-title" data-ws-guide-phase="${phase.id}">${phase.title}: ${phase.name}</h3><ol class="ws-guide-steps">${items}</ol></section>`;
+    }).join("");
     guideBox.hidden = false;
     guideBox.innerHTML = `<div class="ws-guide-now is-${esc(now.state)}" data-ws-guide-now="${esc(now.id)}">
-      <p class="ws-guide-kicker">Next step · ${esc(guide.done)} of ${esc(guide.total)} done</p>
+      <p class="ws-guide-kicker"><span>${activePhase.title} of 2 · ${activePhase.name}</span><span>Next step · ${esc(guide.done)} of ${esc(guide.total)} done</span></p>
       <h2 data-ws-guide-title>${esc(now.title)}${now.count ? ` <small>(${esc(now.count)})</small>` : ""}</h2>
       <p data-ws-guide-why>${esc(now.why)}</p>
       <div class="ws-guide-actions">${button}</div>
-      <details data-ws-guide-all ${state.guideOpen ? "open" : ""}><summary>All steps for this job</summary><ol class="ws-guide-steps">${list}</ol></details></div>`;
-    guideBox.querySelector("[data-ws-guide-calculate]")?.addEventListener("click", () => { go(now.action.tab); calculate(); });
+      <div class="ws-guide-phases" aria-label="Two project phases">${phaseCards}</div>
+      <details data-ws-guide-all ${state.guideOpen ? "open" : ""}><summary>All steps for this job</summary>${list}</details></div>`;
+    guideBox.querySelector("[data-ws-guide-calculate]")?.addEventListener("click", () => {
+      go(now.action.tab);
+      calculate(now.action.kind === "calculate_base" ? "phase1_base_room" : "full");
+    });
     guideBox.querySelector("[data-ws-guide-all]")?.addEventListener("toggle", event => { state.guideOpen = event.target.open; });
   }
 
@@ -364,8 +412,9 @@
     const openNeeds = (review.findings || []).filter(row => row.subskill_id === "information_needs" && row.field === "needs"
       && !(review.answers || {})[row.id]).length;
     // Findings not yet accepted or rejected, from the equipment list and the skills (the to-find list is counted apart).
+    const needsHumanDecision = row => row.evidence !== "missing" && !["accepted", "rejected", "missing"].includes(row.status);
     const openReview = (equipment?.open || 0) + (review.findings || []).filter(row => row.subskill_id !== "information_needs"
-      && !["accepted", "rejected"].includes(row.status)).length;
+      && needsHumanDecision(row)).length;
     // One line for where the PDF review is, in the order its three steps run.
     const drawingMessage = busy(reading)
       ? "Step 1 of 4: reading every page with AI. You can carry on with the other tabs meanwhile."
@@ -377,10 +426,10 @@
           ? "Step 4 of 4: working through the drawings. You can carry on with the other tabs meanwhile."
           : review.status === "failed"
             ? "The PDF review didn't finish. The reason is on Findings; retry below, or use the manual fallback on Pages & AI."
-            : review.status === "blocked"
-              ? "Part of the PDF review is waiting for something (shown on Findings). Everything else it found is ready to review."
+      : review.status === "blocked"
+              ? "One AI task is waiting or stopped. Phase 1 can still calculate from saved drawing evidence; unresolved items will be listed as exceptions."
               : review.status === "needs_review" || openReview
-                ? `The PDF review has finished. Some of what it found still needs your review${openNeeds ? `, and ${openNeeds} item${openNeeds === 1 ? " is" : "s are"} still to find` : ""}.`
+                ? `The AI review has finished. Phase 1 does not require accepting each drawing suggestion${openNeeds ? `; ${openNeeds} missing detail${openNeeds === 1 ? " is" : "s are"} saved as Phase 2 follow-up` : ""}.`
                 : openNeeds
                   ? `The PDF review has finished. ${openNeeds} item${openNeeds === 1 ? " is" : "s are"} still to find.`
                   : "Drawing analysis is complete. Review any items marked To do or Review in Rooms, Walls & roof, and Windows.";
@@ -391,16 +440,16 @@
       <button class="btn ghost mini" type="button" data-ws-manual-fallback>${pendingReview ? "Set up the checks again" : "Set up the manual checks"}</button></div></details>`;
     // One sub-tab at a time: the overview says what needs you; each list has its own sub-tab.
     const skillFindings = (review.findings || []).filter(row => row.subskill_id !== "information_needs");
-    const openFindings = skillFindings.filter(row => !["accepted", "rejected"].includes(row.status)).length;
+    const openFindings = skillFindings.filter(needsHumanDecision).length;
     const equipmentOpen = equipment?.open || 0;
     const stepState = row => busy(row) ? "working" : ["failed", "blocked", "interrupted"].includes(row?.status) ? "error"
       : row?.status === "done" || ["needs_review", "complete", "done"].includes(row?.status) ? "done" : "todo";
     (state.drawingsNav ||= {})[projectId] = {
-      overview: {state: busy(review) || busy(reading) || busy(equipment) ? "working" : openNeeds || openReview ? "check" : "done"},
+      overview: {state: busy(review) || busy(reading) || busy(equipment) ? "working" : stepState(review) === "error" ? "error" : openNeeds || equipmentOpen ? "check" : "done"},
       to_find: {state: openNeeds ? "needed" : "done", count: openNeeds, detail: openNeeds ? "To answer" : "Complete"},
       equipment: {state: busy(equipment) ? "working" : equipmentOpen ? "check" : "done", count: equipmentOpen, detail: equipmentOpen ? "To review" : stepState(equipment) === "todo" ? "Not yet" : "Complete"},
-      findings: {state: busy(review) ? "working" : openFindings ? "check" : stepState(review) === "error" ? "error" : "done", count: openFindings,
-                 detail: openFindings ? "To review" : STATE_TEXT[busy(review) ? "working" : "done"]},
+      findings: {state: busy(review) ? "working" : stepState(review) === "error" ? "error" : "done", count: openFindings,
+                 detail: openFindings ? "Optional suggestions" : STATE_TEXT[busy(review) ? "working" : "done"]},
       pages: {state: stepState(reading) === "error" ? "error" : busy(reading) ? "working" : "done", detail: reading?.read ? `${reading.read} read` : "Details"},
     };
     renderSubtabs();
@@ -806,7 +855,7 @@
     const rows = group("To review", "proposed") + group("Accepted", "accepted") + group("Rejected", "rejected");
     const canRetry = ["failed", "blocked", "interrupted"].includes(run.status);
     return `<section class="ws-page-reading" aria-label="Equipment found in the drawings" data-ws-equipment><h3>Equipment found in the drawings</h3>
-      <p class="ws-fine">Read from every page that shows equipment. These are proposals: accept, correct or reject each one. Power ratings are only what the drawings print.</p>
+      <p class="ws-fine">Clear items verified against the drawing text are accepted automatically. Review conflicting, inferred or unverified readings. Power ratings are only what the drawings print.</p>
       <p class="${canRetry ? "ws-banner is-warn" : "ws-fine"}" role="status" data-ws-equipment-status>${esc(statusText)}</p>
       ${canRetry ? `<button class="btn ghost mini" type="button" data-ws-equipment-retry>Retry reading the equipment</button>` : ""}
       ${rows}</section>`;
@@ -902,7 +951,7 @@
 
   function pdfReviewMarkup(review, vision) {
     const reviewFindings = (review.findings || []).filter(row => row.subskill_id !== "information_needs");
-    const openCounts = reviewFindings.filter(row => !["accepted", "rejected"].includes(row.status)).reduce((counts, row) => {
+    const openCounts = reviewFindings.filter(row => row.evidence !== "missing" && !["accepted", "rejected", "missing"].includes(row.status)).reduce((counts, row) => {
       counts[row.evidence] = (counts[row.evidence] || 0) + 1; return counts;
     }, {});
     const evidenceCount = Object.entries(openCounts).map(([name, count]) => `${count} ${name}`).join(" · ");
@@ -936,23 +985,28 @@
     });
     // Grouped by topic, the topics with findings to review first; inside a topic, those to review first.
     const topics = {};
-    reviewFindings.forEach((row, index) => (topics[row.subskill_id] ||= []).push({row, html: cards[index]}));
+    reviewFindings.forEach((row, index) => ((topics[row.subskill_id] ||= {actionable: [], missing: []})[
+      row.evidence === "missing" ? "missing" : "actionable"]).push({row, html: cards[index]}));
     const open = rows => rows.filter(item => !["accepted", "rejected"].includes(item.row.status)).length;
-    const findings = Object.entries(topics).sort((a, b) => (open(b[1]) > 0) - (open(a[1]) > 0) || b[1].length - a[1].length).map(([id, rows]) => {
-      const waiting = open(rows);
-      const ordered = [...rows].sort((a, b) => (["accepted", "rejected"].includes(a.row.status)) - (["accepted", "rejected"].includes(b.row.status)));
+    const findings = Object.entries(topics).sort((a, b) => (open(b[1].actionable) > 0) - (open(a[1].actionable) > 0)
+      || (b[1].actionable.length + b[1].missing.length) - (a[1].actionable.length + a[1].missing.length)).map(([id, topic]) => {
+      const waiting = open(topic.actionable);
+      const ordered = [...topic.actionable].sort((a, b) => (["accepted", "rejected"].includes(a.row.status)) - (["accepted", "rejected"].includes(b.row.status)));
+      const missing = topic.missing.length ? `<details class="ws-finding-missing" data-ws-finding-missing><summary>${topic.missing.length} unresolved field${topic.missing.length === 1 ? "" : "s"} · no decision needed</summary>
+        <div class="ws-skill-findings">${topic.missing.map(item => item.html).join("")}</div></details>` : "";
+      const total = topic.actionable.length + topic.missing.length;
       return `<details class="ws-finding-topic" data-ws-finding-topic="${esc(id)}" data-ws-read-open="topic:${esc(id)}" ${state.readOpen?.has(`topic:${id}`) ? "open" : ""}>
-        <summary><b>${esc(SKILL_NAMES[id] || id.replaceAll("_", " "))}</b> <small>${waiting ? `${waiting} to review · ` : ""}${rows.length} finding${rows.length === 1 ? "" : "s"}</small></summary>
-        <div class="ws-skill-findings">${ordered.map(item => item.html).join("")}</div></details>`;
+        <summary><b>${esc(SKILL_NAMES[id] || id.replaceAll("_", " "))}</b> <small>${waiting ? `${waiting} optional · ` : ""}${total} finding${total === 1 ? "" : "s"}</small></summary>
+        <div class="ws-skill-findings">${ordered.map(item => item.html).join("")}${missing}</div></details>`;
     }).join("");
     const issues = (review.issues || []).map(item => `<li><b>${esc(SKILL_NAMES[item.name] || item.name.replaceAll("_", " "))} (${esc(item.status)})</b>${item.reason ? `: ${esc(item.reason)}` : ""}</li>`).join("");
-    const retry = ["failed", "blocked", "stale", "needs_review"].includes(review.status)
+    const retry = ["failed", "blocked", "stale"].includes(review.status)
       ? `<button class="btn ghost mini" type="button" data-ws-skill-retry ${review.read_only ? "disabled" : ""}>Retry PDF review</button>` : "";
-    return `<section class="ws-pdf-review" aria-label="Findings from the skills" data-ws-pdf-review><h3>Findings from the skills</h3>
-      <p class="ws-fine">Values the skills read or worked out for rooms, gains, walls, glazing, airflow and plant, each with its pages. They are proposals: accept, edit or reject each one.</p>
+    return `<section class="ws-pdf-review" aria-label="Findings from the skills" data-ws-pdf-review><h3>AI findings and suggestions</h3>
+      <p class="ws-fine">These are optional source-linked suggestions. Phase 1 calculates from resolved room and envelope inputs without requiring you to accept each item. Use a suggestion if you want to correct an input or add evidence for Phase 2.</p>
       ${review.blocked_reason ? `<p class="ws-banner is-warn" role="status">${esc(review.blocked_reason)}</p>` : ""}
       ${issues ? `<p class="ws-banner is-warn" role="alert"><b>Some parts of this review did not finish.</b><ul>${issues}</ul></p>` : ""}
-      <p class="ws-fine" role="status" data-ws-pdf-review-status>Review status: ${esc({needs_review: "finished, findings to review", completed: "finished",
+      <p class="ws-fine" role="status" data-ws-pdf-review-status>Review status: ${esc({needs_review: "finished, optional suggestions available", completed: "finished",
         blocked: "blocked (see above)", failed: "didn't finish", running: "running", queued: "starting", stale: "out of date: retry"}[review.status] || review.status.replaceAll("_", " "))}.</p>
       ${evidenceCount ? `<p data-ws-evidence-count>Open findings: ${esc(evidenceCount)}</p>` : ""}
       ${findings ? `<p class="ws-fine">Open a topic, then a finding, to see its evidence and accept, edit or reject it.</p>${findings}` : ""}${retry}</section>`;
@@ -1748,21 +1802,43 @@
   // calculate; prepare the inputs first when they're missing). The page starts and watches it, so closing
   // or reloading the page doesn't stop it, and reopening the job shows the progress again.
   const CALC_POLL_MS = 2000;
-  async function calculate() {
+  async function calculate(phase = "full") {
     const projectId = state.projectId;
     const note = document.getElementById("wsCalcNote");
-    if (!state.status?.rooms?.with_area) {
-      note.textContent = "Add room areas first.";
+    if (phase === "phase1_base_room") state.phase1Auto.set(projectId, "running");
+    if (phase !== "phase1_base_room" && !state.status?.rooms?.with_area) {
+      if (note) note.textContent = "Add room areas first.";
       go("rooms");
       return;
     }
     try {
       const job = await sendJson("/api/job-calculation", {project_id: projectId, reviewer: userName() || "Operator",
-                                                          include: Object.fromEntries(state.include)});
+                                                          phase, include: Object.fromEntries(state.include)});
       await watchCalculation(projectId, job);
     } catch (error) {
-      if (state.projectId === projectId) note.textContent = `Could not calculate: ${error.message}`;
+      if (phase === "phase1_base_room") state.phase1Auto.set(projectId, "failed");
+      if (state.projectId === projectId && note) note.textContent = `Could not calculate: ${error.message}`;
+      if (state.projectId === projectId) renderGuide().catch(() => {});
     }
+  }
+
+  async function autoStartPhase1(projectId) {
+    if (state.projectId !== projectId || state.phase1Auto.get(projectId) !== "checking") return;
+    const existing = await getJson(`/api/job-calculation?project_id=${encodeURIComponent(projectId)}`).catch(() => ({}));
+    if (state.projectId !== projectId || state.phase1Auto.get(projectId) !== "checking") return;
+    if (existing.status === "running" || existing.status === "queued") {
+      if (existing.phase === "phase1_base_room") {
+        state.phase1Auto.set(projectId, "running");
+        watchCalculation(projectId, existing);
+      } else {
+        // Let an already-running full calculation finish; its completion refreshes the guide.
+        state.phase1Auto.set(projectId, "deferred");
+      }
+      return;
+    }
+    state.phase1Auto.set(projectId, "running");
+    renderGuide().catch(() => {});
+    calculate("phase1_base_room");
   }
 
   async function watchCalculation(projectId, job) {
@@ -1782,12 +1858,16 @@
       }
       if (job.status !== "done") throw new Error(job.error || "The calculation didn't finish.");
       if (state.projectId !== projectId) return;
+      if (job.phase === "phase1_base_room") state.phase1Auto.set(projectId, "done");
+      else state.phase1Auto.delete(projectId);
       note.textContent = "";
       state.roomsModel = null;  // the model was rebuilt
       await loadStatus();
       if (state.tab === "results") renderTab(); else go("results");
     } catch (error) {
+      if (job.phase === "phase1_base_room") state.phase1Auto.set(projectId, "failed");
       if (state.projectId === projectId) note.textContent = `Could not calculate: ${error.message}`;
+      if (state.projectId === projectId) renderGuide().catch(() => {});
     } finally {
       if (state.calculating === projectId) state.calculating = null;
       if (state.projectId === projectId) button.disabled = false;
@@ -1864,14 +1944,35 @@
     state.lastResult = null;
     if (!live(projectId, "results")) return;
     const openFindings = (review.findings || []).filter(row => !["accepted", "rejected"].includes(row.status)).length;
-    const openFindingsNote = openFindings ? `<p class="ws-banner is-warn" data-ws-open-findings>${openFindings} PDF review finding${openFindings === 1 ? " is" : "s are"} still open. We have not used these values in this number; review them on Drawings, then calculate again if you accept one.</p>` : "";
+    const openFindingsNote = openFindings ? `<p class="ws-banner is-warn" data-ws-open-findings>${openFindings} additional drawing suggestions are available on Drawings. They do not block the AI's Phase 1 base load; review an item only when you want to correct or add its value for Phase 2.</p>` : "";
     const report = model.hourly_ai_preliminary_load_report || {};
+    const baseReport = model.phase1_base_room_load_report || {};
+    const baseReportStale = Boolean(model.phase1_base_room_load_report_stale);
+    const basePeak = baseReport.included_scope_peak || {};
+    const baseTotal = basePeak.final_design_total_kw ?? basePeak.design_total_kw;
+    const baseRooms = baseReport.room_peaks || [];
+    const baseExceptions = [...(baseReport.blocked_reasons || []),
+      ...(baseReport.excluded_spaces || []).map(row => `${row.room_name || "Room"}${row.level ? ` (${row.level})` : ""}: ${row.reason || "not included"}`),
+      ...(baseReport.unresolved_room_inputs || []).map(row => `${row.room_name || "Envelope"}${row.component ? ` · ${row.component}` : ""}: ${row.reason || "not resolved"}`)];
+    const baseAssumptions = (baseReport.phase1_assumptions || []).map(row => `${row.room_name || row.room_id || "Project"}${row.component ? ` · ${row.component}` : ""}: ${row.reason || "preliminary assumption"}`);
+    const baseMarkup = `<section class="ws-phase-result" data-ws-phase1-result><h2>Phase 1 · AI base room load</h2>
+      ${baseReportStale ? `<p class="ws-banner is-warn" data-ws-phase1-stale>Drawing inputs changed since this Phase 1 result. Recalculate it to update the base load.</p>` : ""}
+      ${baseTotal == null ? `<p>${baseReport.status === "blocked" ? "AI could not calculate a base load for this drawing yet." : "Not calculated yet. AI will calculate the envelope and window load for each resolved room."}</p>
+        ${baseExceptions.length ? `<ul class="ws-list ws-bullets" data-ws-phase1-exceptions>${baseExceptions.slice(0, 8).map(item => `<li>${esc(item)}</li>`).join("")}</ul>` : ""}
+        <button class="btn key" type="button" data-ws-calculate-base>${baseReport.status === "blocked" ? "Retry Phase 1 base load" : "Calculate Phase 1 base load"}</button>` :
+        `<p><b>${kw(baseTotal)} kW</b> envelope and window load${basePeak.hour != null ? ` · peak hour ${basePeak.display_hour ?? basePeak.hour}` : ""}</p>
+         <ul class="ws-list" data-ws-phase1-rooms>${baseRooms.map(room => `<li><span>${esc(room.name)}</span><b>${kw(room.design_total_kw)} kW</b></li>`).join("")}</ul>
+         <p class="ws-fine">People, lights, equipment, ventilation, infiltration and fan or duct heat are added in Phase 2.</p>
+         ${baseReportStale ? `<button class="btn key" type="button" data-ws-calculate-base>Recalculate Phase 1 base load</button>` : ""}
+         ${baseAssumptions.length ? `<h3>AI assumptions used</h3><ul class="ws-list ws-bullets" data-ws-phase1-assumptions>${baseAssumptions.slice(0, 10).map(item => `<li>${esc(item)}</li>`).join("")}</ul>` : ""}
+         ${baseExceptions.length ? `<h3>Phase 1 exceptions</h3><ul class="ws-list ws-bullets" data-ws-phase1-exceptions>${baseExceptions.slice(0, 8).map(item => `<li>${esc(item)}</li>`).join("")}</ul>` : ""}`}</section>`;
     const peak = report.included_scope_peak || {};
     const total = peak.final_design_total_kw ?? peak.design_total_kw;
     if (total == null) {
-      body.innerHTML = `<div class="ws-card" data-ws-results><h2>Results</h2>${openFindingsNote}<p>Not calculated yet. When the rooms have areas, press <b>Calculate</b>.</p>
-        <button class="btn key" type="button" data-ws-calc-here>Calculate</button></div>`;
-      body.querySelector("[data-ws-calc-here]").addEventListener("click", calculate);
+      body.innerHTML = `<div class="ws-card" data-ws-results>${baseMarkup}<h2>Phase 2 · Complete cooling load</h2>${openFindingsNote}<p>When ready, calculate the full room loads with operating gains and airflow.</p>
+        <button class="btn key" type="button" data-ws-calc-here>Calculate complete load</button></div>`;
+      body.querySelector("[data-ws-calculate-base]")?.addEventListener("click", () => calculate("phase1_base_room"));
+      body.querySelector("[data-ws-calc-here]").addEventListener("click", () => calculate("full"));
       return;
     }
     const rooms = roomRows(report);
@@ -1900,6 +2001,7 @@
         <p class="ws-fine">Prepared ${esc(today)}${userName() ? ` by ${esc(userName())}` : ""} · from the architectural drawings: ${esc((state.status?.name || DATA?.name || "").replace(/\.pdf$/i, ""))}</p>
       </header>
       ${openFindingsNote}
+      ${baseMarkup}
       ${state.status?.result_stale ? `<p class="ws-banner is-warn">Inputs changed since this result. Press <b>Calculate</b> to update it.</p>` : ""}
       <p class="ws-banner">This is a draft estimate from the drawings. We recommend checking it before using it to select equipment.</p>
       <div class="ws-total-big"><span data-ws-total>${kw(total)}</span><span>kW total cooling</span></div>
@@ -1918,6 +2020,7 @@
         <button class="btn key" type="button" data-ws-print>Print or save as PDF</button>
         <button class="btn ghost" type="button" data-ws-csv>Download room loads (CSV)</button>
       </div></div>`;
+    body.querySelector("[data-ws-calculate-base]")?.addEventListener("click", () => calculate("phase1_base_room"));
     body.querySelector("[data-ws-print]").addEventListener("click", () => window.print());
     body.querySelectorAll("[data-ws-gap-tab]").forEach(button => button.addEventListener("click", () => go(button.dataset.wsGapTab)));
     body.querySelector("[data-ws-csv]").addEventListener("click", () => downloadCsv(rooms, total));
@@ -2259,7 +2362,7 @@
     }
   });
 
-  document.getElementById("wsCalculate")?.addEventListener("click", calculate);
+  document.getElementById("wsCalculate")?.addEventListener("click", () => calculate("full"));
   document.getElementById("wsSectionSelect")?.addEventListener("change", event => go(event.target.value));
   document.getElementById("btnJobEngineer")?.addEventListener("click", leave);
   document.getElementById("wsAllProjects")?.addEventListener("click", () => {
