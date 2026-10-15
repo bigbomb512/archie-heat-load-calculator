@@ -16,6 +16,23 @@ Use drawing evidence first. For room area, prefer a printed room area or complet
 
 Phase 1's output is the room envelope/base load. It excludes people, lighting, plug loads and other equipment, ventilation, infiltration and operational airflow. Those inputs remain available as evidence for Phase 2. The hourly method calculates evidenced externally exposed walls, roofs/ceilings, glazing, and resolved adjacent-space boundaries. A floor without evidence for its construction or boundary temperature is listed as unresolved and excluded from the subtotal; it is never represented as a zero contribution. A drawing-supported internal floor or a ground-contact floor may use its explicitly labelled preliminary method, with the assumption and source shown in the audit. A room with missing boundaries still receives a subtotal from resolved surfaces, while the report marks its coverage incomplete and lists the missing contribution as an exception.
 
+### Phase 1 defaults that keep it running without a person (user decisions 2026-10-15)
+
+- **Roof:** the AI decides from the ceiling plans, sections and notes; when they don't settle it, the most likely case
+  is used and labelled (a slab over the ceiling or a building above → not exposed; otherwise exposed). No question is
+  sent to the contractor; the operators can correct it on Walls & roof.
+- **Walls to a mall or another tenancy** count as zero (conditioned neighbours), stated in the result.
+- **Weather location:** the operators' choice on the Project tab wins. Without it, the AI picks the nearest listed
+  AIRAH location from the site details (address, site text on the drawings, job name, title block; a consultant's
+  office is not the site), and the result labels the design days as picked by the AI.
+- **Floor:** a slab on the ground, shown or assumed as the most likely case for a shop, adds no cooling load and is
+  listed as an assumption (ASHRAE preliminary ground-contact rule). A floor over a car park, void, basement or
+  suspended slab stays an unresolved exception.
+- **Coverage:** the result lists the rooms included and left out. When no wall, roof or window of the included rooms
+  is resolved, Phase 1 is blocked with that reason rather than showing 0 kW. A room whose every wall and ceiling face
+  conditioned space (a floor above, neighbours, a mall) is resolved: its envelope load is a real 0 kW and the result
+  says why.
+
 ## Phase 2: Operating loads and complete room load
 
 Starting from the Phase 1 room results, the AI resolves and adds the room's operating gains and air loads:

@@ -255,30 +255,36 @@ and is listed.
 **Answer key caseA:** 2,025 mm panel, sill 1,100, head 2,700 (capped); the
 3,250 roller-shutter doorway and signage/menu panels are not glazing.
 
-## P5 `roof_exposure` (≤ 2,000 characters, optional 1 crop)
+## P5 `roof_exposure` (≤ 3,000 characters, optional 1 crop)
 
 Inputs:
-- drawing-set facts: levels present, whether any section/RCP/notes mention
-  "slab over", "roof over", "level above", "apartments"/"residences",
-  "podium";
+- drawing-set facts (each repeated note kept once, at most two per term, eight in all): levels present, and
+  any note on any sheet mentioning "slab over", "roof over", "level above", "floor above", "apartments"/"residences",
+  "podium", "car park", "U/S of slab"/"underside of slab", "structure above", roof sheeting, metal deck, skylights;
 - the site name and kind from P1;
 - the tenancy level (e.g. "G").
 
-> From these drawing facts, is the roof directly above this tenancy exposed
-> to the sky? Answer `exposed`, `not_exposed` or `unknown`, quoting the fact
-> you used. Do not guess from the business type.
+> Is the roof directly above this tenancy's ceiling exposed to the sky (exposed), or is there a floor, another
+> tenancy, apartments or a car park above it (not_exposed)? Decide from the drawing facts below and quote the fact
+> you relied on, word for word. "U/S of slab" or "structure above" means a concrete slab over the ceiling: over a
+> shop in a centre that is most often a floor or car park above, while roof sheeting, a metal deck or skylights mean
+> the roof. Weigh all the facts (levels, apartments, the site). Answer unknown only if the facts point neither way.
 > JSON only: `{"roof": "exposed"|"not_exposed"|"unknown", "evidence": string}`
 
-**No building-type fallback (user decision 2026-10-05).** Roof exposure is
-applied only from explicit drawing evidence: a section, a level above, a slab
-or roof note, or "apartments/residences" above the tenancy. If the drawings
-don't settle it, **ask the contractor** one plain question ("Is there a floor
-or another tenancy directly above this shop, or is it the roof?") and apply
-their answer as the declaration. This is the one place Card P asks a person.
+The quoted evidence must appear in the facts (ignoring case and spacing).
+
+**Most likely case, labelled (user decision 2026-10-15; replaces the 2026-10-05 "ask the contractor" rule).** When
+the AI answers unknown, `roof_fallback` applies, labelled "Assumed (most likely case)" with its reason:
+- levels, apartments, a podium, a car park or a floor above → not exposed;
+- a concrete slab over the ceiling ("U/S of slab", "structure above") with no roof sheeting, metal deck or skylight
+  → not exposed (a floor above);
+- otherwise → exposed, as for a single-storey shop.
+
+Nobody is asked; the operators can correct it on Walls & roof.
 
 **Answer key caseA:** not exposed for Bar, Kitchen and Shop (apartments above;
-confirmed by the project contact). The fallback reaches it from "Shop G38" +
-"Melrose Central"; the plans alone do not show it.
+confirmed by the project contact). The ceiling and lighting plans' "U/S OF SLAB 3750MM" / "STRUCTURE ABOVE" notes
+reach it through the slab rule even when the AI answers unknown.
 
 ---
 

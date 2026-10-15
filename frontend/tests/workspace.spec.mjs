@@ -809,6 +809,15 @@ test("Drawings: a review whose server stopped says so, and Retry repeats the run
   await expect.poll(() => posts.find(([kind]) => kind === "skill")?.[1]).toEqual({project_id: "job-1", action: "retry"});
 });
 
+test("Project: the weather location the AI picked is shown as used until someone chooses", async ({page}) => {
+  await mockJob(page, {status: () => baseStatus({weather_location: "", weather_locations: ["Adelaide", "Sydney"],
+    weather_ai_pick: "Sydney", weather_ai_why: "Melrose Park is in Sydney", weather_suggestion: "Sydney"})});
+  await page.goto("/#/job/job-1/project/job-site");
+  await expect(page.locator("[data-ws-weather-location]")).toHaveValue("Sydney");
+  await expect(page.locator("[data-ws-weather-note]")).toContainText(
+    "The AI picked Sydney from the site details (Melrose Park is in Sydney); Phase 1 uses it until you choose another and Save.");
+});
+
 test("Project: the weather location is suggested from the address and saved with the job", async ({page}) => {
   const posts = await mockJob(page, {status: () => baseStatus({address: "2 Central Park Ave, Chippendale NSW",
     weather_location: "", weather_locations: ["Newcastle", "Sydney", "Wagga"], weather_suggestion: "Sydney"})});

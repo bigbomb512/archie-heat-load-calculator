@@ -843,7 +843,7 @@ def _legacy_surface_candidates(vision, rows):
 
 def assemble(building, vision=None, contractor_overrides=None, source_fingerprints=None, manual_placeholder_entities=None,
              preliminary_proposal=None, value_resolution=None, research_cache=None, source_pack_releases=None,
-             site_location=None, site_design_weather=None, room_use_resolution=None, geometry_resolution=None, weather_location="",
+             site_location=None, site_design_weather=None, room_use_resolution=None, geometry_resolution=None, weather_location="", weather_note="",
              ceiling_volume_resolution=None, internal_gains_resolution=None, airflow_resolution=None, ahu_resolution=None,
              plant_resolution=None, allow_area_fallbacks=True, process_exhaust=None, design_weather_table=None):
     """Return a materialized preliminary payload plus its transparent ledger.
@@ -925,11 +925,13 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
             or design_weather.for_site(site_location, base_hours, table=design_weather_table)
     if site_days:
         scenario_values = {**scenario_values, "weather_profile": {**scenario_values["weather_profile"], "hours": site_days["days"][0]["hours"]}}
-        distance = ("the weather location chosen on the Project tab" if site_days.get("chosen")
+        # weather_note: the location was picked by the AI from the site details, not chosen by the operators.
+        distance = ((weather_note or "the weather location chosen on the Project tab") if site_days.get("chosen")
                     else f"{site_days['distance_km']:g} km from the site")
         conditions_basis["design_day"] = {
             "site_specific": True, "source": site_days["source"],
-            "origin": "design_temperature_table_chosen_location" if site_days.get("chosen") else "design_temperature_table_nearest_location",
+            "origin": ("design_temperature_table_ai_picked_location" if site_days.get("chosen") and weather_note else
+                       "design_temperature_table_chosen_location" if site_days.get("chosen") else "design_temperature_table_nearest_location"),
             "location": site_days["location"], "state": site_days["state"], "distance_km": site_days["distance_km"],
             "far_from_site": site_days["far"],
             "days": [{key: day[key] for key in ("day", "title", "design_point")} for day in site_days["days"]],
@@ -1630,11 +1632,14 @@ def _base_room_load_input_set(input_set):
     scoped = deepcopy(input_set)
     material = scoped["material"]
     phase1_assumptions = deepcopy(scoped.get("phase1_assumptions", []))
+    floor_basis = scoped.get("phase1_floor_basis") or {}
     for room in material["hourly_load_model"].get("rooms", []):
-        if not any(surface.get("kind") == "floor" for surface in room["cooling_load"].get("envelope_surfaces", [])):
+        # A ground slab (shown or assumed) is listed by the Phase 1 report as a zero-load assumption instead.
+        if (floor_basis.get("kind") not in {"ground", "assumed_ground"}
+                and not any(surface.get("kind") == "floor" for surface in room["cooling_load"].get("envelope_surfaces", []))):
             phase1_assumptions.append({"room_id": room["room_id"], "component": "floor boundary",
                 "status": "unresolved", "value": None, "contribution_kw": None,
-                "reason": "The drawing did not resolve the floor construction and boundary temperature. No floor load was calculated; it is excluded from the subtotal rather than treated as zero."})
+                "reason": floor_basis.get("reason") or "The drawing did not resolve the floor construction and boundary temperature. No floor load was calculated; it is excluded from the subtotal rather than treated as zero."})
         room["occupancy"] = 0
         room["heat_sources"] = [{
             "source_id": f"{room['room_id']}-phase1-zero-gains",
@@ -1851,18 +1856,28 @@ def calculate(input_set, safety_factor_policy=None, scope="full"):
             "people and occupancy", "lighting", "equipment and plug loads", "ventilation and outside air",
             "infiltration", "process air and internal moisture", "supply fan and duct heat",
         ]))
-        # An unresolved floor is not silently converted into a zero-load surface.
+        # A floor the drawings don't describe: a ground slab (shown, or assumed as the most likely case for a shop)
+        # adds no cooling load and is listed as an assumption; a floor over an unconditioned space below stays an
+        # unresolved exception, never a silent zero (user decision 2026-10-15).
+        floor_basis = input_set.get("phase1_floor_basis") or {}
         for room in material.get("hourly_load_model", {}).get("rooms", []):
             cooling = room.get("cooling_load", {})
             has_floor = any(surface.get("kind") == "floor" for surface in cooling.get("envelope_surfaces", [])
                             if isinstance(surface, dict))
+            if not has_floor and floor_basis.get("kind") in {"ground", "assumed_ground"}:
+                report["phase1_assumptions"].append({
+                    "room_id": room.get("room_id", ""), "component": "ground-contact floor",
+                    "method": "ASHRAE preliminary ground-contact floor rule", "contribution_kw": 0.0,
+                    "reason": floor_basis.get("reason", "")})
+                has_floor = True
             if not has_floor:
                 record = {
                     "room_id": room.get("room_id", ""), "room_name": room.get("name", ""),
                     "component_id": "phase1_floor_boundary", "component_type": "envelope",
                     "component": "Floor boundary", "value": None, "unit": "kW",
                     "source": "AI drawing review", "citations": [], "verification_status": "unresolved",
-                    "reason": "Floor construction or boundary temperature was not resolved. Its contribution is excluded from the subtotal, not assumed to be zero.",
+                    "reason": (floor_basis.get("reason") if floor_basis.get("kind") == "unconditioned_below" else
+                               "Floor construction or boundary temperature was not resolved. Its contribution is excluded from the subtotal, not assumed to be zero."),
                 }
                 if not any(row.get("room_id") == record["room_id"] and row.get("component_id") == record["component_id"]
                            for row in report.get("unresolved_room_inputs", []) if isinstance(row, dict)):
@@ -1878,7 +1893,9 @@ def calculate(input_set, safety_factor_policy=None, scope="full"):
                 for surface in cooling.get("envelope_surfaces", [])
                 if isinstance(surface, dict)
             ) or bool(cooling.get("glazing_surfaces"))
-            if has_nonfloor_boundary:
+            # Every wall and the ceiling resolved to conditioned space (a floor above, neighbours, a mall): nothing is
+            # missing, the envelope load is genuinely zero.
+            if has_nonfloor_boundary or cooling.get("envelope_not_applicable") is True:
                 continue
             record = {
                 "room_id": room.get("room_id", ""), "room_name": room.get("name", ""),

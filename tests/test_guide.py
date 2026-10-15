@@ -11,10 +11,10 @@ from backend import (drawing_tasks_service, guide_service, job_service, page_ext
 
 
 def job(address="", above="", rooms="done", walls="done", roof="done", windows="done", results="todo", drawings="done",
-        found="", weather="Sydney", locations=("Sydney", "Newcastle"), suggestion=""):
+        found="", weather="Sydney", locations=("Sydney", "Newcastle"), suggestion="", ai_pick=""):
     tab = lambda state, detail="", count=0: {"state": state, "detail": detail, "count": count}
     return {"address": address, "above": above, "found_site": found, "weather_location": weather,
-            "weather_locations": list(locations), "weather_suggestion": suggestion,
+            "weather_locations": list(locations), "weather_suggestion": suggestion, "weather_ai_pick": ai_pick,
             "tabs": {"drawings": tab(drawings), "rooms": tab(rooms), "windows": tab(windows, "Check glazing"), "results": tab(results)},
             "subtabs": {"project": {"job_site": tab("done"), "tenancy_context": tab("done" if above else "needed")},
                         "rooms": {"room_details": tab(rooms, "Choose a use for 2 room(s).", 2), "measurements": tab("done")},
@@ -92,7 +92,10 @@ class GuideTests(unittest.TestCase):
         result = guide(job(address="2 Central Park Ave, Chippendale NSW", above="floor", weather="", suggestion="Sydney"))
         step = {row["id"]: row for row in result["steps"]}["address"]
         self.assertEqual((result["now"], step["state"]), ("base_load", "done"))
-        self.assertIn("Sydney", step["why"])
+        self.assertIn("the address suggests Sydney, which you can choose on the Project tab", step["why"])
+        picked = guide(job(address="x", above="floor", weather="", found="TENANCY MZ01, MELROSE CENTRAL", ai_pick="Sydney"))
+        self.assertIn("it uses the weather for Sydney, picked by the AI from the site details",
+                      {row["id"]: row for row in picked["steps"]}["address"]["why"])
         # No weather-table selection blocks Phase 1; the generic design day is labelled in the result.
         self.assertEqual({row["id"]: row for row in guide(job(address="x", above="floor", weather="", locations=()))["steps"]}
                          ["address"]["state"], "done")

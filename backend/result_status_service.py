@@ -51,6 +51,11 @@ def gather(web, project):
     basis = report.get("design_conditions_basis") or {}
     if basis.get("design_day") and not basis["design_day"].get("site_specific"):
         items.append(_item("placeholder", "Weather", "Generic Australian design day, not specific to this site (AIRAH DA09 pending).", "project"))
+    elif (basis.get("design_day") or {}).get("origin") == "design_temperature_table_ai_picked_location":
+        day = basis["design_day"]
+        items.append(_item("assumed", "Weather", f"Design days for {day.get('location', '')}, picked by the AI from the "
+                                                 "site details; choose the location on the Project tab to confirm it.",
+                           "project", day.get("label", "")))
     elif (basis.get("design_day") or {}).get("origin") == "design_temperature_table_nearest_location":
         day = basis["design_day"]
         items.append(_item("assumed", "Weather", f"Design days for {day.get('location', '')}, the nearest listed location "

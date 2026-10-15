@@ -300,7 +300,8 @@
               <option value="">Not chosen (generic Australian design day)</option>${status.weather_locations.map(name =>
                 `<option ${draft.weather_location === name ? "selected" : ""}>${esc(name)}</option>`).join("")}</select></label>
             <p class="ws-fine" data-ws-weather-note>The summer design weather comes from this location in the AIRAH Technical Handbook: choose the listed place nearest the site.${
-              status.weather_suggestion && !status.weather_location ? ` Suggested from the address: <b>${esc(status.weather_suggestion)}</b>; press Save to use it.` : ""}</p>`
+              status.weather_ai_pick && !status.weather_location ? ` The AI picked <b>${esc(status.weather_ai_pick)}</b> from the site details${status.weather_ai_why ? ` (${esc(status.weather_ai_why)})` : ""}; Phase 1 uses it until you choose another and Save.`
+              : status.weather_suggestion && !status.weather_location ? ` Suggested from the address: <b>${esc(status.weather_suggestion)}</b>; press Save to use it.` : ""}</p>`
             : `<p class="ws-fine" data-ws-weather-note>Weather: the AIRAH handbook's design temperatures aren't imported on this computer, so a generic Australian design day is used (see the README to import them).</p>`}`
           : `<fieldset><legend>What's above this tenancy?</legend>
             ${[["roof", "The roof"], ["floor", "Another floor or tenancy"], ["not_sure", "Not sure"]].map(([value, label]) =>

@@ -91,9 +91,17 @@ def steps(web, project):
     site = subtabs.get("project", {}).get("job_site", {})
     found = status.get("found_site") or ""
     weather_ready = bool(status.get("weather_location")) or not status.get("weather_locations")
-    address_detail = (f"AI found “{found}”; it will use {status.get('weather_location') or status.get('weather_suggestion') or 'the labelled generic design day'} for Phase 1."
-                      if found or status.get("weather_location") or status.get("weather_suggestion") else
-                      "AI will use the labelled generic design day if the PDF does not identify a site.")
+    # What Phase 1 actually uses: the chosen location, else the AI's pick, else the labelled generic design day.
+    if status.get("weather_location"):
+        weather_used = f"it uses the weather for {status['weather_location']}"
+    elif status.get("weather_ai_pick"):
+        weather_used = f"it uses the weather for {status['weather_ai_pick']}, picked by the AI from the site details"
+    elif status.get("weather_suggestion"):
+        weather_used = (f"it uses the labelled generic design day; the address suggests {status['weather_suggestion']}, "
+                        "which you can choose on the Project tab")
+    else:
+        weather_used = "it uses the labelled generic design day"
+    address_detail = (f"AI found “{found}”; {weather_used} for Phase 1." if found else f"For Phase 1, {weather_used}.")
     result.append(_step("address", "Resolve the site and design weather", address_detail,
                         "done" if ai_ready else "later", "project", "job-site", "Show"))
     tenancy = subtabs.get("project", {}).get("tenancy_context", {})

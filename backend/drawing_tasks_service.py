@@ -58,6 +58,14 @@ def start(web, project, then_skills=True):
             result = {"answered": 0, "refused": len(_waiting(Path(current["review_dir"]))),
                       "rounds": 0, "calls": 0, "provider_limited": True,
                       "warning": str(error)[:500]}
+        if not result.get("provider_limited"):
+            # Phase 1 runs without a person: when nobody has chosen the weather location, the AI picks it from the
+            # site details (one small text call, labelled in the result; user decision 2026-10-15).
+            from backend import weather_pick_service
+            try:
+                weather_pick_service.pick(web, current)
+            except Exception:  # the generic design day (labelled) is used instead
+                pass
         if then_skills and web is not None:
             step("skills")
             from backend import skill_workflow_service

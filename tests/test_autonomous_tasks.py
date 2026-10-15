@@ -1442,33 +1442,55 @@ class AutonomousTaskTests(unittest.TestCase):
         self.assertEqual(majority["status"], "majority")
         self.assertAlmostEqual(majority["winner"], 1)
 
-    def test_roof_requires_explicit_drawing_evidence_and_has_no_building_type_fallback(self):
-        self.assertIsNone(autonomous_tasks.TASKS["P5_roof"]["fallback"])
-        self.assertFalse(autonomous_tasks_service._has_explicit_roof_evidence({"facts": []}))
-        self.assertFalse(autonomous_tasks_service._has_explicit_roof_evidence({"facts": [{"text": "Level 2"}]}))
-        self.assertTrue(autonomous_tasks_service._has_explicit_roof_evidence({"facts": [{"text": "ROOF OVER TENANCY"}]}))
+    def test_roof_facts_include_slab_and_structure_above_once_each(self):
+        note = "CH:2900MM STRUCTURE ABOVE. REFER TO CONTRACTOR U/S OF SLAB 3750MM SERVICES ZONE 2950-3150MM"
+        ai_input = {"drawing_set": {"pages": [{"page": 22, "title": "Reflective Ceiling Plan", "structured_content": {"markdown": note}},
+                                              {"page": 23, "title": "Lighting Plan", "structured_content": {"markdown": note}}]}}
+        packet = autonomous_tasks.build_roof_facts(ai_input, {}, {"room_id": "shop"})
+        self.assertEqual([row["page"] for row in packet["facts"]], [22, 22])           # the copy on page 23 is dropped
+        self.assertTrue(packet["mentions"]["structure above"] and packet["mentions"]["u/?s\\.? of slab"])
+        self.assertIn("U/S of slab", autonomous_tasks.roof_prompt(packet))
+
+    def test_roof_fallback_is_the_most_likely_case_and_labelled(self):
+        self.assertEqual(autonomous_tasks.TASKS["P5_roof"]["fallback"], "roof_fallback")
+        roof, why = autonomous_tasks.roof_fallback({"facts": [], "mentions": {}, "levels_present": []})
+        self.assertEqual(roof, "exposed")
+        self.assertIn("most likely for a single-storey shop", why)
+        self.assertEqual(autonomous_tasks.roof_fallback({"mentions": {"apartments": True}})[0], "not_exposed")
+        self.assertEqual(autonomous_tasks.roof_fallback({"levels_present": ["Ground", "Level 1"]})[0], "not_exposed")
+        slab, why = autonomous_tasks.roof_fallback({"mentions": {"u/?s\\.? of slab": True}})       # Butcher Buffet's ceiling plan
+        self.assertEqual(slab, "not_exposed")
+        self.assertIn("concrete slab over the ceiling", why)
+        self.assertEqual(autonomous_tasks.roof_fallback({"mentions": {"u/?s\\.? of slab": True, "metal deck": True}})[0], "exposed")
 
     def test_roof_reply_must_quote_drawing_fact(self):
-        packet = {"facts": [{"page": 9, "text": "ROOF OVER TENANCY"}], "site_name": "", "tenancy_prefix": "",
+        packet = {"facts": [{"page": 22, "text": "STRUCTURE ABOVE. U/S OF SLAB 3750MM"}], "site_name": "", "tenancy_prefix": "",
                   "room": {"level_name": "Level 1"}}
-        self.assertEqual(autonomous_tasks.validate_roof_reply(packet, json.dumps({"roof": "exposed", "evidence": "ROOF OVER TENANCY"}))["roof"], "exposed")
-        with self.assertRaisesRegex(ValueError, "quoted drawing fact"):
+        self.assertEqual(autonomous_tasks.validate_roof_reply(packet, json.dumps({"roof": "not_exposed", "evidence": "u/s of slab  3750mm"}))["roof"],
+                         "not_exposed")                                  # quoted ignoring case and spacing
+        with self.assertRaisesRegex(ValueError, "quoted word for word"):
             autonomous_tasks.validate_roof_reply(packet, json.dumps({"roof": "exposed", "evidence": "probably exposed"}))
+        self.assertEqual(autonomous_tasks.validate_roof_reply(packet, json.dumps({"roof": "unknown", "evidence": ""}))["roof"], "unknown")
 
-    def test_roof_answer_unknown_and_no_evidence_needs_contractor_answer(self):
-        packet = {"facts": [], "room": {"room_id": "shop", "room_label": "Shop"}}
+    def test_roof_answer_unknown_applies_the_labelled_most_likely_case_without_a_question(self):
+        packet = {"facts": [], "mentions": {}, "levels_present": [], "room": {"room_id": "shop", "room_label": "Shop"}}
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
             trace = {"trace_id": "trace-shop", "room_id": "shop", "room_label": "Shop", "edges": [], "roof": "unknown"}
             artifact = root / "reviewer_room_geometry.json"
             artifact.write_text(json.dumps({"records": [trace]}), encoding="utf-8")
-            record = {"task": "P5_roof", "target": "shop", "packet": packet, "accuracy": {"auto_apply": True}}
-            result = autonomous_tasks_service._apply_p5(
-                None, {"review_dir": temporary}, root, record, {"roof": "unknown", "evidence": ""})
-            self.assertEqual(result["status"], "needs_contractor_answer")
-            self.assertIn("Is there a floor or another tenancy", result["block_reason"])
+            record = {"task": "P5_roof", "target": "shop", "packet": packet, "accuracy": {"auto_apply": False},
+                      "run_id": "roof-run", "quality_label": "AI-determined (below accuracy bar)"}
+            with patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "post") as classify:
+                result = autonomous_tasks_service._apply_p5(
+                    None, {"review_dir": temporary}, root, record, {"roof": "unknown", "evidence": ""})
+        self.assertEqual((result["status"], result["source"]), ("applied_fallback", "ai_fallback"))
+        self.assertEqual(result["applied_value"]["label"], "Assumed (most likely case)")
+        self.assertIn("Correct it on Walls & roof", result["applied_value"]["evidence"])
+        body = classify.call_args.args[2]
+        self.assertEqual((body["roof"], body["declaration_source"], body["ai_run_id"]), ("exposed", "ai_fallback", "roof-run"))
 
-    def test_run_all_surfaces_no_evidence_roof_question_in_contractor_labels(self):
+    def test_run_all_leaves_a_no_evidence_roof_for_the_ai_not_a_contractor_question(self):
         with TemporaryDirectory() as temporary:
             project = {"id": "roof-no-evidence", "review_dir": temporary}
             packet = {"facts": [], "room": {"room_id": "shop", "room_label": "Shop"}}
@@ -1477,10 +1499,8 @@ class AutonomousTaskTests(unittest.TestCase):
                  patch.object(autonomous_tasks_service, "_roof_packets", return_value=[("shop", packet, "roof prompt", [])]):
                 autonomous_tasks_service.run_all(SimpleNamespace(), project)
             record = autonomous_tasks_service._current_task(Path(temporary), "P5_roof", "shop")
-            self.assertEqual(record["status"], "needs_contractor_answer")
-            label = autonomous_tasks_service.get_labels(project)["tasks"][0]
-            self.assertEqual(label["question"], "Is there a floor or another tenancy directly above this shop, or is it the roof?")
-            self.assertEqual(label["room_label"], "Shop")
+            self.assertEqual(record["status"], "waiting_for_reply")
+            self.assertFalse(any(row.get("question") for row in autonomous_tasks_service.get_labels(project)["tasks"]))
 
     def test_contractor_roof_answers_use_reviewer_classification_and_not_sure_stays_unknown(self):
         with TemporaryDirectory() as temporary:

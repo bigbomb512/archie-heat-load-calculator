@@ -72,6 +72,34 @@ class PhaseOneCalculationTests(unittest.TestCase):
             self.assertEqual(saved_report["status"], "blocked")
             self.assertIn("No wall, roof or window of Retail tenancy could be resolved", saved_report["blocked_reasons"][0])
 
+    def test_floor_basis_reads_what_is_below_and_otherwise_assumes_a_ground_slab(self):
+        page = lambda text: {"drawing_set": {"pages": [{"page": 4, "structured_content": {"markdown": text}}]}}
+        below = ai_preliminary_service._floor_basis(page("NEW TENANCY SLAB OVER CAR PARK BELOW. REFER STRUCTURAL"))
+        self.assertEqual(below["kind"], "unconditioned_below")
+        self.assertIn("p. 4", below["reason"])
+        self.assertEqual(ai_preliminary_service._floor_basis(page("100MM SLAB ON GROUND, VAPOUR BARRIER"))["kind"], "ground")
+        assumed = ai_preliminary_service._floor_basis(page("FLOOR TILES 600X600"))
+        self.assertEqual(assumed["kind"], "assumed_ground")
+        self.assertIn("most likely for a shop", assumed["reason"])
+
+    def test_an_assumed_ground_slab_is_a_labelled_zero_not_an_unresolved_floor(self):
+        with TemporaryDirectory() as directory:
+            project = {"id": "phase-one-floor", "review_dir": directory}
+            paths = ai_preliminary_service._paths(project)
+            input_set = assemble({"spaces": [{"id": "shop", "name": "Retail tenancy", "level_name": "Ground",
+                                                "area": "42 m2", "confidence": "high",
+                                                "evidence": [{"page": 3, "excerpt": "Retail tenancy 42 m²"}]}]})
+            input_set["phase1_floor_basis"] = {"kind": "assumed_ground", "reason": "Assumed: a ground slab."}
+            paths["current_set"].write_text(json.dumps(input_set), encoding="utf-8")
+            for name in ("design_requirements.json", "schedule_library.json", "design_day_scenarios.json", "hourly_load_model.json"):
+                (Path(directory) / name).write_text("{}", encoding="utf-8")
+            with patch.object(ai_preliminary_service, "_stale_reasons", return_value=[]):
+                report = ai_preliminary_service._calculate(None, project, scope="phase1_base_room")
+        floors = [row for row in report["phase1_assumptions"] if "floor" in row.get("component", "")]
+        self.assertEqual([(row["component"], row.get("contribution_kw"), row["reason"]) for row in floors],
+                         [("ground-contact floor", 0.0, "Assumed: a ground slab.")])
+        self.assertFalse(any(row.get("component_id") == "phase1_floor_boundary" for row in report.get("unresolved_room_inputs", [])))
+
     def test_phase1_coverage_lists_rooms_left_out_and_blocks_an_empty_envelope(self):
         candidates = [{"label": "Bar", "status": "calculated", "area_m2": 36.6},
                       {"label": "Kitchen", "status": "no_area", "area_m2": None},
@@ -82,12 +110,17 @@ class PhaseOneCalculationTests(unittest.TestCase):
         self.assertEqual(empty["blocked_reasons"], ["No wall, roof or window of Bar could be resolved, so there is no envelope "
                                                     "load to report yet. Kitchen and Shop have no area yet."])
         self.assertEqual(empty["phase1_coverage"], {
-            "rooms_found": 3, "rooms_included": ["Bar"], "surfaces_included": 0, "complete": False,
+            "rooms_found": 3, "rooms_included": ["Bar"], "surfaces_included": 0, "complete": False, "rooms_fully_internal": [],
             "rooms_left_out": [{"label": "Kitchen", "reason": "no area yet"}, {"label": "Shop", "reason": "no area yet"}]})
         partial = {"status": "draft", "preliminary_surface_summary": {"included": 4, "openings_included": 1}}
         ai_preliminary_service._phase1_coverage(partial, candidates)
         self.assertEqual((partial["status"], partial["phase1_coverage"]["surfaces_included"]), ("draft", 5))
         self.assertFalse(partial["phase1_coverage"]["complete"])
+        inside = {"status": "draft", "preliminary_surface_summary": {"included": 0}}
+        ai_preliminary_service._phase1_coverage(inside, candidates[:1], {"material": {"hourly_load_model": {"rooms": [
+            {"name": "Bar", "cooling_load": {"envelope_not_applicable": True}}]}}})
+        self.assertEqual((inside["status"], inside["phase1_coverage"]["complete"]), ("draft", True))   # a real 0 kW
+        self.assertIn("Bar: every wall and the ceiling face conditioned space", inside["phase1_automation_note"])
         whole = {"status": "draft", "preliminary_surface_summary": {"included": 4}}
         ai_preliminary_service._phase1_coverage(whole, candidates[:1])
         self.assertTrue(whole["phase1_coverage"]["complete"])

@@ -64,10 +64,16 @@ def _weather_choice(root, setup, address):
     imported handbook table; empty when it isn't imported on this computer) and a suggestion from the site."""
     from ai import design_weather
     table = design_weather.load_table()
+    from backend import weather_pick_service
     site = _read(root / "site_location_resolution.json", {})
+    picked, note = weather_pick_service.effective(root)
+    ai_pick = picked if note else ""
     return {"weather_location": setup.get("weather_location", ""),
             "weather_locations": sorted((table or {}).get("locations") or {}),
-            "weather_suggestion": design_weather.suggested_location(address, site if site.get("confirmed_address") else None, table)
+            # The AI's pick (used by Phase 1 until someone chooses) comes before the address-only suggestion.
+            "weather_ai_pick": ai_pick if table else "",
+            "weather_ai_why": _read(root / weather_pick_service.PICK_FILE, {}).get("why", "") if ai_pick else "",
+            "weather_suggestion": (ai_pick or design_weather.suggested_location(address, site if site.get("confirmed_address") else None, table))
             if table else ""}
 
 

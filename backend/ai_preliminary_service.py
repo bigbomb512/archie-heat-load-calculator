@@ -23,7 +23,7 @@ from ai import plant_resolution
 from ai import safety_factor_resolution
 from ai.geometry_resolution import build_geometry_resolution
 from ai.research_cache import empty_research_cache, validate_cache
-from backend import productization
+from backend import productization, weather_pick_service
 from backend.room_proposal import room_proposal
 
 
@@ -142,7 +142,7 @@ def _sources(paths):
         # Answers from the What-we-need-to-find list that the model reads directly.
         "glazing_answers": ai_preliminary.fingerprint(_read(paths["root"] / "glazing_answers.json", {})),
         "construction_answers": ai_preliminary.fingerprint(_read(paths["root"] / "construction_answers.json", {})),
-        "weather_location": str(_read(paths["root"] / "job_setup.json", {}).get("weather_location") or ""),
+        "weather_location": "|".join(weather_pick_service.effective(paths["root"])),
         "unconditioned_answers": ai_preliminary.fingerprint(_read(paths["root"] / "unconditioned_answers.json", {})),
         "exhaust_answers": ai_preliminary.fingerprint(_read(paths["root"] / "exhaust_answers.json", {})),
         "hours_answers": ai_preliminary.fingerprint(_read(paths["root"] / "hours_answers.json", {})),
@@ -1899,7 +1899,8 @@ def _assemble(web, project, source="manual_placeholder"):
         value_resolution=resolution, research_cache=validate_cache(_read(paths["research_cache"], empty_research_cache())),
         site_location=_read(paths["site_location"], {}),
         site_design_weather=_read(paths["site_design_weather"], {}),
-        weather_location=str(_read(paths["root"] / "job_setup.json", {}).get("weather_location") or ""),
+        weather_location=weather_pick_service.effective(paths["root"])[0],
+        weather_note=weather_pick_service.effective(paths["root"])[1],
         room_use_resolution=room_use,
         geometry_resolution=geometry,
         ceiling_volume_resolution=ceiling_artifact,
@@ -1917,6 +1918,7 @@ def _assemble(web, project, source="manual_placeholder"):
     )
     input_set["safety_factor_resolution"] = safety_artifact
     input_set["run_source"] = source
+    input_set["phase1_floor_basis"] = _floor_basis(_read(paths["root"] / "ai_input.json", {}))
     _write(paths["sets"] / f"{input_set['input_fingerprint']}.json", input_set)
     _write(paths["current_set"], input_set)
     model = {
@@ -2002,7 +2004,7 @@ def _calculate(web, project, scope="full"):
     report["confirmed_rooms"] = confirmed_rooms
     report["room_scope_confirmation"] = confirmation_summary
     if scope == "phase1_base_room":
-        _phase1_coverage(report, candidates)
+        _phase1_coverage(report, candidates, confirmed_set)
     # Provenance is attached at render time; it does not change any hourly
     # load value or reviewed artifact.
     try:
@@ -2016,21 +2018,67 @@ def _calculate(web, project, scope="full"):
     return report
 
 
-def _phase1_coverage(report, candidates):
+_UNCONDITIONED_BELOW = re.compile(r"\b(?:car\s*park\s+(?:below|under)|(?:over|above)\s+(?:the\s+)?(?:car\s*park|basement|"
+                                  r"loading\s+dock|void)|void\s+(?:below|under)|basement\s+below|suspended\s+(?:slab|floor))\b", re.I)
+_ON_GROUND = re.compile(r"\b(?:slab\s+on\s+(?:ground|grade)|ground\s+(?:floor\s+)?slab|on[- ]grade\s+slab)\b", re.I)
+
+
+def _floor_basis(ai_input):
+    """What is under the tenancy's floor, for Phase 1 (user decision 2026-10-15): a ground slab adds no cooling load.
+    "unconditioned_below" when the drawings show a car park, void, basement or suspended slab below (the floor stays
+    an unresolved exception); otherwise a ground slab, from the drawings or assumed as the most likely case for a shop.
+    Returns {"kind", "reason", "page"}."""
+    pages = (ai_input or {}).get("drawing_set", {}).get("pages", []) if isinstance(ai_input, dict) else []
+    shown = None
+    for page in pages:
+        if not isinstance(page, dict):
+            continue
+        text = " ".join(str((page.get("structured_content") or {}).get("markdown", "")).split())
+        below = _UNCONDITIONED_BELOW.search(text)
+        if below:
+            excerpt = text[max(0, below.start() - 60):below.end() + 60]
+            return {"kind": "unconditioned_below", "page": page.get("page"),
+                    "reason": f"The drawings show an unconditioned space below (p. {page.get('page')}: “{excerpt}”); "
+                              "the floor needs its construction and the space's temperature."}
+        ground = _ON_GROUND.search(text)
+        if ground and shown is None:
+            shown = {"page": page.get("page"), "excerpt": text[max(0, ground.start() - 40):ground.end() + 40]}
+    if shown:
+        return {"kind": "ground", "page": shown["page"],
+                "reason": f"Slab on ground (p. {shown['page']}: “{shown['excerpt']}”): no cooling load through it."}
+    return {"kind": "assumed_ground", "page": None,
+            "reason": "Assumed: the floor is a slab on the ground or over another conditioned space (most likely for a "
+                      "shop; the drawings don't say), so it adds no cooling load."}
+
+
+def _phase1_coverage(report, candidates, input_set=None):
     """Say how much of the job a Phase 1 subtotal covers, so a partial or empty one is never read as the answer.
 
     report["phase1_coverage"] lists the rooms included and the rooms left out (with why). When the included rooms
     have no wall, roof or window resolved, there is no envelope load to report: the result is blocked with that
-    reason instead of showing 0 kW (an island bar with no outside walls once came out as a 0.0 kW "result")."""
+    reason instead of showing 0 kW (an island bar with no outside walls once came out as a 0.0 kW "result"). A room
+    whose every boundary resolved to conditioned space (a floor above, neighbours, a mall) is different: its envelope
+    load really is zero, so it counts as resolved and the result says why."""
+    rooms = (((input_set or {}).get("material") or {}).get("hourly_load_model") or {}).get("rooms", [])
+    all_internal = sorted(str(room.get("name") or "") for room in rooms if isinstance(room, dict)
+                          and (room.get("cooling_load") or {}).get("envelope_not_applicable") is True)
     included = [row["label"] for row in candidates if row.get("status") == "calculated" and row.get("area_m2") is not None]
     left_out = [{"label": row["label"],
                  "reason": "no area yet" if row.get("area_m2") is None else "its use isn't resolved"}
                 for row in candidates if row["label"] not in included]
     summary = report.get("preliminary_surface_summary") or {}
     surfaces = int(summary.get("included") or 0) + int(summary.get("openings_included") or 0)
+    internal = [name for name in included if name in all_internal]
+    resolved = surfaces > 0 or (bool(included) and len(internal) == len(included))
     report["phase1_coverage"] = {"rooms_found": len(candidates), "rooms_included": included, "rooms_left_out": left_out,
-                                 "surfaces_included": surfaces, "complete": bool(included) and not left_out and surfaces > 0}
-    if included and not surfaces:
+                                 "surfaces_included": surfaces, "rooms_fully_internal": internal,
+                                 "complete": bool(included) and not left_out and resolved}
+    if internal:
+        report["phase1_automation_note"] = " ".join(filter(None, [
+            str(report.get("phase1_automation_note") or ""),
+            f"{_names(internal)}: every wall and the ceiling face conditioned space (a floor above, neighbours or a "
+            f"mall), so {'its' if len(internal) == 1 else 'their'} envelope load is 0 kW."]))
+    if included and not resolved:
         missing = f" {_names(row['label'] for row in left_out)} {'has' if len(left_out) == 1 else 'have'} no area yet." if left_out else ""
         report["status"] = "blocked"
         report["blocked_reasons"] = [f"No wall, roof or window of {_names(included)} could be resolved, so there is no "

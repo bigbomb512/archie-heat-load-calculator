@@ -30,8 +30,8 @@ TASKS = {
                  "max_crops_per_page": 3, "max_crop_px": 1024, "prompt_builder": "north_prompt",
                  "reply_validator": "validate_north_reply", "apply_function": "_apply_p2", "fallback": None},
     "P5_roof": {"id": "roof_exposure", "inputs": ["drawing_facts", "P1_site", "current_room_traces"],
-                "budget_chars": 2000, "max_crops": 1, "prompt_builder": "roof_prompt",
-                "reply_validator": "validate_roof_reply", "apply_function": "_apply_p5", "fallback": None},
+                "budget_chars": 3000, "max_crops": 1, "prompt_builder": "roof_prompt",
+                "reply_validator": "validate_roof_reply", "apply_function": "_apply_p5", "fallback": "roof_fallback"},
     "P6_kitchen": {"id": "kitchen_equipment", "inputs": ["current_kitchen_trace", "kitchen_elevation_pages"],
                    "budget_chars": kitchen_equipment.BUDGET_CHARS, "max_images": 3,
                    "prompt_builder": "kitchen_equipment.build_packet", "reply_validator": "kitchen_equipment.validate_reply",
@@ -506,10 +506,20 @@ def north_consensus(values, tolerance=5.0):
             "conflict_pages": [row[0] for row in rows if row not in best]}
 
 
+ROOF_TERMS = re.compile(
+    r"\b(?:slab\s+over|roof\s+over|level\s+above|floor\s+above|tenancy\s+above|apartments?|residences?|podium|"
+    r"stand[- ]alone|single[- ]storey|ground\s+floor|level\s+\d+|u/?s\.?\s+of\s+(?:slab|roof)|underside\s+of\s+(?:slab|roof)|"
+    r"structure\s+above|roof\s+(?:slabs?|sheet(?:ing|s)?|deck|space|insulation|plan|lights?)|metal\s+deck|skylights?|"
+    r"car\s*park|soffit)\b", re.I)
+MAX_ROOF_FACTS = 8
+
+
 def build_roof_facts(ai_input, site_determination, room):
+    """The drawing facts about what is above the tenancy: levels, slabs and structure above (ceiling plans say
+    "U/S of slab"), roof sheeting, skylights, apartments, car parks. Repeated notes (the same note on the ceiling and
+    lighting plans) are kept once, at most two per term, so the packet stays small."""
     pages = (ai_input or {}).get("drawing_set", {}).get("pages", [])
-    terms = re.compile(r"\b(?:slab\s+over|roof\s+over|level\s+above|apartments?|residences?|podium|stand[- ]alone|single[- ]storey|ground\s+floor|level\s+\d+)\b", re.I)
-    facts = []
+    facts, seen, per_term = [], set(), {}
     levels = set()
     tenancy_prefix = ""
     for page in pages:
@@ -520,36 +530,79 @@ def build_roof_facts(ai_input, site_determination, room):
         level = str(page.get("level_name", ""))
         if level:
             levels.add(level)
-        text = str(page.get("structured_content", {}).get("markdown", ""))
+        text = " ".join(str(page.get("structured_content", {}).get("markdown", "")).split())
+        body_start = 0
         if title:
-            text = title + "\n" + text
-        for match in terms.finditer(text):
-            excerpt = text[max(0, match.start() - 100):min(len(text), match.end() + 160)].strip()
-            facts.append({"page": number, "text": excerpt[:260]})
+            text = title + " | " + text
+            body_start = len(title) + 3
+        for match in ROOF_TERMS.finditer(text):
+            term = re.sub(r"[^a-z]+", " ", match.group().casefold()).strip()
+            excerpt = text[max(0, match.start() - 70):min(len(text), match.end() + 110)].strip()
+            # The same note on two sheets is one fact: compare the note's words around the match, not the sheet title.
+            key = re.sub(r"[^a-z0-9]+", " ", text[max(body_start if match.start() >= body_start else 0, match.start() - 30):
+                                                   match.end() + 30].casefold()).strip()
+            if key in seen or per_term.get(term, 0) >= 2:
+                continue
+            seen.add(key)
+            per_term[term] = per_term.get(term, 0) + 1
+            facts.append({"page": number, "text": excerpt[:200]})
         tenancy = re.search(r"\b(?:TENANCY|SHOP|SUITE)\s+([A-Z]\d{1,4})\b", text, re.I)
         if tenancy and not tenancy_prefix:
             tenancy_prefix = tenancy.group(1).upper()
+    facts = facts[:MAX_ROOF_FACTS]
     fact_text = "\n".join(row["text"] for row in facts)
     names = (site_determination or {}).get("site", {}) if isinstance(site_determination, dict) else {}
     site_name = names.get("text", "") if isinstance(names, dict) else ""
     site_kind = names.get("kind", "") if isinstance(names, dict) else ""
     site_name = site_name or (site_determination or {}).get("site_text", "")
     site_kind = site_kind or (site_determination or {}).get("site_kind", "")
-    room_level = str((room or {}).get("level_name", ""))
-    return {"levels_present": sorted(levels), "facts": facts[:20], "site_name": str(site_name),
+    return {"levels_present": sorted(levels), "facts": facts, "site_name": str(site_name),
             "site_kind": str(site_kind), "tenancy_prefix": tenancy_prefix,
             "room": {key: (room or {}).get(key) for key in ("room_id", "room_label", "level_name", "page")},
             "mentions": {term: bool(re.search(term, fact_text, re.I)) for term in
-                         ("slab over", "roof over", "level above", "apartments", "residences", "podium")}}
+                         ("slab over", "roof over", "level above", "apartments", "residences", "podium",
+                          "floor above", "car ?park", "structure above", "u/?s\\.? of slab", "underside of slab",
+                          "roof sheet", "metal deck", "skylight")}}
 
 
 def roof_prompt(packet):
     return (
-        "From these drawing facts, is the roof directly above this tenancy exposed to the sky? Answer exposed, not_exposed "
-        "or unknown, quoting the fact you used. Do not guess from the business type.\n"
+        "Is the roof directly above this tenancy's ceiling exposed to the sky (exposed), or is there a floor, another "
+        "tenancy, apartments or a car park above it (not_exposed)? Decide from the drawing facts below and quote the "
+        "fact you relied on, word for word. \"U/S of slab\" or \"structure above\" means a concrete slab over the "
+        "ceiling: over a shop in a centre that is most often a floor or car park above, while roof sheeting, a metal "
+        "deck or skylights mean the roof. Weigh all the facts (levels, apartments, the site). Answer unknown only if "
+        "the facts point neither way.\n"
         'JSON only: {"roof": "exposed"|"not_exposed"|"unknown", "evidence": string}\n\n'
         + json.dumps(packet, ensure_ascii=False, separators=(",", ":"))
     )
+
+
+ROOF_ABOVE_MENTIONS = ("level above", "apartments", "residences", "podium", "floor above", "car ?park")
+SLAB_ABOVE_MENTIONS = ("u/?s\\.? of slab", "underside of slab", "structure above", "slab over")
+ROOF_SHOWN_MENTIONS = ("roof sheet", "metal deck", "skylight", "roof over")
+
+
+def roof_fallback(packet):
+    """The most likely roof when the drawings don't settle it (user decision 2026-10-15). Not exposed when the
+    drawings show levels or a building above (apartments, a podium, a car park, a floor above), or a concrete slab
+    over the ceiling ("U/S of slab") with no roof sheeting, metal deck or skylight shown, since a slab over a shop is
+    most often a floor (Butcher Buffet: apartments above). Otherwise exposed, as for a single-storey shop.
+    Returns (roof, reason); the reason is shown in the result."""
+    mentions = (packet or {}).get("mentions") or {}
+    above = [term.replace(" ?", " ") for term in ROOF_ABOVE_MENTIONS if mentions.get(term)]
+    slab = any(mentions.get(term) for term in SLAB_ABOVE_MENTIONS)
+    roof_shown = any(mentions.get(term) for term in ROOF_SHOWN_MENTIONS)
+    if slab and not roof_shown and not above:
+        return "not_exposed", ("Assumed: a floor above, not the roof (the ceiling plans show a concrete slab over the "
+                               "ceiling and no roof sheeting or skylights). Correct it on Walls & roof if the roof is "
+                               "directly above.")
+    if len((packet or {}).get("levels_present") or []) > 1 or above:
+        why = (f"the drawings mention {', '.join(above)}" if above else "the drawing set has more than one level")
+        return "not_exposed", (f"Assumed: a floor or other space above, not the roof ({why}). Correct it on Walls & "
+                               "roof if the roof is directly above.")
+    return "exposed", ("Assumed: the roof is directly above (most likely for a single-storey shop; the drawings don't "
+                       "say). Correct it on Walls & roof if there is a floor above.")
 
 
 def validate_roof_reply(packet, reply):
@@ -558,11 +611,8 @@ def validate_roof_reply(packet, reply):
         raise ValueError("roof must be exposed, not_exposed or unknown.")
     evidence = str(value.get("evidence", "")).strip()
     if value["roof"] != "unknown":
-        sources = [str(row.get("text", "")) for row in packet.get("facts", []) if isinstance(row, dict)]
-        explicit = any(re.search(
-            r"\b(?:roof|slab|floor|tenancy|level)\b.{0,60}\b(?:above|over|below|beneath|directly)\b|"
-            r"\b(?:above|over|below|beneath|directly)\b.{0,60}\b(?:roof|slab|floor|tenancy|level)\b",
-            source, re.I) for source in sources)
-        if not evidence or not any(evidence in source for source in sources) or not explicit:
-            raise ValueError("A roof determination needs a quoted drawing fact that explicitly establishes what is above the tenancy.")
+        squash = lambda text: " ".join(str(text).split()).casefold()
+        sources = [squash(row.get("text", "")) for row in packet.get("facts", []) if isinstance(row, dict)]
+        if not evidence or not any(squash(evidence) in source for source in sources):
+            raise ValueError("A roof determination needs a drawing fact quoted word for word from the facts given.")
     return {"roof": value["roof"], "evidence": evidence[:300]}

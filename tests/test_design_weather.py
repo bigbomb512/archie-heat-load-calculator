@@ -87,7 +87,7 @@ class ChosenLocationTests(unittest.TestCase):
 
 
 class DraftDesignDayTests(unittest.TestCase):
-    def assembled(self, site, table, weather_location=""):
+    def assembled(self, site, table, weather_location="", weather_note=""):
         building = {"spaces": [{"name": "Dining", "level_name": "Ground", "area_m2": 200, "evidence": [{"page": 2, "excerpt": "DINING"}]}]}
         room = {"kind": "room", "label": "Dining", "level_name": "Ground", "area_m2": 200, "preliminary_profile_id": "hospitality", "page": 2}
         proposal = {"rooms": [room]}
@@ -95,7 +95,8 @@ class DraftDesignDayTests(unittest.TestCase):
         gains = internal_gains_resolution.resolve(building, proposal=proposal, room_use=use, pack=ai_preliminary.load_pack(),
                                                   source_fingerprints={"proposal": "a"})
         return ai_preliminary.assemble(building, preliminary_proposal=proposal, room_use_resolution=use, internal_gains_resolution=gains,
-                                       site_location=site, design_weather_table=table, weather_location=weather_location)
+                                       site_location=site, design_weather_table=table, weather_location=weather_location,
+                                       weather_note=weather_note)
 
     def test_a_confirmed_site_is_sized_on_the_dry_bulb_day_and_checked_on_the_humid_day(self):
         generic = self.assembled(SITE, None)
@@ -126,6 +127,21 @@ class DraftDesignDayTests(unittest.TestCase):
         self.assertIn("Newcastle (the weather location chosen on the Project tab)", chosen["label"])
         over_site = self.assembled(SITE, TABLE, weather_location="Newcastle")["design_conditions_basis"]["design_day"]
         self.assertEqual(over_site["location"], "Newcastle")                                    # the explicit choice wins
+
+    def test_a_location_picked_by_the_ai_is_labelled_as_picked_and_listed_as_assumed(self):
+        from backend import result_status_service
+        picked = self.assembled({}, TABLE, weather_location="Newcastle",
+                                weather_note="picked by the AI from the site details")["design_conditions_basis"]["design_day"]
+        self.assertEqual(picked["origin"], "design_temperature_table_ai_picked_location")
+        self.assertIn("Newcastle (picked by the AI from the site details)", picked["label"])
+        import json, tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            Path(folder, "hourly_ai_preliminary_load_report.json").write_text(
+                json.dumps({"design_conditions_basis": {"design_day": picked}}), encoding="utf-8")
+            items = result_status_service.gather(None, {"review_dir": folder})
+        weather = items["items"] if isinstance(items, dict) else items
+        self.assertTrue(any(row["topic"] == "Weather" and row["kind"] == "assumed" and "picked by the AI" in row["text"]
+                            for row in weather))
 
 
 if __name__ == "__main__":

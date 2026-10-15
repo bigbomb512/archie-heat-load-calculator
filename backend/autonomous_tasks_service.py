@@ -346,12 +346,12 @@ def _roof_packets(root, room_id=None):
 
 
 def _refresh_roof_tasks(root, room_id=None):
+    # The AI decides the roof from the drawing facts; when they don't settle it, the labelled most-likely case is used
+    # (user decision 2026-10-15). Nobody is asked: the operators can correct it on Walls & roof.
+    budget = autonomous_tasks.TASKS["P5_roof"]["budget_chars"]
     for target,packet,prompt,images in _roof_packets(root, room_id=room_id):
-        record=_create_run(root,"P5_roof",target,packet,prompt,images,
-            "Prompt exceeds the 2,000-character limit; evidence was not shortened." if len(prompt)>2000 else "")
-        if record.get("status")=="waiting_for_reply" and not _has_explicit_roof_evidence(packet):
-            record.update({"status":"needs_contractor_answer","block_reason":ROOF_CONTRACTOR_QUESTION})
-            _update_record(root,record)
+        _create_run(root,"P5_roof",target,packet,prompt,images,
+            f"Prompt exceeds the {budget:,}-character limit; evidence was not shortened." if len(prompt)>budget else "")
 
 
 def _p6_kitchen_packets(root, room_id=None):
@@ -2279,10 +2279,11 @@ def _apply_p5(web, project, root, record, validated):
         return record
     selected = validated["roof"]
     source = "ai_determined"
+    evidence = validated.get("evidence", "")
     if selected == "unknown":
-        record.update({"status": "needs_contractor_answer", "block_reason": ROOF_CONTRACTOR_QUESTION,
-                       "validation": validated, "applied_value": {}, "source": ""})
-        return record
+        # The drawings don't settle it: the most likely case, labelled, instead of a question (user decision 2026-10-15).
+        selected, evidence = autonomous_tasks.roof_fallback(record.get("packet", {}))
+        source = "ai_fallback"
     applied=[]; reviewer_kept=[]
     for trace in traces:
         existing_roof_source = trace.get("roof_source") or (
@@ -2303,11 +2304,12 @@ def _apply_p5(web, project, root, record, validated):
         record.update({"status":"applied","source":"reviewer","applied_value":{"room":representative.get("room_label"),
             "roof":representative.get("roof"),"overrode_by":"reviewer","part_count":len(traces)},"validation":validated})
         return record
-    record.update({"status": _status_for_accuracy(source, record["accuracy"]), "source": source,
+    record.update({"status": "applied_fallback" if source == "ai_fallback" else _status_for_accuracy(source, record["accuracy"]),
+                   "source": source,
                    "applied_value": {"room": representative.get("room_label", room_id), "roof": selected,
                                      "part_count":len(traces),
-                                     "source": source, "ai_run_id": record["run_id"], "evidence": validated.get("evidence", ""),
-                                     "label": record["quality_label"]},
+                                     "source": source, "ai_run_id": record["run_id"], "evidence": evidence,
+                                     "label": "Assumed (most likely case)" if source == "ai_fallback" else record["quality_label"]},
                    "validation": validated, "block_reason": ""})
     return record
 
@@ -2324,16 +2326,6 @@ def _apply_p6(record, validated):
                    },
                    "validation": {"valid": True, "items": items}, "block_reason": ""})
     return record
-
-
-def _has_explicit_roof_evidence(packet):
-    for row in packet.get("facts", []) if isinstance(packet, dict) else []:
-        text = str(row.get("text", "")) if isinstance(row, dict) else ""
-        if re.search(r"\b(?:roof|slab|floor|tenancy|level)\b.{0,60}\b(?:above|over|below|beneath|directly)\b|"
-                     r"\b(?:above|over|below|beneath|directly)\b.{0,60}\b(?:roof|slab|floor|tenancy|level)\b",
-                     text, re.I):
-            return True
-    return False
 
 
 def _answer_roof(web, project, root, data, *, defer_evidence_rebuild=False):
