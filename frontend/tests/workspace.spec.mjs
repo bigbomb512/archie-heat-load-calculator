@@ -800,6 +800,15 @@ test("Drawings: before the skills have run, the needs list says when it will app
   await expect(page.locator("[data-ws-needs-status]")).toContainText("the list appears when they finish");
 });
 
+test("Drawings: a review whose server stopped says so, and Retry repeats the run's own scope", async ({page}) => {
+  const posts = await mockJob(page, {status: () => baseStatus(), skill: () => ({status: "failed", scope: "phase1_envelope",
+    problem: "The server stopped while the AI was working through the drawings.", stages: [], findings: [], subskills: []})});
+  await page.goto("/#/job/job-1/drawings/overview");
+  await expect(page.getByText("The server stopped while the AI was working through the drawings. Press Retry PDF review below")).toBeVisible();
+  await page.getByRole("button", {name: "Retry PDF review"}).first().click();
+  await expect.poll(() => posts.find(([kind]) => kind === "skill")?.[1]).toEqual({project_id: "job-1", action: "retry"});
+});
+
 test("Project: the weather location is suggested from the address and saved with the job", async ({page}) => {
   const posts = await mockJob(page, {status: () => baseStatus({address: "2 Central Park Ave, Chippendale NSW",
     weather_location: "", weather_locations: ["Newcastle", "Sydney", "Wagga"], weather_suggestion: "Sydney"})});

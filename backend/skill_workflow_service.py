@@ -27,6 +27,7 @@ from copy import deepcopy
 from pathlib import Path
 
 from backend.vision_extraction_service import _atomic_json
+from backend.job_runner import _process_alive
 from ai.skill_registry import compose_subskill_instructions, instruction_path, load_subskill_registry, subskill_instructions_fingerprint
 from ai.vision_extraction import select_page_groups
 
@@ -397,11 +398,24 @@ def _new_manifest(catalog, source_fp, scope="all"):
     return {
         "schema_version": 1, "run_id": uuid.uuid4().hex, "workflow_id": catalog["workflow_id"],
         "catalog_id": catalog["catalog_id"], "catalog_fingerprint": _fingerprint(catalog),
-        "source_fingerprint": source_fp, "scope": scope, "status": "queued", "created_at": time.time(),
+        "source_fingerprint": source_fp, "scope": scope, "status": "queued", "created_at": time.time(), "pid": os.getpid(),
         "updated_at": time.time(), "skills": skills, "subskills": subskill_states,
         "preparation": {"status": "not_started", "artifact_names": [], "error_code": "", "remediation": ""},
         "stale_reasons": [],
     }
+
+
+INTERRUPTED_PROBLEM = "The server stopped while the AI was working through the drawings."
+INTERRUPTED_REMEDIATION = "Retry to finish the remaining steps; finished steps are kept."
+
+
+def _orphaned(manifest, project_id):
+    """True for a run recorded as queued or running that no live server is working on: the server running it stopped
+    (closed, restarted or crashed). A run owned by another live server process (its pid) is still running."""
+    if manifest.get("status") not in {"queued", "running"} or project_id in _RUNNING:
+        return False
+    pid = manifest.get("pid")
+    return not (pid != os.getpid() and _process_alive(pid))
 
 
 def _write_manifest(path, manifest):
@@ -3582,6 +3596,9 @@ def _response(web, project):
         for row in manifest.get("subskills", {}).values():
             if row.get("status") in {"resolved", "provisional", "needs_review", "excluded"}:
                 row["status"] = "stale"
+    interrupted = _orphaned(manifest, project["id"])
+    if interrupted:
+        manifest.update({"status": "failed", "error_code": "skill_workflow_interrupted", "remediation": INTERRUPTED_REMEDIATION})
     safe = deepcopy(manifest)
     safe.pop("error_details", None)
     def public_text(value):
@@ -3746,6 +3763,7 @@ def _response(web, project):
                         "scan_reading": safe.get("preparation", {}).get("scan_reading", {}),
                         "remediation": safe.get("preparation", {}).get("remediation", "")},
         "catalog": {"id": catalog["catalog_id"], "version": catalog["schema_version"]},
+        "scope": safe.get("scope", ""), **({"problem": INTERRUPTED_PROBLEM} if interrupted else {}),
         "artifact_links": {name: web.safe_link(paths["root"] / name) for name in {artifact for row in safe.get("skills", {}).values() for artifact in row.get("artifact_names", [])} if (paths["root"] / name).exists()},
     }
 
@@ -4250,7 +4268,11 @@ def post(web, project, data):
         # an interrupted run (for example, after a local server restart). Do
         # not deduplicate forever against that orphaned state; make the
         # interruption visible and require the deliberate retry action.
-        if existing.get("status") == "running":
+        if existing.get("status") in {"queued", "running"} and not _orphaned(existing, project["id"]):
+            response = _response(web, project)       # another live server process is running it
+            response["deduplicated"] = True
+            return response
+        if existing.get("status") in {"queued", "running"}:
             existing.update({"status": "failed", "finished_at": time.time(),
                 "error_code": "skill_workflow_interrupted",
                 "remediation": "The local skill run stopped before completion. Retry the workflow to resume from current evidence."})
@@ -4282,9 +4304,13 @@ def post(web, project, data):
                 raise ValueError("Retry is available only after a failed or stale skill workflow.")
         manifest = _new_manifest(catalog, source_fp, scope)
         manifest["reuse_from"] = _reuse_table(paths, existing)
-        _write_manifest(paths["manifest"], manifest)
+        _RUNNING.add(project["id"])       # before the manifest says queued, so a status read never sees it orphaned
+        try:
+            _write_manifest(paths["manifest"], manifest)
+        except Exception:
+            _RUNNING.discard(project["id"])
+            raise
         _USAGE_STOPPED.pop(str(paths["root"].resolve()), None)  # a new run tries again
-        _RUNNING.add(project["id"])
     thread = threading.Thread(target=_run_worker, args=(web, deepcopy(project), manifest["run_id"], source_fp, catalog), daemon=True)
     thread.start()
     response = _response(web, project)

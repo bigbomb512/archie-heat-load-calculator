@@ -5518,10 +5518,17 @@ def upload_response(project):
 
 
 def project_list(identity=None):
-    projects = sorted(load_projects().values(), key=lambda item: item.get("updated_at", ""), reverse=True)
+    projects = list(load_projects().values())
     # Isolated local walkthroughs can leave metadata in the project registry;
     # they belong only in the test workspace, not the user's project sidebar.
-    projects = [project for project in projects if not project.get("test_run")]
+    projects = [
+        project for project in projects
+        if isinstance(project, dict)
+        and not project.get("test_run")
+        and str(project.get("id") or "").strip()
+        and str(project.get("name") or "").strip()
+    ]
+    projects.sort(key=lambda item: item.get("updated_at", ""), reverse=True)
     if identity is not None and not identity.development:
         projects = [project for project in projects if security.role_for_project(project, identity)]
     return [

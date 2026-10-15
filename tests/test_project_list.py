@@ -22,6 +22,13 @@ class ProjectListTests(unittest.TestCase):
                 "test_run": True,
                 "updated_at": "2026-09-28T11:00:00+0000",
             },
+            # Old local test metadata may not be tagged as a test run and can
+            # lack the fields required by the sidebar response.
+            "test": {
+                "id": "test",
+                "review_dir": "/tmp/test-review",
+                "updated_at": "2026-09-28T12:00:00+0000",
+            },
         }):
             projects = web_app.project_list()
 

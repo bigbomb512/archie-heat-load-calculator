@@ -290,7 +290,7 @@ def start(web, project, data=None):
             "failures": {str(page): reason for page, reason in sorted(failures.items())},
             "packet": packet_from_readings(readings, len(images)),
         })
-        if readings and web is not None:
+        if readings:
             # Pass 2 and drawing review can use successful pages; one unreadable sheet must not
             # discard independent evidence from the rest of the drawing set.
             from backend import page_extraction_service

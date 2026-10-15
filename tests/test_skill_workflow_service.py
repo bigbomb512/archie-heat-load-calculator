@@ -709,6 +709,39 @@ class SkillWorkflowTests(unittest.TestCase):
         finally:
             skills._run_worker = original_worker
 
+    def test_a_run_left_running_by_a_stopped_server_shows_as_stopped_and_retry_repeats_its_scope(self):
+        original_worker = skills._run_worker
+        try:
+            skills._run_worker = lambda *_args: None
+            with tempfile.TemporaryDirectory() as folder:
+                project, web = self.project(folder), Web()
+                paths = skills._project_paths(project)
+                catalog = skills.load_catalog()
+                old = skills._new_manifest(catalog, skills._source_fingerprint(paths, catalog), "phase1_envelope")
+                old.update({"status": "running", "run_id": "orphaned-run", "pid": 999999999})   # no such process
+                skills._write_manifest(paths["manifest"], old)
+
+                shown = skills.get(web, project)
+                self.assertEqual((shown["status"], shown["scope"]), ("failed", "phase1_envelope"))
+                self.assertIn("server stopped", shown["problem"])
+                self.assertEqual(skills._read(paths["manifest"], {})["status"], "running")      # reading changes nothing
+
+                skills._write_manifest(paths["manifest"], {**old, "pid": os.getppid()})        # another live server owns it
+                owned = skills.get(web, project)
+                self.assertEqual(owned["status"], "running")
+                self.assertNotIn("problem", owned)
+                self.assertTrue(skills.post(web, project, {"action": "retry"})["deduplicated"])
+
+                skills._write_manifest(paths["manifest"], old)
+                with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+                    response = skills.post(web, project, {"action": "retry"})
+                self.assertNotEqual(response["run_id"], "orphaned-run")
+                self.assertEqual(response["scope"], "phase1_envelope")                       # not the default pdf_review
+                self.assertEqual(skills._read(paths["manifest"], {})["pid"], os.getpid())
+                skills._RUNNING.discard(project["id"])
+        finally:
+            skills._run_worker = original_worker
+
     def test_subskill_prompt_composes_shared_parent_and_task_instructions(self):
         catalog = skills.load_catalog()
         registry = skills.load_subskill_registry()

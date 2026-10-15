@@ -50,6 +50,13 @@ class GuideTests(unittest.TestCase):
         self.assertIn("The AI usage limit is reached.", steps["ai"]["why"])
         self.assertEqual(steps["questions"]["state"], "later")             # no list of questions exists yet
 
+    def test_a_review_whose_server_stopped_says_so_and_points_to_retry(self):
+        result = guide(job(address="1 Main St", above="floor"), review={"status": "failed", "findings": [], "answers": {},
+                       "problem": "The server stopped while the AI was working through the drawings."})
+        step = {row["id"]: row for row in result["steps"]}["ai"]
+        self.assertEqual((step["state"], step["action"]["label"]), ("error", "Go to retry"))
+        self.assertIn("The server stopped", step["why"])
+
     def test_phase_one_can_run_on_saved_drawing_evidence_when_a_noncritical_review_step_failed(self):
         with TemporaryDirectory() as directory:
             (Path(directory) / "building_evidence.json").write_text('{"spaces":[{"name":"Shop"}]}', encoding="utf-8")

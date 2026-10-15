@@ -425,7 +425,8 @@
         : busy(review)
           ? "Step 4 of 4: working through the drawings. You can carry on with the other tabs meanwhile."
           : review.status === "failed"
-            ? "The PDF review didn't finish. The reason is on Findings; retry below, or use the manual fallback on Pages & AI."
+            ? (review.problem ? `${review.problem} Press Retry PDF review below; finished steps are kept.`
+              : "The PDF review didn't finish. The reason is on Findings; retry below, or use the manual fallback on Pages & AI.")
       : review.status === "blocked"
               ? "One AI task is waiting or stopped. Phase 1 can still calculate from saved drawing evidence; unresolved items will be listed as exceptions."
               : review.status === "needs_review" || openReview
@@ -1048,7 +1049,7 @@
     });
     body.querySelector("[data-ws-skill-retry]")?.addEventListener("click", async event => {
       event.target.disabled = true;
-      try { await sendJson("/api/skill-workflow", {project_id: projectId, action: "retry", scope: "pdf_review"}); await renderDrawings(); }
+      try { await sendJson("/api/skill-workflow", {project_id: projectId, action: "retry"}); await renderDrawings(); }
       catch (error) { event.target.disabled = false; event.target.textContent = `Retry failed: ${error.message}`; }
     });
     body.querySelectorAll("[data-ws-finding-accept], [data-ws-finding-reject], [data-ws-finding-save]").forEach(button => button.addEventListener("click", async () => {
