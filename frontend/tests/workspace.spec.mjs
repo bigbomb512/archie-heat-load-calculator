@@ -951,6 +951,24 @@ test("Results: a stale Phase 1 base load is labelled and can be recalculated", a
   await expect(page.locator("[data-ws-calculate-base]")).toHaveText("Recalculate Phase 1 base load");
 });
 
+test("Results: a blocked Phase 1 shows why instead of 0 kW, and a partial one says which rooms it covers", async ({page}) => {
+  let report = {status: "blocked", included_scope_peak: {final_design_total_kw: 0}, room_peaks: [],
+    blocked_reasons: ["No wall, roof or window of Bar could be resolved, so there is no envelope load to report yet. Kitchen and Shop have no area yet."],
+    phase1_coverage: {rooms_found: 3, rooms_included: ["Bar"], rooms_left_out: [{label: "Kitchen", reason: "no area yet"}, {label: "Shop", reason: "no area yet"}]}};
+  await mockJob(page, {status: () => baseStatus(), model: () => ({phase1_base_room_load_report: report})});
+  await page.goto("/#/job/job-1/results");
+  const phase1 = page.locator("[data-ws-phase1-result]");
+  await expect(phase1).toContainText("AI could not calculate a base load for this drawing yet.");
+  await expect(page.locator("[data-ws-phase1-exceptions]")).toContainText("No wall, roof or window of Bar could be resolved");
+  await expect(phase1).not.toContainText("0.0 kW");
+  report = {...report, status: "draft", blocked_reasons: [], included_scope_peak: {final_design_total_kw: 4.2},
+    room_peaks: [{name: "Bar", design_total_kw: 4.2}], phase1_coverage: {...report.phase1_coverage, rooms_included: ["Bar", "Shop"],
+    rooms_left_out: [{label: "Kitchen", reason: "no area yet"}]}};
+  await page.reload();
+  await expect(page.locator("[data-ws-phase1-coverage]")).toHaveText("Covers 2 of 3 rooms: Bar, Shop. Not included: Kitchen (no area yet).");
+  await expect(phase1).toContainText("4.2 kW");
+});
+
 test("Results: Phase 1 exposes the surface evidence and load audit", async ({page}) => {
   await mockJob(page, {status: () => baseStatus(), model: () => ({
     phase1_base_room_load_report: {

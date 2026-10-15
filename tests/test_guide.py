@@ -1,5 +1,6 @@
 """The Next step card: the job's steps in plain words, in order, with the one to do now."""
 
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -56,6 +57,25 @@ class GuideTests(unittest.TestCase):
         step = {row["id"]: row for row in result["steps"]}["ai"]
         self.assertEqual((step["state"], step["action"]["label"]), ("error", "Go to retry"))
         self.assertIn("The server stopped", step["why"])
+
+    def test_a_blocked_or_partial_phase_one_result_is_not_shown_as_done_and_complete(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "ai_preliminary_input_set.json").write_text('{"input_fingerprint": "fp"}', encoding="utf-8")
+            peak = {"final_design_total_kw": 0.0}
+            blocked = {"status": "blocked", "preliminary_input_set_fingerprint": "fp", "included_scope_peak": peak,
+                       "blocked_reasons": ["No wall, roof or window of Bar could be resolved."]}
+            (root / "phase1_base_room_load_report.json").write_text(json.dumps(blocked), encoding="utf-8")
+            with patch.object(guide_service.ai_preliminary_service, "_stale_reasons", return_value=[]):
+                step = {row["id"]: row for row in guide(job(address="1 Main St", above="floor"), review_dir=directory)["steps"]}["base_load"]
+                self.assertEqual(step["state"], "error")
+                self.assertIn("No wall, roof or window of Bar", step["why"])
+                partial = {**blocked, "status": "draft", "included_scope_peak": {"final_design_total_kw": 4.2},
+                           "phase1_coverage": {"rooms_left_out": [{"label": "Kitchen"}, {"label": "Shop"}]}}
+                (root / "phase1_base_room_load_report.json").write_text(json.dumps(partial), encoding="utf-8")
+                step = {row["id"]: row for row in guide(job(address="1 Main St", above="floor"), review_dir=directory)["steps"]}["base_load"]
+            self.assertEqual(step["state"], "done")
+            self.assertIn("Kitchen, Shop have no area yet", step["why"])
 
     def test_phase_one_can_run_on_saved_drawing_evidence_when_a_noncritical_review_step_failed(self):
         with TemporaryDirectory() as directory:

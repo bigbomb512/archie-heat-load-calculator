@@ -823,6 +823,11 @@ def _p0_wall_style_records(root, page):
     return selected if [int(row.get("packet", {}).get("style_batch_index", 1)) for row in selected] == list(range(1, batch_count + 1)) else []
 
 
+# A first outline reply that leaves rooms out is refused and asked again; from this attempt on, the rooms drawn are
+# kept and the rest are listed as not drawn (so one stubborn room can't block every other room's area).
+OUTLINE_ATTEMPTS_BEFORE_PARTIAL = 2
+
+
 def _p0_outline_packets(root):
     result = []
     for page in _p0_main_geometry_pages(root):
@@ -862,14 +867,59 @@ def _p0_outline_packets(root):
             if not missing:
                 continue
             image, transform = room_outline.render_candidate_areas(context["image"], [], context["viewport"])
-            prompt = room_outline.outline_prompt(missing)
+            references, reference_images = _p0_name_sheets(root, number, missing)
+            prompt = room_outline.outline_prompt(missing, references)
             packet = {"task":"P0_room_outlines", "page":number, "room_names":missing, "transform":transform,
-                      "calibration":calibration, "wall_style_ids":wall_style_ids, "raster_mode":raster_mode}
-            result.append(("P0_room_outlines", f"page-{number}", packet, prompt, [_png_bytes(image)], ""))
+                      "calibration":calibration, "wall_style_ids":wall_style_ids, "raster_mode":raster_mode,
+                      "name_sheets":references}
+            result.append(("P0_room_outlines", f"page-{number}", packet, prompt,
+                           [_png_bytes(image), *reference_images], ""))
         except (OSError, ValueError, IndexError, KeyError, TypeError) as error:
             result.append(("P0_room_outlines", f"page-{number}", {"task":"P0_room_outlines", "page":number}, "", [],
                            f"Open-plan outline packet is blocked: {error}"))
     return result
+
+
+MAX_NAME_SHEETS = 2
+
+
+def _p0_name_sheets(root, plan_page, rooms, max_side=1536):
+    """The other sheets that print these room names (floor plans first, then ceiling plans and the rest), fewest
+    first that name the most rooms, at most MAX_NAME_SHEETS: ([{"page", "title", "rooms"}], [png bytes]).
+    Rooms named on the plan itself need no sheet."""
+    from PIL import Image
+    wanted = {name.casefold(): name for name in rooms}
+    pages, named_on_plan = {}, set()
+    for row in _inferred_room_data(root):
+        name = wanted.get(str(row.get("label", "")).casefold())
+        if not name:
+            continue
+        for item in row.get("evidence") or []:
+            page = item.get("page") if isinstance(item, dict) else None
+            if page == plan_page:
+                named_on_plan.add(name)
+            elif type(page) is int:
+                entry = pages.setdefault(page, {"page": page, "title": str(item.get("title") or "")[:80],
+                                                "floor_plan": item.get("view_type") == "floor_plan", "rooms": set()})
+                entry["rooms"].add(name)
+    left = set(rooms) - named_on_plan
+    chosen, images = [], []
+    while left and len(chosen) < MAX_NAME_SHEETS:
+        best = max(pages.values(), key=lambda row: (len(row["rooms"] & left), row["floor_plan"], -row["page"]), default=None)
+        if not best or not best["rooms"] & left:
+            break
+        source = autonomous_tasks._page_screenshot(root, best["page"])
+        pages.pop(best["page"])
+        if not source:
+            continue
+        with Image.open(source) as opened:
+            sheet = opened.convert("RGB")
+        sheet.thumbnail((max_side, max_side))
+        names = sorted(best["rooms"] & set(rooms))
+        chosen.append({"page": best["page"], "title": best["title"], "rooms": names})
+        images.append(_png_bytes(sheet))
+        left -= best["rooms"]
+    return chosen, images
 
 
 def _trace_task_image(root, trace, edge_rows=None, max_side=1536):
@@ -1181,6 +1231,46 @@ def _match_storefront_run(runs, elevation_pages, spatial):
             "reason":f"Unique run {run_index+1} matches elevation dimensions (2% or up to 600 mm wider)."}
 
 
+# A side with less than this share drawn as wall (a counter edge, a floor-finish change) that faces more of the
+# building is open to the rest of the tenancy: when the AI can't say what it faces, it is inside the tenancy, not a
+# neighbour. A side facing out of the plan (a glazed shopfront or outer wall not drawn in a wall style) keeps the
+# usual fallback.
+OPEN_SIDE_WALL_SHARE = 0.5
+
+
+def _edge_wall_coverage(root, page, traces):
+    """{trace_id: {edge_index: {"wall_coverage": share of the side with a drawn wall along it, "faces_wall": whether
+    it looks onto more drawn building}}} from the page's chosen wall styles; empty when the wall styles or page
+    geometry aren't available (raster pages, no wall-style answer)."""
+    try:
+        records = _p0_wall_style_records(root, page)
+        style_ids = sorted({style_id for row in records for style_id in (row.get("applied_value") or {}).get("wall_style_ids", [])})
+        if not style_ids:
+            return {}
+        segments = room_outline.drawn_segments(_p0_context(root, page)["objects"], style_ids)
+    except (OSError, ValueError, KeyError, TypeError, IndexError):
+        return {}
+    from shapely.geometry import LineString
+    from shapely.strtree import STRtree
+    tree = STRtree(segments) if segments else None
+    nearby = lambda geometry: [segments[index] for index in tree.query(geometry)] if tree is not None else []
+    result = {}
+    for trace in traces:
+        points = trace.get("points_image_px") or []
+        mm_per_px = float((trace.get("calibration") or {}).get("mm_per_px") or 0)
+        if mm_per_px <= 0 or len(points) < 4:
+            continue
+        sides = {}
+        for index, (start, end) in enumerate(zip(points, points[1:])):
+            share = room_outline.wall_coverage((start, end), nearby(LineString([start, end]).buffer(400 / mm_per_px)), mm_per_px)
+            reach = LineString([start, end]).buffer(30_000 / mm_per_px)
+            sides[index] = {"wall_coverage": share,
+                            "faces_wall": share < OPEN_SIDE_WALL_SHARE
+                            and room_outline.faces_drawn_wall((start, end), points, nearby(reach), mm_per_px)}
+        result[trace["trace_id"]] = sides
+    return result
+
+
 def _p3_packets(root, room_id=None, page_number=None):
     result=[]
     try: traces=reviewer_room_geometry_service.current_records(reviewer_room_geometry_service._paths({"review_dir":str(root)}))
@@ -1207,11 +1297,15 @@ def _p3_packets(root, room_id=None, page_number=None):
             continue
         runs=perimeter["runs"]
         room_edges=[]
+        coverage=_edge_wall_coverage(root,page,comfort_traces)
         for trace in comfort_traces:
             for mapping in perimeter["trace_edges"].get(trace["trace_id"],[]):
-                room_edges.append({"trace_id":trace["trace_id"],"room_id":trace["room_id"],
+                edge={"trace_id":trace["trace_id"],"room_id":trace["room_id"],
                     "room_label":trace.get("room_label"),"edge_index":mapping["edge_index"],
-                    "length_m":round(mapping["length_m"],4),"perimeter_run_index":mapping["perimeter_run_index"]})
+                    "length_m":round(mapping["length_m"],4),"perimeter_run_index":mapping["perimeter_run_index"]}
+                side=coverage.get(trace["trace_id"],{}).get(mapping["edge_index"])
+                if side: edge.update({"wall_coverage":round(side["wall_coverage"],2),"faces_wall":side["faces_wall"]})
+                room_edges.append(edge)
         storefront_match=_match_storefront_run(runs,elevation_rows,spatial)
         cues=[]
         page_row=next((row for row in spatial.get("pages",[]) if row.get("page")==page),{})
@@ -1402,7 +1496,7 @@ def _p0_trace_rows(root, record, polygons):
         results.append({"room_id": room_id, "room_label": row["label"], "page": page,
             "points_image_px": coords, "snapped_line_ids": [None] * len(coords),
             "calibration": calibration, "part_index": indexes[row["label"]], "part_count": counts[row["label"]],
-            "ai_measured_area_m2": room_outline.area_m2(polygon, mm_per_px),
+            "ai_measured_area_m2": room_outline.area_m2(row.get("net_polygon") or polygon, mm_per_px),
             "method": row.get("method", "ai_outline_snapped"),
             "outline_simplification_max_deviation_mm": 250.0,
             "note": row.get("conflict", ""), "evidence": [{"page":page, "method":row.get("method"),
@@ -1494,6 +1588,11 @@ def _apply_p0_outlines(web, project, root, record, validated):
         polygon, report = room_outline.snap_polygon(row["points"], segments, snap_px)
         polygons.append({"label":row["room"], "polygon":polygon, "method":"ai_outline_snapped",
                          "note":f"Open sides: {row.get('open_sides','')}; snapped {report['snapped_edges']}/{report['edges']} edges"})
+    nested = room_outline.subtract_nested([(row["label"], row["polygon"]) for row in polygons])
+    for row, (net, taken) in zip(polygons, nested):
+        if taken:   # a room drawn inside this one (a bar in the dining area): its floor is not counted twice
+            row["net_polygon"] = net
+            row["conflict"] = f"Area excludes {', '.join(taken)}, drawn inside it."
     rows = _p0_trace_rows(root, record, polygons)
     prepared = reviewer_room_geometry_service.persist_ai_determined_traces(web, project, rows,
         record["run_id"], record["quality_label"], replace_pages=[record["packet"]["page"]])
@@ -1565,7 +1664,14 @@ def _apply_p3(web, project, root, record, validated):
                     boundary="internal"; source="ai_determined"; reason="Room edge does not lie on the tenancy perimeter; classified internal automatically."
                 else:
                     boundary=run_values.get(mapped,"unknown"); source="ai_determined"; reason=run_evidence.get(mapped,"")
-                    if boundary=="unknown":
+                    share=mapping.get(index,{}).get("wall_coverage")
+                    if (boundary=="unknown" and mapped!=packet.get("storefront_run_index") and share is not None
+                            and share<OPEN_SIDE_WALL_SHARE and mapping.get(index,{}).get("faces_wall") is True):
+                        boundary="internal"; source="ai_fallback"
+                        reason=(f"No wall is drawn along this side ({round(share*100)}% walled) and it looks onto more of "
+                                "the building, so it is open to the rest of the tenancy (e.g. a counter edge): treated as "
+                                "inside the tenancy.")
+                    elif boundary=="unknown":
                         boundary=("mall" if mapped==packet.get("storefront_run_index") and
                                   re.search(r"\b(?:enclosed\s+(?:mall|shopping\s+centre)|shopping\s+centre|mall)\b",
                                       packet.get("nearby_text", ""),re.I) else
@@ -2321,7 +2427,15 @@ def _post(web, project, data, *, defer_evidence_rebuild=False):
             record = _apply_p0_room_names(web, project, root, record, validated)
         elif task == "P0_room_outlines":
             validated = autonomous_tasks.validate_p0_outlines(record["packet"], reply)
+            omitted, not_drawn = room_outline.outline_omissions(autonomous_tasks.parse_json_reply(reply),
+                                                                record["packet"]["room_names"], validated)
+            if omitted and len(record.get("reply_attempts") or []) < OUTLINE_ATTEMPTS_BEFORE_PARTIAL:
+                raise ValueError(f"The reply leaves out {', '.join(omitted)}. Every room in the list is on this plan "
+                                 "(the other images show where each is named): draw each one, or put it under "
+                                 "not_drawn with the reason.")
             record = _apply_p0_outlines(web, project, root, record, validated)
+            record["applied_value"]["not_drawn"] = ([{"room": name, "reason": "The AI left it out."} for name in omitted]
+                                                    + [{"room": name, "reason": reason} for name, reason in not_drawn.items()])
         elif task == "S1_printed_areas":
             record = _apply_s1_areas(web, project, root, record, reply)
         elif task == "S3_title_transcription":

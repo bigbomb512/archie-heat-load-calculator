@@ -44,7 +44,10 @@ def steps(web, project):
     except (OSError, KeyError, TypeError, ValueError):
         base_current = False
     base_peak = (base_report.get("included_scope_peak") or {}) if isinstance(base_report, dict) else {}
-    base_has_result = base_current and isinstance(base_peak.get("final_design_total_kw", base_peak.get("design_total_kw")), (int, float))
+    base_has_result = (base_current and base_report.get("status") != "blocked"
+                       and isinstance(base_peak.get("final_design_total_kw", base_peak.get("design_total_kw")), (int, float)))
+    left_out = [row.get("label") for row in ((base_report.get("phase1_coverage") or {}).get("rooms_left_out") or [])
+                if isinstance(row, dict) and row.get("label")]
     findings = review.get("findings") or []
     answers = review.get("answers") or {}
     needs = [row for row in findings if row.get("subskill_id") == "information_needs" and row.get("field") == "needs"]
@@ -133,6 +136,10 @@ def steps(web, project):
     if base_current and not base_has_result:
         reasons = base_report.get("blocked_reasons") or []
         base_why = "Phase 1 could not calculate a room load yet. " + (str(reasons[0]) if reasons else "The AI could not resolve a room with both a supported use and area; see the room exceptions.")
+    if base_has_result and left_out:
+        base_why = (f"Calculated for part of the job only: {', '.join(left_out)} "
+                    f"{'has' if len(left_out) == 1 else 'have'} no area yet, so {'it is' if len(left_out) == 1 else 'they are'} "
+                    "not in the base load. See the room exceptions on Results.")
     result.append(_step("base_load", "Calculate the Phase 1 base load", base_why,
                         "done" if base_has_result else "error" if base_current else "needed" if phase1_can_run else "later", "results", "",
                         "Calculate base load" if not base_current else "Retry base load", kind="calculate_base", needs_ai=True))

@@ -83,7 +83,7 @@ def _images(root, record):
 
 
 GRID_NOTE = ("\n\nCoordinates: give every x, y (every *_px value) on a 0-1000 grid across the image you are "
-             "describing: x 0 = left edge, 1000 = right edge; y 0 = top edge, 1000 = bottom edge, whatever the image's "
+             "describing (image 1 when the task says to draw on image 1): x 0 = left edge, 1000 = right edge; y 0 = top edge, 1000 = bottom edge, whatever the image's "
              "size in pixels.")
 
 
@@ -95,9 +95,14 @@ def _sizes(paths):
     return sizes
 
 
+# Tasks whose coordinates are always on the first image; the images after it are only for reading (e.g. the sheets
+# that print the room names for the outline task).
+FIRST_IMAGE_TASKS = {"P0_room_outlines"}
+
+
 def _grid_size(task, reply, sizes):
     """The (width, height) a reply's grid coordinates map onto, or None when it can't be told."""
-    if len(sizes) == 1:
+    if len(sizes) == 1 or (task in FIRST_IMAGE_TASKS and sizes):
         return sizes[0]
     index = reply.get("crop_index") if isinstance(reply, dict) else None
     if task == "P2_north" and type(index) is int and 0 <= index < len(sizes):
@@ -106,7 +111,7 @@ def _grid_size(task, reply, sizes):
 
 
 def uses_grid(task, sizes):
-    return len(sizes) == 1 or (task == "P2_north" and len(sizes) > 1)
+    return len(sizes) == 1 or (task == "P2_north" and len(sizes) > 1) or (task in FIRST_IMAGE_TASKS and bool(sizes))
 
 
 def to_pixels(value, size, key=""):

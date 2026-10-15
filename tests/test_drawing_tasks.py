@@ -108,6 +108,9 @@ class DrawingTaskTests(unittest.TestCase):
         self.assertEqual(drawing._grid_size("P2_north", north, sizes), (1024, 724))
         self.assertEqual(drawing.to_pixels(north, (1024, 724))["tail_px"], [482.3, 628.4])
         self.assertTrue(drawing.uses_grid("P2_north", sizes) and drawing.uses_grid("P0_room_outlines", [(10, 10)]))
+        # The outline task draws on image 1; the sheets after it only show where the rooms are named.
+        self.assertTrue(drawing.uses_grid("P0_room_outlines", sizes))
+        self.assertEqual(drawing._grid_size("P0_room_outlines", {"rooms": []}, sizes), (800, 600))
         self.assertFalse(drawing.uses_grid("P4_openings", sizes))                 # several images, no index: left as is
         self.assertIsNone(drawing._grid_size("P4_openings", north, sizes))
         self.assertEqual(drawing.to_pixels({"count": 3, "label": "x"}, (100, 100)), {"count": 3, "label": "x"})

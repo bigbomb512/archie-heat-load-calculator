@@ -1198,6 +1198,95 @@ class AutonomousTaskTests(unittest.TestCase):
         self.assertTrue(all(call.kwargs["_defer_evidence_rebuild"] for call in classify.call_args_list))
         self.assertEqual(rebuild.call_count, 1)
 
+    def test_p3_unknown_side_with_no_drawn_wall_is_inside_the_tenancy_not_a_neighbour(self):
+        # An island bar traced alone: every side is on the "perimeter" of the traced rooms and the AI can't say what
+        # it faces. A side with no wall drawn along it that looks onto more of the building is open to the tenancy.
+        trace = {"trace_id": "bar", "room_id": "bar", "room_label": "Bar",
+                 "points_image_px": [[0, 0], [100, 0], [100, 50], [0, 50], [0, 0]],
+                 "edges": [{"index": index, "boundary": "unknown"} for index in range(4)]}
+        packet = {"trace_ids": ["bar"], "runs": [], "storefront_run_index": 3, "nearby_text": "", "short_run_inheritance": {},
+                  "room_edges": [{"trace_id": "bar", "edge_index": index, "length_m": 1.0, "perimeter_run_index": index,
+                                  **({} if share is None else {"wall_coverage": share, "faces_wall": faces})}
+                                 for index, (share, faces) in enumerate([(0.1, True), (0.9, False), (None, None), (0.0, True)])]}
+        record = {"packet": packet, "accuracy": {"auto_apply": True}, "run_id": "p3-open"}
+        with patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "current_records", return_value=[trace]), \
+             patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "post") as classify, \
+             patch.object(autonomous_tasks_service.calculation_extraction_service, "post"):
+            result = autonomous_tasks_service._apply_p3(SimpleNamespace(), {"id": "open"}, Path("."), record,
+                {"edges": [{"index": index, "boundary": "unknown", "evidence": ""} for index in range(4)]})
+        edges = {row["index"]: row for row in result["applied_value"]["rooms"][0]["edges"]}
+        self.assertEqual([edges[index]["boundary"] for index in range(4)],
+                         ["internal", "adjacent_tenancy", "adjacent_tenancy", "external"])   # walled, unmeasured, storefront
+        self.assertIn("No wall is drawn along this side (10% walled)", edges[0]["evidence"])
+        self.assertEqual(classify.call_args.kwargs.get("_defer_evidence_rebuild"), True)
+
+    def test_p3_an_open_side_facing_out_of_the_plan_keeps_the_usual_fallback(self):
+        trace = {"trace_id": "shop", "room_id": "shop", "room_label": "Shop",
+                 "points_image_px": [[0, 0], [100, 0], [100, 50], [0, 50], [0, 0]],
+                 "edges": [{"index": index, "boundary": "unknown"} for index in range(4)]}
+        packet = {"trace_ids": ["shop"], "runs": [], "storefront_run_index": None, "nearby_text": "", "short_run_inheritance": {},
+                  "room_edges": [{"trace_id": "shop", "edge_index": 0, "length_m": 11.5, "perimeter_run_index": 0,
+                                  "wall_coverage": 0.15, "faces_wall": False}]}       # a glazed outer wall: looks onto nothing
+        with patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "current_records", return_value=[trace]), \
+             patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "post"), \
+             patch.object(autonomous_tasks_service.calculation_extraction_service, "post"):
+            result = autonomous_tasks_service._apply_p3(SimpleNamespace(), {"id": "out"}, Path("."),
+                {"packet": packet, "accuracy": {"auto_apply": True}, "run_id": "p3-out"},
+                {"edges": [{"index": 0, "boundary": "unknown", "evidence": ""}]})
+        self.assertEqual(result["applied_value"]["rooms"][0]["edges"][0]["boundary"], "adjacent_tenancy")
+
+    def test_p0_outline_reply_leaving_rooms_out_is_asked_again_then_kept_with_the_rest_listed(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            packet = {"task": "P0_room_outlines", "page": 20, "room_names": ["Bar", "Kitchen", "Shop"],
+                      "transform": {"offset_px": [0, 0], "factor": 1.0}}
+            autonomous_tasks_service._create_run(root, "P0_room_outlines", "page-20", packet, "Draw the rooms.", [])
+            applied = []
+
+            def apply(_web, _project, _root, record, validated):
+                applied.append([row["room"] for row in validated])
+                record.update({"status": "below_accuracy_bar", "applied_value": {"rooms": []}})
+                return record
+
+            bar_only = json.dumps({"rooms": [{"room": "Bar", "points_px": [[0, 0], [10, 0], [10, 10]]}]})
+            data = {"action": "validate_apply", "task": "P0_room_outlines", "target": "page-20", "reply": bar_only}
+            with patch.object(autonomous_tasks_service, "_apply_p0_outlines", side_effect=apply), \
+                 patch.object(autonomous_tasks_service, "get", return_value={}), \
+                 patch.object(autonomous_tasks_service, "_refresh_geometry_tasks"), \
+                 patch.object(autonomous_tasks_service, "_export_determinations"), \
+                 patch.object(autonomous_tasks_service.productization, "record_change_if_fingerprint_changed"):
+                autonomous_tasks_service._post(None, {"id": "outline", "review_dir": temporary}, data)
+                first = autonomous_tasks_service._current_task(root, "P0_room_outlines", "page-20")
+                self.assertEqual((first["status"], applied), ("waiting_for_reply", []))
+                self.assertIn("The reply leaves out Kitchen, Shop.", first["reply_attempts"][-1]["reason"])
+                second = json.dumps({"rooms": [{"room": "Bar", "points_px": [[0, 0], [10, 0], [10, 10]]}],
+                                     "not_drawn": [{"room": "Shop", "reason": "Only part of it is on this plan."}]})
+                autonomous_tasks_service._post(None, {"id": "outline", "review_dir": temporary}, {**data, "reply": second})
+                kept = autonomous_tasks_service._current_task(root, "P0_room_outlines", "page-20")
+            self.assertEqual(applied, [["Bar"]])
+            self.assertEqual(kept["applied_value"]["not_drawn"],
+                             [{"room": "Kitchen", "reason": "The AI left it out."},
+                              {"room": "Shop", "reason": "Only part of it is on this plan."}])
+
+    def test_p0_outline_packet_sends_the_sheets_that_print_the_room_names(self):
+        from PIL import Image
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            shots = root / "chatgpt_packet" / "screenshots"
+            shots.mkdir(parents=True)
+            for page in (21, 22, 23):
+                Image.new("RGB", (3000, 2000), "white").save(shots / f"page_{page:03d}.png")
+            evidence = lambda *pages: [{"page": page, "title": {21: "Top View Plan", 22: "Ceiling Plan", 23: "Lighting"}[page],
+                                        "view_type": "floor_plan" if page == 21 else "reflected_ceiling_plan"} for page in pages]
+            rows = [{"label": "Bar", "evidence": evidence(21, 22)}, {"label": "Coolroom", "evidence": evidence(22, 23)},
+                    {"label": "Shop", "evidence": evidence(21)}, {"label": "Office", "evidence": [{"page": 20}]}]
+            with patch.object(autonomous_tasks_service, "_inferred_room_data", return_value=rows):
+                sheets, images = autonomous_tasks_service._p0_name_sheets(root, 20, ["Bar", "Coolroom", "Office", "Shop"])
+        self.assertEqual(sheets, [{"page": 21, "title": "Top View Plan", "rooms": ["Bar", "Shop"]},
+                                  {"page": 22, "title": "Ceiling Plan", "rooms": ["Bar", "Coolroom"]}])
+        self.assertEqual(len(images), 2)                                   # Office is named on the plan itself
+        self.assertEqual(Image.open(__import__("io").BytesIO(images[0])).size, (1536, 1024))
+
     def test_site_cross_check_ignores_page_and_folds_case_and_whitespace(self):
         packet = {"rule_based_top_candidate": {"text": "TENANCY MZ01, M38, MELROSE CENTRAL", "page": 20}}
         reply = {"site": {"text": "tenancy   mz01, m38, melrose central", "page": 1}}

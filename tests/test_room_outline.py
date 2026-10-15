@@ -168,6 +168,41 @@ def outline_checks():
     expect_error("a room outlined twice is refused",
                  lambda: ro.validate_outline_reply({"rooms": [{"room": "Counter", "points_px": [[0, 0], [9, 0], [9, 9]]}] * 2},
                                                    ["Counter"], transform), "twice")
+    # Every listed room is drawn or explained; a bare name under not_drawn is not an explanation.
+    rooms = ["Bar", "Kitchen", "Shop", "Coolroom"]
+    drawn_bar = [{"room": "Bar", "points": [(0, 0), (1, 0), (1, 1)]}]
+    omitted, explained = ro.outline_omissions({"not_drawn": [{"room": "coolroom", "reason": "Only on the ceiling plan."},
+                                                             {"room": "Shop", "reason": ""}]}, rooms, drawn_bar)
+    check("rooms neither drawn nor explained are listed as left out", omitted == ["Kitchen", "Shop"])
+    check("an explained room keeps its reason", explained == {"Coolroom": "Only on the ceiling plan."})
+    prompt = ro.outline_prompt(["Bar", "Shop"], [{"page": 21, "title": "Top View Plan", "rooms": ["Bar", "Shop"]}])
+    check("the outline prompt says which sheet mentions the rooms and to draw on image 1",
+          "Image 2 is page 21 of the same set, which mentions Bar, Shop (as a room label, or in a note" in prompt
+          and "Give every coordinate on image 1 only." in prompt and "not_drawn" in prompt
+          and "recognise a room by what is drawn in it" in prompt)
+    check("without name sheets the prompt still asks for every room", "Draw every room in the list" in ro.outline_prompt(["Bar"]))
+    # A bar island drawn inside the dining area is taken off the dining area's floor, not counted twice.
+    dining, bar = box(0, 0, 100, 100), box(40, 40, 60, 60)
+    (net_dining, taken), (net_bar, none_taken) = ro.subtract_nested([("Dining", dining), ("Bar", bar)])
+    check("a room drawn inside another is subtracted from the larger room only",
+          taken == ["Bar"] and net_dining.area == 9600 and none_taken == [] and net_bar.area == 400)
+    side_net, side_taken = ro.subtract_nested([("A", box(0, 0, 10, 10)), ("B", box(10, 0, 20, 10))])[0]
+    check("neighbouring rooms are not subtracted", side_taken == [] and side_net.area == 100)
+    # A side with a drawn wall along it is walled; an open counter edge is not.
+    walls = [LineString([(0, 0), (500, 0)]), LineString([(0, 4), (500, 4)]), LineString([(0, 0), (0, 200)])]
+    check("a side along a drawn wall (double line counted once) is fully walled",
+          ro.wall_coverage(((0, 2), (500, 2)), walls, 10) == 1.0)
+    check("a side half along a wall is half walled", ro.wall_coverage(((250, 1), (750, 1)), walls, 10) == 0.5)
+    check("a side with no wall nearby is open", ro.wall_coverage(((0, 300), (500, 300)), walls, 10) == 0.0)
+    check("a crossing wall doesn't count", ro.wall_coverage(((0, 100), (500, 100)), walls, 10) == 0.0)
+    # Looking outward: an island inside a walled room faces walls; a side on the plan's edge faces nothing.
+    hall = [LineString([(0, 0), (1000, 0)]), LineString([(1000, 0), (1000, 1000)]),
+            LineString([(1000, 1000), (0, 1000)]), LineString([(0, 1000), (0, 0)])]
+    island = [(400, 400), (600, 400), (600, 600), (400, 600)]
+    check("every side of an island in a walled room faces a drawn wall",
+          all(ro.faces_drawn_wall((island[i], island[(i + 1) % 4]), island, hall, 10) for i in range(4)))
+    edge_room = [(0, 0), (200, 0), (200, 200), (0, 200)]
+    check("a side on the plan's outer edge faces nothing", not ro.faces_drawn_wall(((0, 200), (0, 0)), edge_room, hall, 10))
     # Drawn room: 600 x 400 px. The AI sketch is off by up to 12 px on each side.
     drawn = [LineString([(0, 0), (600, 0)]), LineString([(600, 0), (600, 400)]),
              LineString([(600, 400), (0, 400)]), LineString([(0, 400), (0, 0)])]

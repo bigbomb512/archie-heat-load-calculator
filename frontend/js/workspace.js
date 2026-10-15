@@ -1952,7 +1952,12 @@
     const baseReport = model.phase1_base_room_load_report || {};
     const baseReportStale = Boolean(model.phase1_base_room_load_report_stale);
     const basePeak = baseReport.included_scope_peak || {};
-    const baseTotal = basePeak.final_design_total_kw ?? basePeak.design_total_kw;
+    // A blocked Phase 1 report has no load to show, even if its peak holds zeros.
+    const baseTotal = baseReport.status === "blocked" ? null : (basePeak.final_design_total_kw ?? basePeak.design_total_kw);
+    const coverage = baseReport.phase1_coverage || {};
+    const leftOut = (coverage.rooms_left_out || []).map(row => `${row.label} (${row.reason})`);
+    const coverageNote = leftOut.length && (coverage.rooms_included || []).length
+      ? `<p class="ws-banner is-warn" data-ws-phase1-coverage>Covers ${coverage.rooms_included.length} of ${coverage.rooms_found} rooms: ${esc(coverage.rooms_included.join(", "))}. Not included: ${esc(leftOut.join(", "))}.</p>` : "";
     const baseRooms = baseReport.room_peaks || [];
     const baseExceptions = [...(baseReport.phase1_automation_note ? [baseReport.phase1_automation_note] : []),
       ...(baseReport.blocked_reasons || []),
@@ -1987,7 +1992,7 @@
       ${baseTotal == null ? `<p>${baseReport.status === "blocked" ? "AI could not calculate a base load for this drawing yet." : "Not calculated yet. AI will calculate the envelope and window load for each resolved room."}</p>
         ${baseExceptions.length ? `<ul class="ws-list ws-bullets" data-ws-phase1-exceptions>${baseExceptions.slice(0, 8).map(item => `<li>${esc(item)}</li>`).join("")}</ul>` : ""}
         <button class="btn key" type="button" data-ws-calculate-base>${baseReport.status === "blocked" ? "Retry Phase 1 base load" : "Calculate Phase 1 base load"}</button>` :
-        `<p><b>${kw(baseTotal)} kW</b> envelope and window load${basePeak.hour != null ? ` · peak hour ${basePeak.display_hour ?? basePeak.hour}` : ""}</p>
+        `${coverageNote}<p><b>${kw(baseTotal)} kW</b> envelope and window load${basePeak.hour != null ? ` · peak hour ${basePeak.display_hour ?? basePeak.hour}` : ""}</p>
          <ul class="ws-list" data-ws-phase1-rooms>${baseRooms.map(room => `<li><span>${esc(room.name)}</span><b>${kw(room.design_total_kw)} kW</b></li>`).join("")}</ul>
          <p class="ws-fine">People, lights, equipment, ventilation, infiltration and fan or duct heat are added in Phase 2.</p>
          ${baseReportStale ? `<button class="btn key" type="button" data-ws-calculate-base>Recalculate Phase 1 base load</button>` : ""}

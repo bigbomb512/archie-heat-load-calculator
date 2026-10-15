@@ -520,14 +520,118 @@ def calibration_from_dimension(value_mm, length_px, declared_mm_per_px, toleranc
 
 # --- Full-room AI outlines (open plans with no enclosing walls) ---------------------
 
-def outline_prompt(room_names):
+def outline_prompt(room_names, references=()):
+    """The outline request. references: the other sheets sent after the plan (image 2, 3, ...) that mention the room
+    names, as {"page", "rooms"}: the plan to draw on often has no room names, so without them the AI guesses which
+    space is which and draws only the obvious ones. A sheet may mention a name only in a note with an arrow to the area
+    (Butcher Buffet: "ceiling in bar area"), so the prompt doesn't promise labels."""
     rooms = ", ".join(room_names)
-    return ("The image is one architectural floor plan. Draw the outline of each of these rooms: " + rooms + ". "
-            "Give each outline as the corner points of the room's floor, in image pixels, in order around the room, "
-            "following the inside face of walls where there are walls, and the drawn boundary (tenancy line, "
-            "counter edge, floor-finish change) where there is no wall. Name the drawn feature you followed for any "
-            "side without a wall. If a room is not on this plan, leave it out. Reply with JSON only:\n"
-            "{\"rooms\": [{\"room\": string, \"points_px\": [[x, y], ...], \"open_sides\": string}]}")
+    shape = ("Give each outline as the corner points of the room's floor, in order around the room, following the inside "
+             "face of walls where there are walls, and the drawn boundary (tenancy line, counter edge, floor-finish "
+             "change) where there is no wall. A room inside another room (e.g. a bar in a dining area) is drawn on its "
+             "own, and the larger room is drawn around its whole space; the inner room's area is taken off it. Name the "
+             "drawn feature you followed for any side without a wall. Where no name is printed, recognise a room by "
+             "what is drawn in it: cooking equipment and benches for a kitchen, insulated panel rooms with shelving for "
+             "a coolroom or freezer, tables and seats for a dining area or shop. Draw every room in the list; if a room "
+             "really is not on ")
+    if not references:
+        return ("The image is one architectural floor plan. Draw the outline of each of these rooms: " + rooms + ". "
+                + shape + "this plan, put it under not_drawn with the reason. Give coordinates in image pixels. "
+                "Reply with JSON only:\n" + OUTLINE_REPLY_FORMAT)
+    sheets = " ".join(f"Image {index + 2} is page {row['page']} of the same set, which mentions {', '.join(row['rooms'])} "
+                      "(as a room label, or in a note with an arrow to the area)." for index, row in enumerate(references))
+    return ("Image 1 is an architectural floor plan. Draw the outline of each of these rooms on image 1: " + rooms + ". "
+            "Image 1 may not print the room names. " + sheets + " The other images show the same floor; use them only "
+            "to find where each room is, then draw it on image 1. Give every coordinate on image 1 only. "
+            + shape + "image 1, put it under not_drawn with the reason. Reply with JSON only:\n" + OUTLINE_REPLY_FORMAT)
+
+
+OUTLINE_REPLY_FORMAT = ("{\"rooms\": [{\"room\": string, \"points_px\": [[x, y], ...], \"open_sides\": string}], "
+                        "\"not_drawn\": [{\"room\": string, \"reason\": string}]}")
+
+
+def outline_omissions(reply, room_names, outlines):
+    """The listed rooms an outline reply neither drew nor explained under not_drawn, and the explained ones
+    ({room: reason}). An explanation needs a reason; a bare name doesn't count."""
+    drawn = {row["room"].casefold() for row in outlines}
+    explained = {}
+    for row in (reply.get("not_drawn") if isinstance(reply, dict) and isinstance(reply.get("not_drawn"), list) else []):
+        room, reason = str((row or {}).get("room", "")).strip(), str((row or {}).get("reason", "")).strip()
+        if room and reason:
+            explained[room.casefold()] = reason[:300]
+    omitted = [name for name in room_names if name.casefold() not in drawn and name.casefold() not in explained]
+    return omitted, {name: explained[name.casefold()] for name in room_names if name.casefold() in explained
+                     and name.casefold() not in drawn}
+
+
+def subtract_nested(polygons, inside_share=0.8):
+    """Each polygon less the other outlines lying inside it (at least inside_share of their area): a bar drawn
+    inside the dining area is not counted twice. Returns [(net polygon, [names taken off])] in the same order;
+    polygons is [(name, polygon)]."""
+    result = []
+    for index, (_name, outer) in enumerate(polygons):
+        net, taken = outer, []
+        for other, (inner_name, inner) in enumerate(polygons):
+            if other == index or inner.area <= 0 or inner.area >= outer.area:
+                continue
+            if outer.intersection(inner).area >= inside_share * inner.area:
+                net = net.difference(inner)
+                taken.append(inner_name)
+        result.append((net, taken))
+    return result
+
+
+def faces_drawn_wall(edge, room_points, segments, mm_per_px, start_mm=450, reach_m=30):
+    """Whether, looking outward from a room side (from a quarter, half and three-quarters along it), a drawn wall
+    line is met every time within reach_m: the side faces more of the building (a dining area, a store room) rather
+    than the outside of the plan, where a glazed shopfront or an outer wall drawn without wall lines looks onto
+    nothing."""
+    (x1, y1), (x2, y2) = edge
+    length = math.dist(edge[0], edge[1])
+    if length <= 0 or not mm_per_px:
+        return False
+    nx, ny = -(y2 - y1) / length, (x2 - x1) / length
+    if Polygon(room_points).contains(Point((x1 + x2) / 2 + nx * 3, (y1 + y2) / 2 + ny * 3)):
+        nx, ny = -nx, -ny          # point the normal away from the room
+    start, reach = start_mm / mm_per_px, reach_m * 1000 / mm_per_px
+    for share in (0.25, 0.5, 0.75):
+        x, y = x1 + (x2 - x1) * share, y1 + (y2 - y1) * share
+        ray = LineString([(x + nx * start, y + ny * start), (x + nx * reach, y + ny * reach)])
+        if not any(segment.intersects(ray) for segment in segments):
+            return False
+    return True
+
+
+def wall_coverage(edge, segments, mm_per_px, max_offset_mm=400, max_angle_deg=8):
+    """The share (0-1) of a room side with a drawn wall line running along it: parallel within max_angle_deg and
+    within max_offset_mm. An open side (a counter edge, a floor-finish change) has little or none."""
+    (x1, y1), (x2, y2) = edge
+    length = math.dist(edge[0], edge[1])
+    if length <= 0 or not mm_per_px:
+        return 0.0
+    ux, uy = (x2 - x1) / length, (y2 - y1) / length
+    angle = math.atan2(uy, ux)
+    spans = []
+    for segment in segments:
+        coords = list(segment.coords)
+        (a1, b1), (a2, b2) = coords[0], coords[-1]
+        turn = abs(((math.atan2(b2 - b1, a2 - a1) - angle + math.pi / 2) % math.pi) - math.pi / 2)
+        if math.degrees(turn) > max_angle_deg:
+            continue
+        offsets = (abs((a1 - x1) * uy - (b1 - y1) * ux), abs((a2 - x1) * uy - (b2 - y1) * ux))
+        if max(offsets) * mm_per_px > max_offset_mm:
+            continue
+        low, high = sorted(((a1 - x1) * ux + (b1 - y1) * uy, (a2 - x1) * ux + (b2 - y1) * uy))
+        low, high = max(0.0, low), min(length, high)
+        if high > low:
+            spans.append((low, high))
+    covered, reach = 0.0, 0.0
+    for low, high in sorted(spans):       # merge overlaps so double wall lines aren't counted twice
+        low = max(low, reach)
+        if high > low:
+            covered += high - low
+            reach = high
+    return min(1.0, covered / length)
 
 
 def validate_outline_reply(reply, room_names, transform):

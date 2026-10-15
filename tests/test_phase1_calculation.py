@@ -67,6 +67,31 @@ class PhaseOneCalculationTests(unittest.TestCase):
                                 for warning in report["warnings"]))
             self.assertFalse(any("Envelope and listed air-side loads were not assessed" in warning
                                  for warning in report["warnings"]))
+            # The room has an area but no wall, roof or window resolved: no load to report, not "0 kW".
+            self.assertEqual(saved_report["phase1_coverage"]["rooms_included"], ["Retail tenancy"])
+            self.assertEqual(saved_report["status"], "blocked")
+            self.assertIn("No wall, roof or window of Retail tenancy could be resolved", saved_report["blocked_reasons"][0])
+
+    def test_phase1_coverage_lists_rooms_left_out_and_blocks_an_empty_envelope(self):
+        candidates = [{"label": "Bar", "status": "calculated", "area_m2": 36.6},
+                      {"label": "Kitchen", "status": "no_area", "area_m2": None},
+                      {"label": "Shop", "status": "no_area", "area_m2": None}]
+        empty = {"status": "draft", "preliminary_surface_summary": {"included": 0, "openings_included": 0}, "blocked_reasons": []}
+        ai_preliminary_service._phase1_coverage(empty, candidates)
+        self.assertEqual(empty["status"], "blocked")
+        self.assertEqual(empty["blocked_reasons"], ["No wall, roof or window of Bar could be resolved, so there is no envelope "
+                                                    "load to report yet. Kitchen and Shop have no area yet."])
+        self.assertEqual(empty["phase1_coverage"], {
+            "rooms_found": 3, "rooms_included": ["Bar"], "surfaces_included": 0, "complete": False,
+            "rooms_left_out": [{"label": "Kitchen", "reason": "no area yet"}, {"label": "Shop", "reason": "no area yet"}]})
+        partial = {"status": "draft", "preliminary_surface_summary": {"included": 4, "openings_included": 1}}
+        ai_preliminary_service._phase1_coverage(partial, candidates)
+        self.assertEqual((partial["status"], partial["phase1_coverage"]["surfaces_included"]), ("draft", 5))
+        self.assertFalse(partial["phase1_coverage"]["complete"])
+        whole = {"status": "draft", "preliminary_surface_summary": {"included": 4}}
+        ai_preliminary_service._phase1_coverage(whole, candidates[:1])
+        self.assertTrue(whole["phase1_coverage"]["complete"])
+        self.assertEqual(ai_preliminary_service._workspace_report(partial)["phase1_coverage"]["rooms_included"], ["Bar"])
 
 
 if __name__ == "__main__":

@@ -1697,6 +1697,7 @@ def _workspace_report(report):
                                               for item in report.get("refrigeration_process_exclusions", [])
                                               if isinstance(item, dict)],
         "confirmed_rooms": [{key: row.get(key) for key in confirmed_fields} for row in confirmed if isinstance(row, dict)],
+        "phase1_coverage": report.get("phase1_coverage") if isinstance(report.get("phase1_coverage"), dict) else {},
         "room_scope_confirmation": {key: confirmation.get(key) for key in ("reviewer", "confirmed_at")
                                      if isinstance(confirmation, dict) and confirmation.get(key)},
     }
@@ -1963,6 +1964,7 @@ def _calculate(web, project, scope="full"):
     missing = [label for label, path in required.items() if not path.exists()]
     if missing:
         raise ValueError("Cannot calculate the preliminary load yet. Missing required artifacts: " + ", ".join(missing) + ".")
+    candidates = []
     if scope == "phase1_base_room":
         candidates = room_scope_confirmation.candidates(input_set, _room_use_artifact(paths))
         has_calculable_room = any(row["status"] == "calculated" and row.get("area_m2") is not None
@@ -1999,6 +2001,8 @@ def _calculate(web, project, scope="full"):
     report = ai_preliminary.calculate(confirmed_set, safety_factor_policy=policy, scope=scope)
     report["confirmed_rooms"] = confirmed_rooms
     report["room_scope_confirmation"] = confirmation_summary
+    if scope == "phase1_base_room":
+        _phase1_coverage(report, candidates)
     # Provenance is attached at render time; it does not change any hourly
     # load value or reviewed artifact.
     try:
@@ -2010,6 +2014,32 @@ def _calculate(web, project, scope="full"):
         report["provenance"] = {"schema_version": 1, "register_fingerprint": "", "by_component_id": {}, "governing_components": []}
     _write(paths["base_report"] if scope == "phase1_base_room" else paths["report"], report)
     return report
+
+
+def _phase1_coverage(report, candidates):
+    """Say how much of the job a Phase 1 subtotal covers, so a partial or empty one is never read as the answer.
+
+    report["phase1_coverage"] lists the rooms included and the rooms left out (with why). When the included rooms
+    have no wall, roof or window resolved, there is no envelope load to report: the result is blocked with that
+    reason instead of showing 0 kW (an island bar with no outside walls once came out as a 0.0 kW "result")."""
+    included = [row["label"] for row in candidates if row.get("status") == "calculated" and row.get("area_m2") is not None]
+    left_out = [{"label": row["label"],
+                 "reason": "no area yet" if row.get("area_m2") is None else "its use isn't resolved"}
+                for row in candidates if row["label"] not in included]
+    summary = report.get("preliminary_surface_summary") or {}
+    surfaces = int(summary.get("included") or 0) + int(summary.get("openings_included") or 0)
+    report["phase1_coverage"] = {"rooms_found": len(candidates), "rooms_included": included, "rooms_left_out": left_out,
+                                 "surfaces_included": surfaces, "complete": bool(included) and not left_out and surfaces > 0}
+    if included and not surfaces:
+        missing = f" {_names(row['label'] for row in left_out)} {'has' if len(left_out) == 1 else 'have'} no area yet." if left_out else ""
+        report["status"] = "blocked"
+        report["blocked_reasons"] = [f"No wall, roof or window of {_names(included)} could be resolved, so there is no "
+                                     f"envelope load to report yet.{missing}"] + list(report.get("blocked_reasons") or [])
+
+
+def _names(names):
+    names = list(names)
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1] if names else ""
 
 
 def _auto_start_provider(web, project):
