@@ -70,8 +70,11 @@ def current_records(paths, artifact=None):
     return [resolved for row in active if (resolved := _trace_with_current_room(row, paths, rooms))]
 
 
-def persist_ai_determined_traces(web, project, rows, ai_run_id, quality_label, replace_pages=None):
-    """Replace AI geometry for the rerun plan pages, keeping reviewer traces authoritative."""
+def persist_ai_determined_traces(web, project, rows, ai_run_id, quality_label, replace_pages=None, replace_room_labels=None):
+    """Replace AI geometry for the rerun plan pages, keeping reviewer traces authoritative.
+
+    replace_room_labels limits the replacement to those rooms: the open-plan outline task draws only the rooms the
+    enclosed-wall naming left out, so it must not wipe the rooms that step already traced on the same page."""
     paths = _paths(project)
     current_artifact = reviewer_room_geometry.validate_artifact(_read(paths["artifact"], reviewer_room_geometry.empty_artifact()))
     pdf_fp = _source_pdf_fingerprint(paths)
@@ -107,9 +110,12 @@ def persist_ai_determined_traces(web, project, rows, ai_run_id, quality_label, r
     # A reviewer trace for a room wins over all AI parts. New AI runs replace
     # prior AI outputs as a set, so obsolete room parts cannot linger.
     pages_to_replace = {int(page) for page in (replace_pages or [row.get("page") for row in rows]) if page is not None}
+    only_labels = ({str(label).casefold() for label in replace_room_labels} if replace_room_labels is not None else None)
     kept = [row for row in current_artifact["records"]
             if not (row.get("declaration_source") in {"ai_determined", "ai_fallback"}
-                    and (row.get("page") in pages_to_replace or row.get("room_id") in human_room_ids))]
+                    and ((row.get("page") in pages_to_replace
+                          and (only_labels is None or str(row.get("room_label", "")).casefold() in only_labels))
+                         or row.get("room_id") in human_room_ids))]
     new_rooms = {row["room_id"] for row in prepared}
     kept = [row for row in kept if row.get("room_id") not in new_rooms or row.get("declaration_source", "reviewer") == "reviewer"]
     validated = reviewer_room_geometry.validate_artifact({"records": [*kept, *prepared],

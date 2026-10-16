@@ -27,7 +27,7 @@ class UnconditionedWallTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unconditioned or unknown"):
             reviewer_room_geometry.validate_envelope_classification([{"index": 0, "boundary": "garage"}], "unknown", 4)
 
-    def test_a_wall_waits_for_the_temperature_then_conducts_against_it_without_sun(self):
+    def test_a_wall_uses_the_buffer_estimate_until_the_temperature_is_answered_then_conducts_against_it_without_sun(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             room_use, proposal, _room_id, trace = traced.write_fixture(root)
@@ -38,19 +38,29 @@ class UnconditionedWallTests(unittest.TestCase):
 
             assembled, report = draft(root, room_use, proposal)
             room = assembled["material"]["hourly_load_model"]["rooms"][0]
-            self.assertEqual(room["cooling_load"]["envelope_surfaces"], [])
-            waiting = [row for row in report.get("unresolved_room_inputs", []) if row["component_id"].startswith("unconditioned_wall_temperature")]
-            self.assertEqual(len(waiting), 1)
-            self.assertIn("answer that space's design temperature", waiting[0]["reason"])
+            # Every surface is itemised: the unconditioned wall on the buffer estimate, three internal walls and the
+            # ceiling under a floor above at the room's temperature, and the slab floor.
+            surfaces = {row["label"]: row for row in room["cooling_load"]["envelope_surfaces"]}
+            buffer = surfaces["Shop wall 1 to an unconditioned space"]
+            self.assertEqual(buffer["boundary_method"], "fixed_adjacent_temperature")
+            self.assertIn("outdoor temperature minus 3 K", buffer["boundary_source"])
+            self.assertEqual({label for label in surfaces} - {buffer["label"]},
+                             {"Shop wall 2 to another room", "Shop wall 3 to another room", "Shop wall 4 to another room",
+                              "Shop ceiling (floor above)", "Shop floor (slab)"})
+            self.assertEqual(surfaces["Shop wall 2 to another room"]["boundary_temperature_c"], room["indoor_cooling_setpoint_c"])
+            self.assertFalse(any(row["component_id"].startswith("unconditioned_wall_temperature")
+                                 for row in report.get("unresolved_room_inputs", [])))
             (root / "hourly_ai_preliminary_load_report.json").write_text(json.dumps(report))
+            (root / "ai_preliminary_input_set.json").write_text(json.dumps(assembled))
             with patch("backend.skill_workflow_service.get", return_value={}):
                 items = result_status_service.gather(None, {"id": "j", "review_dir": folder})["items"]
-            self.assertEqual([row["kind"] for row in items if row["topic"] == "Walls to unconditioned spaces"], ["to_find"])
+            self.assertEqual([row["kind"] for row in items if row["topic"] == "Walls to unconditioned spaces"], ["assumed"])
 
             need_answers_service._save_unconditioned({"review_dir": folder}, {"value": "38", "note": "Plant room, unventilated",
                                                                              "source": "site_visit"}, ROOMS, "Sam")
             assembled, report = draft(root, room_use, proposal)
-            [wall] = assembled["material"]["hourly_load_model"]["rooms"][0]["cooling_load"]["envelope_surfaces"]
+            [wall] = [row for row in assembled["material"]["hourly_load_model"]["rooms"][0]["cooling_load"]["envelope_surfaces"]
+                      if row["label"] == "Shop wall 1 to an unconditioned space"]
             self.assertEqual((wall["kind"], wall["boundary_method"], wall["boundary_temperature_c"], wall["solar_gain_factor"]),
                              ("opaque_wall", "fixed_adjacent_temperature", 38.0, 0))
             self.assertIn("Plant room, unventilated", wall["boundary_source"])

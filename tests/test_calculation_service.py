@@ -119,6 +119,15 @@ class CalculationJobTests(unittest.TestCase):
         self.assertNotIn("rooms", [call[0] if isinstance(call, tuple) else call for call in self.calls])
         self.assertIn(("calculate", "phase1_base_room"), self.calls)
 
+    def test_the_jobs_phase_one_note_is_added_to_the_reports_own_note_not_written_over_it(self):
+        own = "Shop: every wall and the ceiling face conditioned space, so its envelope load is 0 kW."
+        (self.root / "phase1_base_room_load_report.json").write_text(json.dumps({"phase1_automation_note": own,
+                                                                                 "included_scope_peak": {"final_design_total_kw": 0.0}}))
+        with patch.object(service, "_phase1_evidence_state", return_value="One evidence task could not be read."):
+            self.run_job({"phase": "phase1_base_room"})
+        saved = json.loads((self.root / "phase1_base_room_load_report.json").read_text())
+        self.assertEqual(saved["phase1_automation_note"], "One evidence task could not be read. " + own)
+
     def test_input_resolution_never_starts_a_skills_run_with_or_without_consent(self):
         from backend import model_input_resolution_service, skill_workflow_service
         for consent in (False, True):

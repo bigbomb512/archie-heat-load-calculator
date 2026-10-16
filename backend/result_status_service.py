@@ -129,13 +129,19 @@ def gather(web, project):
             items.append(_item("assumed", room, f"Kitchen exhaust {answer.get('lps', 0):g} L/s assumed replaced through the "
                                                 "conditioned space (the make-up air arrangement wasn't given).", "drawings"))
 
-    # Walls to unconditioned spaces without the temperature beyond them: not counted until answered.
-    waiting = sorted({row.get("room_name") or "A room" for row in report.get("unresolved_room_inputs") or []
-                      if isinstance(row, dict) and str(row.get("component_id", "")).startswith("unconditioned_wall_temperature")})
-    if waiting:
-        items.append(_item("to_find", "Walls to unconditioned spaces", "Walls marked as facing an unconditioned space aren't counted: "
-                                                                        "answer that space's design temperature (What we need to find).",
-                           "drawings", ", ".join(waiting)))
+    # Walls to unconditioned spaces without the temperature beyond them: counted with the standard buffer-space
+    # estimate (outdoor temperature minus 3 K) until the space's temperature is answered.
+    current_set = _read(root / "ai_preliminary_input_set.json", {})
+    room_names = {str(room.get("room_id")): room.get("name", "") for room in
+                  ((current_set.get("material") or {}).get("hourly_load_model") or {}).get("rooms", []) if isinstance(room, dict)}
+    estimated = sorted({room_names.get(str(row.get("room_id")), "") or "A room"
+                        for row in current_set.get("phase1_assumptions") or []
+                        if isinstance(row, dict) and row.get("component") == "adjacent-space boundary"})
+    if estimated:
+        items.append(_item("assumed", "Walls to unconditioned spaces", "Walls facing an unconditioned space are counted at the "
+                                                                        "outdoor temperature minus 3 K (the standard estimate): "
+                                                                        "answer that space's design temperature to replace it.",
+                           "drawings", ", ".join(estimated)))
 
     # Walls and roof on the preliminary U-values (no construction answered).
     components = (report.get("included_scope_peak") or {}).get("components") or {}

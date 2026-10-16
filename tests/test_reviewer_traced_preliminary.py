@@ -255,12 +255,12 @@ def main():
         check("exposed reviewer roof uses traced area and the controlled roof U-value",
               roof["area_m2"] == 25.0 and roof["u_value_w_m2k"] == expected_u
               and roof["orientation"] == "horizontal" and roof["reviewer_trace_id"] == trace["trace_id"])
-        check("unknown edges and roof classification keep envelope scope incomplete",
+        walls = [surface for surface in room["cooling_load"]["envelope_surfaces"] if surface["kind"] == "opaque_wall"]
+        check("unknown wall edges are itemised as assumed neighbours (one note) and only the roof sun stays open",
               not report["scope_summary"]["complete_scope"]
-              and any(item.get("component_id") == "unclassified_wall_boundaries"
-                      and item.get("component") == "Walls — boundary not classified"
-                      and item.get("reason") == "4 of 4 wall edges not classified."
-                      for item in report["unresolved_room_inputs"])
+              and len(walls) == 4 and all(wall["label"].endswith("to a neighbouring tenancy") for wall in walls)
+              and sum("walls 1, 2, 3, 4 of Shop" in str(row.get("reason")) for row in assembled["phase1_assumptions"]) == 1
+              and not any(item.get("component_id") == "unclassified_wall_boundaries" for item in report["unresolved_room_inputs"])
               and any(item.get("component_id") == "roof_solar"
                       and item.get("component") == "Roof sun — not assessed"
                       for item in report["unresolved_room_inputs"])
@@ -281,31 +281,31 @@ def main():
         assembled = ai_preliminary.assemble({"spaces": []}, preliminary_proposal=prepared,
                                             allow_area_fallbacks=False)
         room = assembled["material"]["hourly_load_model"]["rooms"][0]
-        wall = next(surface for surface in room["cooling_load"]["envelope_surfaces"] if surface["kind"] == "opaque_wall")
+        wall = next(surface for surface in room["cooling_load"]["envelope_surfaces"]
+                    if surface["kind"] == "opaque_wall" and surface.get("boundary_method") == "external")
         report = ai_preliminary.calculate(assembled)
         check("external reviewer edge uses calibrated area and the disclosed west-facing solar fallback",
               abs(wall["area_m2"] - 0.3) < 1e-9 and wall["orientation"] == "W"
               and wall["u_value_w_m2k"] == ai_preliminary.load_pack()["profiles"]["retail"]["wall_u_w_m2k"]
               and any(row.get("component") == "wall orientation" for row in assembled["phase1_assumptions"]))
-        check("west-facing orientation estimate is disclosed while unrelated boundary gaps remain reviewable",
+        check("west-facing orientation estimate is disclosed and every other surface is itemised",
               not any(item.get("component") == "external walls — orientation not assessed (no façade solar)"
                       for item in assembled["exclusions"])
               and any(item.get("component") == "wall orientation" for item in assembled["phase1_assumptions"])
-              and not report["scope_summary"]["complete_scope"])
+              and {surface["label"] for surface in room["cooling_load"]["envelope_surfaces"]} >= {
+                  "Shop wall 2 to another room", "Shop wall 3 to another room", "Shop wall 4 to another room",
+                  "Shop ceiling (floor above)", "Shop floor (slab)"})
 
     with tempfile.TemporaryDirectory() as folder:
         root = Path(folder)
         room_use, proposal, _room_id, trace = write_fixture(root)
         set_envelope_trace(root, trace, [{"index": 0, "boundary": "external"}], "not_exposed")
         prepared = prepare(root, room_use, proposal)
-        missing_height = prepared["envelope_assessments"][0]
-        check("external reviewer edge without ceiling height is listed once as not assessed",
-              not prepared["surfaces"]
-              and sum(item.get("component_id") == "external_wall_edge_0"
-                      for item in missing_height["not_assessed"] + missing_height["excluded"]) == 1
-              and any(item.get("component") == "External wall area — not assessed"
-                      and item.get("reason") == "Ceiling height unresolved; wall area cannot be derived."
-                      for item in missing_height["not_assessed"]))
+        external = [row for row in prepared["surfaces"] if row.get("label") == "Shop traced external wall edge 1"]
+        check("external reviewer edge without ceiling height uses the labelled 2.7 m default",
+              len(external) == 1 and abs(external[0]["gross_area_m2"] - 0.27) < 1e-9
+              and any("2.7 m preliminary default height" in str(row.get("phase1_assumption", ""))
+                      for row in prepared["surfaces"]))
         set_envelope_trace(root, trace, [{"index": 0, "boundary": "adjacent_tenancy"},
                                          {"index": 1, "boundary": "internal"},
                                          {"index": 2, "boundary": "internal"},
@@ -313,14 +313,14 @@ def main():
         prepared = prepare(root, room_use, proposal)
         assembled = ai_preliminary.assemble({"spaces": []}, preliminary_proposal=prepared,
                                             allow_area_fallbacks=False)
-        check("unknown roof stays not assessed while adjacent and internal edges stay excluded",
-              any(item.get("component_id") == "roof_exposure" for item in prepared["envelope_assessments"][0]["not_assessed"])
-              and {row["component"] for row in prepared["envelope_assessments"][0]["excluded"]} >= {"Adjacent tenancy boundary", "Internal boundary"}
-              and not assembled["material"]["hourly_load_model"]["rooms"][0]["cooling_load"]["envelope_surfaces"])
-        boundary_exclusions = [item for item in assembled["exclusions"] if item.get("envelope_exclusion")]
-        boundary_ids = [item.get("component_id") for item in boundary_exclusions]
-        check("each excluded reviewer boundary is recorded once in known exclusions",
-              len(boundary_exclusions) == 4 and len(boundary_ids) == len(set(boundary_ids)))
+        labels = {surface["label"] for surface in assembled["material"]["hourly_load_model"]["rooms"][0]["cooling_load"]["envelope_surfaces"]}
+        check("an unknown roof takes the labelled most-likely case and neighbour and internal walls are itemised, not excluded",
+              not any(item.get("component_id") == "roof_exposure" for row in prepared.get("envelope_assessments", [])
+                      for item in row.get("not_assessed", []))
+              and labels >= {"Shop wall 1 to a neighbouring tenancy", "Shop wall 2 to another room", "Shop traced footprint roof"}
+              and any("most likely for a single-storey shop" in str(row.get("reason")) for row in assembled["phase1_assumptions"]))
+        check("no reviewer boundary is dropped into known exclusions any more",
+              not [item for item in assembled["exclusions"] if item.get("envelope_exclusion")])
 
     with tempfile.TemporaryDirectory() as folder:
         root = Path(folder)
@@ -398,8 +398,8 @@ def main():
                                             geometry_resolution=ledger, allow_area_fallbacks=False)
         surfaces = assembled["material"]["hourly_load_model"]["rooms"][0]["cooling_load"]["envelope_surfaces"]
         check("a ledger wall does not suppress a trace roof",
-              len(surfaces) == 2 and any(surface.get("surface_id") == "ledger-wall" for surface in surfaces)
-              and any(surface.get("kind") == "roof" for surface in surfaces))
+              sum(surface.get("surface_id") == "ledger-wall" for surface in surfaces) == 1
+              and sum(surface.get("kind") == "roof" for surface in surfaces) == 1)
 
     with tempfile.TemporaryDirectory() as folder:
         root = Path(folder)
@@ -442,7 +442,7 @@ def main():
         assembled = ai_preliminary.assemble({"spaces": []}, preliminary_proposal=prepared,
                                             allow_area_fallbacks=False)
         room = assembled["material"]["hourly_load_model"]["rooms"][0]
-        opaque = next(surface for surface in room["cooling_load"]["envelope_surfaces"] if surface["kind"] == "opaque_wall")
+        opaque = next(surface for surface in room["cooling_load"]["envelope_surfaces"] if surface["kind"] == "opaque_wall" and surface.get("boundary_method") == "external")
         glazing = room["cooling_load"]["glazing_surfaces"]
         report = ai_preliminary.calculate(assembled)
         check("shopfront opening reduces its host wall and uses the disclosed west-facing solar estimate",
@@ -451,13 +451,14 @@ def main():
               and any(item.get("component") == "wall orientation" for item in assembled["phase1_assumptions"])
               and not any(item.get("component") == "Glazing sun — orientation not assessed"
                           for item in report["unresolved_room_inputs"]))
-        reviewer_surface = next(surface for surface in prepared["surfaces"] if surface.get("physical_type") == "wall")
+        reviewer_surface = next(surface for surface in prepared["surfaces"] if surface.get("physical_type") == "wall"
+                                and surface.get("thermal_role") == "external")
         reviewer_surface["opening_coverage"] = "reviewer_entered"
         prepared["openings"] = [row for row in prepared["openings"] if row.get("host_surface_key") == reviewer_surface["surface_key"]]
         reviewer_entered_set = ai_preliminary.assemble({"spaces": []}, preliminary_proposal=prepared,
                                                        allow_area_fallbacks=False)
         reviewer_entered_room = reviewer_entered_set["material"]["hourly_load_model"]["rooms"][0]
-        reviewer_entered_wall = next(surface for surface in reviewer_entered_room["cooling_load"]["envelope_surfaces"] if surface["kind"] == "opaque_wall")
+        reviewer_entered_wall = next(surface for surface in reviewer_entered_room["cooling_load"]["envelope_surfaces"] if surface["kind"] == "opaque_wall" and surface.get("boundary_method") == "external")
         check("reviewer-entered opening coverage subtracts glazing while keeping the host wall included",
               abs(reviewer_entered_wall["area_m2"] - (4.0 * 3.75 - 2.025 * 2.65)) < 1e-8
               and len(reviewer_entered_room["cooling_load"]["glazing_surfaces"]) == 1)
@@ -469,7 +470,7 @@ def main():
         assembled_north = ai_preliminary.assemble({"spaces": []}, preliminary_proposal=prepared_north,
                                                    allow_area_fallbacks=False)
         north_room = assembled_north["material"]["hourly_load_model"]["rooms"][0]
-        north_wall = next(surface for surface in north_room["cooling_load"]["envelope_surfaces"] if surface["kind"] == "opaque_wall")
+        north_wall = next(surface for surface in north_room["cooling_load"]["envelope_surfaces"] if surface["kind"] == "opaque_wall" and surface.get("boundary_method") == "external")
         check("page north orients traced walls and applies the existing directional façade solar path",
               north_wall["orientation"] == "N"
               and any(schedule.get("schedule_id", "").startswith("prelim-solar-")
@@ -503,7 +504,7 @@ def main():
         surfaces = assembled["material"]["hourly_load_model"]["rooms"][0]["cooling_load"]["envelope_surfaces"]
         roofs = [row for row in surfaces if row.get("kind") == "roof"]
         part2_wall = next(row for row in surfaces if row.get("reviewer_trace_id") == "ai-shop-part-2"
-                          and row.get("kind") == "opaque_wall")
+                          and row.get("kind") == "opaque_wall" and row.get("boundary_method") == "external")
         linked_opening = next(row for row in prepared["openings"]
                               if row.get("host_surface_key") == "reviewer-trace:ai-shop-part-2:wall:0")
         check("all AI room parts contribute roof and part-two storefront wall and opening",

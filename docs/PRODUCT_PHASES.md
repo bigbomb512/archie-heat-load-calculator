@@ -16,6 +16,27 @@ Use drawing evidence first. For room area, prefer a printed room area or complet
 
 Phase 1's output is the room envelope/base load. It excludes people, lighting, plug loads and other equipment, ventilation, infiltration and operational airflow. Those inputs remain available as evidence for Phase 2. The hourly method calculates evidenced externally exposed walls, roofs/ceilings, glazing, and resolved adjacent-space boundaries. A floor without evidence for its construction or boundary temperature is listed as unresolved and excluded from the subtotal; it is never represented as a zero contribution. A drawing-supported internal floor or a ground-contact floor may use its explicitly labelled preliminary method, with the assumption and source shown in the audit. A room with missing boundaries still receives a subtotal from resolved surfaces, while the report marks its coverage incomplete and lists the missing contribution as an exception.
 
+### Every surface of every room (user spec 2026-10-16)
+
+Phase 1 is each room's empty-room load, itemised. Every traced room gets every wall (one per outline side: its length
+x the ceiling height), its ceiling or roof and its floor, each with its area, U-value, the temperature beyond it and
+its kW, shown room by room on the Results tab. A surface next to conditioned space (another room, a neighbouring
+tenancy, an air-conditioned mall, a floor above) is listed at the room's own temperature, so it shows 0 kW with the
+reason instead of disappearing. Walls between two rooms use the partition U-value. Doors and windows are closed;
+equipment is listed for Phase 2 but adds no heat here.
+
+What the AI could not settle never removes a surface; it gets a labelled fallback, said once per room:
+- a wall the AI couldn't classify: along another traced room it is a wall to that room, otherwise a wall to a
+  neighbouring tenancy;
+- a roof with no answer: the roof rule below;
+- no ceiling height: the 2.7 m preliminary default;
+- a wall or floor to an unconditioned space with no answered temperature: outdoor temperature minus 3 K (ASHRAE
+  buffer-space estimate).
+
+Known gaps: the sun on an exposed roof is not counted yet (no cited horizontal solar profile; conduction only), and
+wall and floor materials read by the skills are not yet applied to the traced surfaces, which use the assumption pack's
+U-values unless a construction is answered.
+
 ### Phase 1 defaults that keep it running without a person (user decisions 2026-10-15)
 
 - **Roof:** the AI decides from the ceiling plans, sections and notes; when they don't settle it, the most likely case
@@ -27,7 +48,7 @@ Phase 1's output is the room envelope/base load. It excludes people, lighting, p
   office is not the site), and the result labels the design days as picked by the AI.
 - **Floor:** a slab on the ground, shown or assumed as the most likely case for a shop, adds no cooling load and is
   listed as an assumption (ASHRAE preliminary ground-contact rule). A floor over a car park, void, basement or
-  suspended slab stays an unresolved exception.
+  suspended slab is counted against the buffer-space estimate until that space's temperature is answered.
 - **Coverage:** the result lists the rooms included and left out. When no wall, roof or window of the included rooms
   is resolved, Phase 1 is blocked with that reason rather than showing 0 kW. A room whose every wall and ceiling face
   conditioned space (a floor above, neighbours, a mall) is resolved: its envelope load is a real 0 kW and the result

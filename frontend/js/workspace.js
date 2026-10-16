@@ -56,6 +56,7 @@
   };
   const userName = () => storage.get("toki.workspace.name");
   const live = (projectId, tab = null) => state.active && state.projectId === projectId && (tab === null || state.tab === tab);
+  const liveTab = live;
 
   async function getJson(url) {
     const response = await fetch(url);
@@ -377,6 +378,10 @@
 
   async function renderDrawings() {
     const projectId = state.projectId;
+    // Only the latest redraw paints: two can overlap (changing the surface, then the construction), and an older one
+    // finishing last used to paint over the newer one, wiping a U-value typed in between.
+    const render = state.drawingsRender = (state.drawingsRender || 0) + 1;
+    const live = (id, tab) => render === state.drawingsRender && liveTab(id, tab);
     if (state.preparing?.projectId !== projectId) {
       // A run started earlier (another visit, or before a reload) is watched rather than started again.
       const job = await getJson(`/api/prepare-pages?project_id=${encodeURIComponent(projectId)}`).catch(() => ({}));
@@ -1960,13 +1965,13 @@
     const coverageNote = leftOut.length && (coverage.rooms_included || []).length
       ? `<p class="ws-banner is-warn" data-ws-phase1-coverage>Covers ${coverage.rooms_included.length} of ${coverage.rooms_found} rooms: ${esc(coverage.rooms_included.join(", "))}. Not included: ${esc(leftOut.join(", "))}.</p>` : "";
     const baseRooms = baseReport.room_peaks || [];
-    const baseExceptions = [...(baseReport.phase1_automation_note ? [baseReport.phase1_automation_note] : []),
+    const baseExceptions = [...(baseReport.phase1_automation_note && baseTotal == null ? [baseReport.phase1_automation_note] : []),
       ...(baseReport.blocked_reasons || []),
       ...(baseReport.excluded_spaces || []).map(row => `${row.room_name || "Room"}${row.level ? ` (${row.level})` : ""}: ${row.reason || "not included"}`),
       ...(baseReport.unresolved_room_inputs || []).map(row => `${row.room_name || "Envelope"}${row.component ? ` · ${row.component}` : ""}: ${row.reason || "not resolved"}`)];
     const baseAssumptions = (baseReport.phase1_assumptions || []).map(row => `${row.room_name || row.room_id || "Project"}${row.component ? ` · ${row.component}` : ""}: ${row.reason || "preliminary assumption"}`);
     const baseSurfaces = baseReport.phase1_surface_audit || [];
-    const baseSurfaceMarkup = baseSurfaces.length ? `<details data-ws-phase1-surfaces><summary>Surface inputs and load · ${baseSurfaces.length}</summary>
+    const baseSurfaceMarkup = baseSurfaces.length ? `<details data-ws-phase1-surfaces><summary>How each surface was worked out · ${baseSurfaces.length}</summary>
       <ul class="ws-list ws-bullets">${baseSurfaces.map(row => {
         const supportedRange = row.supported_load_range_kw;
         const evidence = [...(Array.isArray(row.evidence) ? row.evidence : []), ...(Array.isArray(row.citations) ? row.citations : []),
@@ -1988,17 +1993,37 @@
           Conduction ${kw(row.conduction_kw)} kW · solar ${kw(row.solar_kw)} kW · net ${kw(row.total_kw)} kW${confidence}${rangeMarkup}<br>
           <span class="ws-fine">${esc(row.method || "Method not recorded")}${row.solar_method ? ` · Solar: ${esc(row.solar_method)}` : ""}${row.source ? ` · ${esc(row.source)}` : ""}${refs.length ? ` · Evidence: ${esc(refs.join("; "))}` : " · No page citation recorded"}</span></li>`;
       }).join("")}</ul></details>` : "";
+    // Each room on its own: its area and load, then every wall, ceiling or roof, floor and window with its area,
+    // U-value, the temperature beyond it and its share of the load, then the room's assumptions.
+    const areaByRoom = Object.fromEntries((baseReport.confirmed_rooms || []).map(row => [row.label, row.area_m2]));
+    const phase1Surfaces = name => baseSurfaces.filter(row => (row.room_name || "") === name);
+    const roomAssumptions = name => (baseReport.phase1_assumptions || []).filter(row => row.room_name === name);
+    const beyond = row => row.boundary_method === "external" ? "outside" : row.boundary_temperature_c != null ? `${Number(row.boundary_temperature_c).toFixed(1)} °C` : "—";
+    const roomMarkup = room => {
+      const rows = phase1Surfaces(room.name), area = areaByRoom[room.name];
+      const notes = roomAssumptions(room.name);
+      return `<details class="ws-phase1-room" data-ws-phase1-room="${esc(room.name)}"><summary><span>${esc(room.name)}</span>
+          <span class="ws-fine">${area != null ? `${Number(area).toFixed(1)} m²` : ""}${rows.length ? ` · ${rows.length} surfaces` : ""}</span><b>${kw(room.design_total_kw)} kW</b></summary>
+        ${rows.length ? `<div class="ws-table-wrap"><table class="ws-table" data-ws-phase1-room-surfaces><thead><tr><th scope="col">Surface</th><th scope="col">Area (m²)</th>
+          <th scope="col">U (W/m²K)</th><th scope="col">Beyond</th><th scope="col">kW</th></tr></thead><tbody>${rows.map(row => `<tr>
+          <th scope="row">${esc(row.label || row.surface_type || "Surface")}</th><td>${row.area_m2 != null ? Number(row.area_m2).toFixed(1) : "—"}</td>
+          <td>${row.u_value_w_m2k ?? "—"}</td><td>${esc(beyond(row))}</td><td>${kw(row.total_kw)}</td></tr>`).join("")}</tbody></table></div>`
+          : `<p class="ws-fine">No surfaces were resolved for this room.</p>`}
+        ${notes.length ? `<ul class="ws-list ws-bullets ws-fine" data-ws-phase1-room-notes>${notes.map(row => `<li>${esc(row.reason || row.component || "")}</li>`).join("")}</ul>` : ""}
+      </details>`;
+    };
     const baseMarkup = `<section class="ws-phase-result" data-ws-phase1-result><h2>Phase 1 · AI base room load</h2>
       ${baseReportStale ? `<p class="ws-banner is-warn" data-ws-phase1-stale>Drawing inputs changed since this Phase 1 result. Recalculate it to update the base load.</p>` : ""}
       ${baseTotal == null ? `<p>${baseReport.status === "blocked" ? "AI could not calculate a base load for this drawing yet." : "Not calculated yet. AI will calculate the envelope and window load for each resolved room."}</p>
         ${baseExceptions.length ? `<ul class="ws-list ws-bullets" data-ws-phase1-exceptions>${baseExceptions.slice(0, 8).map(item => `<li>${esc(item)}</li>`).join("")}</ul>` : ""}
         <button class="btn key" type="button" data-ws-calculate-base>${baseReport.status === "blocked" ? "Retry Phase 1 base load" : "Calculate Phase 1 base load"}</button>` :
         `${coverageNote}<p><b>${kw(baseTotal)} kW</b> envelope and window load${basePeak.hour != null ? ` · peak hour ${basePeak.display_hour ?? basePeak.hour}` : ""}</p>
-         <ul class="ws-list" data-ws-phase1-rooms>${baseRooms.map(room => `<li><span>${esc(room.name)}</span><b>${kw(room.design_total_kw)} kW</b></li>`).join("")}</ul>
-         <p class="ws-fine">People, lights, equipment, ventilation, infiltration and fan or duct heat are added in Phase 2.</p>
+         ${baseReport.phase1_automation_note ? `<p class="ws-fine" data-ws-phase1-note>${esc(baseReport.phase1_automation_note)}</p>` : ""}
+         <div data-ws-phase1-rooms>${baseRooms.map(roomMarkup).join("")}</div>
+         <p class="ws-fine">Doors and windows are taken as closed. People, lights, equipment, ventilation, infiltration and fan or duct heat are added in Phase 2.</p>
          ${baseReportStale ? `<button class="btn key" type="button" data-ws-calculate-base>Recalculate Phase 1 base load</button>` : ""}
          ${baseSurfaceMarkup}
-         ${baseAssumptions.length ? `<h3>AI assumptions used</h3><ul class="ws-list ws-bullets" data-ws-phase1-assumptions>${baseAssumptions.slice(0, 10).map(item => `<li>${esc(item)}</li>`).join("")}</ul>` : ""}
+         ${baseAssumptions.length && !baseSurfaces.length ? `<h3>AI assumptions used</h3><ul class="ws-list ws-bullets" data-ws-phase1-assumptions>${baseAssumptions.slice(0, 10).map(item => `<li>${esc(item)}</li>`).join("")}</ul>` : ""}
          ${baseExceptions.length ? `<h3>Phase 1 exceptions</h3><ul class="ws-list ws-bullets" data-ws-phase1-exceptions>${baseExceptions.slice(0, 8).map(item => `<li>${esc(item)}</li>`).join("")}</ul>` : ""}`}</section>`;
     const peak = report.included_scope_peak || {};
     const total = peak.final_design_total_kw ?? peak.design_total_kw;

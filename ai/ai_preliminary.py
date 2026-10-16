@@ -767,7 +767,7 @@ def validate_placeholder_proposal(raw):
                 item["opening_coverage"] = str(item.get("opening_coverage", "not_applicable")).casefold()
                 if item["physical_type"] not in OPAQUE_TYPES:
                     errors.append("a supported opaque physical type (wall, roof, floor, ceiling, or partition)")
-                if item["thermal_role"] not in {"external", "outside", "outdoors", "ground_contact", "fixed_adjacent", "room_to_room", "roof_void", "ceiling_below_roof", "internal_floor", "unresolved"}:
+                if item["thermal_role"] not in {"external", "outside", "outdoors", "ground_contact", "fixed_adjacent", "conditioned_adjacent", "room_to_room", "roof_void", "ceiling_below_roof", "internal_floor", "unresolved"}:
                     errors.append("a supported thermal role")
                 if item["physical_type"] in {"wall", "roof", "ceiling"} and item["thermal_role"] in {"external", "outside", "outdoors"} and item["external_exposure"] != "external":
                     errors.append("confirmed external thermal exposure")
@@ -1356,7 +1356,9 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
         floor_boundary = physical == "floor" and role in {
             "ground_contact", "internal_floor", "room_to_room", "fixed_adjacent", "unresolved"
         }
-        fixed_adjacent = role == "fixed_adjacent" or floor_boundary
+        # conditioned_adjacent: a wall or ceiling next to a conditioned space (another room, a neighbouring tenancy, an
+        # air-conditioned mall, a floor above): itemised at the room's own temperature, so it is listed with 0 kW.
+        fixed_adjacent = role in {"fixed_adjacent", "conditioned_adjacent"} or floor_boundary
         externally_exposed = role in {"external", "outside", "outdoors"} and candidate.get("external_exposure") == "external"
         if not (floor_boundary or fixed_adjacent or (physical in {"wall", "roof", "ceiling", "floor"} and externally_exposed)):
             surface_summary["excluded"] += 1
@@ -1405,7 +1407,7 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
             continue
         physical = candidate["physical_type"]
         role = candidate.get("thermal_role")
-        fixed_adjacent = role == "fixed_adjacent" or (physical == "floor" and role in {
+        fixed_adjacent = role in {"fixed_adjacent", "conditioned_adjacent"} or (physical == "floor" and role in {
             "ground_contact", "internal_floor", "room_to_room", "unresolved"
         })
         orientation = ("" if fixed_adjacent or physical == "floor" else candidate.get("orientation", "") if candidate.get("orientation", "") in CARDINALS
@@ -1421,8 +1423,11 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
             schedules.append(_schedule_with_values(solar_schedule_id, f"Preliminary {orientation} façade solar profile", [round(operating[hour] * solar_profile[hour] / solar_peak, 6) for hour in range(24)], _source(f"solar-{orientation}")))
             room["schedule_assignments"]["solar"][candidate["candidate_id"]] = solar_schedule_id
         floor_u = envelope["opaque_constructions"]["floor"]["u_value_w_m2k"]
+        partition_u = envelope["opaque_constructions"]["partition"]["u_value_w_m2k"]
         opaque = {"surface_id": candidate["candidate_id"], "kind": "floor" if physical == "floor" else "roof" if physical == "roof" else "ceiling" if physical == "ceiling" else "opaque_wall",
-                  "orientation": orientation, "area_m2": net, "u_value_w_m2k": floor_u if physical == "floor" else profile["roof_u_w_m2k"] if physical in {"roof", "ceiling"} else profile["wall_u_w_m2k"],
+                  "label": candidate.get("label", ""), "boundary_condition": candidate.get("boundary_condition", ""),
+                  "orientation": orientation, "area_m2": net, "u_value_w_m2k": floor_u if physical == "floor" else profile["roof_u_w_m2k"] if physical in {"roof", "ceiling"}
+                  else partition_u if candidate.get("boundary_condition") == "internal" else profile["wall_u_w_m2k"],
                   "solar_design_w_m2": solar_peak, "solar_gain_factor": envelope["opaque_solar_gain_factor"] if solar_peak else 0,
                   "shading_factor": 1, "boundary_method": "external", "boundary_temperature_c": None, "construction_id": "",
                   "verification_status": "provisional",
@@ -1444,9 +1449,15 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
             opaque["construction_id"] = candidate["resolved_construction_id"]
         if candidate.get("construction_source"):          # the operators' answered construction, not the pack's U-value
             opaque["source"] = candidate["construction_source"]
+        if candidate.get("phase1_assumption"):
+            phase1_assumptions.append({"room_id": room["room_id"], "component": candidate.get("label") or physical,
+                                       "reason": candidate["phase1_assumption"]})
         if fixed_adjacent:
             supplied_temperature = _number(candidate.get("boundary_temperature_c", candidate.get("adjacent_temperature_c")))
-            if physical == "floor" and role in {"room_to_room", "internal_floor"}:
+            if role == "conditioned_adjacent":
+                supplied_temperature = scenario_values["indoor_dry_bulb_c"]
+                source = candidate.get("boundary_source") or "Conditioned space beyond: kept at the room's design temperature, so no heat flows."
+            elif physical == "floor" and role in {"room_to_room", "internal_floor"}:
                 supplied_temperature = scenario_values["indoor_dry_bulb_c"]
                 source = "Phase 1 default: adjacent internal floor is assumed to be within the conditioned building at the room setpoint."
                 phase1_assumptions.append({"room_id": room["room_id"], "component": "internal floor boundary",
@@ -1458,9 +1469,10 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                 source = "ASHRAE Handbook—HVAC Applications, nonresidential cooling loads: ground-contact floor sensible transfer may be neglected except in hot climates."
                 opaque["boundary_citations"] = [{"reference": "ASHRAE Handbook—HVAC Applications, Nonresidential Cooling Loads",
                     "excerpt": "The preliminary ground-contact floor method neglects sensible transfer except in hot climates."}]
-                phase1_assumptions.append({"room_id": room["room_id"], "component": "ground-contact floor",
-                    "method": "ASHRAE preliminary ground-contact floor rule", "contribution_kw": 0.0,
-                    "reason": "The drawing identifies a ground-contact floor. Its cooling contribution is set to zero under the cited preliminary rule; annual mean temperature was unavailable to check the hot-climate exception."})
+                if not candidate.get("phase1_assumption"):     # an assumed slab already says why (listed above)
+                    phase1_assumptions.append({"room_id": room["room_id"], "component": "ground-contact floor",
+                        "method": "ASHRAE preliminary ground-contact floor rule", "contribution_kw": 0.0,
+                        "reason": "The drawing identifies a ground-contact floor. Its cooling contribution is set to zero under the cited preliminary rule; annual mean temperature was unavailable to check the hot-climate exception."})
             elif supplied_temperature is not None:
                 source = candidate.get("boundary_source", "AI-read adjacent-space temperature")
             else:
@@ -1753,6 +1765,7 @@ def _phase1_surface_audit(report, material):
                     "boundary_method": surface.get("boundary_method", ""),
                     "boundary_temperature_c": surface.get("boundary_temperature_c"),
                     "boundary_source": surface.get("boundary_source", ""),
+                    "label": surface.get("label", ""), "boundary_condition": surface.get("boundary_condition", ""),
                     "construction_id": surface.get("construction_id", ""),
                     "source": " · ".join(str(value) for value in (surface.get("source", ""), surface.get("boundary_source", "")) if value),
                     "citations": deepcopy(surface.get("citations") or surface.get("boundary_citations", [])),
@@ -1795,7 +1808,12 @@ def _phase1_surface_audit(report, material):
             if supported_range:
                 surface["supported_load_range_kw"] = supported_range
             audit.append(surface)
-    return audit
+    # Each room's surfaces in reading order: walls by number, then the ceiling or roof, the floor, then windows.
+    def reading_order(row):
+        kind = {"opaque_wall": 0, "ceiling": 1, "roof": 1, "floor": 2}.get(row.get("surface_type"), 3)
+        number = re.search(r"\bwall (\d+)\b", str(row.get("label") or ""))
+        return (str(row.get("room_name") or ""), kind, int(number.group(1)) if number else 0, str(row.get("label") or ""))
+    return sorted(audit, key=reading_order)
 
 
 def calculate(input_set, safety_factor_policy=None, scope="full"):

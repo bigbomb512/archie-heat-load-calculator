@@ -1578,6 +1578,7 @@ def _apply_p0_room_names(web, project, root, record, validated):
 
 
 def _apply_p0_outlines(web, project, root, record, validated):
+    from shapely.geometry import Polygon
     context = _p0_context(root, record["packet"]["page"])
     calibration = record["packet"]["calibration"]
     _walls, _areas, segments = _p0_walls_areas(root, record["packet"]["page"], context, calibration,
@@ -1588,14 +1589,25 @@ def _apply_p0_outlines(web, project, root, record, validated):
         polygon, report = room_outline.snap_polygon(row["points"], segments, snap_px)
         polygons.append({"label":row["room"], "polygon":polygon, "method":"ai_outline_snapped",
                          "note":f"Open sides: {row.get('open_sides','')}; snapped {report['snapped_edges']}/{report['edges']} edges"})
-    nested = room_outline.subtract_nested([(row["label"], row["polygon"]) for row in polygons])
+    # Rooms already traced on this page by the enclosed-wall step (e.g. a walled bar island) stay, and are taken off
+    # an outer room drawn around them, like the rooms in this reply.
+    asked = {str(name).casefold() for name in record["packet"].get("room_names", [])}
+    try:
+        others = [(row["room_label"], Polygon(row["points_image_px"]))
+                  for row in reviewer_room_geometry_service.current_records(reviewer_room_geometry_service._paths(project))
+                  if row.get("page") == record["packet"]["page"] and str(row.get("room_label", "")).casefold() not in asked
+                  and isinstance(row.get("points_image_px"), list) and len(row["points_image_px"]) >= 4]
+    except (OSError, ValueError, TypeError, KeyError):
+        others = []
+    nested = room_outline.subtract_nested([(row["label"], row["polygon"]) for row in polygons] + others)
     for row, (net, taken) in zip(polygons, nested):
         if taken:   # a room drawn inside this one (a bar in the dining area): its floor is not counted twice
             row["net_polygon"] = net
             row["conflict"] = f"Area excludes {', '.join(taken)}, drawn inside it."
     rows = _p0_trace_rows(root, record, polygons)
     prepared = reviewer_room_geometry_service.persist_ai_determined_traces(web, project, rows,
-        record["run_id"], record["quality_label"], replace_pages=[record["packet"]["page"]])
+        record["run_id"], record["quality_label"], replace_pages=[record["packet"]["page"]],
+        replace_room_labels=record["packet"].get("room_names", []))
     record.update({"status":_status_for_accuracy("ai_determined",record["accuracy"]),"source":"ai_determined",
         "applied_value":{"rooms":_p0_result_rooms(prepared),"label":record["quality_label"]},
         "validation":validated,"block_reason":""})

@@ -1009,6 +1009,24 @@ class AutonomousTaskTests(unittest.TestCase):
                 {prepared[0]["trace_id"], "reviewer-bar", "other-page-ai"})
             self.assertEqual(prepared[0]["part_count"], 1)
             self.assertEqual(prepared[0]["declaration_source"], "ai_determined")
+            # The outline task replaces only the rooms it drew: the walled bar traced by the naming step stays.
+            bar = trace("ai-bar", "bar", "ai_determined")
+            current = [*saved["records"], bar]
+            (root / "reviewer_room_geometry.json").write_text(json.dumps(reviewer_room_geometry.validate_artifact(
+                {"records": current})), encoding="utf-8")
+            with patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "_source_pdf_fingerprint", return_value="pdf"), \
+                 patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "_vector_pages", return_value=[vector_page]), \
+                 patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "_rooms", return_value=[
+                     {"room_id":"shop","label":"Shop","level_name":"Ground"},{"room_id":"bar","label":"Bar","level_name":"Ground"}]), \
+                 patch.object(autonomous_tasks_service.reviewer_room_geometry_service.reviewer_room_geometry, "active_records",
+                              return_value=[row for row in current if row["trace_id"] != "reviewer-bar"]):
+                outlined = autonomous_tasks_service.reviewer_room_geometry_service.persist_ai_determined_traces(
+                    SimpleNamespace(), project, rows, "outline-run", "AI-determined (below accuracy bar)",
+                    replace_pages=[20], replace_room_labels=["Shop"])
+            kept = {row["trace_id"] for row in json.loads((root / "reviewer_room_geometry.json").read_text())["records"]}
+            self.assertIn("ai-bar", kept)
+            self.assertIn(outlined[0]["trace_id"], kept)
+            self.assertNotIn(prepared[0]["trace_id"], kept)                  # the old Shop outline is replaced
 
     def test_p0_trace_rows_normalize_clockwise_polygon_for_trace_validator(self):
         from shapely.geometry import Polygon

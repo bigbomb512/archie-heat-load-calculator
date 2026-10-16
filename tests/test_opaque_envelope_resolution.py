@@ -55,15 +55,20 @@ class OpaqueEnvelopeResolutionTests(unittest.TestCase):
         self.assertEqual(row["net_opaque_area_m2"], 22)
         self.assertEqual(row["opening_coverage_status"], "reviewer_entered")
 
-    def test_non_external_boundary_requires_temperature(self):
+    def test_non_external_boundary_without_temperature_uses_the_labelled_estimate_only_in_a_preliminary_model(self):
+        pack = {"preliminary_envelope": {"opaque_constructions": {"wall": {"construction_id": "wall-pack", "u_value_w_m2k": 0.6}}}}
         ledger = self._ledger("not_applicable")
-        ledger["surfaces"][0].update({"thermal_role": "fixed_adjacent", "boundary_condition": "corridor"})
-        result = resolve_opaque_envelope(
-            ledger, source_pack={"preliminary_envelope": {"opaque_constructions": {"wall": {"construction_id": "wall-pack", "u_value_w_m2k": 0.6}}}},
-            resolution_mode="preliminary_ai_estimate", weather_available=True,
-        )
-        self.assertFalse(result["surfaces"][0]["thermal_eligible"])
-        self.assertIn("boundary_temperature_missing", result["surfaces"][0]["unresolved_fields"])
+        ledger["surfaces"][0].update({"thermal_role": "fixed_adjacent", "boundary_condition": "corridor", "opening_ids": []})
+        result = resolve_opaque_envelope(ledger, source_pack=pack, resolution_mode="preliminary_ai_estimate", weather_available=True)
+        surface = result["surfaces"][0]
+        self.assertTrue(surface["thermal_eligible"])                     # Phase 1 counts it rather than dropping it
+        self.assertIn("unconditioned space at outdoor temperature minus 3 K (buffer-space estimate)", surface["assumptions"])
+        ledger = self._ledger("not_applicable")
+        ledger["surfaces"][0].update({"thermal_role": "fixed_adjacent", "boundary_condition": "corridor", "opening_ids": [],
+                                      "construction_id": "wall-pack", "u_value_w_m2k": 0.6})
+        reviewed = resolve_opaque_envelope(ledger, source_pack=pack, resolution_mode="engineering_reviewed", weather_available=True)
+        self.assertFalse(reviewed["surfaces"][0]["thermal_eligible"])
+        self.assertIn("boundary_temperature_missing", reviewed["surfaces"][0]["unresolved_fields"])
 
     def test_preliminary_unresolved_floor_uses_a_labelled_boundary_estimate_not_zero(self):
         ledger = self._ledger("not_applicable")

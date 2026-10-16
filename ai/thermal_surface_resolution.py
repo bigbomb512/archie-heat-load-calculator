@@ -309,9 +309,15 @@ def resolve_opaque_envelope(ledger, opening_register=None, value_resolution=None
                 # Reviewed models may still use the normal selected design-day
                 # weather at calculation time; do not require a static value.
                 pass
+        elif role == "conditioned_adjacent":
+            # A conditioned neighbour (another room, tenancy, an air-conditioned mall, a floor above): the Phase 1
+            # assembler holds it at the room's design temperature, so it is itemised with no heat flow.
+            item["boundary_method"] = "fixed_adjacent_temperature"
         elif role == "ground_contact" or boundary == "ground":
             item["boundary_method"] = "ground_contact"
-            if item.get("boundary_temperature_c") in (None, "") and not item.get("boundary_temperature_profile"):
+            # In the preliminary estimate the assembler applies the cited ASHRAE ground-contact rule (no cooling load).
+            if (item.get("boundary_temperature_c") in (None, "") and not item.get("boundary_temperature_profile")
+                    and resolution_mode != "preliminary_ai_estimate"):
                 blockers.append("ground_temperature_missing")
         elif role in {"fixed_adjacent", "roof_void", "ceiling_below_roof"} or boundary in {"corridor", "plant_room", "roof_void", "unconditioned_space"}:
             item["boundary_method"] = "fixed_adjacent_temperature"
@@ -319,6 +325,9 @@ def resolve_opaque_envelope(ledger, opening_register=None, value_resolution=None
                 boundary_record = _surface_value(value_resolution, surface_id, "boundary_temperature_c")
                 if boundary_record and _number(boundary_record.get("value")) is not None:
                     item["boundary_temperature_c"] = boundary_record["value"]
+                elif resolution_mode == "preliminary_ai_estimate":
+                    # The assembler uses the labelled buffer-space estimate (outdoor temperature minus 3 K).
+                    item.setdefault("assumptions", []).append("unconditioned space at outdoor temperature minus 3 K (buffer-space estimate)")
                 else:
                     blockers.append("boundary_temperature_missing")
         elif role == "room_to_room":

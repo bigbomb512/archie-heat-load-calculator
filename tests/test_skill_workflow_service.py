@@ -1264,6 +1264,24 @@ class SkillWorkflowTests(unittest.TestCase):
         with self.assertRaises(Exception):
             skills._validate_subskill_output(task, {**json.loads(json.dumps(proposal)), "remediation": {"step": "x"}}, registry, allowed_pages={1})
 
+    def test_a_row_with_a_required_value_left_empty_is_dropped_and_noted_not_a_failed_skill(self):
+        # Butcher Buffet 2026-10-15: one opening's exposure came back null and failed the whole orientation skill.
+        registry = skills.load_subskill_registry()
+        task = next(row for row in registry["subskills"] if row["id"] == "exposure_orientation")
+        reply = {"subskill_id": task["id"], "subskill_version": task["version"], "status": "needs_review",
+            "affected_ids": ["shopfront"], "observations": [], "inferences": [], "citations": [{"page": 26, "excerpt": "Shopfront"}],
+            "confidence": 0.5, "alternatives": [], "unresolved_fields": [], "remediation": [], "input_fingerprint": "a" * 64,
+            "proposal_fields": {"exposures": [
+                {"opening_id": "shopfront", "exposure": "mall", "azimuth_deg": None, "orientation_source_id": None},
+                {"opening_id": "window-3200x600", "exposure": None, "azimuth_deg": None, "orientation_source_id": None}]}}
+        checked = skills._validate_subskill_output(task, json.loads(json.dumps(reply)), registry, allowed_pages={26})
+        self.assertEqual([row["opening_id"] for row in checked["proposal_fields"]["exposures"]], ["shopfront"])
+        self.assertIn("Dropped rows with a required value left empty: exposures[1] (exposure not given).", checked["remediation"][-1])
+        wrong_type = json.loads(json.dumps(reply))
+        wrong_type["proposal_fields"]["exposures"][0]["exposure"] = 3            # a wrong type still fails
+        with self.assertRaises(Exception):
+            skills._validate_subskill_output(task, wrong_type, registry, allowed_pages={26})
+
     def test_citations_written_as_sentences_count_by_the_page_they_name_and_still_must_be_in_the_set(self):
         registry = skills.load_subskill_registry()
         task = next(row for row in registry["subskills"] if row["id"] == "ceiling_height_volume")
@@ -1693,6 +1711,8 @@ class SkillWorkflowTests(unittest.TestCase):
         self.assertTrue({"sheet_identity", "revision_scope", "page_relationships", "room_identity_use"}.issubset(selected))
         self.assertTrue({"equipment_evidence", "occupancy_seating", "lighting_evidence", "outside_air",
                          "infiltration", "plant_detection", "coil_duty"}.isdisjoint(selected))
+        # The weather comes from the chosen or AI-picked location; the weather-source step only blocked the review.
+        self.assertNotIn("weather_source_matching", selected)
         by_id = {row["id"]: row for row in registry["subskills"]}
         # Opening-to-wall matching must wait for the surface inventory so it
         # can use the same stable wall IDs that the area resolver consumes.

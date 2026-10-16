@@ -114,10 +114,12 @@ _WORKFLOW_SCOPES = {
                              "room_identity_use", "room_boundaries_areas", "ceiling_height_volume"}),
     # Phase 1 envelope evidence: room geometry plus the physical surfaces and
     # openings needed for a room-by-room base envelope calculation. This keeps
-    # equipment, occupancy, airflow, and plant discovery out of the run.
+    # equipment, occupancy, airflow, and plant discovery out of the run. The weather-source step is left out, as for
+    # the PDF review: Phase 1's design days come from the chosen or AI-picked weather location (weather_pick_service),
+    # and that step only waited for a map-confirmed address, which marked every Phase 1 review blocked.
     "phase1_envelope": frozenset({
         "sheet_identity", "revision_scope", "page_relationships", "site_clue_extraction",
-        "address_confirmation", "weather_source_matching", "room_identity_use",
+        "address_confirmation", "room_identity_use",
         "room_boundaries_areas", "ceiling_height_volume", "surface_inventory", "surface_area",
         "construction_matching", "boundary_resolution", "cross_sheet_opening_match",
         "glazing_properties", "exposure_orientation", "shading",
@@ -1218,6 +1220,26 @@ def _validate_subskill_output(subskill, result, registry, allowed_pages=None):
         missing, unexpected = sorted(declared - set(values)), sorted(set(values) - declared)
         _validation_error("proposal_fields_mismatch", "proposal_fields", f"Missing fields: {missing}; unexpected fields: {unexpected}.")
     not_applicable = result.get("status") == "not_applicable"
+    # A row that leaves a required value empty (null where text or a number is expected) means the AI couldn't tell:
+    # that row is dropped and noted, not allowed to fail the whole skill (one opening with an unknown exposure used to
+    # fail the orientation skill and mark the Phase 1 review failed).
+    unknown_rows = []
+    for field, descriptor in subskill["proposal_fields"].items():
+        item_types = _contract_object_fields(descriptor)
+        if item_types is None or not isinstance(values.get(field), list):
+            continue
+        kept = []
+        for row_index, row in enumerate(values[field]):
+            empty = [key for key, item_type in item_types.items()
+                     if isinstance(row, dict) and row.get(key) is None and not _matches_contract_type(None, item_type)]
+            if empty:
+                unknown_rows.append(f"{field}[{row_index}] ({', '.join(empty)} not given)")
+            else:
+                kept.append(row)
+        values[field] = kept
+    if unknown_rows:
+        result["remediation"] = list(result.get("remediation") or []) + [
+            "Dropped rows with a required value left empty: " + "; ".join(unknown_rows) + "."]
     for field, descriptor in subskill["proposal_fields"].items():
         value = values[field]
         if not _matches_contract_type(value, descriptor) and not (not_applicable and descriptor.startswith("object") and value == {}):

@@ -666,15 +666,22 @@ test("Drawings: a construction answer picks a handbook wall or roof, or takes a 
   await expect(need().locator("[data-ws-need-save]")).toHaveText("Choose a construction or enter its U-value");
   await need().locator("[data-ws-need-construction]").selectOption("flat-roofs:deck");
   await expect(need().locator("[data-ws-need-u]")).toHaveCount(0);                            // the handbook gives the U-value
+  await need().evaluate(element => { element.dataset.beforeSave = "1"; });                    // marks the form drawn before saving
   await need().locator("[data-ws-need-save]").click();
   await expect.poll(() => posts.length).toBe(1);
   expect(posts[0]).toMatchObject({kind: "construction", surface: "roof", construction_id: "flat-roofs:deck", room: "",
                                   value: "Metal deck, blanket — U 0.4 W/m²K (flat roofs)", source: "standard_or_reference"});
-  // Walls from another source: no listed construction, a typed U-value and what it is.
-  await expect(need().locator("[data-ws-need-save]")).toBeEnabled();                          // the form has refreshed after saving
+  // Walls from another source: no listed construction, a typed U-value and what it is. Typing starts only once the
+  // page has redrawn the form after saving; typing into the old one lost the answer now and then.
+  await expect(page.locator("[data-ws-need='information_needs:needs:0'][data-before-save]")).toHaveCount(0);
+  await openNeed(need());
+  await expect(need().locator("[data-ws-need-save]")).toBeEnabled();
   await need().locator("[data-ws-need-surface]").selectOption("wall");
   await expect(need().locator("[data-ws-need-construction] option[value='masonry-walls:brick']")).toHaveCount(1);
-  await need().locator("[data-ws-need-construction]").selectOption("");
+  await need().evaluate(element => { element.dataset.beforeRedraw = "1"; });
+  await need().locator("[data-ws-need-construction]").selectOption("");                      // redraws the form
+  await expect(page.locator("[data-ws-need='information_needs:needs:0'][data-before-redraw]")).toHaveCount(0);
+  await openNeed(need());
   await expect(need().locator("[data-ws-need-u]")).toBeVisible();                             // a typed U-value is asked for
   await need().locator("[data-ws-need-room]").selectOption("Shop");
   await need().locator("[data-ws-need-u]").fill("0.45");
@@ -978,6 +985,32 @@ test("Results: a blocked Phase 1 shows why instead of 0 kW, and a partial one sa
   await expect(phase1).toContainText("4.2 kW");
 });
 
+test("Results: Phase 1 shows each room with its area, load and every surface it was worked out from", async ({page}) => {
+  const surface = (label, type, area, u, beyond, total) => ({room_name: "Shop", label, surface_type: type, area_m2: area,
+    u_value_w_m2k: u, boundary_method: beyond == null ? "external" : "fixed_adjacent_temperature", boundary_temperature_c: beyond,
+    conduction_kw: total, solar_kw: 0, total_kw: total});
+  await mockJob(page, {status: () => baseStatus(), model: () => ({phase1_base_room_load_report: {status: "draft",
+    included_scope_peak: {final_design_total_kw: 1.3}, room_peaks: [{name: "Shop", design_total_kw: 1.3}, {name: "Bar", design_total_kw: 0}],
+    confirmed_rooms: [{label: "Shop", area_m2: 227.1}, {label: "Bar", area_m2: 32.5}],
+    phase1_automation_note: "Bar: every wall and the ceiling face conditioned space, so its envelope load is 0 kW.",
+    phase1_assumptions: [{room_name: "Shop", component: "Shop floor (slab)", reason: "Assumed: a slab on the ground."}],
+    phase1_surface_audit: [surface("Shop wall 1 to the outside", "opaque_wall", 31.5, 0.6, null, 1.3),
+                           surface("Shop wall 2 to the mall", "opaque_wall", 10.2, 0.6, 24, 0),
+                           surface("Shop floor (slab)", "floor", 227.1, 0.8, 24, 0)]}})});
+  await page.goto("/#/job/job-1/results");
+  await expect(page.locator("[data-ws-phase1-note]")).toContainText("Bar: every wall and the ceiling face conditioned space");
+  const shop = page.locator("[data-ws-phase1-room='Shop']");
+  await expect(shop.locator("summary")).toContainText("227.1 m² · 3 surfaces");
+  await expect(shop.locator("summary")).toContainText("1.3 kW");
+  await shop.locator("summary").click();
+  await expect(shop.locator("[data-ws-phase1-room-surfaces] tbody tr")).toHaveCount(3);
+  await expect(shop.locator("[data-ws-phase1-room-surfaces] tbody tr").first().locator("th, td"))
+    .toHaveText(["Shop wall 1 to the outside", "31.5", "0.6", "outside", "1.3"]);
+  await expect(shop.locator("[data-ws-phase1-room-surfaces] tbody tr").nth(1)).toContainText("24.0 °C");
+  await expect(shop.locator("[data-ws-phase1-room-notes]")).toHaveText("Assumed: a slab on the ground.");
+  await expect(page.locator("[data-ws-phase1-room='Bar'] summary")).toContainText("32.5 m²");
+});
+
 test("Results: Phase 1 exposes the surface evidence and load audit", async ({page}) => {
   await mockJob(page, {status: () => baseStatus(), model: () => ({
     phase1_base_room_load_report: {
@@ -992,9 +1025,9 @@ test("Results: Phase 1 exposes the surface evidence and load audit", async ({pag
     },
   })});
   await page.goto("/#/job/job-1/results");
-  await expect(page.locator("[data-ws-phase1-exceptions]")).toContainText("One page read failed");
+  await expect(page.locator("[data-ws-phase1-note]")).toContainText("One page read failed");
   const audit = page.locator("[data-ws-phase1-surfaces]");
-  await expect(audit).toContainText("Surface inputs and load · 1");
+  await expect(audit).toContainText("How each surface was worked out · 1");
   await audit.locator("summary").click();
   await expect(audit).toContainText("Conduction 0.2 kW");
   await expect(audit).toContainText("Supported range 0.7–1.3 kW");

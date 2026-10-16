@@ -162,7 +162,8 @@ def start(web, project, data):
         web.update_project(project)
         report = ai_preliminary_service._read(paths["base_report"] if phase == "phase1_base_room" else paths["report"], {})
         if phase1_note and phase == "phase1_base_room":
-            report["phase1_automation_note"] = phase1_note
+            # Added to Phase 1's own note (e.g. why a fully internal room is 0 kW), not written over it.
+            report["phase1_automation_note"] = " ".join(filter(None, [phase1_note, str(report.get("phase1_automation_note") or "")]))
             ai_preliminary_service._write(paths["base_report"], report)
         peak = report.get("included_scope_peak") or {}
         return {"phase": phase, "total_kw": peak.get("final_design_total_kw", peak.get("design_total_kw")),
