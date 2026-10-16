@@ -1449,6 +1449,10 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
             opaque["construction_id"] = candidate["resolved_construction_id"]
         if candidate.get("construction_source"):          # the operators' answered construction, not the pack's U-value
             opaque["source"] = candidate["construction_source"]
+        for note in candidate.get("phase1_assumptions") or []:      # several notes on one surface (e.g. area, roof)
+            if isinstance(note, dict) and note.get("reason"):
+                phase1_assumptions.append({"room_id": room["room_id"], "component": note.get("component") or physical,
+                                           "reason": note["reason"]})
         if candidate.get("phase1_assumption"):
             phase1_assumptions.append({"room_id": room["room_id"], "component": candidate.get("label") or physical,
                                        "reason": candidate["phase1_assumption"]})

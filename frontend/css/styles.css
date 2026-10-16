@@ -243,6 +243,14 @@ button,input{ font:inherit; color:inherit }
   margin-top:14px; overflow:hidden }
 .track i{ display:block; height:100%; background:var(--accent); width:0;
   transition:width .18s }
+.upload-next{
+  margin-top:16px; padding:20px 22px; border:1px solid var(--line);
+  border-radius:var(--r-lg); background:var(--raise-bg);
+}
+.upload-next h2{ margin:0 0 6px; font-size:18px }
+.upload-next p{ margin:0 0 16px; color:var(--text-2); font-size:14px; line-height:1.5 }
+.upload-error{ margin:14px 0 0; padding:12px 14px; border:1px solid #d7a09b;
+  border-radius:var(--r); color:#8d2c22; background:#fff4f2 }
 
 /* ---- analysing ---- */
 .run{ border:1px solid var(--line); border-radius:var(--r-lg);

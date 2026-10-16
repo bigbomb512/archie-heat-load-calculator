@@ -13,9 +13,11 @@
 <link rel="stylesheet" href="/frontend/css/design-system.css">
 <link rel="stylesheet" href="/frontend/css/analysis-workspace.css">
 <link rel="stylesheet" href="/frontend/css/workspace.css">
+<link rel="stylesheet" href="/frontend/css/guided.css">
 </head>
 <body class="hvac-app">
 <a class="skip-link" href="#main">Skip to calculator</a>
+<div id="guidedApp" class="guided-app" aria-live="polite"></div>
 <div class="shell">
 
   <!-- ============ sidebar ============ -->
@@ -89,6 +91,7 @@
           <div class="upload-heading"><span class="document-symbol" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/></svg></span><div><h2>Start with your drawings</h2><p>Drop your architectural PDF here to begin.</p></div></div>
           <div class="upload-bottom"><div class="upload-picker"><label class="lbl" for="pdf">Choose PDF</label><input id="pdf" type="file" accept="application/pdf"></div><span class="file-hint">Plans, sections &amp; specifications</span></div>
         </div>
+        <p id="uploadError" class="upload-error hide" role="alert"></p>
         <ol class="workflow-preview" aria-label="Analysis workflow"><li><span>1</span>Upload drawings</li><li><span>2</span>Review inputs</li><li><span>3</span>Calculate loads</li></ol>
         <p class="scope-note">You review the inputs before calculation.<br>Heating requires cited inputs and approval, and stays separate from cooling.</p>
       </section>
@@ -106,6 +109,11 @@
           </div>
           <div class="track"><i id="fBar"></i></div>
         </div>
+        <section id="uploadNext" class="upload-next hide" aria-live="polite">
+          <h2>Your PDF is ready</h2>
+          <p>Analyse the drawing pages to open the project workspace and continue.</p>
+          <button class="btn key" id="btnAnalyseInline" type="button">Analyse PDF</button>
+        </section>
       </section>
 
       <!-- analysing -->
@@ -824,8 +832,6 @@
 
 </div>
 
-<script src="/frontend/js/app.js"></script>
-<script src="/frontend/js/autonomous_tasks.js"></script>
-<script src="/frontend/js/workspace.js"></script>
+<script src="/frontend/js/bootstrap.js"></script>
 </body>
 </html>

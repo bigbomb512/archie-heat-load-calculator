@@ -20,6 +20,47 @@ class JobServiceTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_guided_stage_gate_requires_a_current_complete_phase1_and_phase2_report(self):
+        from backend import ai_preliminary_service, autonomous_tasks_service
+        model = {
+            "room_scope": {"status": "confirmed", "candidates": [
+                {"key": "room-1", "label": "Shop", "area_m2": 40, "include": True, "status": "calculated"}]},
+            "phase1_base_room_load_report": {"status": "draft", "blocked_reasons": [], "phase1_coverage": {"complete": True}},
+            "phase1_base_room_load_report_stale": False,
+            "hourly_ai_preliminary_load_report": {"included_scope_peak": {"final_design_total_kw": 20}},
+        }
+        with patch.object(autonomous_tasks_service, "_all_current", return_value=[]), \
+             patch.object(autonomous_tasks_service, "_task_progress", return_value={"waiting": 0, "blocked": 0, "total": 0}), \
+             patch.object(ai_preliminary_service, "get", return_value=model):
+            ready = job_service.status(SimpleNamespace(), self.project)
+            model["phase1_base_room_load_report_stale"] = True
+            stale_base = job_service.status(SimpleNamespace(), self.project)
+        self.assertEqual((ready["stage"], ready["phase1_complete"], ready["phase2_complete"], ready["results_ready"]),
+                         ("results", True, True, True))
+        self.assertEqual((stale_base["stage"], stale_base["phase1_complete"]), ("phase1", False))
+
+    def test_project_list_summary_reads_saved_artifacts_without_a_freshness_rebuild(self):
+        from backend import autonomous_tasks_service
+        fingerprint = "saved-input-fingerprint"
+        (self.root / "ai_preliminary_input_set.json").write_text(json.dumps({"input_fingerprint": fingerprint}))
+        (self.root / "phase1_base_room_load_report.json").write_text(json.dumps({
+            "preliminary_input_set_fingerprint": fingerprint,
+            "phase1_coverage": {"complete": True}, "blocked_reasons": [],
+        }))
+        (self.root / "hourly_ai_preliminary_load_report.json").write_text(json.dumps({
+            "preliminary_input_set_fingerprint": fingerprint,
+            "included_scope_peak": {"final_design_total_kw": 18.4},
+        }))
+        with patch.object(autonomous_tasks_service, "_all_current", return_value=[]), \
+             patch.object(autonomous_tasks_service, "_task_progress", return_value={"waiting": 0, "blocked": 0}), \
+             patch("backend.ai_preliminary_service.get", side_effect=AssertionError("must not rebuild the model")):
+            summary = job_service.project_list_summary(SimpleNamespace(), self.project)
+        self.assertEqual(summary["stage"], "results")
+        self.assertTrue(summary["phase1_complete"])
+        self.assertTrue(summary["phase2_complete"])
+        self.assertTrue(summary["results_ready"])
+
+
     def test_job_setup_saves_known_fields_and_refuses_unknown_choices(self):
         saved = job_service.save_job_setup(self.project, {"name": "  Corner   cafe ", "address": "1 Main St, Ryde NSW",
                                                           "building_type": "food_tenancy", "above": "floor", "edited_by": "Sam"})

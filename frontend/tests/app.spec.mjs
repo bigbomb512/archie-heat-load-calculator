@@ -170,7 +170,7 @@ test("confirmation unlocks only after analysis has selected pages", async ({ pag
   await expect(page.locator("#fState")).toHaveText("Ready");
   await expect(page.locator("#btnContinue")).toBeDisabled();
 
-  await page.locator("#btnAnalyse").click();
+  await page.locator("#btnAnalyseInline").click();
   await expect(page.locator("#topTitle")).toHaveText("Analysis complete");
   await expect(page.locator("#btnContinue")).toBeEnabled();
 
@@ -207,7 +207,7 @@ test("confirmation does not show the no-AI notice when a real reply is preserved
   await page.locator("#pdf").setInputFiles({
     name:"real-reply-project.pdf", mimeType:"application/pdf", buffer:Buffer.from("%PDF-1.4 test"),
   });
-  await page.locator("#btnAnalyse").click();
+  await page.locator("#btnAnalyseInline").click();
   await page.locator("#btnContinue").click();
   await expect(page.locator("#workflowSkeleton")).toBeVisible();
   await expect(page.locator("#noAiEvidenceNotice")).toBeHidden();
@@ -221,7 +221,7 @@ test("analysis gives one clear next action before exposing advanced workflow", a
     mimeType: "application/pdf",
     buffer: Buffer.from("%PDF-1.4 workflow fixture"),
   });
-  await page.locator("#btnAnalyse").click();
+  await page.locator("#btnAnalyseInline").click();
   await expect(page.getByRole("button", { name: "Settings" })).toHaveCount(0);
   await expect(page.locator("#btnApproveSafetyFactor")).toHaveCount(0);
   await expect(page.locator("#btnConfirm, #btnConfirmTop")).toHaveCount(0);
@@ -318,7 +318,7 @@ test("guided resolver reports contractor-friendly skill stages then refreshes co
   await page.locator("#pdf").setInputFiles({
     name: "guided-workflow.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 guided fixture"),
   });
-  await page.locator("#btnAnalyse").click();
+  await page.locator("#btnAnalyseInline").click();
   await page.locator("#btnContinue").click();
   await page.locator("#btnGuidedResolveModelInputs").click();
   await expect(page.locator("#guidedModelInputsStatus")).toContainText("Coverage hydrated");
@@ -333,7 +333,7 @@ async function openGuidedResolver(page){
   await page.locator("#pdf").setInputFiles({
     name: "guided-workflow.pdf", mimeType: "application/pdf", buffer: Buffer.from("%PDF-1.4 guided fixture"),
   });
-  await page.locator("#btnAnalyse").click();
+  await page.locator("#btnAnalyseInline").click();
   await page.locator("#btnContinue").click();
 }
 
@@ -1273,13 +1273,26 @@ test("analysis reaches results without browser errors", async ({ page }) => {
     mimeType: "application/pdf",
     buffer: Buffer.from("%PDF-1.4\n%%EOF"),
   });
-  await expect(page.locator("#btnAnalyse")).toBeVisible();
-  await page.locator("#btnAnalyse").click();
+  await expect(page.locator("#btnAnalyseInline")).toBeVisible();
+  await page.locator("#btnAnalyseInline").click();
 
   await expect(page.locator("#summaryTitle")).toHaveText("Ready for the next step.");
   await expect(page.locator("#btnConfirm, #btnConfirmTop")).toHaveCount(0);
   await expect(page.locator("#btnContinue")).toBeEnabled();
   expect(errors).toEqual([]);
+});
+
+test("normal entry keeps the established workspace and makes an uploaded PDF actionable", async ({page}) => {
+  await mockApi(page);
+  await page.goto("/");
+  await expect(page.locator(".shell")).toBeVisible();
+  await expect(page.locator("#guidedApp")).toBeHidden();
+  await page.locator("#pdf").setInputFiles({name:"demo.pdf",mimeType:"application/pdf",buffer:Buffer.from("%PDF-1.4\\n%%EOF")});
+  await expect(page.locator("#fState")).toHaveText("Ready");
+  await expect(page.getByRole("heading",{name:"Your PDF is ready"})).toBeVisible();
+  await expect(page.locator("#btnAnalyseInline")).toBeEnabled();
+  await page.locator("#btnAnalyseInline").click();
+  await expect(page.locator("#vJob")).toBeVisible();
 });
 
 test("saved project opens into results", async ({ page }) => {

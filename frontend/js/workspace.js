@@ -1311,7 +1311,7 @@
   const SCALE_TOLERANCE = 0.02;  // the server's rule: a dimension must agree with the stated page scale within 2%
   const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
   const shoelace = points => Math.abs(points.slice(0, -1).reduce((sum, a, i) => sum + a[0] * points[i + 1][1] - points[i + 1][0] * a[1], 0)) / 2;
-  const SCALE_OK = new Set(["agreed", "declared_scale_rejected"]);
+  const SCALE_OK = new Set(["agreed", "declared_scale_rejected", "declared_scale_only"]);
 
   async function renderMeasure() {
     const m = state.measure, projectId = state.projectId;

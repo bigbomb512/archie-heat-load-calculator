@@ -91,7 +91,7 @@ def persist_ai_determined_traces(web, project, rows, ai_run_id, quality_label, r
         if page not in vectors or not isinstance(points, list) or len(points) < 4:
             raise ValueError("AI room outline does not reference a current room and plan page.")
         calibration = deepcopy(row.get("calibration") or {})
-        if calibration.get("status") not in {"agreed", "declared_scale_rejected"} or not calibration.get("mm_per_px"):
+        if calibration.get("status") not in {"agreed", "declared_scale_rejected", "declared_scale_only"} or not calibration.get("mm_per_px"):
             raise ValueError("AI room outline needs a calibrated printed dimension.")
         prepared.append({"trace_id": str(row.get("trace_id") or "ai_room_trace_" + fingerprint([ai_run_id, room_id, page, row.get("part_index")])[:18]),
             "room_id": room_id, "room_label": room.get("label"), "level_name": room.get("level_name", ""),
@@ -197,7 +197,7 @@ def current_traced_areas(root):
             continue
         status = calibration.get("status")
         if (not math.isfinite(area) or area <= 0 or not math.isfinite(mm_per_px) or mm_per_px <= 0
-                or status not in {"agreed", "declared_scale_rejected"}):
+                or status not in {"agreed", "declared_scale_rejected", "declared_scale_only"}):
             continue
         room_id = str(trace["room_id"])
         room = rooms.get(room_id, {})
@@ -271,7 +271,11 @@ def current_traced_areas(root):
     from ai.room_use_resolution import room_identity
     rooms_by_identity = {room_identity(row.get("label", ""), row.get("level_name") or "Unassigned level"): row
                          for row in artifact_input.get("rooms", []) if isinstance(row, dict)}
-    for pointer in (paths["root"] / "ai_tasks" / "S1_printed_areas").glob("*/current.json"):
+    # Areas with no outline: printed areas read from a scanned plan (S1) and the last area step (P0_room_sizes:
+    # printed area, printed dimensions, an AI estimate off the plan, or the tenancy remainder).
+    pointers = [*(paths["root"] / "ai_tasks" / "S1_printed_areas").glob("*/current.json"),
+                *(paths["root"] / "ai_tasks" / "P0_room_sizes").glob("*/current.json")]
+    for pointer in pointers:
         current = _read(pointer, {})
         record = _read(pointer.parent / current.get("run_path", "") / "record.json", {})
         if record.get("status") not in {"applied", "below_accuracy_bar"}:
@@ -286,11 +290,12 @@ def current_traced_areas(root):
             room = rooms_by_identity.get(identity, {})
             room_id = str(room.get("room_id") or identity)
             previous = result.get(room_id)
-            if previous and previous.get("declaration_source") == "reviewer":
+            area_source = str(area.get("source") or "printed (read from image)")
+            if not area_only_may_replace(previous, area_source):
                 continue
             result[room_id] = {"room_id": room_id, "room_label": room.get("label") or label,
                 "level_name": room.get("level_name") or level, "area_m2": area.get("area_m2"),
-                "area_source": "printed (read from image)", "source": "printed (read from image)",
+                "area_source": area_source, "source": area_source,
                 "page": page, "source_pages": [page] if type(page) is int else [],
                 "area_only": True, "outline": None, "trace_id": "", "proof_id": "",
                 "points_image_px": [], "edges": [], "openings": [], "roof": "unknown",
@@ -299,6 +304,16 @@ def current_traced_areas(root):
                 "printed_text": area.get("printed_text", ""), "calibration_status": "not_required"}
     from backend.job_service import area_overrides
     return apply_area_overrides(result, area_overrides(paths["root"]))
+
+
+def area_only_may_replace(previous, area_source):
+    """Whether an area with no outline may stand in for the room's current area: a person's area always wins; a printed
+    area beats an AI outline; an estimate, printed dimensions or a remainder never replaces a measured outline."""
+    if not previous:
+        return True
+    if previous.get("declaration_source") == "reviewer":
+        return False
+    return bool(previous.get("area_only")) or area_source == "printed (read from image)"
 
 
 def apply_area_overrides(result, overrides):
@@ -998,7 +1013,7 @@ def post(web, project, data, _validated_current_records=None, _defer_evidence_re
         if not current:
             raise ValueError("Envelope can only be classified on a current room trace.")
         calibration = current.get("calibration", {})
-        if calibration.get("status") not in {"agreed", "declared_scale_rejected"} or not calibration.get("mm_per_px"):
+        if calibration.get("status") not in {"agreed", "declared_scale_rejected", "declared_scale_only"} or not calibration.get("mm_per_px"):
             raise ValueError("Envelope can only be classified on a calibrated room trace.")
         reviewer = str(data.get("reviewer", "")).strip()
         if not reviewer:

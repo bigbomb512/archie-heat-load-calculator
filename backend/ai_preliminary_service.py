@@ -1303,7 +1303,8 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                 ai_determined = (traced_area.get("declaration_source") in {"ai_determined", "ai_fallback"}
                                  and not trace_area_is_printed and not trace_area_is_edited)
                 room["area_origin"] = ("edited" if trace_area_is_edited else
-                                       "printed (read from image)" if traced_area.get("area_only") else
+                                       str(traced_area.get("area_source") or "printed (read from image)")
+                                       if traced_area.get("area_only") else
                                        "pdf_evidence" if trace_area_is_printed else
                                        "ai_determined" if ai_determined else "reviewer_traced")
                 room["area_verification_status"] = "provisional"
@@ -1312,10 +1313,12 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                 room["reviewer_traced_area"] = deepcopy(traced_area)
                 trace_citation = {"page": page,
                                   "reference": ("Room area entered by a person" if trace_area_is_edited else
-                                                "Printed room area read from image" if traced_area.get("area_only") else f"Room trace {trace_id}"),
+                                                f"Room area ({traced_area.get('area_source') or 'printed (read from image)'})"
+                                                if traced_area.get("area_only") else f"Room trace {trace_id}"),
                                   "excerpt": (f"Room area typed in by {traced_area.get('edited_by') or 'an operator'}: {traced_area.get('area_m2')} m²."
                                               if trace_area_is_edited else
-                                              f"Printed room area read from image: {traced_area.get('printed_text') or room.get('label', '')}."
+                                              f"Room area, {traced_area.get('area_source') or 'printed (read from image)'}: "
+                                              f"{traced_area.get('printed_text') or room.get('label', '')}."
                                               if traced_area.get("area_only") else
                                               f"AI-determined room outline; {traced_area.get('ai_quality_label') or 'below accuracy bar'}; "
                                               f"calibration status {traced_area.get('calibration_status')}." if ai_determined else
@@ -1347,14 +1350,40 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                 )
                 fully_internal_parts = []
                 if traced_area.get("area_only"):
-                    assessment["not_assessed"].extend([
+                    # An area with no outline (printed area, printed dimensions, an AI estimate, the tenancy
+                    # remainder): the floor and the ceiling or roof follow from the area; only the walls need an outline.
+                    assessment["not_assessed"].append(
                         {"component_id": "area_only_walls", "component": "Walls — not assessed",
-                         "reason": "No room outline is available; wall boundaries and areas were not assessed.",
-                         "page": traced_area.get("page")},
-                        {"component_id": "area_only_roof", "component": "Roof — not assessed",
-                         "reason": "No room outline or roof declaration is available; roof exposure and gains were not assessed.",
-                         "page": traced_area.get("page")},
-                    ])
+                         "reason": "The room's area was found without an outline, so its walls could not be measured.",
+                         "page": traced_area.get("page")})
+                    area_only_area = ai_preliminary._number(traced_area.get("area_m2"))
+                    if area_only_area:
+                        part = {"trace_id": f"area-only-{room_use_id}", "page": traced_area.get("page")}
+                        citation = {"page": traced_area.get("page"), "reference": f"Room area ({traced_area.get('area_source', '')})",
+                                    "excerpt": str(traced_area.get("printed_text") or room.get("label", ""))}
+                        roof, roof_note = _roof_assumption(paths, phase1_ai_input, phase1_site, room)
+                        area_note = (f"{room.get('label', 'This room')}'s area ({area_only_area:g} m²) is "
+                                     f"{traced_area.get('area_source', 'from the drawings')}: no outline was available.")
+                        top = {"surface_key": f"reviewer-trace:{part['trace_id']}:" + ("roof" if roof == "exposed" else "ceiling"),
+                               "label": f"{room.get('label', 'Room')} " + ("roof" if roof == "exposed" else "ceiling (floor above)"),
+                               "owner_room_label": room.get("label", ""), "owner_level_name": room.get("level_name", ""),
+                               "physical_type": "roof" if roof == "exposed" else "ceiling",
+                               "thermal_role": "external" if roof == "exposed" else "conditioned_adjacent",
+                               "external_exposure": "external" if roof == "exposed" else "",
+                               "boundary_condition": "outside" if roof == "exposed" else "floor_above",
+                               "orientation": "horizontal" if roof == "exposed" else "", "gross_area_m2": area_only_area,
+                               "boundary_source": "" if roof == "exposed" else "A floor or other conditioned space above, at the room's temperature: no heat flows.",
+                               "opening_coverage": "not_applicable", "confidence": 0.5, "page": part["page"],
+                               "evidence": [citation], "verification_status": "provisional",
+                               "rationale": "Roof or ceiling over the room's area (no outline).",
+                               "phase1_assumptions": [{"component": "room area", "reason": area_note},
+                                                      *([{"component": "roof", "reason": roof_note}] if roof_note else [])]}
+                        proposal["surfaces"].append(top)
+                        proposal["surfaces"].append(_floor_surface(room, part, area_only_area, floor_basis, citation, ""))
+                scale_note = next((str((part.get("calibration") or {}).get("label") or
+                                       "Scaled from the sheet's printed scale; no printed dimension could be read to check it.")
+                                   for part in trace_parts
+                                   if (part.get("calibration") or {}).get("status") == "declared_scale_only"), "")
                 for part in trace_parts:
                     part_component_suffix = f"_{part.get('trace_id')}" if len(trace_parts) > 1 else ""
                     declaration_reviewer = str(part.get("envelope_reviewer", ""))
@@ -1413,7 +1442,12 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                             **({"phase1_assumption": roof_note} if roof_note else {}),
                         })
                     if area:
-                        proposal["surfaces"].append(_floor_surface(room, part, area, floor_basis, citation, declaration_reviewer))
+                        floor = _floor_surface(room, part, area, floor_basis, citation, declaration_reviewer)
+                        if scale_note:
+                            floor["phase1_assumptions"] = [{"component": "room area",
+                                                            "reason": f"{room.get('label', 'This room')}: {scale_note}"}]
+                            scale_note = ""
+                        proposal["surfaces"].append(floor)
                     # Walls the AI couldn't classify: one along another traced room faces that room; the rest are
                     # taken as a neighbouring tenancy (the usual case for a shop), both at the same temperature.
                     unknown = [edge.get("index") for edge in edges if edge.get("boundary", "unknown") == "unknown"]
@@ -1772,8 +1806,14 @@ def _room_peaks(report):
         for room in scenario.get("rooms", []) if isinstance(scenario, dict) and isinstance(scenario.get("rooms"), list) else []:
             peak = room.get("peak") if isinstance(room, dict) else None
             if isinstance(peak, dict) and room.get("room_id") and isinstance(peak.get("design_total_kw"), (int, float)):
-                peaks.append({"room_id": str(room["room_id"]), "name": str(room.get("name", "")),
-                              "design_total_kw": peak["design_total_kw"], "hour": peak.get("display_hour", peak.get("hour"))})
+                item = {"room_id": str(room["room_id"]), "name": str(room.get("name", "")),
+                        "design_total_kw": peak["design_total_kw"],
+                        "hour": peak.get("display_hour", peak.get("hour"))}
+                if room.get("area_m2") is not None:
+                    item["area_m2"] = room["area_m2"]
+                if isinstance(peak.get("components"), dict):
+                    item["components"] = peak["components"]
+                peaks.append(item)
         break  # the included-scope peak comes from the first (design) scenario
     return peaks
 
@@ -1807,6 +1847,7 @@ def _response(web, project, response_view="full", check_freshness=None):
             "hourly_ai_preliminary_load_report": _workspace_report(report),
             "phase1_base_room_load_report": _workspace_report(base_report),
             "phase1_base_room_load_report_stale": base_report_stale,
+            "phase2_room_inputs": _phase2_room_inputs(input_set),
             "status": ("stale" if stale_reasons else ("current" if input_set else "not_calculated"))
                       if check_freshness else "freshness_pending",
             "freshness_pending": not check_freshness,
@@ -1836,6 +1877,38 @@ def _response(web, project, response_view="full", check_freshness=None):
         "room_scope": _room_scope_state(paths, input_set),
         "artifact_links": artifact_links,
     }
+
+
+def _phase2_room_inputs(input_set):
+    """Compact saved operating-load inputs for room cards; this does not resolve or calculate anything."""
+    if not isinstance(input_set, dict):
+        return []
+    gains = input_set.get("internal_gains_resolution", {})
+    airflow = input_set.get("airflow_resolution", {})
+    by_room = {}
+    for row in gains.get("records", []) if isinstance(gains, dict) else []:
+        if not isinstance(row, dict) or not row.get("room_id"):
+            continue
+        fields = row.get("fields", {}) if isinstance(row.get("fields"), dict) else {}
+        def value(name, unit):
+            item = fields.get(name, {})
+            return {"value": item.get("value"), "unit": item.get("unit") or unit,
+                    "origin": item.get("origin", "unresolved"), "source": item.get("source", ""),
+                    "rationale": item.get("rationale", "")} if isinstance(item, dict) else {"value": item, "unit": unit, "origin": "unresolved", "source": ""}
+        by_room[row["room_id"]] = {
+            "room_id": row["room_id"], "name": row.get("original_label", ""),
+            "people": {"count": value("occupancy_count", "people"),
+                       "sensible_w_per_person": value("people_sensible_w_per_person", "W/person"),
+                       "latent_w_per_person": value("people_latent_w_per_person", "W/person")},
+            "lights": {"load": value("lighting_load_w", "W")},
+            "equipment": row.get("equipment", []) if isinstance(row.get("equipment"), list) else [],
+        }
+    for row in airflow.get("records", []) if isinstance(airflow, dict) else []:
+        if not isinstance(row, dict) or not row.get("room_id"):
+            continue
+        target = by_room.setdefault(row["room_id"], {"room_id": row["room_id"], "name": "", "people": {}, "lights": {}, "equipment": []})
+        target.setdefault("air", []).append({key: row.get(key) for key in ("air_path_type", "label", "value", "unit", "origin", "source", "status", "rationale") if row.get(key) is not None})
+    return list(by_room.values())
 
 
 def get(web, project, response_view="full", check_freshness=None):

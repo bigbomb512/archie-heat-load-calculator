@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Drawings, the AI at work</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+@font-face{font-family:"Alte Haas Grotesk";src:url("/_blob/0440e6c0af413802d606d9044695c388") format("truetype");font-weight:400;font-style:normal}
+@font-face{font-family:"Alte Haas Grotesk";src:url("/_blob/844ee5da0326ac58c0c9dacaa1f3f1fa") format("truetype");font-weight:700;font-style:normal}
+body{margin:0;background:#F2F4F4}
+a{color:#246B91}a:hover{color:#163B50}
+</style>
+</helmet>
+<div style="min-height: 1000px; background: #F2F4F4; color: #163B50; font-family: 'Alte Haas Grotesk', Helvetica, sans-serif; font-size: 15px; line-height: 1.45; font-variant-numeric: tabular-nums;">
+  <header style="background: #FFFFFF; border-bottom: 1px solid #D3DCE1;">
+    <div style="max-width: 1360px; margin: 0 auto; padding: 14px 40px; display: flex; flex-wrap: wrap; align-items: center; gap: 24px;">
+      <img src="/_blob/f58fcda2fc0de1fc135f161c51b2b190" alt="Toki" style="height: 22px; width: auto;">
+      <a href="#jobs" style="font-size: 15px; text-decoration: none;">Jobs</a>
+      <div style="display: flex; flex-direction: column; flex: 1 1 320px; min-width: 0;">
+        <span style="font-size: 18px; font-weight: 700;">Butcher Buffet</span>
+        <span style="font-size: 13px; color: #4B616D;">Tenancy MZ01, M38, Melrose Central</span>
+      </div>
+      <a href="#details" style="font-size: 15px;">Job details</a>
+    </div>
+    <nav aria-label="Job steps" style="max-width: 1360px; margin: 0 auto; padding: 0 40px; display: flex; flex-wrap: wrap;">
+      <a href="#drawings" aria-current="step" style="flex: 1 1 220px; display: flex; gap: 12px; align-items: flex-start; padding: 14px 16px 13px 0; text-decoration: none; color: #163B50; border-bottom: 3px solid #246B91;">
+        <span style="width: 26px; height: 26px; border-radius: 13px; background: #246B91; color: #FFFFFF; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; flex: none;" aria-hidden="true">1</span>
+        <span style="display: flex; flex-direction: column;"><span style="font-weight: 700;">Drawings</span><span style="font-size: 13px; color: #4B616D;">The AI is reading them</span></span>
+      </a>
+      <span style="flex: 1 1 220px; display: flex; gap: 12px; align-items: flex-start; padding: 14px 16px 16px 0; color: #6B7F89;" title="Starts when the AI has read the drawings">
+        <span style="width: 24px; height: 24px; border-radius: 12px; border: 1px solid #6B7F89; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; flex: none;" aria-hidden="true">2</span>
+        <span style="display: flex; flex-direction: column;"><span style="font-weight: 700;">Rooms</span><span style="font-size: 13px;">Phase 1, empty-room load</span></span>
+      </span>
+      <span style="flex: 1 1 220px; display: flex; gap: 12px; align-items: flex-start; padding: 14px 16px 16px 0; color: #6B7F89;">
+        <span style="width: 24px; height: 24px; border-radius: 12px; border: 1px solid #6B7F89; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; flex: none;" aria-hidden="true">3</span>
+        <span style="display: flex; flex-direction: column;"><span style="font-weight: 700;">Operating loads</span><span style="font-size: 13px;">Phase 2</span></span>
+      </span>
+      <span style="flex: 1 1 220px; display: flex; gap: 12px; align-items: flex-start; padding: 14px 16px 16px 0; color: #6B7F89;" title="Available when Phase 2 is complete">
+        <span style="width: 24px; height: 24px; border-radius: 12px; border: 1px dashed #6B7F89; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; flex: none;" aria-hidden="true">4</span>
+        <span style="display: flex; flex-direction: column;"><span style="font-weight: 700;">Results</span><span style="font-size: 13px;">After Phase 2</span></span>
+      </span>
+    </nav>
+  </header>
+
+  <main style="max-width: 1360px; margin: 0 auto; padding: 28px 40px 48px; display: flex; flex-direction: column; gap: 24px;">
+    <p role="status" style="margin: 0; font-size: 18px; max-width: 62ch;">The AI is tracing the rooms, about 15 minutes to go. You can close this page; the job carries on and shows here when you come back.</p>
+
+    <div style="display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start;">
+      <section aria-labelledby="progress-title" style="flex: 1 1 420px; min-width: 0; background: #FFFFFF; border: 1px solid #D3DCE1; border-radius: 4px; padding: 24px; display: flex; flex-direction: column; gap: 16px;">
+        <h1 id="progress-title" style="margin: 0; font-size: 24px; font-weight: 700;">What the AI is doing</h1>
+        <ol style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column;">
+          <li style="display: flex; gap: 16px; padding: 12px 0; border-bottom: 1px solid #E3E9EC;">
+            <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true" style="flex: none;"><circle cx="11" cy="11" r="10" fill="#163B50"></circle><path d="M6.5 11.5l3 3 6-6.5" stroke="#FFFFFF" stroke-width="2" fill="none"></path></svg>
+            <span style="display: flex; flex-direction: column;"><span style="font-weight: 700;">Read every page</span><span style="color: #4B616D;">38 of 38 pages, 3 minutes</span></span>
+          </li>
+          <li style="display: flex; gap: 16px; padding: 12px 0; border-bottom: 1px solid #E3E9EC;">
+            <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true" style="flex: none;"><circle cx="11" cy="11" r="10" fill="#163B50"></circle><path d="M6.5 11.5l3 3 6-6.5" stroke="#FFFFFF" stroke-width="2" fill="none"></path></svg>
+            <span style="display: flex; flex-direction: column;"><span style="font-weight: 700;">Found the equipment</span><span style="color: #4B616D;">49 items from the schedules and plans</span></span>
+          </li>
+          <li style="display: flex; gap: 16px; padding: 12px 0; border-bottom: 1px solid #E3E9EC;">
+            <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true" style="flex: none;"><circle cx="11" cy="11" r="9" fill="none" stroke="#D3DCE1" stroke-width="3"></circle><path d="M11 2a9 9 0 0 1 9 9" fill="none" stroke="#246B91" stroke-width="3"></path></svg>
+            <span style="display: flex; flex-direction: column;"><span style="font-weight: 700;">Tracing the rooms and walls</span><span style="color: #4B616D;">Shop, Kitchen and Bar traced; the Coolroom and Freezer are next</span></span>
+          </li>
+          <li style="display: flex; gap: 16px; padding: 12px 0; border-bottom: 1px solid #E3E9EC; color: #6B7F89;">
+            <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true" style="flex: none;"><circle cx="11" cy="11" r="9.5" fill="none" stroke="#9AAAB3" stroke-width="1.5"></circle></svg>
+            <span style="display: flex; flex-direction: column;"><span style="font-weight: 700;">Work out walls, roof, floor and windows</span><span>Waiting for the rooms</span></span>
+          </li>
+          <li style="display: flex; gap: 16px; padding: 12px 0; color: #6B7F89;">
+            <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true" style="flex: none;"><circle cx="11" cy="11" r="9.5" fill="none" stroke="#9AAAB3" stroke-width="1.5"></circle></svg>
+            <span style="display: flex; flex-direction: column;"><span style="font-weight: 700;">Calculate each room's empty-room load</span><span>Phase 1</span></span>
+          </li>
+        </ol>
+      </section>
+
+      <section aria-labelledby="found-title" style="flex: 1 1 560px; min-width: 0; background: #FFFFFF; border: 1px solid #D3DCE1; border-radius: 4px; padding: 24px; display: flex; flex-direction: column; gap: 16px;">
+        <h2 id="found-title" style="margin: 0; font-size: 24px; font-weight: 700;">Found so far</h2>
+        <svg viewBox="-20 -20 600 611" role="img" aria-label="Floor plan with the Shop, Kitchen and Bar traced and two rooms not traced yet" style="width: 100%; height: auto; max-height: 520px;">
+          <polygon points="0,0 285,2 287,94 215,94 215,109 285,109 285,154 308,154 308,271 284,271 284,296 202,296 202,426 266,426 266,453 300,453 307,571 0,571" fill="#FFFFFF" stroke="#163B50" stroke-width="1.5"></polygon>
+          <polygon points="285,109 496,109 496,309 538,309 538,339 482,339 482,393 263,393 263,426 202,426 202,296 284,296 284,271 308,271 308,154 285,154" fill="#FFFFFF" stroke="#163B50" stroke-width="1.5"></polygon>
+          <polygon points="102,170 101,158 285,157 285,268 233,267 234,234 223,250 211,234 212,267 102,267" fill="#FFFFFF" stroke="#163B50" stroke-width="1.5"></polygon>
+          <polygon points="500,115 560,115 560,190 500,190" fill="none" stroke="#9AAAB3" stroke-width="1.5" stroke-dasharray="1 5" stroke-linecap="round"></polygon>
+          <polygon points="500,227 560,227 560,309 500,309" fill="none" stroke="#9AAAB3" stroke-width="1.5" stroke-dasharray="1 5" stroke-linecap="round"></polygon>
+          <g font-family="Alte Haas Grotesk, Helvetica, sans-serif" fill="#163B50">
+            <text x="70" y="460" font-size="20" font-weight="700">Shop</text>
+            <text x="150" y="216" font-size="16" font-weight="700">Bar</text>
+            <text x="350" y="224" font-size="18" font-weight="700">Kitchen</text>
+          </g>
+        </svg>
+        <dl style="margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 24px;">
+          <div><dt style="font-size: 13px; color: #4B616D;">Site</dt><dd style="margin: 0;">Tenancy MZ01, M38, Melrose Central</dd></div>
+          <div><dt style="font-size: 13px; color: #4B616D;">Weather</dt><dd style="margin: 0;">Sydney, picked from "Melrose Park" in the job name</dd></div>
+          <div><dt style="font-size: 13px; color: #4B616D;">Rooms named on the drawings</dt><dd style="margin: 0;">Shop, Kitchen, Bar, Coolroom, Freezer</dd></div>
+          <div><dt style="font-size: 13px; color: #4B616D;">Above the shop</dt><dd style="margin: 0;">A floor, from "U/S of slab" on the ceiling plan</dd></div>
+        </dl>
+      </section>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1000}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

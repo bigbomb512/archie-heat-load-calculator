@@ -339,10 +339,14 @@ def main():
         check("printed scanned area is attached without an outline trace",
               room["area_m2"] == 24.5 and room["area_origin"] == "printed (read from image)"
               and not room.get("reviewer_trace_id"))
-        check("scanned area leaves walls and roof explicitly unassessed",
-              {item["component"] for item in assessment["not_assessed"]} >= {"Walls — not assessed", "Roof — not assessed"})
-        check("draft exclusions list unassessed scanned-room walls and roof",
-              {item.get("component") for item in assembled["exclusions"]} >= {"Walls — not assessed", "Roof — not assessed"})
+        surfaces = {row["label"] for row in assembled["material"]["hourly_load_model"]["rooms"][0]["cooling_load"]["envelope_surfaces"]}
+        check("an area with no outline still gives the floor and the roof; only the walls stay unassessed",
+              {item["component"] for item in assessment["not_assessed"]} == {"Walls — not assessed"}
+              and surfaces == {"Shop roof", "Shop floor (slab)"}
+              and any("24.5 m²) is printed (read from image): no outline was available" in str(row.get("reason"))
+                      for row in assembled["phase1_assumptions"]))
+        check("draft exclusions list the unassessed walls of the room with no outline",
+              "Walls — not assessed" in {item.get("component") for item in assembled["exclusions"]})
 
     with tempfile.TemporaryDirectory() as folder:
         root = Path(folder)

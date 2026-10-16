@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Rooms, Phase 1</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+@font-face{font-family:"Alte Haas Grotesk";src:url("/_blob/0440e6c0af413802d606d9044695c388") format("truetype");font-weight:400;font-style:normal}
+@font-face{font-family:"Alte Haas Grotesk";src:url("/_blob/844ee5da0326ac58c0c9dacaa1f3f1fa") format("truetype");font-weight:700;font-style:normal}
+body{margin:0;background:#F2F4F4}
+a{color:#246B91}a:hover{color:#163B50}
+</style>
+</helmet>
+<div style="min-height: 1180px; background: #F2F4F4; color: #163B50; font-family: 'Alte Haas Grotesk', Helvetica, sans-serif; font-size: 15px; line-height: 1.45; font-variant-numeric: tabular-nums;">
+  <header style="background: #FFFFFF; border-bottom: 1px solid #D3DCE1;">
+    <div style="max-width: 1360px; margin: 0 auto; padding: 14px 40px; display: flex; flex-wrap: wrap; align-items: center; gap: 24px;">
+      <img src="/_blob/f58fcda2fc0de1fc135f161c51b2b190" alt="Toki" style="height: 22px; width: auto;">
+      <a href="#jobs" style="font-size: 15px; text-decoration: none;">Jobs</a>
+      <div style="display: flex; flex-direction: column; flex: 1 1 320px; min-width: 0;">
+        <span style="font-size: 18px; font-weight: 700;">Butcher Buffet</span>
+        <span style="font-size: 13px; color: #4B616D;">Tenancy MZ01, M38, Melrose Central</span>
+      </div>
+      <a href="#details" style="font-size: 15px;">Job details</a>
+    </div>
+    <nav aria-label="Job steps" style="max-width: 1360px; margin: 0 auto; padding: 0 40px; display: flex; flex-wrap: wrap; gap: 0;">
+      <a href="Drawings.dc.html" style="flex: 1 1 220px; display: flex; gap: 12px; align-items: flex-start; padding: 14px 16px 16px 0; text-decoration: none; color: #163B50; border-bottom: 3px solid transparent;">
+        <span style="width: 26px; height: 26px; border-radius: 13px; background: #163B50; color: #FFFFFF; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; flex: none;" aria-hidden="true">1</span>
+        <span style="display: flex; flex-direction: column;"><span style="font-weight: 700;">Drawings</span><span style="font-size: 13px; color: #4B616D;">Read, 38 pages</span></span>
+      </a>
+      <a href="#rooms" aria-current="step" style="flex: 1 1 220px; display: flex; gap: 12px; align-items: flex-start; padding: 14px 16px 13px 0; text-decoration: none; color: #163B50; border-bottom: 3px solid #246B91;">
+        <span style="width: 26px; height: 26px; border-radius: 13px; background: #246B91; color: #FFFFFF; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; flex: none;" aria-hidden="true">2</span>
+        <span style="display: flex; flex-direction: column;"><span style="font-weight: 700;">Rooms</span><span style="font-size: 13px; color: #4B616D;">Phase 1, empty-room load</span></span>
+      </a>
+      <a href="#operating" style="flex: 1 1 220px; display: flex; gap: 12px; align-items: flex-start; padding: 14px 16px 16px 0; text-decoration: none; color: #163B50; border-bottom: 3px solid transparent;">
+        <span style="width: 24px; height: 24px; border-radius: 12px; border: 1px solid #163B50; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; flex: none;" aria-hidden="true">3</span>
+        <span style="display: flex; flex-direction: column;"><span style="font-weight: 700;">Operating loads</span><span style="font-size: 13px; color: #4B616D;">Phase 2, ready to start</span></span>
+      </a>
+      <span style="flex: 1 1 220px; display: flex; gap: 12px; align-items: flex-start; padding: 14px 16px 16px 0; color: #6B7F89; border-bottom: 3px solid transparent;" title="Available when Phase 2 is complete">
+        <span style="width: 24px; height: 24px; border-radius: 12px; border: 1px dashed #6B7F89; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; flex: none;" aria-hidden="true">4</span>
+        <span style="display: flex; flex-direction: column;"><span style="font-weight: 700;">Results</span><span style="font-size: 13px;">After Phase 2</span></span>
+      </span>
+    </nav>
+  </header>
+
+  <main style="max-width: 1360px; margin: 0 auto; padding: 28px 40px 48px; display: flex; flex-direction: column; gap: 24px;">
+    <section aria-label="Where this job is" style="display: flex; flex-wrap: wrap; align-items: center; gap: 16px 32px;">
+      <p style="margin: 0; flex: 1 1 560px; font-size: 18px; max-width: 62ch;">Phase 1 is done for the three cooled rooms. Every wall, ceiling and floor faces air-conditioned space, so their empty-room load is 0 kW. Their load comes from people, equipment and fresh air in Phase 2.</p>
+      <button type="button" style="font: inherit; font-weight: 700; background: #246B91; color: #FFFFFF; border: 0; border-radius: 6px; padding: 12px 20px; min-height: 44px; cursor: pointer;">Continue to operating loads</button>
+    </section>
+
+    <div style="display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start;">
+      <section aria-label="Floor plan" style="flex: 1 1 560px; min-width: 0; background: #FFFFFF; border: 1px solid #D3DCE1; border-radius: 4px; padding: 24px; display: flex; flex-direction: column; gap: 16px;">
+        <div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; align-items: baseline;">
+          <h1 style="margin: 0; font-size: 24px; font-weight: 700;">Ground floor</h1>
+          <span style="font-size: 13px; color: #4B616D;">Traced by the AI from the dimension plan, page 20</span>
+        </div>
+        <svg viewBox="-20 -20 600 611" role="img" aria-label="Floor plan of the tenancy with five rooms; the Shop is selected" style="width: 100%; height: auto; max-height: 620px;">
+          <defs>
+            <pattern id="cold" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+              <line x1="0" y1="0" x2="0" y2="8" stroke="#9AAAB3" stroke-width="2"></line>
+            </pattern>
+          </defs>
+          <polygon points="0,0 285,2 287,94 215,94 215,109 285,109 285,154 308,154 308,271 284,271 284,296 202,296 202,426 266,426 266,453 300,453 307,571 0,571" fill="#DCE9F1" stroke="#246B91" stroke-width="3"></polygon>
+          <polygon points="285,109 496,109 496,309 538,309 538,339 482,339 482,393 263,393 263,426 202,426 202,296 284,296 284,271 308,271 308,154 285,154" fill="#FFFFFF" stroke="#163B50" stroke-width="1.5"></polygon>
+          <polygon points="102,170 101,158 285,157 285,268 233,267 234,234 223,250 211,234 212,267 102,267" fill="#FFFFFF" stroke="#163B50" stroke-width="1.5"></polygon>
+          <polygon points="500,115 560,115 560,190 500,190" fill="url(#cold)" stroke="#6B7F89" stroke-width="1.5"></polygon>
+          <polygon points="500,227 560,227 560,309 500,309" fill="url(#cold)" stroke="#6B7F89" stroke-width="1.5"></polygon>
+          <g font-family="Alte Haas Grotesk, Helvetica, sans-serif" fill="#163B50">
+            <text x="70" y="460" font-size="20" font-weight="700">Shop</text>
+            <text x="70" y="482" font-size="14">227.1 m², 0.0 kW</text>
+            <text x="150" y="212" font-size="16" font-weight="700">Bar</text>
+            <text x="150" y="231" font-size="12">32.5 m²</text>
+            <text x="350" y="220" font-size="18" font-weight="700">Kitchen</text>
+            <text x="350" y="240" font-size="13">113.7 m²</text>
+            <text x="506" y="156" font-size="10">Coolroom</text>
+            <text x="510" y="272" font-size="10">Freezer</text>
+          </g>
+        </svg>
+        <ul style="margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 8px 24px; font-size: 13px; color: #4B616D;">
+          <li style="display: flex; align-items: center; gap: 8px;"><svg width="28" height="10" aria-hidden="true"><line x1="0" y1="5" x2="28" y2="5" stroke="#163B50" stroke-width="2"></line></svg>Measured from the drawing</li>
+          <li style="display: flex; align-items: center; gap: 8px;"><svg width="28" height="10" aria-hidden="true"><line x1="0" y1="5" x2="28" y2="5" stroke="#163B50" stroke-width="2" stroke-dasharray="6 4"></line></svg>Assumed</li>
+          <li style="display: flex; align-items: center; gap: 8px;"><svg width="28" height="10" aria-hidden="true"><line x1="0" y1="5" x2="28" y2="5" stroke="#163B50" stroke-width="2" stroke-dasharray="1 4" stroke-linecap="round"></line></svg>AI estimate</li>
+          <li style="display: flex; align-items: center; gap: 8px;"><svg width="16" height="12" aria-hidden="true"><rect x="0" y="0" width="16" height="12" fill="url(#cold)" stroke="#6B7F89"></rect></svg>Refrigeration, sized separately</li>
+        </ul>
+        <table style="width: 100%; border-collapse: collapse; font-size: 15px;">
+          <caption style="text-align: left; font-size: 13px; color: #4B616D; padding-bottom: 8px;">Rooms on this floor</caption>
+          <thead>
+            <tr style="text-align: left; font-size: 13px; color: #4B616D;">
+              <th scope="col" style="font-weight: 400; padding: 6px 0; border-bottom: 1px solid #D3DCE1;">Room</th>
+              <th scope="col" style="font-weight: 400; padding: 6px 0; border-bottom: 1px solid #D3DCE1; text-align: right;">Area (m²)</th>
+              <th scope="col" style="font-weight: 400; padding: 6px 0; border-bottom: 1px solid #D3DCE1; text-align: right;">Empty-room load (kW)</th>
+              <th scope="col" style="font-weight: 400; padding: 6px 0 6px 24px; border-bottom: 1px solid #D3DCE1;">Phase 1</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="background: #EEF5F9;"><th scope="row" style="text-align: left; padding: 10px 0 10px 8px;"><a href="#shop" aria-current="true" style="font-weight: 700;">Shop</a></th><td style="text-align: right;">227.1</td><td style="text-align: right;">0.0</td><td style="padding-left: 24px;">Done</td></tr>
+            <tr><th scope="row" style="text-align: left; padding: 10px 0 10px 8px; font-weight: 400;"><a href="#kitchen">Kitchen</a></th><td style="text-align: right;">113.7</td><td style="text-align: right;">0.0</td><td style="padding-left: 24px;">Done</td></tr>
+            <tr><th scope="row" style="text-align: left; padding: 10px 0 10px 8px; font-weight: 400;"><a href="#bar">Bar</a></th><td style="text-align: right;">32.5</td><td style="text-align: right;">0.0</td><td style="padding-left: 24px;">Done</td></tr>
+            <tr style="color: #4B616D;"><th scope="row" style="text-align: left; padding: 10px 0 10px 8px; font-weight: 400;">Coolroom</th><td style="text-align: right;">7.5</td><td style="text-align: right;">Not in this load</td><td style="padding-left: 24px;">Refrigeration</td></tr>
+            <tr style="color: #4B616D;"><th scope="row" style="text-align: left; padding: 10px 0 10px 8px; font-weight: 400;">Freezer</th><td style="text-align: right;">8.3</td><td style="text-align: right;">Not in this load</td><td style="padding-left: 24px;">Refrigeration</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section aria-labelledby="room-title" style="flex: 1 1 440px; min-width: 0; background: #FFFFFF; border: 1px solid #D3DCE1; border-radius: 4px; padding: 24px; display: flex; flex-direction: column; gap: 20px;">
+        <div style="display: flex; flex-direction: column; gap: 4px;">
+          <h2 id="room-title" style="margin: 0; font-size: 36px; font-weight: 700; line-height: 1.1;">Shop</h2>
+          <span style="color: #4B616D;">Dining area and counter, comfort cooled</span>
+        </div>
+        <dl style="margin: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px;">
+          <div style="display: flex; flex-direction: column; gap: 2px;">
+            <dt style="font-size: 13px; color: #4B616D;">Floor area</dt>
+            <dd style="margin: 0; font-size: 24px; font-weight: 700;">227.1 m²</dd>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 2px;">
+            <dt style="font-size: 13px; color: #4B616D;">Ceiling height</dt>
+            <dd style="margin: 0; font-size: 24px; font-weight: 700; text-decoration: underline dashed #4B616D; text-underline-offset: 6px;">2.7 m</dd>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 2px;">
+            <dt style="font-size: 13px; color: #4B616D;">Empty-room load</dt>
+            <dd style="margin: 0; font-size: 24px; font-weight: 700;">0.0 kW</dd>
+          </div>
+        </dl>
+        <p style="margin: 0; font-size: 13px; color: #4B616D; max-width: 60ch;">Area traced by the AI on the dimension plan and scaled by the printed 11,825 mm dimension. The Bar inside it (32.5 m²) is taken off. The height is the default, shown dashed, because no ceiling height was matched to this room.</p>
+
+        <div style="display: flex; flex-direction: column; gap: 8px;">
+          <h3 style="margin: 0; font-size: 18px; font-weight: 700;">What the load is worked out from</h3>
+          <div style="overflow-x: auto;">
+            <table style="width: 100%; border-collapse: collapse; font-size: 15px; min-width: 420px;">
+              <thead>
+                <tr style="text-align: left; font-size: 13px; color: #4B616D;">
+                  <th scope="col" style="font-weight: 400; padding: 6px 0; border-bottom: 1px solid #D3DCE1;">Surface</th>
+                  <th scope="col" style="font-weight: 400; padding: 6px 0; border-bottom: 1px solid #D3DCE1; text-align: right;">m²</th>
+                  <th scope="col" style="font-weight: 400; padding: 6px 0; border-bottom: 1px solid #D3DCE1; text-align: right;">U</th>
+                  <th scope="col" style="font-weight: 400; padding: 6px 0 6px 16px; border-bottom: 1px solid #D3DCE1;">Beyond it</th>
+                  <th scope="col" style="font-weight: 400; padding: 6px 0; border-bottom: 1px solid #D3DCE1; text-align: right;">kW</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><th scope="row" style="text-align: left; font-weight: 400; padding: 10px 0;">9 walls to neighbouring tenancies</th><td style="text-align: right;">172.8</td><td style="text-align: right;">0.6</td><td style="padding-left: 16px;">24 °C, conditioned</td><td style="text-align: right;">0.0</td></tr>
+                <tr><th scope="row" style="text-align: left; font-weight: 400; padding: 10px 0;">9 walls to the Kitchen and Bar</th><td style="text-align: right;">59.0</td><td style="text-align: right;">1.2</td><td style="padding-left: 16px;">24 °C, same tenancy</td><td style="text-align: right;">0.0</td></tr>
+                <tr><th scope="row" style="text-align: left; font-weight: 400; padding: 10px 0;">Ceiling under the floor above</th><td style="text-align: right;">227.1</td><td style="text-align: right;">0.5</td><td style="padding-left: 16px;">24 °C, apartments</td><td style="text-align: right;">0.0</td></tr>
+                <tr><th scope="row" style="text-align: left; font-weight: 400; padding: 10px 0; text-decoration: underline dashed #4B616D; text-underline-offset: 4px;">Floor slab</th><td style="text-align: right;">227.1</td><td style="text-align: right;">0.8</td><td style="padding-left: 16px;">Ground</td><td style="text-align: right;">0.0</td></tr>
+                <tr><th scope="row" style="text-align: left; font-weight: 400; padding: 10px 0;">Shopfront glazing</th><td style="text-align: right;">3.2</td><td style="text-align: right;">5.8</td><td style="padding-left: 16px;">Mall, conditioned</td><td style="text-align: right;">0.0</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <a href="#walls" style="font-size: 13px;">See each wall on the plan</a>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 8px;">
+          <h3 style="margin: 0; font-size: 18px; font-weight: 700;">What the AI assumed</h3>
+          <ul style="margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; max-width: 64ch;">
+            <li>The floor is a slab on the ground; the drawings don't say what is below. <a href="#change-floor">Change</a></li>
+            <li>The ceiling plan's "U/S of slab 3750" means a floor above, not the roof. <a href="#change-roof">Change</a></li>
+            <li>Walls 1 to 5 and 15 to 18 face neighbouring tenancies; the drawings don't label them. <a href="#change-walls">Change</a></li>
+          </ul>
+        </div>
+
+        <div style="display: flex; flex-wrap: wrap; gap: 12px; padding-top: 4px; border-top: 1px solid #E3E9EC;">
+          <button type="button" style="font: inherit; background: #FFFFFF; color: #246B91; border: 1px solid #246B91; border-radius: 6px; padding: 10px 16px; min-height: 44px; cursor: pointer;">Correct the area</button>
+          <button type="button" style="font: inherit; background: #FFFFFF; color: #246B91; border: 1px solid #246B91; border-radius: 6px; padding: 10px 16px; min-height: 44px; cursor: pointer;">Change a wall or the roof</button>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1180}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

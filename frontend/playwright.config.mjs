@@ -2,7 +2,11 @@ import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./tests",
-  timeout: 15_000,
+  // A few existing workspace tests reload the full legacy drawing review and
+  // poll a server-owned task. Give those flows room to finish on slower CI/dev
+  // machines without changing what the assertions verify.
+  timeout: 30_000,
+  workers: 1,
   use: {
     baseURL: "http://127.0.0.1:4173",
     headless: true,

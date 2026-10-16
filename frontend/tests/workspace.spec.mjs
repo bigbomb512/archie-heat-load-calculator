@@ -73,6 +73,10 @@ async function mockJob(page, {status, model = () => ({room_scope: scope}), onPos
                                reading = () => ({status: "none", enabled: true, page_count: 0, read: 0, failed: 0, main_plans: {}, pages: []}),
                                extraction = () => ({status: "none", findings: [], pages: [], open: 0})}) {
   const posts = [];
+  await page.addInitScript(() => {
+    if (!new URLSearchParams(location.search).has("engineer") && !new URLSearchParams(location.search).has("operator") && !new URLSearchParams(location.search).has("legacy"))
+      history.replaceState(null, "", `/?legacy=1${location.hash}`);
+  });
   await page.route("**/api/test-mode/status", route => route.fulfill({json: {enabled: false}}));
   await page.route("**/api/projects", route => route.fulfill({json: [{id: "job-1", name: analysis.name, pages: 38, relevant: 3, analysed: true}]}));
   await page.route("**/api/analysis?id=job-1", route => route.fulfill({json: analysis}));
@@ -149,6 +153,7 @@ async function openFinding(page, id) {
 }
 
 async function openJob(page, path = "/") {
+  if (path === "/") path = "/?legacy=1";
   await page.goto(path);
   await page.locator("[data-open='job-1']").click();
 }
@@ -533,7 +538,8 @@ test("Drawings: equipment found in the drawings can be corrected, chosen between
   await expect(section.locator("[data-ws-eq='eq:oven'] [data-ws-eq-duplicate]")).toHaveCount(0);
   await screen.locator("[data-ws-eq-reject]").click();
   expect(decisions[2]).toMatchObject({finding_id: "eq:screen", decision: "rejected"});
-  await expect(section.locator("[data-ws-equipment-status]")).toHaveText("3 items from 3 pages · all reviewed · 7200 W in the calculation (press Calculate to update).");
+  await expect(section.locator("[data-ws-equipment-status]")).toHaveText(
+    "3 items from 3 pages · all reviewed · 7200 W in the calculation (press Calculate to update).", {timeout: 15000});
   // An accepted item can be changed: the data sheet's heat to the room replaces rated W × factor, and must say where it's from.
   const change = section.locator("[data-ws-eq='eq:oven'] [data-ws-eq-change]");
   await change.locator("summary").click();

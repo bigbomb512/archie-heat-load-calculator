@@ -278,7 +278,7 @@ def traced_rooms(root):
         calibration = row.get("calibration") if isinstance(row.get("calibration"), dict) else {}
         points = row.get("points_image_px") or []
         scale = calibration.get("mm_per_px")
-        if calibration.get("status") not in {"agreed", "declared_scale_rejected"} or not isinstance(scale, (int, float)) or len(points) < 4:
+        if calibration.get("status") not in {"agreed", "declared_scale_rejected", "declared_scale_only"} or not isinstance(scale, (int, float)) or len(points) < 4:
             continue
         try:
             twice = sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(points, points[1:]))
@@ -358,6 +358,15 @@ def _typed_since_result(root):
     return any(path.exists() and path.stat().st_mtime > report.stat().st_mtime for path in typed)
 
 
+AREA_STEPS = {"P0_dimensions", "P0_wall_styles", "P0_room_names", "P0_room_outlines", "S1_printed_areas", "P0_room_sizes"}
+
+
+def _areas_still_being_found(tasks):
+    """Whether an AI area step is still to answer (a step is answered at most twice before it gives up)."""
+    return any(row.get("task") in AREA_STEPS and row.get("status") == "waiting_for_reply"
+               and len(row.get("reply_attempts") or []) < 2 for row in tasks)
+
+
 def status(web, project):
     """Header facts and tab states: done / check / needed / working / todo."""
     from backend import ai_preliminary_service, autonomous_tasks_service
@@ -387,7 +396,7 @@ def status(web, project):
     else:
         drawings_tab = _tab("done")
 
-    model = ai_preliminary_service.get(web, project, "workspace", check_freshness=False) if confirmed else {}
+    model = ai_preliminary_service.get(web, project, "workspace", check_freshness=True) if confirmed else {}
     scope = model.get("room_scope") or {}
     overrides = area_overrides(root)
     typed = {row["room_id"]: row for row in overrides}
@@ -459,8 +468,12 @@ def status(web, project):
         measurements_tab = _tab("todo", "Measurements appear when rooms are listed.", 0)
     elif not included:
         measurements_tab = _tab("needed", "Choose which rooms are cooled.", 1)
+    elif len(with_area) < len(included) and _areas_still_being_found(tasks):
+        # The AI's area steps (outlines, then the last room-size step) are still running: nobody is asked yet.
+        measurements_tab = _tab("working", f"Finding the area of {len(included) - len(with_area)} room(s).", 0)
     elif len(with_area) < len(included):
-        measurements_tab = _tab("needed", f"Add areas for {len(included) - len(with_area)} room(s).", len(included) - len(with_area))
+        measurements_tab = _tab("needed", f"Type the area for {len(included) - len(with_area)} room(s) the drawings don't give.",
+                                len(included) - len(with_area))
     else:
         below_area_bar = [row for row in with_area
                           if "below accuracy bar" in str(row.get("area_quality_label") or "").lower()]
@@ -526,13 +539,34 @@ def status(web, project):
     report = model.get("hourly_ai_preliminary_load_report") or {}
     peak = report.get("included_scope_peak") or {}
     total = peak.get("final_design_total_kw", peak.get("design_total_kw"))
-    stale = scope.get("status") != "confirmed" or _typed_since_result(root)
+    stale = scope.get("status") != "confirmed" or _typed_since_result(root) or model.get("status") == "stale"
     if total is None:
         results_tab = _tab("todo", "Not calculated yet.")
     elif stale:
         results_tab = _tab("check", "Inputs changed since the last calculation.")
     else:
         results_tab = _tab("done")
+
+    # The guided job flow uses these compact stage facts to lock later work.
+    # Keep legacy tabs intact for engineer mode and existing links.
+    base_report = model.get("phase1_base_room_load_report") or {}
+    base_stale = bool(model.get("phase1_base_room_load_report_stale"))
+    base_coverage = base_report.get("phase1_coverage") if isinstance(base_report.get("phase1_coverage"), dict) else {}
+    phase1_complete = bool(base_report and not base_stale and not base_report.get("blocked_reasons")
+                          and base_coverage.get("complete") is True)
+    results_ready = total is not None
+    phase2_complete = bool(results_ready and not stale and results_tab.get("state") == "done")
+    needs_you = {
+        "drawings": int(progress.get("blocked", 0) or 0),
+        "phase1": sum(row.get("area_m2") is None or row.get("status") == "needs_use"
+                       for row in candidates),
+        "phase2": len((report.get("review_queue") or [])) if isinstance(report.get("review_queue"), list) else 0,
+        "results": 0,
+    }
+    stage = ("drawings" if not confirmed or progress.get("waiting") or progress.get("blocked")
+             else "phase1" if not phase1_complete
+             else "phase2" if not phase2_complete
+             else "results")
 
     # Ceiling height per room-list key: typed first, otherwise the last resolved height (drawing or default).
     from ai.ceiling_volume_resolution import room_identity as ceiling_identity
@@ -558,6 +592,11 @@ def status(web, project):
         **_weather_choice(root, setup, address or found_site),
         "total_kw": total, "result_stale": bool(total is not None and stale),
         "drawings_confirmed": confirmed, "checks": progress,
+        "stage": stage,
+        "phase1_complete": phase1_complete,
+        "phase2_complete": phase2_complete,
+        "results_ready": results_ready,
+        "needs_you": needs_you,
         "rooms": {"total": len(candidates), "included": len(included), "with_area": len(with_area)},
         "area_overrides": overrides, "height_overrides": heights, "room_heights": room_heights,
         "traced_rooms": traced,
@@ -571,4 +610,72 @@ def status(web, project):
         "tabs": {"project": project_tab, "drawings": drawings_tab, "rooms": rooms_tab,
                  "walls": walls_tab, "windows": windows_tab, "results": results_tab},
         "pages": analysis.get("pages_analysed"),
+    }
+
+
+def project_list_summary(web, project):
+    """Return quick job-list facts from saved JSON, without rebuilding model freshness.
+
+    Opening a job still calls :func:`status` for the complete, current answer. The
+    jobs page can contain many projects, so it must not perform those expensive
+    per-project geometry and input-fingerprint checks before it can render.
+    """
+    from backend import autonomous_tasks_service
+
+    root = _root(project)
+    setup = job_setup(project)
+    tasks = autonomous_tasks_service._all_current(root)
+    progress = autonomous_tasks_service._task_progress(root)
+    confirmed = bool(project.get("reasoning_packet"))
+    site = next((row.get("applied_value", {}).get("site_text", "") for row in tasks
+                 if row.get("task") == "P1_site" and isinstance(row.get("applied_value"), dict)), "")
+
+    input_set = _read(root / "ai_preliminary_input_set.json", {})
+    base_report = _read(root / "phase1_base_room_load_report.json", {})
+    full_report = _read(root / "hourly_ai_preliminary_load_report.json", {})
+    model = _read(root / "ai_preliminary_model.json", {})
+    scope = model.get("room_scope") if isinstance(model, dict) else {}
+    candidates = scope.get("candidates", []) if isinstance(scope, dict) else []
+    phase1_needs = sum(1 for row in candidates if isinstance(row, dict)
+                       and (row.get("area_m2") is None or row.get("status") == "needs_use"))
+    queue = model.get("review_queue", []) if isinstance(model, dict) else []
+    if not isinstance(queue, list):
+        queue = []
+    if not queue:
+        resolution = _read(root / "model_input_resolution.json", {})
+        queue = resolution.get("review_queue", []) if isinstance(resolution, dict) else []
+    if not isinstance(queue, list):
+        queue = []
+
+    base_fingerprint = base_report.get("preliminary_input_set_fingerprint")
+    current_fingerprint = input_set.get("input_fingerprint")
+    coverage = base_report.get("phase1_coverage") if isinstance(base_report.get("phase1_coverage"), dict) else {}
+    phase1_current = bool(base_report and current_fingerprint
+                          and base_fingerprint == current_fingerprint
+                          and coverage.get("complete") is True
+                          and not base_report.get("blocked_reasons"))
+    full_fingerprint = full_report.get("preliminary_input_set_fingerprint") or full_report.get("input_fingerprint")
+    full_current = bool(full_report and current_fingerprint and full_fingerprint == current_fingerprint
+                        and not _typed_since_result(root))
+    results_ready = bool(full_current and (full_report.get("included_scope_peak") or full_report.get("scenario_results")))
+    phase2_complete = bool(phase1_current and results_ready)
+    stage = ("drawings" if not confirmed or progress.get("waiting") or progress.get("blocked")
+             else "phase1" if not phase1_current
+             else "phase2" if not phase2_complete
+             else "results")
+    needs_you = {
+        "drawings": int(progress.get("blocked", 0) or 0),
+        "phase1": int(phase1_needs),
+        "phase2": len(queue),
+        "results": 0,
+    }
+    return {
+        "stage": stage,
+        "needs_you": needs_you,
+        "phase1_complete": phase1_current,
+        "phase2_complete": phase2_complete,
+        "results_ready": results_ready,
+        "address": setup.get("address", ""),
+        "found_site": site,
+        "result_stale": bool(full_report and not full_current),
     }

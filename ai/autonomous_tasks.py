@@ -19,6 +19,7 @@ TASKS = {
     "P0_wall_styles": {"id": "room_geometry_wall_styles", "inputs": ["plan_page_styles"], "budget_chars": 3000, "media": "image", "prompt_builder": "build_p0_packets", "reply_validator": "validate_wall_style_batch_reply", "apply_function": "_apply_p0_wall_styles", "fallback": None},
     "P0_room_names": {"id": "room_geometry_room_names", "inputs": ["calibrated_enclosed_areas", "room_registry"], "budget_chars": 4000, "media": "image", "prompt_builder": "build_p0_packets", "reply_validator": "validate_p0_room_names", "apply_function": "_apply_p0_room_names", "fallback": None},
     "P0_room_outlines": {"id": "room_geometry_outlines", "inputs": ["rooms_without_area", "plan_page"], "budget_chars": 3000, "media": "image", "prompt_builder": "build_p0_packets", "reply_validator": "validate_p0_outlines", "apply_function": "_apply_p0_outlines", "fallback": None},
+    "P0_room_sizes": {"id": "room_sizes_without_outline", "inputs": ["rooms_without_area", "plan_page", "name_sheets"], "budget_chars": 3000, "media": "image", "prompt_builder": "room_size_prompt", "reply_validator": "validate_room_size_reply", "apply_function": "_apply_p0_sizes", "fallback": "tenancy_remainder"},
     "S1_printed_areas": {"id": "scanned_printed_room_areas", "inputs": ["scanned_plan_tiles", "raster_room_outlines"], "budget_chars": 3000, "media": "image", "prompt_builder": "scan_reading.area_prompt", "reply_validator": "scan_reading.validate_area_reply", "apply_function": "_apply_s1_areas", "fallback": None},
     "S3_title_transcription": {"id": "scanned_title_transcription", "inputs": ["scanned_title_block"], "budget_chars": 1000, "media": "image", "prompt_builder": "scan_reading.transcription_prompt", "reply_validator": "scan_reading.validate_transcription", "apply_function": "_apply_s3_transcription", "fallback": None},
     "P3_boundaries": {"id": "boundary_classification", "inputs": ["current_room_trace", "boundary_evidence"], "budget_chars": 1500, "media": "image", "prompt_builder": "build_boundary_packets", "reply_validator": "validate_boundary_reply", "apply_function": "_apply_p3", "fallback": "tenancy_boundary"},
@@ -129,6 +130,78 @@ def validate_p0_room_names(packet, reply):
 def validate_p0_outlines(packet, reply):
     value = parse_json_reply(reply)
     return room_outline.validate_outline_reply(value, packet["room_names"], packet["transform"])
+
+
+ROOM_SIZE_BASES = {"printed_area", "printed_dimensions", "estimated"}
+
+
+def room_size_prompt(rooms, references=(), mm_per_image_px=None, scale_label=""):
+    """Last steps for a room the outline steps could not measure (user decision 2026-10-16: every room's area is
+    found without anyone tracing): a printed area, else its printed dimensions, else the AI's measurement off the plan
+    at the sheet's scale; and the tenancy's printed total area, for a remainder."""
+    sheets = " ".join(f"Image {index + 2} is page {row['page']} of the same set, which mentions {', '.join(row['rooms'])}."
+                      for index, row in enumerate(references))
+    scale = (f"On image 1, one pixel is about {mm_per_image_px:.0f} mm ({scale_label})." if mm_per_image_px else
+             "Use the plan's printed scale, scale bar or any printed dimension to judge sizes.")
+    return ("Image 1 is an architectural floor plan. These rooms still have no floor area: " + ", ".join(rooms) + ". "
+            + (sheets + " " if sheets else "") + scale + " For each room give its floor area: use an area printed for "
+            "it on any image (a room tag such as \"24.5 m²\" or an area schedule; basis printed_area, quote the text); "
+            "otherwise its length and width from printed dimensions (basis printed_dimensions, quote them); otherwise "
+            "measure its length and width on image 1 at that scale (basis estimated). Answer every room; only if a "
+            "room is not part of this building put it under not_found with the reason. If the drawings print the whole "
+            "tenancy's or floor's area (e.g. \"Tenancy area 216 m²\", GLA, lease area), give it and quote it. Reply "
+            "with JSON only:\n"
+            '{"rooms": [{"room": string, "basis": "printed_area"|"printed_dimensions"|"estimated", "area_m2": number|null, '
+            '"length_mm": number|null, "width_mm": number|null, "evidence": string}], '
+            '"not_found": [{"room": string, "reason": string}], "tenancy_area_m2": number|null, "tenancy_evidence": string}')
+
+
+def validate_room_size_reply(packet, reply):
+    """Each listed room with a plausible area (0.5 to 5,000 m²) and its basis; printed answers must quote what they
+    read. Returns {"rooms": [{room, basis, area_m2, evidence}], "not_found": [...], "tenancy_area_m2", "tenancy_evidence"}."""
+    value = parse_json_reply(reply)
+    allowed = {str(name).casefold(): name for name in packet.get("room_names", [])}
+    rooms, seen = [], set()
+    for row in value.get("rooms") if isinstance(value.get("rooms"), list) else []:
+        if not isinstance(row, dict):
+            continue
+        name = allowed.get(str(row.get("room", "")).strip().casefold())
+        if not name or name.casefold() in seen:
+            continue
+        basis = str(row.get("basis", "")).strip()
+        if basis not in ROOM_SIZE_BASES:
+            raise ValueError(f"The basis for {name} must be printed_area, printed_dimensions or estimated.")
+        evidence = str(row.get("evidence", "")).strip()[:200]
+        area = row.get("area_m2")
+        length, width = row.get("length_mm"), row.get("width_mm")
+        number = lambda item: isinstance(item, (int, float)) and not isinstance(item, bool) and math.isfinite(item) and item > 0
+        if basis == "printed_area":
+            if not number(area) or not evidence:
+                raise ValueError(f"A printed area for {name} needs the area and the printed text it was read from.")
+            area = float(area)
+        else:
+            if not (number(length) and number(width)):
+                if number(area) and basis == "estimated":
+                    area = float(area)
+                else:
+                    raise ValueError(f"Give the length and width of {name} in millimetres.")
+            else:
+                area = float(length) * float(width) / 1e6
+            if basis == "printed_dimensions" and not evidence:
+                raise ValueError(f"Quote the printed dimensions used for {name}.")
+        if not 0.5 <= area <= 5000:
+            raise ValueError(f"{name} would be {area:.1f} m², which is not a plausible room area.")
+        seen.add(name.casefold())
+        rooms.append({"room": name, "basis": basis, "area_m2": round(area, 2), "evidence": evidence})
+    not_found = [{"room": allowed[str(row.get("room", "")).strip().casefold()], "reason": str(row.get("reason", ""))[:200]}
+                 for row in (value.get("not_found") if isinstance(value.get("not_found"), list) else [])
+                 if isinstance(row, dict) and str(row.get("room", "")).strip().casefold() in allowed
+                 and str(row.get("room", "")).strip().casefold() not in seen]
+    tenancy = value.get("tenancy_area_m2")
+    tenancy_evidence = str(value.get("tenancy_evidence") or "").strip()[:200]
+    tenancy = float(tenancy) if (isinstance(tenancy, (int, float)) and not isinstance(tenancy, bool)
+                                 and 1 <= tenancy <= 100000 and tenancy_evidence) else None
+    return {"rooms": rooms, "not_found": not_found, "tenancy_area_m2": tenancy, "tenancy_evidence": tenancy_evidence if tenancy else ""}
 
 
 def validate_wall_style_batch_reply(packet, reply):

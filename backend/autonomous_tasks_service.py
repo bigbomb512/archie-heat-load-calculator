@@ -213,17 +213,65 @@ def _p0_main_geometry_pages(root):
 
 
 def _p0_calibration_ready(root, page, context):
-    """Require one dimension with readable scale, otherwise two agreeing dimensions."""
+    """The page's scale: printed room areas or printed dimensions agreeing with the sheet scale first; when the
+    dimension readings are finished and none could set it, the sheet's printed scale alone, labelled unchecked (user
+    decision 2026-10-16: areas must be found without anyone tracing)."""
     printed = _s1_calibration(root, page)
     if printed:
         return printed, ""
     dimensions = _p0_dimensions(root, page)
     if not context.get("declared_mm_per_px") and len(dimensions) < 2:
-        return None, "The sheet scale is unreadable; two agreeing printed dimensions are required before outlining rooms."
-    try:
-        return _p0_calibration(root, page, context), ""
-    except (OSError, ValueError, KeyError, TypeError) as error:
-        return None, str(error)
+        reason = "The sheet scale is unreadable; two agreeing printed dimensions are required before outlining rooms."
+    else:
+        try:
+            return _p0_calibration(root, page, context), ""
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            reason = str(error)
+    if context.get("declared_mm_per_px") and _p0_dimensions_settled(root, page):
+        sheet = _sheet_scale_calibration(root, page, context, reason)
+        if sheet:
+            return sheet, ""
+    return None, reason
+
+
+def _p0_dimensions_settled(root, page):
+    """No dimension reading on this page is still waiting for an answer (none was offered, or each was answered or
+    refused twice)."""
+    for pointer in (root / "ai_tasks" / "P0_dimensions").glob(f"page-{page}-dimension-*/current.json"):
+        record = _read(pointer.parent / _read(pointer, {}).get("run_path", "") / "record.json", {})
+        if record.get("status") == "waiting_for_reply" and len(record.get("reply_attempts") or []) < 2:
+            return False
+    return True
+
+
+PAPER_LONG_SIDE_MM = {"A0": 1189, "A1": 841, "A2": 594, "A3": 420, "A4": 297}
+
+
+def _sheet_scale_calibration(root, page, context, reason=""):
+    """The sheet's printed scale (e.g. "1:50") as the page's scale, corrected when the scale names a paper size the PDF
+    was not printed at ("1:100 @ A1" on an A3 PDF), or None when it implies an implausible plan size."""
+    declared = float(context["declared_mm_per_px"])
+    _ai_input, spatial, _building = _load_inputs(root)
+    page_row = next((row for row in spatial.get("pages", []) if row.get("page") == page), {})
+    texts = [str(item.get("text", "") if isinstance(item, dict) else item) for item in page_row.get("scale_candidates") or []]
+    scale_text = next((text for text in texts if text.strip()), "")
+    factor, paper_note = 1.0, ""
+    bbox = context.get("page_bbox") or (0, 0, context.get("pdf_page_width") or 0, 0)
+    pdf_long_mm = max(float(bbox[2]) - float(bbox[0]), float(bbox[3]) - float(bbox[1])) * 25.4 / 72
+    stated = next((match.group(1).upper() for text in texts for match in [re.search(r"@\s*(A[0-4])\b", text, re.I)] if match), "")
+    if stated and pdf_long_mm > 0 and abs(PAPER_LONG_SIDE_MM[stated] / pdf_long_mm - 1) > 0.05:
+        factor = PAPER_LONG_SIDE_MM[stated] / pdf_long_mm
+        paper_note = f" at {stated} (this PDF is printed on a different paper size, corrected)"
+    mm_per_px = declared * factor
+    left, top, right, bottom = context.get("viewport") or (0, 0, 0, 0)
+    plan_long_m = max(right - left, bottom - top) * mm_per_px / 1000
+    if not 2 <= plan_long_m <= 400:
+        return None
+    return {"source": "sheet_printed_scale", "status": "declared_scale_only", "mm_per_px": mm_per_px,
+            "scale_text": scale_text, "paper_adjustment": round(factor, 4),
+            "label": (f"Scaled from the sheet's printed scale {scale_text or ''}{paper_note}; no printed dimension "
+                      "could be read to check it.").replace("  ", " "),
+            "reason": reason[:300]}
 
 
 def _s1_calibration(root, page):
@@ -328,7 +376,7 @@ def _roof_packets(root, room_id=None):
     selected = {}
     for trace in traces:
         if (trace.get("room_id") in comfort_ids and (room_id is None or trace.get("room_id") == room_id)
-                and trace.get("calibration", {}).get("status") in {"agreed", "declared_scale_rejected"}):
+                and trace.get("calibration", {}).get("status") in {"agreed", "declared_scale_rejected", "declared_scale_only"}):
             selected.setdefault(trace["room_id"], []).append(trace)
     result = []
     for room_id, parts in selected.items():
@@ -369,7 +417,7 @@ def _p6_kitchen_packets(root, room_id=None):
         traces = []
     kitchen_traces = [row for row in traces if str(row.get("room_id")) in comfort_ids
                       and "kitchen" in str(row.get("room_label", "")).casefold()
-                      and row.get("calibration", {}).get("status") in {"agreed", "declared_scale_rejected"}
+                      and row.get("calibration", {}).get("status") in {"agreed", "declared_scale_rejected", "declared_scale_only"}
                       and isinstance(row.get("points_image_px"), list) and len(row["points_image_px"]) >= 4]
     if room_id is not None and str(room_id) not in {str(row.get("room_id")) for row in kitchen_traces}:
         return []
@@ -880,6 +928,74 @@ def _p0_outline_packets(root):
     return result
 
 
+# Where a room's area came from when no outline could measure it (P0_room_sizes), as shown in the result.
+ROOM_SIZE_SOURCES = {"printed_area": "printed (read from image)", "printed_dimensions": "printed dimensions",
+                     "estimated": "AI estimate from the plan", "remainder": "tenancy area remainder"}
+OUTLINE_STEPS = {"P0_dimensions", "P0_wall_styles", "P0_room_names", "P0_room_outlines", "S1_printed_areas"}
+
+
+def _p0_size_packets(root):
+    """The last area step (user decision 2026-10-16): once no outline step is still waiting, every room without an
+    area is asked for in one call — printed area, printed dimensions, or measured off the plan at its scale."""
+    pages = _p0_main_geometry_pages(root)
+    if not pages:
+        return []
+    if any(record.get("task") in OUTLINE_STEPS and record.get("status") == "waiting_for_reply"
+           and len(record.get("reply_attempts") or []) < 2 for record in _all_current(root)):
+        return []
+    names = sorted({row["label"] for row in _inferred_room_data(root)})
+    have = {str(row.get("room_label", "")).casefold()
+            for row in reviewer_room_geometry_service.current_traced_areas(root).values() if row.get("area_m2")}
+    missing = [name for name in names if name.casefold() not in have]
+    if not missing:
+        return []
+    number = pages[0]["page"]
+    try:
+        context = _p0_context(root, number)
+        image, transform = room_outline.render_candidate_areas(context["image"], [], context["viewport"])
+        calibration, _reason = _p0_calibration_ready(root, number, context)
+        scale = (calibration or {}).get("mm_per_px") or context.get("declared_mm_per_px")
+        scale_label = ((calibration or {}).get("label") or ("printed dimensions" if calibration else "the sheet's printed scale"))
+        references, reference_images = _p0_name_sheets(root, number, missing)
+    except (OSError, ValueError, KeyError, TypeError, IndexError) as error:
+        return [("P0_room_sizes", f"page-{number}", {"task": "P0_room_sizes", "page": number}, "", [],
+                 f"The plan page could not be prepared for the room sizes: {error}")]
+    mm_per_image_px = round(scale / transform["factor"], 3) if scale else None
+    packet = {"task": "P0_room_sizes", "page": number, "room_names": missing, "name_sheets": references,
+              "mm_per_image_px": mm_per_image_px, "level_name": str(pages[0].get("level_name") or "Unassigned level")}
+    prompt = autonomous_tasks.room_size_prompt(missing, references, mm_per_image_px, scale_label)
+    return [("P0_room_sizes", f"page-{number}", packet, prompt, [_png_bytes(image), *reference_images], "")]
+
+
+def _apply_p0_sizes(web, project, root, record, validated):
+    """Save each room's area (no outline) with where it came from; one room left over takes the tenancy's printed
+    total area less every other room's."""
+    packet = record["packet"]
+    page, level = packet.get("page"), packet.get("level_name") or "Unassigned level"
+    room = lambda label, area, basis, text: {"label": label, "area_m2": round(area, 2), "source": ROOM_SIZE_SOURCES[basis],
+                                             "method": f"room_size_{basis}", "printed_text": text, "page": page,
+                                             "level_name": level, "outline": None,
+                                             "quality_label": record.get("quality_label", "AI-determined")}
+    rooms = [room(row["room"], row["area_m2"], row["basis"], row["evidence"]) for row in validated["rooms"]]
+    answered = {row["label"].casefold() for row in rooms} | {row["room"].casefold() for row in validated["not_found"]}
+    left = [name for name in packet.get("room_names", []) if name.casefold() not in answered]
+    tenancy = validated.get("tenancy_area_m2")
+    if tenancy and len(left) == 1:
+        others = {str(row.get("room_label", "")).casefold(): float(row["area_m2"])
+                  for row in reviewer_room_geometry_service.current_traced_areas(root).values()
+                  if isinstance(row.get("area_m2"), (int, float)) and str(row.get("room_label", "")).casefold() != left[0].casefold()}
+        others.update({row["label"].casefold(): row["area_m2"] for row in rooms})
+        remainder = tenancy - sum(others.values())
+        if remainder >= 0.5:
+            rooms.append(room(left[0], remainder, "remainder",
+                              f"{validated['tenancy_evidence']} less the other rooms ({sum(others.values()):.1f} m²)"))
+    record.update({"status": _status_for_accuracy("ai_determined", record["accuracy"]), "source": "ai_determined",
+                   "applied_value": {"rooms": rooms, "not_found": validated["not_found"], "tenancy_area_m2": tenancy,
+                                     "label": record.get("quality_label", "AI-determined")},
+                   "validation": validated, "block_reason": ""})
+    return record
+
+
 MAX_NAME_SHEETS = 2
 
 
@@ -1276,7 +1392,7 @@ def _p3_packets(root, room_id=None, page_number=None):
     try: traces=reviewer_room_geometry_service.current_records(reviewer_room_geometry_service._paths({"review_dir":str(root)}))
     except (OSError,ValueError,TypeError,KeyError): traces=[]
     comfort=_comfort_room_ids(root)
-    selected=[row for row in traces if row.get("calibration",{}).get("status") in {"agreed","declared_scale_rejected"}]
+    selected=[row for row in traces if row.get("calibration",{}).get("status") in {"agreed","declared_scale_rejected","declared_scale_only"}]
     affected_pages = ({page_number} if page_number is not None else
                       {row.get("page") for row in selected if row.get("room_id") == room_id}
                       if room_id is not None else None)
@@ -1367,7 +1483,7 @@ def _p4_packets(root, only_room_id=None):
     comfort=_comfort_room_ids(root)
     assumption=__import__("ai.ai_preliminary",fromlist=["load_pack"]).load_pack()
     glazing="retail"; shading="unshaded"
-    selected=[trace for trace in traces if trace.get("calibration",{}).get("status") in {"agreed","declared_scale_rejected"}]
+    selected=[trace for trace in traces if trace.get("calibration",{}).get("status") in {"agreed","declared_scale_rejected","declared_scale_only"}]
     by_page={}
     for trace in selected: by_page.setdefault(trace.get("page"),[]).append(trace)
     for plan_page,page_traces in sorted(by_page.items()):
@@ -1463,7 +1579,7 @@ def _p4_packets(root, only_room_id=None):
 def _p0_trace_rows(root, record, polygons):
     page = int(record["packet"]["page"])
     calibration = deepcopy(record["packet"]["calibration"])
-    if calibration.get("status") not in {"agreed", "declared_scale_rejected"}:
+    if calibration.get("status") not in {"agreed", "declared_scale_rejected", "declared_scale_only"}:
         raise ValueError("P0 cannot apply room areas until printed dimensions calibrate within 2%.")
     rooms = reviewer_room_geometry_service._rooms(reviewer_room_geometry_service._paths({"review_dir": str(root)}))
     room_ids = {}
@@ -1890,7 +2006,7 @@ def _refresh_geometry_tasks(root, room_id=None, page_number=None):
     # If both packet lists are calculated together, the outline builder cannot
     # see the just-created naming tasks and offers an unnecessary second task.
     _refresh_site_tasks(root)
-    for packet_builder in (_p0_initial_packets, _p0_followup_packets, _p0_outline_packets, _s1_packets):
+    for packet_builder in (_p0_initial_packets, _p0_followup_packets, _p0_outline_packets, _s1_packets, _p0_size_packets):
         for task,target,packet,prompt,images,reason in packet_builder(root):
             budget=autonomous_tasks.TASKS[task]["budget_chars"]
             _create_run(root,task,target,packet,prompt,images,reason or
@@ -2026,7 +2142,7 @@ def _run_all(web, project, root):
                      if task == "P0_dimensions" and len(prompt) > 1500 else
                      "Prompt exceeds the 3,000-character limit; evidence was not shortened."
                      if task == "P0_wall_styles" and len(prompt) > 3000 else ""))
-    for packet_builder in (_p0_followup_packets, _p0_outline_packets, _s1_packets, _p3_packets, _p4_packets, _p6_kitchen_packets):
+    for packet_builder in (_p0_followup_packets, _p0_outline_packets, _s1_packets, _p0_size_packets, _p3_packets, _p4_packets, _p6_kitchen_packets):
         for task, target, packet, prompt, images, reason in packet_builder(root):
             budget = autonomous_tasks.TASKS[task]["budget_chars"]
             _create_run(root, task, target, packet, prompt, images,
@@ -2064,7 +2180,7 @@ def _export_determinations(root):
         result["P6_kitchen"] = kitchen_equipment.to_determinations(
             kitchen_record["applied_value"].get("items", []), source=source)
     rooms = {}
-    for task in ("S1_printed_areas", "P0_room_names", "P0_room_outlines"):
+    for task in ("S1_printed_areas", "P0_room_names", "P0_room_outlines", "P0_room_sizes"):
         for record in (row for row in _all_current(root) if row.get("task") == task and row.get("applied_value")):
             for row in record["applied_value"].get("rooms", []):
                 key = str(row.get("label", "")).casefold()
@@ -2440,6 +2556,9 @@ def _post(web, project, data, *, defer_evidence_rebuild=False):
             record = _apply_p0_outlines(web, project, root, record, validated)
             record["applied_value"]["not_drawn"] = ([{"room": name, "reason": "The AI left it out."} for name in omitted]
                                                     + [{"room": name, "reason": reason} for name, reason in not_drawn.items()])
+        elif task == "P0_room_sizes":
+            validated = autonomous_tasks.validate_room_size_reply(record["packet"], reply)
+            record = _apply_p0_sizes(web, project, root, record, validated)
         elif task == "S1_printed_areas":
             record = _apply_s1_areas(web, project, root, record, reply)
         elif task == "S3_title_transcription":

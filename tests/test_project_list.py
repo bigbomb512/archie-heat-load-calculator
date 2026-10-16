@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from backend import web_app
+from backend import job_service, web_app
 
 
 class ProjectListTests(unittest.TestCase):
@@ -29,11 +29,13 @@ class ProjectListTests(unittest.TestCase):
                 "review_dir": "/tmp/test-review",
                 "updated_at": "2026-09-28T12:00:00+0000",
             },
-        }):
+        }), patch.object(job_service, "status", side_effect=AssertionError("job list must not run full status checks")):
             projects = web_app.project_list()
 
         self.assertEqual([project["id"] for project in projects], ["real-project"])
         self.assertEqual(projects[0]["name"], "Building drawings.pdf")
+        self.assertEqual(projects[0]["stage"], "drawings")
+        self.assertIn("phase1", projects[0]["needs_you"])
 
 
 if __name__ == "__main__":

@@ -94,6 +94,9 @@ function upload(file){
   requiredElement("fName").textContent = file.name;
   requiredElement("fMeta").textContent = (file.size/1048576).toFixed(1) + " MB";
   requiredElement("fState").textContent = "Uploading";
+  optionalElement("uploadError")?.classList.add("hide");
+  if (optionalElement("uploadError")) optionalElement("uploadError").textContent = "";
+  optionalElement("uploadNext")?.classList.add("hide");
   requiredElement("topTitle").textContent = "New analysis";
   requiredElement("topSub").textContent = file.name;
 
@@ -110,8 +113,9 @@ function upload(file){
     requiredElement("fState").textContent = "Ready";
     requiredElement("fMeta").textContent = `${res.pages} pages · ${(res.size_bytes/1048576).toFixed(1)} MB`;
     DATA = { id: res.id, name: res.name, pages: res.pages };
-    requiredElement("btnAnalyse").classList.remove("hide");
     requiredElement("btnAnalyse").disabled = false;
+    optionalElement("uploadNext")?.classList.remove("hide");
+    if (optionalElement("btnAnalyseInline")) optionalElement("btnAnalyseInline").disabled = false;
     loadProjects();
   });
   xhr.addEventListener("error", () => failUpload("The upload did not reach the server."));
@@ -120,11 +124,14 @@ function upload(file){
 
 function failUpload(msg){
   show("vUpload"); requiredElement("btnRestart").classList.add("hide");
+  const error = optionalElement("uploadError");
+  if (error) { error.textContent = msg; error.classList.remove("hide"); }
   toast("Upload failed", msg);
 }
 
 /* ---------------- analyse ---------------- */
 requiredElement("btnAnalyse").addEventListener("click", analyse);
+optionalElement("btnAnalyseInline")?.addEventListener("click", analyse);
 
 async function analyse(){
   if (!DATA) return;
@@ -133,6 +140,7 @@ async function analyse(){
   requiredElement("btnContinue").disabled = true;
   show("vRun");
   requiredElement("btnAnalyse").disabled = true;
+  if (optionalElement("btnAnalyseInline")) optionalElement("btnAnalyseInline").disabled = true;
   requiredElement("runSub").textContent = `Reviewing ${DATA.pages} pages`;
   requiredElement("topTitle").textContent = "Analysing";
   const stop = runSteps();
@@ -154,6 +162,7 @@ async function analyse(){
     }
   } catch (err) {
     stop(); show("vFile"); requiredElement("btnAnalyse").disabled = false;
+    if (optionalElement("btnAnalyseInline")) optionalElement("btnAnalyseInline").disabled = false;
     requiredElement("btnContinue").disabled = true;
     toast("Analysis failed", err.message);
   } finally {
@@ -3402,7 +3411,7 @@ function traceEnvelopeClassificationMarkup(trace, state, context){
   if (!trace) return "";
   const calStatus = trace.calibration?.status;
   if (trace.freshness !== "current") return `<section class="reviewer-envelope-classification" data-envelope-classification><h4>Walls and roof</h4><p class="reviewer-geometry-blocking" role="status">Envelope can only be classified on a current room trace. ${esc((trace.stale_reasons || []).join(" "))}</p></section>`;
-  if (!trace.calibration?.mm_per_px || !["agreed", "declared_scale_rejected"].includes(calStatus)) {
+  if (!trace.calibration?.mm_per_px || !["agreed", "declared_scale_rejected", "declared_scale_only"].includes(calStatus)) {
     return `<section class="reviewer-envelope-classification" data-envelope-classification><h4>Walls and roof</h4><p class="reviewer-geometry-blocking" role="status">Envelope can only be classified on a calibrated room trace.</p></section>`;
   }
   const edges = deepcopyEdges(state.envelopeEdges || trace.edges, (trace.points_image_px || []).length - 1);

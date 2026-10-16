@@ -5531,8 +5531,9 @@ def project_list(identity=None):
     projects.sort(key=lambda item: item.get("updated_at", ""), reverse=True)
     if identity is not None and not identity.development:
         projects = [project for project in projects if security.role_for_project(project, identity)]
-    return [
-        {
+    result = []
+    for project in projects:
+        item = {
             "id": project["id"],
             "name": project["name"],
             "pages": project.get("pages", 0),
@@ -5542,8 +5543,20 @@ def project_list(identity=None):
             "updated_at": project.get("updated_at", ""),
             "revision": project.get("analysis_version", "") or project.get("revision", ""),
         }
-        for project in projects
-    ]
+        # Keep the jobs page responsive when the registry contains many large
+        # drawing sets. Full freshness checks run after a job is opened.
+        try:
+            summary = job_service.project_list_summary(sys.modules[__name__], project)
+            item.update({key: summary.get(key) for key in ("stage", "needs_you", "phase1_complete", "phase2_complete", "results_ready")})
+            item["address"] = summary.get("address", "")
+            item["found_site"] = summary.get("found_site", "")
+            item["result_stale"] = summary.get("result_stale", False)
+        except (OSError, KeyError, ValueError, TypeError):
+            item.update({"stage": "drawings", "needs_you": {"drawings": 0, "phase1": 0, "phase2": 0, "results": 0},
+                         "phase1_complete": False, "phase2_complete": False, "results_ready": False,
+                         "address": "", "found_site": "", "result_stale": False})
+        result.append(item)
+    return result
 
 
 def api_project_members(request):

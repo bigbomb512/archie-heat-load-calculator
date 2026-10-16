@@ -118,7 +118,13 @@ def _grid_size(task, reply, sizes):
     return None
 
 
+# Tasks whose replies carry no coordinates: no grid note in the prompt.
+NO_GRID_TASKS = {"P0_room_sizes"}
+
+
 def uses_grid(task, sizes):
+    if task in NO_GRID_TASKS:
+        return False
     return len(sizes) == 1 or (task == "P2_north" and len(sizes) > 1) or (task in FIRST_IMAGE_TASKS and bool(sizes))
 
 

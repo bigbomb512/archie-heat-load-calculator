@@ -121,17 +121,27 @@ def validate_artifact(raw):
         calibration = row.get("calibration")
         if not isinstance(calibration, dict):
             raise ValueError("Room geometry trace needs a calibration record.")
+        declaration_source = row.get("declaration_source", "reviewer")
+        # An AI outline on a sheet where no printed dimension could be read is scaled from the sheet's printed scale
+        # alone (user decision 2026-10-16), labelled as unchecked; it has no dimension span to mark.
+        sheet_scale_only = (declaration_source in {"ai_determined", "ai_fallback"}
+                            and calibration.get("source") == "sheet_printed_scale"
+                            and calibration.get("status") == "declared_scale_only")
+        if sheet_scale_only:
+            scale = calibration.get("mm_per_px")
+            if not isinstance(scale, (int, float)) or isinstance(scale, bool) or not math.isfinite(scale) or scale <= 0:
+                raise ValueError("A sheet-scale calibration needs a positive millimetres-per-pixel value.")
         dim_points = calibration.get("dimension_points_image_px")
-        if not isinstance(dim_points, list) or len(dim_points) != 2 or not all(valid_point(point) for point in dim_points):
+        if not sheet_scale_only and (not isinstance(dim_points, list) or len(dim_points) != 2
+                                     or not all(valid_point(point) for point in dim_points)):
             raise ValueError("Calibration needs two finite points marking the printed dimension span.")
         dim_value = calibration.get("dimension_value_mm")
-        if not isinstance(dim_value, (int, float)) or not math.isfinite(dim_value) or dim_value <= 0:
+        if not sheet_scale_only and (not isinstance(dim_value, (int, float)) or not math.isfinite(dim_value) or dim_value <= 0):
             raise ValueError("Printed calibration dimension must be positive millimetres.")
-        declaration_source = row.get("declaration_source", "reviewer")
         allowed_calibration_sources = {"reviewer": "reviewer_read_printed_dimension",
                                        "ai_determined": "ai_read_printed_dimension",
                                        "ai_fallback": "ai_read_printed_dimension"}
-        if calibration.get("source") != allowed_calibration_sources.get(declaration_source):
+        if not sheet_scale_only and calibration.get("source") != allowed_calibration_sources.get(declaration_source):
             raise ValueError("Calibration source must match the trace declaration source.")
         ai_measured_area = row.get("ai_measured_area_m2")
         if ai_measured_area is not None:

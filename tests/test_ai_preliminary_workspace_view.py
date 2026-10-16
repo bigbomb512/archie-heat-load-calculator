@@ -88,6 +88,26 @@ class PreliminaryWorkspaceViewTests(unittest.TestCase):
         self.assertIn("room_scope", response)
         self.assertTrue(response["settings"]["saved_project_consent"])
 
+    def test_workspace_compacts_saved_phase2_inputs_by_room_without_recalculating(self):
+        compact = ai_preliminary_service._phase2_room_inputs({
+            "internal_gains_resolution": {"records": [{
+                "room_id": "room:ground:shop", "original_label": "Shop",
+                "fields": {"occupancy_count": {"value": 8, "unit": "people", "origin": "project_evidence", "source": "seat plan"},
+                           "people_sensible_w_per_person": {"value": 75, "unit": "W/person", "origin": "controlled_fallback"},
+                           "people_latent_w_per_person": {"value": 55, "unit": "W/person", "origin": "controlled_fallback"},
+                           "lighting_load_w": {"value": 420, "unit": "W", "origin": "controlled_fallback"}},
+                "equipment": [{"name": "Display fridge", "rating_w": 360, "origin": "project_evidence"}],
+            }]},
+            "airflow_resolution": {"records": [{"room_id": "room:ground:shop", "air_path_type": "outside_air",
+                                                  "value": 35, "unit": "L/s", "origin": "controlled_fallback", "status": "provisional"}]},
+        })
+        self.assertEqual(len(compact), 1)
+        self.assertEqual(compact[0]["people"]["count"]["value"], 8)
+        self.assertEqual(compact[0]["people"]["count"]["source"], "seat plan")
+        self.assertEqual(compact[0]["lights"]["load"]["unit"], "W")
+        self.assertEqual(compact[0]["equipment"][0]["name"], "Display fridge")
+        self.assertEqual(compact[0]["air"][0]["value"], 35)
+
     def test_get_api_passes_workspace_view_and_keeps_freshness_check_opt_in(self):
         default_request = SimpleNamespace(path="/api/ai-preliminary-model?project_id=workspace-test")
         with patch.object(web_app, "project_by_id", return_value=self.project), \

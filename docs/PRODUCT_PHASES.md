@@ -16,6 +16,23 @@ Use drawing evidence first. For room area, prefer a printed room area or complet
 
 Phase 1's output is the room envelope/base load. It excludes people, lighting, plug loads and other equipment, ventilation, infiltration and operational airflow. Those inputs remain available as evidence for Phase 2. The hourly method calculates evidenced externally exposed walls, roofs/ceilings, glazing, and resolved adjacent-space boundaries. A floor without evidence for its construction or boundary temperature is listed as unresolved and excluded from the subtotal; it is never represented as a zero contribution. A drawing-supported internal floor or a ground-contact floor may use its explicitly labelled preliminary method, with the assumption and source shown in the audit. A room with missing boundaries still receives a subtotal from resolved surfaces, while the report marks its coverage incomplete and lists the missing contribution as an exception.
 
+### Every room's area, without anyone tracing (user decision 2026-10-16)
+
+The system finds every room's area itself; a person is never asked to draw. Each step runs only when the one before
+found nothing, and the result says which was used:
+1. an area printed on the drawings (room tags, area schedules);
+2. the room's outline (its enclosed walls, or the AI tracing it), scaled by a printed dimension that agrees with the
+   sheet's scale; if no printed dimension can be read, by the sheet's printed scale alone ("scaled from the sheet's
+   printed scale 1:50; no printed dimension could be read to check it"), corrected when the scale names a larger paper
+   size than the PDF, and refused if it implies an implausible plan size;
+3. no outline: one AI step asks for each remaining room's printed area, printed dimensions, or its length and width
+   measured on the plan at the sheet's scale;
+4. one room left over: the tenancy's printed total area less every other room ("tenancy area remainder").
+A printed area beats an AI outline; an outline beats an estimate, printed dimensions or a remainder; an area typed by
+a person beats everything. A room with an area but no outline gets its floor and ceiling or roof; only its walls stay
+unassessed. While a step is still running the job shows "Finding the area of n room(s)"; only if every step finished
+without an area is the person asked to type it.
+
 ### Every surface of every room (user spec 2026-10-16)
 
 Phase 1 is each room's empty-room load, itemised. Every traced room gets every wall (one per outline side: its length
