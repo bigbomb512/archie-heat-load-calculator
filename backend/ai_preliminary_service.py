@@ -89,6 +89,38 @@ def _paths(project):
     }
 
 
+_FILE_FINGERPRINT_MEMO = {}
+_FILE_FINGERPRINT_MEMO_LOCK = threading.Lock()
+_FILE_FINGERPRINT_MEMO_LIMIT = 512
+
+
+def _file_fingerprint(path, default, use_saved=False):
+    """ai_preliminary.fingerprint of a JSON file's contents (or its saved "fingerprint" when use_saved),
+    worked out once per saved version of the file: a busy job rewrites a few files while the rest stay the same."""
+    path = Path(path)
+    try:
+        stat = path.stat()
+        version = (stat.st_mtime_ns, stat.st_size, getattr(stat, "st_ino", 0), use_saved)
+    except OSError:
+        version = None
+    key = str(path)
+    if version is not None:
+        with _FILE_FINGERPRINT_MEMO_LOCK:
+            hit = _FILE_FINGERPRINT_MEMO.get(key)
+            if hit and hit[0] == version:
+                return hit[1]
+    artifact = _read(path, default)
+    value = ((artifact.get("fingerprint") if use_saved and isinstance(artifact, dict) else None)
+             or ai_preliminary.fingerprint(artifact))
+    if version is not None:
+        with _FILE_FINGERPRINT_MEMO_LOCK:
+            _FILE_FINGERPRINT_MEMO.pop(key, None)
+            _FILE_FINGERPRINT_MEMO[key] = (version, value)
+            while len(_FILE_FINGERPRINT_MEMO) > _FILE_FINGERPRINT_MEMO_LIMIT:
+                _FILE_FINGERPRINT_MEMO.pop(next(iter(_FILE_FINGERPRINT_MEMO)))
+    return value
+
+
 def _sources(paths):
     run = _read(paths["run"], {})
     proposal = _proposal_for_resolution(paths)
@@ -97,8 +129,7 @@ def _sources(paths):
         key: resolution.get(key) for key in ("research_consent", "source_pack_version", "research_jobs", "project_sources", "overrides")
     }
     def artifact_fingerprint(path, default):
-        artifact = _read(path, default)
-        return artifact.get("fingerprint") or ai_preliminary.fingerprint(artifact)
+        return _file_fingerprint(path, default, use_saved=True)
 
     skill_manifest = _read(paths["root"] / "skill_workflow_run.json", {})
     skill_run_id = skill_manifest.get("run_id")
@@ -112,9 +143,9 @@ def _sources(paths):
             phase1_skill_proposals[skill_id] = _read(skill_proposal_dir / f"{skill_id}.json", {})
 
     return {
-        "building_evidence": ai_preliminary.fingerprint(_read(paths["building"], {})),
-        "vision_response": ai_preliminary.fingerprint(_read(paths["vision"], {})),
-        "evidence_fusion": ai_preliminary.fingerprint(_read(paths["fusion"], {})),
+        "building_evidence": _file_fingerprint(paths["building"], {}),
+        "vision_response": _file_fingerprint(paths["vision"], {}),
+        "evidence_fusion": _file_fingerprint(paths["fusion"], {}),
         "manual_placeholder_entities": ai_preliminary.fingerprint(run.get("manual_placeholder_entities", [])),
         "ai_preliminary_proposal": ai_preliminary.fingerprint(proposal),
         "phase1_skill_proposals": ai_preliminary.fingerprint({
@@ -123,10 +154,10 @@ def _sources(paths):
             "proposals": phase1_skill_proposals,
             "decisions": _read(paths["root"] / "skill_review_decisions.json", {}).get("decisions", {}),
         }),
-        "research_cache": ai_preliminary.fingerprint(_read(paths["research_cache"], empty_research_cache())),
+        "research_cache": _file_fingerprint(paths["research_cache"], empty_research_cache()),
         "value_resolution_state": value_resolver.fingerprint(state),
-        "site_location_resolution": ai_preliminary.fingerprint(_read(paths["site_location"], {})),
-        "site_design_weather_resolution": ai_preliminary.fingerprint(_read(paths["site_design_weather"], {})),
+        "site_location_resolution": _file_fingerprint(paths["site_location"], {}),
+        "site_design_weather_resolution": _file_fingerprint(paths["site_design_weather"], {}),
         "reviewer_room_geometry_north": ai_preliminary.fingerprint(
             _read(paths["root"] / "reviewer_room_geometry.json", {}).get("page_north", {})
         ),
@@ -140,12 +171,12 @@ def _sources(paths):
         "safety_factor_resolution": artifact_fingerprint(paths["safety_factor_resolution"], safety_factor_resolution.empty_safety_factor_resolution()),
         "preliminary_geometry_resolution": ai_preliminary.fingerprint(_preliminary_geometry(paths)),
         # Answers from the What-we-need-to-find list that the model reads directly.
-        "glazing_answers": ai_preliminary.fingerprint(_read(paths["root"] / "glazing_answers.json", {})),
-        "construction_answers": ai_preliminary.fingerprint(_read(paths["root"] / "construction_answers.json", {})),
+        "glazing_answers": _file_fingerprint(paths["root"] / "glazing_answers.json", {}),
+        "construction_answers": _file_fingerprint(paths["root"] / "construction_answers.json", {}),
         "weather_location": "|".join(weather_pick_service.effective(paths["root"])),
-        "unconditioned_answers": ai_preliminary.fingerprint(_read(paths["root"] / "unconditioned_answers.json", {})),
-        "exhaust_answers": ai_preliminary.fingerprint(_read(paths["root"] / "exhaust_answers.json", {})),
-        "hours_answers": ai_preliminary.fingerprint(_read(paths["root"] / "hours_answers.json", {})),
+        "unconditioned_answers": _file_fingerprint(paths["root"] / "unconditioned_answers.json", {}),
+        "exhaust_answers": _file_fingerprint(paths["root"] / "exhaust_answers.json", {}),
+        "hours_answers": _file_fingerprint(paths["root"] / "hours_answers.json", {}),
     }
 
 
@@ -1717,10 +1748,38 @@ def _save_settings(paths, incoming):
     return current
 
 
+_SOURCES_MEMO = {}
+_SOURCES_MEMO_LOCK = threading.Lock()
+_SOURCES_MEMO_LIMIT = 8
+
+
+def _current_sources(paths):
+    """Source fingerprints for the freshness check, worked out once per set of saved job files.
+
+    Every input `_sources` reads is a JSON file inside the job folder, so the fingerprints can only change
+    when one of those files does. Working them out took about 3 seconds on a 38-page set, and the job
+    status, job plan and calculation all ask for them.
+    """
+    key = str(Path(paths["root"]).resolve())
+    from backend import job_files
+    signature = job_files.signature(paths["root"])
+    with _SOURCES_MEMO_LOCK:
+        hit = _SOURCES_MEMO.get(key)
+        if hit and hit[0] == signature:
+            return dict(hit[1])
+    result = _sources(paths)
+    with _SOURCES_MEMO_LOCK:
+        _SOURCES_MEMO.pop(key, None)
+        _SOURCES_MEMO[key] = (signature, dict(result))
+        while len(_SOURCES_MEMO) > _SOURCES_MEMO_LIMIT:
+            _SOURCES_MEMO.pop(next(iter(_SOURCES_MEMO)))
+    return result
+
+
 def _stale_reasons(paths, input_set):
     if not input_set:
         return []
-    current = _sources(paths)
+    current = _current_sources(paths)
     previous = input_set.get("dependency_fingerprints", {})
     return [name for name, value in current.items() if previous.get(name) != value]
 

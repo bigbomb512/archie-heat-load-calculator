@@ -39,6 +39,19 @@ class JobServiceTests(unittest.TestCase):
                          ("results", True, True, True))
         self.assertEqual((stale_base["stage"], stale_base["phase1_complete"]), ("phase1", False))
 
+    def test_a_missing_area_is_not_a_needs_you_item_while_area_work_is_waiting(self):
+        from backend import ai_preliminary_service, autonomous_tasks_service
+        model = {"room_scope": {"status": "confirmed", "candidates": [
+            {"key": "shop", "label": "Shop", "area_m2": None, "include": True, "status": "area_pending"}]}}
+        area_task = {"task": "P0_room_sizes", "status": "waiting_for_reply", "reply_attempts": []}
+        with patch.object(autonomous_tasks_service, "_all_current", side_effect=[[area_task], []]), \
+             patch.object(autonomous_tasks_service, "_task_progress", return_value={"waiting": 0, "blocked": 0, "total": 0}), \
+             patch.object(ai_preliminary_service, "get", return_value=model):
+            working = job_service.status(SimpleNamespace(), self.project)
+            finished = job_service.status(SimpleNamespace(), self.project)
+        self.assertEqual(working["needs_you"]["phase1"], 0)
+        self.assertEqual(finished["needs_you"]["phase1"], 1)
+
     def test_project_list_summary_reads_saved_artifacts_without_a_freshness_rebuild(self):
         from backend import autonomous_tasks_service
         fingerprint = "saved-input-fingerprint"

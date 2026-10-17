@@ -5,6 +5,7 @@ import json
 import math
 import logging
 import re
+import threading
 from functools import lru_cache
 from copy import deepcopy
 from pathlib import Path
@@ -130,8 +131,37 @@ def persist_ai_determined_traces(web, project, rows, ai_run_id, quality_label, r
     return prepared
 
 
+_ARTIFACT_INPUT_MEMO = {}
+_ARTIFACT_INPUT_MEMO_LOCK = threading.Lock()
+_ARTIFACT_INPUT_MEMO_LIMIT = 8
+
+
 def current_artifact_input(root):
+    """The current traces and their source fingerprints, worked out once per set of saved job files.
+
+    Building it re-reads and fingerprints the vector geometry (about a second on a 38-page set), and the job
+    status, job plan and calculation each ask for it. The cached value is reused only while every JSON file in
+    the job folder and the source PDF are unchanged; callers always get their own copy.
+    """
+    from backend import job_files
     paths = _paths({"review_dir": str(root)})
+    source_pdf = str(_read(paths["ai_input"], {}).get("source_pdf") or "")
+    key = str(Path(root).resolve())
+    signature = job_files.signature(root, [source_pdf])
+    with _ARTIFACT_INPUT_MEMO_LOCK:
+        hit = _ARTIFACT_INPUT_MEMO.get(key)
+        if hit and hit[0] == signature:
+            return deepcopy(hit[1])
+    result = _build_artifact_input(paths)
+    with _ARTIFACT_INPUT_MEMO_LOCK:
+        _ARTIFACT_INPUT_MEMO.pop(key, None)
+        _ARTIFACT_INPUT_MEMO[key] = (signature, deepcopy(result))
+        while len(_ARTIFACT_INPUT_MEMO) > _ARTIFACT_INPUT_MEMO_LIMIT:
+            _ARTIFACT_INPUT_MEMO.pop(next(iter(_ARTIFACT_INPUT_MEMO)))
+    return result
+
+
+def _build_artifact_input(paths):
     artifact = reviewer_room_geometry.validate_artifact(_read(paths["artifact"], reviewer_room_geometry.empty_artifact()))
     source_artifacts = {
         "ai_input": _read(paths["ai_input"], {}),

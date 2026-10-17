@@ -17,6 +17,7 @@ does not load every artifact:
 from datetime import datetime, timezone
 import math
 import json
+import threading
 from pathlib import Path
 
 BUILDING_TYPES = {"food_tenancy": "Food tenancy (café, restaurant)", "retail": "Retail shop", "office": "Office",
@@ -367,6 +368,34 @@ def _areas_still_being_found(tasks):
                and len(row.get("reply_attempts") or []) < 2 for row in tasks)
 
 
+def open_information_needs(root):
+    """How many questions on the current "What we need to find" list are still open for the operators.
+
+    This is the list Operating loads asks; an item is closed once it is answered, accepted or rejected.
+    The draft's low-confidence review queue is not counted: the AI resolves those values itself.
+    """
+    manifest = _read(root / "skill_workflow_run.json", {})
+    run_id = manifest.get("run_id") if isinstance(manifest, dict) else None
+    if not run_id:
+        return 0
+    proposal = _read(root / "skill_workflow_runs" / str(run_id) / "proposals" / "information_needs.json", {})
+    fields = proposal.get("proposal_fields") if isinstance(proposal, dict) else {}
+    needs = (fields or {}).get("needs") if isinstance(fields, dict) else None
+    needs = needs if isinstance(needs, list) else ([needs] if needs else [])
+    decisions = _read(root / "skill_review_decisions.json", {}).get("decisions", {})
+    answers = _read(root / "information_answers.json", {}).get("answers", {})
+    decisions = decisions if isinstance(decisions, dict) else {}
+    answers = answers if isinstance(answers, dict) else {}
+    open_count = 0
+    for index, _need in enumerate(needs):
+        finding_id = f"information_needs:needs:{index}"
+        decision = decisions.get(finding_id) if isinstance(decisions.get(finding_id), dict) else {}
+        if finding_id in answers or decision.get("status") in {"accepted", "rejected"}:
+            continue
+        open_count += 1
+    return open_count
+
+
 def status(web, project):
     """Header facts and tab states: done / check / needed / working / todo."""
     from backend import ai_preliminary_service, autonomous_tasks_service
@@ -558,9 +587,11 @@ def status(web, project):
     phase2_complete = bool(results_ready and not stale and results_tab.get("state") == "done")
     needs_you = {
         "drawings": int(progress.get("blocked", 0) or 0),
-        "phase1": sum(row.get("area_m2") is None or row.get("status") == "needs_use"
-                       for row in candidates),
-        "phase2": len((report.get("review_queue") or [])) if isinstance(report.get("review_queue"), list) else 0,
+        # Missing areas are not a contractor action while the area workflow is
+        # still running. Keep the job list and in-job Needs you count aligned.
+        "phase1": sum((row.get("area_m2") is None and not _areas_still_being_found(tasks))
+                      or row.get("status") == "needs_use" for row in candidates),
+        "phase2": open_information_needs(root),
         "results": 0,
     }
     stage = ("drawings" if not confirmed or progress.get("waiting") or progress.get("blocked")
@@ -613,6 +644,52 @@ def status(web, project):
     }
 
 
+_RESULT_FACTS = {}
+_RESULT_FACTS_LOCK = threading.Lock()
+RESULT_FILES = ("ai_preliminary_input_set.json", "phase1_base_room_load_report.json",
+                "hourly_ai_preliminary_load_report.json", "ai_preliminary_model.json")
+
+
+def _saved_result_facts(root):
+    """The few facts the jobs list needs from a job's large result files, read once per saved version.
+
+    The four files run to megabytes per job; re-reading them for every job made the jobs list take ~1.5 s.
+    Only these small facts are kept in memory, keyed on each file's size, modification time and inode.
+    """
+    version = []
+    for name in RESULT_FILES:
+        try:
+            stat = (root / name).stat()
+            version.append((stat.st_mtime_ns, stat.st_size, getattr(stat, "st_ino", 0)))
+        except OSError:
+            version.append(None)
+    key = str(root)
+    with _RESULT_FACTS_LOCK:
+        hit = _RESULT_FACTS.get(key)
+        if hit and hit[0] == version:
+            return hit[1]
+    input_set, base_report, full_report, model = (_read(root / name, {}) for name in RESULT_FILES)
+    input_set, base_report, full_report, model = (value if isinstance(value, dict) else {}
+                                                  for value in (input_set, base_report, full_report, model))
+    scope = model.get("room_scope") if isinstance(model.get("room_scope"), dict) else {}
+    coverage = base_report.get("phase1_coverage") if isinstance(base_report.get("phase1_coverage"), dict) else {}
+    facts = {
+        "current_fingerprint": input_set.get("input_fingerprint"),
+        "base_exists": bool(base_report),
+        "base_fingerprint": base_report.get("preliminary_input_set_fingerprint"),
+        "coverage_complete": coverage.get("complete") is True,
+        "base_blocked": bool(base_report.get("blocked_reasons")),
+        "full_exists": bool(full_report),
+        "full_fingerprint": full_report.get("preliminary_input_set_fingerprint") or full_report.get("input_fingerprint"),
+        "full_has_result": bool(full_report.get("included_scope_peak") or full_report.get("scenario_results")),
+        "candidates": [{"no_area": row.get("area_m2") is None, "needs_use": row.get("status") == "needs_use"}
+                       for row in (scope.get("candidates") or []) if isinstance(row, dict)],
+    }
+    with _RESULT_FACTS_LOCK:
+        _RESULT_FACTS[key] = (version, facts)
+    return facts
+
+
 def project_list_summary(web, project):
     """Return quick job-list facts from saved JSON, without rebuilding model freshness.
 
@@ -630,34 +707,18 @@ def project_list_summary(web, project):
     site = next((row.get("applied_value", {}).get("site_text", "") for row in tasks
                  if row.get("task") == "P1_site" and isinstance(row.get("applied_value"), dict)), "")
 
-    input_set = _read(root / "ai_preliminary_input_set.json", {})
-    base_report = _read(root / "phase1_base_room_load_report.json", {})
-    full_report = _read(root / "hourly_ai_preliminary_load_report.json", {})
-    model = _read(root / "ai_preliminary_model.json", {})
-    scope = model.get("room_scope") if isinstance(model, dict) else {}
-    candidates = scope.get("candidates", []) if isinstance(scope, dict) else []
-    phase1_needs = sum(1 for row in candidates if isinstance(row, dict)
-                       and (row.get("area_m2") is None or row.get("status") == "needs_use"))
-    queue = model.get("review_queue", []) if isinstance(model, dict) else []
-    if not isinstance(queue, list):
-        queue = []
-    if not queue:
-        resolution = _read(root / "model_input_resolution.json", {})
-        queue = resolution.get("review_queue", []) if isinstance(resolution, dict) else []
-    if not isinstance(queue, list):
-        queue = []
+    facts = _saved_result_facts(root)
+    areas_still_being_found = _areas_still_being_found(tasks)
+    phase1_needs = sum(1 for row in facts["candidates"]
+                       if (row["no_area"] and not areas_still_being_found) or row["needs_use"])
 
-    base_fingerprint = base_report.get("preliminary_input_set_fingerprint")
-    current_fingerprint = input_set.get("input_fingerprint")
-    coverage = base_report.get("phase1_coverage") if isinstance(base_report.get("phase1_coverage"), dict) else {}
-    phase1_current = bool(base_report and current_fingerprint
-                          and base_fingerprint == current_fingerprint
-                          and coverage.get("complete") is True
-                          and not base_report.get("blocked_reasons"))
-    full_fingerprint = full_report.get("preliminary_input_set_fingerprint") or full_report.get("input_fingerprint")
-    full_current = bool(full_report and current_fingerprint and full_fingerprint == current_fingerprint
+    current_fingerprint = facts["current_fingerprint"]
+    phase1_current = bool(facts["base_exists"] and current_fingerprint
+                          and facts["base_fingerprint"] == current_fingerprint
+                          and facts["coverage_complete"] and not facts["base_blocked"])
+    full_current = bool(facts["full_exists"] and current_fingerprint and facts["full_fingerprint"] == current_fingerprint
                         and not _typed_since_result(root))
-    results_ready = bool(full_current and (full_report.get("included_scope_peak") or full_report.get("scenario_results")))
+    results_ready = bool(full_current and facts["full_has_result"])
     phase2_complete = bool(phase1_current and results_ready)
     stage = ("drawings" if not confirmed or progress.get("waiting") or progress.get("blocked")
              else "phase1" if not phase1_current
@@ -666,10 +727,11 @@ def project_list_summary(web, project):
     needs_you = {
         "drawings": int(progress.get("blocked", 0) or 0),
         "phase1": int(phase1_needs),
-        "phase2": len(queue),
+        "phase2": open_information_needs(root),
         "results": 0,
     }
     return {
+        "name": setup.get("name") or str(project.get("name") or "").removesuffix(".pdf"),
         "stage": stage,
         "needs_you": needs_you,
         "phase1_complete": phase1_current,
@@ -677,5 +739,5 @@ def project_list_summary(web, project):
         "results_ready": results_ready,
         "address": setup.get("address", ""),
         "found_site": site,
-        "result_stale": bool(full_report and not full_current),
+        "result_stale": bool(facts["full_exists"] and not full_current),
     }

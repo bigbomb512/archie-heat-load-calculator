@@ -434,6 +434,20 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._send_security_error(error, 403)
             except Exception as error:
                 return self.send_json(product_error(error), 400)
+        if urlparse(self.path).path == "/api/new-job":
+            try:
+                return self.send_json(api_new_job_status(self))
+            except security.SecurityError as error:
+                return self._send_security_error(error, 403)
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if urlparse(self.path).path == "/api/job-plan":
+            try:
+                return self.send_json(api_job_plan(self))
+            except security.SecurityError as error:
+                return self._send_security_error(error, 403)
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
         if urlparse(self.path).path == "/api/autonomous-tasks":
             try:
                 return self.send_json(api_autonomous_tasks(self))
@@ -787,6 +801,13 @@ class Handler(SimpleHTTPRequestHandler):
         if urlparse(self.path).path == "/api/page-reading":
             try:
                 return self.send_json(api_page_reading(self))
+            except security.SecurityError as error:
+                return self._send_security_error(error, 403)
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if urlparse(self.path).path == "/api/new-job":
+            try:
+                return self.send_json(api_start_new_job(self))
             except security.SecurityError as error:
                 return self._send_security_error(error, 403)
             except Exception as error:
@@ -4323,6 +4344,33 @@ def api_job_status(request):
     return job_service.status(sys.modules[__name__], project)
 
 
+def api_new_job_status(request):
+    """How far a new upload has got: reading the PDF, then preparing its drawing pages."""
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    security.require_project_role(project, request._identity(), "viewer")
+    from backend import new_job_service
+    return new_job_service.status(sys.modules[__name__], project)
+
+
+def api_start_new_job(request):
+    """Read a new upload's PDF and prepare its default drawing pages on the server (the page can be closed)."""
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or data.get("id", ""))
+    security.require_project_role(project, request._identity(), "editor")
+    from backend import new_job_service
+    return new_job_service.start(sys.modules[__name__], project)
+
+
+def api_job_plan(request):
+    """Read the current room outline and load data for the job workspace."""
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    security.require_project_role(project, request._identity(), "viewer")
+    from backend import job_plan_service
+    return job_plan_service.get(sys.modules[__name__], project)
+
+
 def api_save_job(request):
     """Job setup (name, address, building type, what's above), typed room areas and ceiling heights."""
     data = read_json_body(request)
@@ -5548,13 +5596,15 @@ def project_list(identity=None):
         try:
             summary = job_service.project_list_summary(sys.modules[__name__], project)
             item.update({key: summary.get(key) for key in ("stage", "needs_you", "phase1_complete", "phase2_complete", "results_ready")})
+            item["display_name"] = summary.get("name") or project["name"]
             item["address"] = summary.get("address", "")
             item["found_site"] = summary.get("found_site", "")
             item["result_stale"] = summary.get("result_stale", False)
         except (OSError, KeyError, ValueError, TypeError):
             item.update({"stage": "drawings", "needs_you": {"drawings": 0, "phase1": 0, "phase2": 0, "results": 0},
                          "phase1_complete": False, "phase2_complete": False, "results_ready": False,
-                         "address": "", "found_site": "", "result_stale": False})
+                         "address": "", "found_site": "", "result_stale": False,
+                         "display_name": str(project["name"]).removesuffix(".pdf")})
         result.append(item)
     return result
 

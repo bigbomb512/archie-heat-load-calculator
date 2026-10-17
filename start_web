@@ -9,6 +9,17 @@ if [[ "${1:-}" == "--test" ]]; then
   shift
 fi
 
+# The OpenRouter key in the Keychain (README, "Setting up a computer") wins over a key already in this shell:
+# a Terminal window opened before the key was replaced still holds the old one, and the server would use it.
+# Test mode never gets a key.
+if [[ -z "${ARCHIE_TEST_MODE:-}" ]] && command -v security >/dev/null 2>&1; then
+  keychain_key="$(security find-generic-password -s openrouter -w 2>/dev/null || true)"
+  if [[ -n "$keychain_key" ]]; then
+    export OPENROUTER_API_KEY="$keychain_key"
+  fi
+  unset keychain_key
+fi
+
 if [[ -x ".venv/bin/python" ]]; then
   exec ".venv/bin/python" -m backend.web_app "$@"
 fi

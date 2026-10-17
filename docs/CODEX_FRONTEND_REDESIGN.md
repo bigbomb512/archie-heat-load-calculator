@@ -221,6 +221,9 @@ AI: Sydney (Melrose Park NSW)" when `weather_ai_pick` is set). Saved with `/api/
 
 ## The plan drawing (shared by Drawings, Rooms, Operating loads, Results)
 
+> The `/api/job-plan` contract below was superseded on 2026-10-17; see `docs/CODEX_FRONTEND_ROUND2.md` for the
+> current fields (`area_basis`, `state` values, `final_w_m2`).
+
 Backend: add read-only `GET /api/job-plan?project_id=` (no calculation, unit-tested) returning, per plan page with
 room outlines: `page`, `level_name`, a `view_box` (the outlines' bounds plus 4 %), and `rooms`: `room_id`, `label`,
 `points` (page pixels, from `reviewer_room_geometry_service.current_records`), `label_point` (shapely

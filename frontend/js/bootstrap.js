@@ -1,12 +1,14 @@
 (() => {
   const params = new URLSearchParams(location.search);
-  // Keep the established workspace as the normal product. The guided redesign
-  // stays available behind an explicit preview flag until it is ready to replace it.
-  const guided = params.has("guided");
-  const scripts = guided
-    ? ["/frontend/js/guided.js"]
-    : ["/frontend/js/app.js", "/frontend/js/autonomous_tasks.js", "/frontend/js/workspace.js"];
-  document.body.classList.add(scripts.length === 1 ? "guided-mode" : "engineer-mode");
+  // The job workspace design is the default (user decision, 2026-10-17). The old app stays reachable:
+  // ?classic=1 opens it, and the engineer tools (?engineer=1) and manual AI task review (?operator=1) run in it.
+  const classic = params.has("classic") || params.has("engineer") || params.has("operator");
+  if (!classic) {
+    document.body.classList.add("job-preview");
+    document.write('<script type="module" src="/frontend/js/job/app.js"></script>');
+    return;
+  }
+  const scripts = ["/frontend/js/app.js", "/frontend/js/autonomous_tasks.js", "/frontend/js/workspace.js"];
   // This script is loaded at the end of the HTML document. Use parser-inserted
   // scripts for the legacy engineering bundle so callers that navigate to
   // ?engineer=1 can rely on its globals as soon as `load` completes.

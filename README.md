@@ -44,7 +44,9 @@ brew install poppler
 ./start_web --port 8000
 ```
 
-Open `http://127.0.0.1:8000`.
+Open `http://127.0.0.1:8000`. It opens the job workspace (Jobs, then Drawings, Rooms, Operating loads and
+Results per job). The old app is still at `http://127.0.0.1:8000/?classic=1`; the engineer tools (`?engineer=1`) and
+the manual AI task review (`?operator=1`) open in it.
 
 Before opening a pull request, run the dependency-free quality and repository
 hygiene checks:
@@ -257,6 +259,10 @@ account; give each person their own key so their spending is visible and limited
 
 6. **Check in the app.** On a job's Drawings tab, "AI use for this job" names OpenRouter and the model, and shows the
    cost of each job. A full review of Butcher Buffet (38 pages) cost about US$0.47 on this mix (2026-10-10).
+
+**Replacing a key** (it expired or leaked): store the new one with `security add-generic-password -U -a "$USER" -s
+openrouter -w` (`-U` replaces the old entry), then stop Archie (Ctrl-C) and start it again with `./start_web`.
+`start_web` reads the key from the Keychain each time it starts, so an old Terminal window can't pass the old key on.
 
 If a key leaks, delete it on OpenRouter; the other keys keep working. A single shared server with one
 key for everyone needs a login and a hosted machine, which is later work.

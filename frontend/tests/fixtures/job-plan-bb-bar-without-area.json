@@ -1,0 +1,4661 @@
+{
+ "area_basis_labels": {
+  "ai_outline": {
+   "label": "Measured from the AI's room outline",
+   "line_style": "dashed"
+  },
+  "estimate": {
+   "label": "AI estimate from the plan",
+   "line_style": "dotted"
+  },
+  "measured": {
+   "label": "Measured from a printed dimension",
+   "line_style": "solid"
+  },
+  "printed": {
+   "label": "Printed on the drawing",
+   "line_style": "solid"
+  },
+  "printed_dimensions": {
+   "label": "Worked out from printed dimensions",
+   "line_style": "dashed"
+  },
+  "remainder": {
+   "label": "What is left of the tenancy area",
+   "line_style": "dotted"
+  },
+  "sheet_scale": {
+   "label": "Measured at the sheet's printed scale only",
+   "line_style": "dashed"
+  },
+  "typed": {
+   "label": "Typed by you",
+   "line_style": "solid"
+  }
+ },
+ "final_report": {
+  "assumption_coverage": {
+   "low_confidence_count": null
+  },
+  "blocked_reasons": [],
+  "calculation_phase": null,
+  "confirmed_rooms": [],
+  "design_conditions_basis": {},
+  "excluded_spaces": [],
+  "included_scope_peak": {},
+  "known_exclusions": [],
+  "label": "",
+  "phase1_assumptions": [],
+  "phase1_automation_note": "",
+  "phase1_coverage": {},
+  "phase1_surface_audit": [],
+  "preliminary_surface_summary": {},
+  "refrigeration_process_exclusions": [],
+  "report_type": "",
+  "review_queue": [],
+  "room_names": [],
+  "room_peaks": [],
+  "room_scope_confirmation": {},
+  "status": "not_calculated",
+  "unresolved_room_inputs": []
+ },
+ "outlines": [
+  {
+   "area_basis": "measured",
+   "kind": "refrigeration",
+   "label_point": [
+    2028.64,
+    581.14
+   ],
+   "level": "",
+   "line_style": "solid",
+   "name": "Coolroom",
+   "page": 20,
+   "points": [
+    [
+     1941.63,
+     472.48
+    ],
+    [
+     2115.66,
+     472.48
+    ],
+    [
+     2115.66,
+     689.8
+    ],
+    [
+     1941.63,
+     689.8
+    ],
+    [
+     1941.63,
+     472.48
+    ]
+   ],
+   "room_id": "room-use:unassigned-level:coolroom",
+   "source": "ai_determined",
+   "state": "sized_separately"
+  },
+  {
+   "area_basis": "measured",
+   "kind": "refrigeration",
+   "label_point": [
+    2028.64,
+    916.55
+   ],
+   "level": "",
+   "line_style": "solid",
+   "name": "Freezer",
+   "page": 20,
+   "points": [
+    [
+     1941.63,
+     796.53
+    ],
+    [
+     2115.66,
+     796.53
+    ],
+    [
+     2115.66,
+     1036.57
+    ],
+    [
+     1941.63,
+     1036.57
+    ],
+    [
+     1941.63,
+     796.53
+    ]
+   ],
+   "room_id": "room-use:unassigned-level:freezer",
+   "source": "ai_determined",
+   "state": "sized_separately"
+  },
+  {
+   "area_basis": "measured",
+   "kind": "comfort",
+   "label_point": [
+    1657.59,
+    755.73
+   ],
+   "level": "",
+   "line_style": "solid",
+   "name": "Kitchen",
+   "page": 20,
+   "points": [
+    [
+     1318.12,
+     456.28
+    ],
+    [
+     1931.42,
+     456.28
+    ],
+    [
+     1931.42,
+     1036.57
+    ],
+    [
+     2052.36,
+     1036.57
+    ],
+    [
+     2052.36,
+     1121.19
+    ],
+    [
+     1890.62,
+     1121.19
+    ],
+    [
+     1890.62,
+     1280.21
+    ],
+    [
+     1253.31,
+     1280.21
+    ],
+    [
+     1253.31,
+     1375.63
+    ],
+    [
+     1078.68,
+     1375.63
+    ],
+    [
+     1078.68,
+     996.37
+    ],
+    [
+     1315.16,
+     996.37
+    ],
+    [
+     1315.16,
+     925.56
+    ],
+    [
+     1383.75,
+     925.56
+    ],
+    [
+     1383.75,
+     585.9
+    ],
+    [
+     1318.12,
+     585.9
+    ],
+    [
+     1318.12,
+     456.28
+    ]
+   ],
+   "room_id": "room-use:unassigned-level:kitchen",
+   "source": "ai_determined",
+   "state": "done"
+  },
+  {
+   "area_basis": "measured",
+   "kind": "comfort",
+   "label_point": [
+    903.47,
+    960.96
+   ],
+   "level": "",
+   "line_style": "solid",
+   "name": "Shop",
+   "page": 20,
+   "points": [
+    [
+     491.78,
+     139.42
+    ],
+    [
+     1318.12,
+     146.02
+    ],
+    [
+     1322.77,
+     412.98
+    ],
+    [
+     1114.09,
+     412.98
+    ],
+    [
+     1114.09,
+     454.78
+    ],
+    [
+     1318.12,
+     454.78
+    ],
+    [
+     1318.12,
+     585.9
+    ],
+    [
+     1383.75,
+     585.9
+    ],
+    [
+     1383.75,
+     925.56
+    ],
+    [
+     1315.16,
+     925.56
+    ],
+    [
+     1315.16,
+     996.37
+    ],
+    [
+     1078.68,
+     996.37
+    ],
+    [
+     1078.68,
+     1375.63
+    ],
+    [
+     1261.83,
+     1375.63
+    ],
+    [
+     1261.83,
+     1453.04
+    ],
+    [
+     1362.27,
+     1453.04
+    ],
+    [
+     1383.46,
+     1795.1
+    ],
+    [
+     491.78,
+     1795.1
+    ],
+    [
+     491.78,
+     139.42
+    ]
+   ],
+   "room_id": "room-use:unassigned-level:shop",
+   "source": "ai_determined",
+   "state": "done"
+  }
+ ],
+ "pages": [
+  {
+   "calibration_warning": "",
+   "declared_scale": "1:100",
+   "drawing_number": "201",
+   "fallback_plan": false,
+   "fallback_reason": "",
+   "image_height_px": null,
+   "image_px_per_pt": null,
+   "image_width_px": null,
+   "level_name": "",
+   "page": 19,
+   "pdf_height_pt": 842.0,
+   "pdf_width_pt": 1191.0,
+   "preview_error": "Full-resolution plan image unavailable or does not match vector coordinates.",
+   "preview_height_px": null,
+   "preview_matches_vector_coordinates": false,
+   "preview_url": "",
+   "preview_width_px": null,
+   "printed_dimensions_found": null,
+   "proposed_role": "main_floor_plan",
+   "scale_denominator": 100.0,
+   "title": "including amendments of the relevant Building Code of",
+   "vector_page_fingerprint": "3d203264c35f49d952e902c1cecfc590b2c080ec1b564bcca6280c7977181904"
+  },
+  {
+   "calibration_warning": "",
+   "declared_scale": "1:100",
+   "drawing_number": "202",
+   "fallback_plan": false,
+   "fallback_reason": "",
+   "image_height_px": 2105,
+   "image_px_per_pt": 2.500419815281276,
+   "image_width_px": 2978,
+   "level_name": "",
+   "page": 20,
+   "pdf_height_pt": 842.0,
+   "pdf_width_pt": 1191.0,
+   "preview_error": "",
+   "preview_height_px": 2105,
+   "preview_matches_vector_coordinates": true,
+   "preview_url": "/api/artifact?project_id=20260226-butcher-buffet-_-melrose-park-construction-rev-b_2_-1792058065&artifact=chatgpt_packet%2Fscreenshots%2Fpage_020_floor_plan.png",
+   "preview_width_px": 2978,
+   "printed_dimensions_found": null,
+   "proposed_role": "main_floor_plan",
+   "scale_denominator": 100.0,
+   "title": "Dimension Plan",
+   "vector_page_fingerprint": "c821e4da3dbb0cd625342c33fad5ea96c72cb214ea85adedcae3866757c5c60e"
+  },
+  {
+   "calibration_warning": "",
+   "declared_scale": "1:100",
+   "drawing_number": "203",
+   "fallback_plan": false,
+   "fallback_reason": "",
+   "image_height_px": 2105,
+   "image_px_per_pt": 2.500419815281276,
+   "image_width_px": 2978,
+   "level_name": "",
+   "page": 21,
+   "pdf_height_pt": 842.0,
+   "pdf_width_pt": 1191.0,
+   "preview_error": "",
+   "preview_height_px": 2105,
+   "preview_matches_vector_coordinates": true,
+   "preview_url": "/api/artifact?project_id=20260226-butcher-buffet-_-melrose-park-construction-rev-b_2_-1792058065&artifact=chatgpt_packet%2Fscreenshots%2Fpage_021_floor_plan.png",
+   "preview_width_px": 2978,
+   "printed_dimensions_found": null,
+   "proposed_role": "supporting_geometry_plan",
+   "scale_denominator": 100.0,
+   "title": "Dimensioned Top View Plan",
+   "vector_page_fingerprint": "8a78b8a16b6c2cf1fdfcce5c2760303650d6154481623b129d0fb2c257eae742"
+  }
+ ],
+ "phase1_current": true,
+ "phase1_report": {
+  "assumption_coverage": {
+   "low_confidence_count": 49
+  },
+  "blocked_reasons": [],
+  "calculation_phase": 1,
+  "confirmed_rooms": [
+   {
+    "area_m2": 113.69,
+    "area_origin": "ai_determined",
+    "area_quality_label": "AI-determined (below accuracy bar)",
+    "label": "Kitchen",
+    "level": "Unassigned level",
+    "source_pages": [
+     20,
+     21,
+     22
+    ]
+   },
+   {
+    "area_m2": 259.58,
+    "area_origin": "ai_determined",
+    "area_quality_label": "AI-determined (below accuracy bar)",
+    "label": "Shop",
+    "level": "Unassigned level",
+    "source_pages": [
+     20,
+     21
+    ]
+   }
+  ],
+  "design_conditions_basis": {
+   "design_day": {
+    "days": [
+     {
+      "day": "hot",
+      "design_point": {
+       "db": 31.1,
+       "wb": 19.8
+      },
+      "title": "Summer design day: design dry bulb with coincident wet bulb"
+     },
+     {
+      "day": "humid",
+      "design_point": {
+       "db": 29.5,
+       "wb": 22.7
+      },
+      "title": "Summer design day: design wet bulb with coincident dry bulb"
+     }
+    ],
+    "distance_km": null,
+    "far_from_site": false,
+    "label": "Summer design days for Sydney (picked by the AI from the site details (site read as Melrose Park, NSW); change it on the Project tab): 31.1 \u00b0C dry bulb with 19.8 \u00b0C wet bulb, and 22.7 \u00b0C wet bulb with 29.5 \u00b0C dry bulb as a dehumidification check. Source: AIRAH Technical Handbook, 4th edition (2007), Design temperature data, p. 37 (from AIRAH DA9, 1998).",
+    "location": "Sydney",
+    "origin": "design_temperature_table_ai_picked_location",
+    "site_specific": true,
+    "source": "AIRAH Technical Handbook, 4th edition (2007), Design temperature data, p. 37 (from AIRAH DA9, 1998)",
+    "state": "NSW"
+   },
+   "site": {
+    "address": "",
+    "basis": "",
+    "confirmed": false,
+    "label": "Site location not confirmed"
+   },
+   "sun": {
+    "directions": [
+     "N",
+     "E",
+     "S",
+     "W"
+    ],
+    "label": "Generic preliminary sun values by fa\u00e7ade direction (assumption pack au-preliminary-v3, N/E/S/W) \u2014 not site-specific; no flat-roof sun",
+    "site_specific": false,
+    "source": "AI preliminary assumption pack au-preliminary-v3"
+   }
+  },
+  "excluded_spaces": [],
+  "included_scope_peak": {
+   "components": {
+    "envelope": {
+     "latent_kw": 0.0,
+     "sensible_kw": 0.0,
+     "total_kw": 0.0
+    },
+    "equipment_refrigeration": {
+     "latent_kw": 0.0,
+     "sensible_kw": 0.0,
+     "total_kw": 0.0
+    },
+    "lighting": {
+     "latent_kw": 0.0,
+     "sensible_kw": 0.0,
+     "total_kw": 0.0
+    },
+    "outside_air": {
+     "latent_kw": 0.0,
+     "sensible_kw": 0.0,
+     "total_kw": 0.0
+    },
+    "people": {
+     "latent_kw": 0.0,
+     "sensible_kw": 0.0,
+     "total_kw": 0.0
+    },
+    "solar": {
+     "latent_kw": 0.0,
+     "sensible_kw": 0.0,
+     "total_kw": 0.0
+    }
+   },
+   "design_total_kw": 0.0,
+   "display_hour": 0,
+   "final_design_total_kw": 0.0,
+   "hour": 0,
+   "latent_kw": 0.0,
+   "month": "January",
+   "raw_coincident_total_kw": 0.0,
+   "safety_allowance_kw": 0.0,
+   "safety_factor": 1.1,
+   "scenario_id": "ai_preliminary_cooling_day",
+   "sensible_kw": 0.0,
+   "tied_hours": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23
+   ],
+   "ties": [
+    {
+     "hours": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23
+     ],
+     "month": "January",
+     "scenario_id": "ai_preliminary_cooling_day"
+    }
+   ],
+   "total_kw": 0.0
+  },
+  "known_exclusions": [],
+  "label": "Phase 1 AI preliminary base room load \u2014 envelope only; not engineering reviewed or validated",
+  "phase1_assumptions": [
+   {
+    "component": "Kitchen floor (slab)",
+    "reason": "Assumed: the floor is a slab on the ground or over another conditioned space (most likely for a shop; the drawings don't say), so it adds no cooling load.",
+    "room_id": "room-d6259793fed8d520",
+    "room_name": "Kitchen"
+   },
+   {
+    "component": "Shop floor (slab)",
+    "reason": "Assumed: the floor is a slab on the ground or over another conditioned space (most likely for a shop; the drawings don't say), so it adds no cooling load.",
+    "room_id": "room-57cc1fc9daa31cf2",
+    "room_name": "Shop"
+   }
+  ],
+  "phase1_automation_note": "Kitchen and Shop: every wall and the ceiling face conditioned space (a floor above, neighbours or a mall), so their envelope load is 0 kW.",
+  "phase1_coverage": {
+   "complete": false,
+   "rooms_found": 3,
+   "rooms_fully_internal": [
+    "Kitchen",
+    "Shop"
+   ],
+   "rooms_included": [
+    "Kitchen",
+    "Shop"
+   ],
+   "rooms_left_out": [
+    {
+     "label": "Bar",
+     "reason": "no area yet"
+    }
+   ],
+   "surfaces_included": 38
+  },
+  "phase1_surface_audit": [
+   {
+    "area_m2": 23.353259036461786,
+    "boundary_condition": "adjacent_tenancy",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "Faces a neighbouring tenancy, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-wall-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_9afa01f1b0edcd8030",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_9afa01f1b0edcd8030"
+     }
+    ],
+    "label": "Kitchen wall 1 to a neighbouring tenancy",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-d6259793fed8d520",
+    "room_name": "Kitchen",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: hospitality; reviewer-declared boundary \u00b7 Faces a neighbouring tenancy, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-758515a10b5eb354",
+    "surface_type": "opaque_wall",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 0.6,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 22.096303091910002,
+    "boundary_condition": "internal",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-partition-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_9afa01f1b0edcd8030",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_9afa01f1b0edcd8030"
+     }
+    ],
+    "label": "Kitchen wall 2 to another room",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-d6259793fed8d520",
+    "room_name": "Kitchen",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: hospitality; reviewer-declared boundary \u00b7 Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-c6f96a06672b1e95",
+    "surface_type": "opaque_wall",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 1.2,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 4.605157586612896,
+    "boundary_condition": "internal",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-partition-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_9afa01f1b0edcd8030",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_9afa01f1b0edcd8030"
+     }
+    ],
+    "label": "Kitchen wall 3 to another room",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-d6259793fed8d520",
+    "room_name": "Kitchen",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: hospitality; reviewer-declared boundary \u00b7 Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-96196ff3fa622bc0",
+    "surface_type": "opaque_wall",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 1.2,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 3.2221633452884375,
+    "boundary_condition": "internal",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-partition-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_9afa01f1b0edcd8030",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_9afa01f1b0edcd8030"
+     }
+    ],
+    "label": "Kitchen wall 4 to another room",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-d6259793fed8d520",
+    "room_name": "Kitchen",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: hospitality; reviewer-declared boundary \u00b7 Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-850043b3c7fd9cea",
+    "surface_type": "opaque_wall",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 1.2,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 6.158741425986197,
+    "boundary_condition": "adjacent_tenancy",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "Faces a neighbouring tenancy, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-wall-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_9afa01f1b0edcd8030",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_9afa01f1b0edcd8030"
+     }
+    ],
+    "label": "Kitchen wall 5 to a neighbouring tenancy",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-d6259793fed8d520",
+    "room_name": "Kitchen",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: hospitality; reviewer-declared boundary \u00b7 Faces a neighbouring tenancy, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-b740906a8a840eb9",
+    "surface_type": "opaque_wall",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 0.6,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 6.055169170027965,
+    "boundary_condition": "adjacent_tenancy",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "Faces a neighbouring tenancy, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-wall-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_9afa01f1b0edcd8030",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_9afa01f1b0edcd8030"
+     }
+    ],
+    "label": "Kitchen wall 6 to a neighbouring tenancy",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-d6259793fed8d520",
+    "room_name": "Kitchen",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: hospitality; reviewer-declared boundary \u00b7 Faces a neighbouring tenancy, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-118f9ceddd1bbad0",
+    "surface_type": "opaque_wall",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 0.6,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 24.26751266350474,
+    "boundary_condition": "adjacent_tenancy",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "Faces a neighbouring tenancy, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-wall-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_9afa01f1b0edcd8030",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_9afa01f1b0edcd8030"
+     }
+    ],
+    "label": "Kitchen wall 7 to a neighbouring tenancy",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-d6259793fed8d520",
+    "room_name": "Kitchen",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: hospitality; reviewer-declared boundary \u00b7 Faces a neighbouring tenancy, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-b594b266863cc275",
+    "surface_type": "opaque_wall",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 0.6,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 3.633406126299013,
+    "boundary_condition": "adjacent_tenancy",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "Faces a neighbouring tenancy, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-wall-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_9afa01f1b0edcd8030",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_9afa01f1b0edcd8030"
+     }
+    ],
+    "label": "Kitchen wall 8 to a neighbouring tenancy",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-d6259793fed8d520",
+    "room_name": "Kitchen",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: hospitality; reviewer-declared boundary \u00b7 Faces a neighbouring tenancy, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-604939316ade22a7",
+    "surface_type": "opaque_wall",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 0.6,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 6.649567300729362,
+    "boundary_condition": "internal",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-partition-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_9afa01f1b0edcd8030",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_9afa01f1b0edcd8030"
+     }
+    ],
+    "label": "Kitchen wall 9 to another room",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-d6259793fed8d520",
+    "room_name": "Kitchen",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: hospitality; reviewer-declared boundary \u00b7 Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-1e3914fe3508b6ba",
+    "surface_type": "opaque_wall",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 1.2,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 14.441475659821453,
+    "boundary_condition": "internal",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-partition-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_9afa01f1b0edcd8030",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_9afa01f1b0edcd8030"
+     }
+    ],
+    "label": "Kitchen wall 10 to another room",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-d6259793fed8d520",
+    "room_name": "Kitchen",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: hospitality; reviewer-declared boundary \u00b7 Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-0567ebac78a69ea5",
+    "surface_type": "opaque_wall",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 1.2,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 9.004693782720498,
+    "boundary_condition": "internal",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-partition-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_9afa01f1b0edcd8030",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_9afa01f1b0edcd8030"
+     }
+    ],
+    "label": "Kitchen wall 11 to another room",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-d6259793fed8d520",
+    "room_name": "Kitchen",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: hospitality; reviewer-declared boundary \u00b7 Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-ba318f9c627736fc",
+    "surface_type": "opaque_wall",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 1.2,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 2.696305678088798,
+    "boundary_condition": "internal",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-partition-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_9afa01f1b0edcd8030",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_9afa01f1b0edcd8030"
+     }
+    ],
+    "label": "Kitchen wall 12 to another room",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-d6259793fed8d520",
+    "room_name": "Kitchen",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: hospitality; reviewer-declared boundary \u00b7 Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-eeca72608c787381",
+    "surface_type": "opaque_wall",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 1.2,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 2.6117724397699518,
+    "boundary_condition": "internal",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-partition-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_9afa01f1b0edcd8030",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_9afa01f1b0edcd8030"
+     }
+    ],
+    "label": "Kitchen wall 13 to another room",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-d6259793fed8d520",
+    "room_name": "Kitchen",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: hospitality; reviewer-declared boundary \u00b7 Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-568dcf0d235c00f8",
+    "surface_type": "opaque_wall",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 1.2,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 12.933585462782663,
+    "boundary_condition": "internal",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-partition-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_9afa01f1b0edcd8030",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_9afa01f1b0edcd8030"
+     }
+    ],
+    "label": "Kitchen wall 14 to another room",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-d6259793fed8d520",
+    "room_name": "Kitchen",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: hospitality; reviewer-declared boundary \u00b7 Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-bd79ea3894ad8ab4",
+    "surface_type": "opaque_wall",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 1.2,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 2.499061455344838,
+    "boundary_condition": "internal",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-partition-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_9afa01f1b0edcd8030",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_9afa01f1b0edcd8030"
+     }
+    ],
+    "label": "Kitchen wall 15 to another room",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-d6259793fed8d520",
+    "room_name": "Kitchen",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: hospitality; reviewer-declared boundary \u00b7 Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-bfa88bafa3635627",
+    "surface_type": "opaque_wall",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 1.2,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 4.935674932832506,
+    "boundary_condition": "internal",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-partition-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_9afa01f1b0edcd8030",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_9afa01f1b0edcd8030"
+     }
+    ],
+    "label": "Kitchen wall 16 to another room",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-d6259793fed8d520",
+    "room_name": "Kitchen",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: hospitality; reviewer-declared boundary \u00b7 Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-b744f731cd7d79d4",
+    "surface_type": "opaque_wall",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 1.2,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 113.69056586793302,
+    "boundary_condition": "floor_above",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "A floor or other conditioned space above, at the room's temperature: no heat flows.",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-ceiling-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_9afa01f1b0edcd8030",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_9afa01f1b0edcd8030"
+     }
+    ],
+    "label": "Kitchen ceiling (floor above)",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-d6259793fed8d520",
+    "room_name": "Kitchen",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: hospitality; reviewer-declared boundary \u00b7 A floor or other conditioned space above, at the room's temperature: no heat flows.",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-07f3d2b05157717d",
+    "surface_type": "ceiling",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 0.5,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 113.69056586793302,
+    "boundary_condition": "ground",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "ASHRAE Handbook\u2014HVAC Applications, nonresidential cooling loads: ground-contact floor sensible transfer may be neglected except in hot climates.",
+    "boundary_temperature_c": 24.0,
+    "citations": [
+     {
+      "excerpt": "The preliminary ground-contact floor method neglects sensible transfer except in hot climates.",
+      "reference": "ASHRAE Handbook\u2014HVAC Applications, Nonresidential Cooling Loads"
+     }
+    ],
+    "conduction_kw": 0.0,
+    "confidence": 0.6,
+    "construction_id": "au-preliminary-v3-floor-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_9afa01f1b0edcd8030",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_9afa01f1b0edcd8030"
+     }
+    ],
+    "label": "Kitchen floor (slab)",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-d6259793fed8d520",
+    "room_name": "Kitchen",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: hospitality; reviewer-declared boundary \u00b7 ASHRAE Handbook\u2014HVAC Applications, nonresidential cooling loads: ground-contact floor sensible transfer may be neglected except in hot climates.",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-c6c09c66268c11f9",
+    "surface_type": "floor",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 0.8,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 31.466407286235622,
+    "boundary_condition": "adjacent_tenancy",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "Faces a neighbouring tenancy, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-wall-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_3c8d4f705bc6fc5d32",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     }
+    ],
+    "label": "Shop wall 1 to a neighbouring tenancy",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-57cc1fc9daa31cf2",
+    "room_name": "Shop",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: retail; reviewer-declared boundary \u00b7 Faces a neighbouring tenancy, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-07ff976101edd961",
+    "surface_type": "opaque_wall",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 0.6,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 10.166854251637538,
+    "boundary_condition": "adjacent_tenancy",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "Faces a neighbouring tenancy, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-wall-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_3c8d4f705bc6fc5d32",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     }
+    ],
+    "label": "Shop wall 2 to a neighbouring tenancy",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-57cc1fc9daa31cf2",
+    "room_name": "Shop",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: retail; reviewer-declared boundary \u00b7 Faces a neighbouring tenancy, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-287b15864da79472",
+    "surface_type": "opaque_wall",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 0.6,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 7.94612440197105,
+    "boundary_condition": "internal",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-partition-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_3c8d4f705bc6fc5d32",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     }
+    ],
+    "label": "Shop wall 3 to another room",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-57cc1fc9daa31cf2",
+    "room_name": "Shop",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: retail; reviewer-declared boundary \u00b7 Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-77a6ad6b8887c7f5",
+    "surface_type": "opaque_wall",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 1.2,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 1.5916618746520486,
+    "boundary_condition": "internal",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-partition-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_3c8d4f705bc6fc5d32",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     }
+    ],
+    "label": "Shop wall 4 to another room",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-57cc1fc9daa31cf2",
+    "room_name": "Shop",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: retail; reviewer-declared boundary \u00b7 Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-04411d33fdc0ec8d",
+    "surface_type": "opaque_wall",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 1.2,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 7.769061537924826,
+    "boundary_condition": "internal",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-partition-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_3c8d4f705bc6fc5d32",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     }
+    ],
+    "label": "Shop wall 5 to another room",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-57cc1fc9daa31cf2",
+    "room_name": "Shop",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: retail; reviewer-declared boundary \u00b7 Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-2b4446aa4baf3ec4",
+    "surface_type": "opaque_wall",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 1.2,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 4.9927919857506415,
+    "boundary_condition": "internal",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-partition-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_3c8d4f705bc6fc5d32",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     }
+    ],
+    "label": "Shop wall 6 to another room",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-57cc1fc9daa31cf2",
+    "room_name": "Shop",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: retail; reviewer-declared boundary \u00b7 Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-8f62b0713d23f765",
+    "surface_type": "opaque_wall",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 1.2,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 2.499061455344838,
+    "boundary_condition": "internal",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-partition-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_3c8d4f705bc6fc5d32",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     }
+    ],
+    "label": "Shop wall 7 to another room",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-57cc1fc9daa31cf2",
+    "room_name": "Shop",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: retail; reviewer-declared boundary \u00b7 Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-f52e4a9326c5b880",
+    "surface_type": "opaque_wall",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 1.2,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 12.933585462782663,
+    "boundary_condition": "internal",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-partition-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_3c8d4f705bc6fc5d32",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     }
+    ],
+    "label": "Shop wall 8 to another room",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-57cc1fc9daa31cf2",
+    "room_name": "Shop",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: retail; reviewer-declared boundary \u00b7 Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-508ee71ea39c354a",
+    "surface_type": "opaque_wall",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 1.2,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 2.6117724397699518,
+    "boundary_condition": "internal",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-partition-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_3c8d4f705bc6fc5d32",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     }
+    ],
+    "label": "Shop wall 9 to another room",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-57cc1fc9daa31cf2",
+    "room_name": "Shop",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: retail; reviewer-declared boundary \u00b7 Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-2067d8b785a74449",
+    "surface_type": "opaque_wall",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 1.2,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 2.696305678088798,
+    "boundary_condition": "internal",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-partition-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_3c8d4f705bc6fc5d32",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     }
+    ],
+    "label": "Shop wall 10 to another room",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-57cc1fc9daa31cf2",
+    "room_name": "Shop",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: retail; reviewer-declared boundary \u00b7 Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-a5dc0951e68e7b23",
+    "surface_type": "opaque_wall",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 1.2,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 9.004693782720498,
+    "boundary_condition": "internal",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-partition-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_3c8d4f705bc6fc5d32",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     }
+    ],
+    "label": "Shop wall 11 to another room",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-57cc1fc9daa31cf2",
+    "room_name": "Shop",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: retail; reviewer-declared boundary \u00b7 Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-063b60ca037666b6",
+    "surface_type": "opaque_wall",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 1.2,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 14.441475659821453,
+    "boundary_condition": "internal",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-partition-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_3c8d4f705bc6fc5d32",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     }
+    ],
+    "label": "Shop wall 12 to another room",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-57cc1fc9daa31cf2",
+    "room_name": "Shop",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: retail; reviewer-declared boundary \u00b7 Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-48eeada1ae6025cd",
+    "surface_type": "opaque_wall",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 1.2,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 6.973992161304372,
+    "boundary_condition": "internal",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-partition-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_3c8d4f705bc6fc5d32",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     }
+    ],
+    "label": "Shop wall 13 to another room",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-57cc1fc9daa31cf2",
+    "room_name": "Shop",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: retail; reviewer-declared boundary \u00b7 Faces another room, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-3bb239999e6f8c4e",
+    "surface_type": "opaque_wall",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 1.2,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 2.947620710928588,
+    "boundary_condition": "adjacent_tenancy",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "Faces a neighbouring tenancy, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-wall-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_3c8d4f705bc6fc5d32",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     }
+    ],
+    "label": "Shop wall 14 to a neighbouring tenancy",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-57cc1fc9daa31cf2",
+    "room_name": "Shop",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: retail; reviewer-declared boundary \u00b7 Faces a neighbouring tenancy, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-961fb3ae0aadeb8b",
+    "surface_type": "opaque_wall",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 0.6,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 3.8245578633983732,
+    "boundary_condition": "adjacent_tenancy",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "Faces a neighbouring tenancy, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-wall-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_3c8d4f705bc6fc5d32",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     }
+    ],
+    "label": "Shop wall 15 to a neighbouring tenancy",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-57cc1fc9daa31cf2",
+    "room_name": "Shop",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: retail; reviewer-declared boundary \u00b7 Faces a neighbouring tenancy, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-eb49a8846bb540df",
+    "surface_type": "opaque_wall",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 0.6,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 13.049940997026802,
+    "boundary_condition": "adjacent_tenancy",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "Faces a neighbouring tenancy, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-wall-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_3c8d4f705bc6fc5d32",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     }
+    ],
+    "label": "Shop wall 16 to a neighbouring tenancy",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-57cc1fc9daa31cf2",
+    "room_name": "Shop",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: retail; reviewer-declared boundary \u00b7 Faces a neighbouring tenancy, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-061550f8bd80e1ee",
+    "surface_type": "opaque_wall",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 0.6,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 33.953422497362205,
+    "boundary_condition": "adjacent_tenancy",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "Faces a neighbouring tenancy, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-wall-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_3c8d4f705bc6fc5d32",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     }
+    ],
+    "label": "Shop wall 17 to a neighbouring tenancy",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-57cc1fc9daa31cf2",
+    "room_name": "Shop",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: retail; reviewer-declared boundary \u00b7 Faces a neighbouring tenancy, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-d1dae8d5afe37024",
+    "surface_type": "opaque_wall",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 0.6,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 63.04504145033268,
+    "boundary_condition": "adjacent_tenancy",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "Faces a neighbouring tenancy, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-wall-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_3c8d4f705bc6fc5d32",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     }
+    ],
+    "label": "Shop wall 18 to a neighbouring tenancy",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-57cc1fc9daa31cf2",
+    "room_name": "Shop",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: retail; reviewer-declared boundary \u00b7 Faces a neighbouring tenancy, air-conditioned to the same temperature: no heat flows (Phase 1 rule, 2026-10-15).",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-07de5cfdb13df57f",
+    "surface_type": "opaque_wall",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 0.6,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 259.58361060051817,
+    "boundary_condition": "floor_above",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "A floor or other conditioned space above, at the room's temperature: no heat flows.",
+    "boundary_temperature_c": 24.0,
+    "citations": [],
+    "conduction_kw": 0.0,
+    "confidence": 0.65,
+    "construction_id": "au-preliminary-v3-ceiling-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_3c8d4f705bc6fc5d32",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     }
+    ],
+    "label": "Shop ceiling (floor above)",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-57cc1fc9daa31cf2",
+    "room_name": "Shop",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: retail; reviewer-declared boundary \u00b7 A floor or other conditioned space above, at the room's temperature: no heat flows.",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-7bee44c30b4eedc4",
+    "surface_type": "ceiling",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 0.5,
+    "verification_status": "provisional"
+   },
+   {
+    "area_m2": 259.58361060051817,
+    "boundary_condition": "ground",
+    "boundary_method": "fixed_adjacent_temperature",
+    "boundary_source": "ASHRAE Handbook\u2014HVAC Applications, nonresidential cooling loads: ground-contact floor sensible transfer may be neglected except in hot climates.",
+    "boundary_temperature_c": 24.0,
+    "citations": [
+     {
+      "excerpt": "The preliminary ground-contact floor method neglects sensible transfer except in hot climates.",
+      "reference": "ASHRAE Handbook\u2014HVAC Applications, Nonresidential Cooling Loads"
+     }
+    ],
+    "conduction_kw": 0.0,
+    "confidence": 0.6,
+    "construction_id": "au-preliminary-v3-floor-standard",
+    "evidence": [
+     {
+      "excerpt": "Reviewer-declared room boundary for preliminary envelope assessment.",
+      "page": 20,
+      "reference": "Room trace ai_room_trace_3c8d4f705bc6fc5d32",
+      "reviewer": "Archie AI (P5)",
+      "reviewer_trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     }
+    ],
+    "label": "Shop floor (slab)",
+    "method": "surface area \u00d7 U-value \u00d7 boundary-to-room temperature difference",
+    "opening_area_m2": null,
+    "orientation": "",
+    "peak_hour": 0,
+    "preliminary_assumption": true,
+    "room_id": "room-57cc1fc9daa31cf2",
+    "room_name": "Shop",
+    "shgc": null,
+    "solar_kw": 0.0,
+    "solar_method": "area \u00d7 directional solar \u00d7 solar-gain factor \u00d7 shading",
+    "source": "AI preliminary assumption pack au-preliminary-v3: retail; reviewer-declared boundary \u00b7 ASHRAE Handbook\u2014HVAC Applications, nonresidential cooling loads: ground-contact floor sensible transfer may be neglected except in hot climates.",
+    "supported_uncertainty_ranges": [],
+    "surface_id": "ai-preliminary-surface-cb4a6c4efc9242fd",
+    "surface_type": "floor",
+    "total_kw": 0.0,
+    "u_value_w_m2k": 0.8,
+    "verification_status": "provisional"
+   }
+  ],
+  "preliminary_surface_summary": {
+   "blocked": 0,
+   "discovered": 38,
+   "excluded": 0,
+   "included": 38,
+   "openings_discovered": 0,
+   "openings_excluded": 0,
+   "openings_included": 0
+  },
+  "refrigeration_process_exclusions": [
+   {
+    "reason": "Room identity was detected, but no validated area or structured boundary is available; it is excluded from this draft subtotal. No explicit or geometry-resolved room area is available; a generic area fallback was not applied.",
+    "room_name": "Bar"
+   },
+   {
+    "reason": "Refrigeration load required; this room is excluded from the comfort-HVAC subtotal.",
+    "room_name": "Freezer"
+   },
+   {
+    "reason": "Refrigeration load required; this room is excluded from the comfort-HVAC subtotal.",
+    "room_name": "Coolroom"
+   }
+  ],
+  "report_type": "hourly_ai_preliminary_phase1_base_room_load",
+  "review_queue": [
+   {
+    "confidence_band": "medium",
+    "field": "area_m2",
+    "rationale": "Draft area is scale-calibrated, but geometry review warnings remain.",
+    "room_id": "geometry_083c570ff456554950e50075"
+   },
+   {
+    "confidence_band": "low",
+    "field": "ceiling_height_mm",
+    "rationale": "Controlled Australia-first preliminary ceiling-height assumption.",
+    "room_id": "room-57cc1fc9daa31cf2"
+   },
+   {
+    "confidence_band": "low",
+    "field": "ceiling_height_mm",
+    "rationale": "Controlled Australia-first preliminary ceiling-height assumption.",
+    "room_id": "room-d6259793fed8d520"
+   },
+   {
+    "confidence_band": "low",
+    "field": "area_m2",
+    "rationale": "AI-determined calibrated room outline; provisional until reviewed.",
+    "room_id": "room-57cc1fc9daa31cf2"
+   },
+   {
+    "confidence_band": "low",
+    "field": "room_profile",
+    "rationale": "AI proposal when valid; otherwise label-based controlled profile selection.",
+    "room_id": "room-57cc1fc9daa31cf2"
+   },
+   {
+    "confidence_band": "low",
+    "field": "space_scope",
+    "rationale": "AI preliminary scope classification.",
+    "room_id": "room-57cc1fc9daa31cf2"
+   },
+   {
+    "confidence_band": "medium",
+    "field": "people_activity",
+    "rationale": "76 W sensible + 74 W latent per person (Walking, seated, standing, walking slowly): AIRAH Technical Handbook, 4th edition (2007), Heat gain from people, p. 47 (from AIRAH DA9, 1998), room at 24 \u00b0C.",
+    "room_id": "room-57cc1fc9daa31cf2"
+   },
+   {
+    "confidence_band": "medium",
+    "field": "people_activity",
+    "rationale": "85 W sensible + 135 W latent per person (Light bench work): AIRAH Technical Handbook, 4th edition (2007), Heat gain from people, p. 47 (from AIRAH DA9, 1998), room at 24 \u00b0C.",
+    "room_id": "room-d6259793fed8d520"
+   }
+  ],
+  "room_names": [
+   {
+    "name": "Shop",
+    "room_id": "room-57cc1fc9daa31cf2"
+   },
+   {
+    "name": "Kitchen",
+    "room_id": "room-d6259793fed8d520"
+   }
+  ],
+  "room_peaks": [
+   {
+    "components": {
+     "envelope": {
+      "base_latent_kw": 0.0,
+      "base_sensible_kw": 0.0,
+      "formula": "surface area \u00d7 U-value \u00d7 (surface boundary temperature \u2212 indoor DB) \u00f7 1000",
+      "input_rows": [
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "indoor_db_c": 24.0,
+        "outdoor_db_c": 22.1,
+        "surfaces": [
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-partition-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-0567ebac78a69ea5"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-ceiling-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-07f3d2b05157717d"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-wall-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-118f9ceddd1bbad0"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-partition-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-1e3914fe3508b6ba"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-partition-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-568dcf0d235c00f8"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-wall-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-604939316ade22a7"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-wall-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-758515a10b5eb354"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-partition-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-850043b3c7fd9cea"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-partition-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-96196ff3fa622bc0"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-wall-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-b594b266863cc275"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-wall-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-b740906a8a840eb9"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-partition-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-b744f731cd7d79d4"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-partition-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-ba318f9c627736fc"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-partition-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-bd79ea3894ad8ab4"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-partition-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-bfa88bafa3635627"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-floor-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-c6c09c66268c11f9"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-partition-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-c6f96a06672b1e95"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-partition-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-eeca72608c787381"
+         }
+        ]
+       }
+      ],
+      "inputs": {
+       "indoor_db_c": 24.0,
+       "outdoor_db_c": 22.1,
+       "surfaces": [
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-partition-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-0567ebac78a69ea5"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-ceiling-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-07f3d2b05157717d"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-wall-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-118f9ceddd1bbad0"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-partition-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-1e3914fe3508b6ba"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-partition-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-568dcf0d235c00f8"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-wall-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-604939316ade22a7"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-wall-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-758515a10b5eb354"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-partition-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-850043b3c7fd9cea"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-partition-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-96196ff3fa622bc0"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-wall-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-b594b266863cc275"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-wall-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-b740906a8a840eb9"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-partition-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-b744f731cd7d79d4"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-partition-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-ba318f9c627736fc"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-partition-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-bd79ea3894ad8ab4"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-partition-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-bfa88bafa3635627"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-floor-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-c6c09c66268c11f9"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-partition-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-c6f96a06672b1e95"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-partition-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-eeca72608c787381"
+        }
+       ]
+      },
+      "latent_kw": 0.0,
+      "schedule_factors": [],
+      "sensible_kw": 0.0,
+      "total_kw": 0.0
+     },
+     "equipment_refrigeration": {
+      "base_latent_kw": 0.0,
+      "base_sensible_kw": 0.0,
+      "formula": "quantity \u00d7 heat-to-space W each \u00d7 diversity \u00d7 space-gain factor \u00f7 1000",
+      "input_rows": [
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "sources": [
+         {
+          "diversity_factor": 1,
+          "gain_kw": 0.0,
+          "heat_to_space_w_each": 0,
+          "kind": "other",
+          "name": "Phase 2 equipment excluded",
+          "quantity": 0,
+          "space_gain_factor": 1
+         }
+        ]
+       }
+      ],
+      "inputs": {
+       "sources": [
+        {
+         "diversity_factor": 1,
+         "gain_kw": 0.0,
+         "heat_to_space_w_each": 0,
+         "kind": "other",
+         "name": "Phase 2 equipment excluded",
+         "quantity": 0,
+         "space_gain_factor": 1
+        }
+       ]
+      },
+      "latent_kw": 0.0,
+      "schedule_factors": [
+       0.0
+      ],
+      "sensible_kw": 0.0,
+      "total_kw": 0.0
+     },
+     "lighting": {
+      "base_latent_kw": 0.0,
+      "base_sensible_kw": 0.0,
+      "formula": "area \u00d7 lighting W/m\u00b2 \u00d7 diversity \u00f7 1000",
+      "input_rows": [
+       {
+        "area_m2": 113.69056586793302,
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "diversity_factor": 1.0,
+        "lighting_w_m2": 0.0
+       }
+      ],
+      "inputs": {
+       "area_m2": 113.69056586793302,
+       "diversity_factor": 1.0,
+       "lighting_w_m2": 0.0
+      },
+      "latent_kw": 0.0,
+      "schedule_factors": [
+       0.0
+      ],
+      "sensible_kw": 0.0,
+      "total_kw": 0.0
+     },
+     "outside_air": {
+      "base_latent_kw": 0.0,
+      "base_sensible_kw": 0.0,
+      "formula": "outside-air mass flow \u00d7 moist-air enthalpy difference; latent = total \u2212 sensible",
+      "input_rows": [
+       {
+        "atmospheric_pressure_kpa": 101.325,
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": -0.0,
+        "contribution_total_kw": 0.0,
+        "flow_lps": 0.0,
+        "flow_reference_basis": "legacy_unverified",
+        "flow_reference_state": {
+         "dry_bulb_c": 22.1,
+         "humidity_ratio": 0.008607901,
+         "pressure_kpa": 101.325
+        },
+        "flow_reference_status": "calculation_assumption_unverified",
+        "flow_source": "Phase 1 scope rule: ventilation is added in Phase 2.",
+        "flow_verification_status": "not_applicable",
+        "indoor_db_c": 24.0,
+        "indoor_wb_c": 18.0,
+        "indoor_wet_bulb_basis": "legacy_unverified",
+        "indoor_wet_bulb_method": "legacy_unverified_psychrometer_relation_v1",
+        "mass_flow_kg_s": 0.0,
+        "outdoor_db_c": 22.1,
+        "outdoor_wb_c": 15.8,
+        "outdoor_weather_provenance": {
+         "dry_bulb": {
+          "citations": [],
+          "source": "AI preliminary assumption pack au-preliminary-v3: scenario",
+          "status": "provisional",
+          "value": 22.1
+         },
+         "pressure": {
+          "citations": [],
+          "source": "AI preliminary assumption pack au-preliminary-v3: scenario",
+          "status": "provisional",
+          "value": 101.325
+         },
+         "pressure_kpa": 101.325,
+         "scenario_id": "ai_preliminary_cooling_day",
+         "wet_bulb": {
+          "citations": [],
+          "source": "AI preliminary assumption pack au-preliminary-v3: scenario",
+          "status": "provisional",
+          "value": 15.8
+         },
+         "wet_bulb_basis": "thermodynamic"
+        },
+        "outdoor_wet_bulb_basis": "thermodynamic",
+        "outdoor_wet_bulb_method": "thermodynamic_ashrae_eq33_iapws_water_ice_v3"
+       }
+      ],
+      "inputs": {
+       "atmospheric_pressure_kpa": 101.325,
+       "flow_lps": 0.0,
+       "flow_reference_basis": "legacy_unverified",
+       "flow_reference_state": {
+        "dry_bulb_c": 22.1,
+        "humidity_ratio": 0.008607901,
+        "pressure_kpa": 101.325
+       },
+       "flow_reference_status": "calculation_assumption_unverified",
+       "flow_source": "Phase 1 scope rule: ventilation is added in Phase 2.",
+       "flow_verification_status": "not_applicable",
+       "indoor_db_c": 24.0,
+       "indoor_wb_c": 18.0,
+       "indoor_wet_bulb_basis": "legacy_unverified",
+       "indoor_wet_bulb_method": "legacy_unverified_psychrometer_relation_v1",
+       "mass_flow_kg_s": 0.0,
+       "outdoor_db_c": 22.1,
+       "outdoor_wb_c": 15.8,
+       "outdoor_weather_provenance": {
+        "dry_bulb": {
+         "citations": [],
+         "source": "AI preliminary assumption pack au-preliminary-v3: scenario",
+         "status": "provisional",
+         "value": 22.1
+        },
+        "pressure": {
+         "citations": [],
+         "source": "AI preliminary assumption pack au-preliminary-v3: scenario",
+         "status": "provisional",
+         "value": 101.325
+        },
+        "pressure_kpa": 101.325,
+        "scenario_id": "ai_preliminary_cooling_day",
+        "wet_bulb": {
+         "citations": [],
+         "source": "AI preliminary assumption pack au-preliminary-v3: scenario",
+         "status": "provisional",
+         "value": 15.8
+        },
+        "wet_bulb_basis": "thermodynamic"
+       },
+       "outdoor_wet_bulb_basis": "thermodynamic",
+       "outdoor_wet_bulb_method": "thermodynamic_ashrae_eq33_iapws_water_ice_v3"
+      },
+      "latent_kw": 0.0,
+      "schedule_factors": [],
+      "sensible_kw": 0.0,
+      "total_kw": 0.0
+     },
+     "people": {
+      "base_latent_kw": 0.0,
+      "base_sensible_kw": 0.0,
+      "formula": "occupancy \u00d7 W/person \u00d7 diversity \u00f7 1000",
+      "input_rows": [
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "diversity_factor": 1.0,
+        "latent_w_per_person": 0.0,
+        "occupancy": 0.0,
+        "sensible_w_per_person": 0.0
+       }
+      ],
+      "inputs": {
+       "diversity_factor": 1.0,
+       "latent_w_per_person": 0.0,
+       "occupancy": 0.0,
+       "sensible_w_per_person": 0.0
+      },
+      "latent_kw": 0.0,
+      "schedule_factors": [
+       0.0
+      ],
+      "sensible_kw": 0.0,
+      "total_kw": 0.0
+     },
+     "solar": {
+      "base_latent_kw": 0.0,
+      "base_sensible_kw": 0.0,
+      "formula": "surface area \u00d7 design solar W/m\u00b2 \u00d7 solar-gain factor \u00d7 shading factor \u00f7 1000",
+      "input_rows": [
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-0567ebac78a69ea5"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-07f3d2b05157717d"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-118f9ceddd1bbad0"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-1e3914fe3508b6ba"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-568dcf0d235c00f8"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-604939316ade22a7"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-758515a10b5eb354"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-850043b3c7fd9cea"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-96196ff3fa622bc0"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-b594b266863cc275"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-b740906a8a840eb9"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-b744f731cd7d79d4"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-ba318f9c627736fc"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-bd79ea3894ad8ab4"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-bfa88bafa3635627"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-c6c09c66268c11f9"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-c6f96a06672b1e95"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-eeca72608c787381"
+         }
+        ]
+       }
+      ],
+      "inputs": {
+       "surfaces": [
+        {
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-0567ebac78a69ea5"
+        }
+       ]
+      },
+      "latent_kw": 0.0,
+      "schedule_factors": [],
+      "sensible_kw": 0.0,
+      "total_kw": 0.0
+     }
+    },
+    "design_total_kw": 0.0,
+    "hour": 0,
+    "name": "Kitchen",
+    "room_id": "room-d6259793fed8d520"
+   },
+   {
+    "components": {
+     "envelope": {
+      "base_latent_kw": 0.0,
+      "base_sensible_kw": 0.0,
+      "formula": "surface area \u00d7 U-value \u00d7 (surface boundary temperature \u2212 indoor DB) \u00f7 1000",
+      "input_rows": [
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "indoor_db_c": 24.0,
+        "outdoor_db_c": 22.1,
+        "surfaces": [
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-partition-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-04411d33fdc0ec8d"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-wall-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-061550f8bd80e1ee"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-partition-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-063b60ca037666b6"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-wall-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-07de5cfdb13df57f"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-wall-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-07ff976101edd961"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-partition-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-2067d8b785a74449"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-wall-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-287b15864da79472"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-partition-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-2b4446aa4baf3ec4"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-partition-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-3bb239999e6f8c4e"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-partition-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-48eeada1ae6025cd"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-partition-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-508ee71ea39c354a"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-partition-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-77a6ad6b8887c7f5"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-ceiling-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-7bee44c30b4eedc4"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-partition-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-8f62b0713d23f765"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-wall-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-961fb3ae0aadeb8b"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-partition-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-a5dc0951e68e7b23"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-floor-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-cb4a6c4efc9242fd"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-wall-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-d1dae8d5afe37024"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-wall-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-eb49a8846bb540df"
+         },
+         {
+          "boundary_method": "fixed_adjacent_temperature",
+          "boundary_temperature_c": 24.0,
+          "construction_id": "au-preliminary-v3-partition-standard",
+          "construction_revision": null,
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-f52e4a9326c5b880"
+         }
+        ]
+       }
+      ],
+      "inputs": {
+       "indoor_db_c": 24.0,
+       "outdoor_db_c": 22.1,
+       "surfaces": [
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-partition-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-04411d33fdc0ec8d"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-wall-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-061550f8bd80e1ee"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-partition-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-063b60ca037666b6"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-wall-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-07de5cfdb13df57f"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-wall-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-07ff976101edd961"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-partition-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-2067d8b785a74449"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-wall-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-287b15864da79472"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-partition-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-2b4446aa4baf3ec4"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-partition-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-3bb239999e6f8c4e"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-partition-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-48eeada1ae6025cd"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-partition-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-508ee71ea39c354a"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-partition-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-77a6ad6b8887c7f5"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-ceiling-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-7bee44c30b4eedc4"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-partition-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-8f62b0713d23f765"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-wall-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-961fb3ae0aadeb8b"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-partition-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-a5dc0951e68e7b23"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-floor-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-cb4a6c4efc9242fd"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-wall-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-d1dae8d5afe37024"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-wall-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-eb49a8846bb540df"
+        },
+        {
+         "boundary_method": "fixed_adjacent_temperature",
+         "boundary_temperature_c": 24.0,
+         "construction_id": "au-preliminary-v3-partition-standard",
+         "construction_revision": null,
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-f52e4a9326c5b880"
+        }
+       ]
+      },
+      "latent_kw": 0.0,
+      "schedule_factors": [],
+      "sensible_kw": 0.0,
+      "total_kw": 0.0
+     },
+     "equipment_refrigeration": {
+      "base_latent_kw": 0.0,
+      "base_sensible_kw": 0.0,
+      "formula": "quantity \u00d7 heat-to-space W each \u00d7 diversity \u00d7 space-gain factor \u00f7 1000",
+      "input_rows": [
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "sources": [
+         {
+          "diversity_factor": 1,
+          "gain_kw": 0.0,
+          "heat_to_space_w_each": 0,
+          "kind": "other",
+          "name": "Phase 2 equipment excluded",
+          "quantity": 0,
+          "space_gain_factor": 1
+         }
+        ]
+       }
+      ],
+      "inputs": {
+       "sources": [
+        {
+         "diversity_factor": 1,
+         "gain_kw": 0.0,
+         "heat_to_space_w_each": 0,
+         "kind": "other",
+         "name": "Phase 2 equipment excluded",
+         "quantity": 0,
+         "space_gain_factor": 1
+        }
+       ]
+      },
+      "latent_kw": 0.0,
+      "schedule_factors": [
+       0.0
+      ],
+      "sensible_kw": 0.0,
+      "total_kw": 0.0
+     },
+     "lighting": {
+      "base_latent_kw": 0.0,
+      "base_sensible_kw": 0.0,
+      "formula": "area \u00d7 lighting W/m\u00b2 \u00d7 diversity \u00f7 1000",
+      "input_rows": [
+       {
+        "area_m2": 259.58361060051817,
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "diversity_factor": 1.0,
+        "lighting_w_m2": 0.0
+       }
+      ],
+      "inputs": {
+       "area_m2": 259.58361060051817,
+       "diversity_factor": 1.0,
+       "lighting_w_m2": 0.0
+      },
+      "latent_kw": 0.0,
+      "schedule_factors": [
+       0.0
+      ],
+      "sensible_kw": 0.0,
+      "total_kw": 0.0
+     },
+     "outside_air": {
+      "base_latent_kw": 0.0,
+      "base_sensible_kw": 0.0,
+      "formula": "outside-air mass flow \u00d7 moist-air enthalpy difference; latent = total \u2212 sensible",
+      "input_rows": [
+       {
+        "atmospheric_pressure_kpa": 101.325,
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": -0.0,
+        "contribution_total_kw": 0.0,
+        "flow_lps": 0.0,
+        "flow_reference_basis": "legacy_unverified",
+        "flow_reference_state": {
+         "dry_bulb_c": 22.1,
+         "humidity_ratio": 0.008607901,
+         "pressure_kpa": 101.325
+        },
+        "flow_reference_status": "calculation_assumption_unverified",
+        "flow_source": "Phase 1 scope rule: ventilation is added in Phase 2.",
+        "flow_verification_status": "not_applicable",
+        "indoor_db_c": 24.0,
+        "indoor_wb_c": 18.0,
+        "indoor_wet_bulb_basis": "legacy_unverified",
+        "indoor_wet_bulb_method": "legacy_unverified_psychrometer_relation_v1",
+        "mass_flow_kg_s": 0.0,
+        "outdoor_db_c": 22.1,
+        "outdoor_wb_c": 15.8,
+        "outdoor_weather_provenance": {
+         "dry_bulb": {
+          "citations": [],
+          "source": "AI preliminary assumption pack au-preliminary-v3: scenario",
+          "status": "provisional",
+          "value": 22.1
+         },
+         "pressure": {
+          "citations": [],
+          "source": "AI preliminary assumption pack au-preliminary-v3: scenario",
+          "status": "provisional",
+          "value": 101.325
+         },
+         "pressure_kpa": 101.325,
+         "scenario_id": "ai_preliminary_cooling_day",
+         "wet_bulb": {
+          "citations": [],
+          "source": "AI preliminary assumption pack au-preliminary-v3: scenario",
+          "status": "provisional",
+          "value": 15.8
+         },
+         "wet_bulb_basis": "thermodynamic"
+        },
+        "outdoor_wet_bulb_basis": "thermodynamic",
+        "outdoor_wet_bulb_method": "thermodynamic_ashrae_eq33_iapws_water_ice_v3"
+       }
+      ],
+      "inputs": {
+       "atmospheric_pressure_kpa": 101.325,
+       "flow_lps": 0.0,
+       "flow_reference_basis": "legacy_unverified",
+       "flow_reference_state": {
+        "dry_bulb_c": 22.1,
+        "humidity_ratio": 0.008607901,
+        "pressure_kpa": 101.325
+       },
+       "flow_reference_status": "calculation_assumption_unverified",
+       "flow_source": "Phase 1 scope rule: ventilation is added in Phase 2.",
+       "flow_verification_status": "not_applicable",
+       "indoor_db_c": 24.0,
+       "indoor_wb_c": 18.0,
+       "indoor_wet_bulb_basis": "legacy_unverified",
+       "indoor_wet_bulb_method": "legacy_unverified_psychrometer_relation_v1",
+       "mass_flow_kg_s": 0.0,
+       "outdoor_db_c": 22.1,
+       "outdoor_wb_c": 15.8,
+       "outdoor_weather_provenance": {
+        "dry_bulb": {
+         "citations": [],
+         "source": "AI preliminary assumption pack au-preliminary-v3: scenario",
+         "status": "provisional",
+         "value": 22.1
+        },
+        "pressure": {
+         "citations": [],
+         "source": "AI preliminary assumption pack au-preliminary-v3: scenario",
+         "status": "provisional",
+         "value": 101.325
+        },
+        "pressure_kpa": 101.325,
+        "scenario_id": "ai_preliminary_cooling_day",
+        "wet_bulb": {
+         "citations": [],
+         "source": "AI preliminary assumption pack au-preliminary-v3: scenario",
+         "status": "provisional",
+         "value": 15.8
+        },
+        "wet_bulb_basis": "thermodynamic"
+       },
+       "outdoor_wet_bulb_basis": "thermodynamic",
+       "outdoor_wet_bulb_method": "thermodynamic_ashrae_eq33_iapws_water_ice_v3"
+      },
+      "latent_kw": 0.0,
+      "schedule_factors": [],
+      "sensible_kw": 0.0,
+      "total_kw": 0.0
+     },
+     "people": {
+      "base_latent_kw": 0.0,
+      "base_sensible_kw": 0.0,
+      "formula": "occupancy \u00d7 W/person \u00d7 diversity \u00f7 1000",
+      "input_rows": [
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "diversity_factor": 1.0,
+        "latent_w_per_person": 0.0,
+        "occupancy": 0.0,
+        "sensible_w_per_person": 0.0
+       }
+      ],
+      "inputs": {
+       "diversity_factor": 1.0,
+       "latent_w_per_person": 0.0,
+       "occupancy": 0.0,
+       "sensible_w_per_person": 0.0
+      },
+      "latent_kw": 0.0,
+      "schedule_factors": [
+       0.0
+      ],
+      "sensible_kw": 0.0,
+      "total_kw": 0.0
+     },
+     "solar": {
+      "base_latent_kw": 0.0,
+      "base_sensible_kw": 0.0,
+      "formula": "surface area \u00d7 design solar W/m\u00b2 \u00d7 solar-gain factor \u00d7 shading factor \u00f7 1000",
+      "input_rows": [
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-04411d33fdc0ec8d"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-061550f8bd80e1ee"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-063b60ca037666b6"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-07de5cfdb13df57f"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-07ff976101edd961"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-2067d8b785a74449"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-287b15864da79472"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-2b4446aa4baf3ec4"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-3bb239999e6f8c4e"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-48eeada1ae6025cd"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-508ee71ea39c354a"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-77a6ad6b8887c7f5"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-7bee44c30b4eedc4"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-8f62b0713d23f765"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-961fb3ae0aadeb8b"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-a5dc0951e68e7b23"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-cb4a6c4efc9242fd"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-d1dae8d5afe37024"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-eb49a8846bb540df"
+         }
+        ]
+       },
+       {
+        "contribution_latent_kw": 0.0,
+        "contribution_sensible_kw": 0.0,
+        "contribution_total_kw": 0.0,
+        "surfaces": [
+         {
+          "gain_kw": 0.0,
+          "orientation": "",
+          "surface_id": "ai-preliminary-surface-f52e4a9326c5b880"
+         }
+        ]
+       }
+      ],
+      "inputs": {
+       "surfaces": [
+        {
+         "gain_kw": 0.0,
+         "orientation": "",
+         "surface_id": "ai-preliminary-surface-04411d33fdc0ec8d"
+        }
+       ]
+      },
+      "latent_kw": 0.0,
+      "schedule_factors": [],
+      "sensible_kw": 0.0,
+      "total_kw": 0.0
+     }
+    },
+    "design_total_kw": 0.0,
+    "hour": 0,
+    "name": "Shop",
+    "room_id": "room-57cc1fc9daa31cf2"
+   }
+  ],
+  "room_scope_confirmation": {
+   "confirmed_at": "2026-10-16T06:31:02.998581+00:00",
+   "reviewer": "AI Phase 1 scope resolver"
+  },
+  "status": "draft",
+  "unresolved_room_inputs": [
+   {
+    "component_id": "infiltration",
+    "component_type": "infiltration",
+    "room_id": "room-d6259793fed8d520"
+   },
+   {
+    "component_id": "minimum_supply_air",
+    "component_type": "minimum_supply_air",
+    "room_id": "room-d6259793fed8d520"
+   },
+   {
+    "component_id": "extract_air",
+    "component_type": "extract_air",
+    "room_id": "room-d6259793fed8d520"
+   },
+   {
+    "component_id": "spill_air",
+    "component_type": "spill_air",
+    "room_id": "room-d6259793fed8d520"
+   },
+   {
+    "component_id": "transfer_air",
+    "component_type": "transfer_air",
+    "room_id": "room-d6259793fed8d520"
+   },
+   {
+    "component_id": "make_up_air",
+    "component_type": "make_up_air",
+    "room_id": "room-d6259793fed8d520"
+   },
+   {
+    "component_id": "vapour_gain",
+    "component_type": "vapour_gain",
+    "room_id": "room-d6259793fed8d520"
+   },
+   {
+    "component_id": "steam_gain",
+    "component_type": "steam_gain",
+    "room_id": "room-d6259793fed8d520"
+   },
+   {
+    "component_id": "process_latent_load",
+    "component_type": "process_latent_load",
+    "room_id": "room-d6259793fed8d520"
+   },
+   {
+    "component_id": "infiltration",
+    "component_type": "infiltration",
+    "room_id": "room-57cc1fc9daa31cf2"
+   },
+   {
+    "component_id": "minimum_supply_air",
+    "component_type": "minimum_supply_air",
+    "room_id": "room-57cc1fc9daa31cf2"
+   },
+   {
+    "component_id": "extract_air",
+    "component_type": "extract_air",
+    "room_id": "room-57cc1fc9daa31cf2"
+   },
+   {
+    "component_id": "spill_air",
+    "component_type": "spill_air",
+    "room_id": "room-57cc1fc9daa31cf2"
+   },
+   {
+    "component_id": "transfer_air",
+    "component_type": "transfer_air",
+    "room_id": "room-57cc1fc9daa31cf2"
+   },
+   {
+    "component_id": "make_up_air",
+    "component_type": "make_up_air",
+    "room_id": "room-57cc1fc9daa31cf2"
+   },
+   {
+    "component_id": "vapour_gain",
+    "component_type": "vapour_gain",
+    "room_id": "room-57cc1fc9daa31cf2"
+   },
+   {
+    "component_id": "steam_gain",
+    "component_type": "steam_gain",
+    "room_id": "room-57cc1fc9daa31cf2"
+   },
+   {
+    "component_id": "process_latent_load",
+    "component_type": "process_latent_load",
+    "room_id": "room-57cc1fc9daa31cf2"
+   }
+  ]
+ },
+ "project_id": "20260226-butcher-buffet-_-melrose-park-construction-rev-b_2_-1792058065",
+ "rooms": [
+  {
+   "area_basis": "",
+   "area_label": "",
+   "area_m2": null,
+   "final_kw": null,
+   "final_w_m2": null,
+   "has_outline": false,
+   "included": false,
+   "kind": "comfort",
+   "level": "",
+   "name": "Bar",
+   "phase1_kw": null,
+   "room_id": "room-use:unassigned-level:bar",
+   "source_pages": [
+    21,
+    22
+   ],
+   "state": "needs_area",
+   "w_m2": null
+  },
+  {
+   "area_basis": "measured",
+   "area_label": "Measured from a printed dimension",
+   "area_m2": 113.69056586793302,
+   "final_kw": null,
+   "final_w_m2": null,
+   "has_outline": true,
+   "included": true,
+   "kind": "comfort",
+   "level": "",
+   "name": "Kitchen",
+   "phase1_kw": 0.0,
+   "room_id": "room-use:unassigned-level:kitchen",
+   "source_pages": [
+    20,
+    21,
+    22
+   ],
+   "state": "done",
+   "w_m2": 0.0
+  },
+  {
+   "area_basis": "measured",
+   "area_label": "Measured from a printed dimension",
+   "area_m2": 259.58361060051817,
+   "final_kw": null,
+   "final_w_m2": null,
+   "has_outline": true,
+   "included": true,
+   "kind": "comfort",
+   "level": "",
+   "name": "Shop",
+   "phase1_kw": 0.0,
+   "room_id": "room-use:unassigned-level:shop",
+   "source_pages": [
+    20,
+    21
+   ],
+   "state": "done",
+   "w_m2": 0.0
+  },
+  {
+   "area_basis": "measured",
+   "area_label": "Measured from a printed dimension",
+   "area_m2": 7.522353228905872,
+   "final_kw": null,
+   "final_w_m2": null,
+   "has_outline": true,
+   "included": false,
+   "kind": "refrigeration",
+   "level": "",
+   "name": "Coolroom",
+   "phase1_kw": null,
+   "room_id": "room-use:unassigned-level:coolroom",
+   "source_pages": [],
+   "state": "sized_separately",
+   "w_m2": null
+  },
+  {
+   "area_basis": "measured",
+   "area_label": "Measured from a printed dimension",
+   "area_m2": 8.308600396240683,
+   "final_kw": null,
+   "final_w_m2": null,
+   "has_outline": true,
+   "included": false,
+   "kind": "refrigeration",
+   "level": "",
+   "name": "Freezer",
+   "phase1_kw": null,
+   "room_id": "room-use:unassigned-level:freezer",
+   "source_pages": [],
+   "state": "sized_separately",
+   "w_m2": null
+  }
+ ],
+ "rooms_without_outline": [
+  {
+   "area_basis": "",
+   "area_label": "",
+   "area_m2": null,
+   "final_kw": null,
+   "final_w_m2": null,
+   "has_outline": false,
+   "included": false,
+   "kind": "comfort",
+   "level": "",
+   "name": "Bar",
+   "phase1_kw": null,
+   "room_id": "room-use:unassigned-level:bar",
+   "source_pages": [
+    21,
+    22
+   ],
+   "state": "needs_area",
+   "w_m2": null
+  }
+ ],
+ "status": {
+  "above": "",
+  "address": "",
+  "area_overrides": [],
+  "building_type": "",
+  "checks": {
+   "blocked": 1,
+   "marker": "02eedc70cceb9346",
+   "total": 19,
+   "waiting": 0
+  },
+  "drawings_confirmed": true,
+  "envelope": {
+   "room-use:unassigned-level:coolroom": {
+    "below_accuracy_bar": true,
+    "edges": [
+     {
+      "boundary": "unknown",
+      "index": 0,
+      "length_m": 2.454,
+      "page": 20,
+      "source": "ai_determined",
+      "trace_id": "ai_room_trace_56921f7debe4b0459b"
+     },
+     {
+      "boundary": "unknown",
+      "index": 1,
+      "length_m": 3.065,
+      "page": 20,
+      "source": "ai_determined",
+      "trace_id": "ai_room_trace_56921f7debe4b0459b"
+     },
+     {
+      "boundary": "unknown",
+      "index": 2,
+      "length_m": 2.454,
+      "page": 20,
+      "source": "ai_determined",
+      "trace_id": "ai_room_trace_56921f7debe4b0459b"
+     },
+     {
+      "boundary": "unknown",
+      "index": 3,
+      "length_m": 3.065,
+      "page": 20,
+      "source": "ai_determined",
+      "trace_id": "ai_room_trace_56921f7debe4b0459b"
+     }
+    ],
+    "has_outline": true,
+    "no_glazing_edges": [],
+    "openings": [],
+    "roof": "unknown",
+    "roof_source": "",
+    "traces": [
+     {
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "edge_sources": {},
+      "page": 20,
+      "roof_source": "",
+      "trace_id": "ai_room_trace_56921f7debe4b0459b"
+     }
+    ],
+    "window_count": 0
+   },
+   "room-use:unassigned-level:freezer": {
+    "below_accuracy_bar": true,
+    "edges": [
+     {
+      "boundary": "unknown",
+      "index": 0,
+      "length_m": 2.454,
+      "page": 20,
+      "source": "ai_determined",
+      "trace_id": "ai_room_trace_473d5cf89efdfe7038"
+     },
+     {
+      "boundary": "unknown",
+      "index": 1,
+      "length_m": 3.385,
+      "page": 20,
+      "source": "ai_determined",
+      "trace_id": "ai_room_trace_473d5cf89efdfe7038"
+     },
+     {
+      "boundary": "unknown",
+      "index": 2,
+      "length_m": 2.454,
+      "page": 20,
+      "source": "ai_determined",
+      "trace_id": "ai_room_trace_473d5cf89efdfe7038"
+     },
+     {
+      "boundary": "unknown",
+      "index": 3,
+      "length_m": 3.385,
+      "page": 20,
+      "source": "ai_determined",
+      "trace_id": "ai_room_trace_473d5cf89efdfe7038"
+     }
+    ],
+    "has_outline": true,
+    "no_glazing_edges": [],
+    "openings": [],
+    "roof": "unknown",
+    "roof_source": "",
+    "traces": [
+     {
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "edge_sources": {},
+      "page": 20,
+      "roof_source": "",
+      "trace_id": "ai_room_trace_473d5cf89efdfe7038"
+     }
+    ],
+    "window_count": 0
+   },
+   "room-use:unassigned-level:kitchen": {
+    "below_accuracy_bar": true,
+    "edges": [
+     {
+      "boundary": "adjacent_tenancy",
+      "index": 0,
+      "length_m": 8.649,
+      "page": 20,
+      "source": "ai_fallback",
+      "trace_id": "ai_room_trace_9afa01f1b0edcd8030"
+     },
+     {
+      "boundary": "internal",
+      "index": 1,
+      "length_m": 8.184,
+      "page": 20,
+      "source": "ai_determined",
+      "trace_id": "ai_room_trace_9afa01f1b0edcd8030"
+     },
+     {
+      "boundary": "internal",
+      "index": 2,
+      "length_m": 1.706,
+      "page": 20,
+      "source": "ai_determined",
+      "trace_id": "ai_room_trace_9afa01f1b0edcd8030"
+     },
+     {
+      "boundary": "internal",
+      "index": 3,
+      "length_m": 1.193,
+      "page": 20,
+      "source": "ai_fallback",
+      "trace_id": "ai_room_trace_9afa01f1b0edcd8030"
+     },
+     {
+      "boundary": "adjacent_tenancy",
+      "index": 4,
+      "length_m": 2.281,
+      "page": 20,
+      "source": "ai_fallback",
+      "trace_id": "ai_room_trace_9afa01f1b0edcd8030"
+     },
+     {
+      "boundary": "adjacent_tenancy",
+      "index": 5,
+      "length_m": 2.243,
+      "page": 20,
+      "source": "ai_fallback",
+      "trace_id": "ai_room_trace_9afa01f1b0edcd8030"
+     },
+     {
+      "boundary": "adjacent_tenancy",
+      "index": 6,
+      "length_m": 8.988,
+      "page": 20,
+      "source": "ai_fallback",
+      "trace_id": "ai_room_trace_9afa01f1b0edcd8030"
+     },
+     {
+      "boundary": "adjacent_tenancy",
+      "index": 7,
+      "length_m": 1.346,
+      "page": 20,
+      "source": "ai_fallback",
+      "trace_id": "ai_room_trace_9afa01f1b0edcd8030"
+     },
+     {
+      "boundary": "internal",
+      "index": 8,
+      "length_m": 2.463,
+      "page": 20,
+      "source": "ai_determined",
+      "trace_id": "ai_room_trace_9afa01f1b0edcd8030"
+     },
+     {
+      "boundary": "internal",
+      "index": 9,
+      "length_m": 5.349,
+      "page": 20,
+      "source": "ai_determined",
+      "trace_id": "ai_room_trace_9afa01f1b0edcd8030"
+     },
+     {
+      "boundary": "internal",
+      "index": 10,
+      "length_m": 3.335,
+      "page": 20,
+      "source": "ai_determined",
+      "trace_id": "ai_room_trace_9afa01f1b0edcd8030"
+     },
+     {
+      "boundary": "internal",
+      "index": 11,
+      "length_m": 0.999,
+      "page": 20,
+      "source": "ai_determined",
+      "trace_id": "ai_room_trace_9afa01f1b0edcd8030"
+     },
+     {
+      "boundary": "internal",
+      "index": 12,
+      "length_m": 0.967,
+      "page": 20,
+      "source": "ai_determined",
+      "trace_id": "ai_room_trace_9afa01f1b0edcd8030"
+     },
+     {
+      "boundary": "internal",
+      "index": 13,
+      "length_m": 4.79,
+      "page": 20,
+      "source": "ai_determined",
+      "trace_id": "ai_room_trace_9afa01f1b0edcd8030"
+     },
+     {
+      "boundary": "internal",
+      "index": 14,
+      "length_m": 0.926,
+      "page": 20,
+      "source": "ai_determined",
+      "trace_id": "ai_room_trace_9afa01f1b0edcd8030"
+     },
+     {
+      "boundary": "internal",
+      "index": 15,
+      "length_m": 1.828,
+      "page": 20,
+      "source": "ai_determined",
+      "trace_id": "ai_room_trace_9afa01f1b0edcd8030"
+     }
+    ],
+    "has_outline": true,
+    "no_glazing_edges": [],
+    "openings": [],
+    "roof": "not_exposed",
+    "roof_source": "ai_determined",
+    "traces": [
+     {
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "edge_sources": {
+       "0": "ai_fallback",
+       "1": "ai_determined",
+       "10": "ai_determined",
+       "11": "ai_determined",
+       "12": "ai_determined",
+       "13": "ai_determined",
+       "14": "ai_determined",
+       "15": "ai_determined",
+       "2": "ai_determined",
+       "3": "ai_fallback",
+       "4": "ai_fallback",
+       "5": "ai_fallback",
+       "6": "ai_fallback",
+       "7": "ai_fallback",
+       "8": "ai_determined",
+       "9": "ai_determined"
+      },
+      "page": 20,
+      "roof_source": "ai_determined",
+      "trace_id": "ai_room_trace_9afa01f1b0edcd8030"
+     }
+    ],
+    "window_count": 0
+   },
+   "room-use:unassigned-level:shop": {
+    "below_accuracy_bar": true,
+    "edges": [
+     {
+      "boundary": "adjacent_tenancy",
+      "index": 0,
+      "length_m": 11.654,
+      "page": 20,
+      "source": "ai_fallback",
+      "trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     },
+     {
+      "boundary": "adjacent_tenancy",
+      "index": 1,
+      "length_m": 3.766,
+      "page": 20,
+      "source": "ai_fallback",
+      "trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     },
+     {
+      "boundary": "internal",
+      "index": 2,
+      "length_m": 2.943,
+      "page": 20,
+      "source": "ai_determined",
+      "trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     },
+     {
+      "boundary": "internal",
+      "index": 3,
+      "length_m": 0.59,
+      "page": 20,
+      "source": "ai_determined",
+      "trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     },
+     {
+      "boundary": "internal",
+      "index": 4,
+      "length_m": 2.877,
+      "page": 20,
+      "source": "ai_determined",
+      "trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     },
+     {
+      "boundary": "internal",
+      "index": 5,
+      "length_m": 1.849,
+      "page": 20,
+      "source": "ai_determined",
+      "trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     },
+     {
+      "boundary": "internal",
+      "index": 6,
+      "length_m": 0.926,
+      "page": 20,
+      "source": "ai_determined",
+      "trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     },
+     {
+      "boundary": "internal",
+      "index": 7,
+      "length_m": 4.79,
+      "page": 20,
+      "source": "ai_determined",
+      "trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     },
+     {
+      "boundary": "internal",
+      "index": 8,
+      "length_m": 0.967,
+      "page": 20,
+      "source": "ai_determined",
+      "trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     },
+     {
+      "boundary": "internal",
+      "index": 9,
+      "length_m": 0.999,
+      "page": 20,
+      "source": "ai_determined",
+      "trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     },
+     {
+      "boundary": "internal",
+      "index": 10,
+      "length_m": 3.335,
+      "page": 20,
+      "source": "ai_determined",
+      "trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     },
+     {
+      "boundary": "internal",
+      "index": 11,
+      "length_m": 5.349,
+      "page": 20,
+      "source": "ai_determined",
+      "trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     },
+     {
+      "boundary": "internal",
+      "index": 12,
+      "length_m": 2.583,
+      "page": 20,
+      "source": "ai_determined",
+      "trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     },
+     {
+      "boundary": "adjacent_tenancy",
+      "index": 13,
+      "length_m": 1.092,
+      "page": 20,
+      "source": "ai_fallback",
+      "trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     },
+     {
+      "boundary": "adjacent_tenancy",
+      "index": 14,
+      "length_m": 1.417,
+      "page": 20,
+      "source": "ai_fallback",
+      "trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     },
+     {
+      "boundary": "adjacent_tenancy",
+      "index": 15,
+      "length_m": 4.833,
+      "page": 20,
+      "source": "ai_fallback",
+      "trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     },
+     {
+      "boundary": "adjacent_tenancy",
+      "index": 16,
+      "length_m": 12.575,
+      "page": 20,
+      "source": "ai_fallback",
+      "trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     },
+     {
+      "boundary": "adjacent_tenancy",
+      "index": 17,
+      "length_m": 23.35,
+      "page": 20,
+      "source": "ai_fallback",
+      "trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     }
+    ],
+    "has_outline": true,
+    "no_glazing_edges": [],
+    "openings": [],
+    "roof": "not_exposed",
+    "roof_source": "ai_determined",
+    "traces": [
+     {
+      "ai_quality_label": "AI-determined (below accuracy bar)",
+      "edge_sources": {
+       "0": "ai_fallback",
+       "1": "ai_fallback",
+       "10": "ai_determined",
+       "11": "ai_determined",
+       "12": "ai_determined",
+       "13": "ai_fallback",
+       "14": "ai_fallback",
+       "15": "ai_fallback",
+       "16": "ai_fallback",
+       "17": "ai_fallback",
+       "2": "ai_determined",
+       "3": "ai_determined",
+       "4": "ai_determined",
+       "5": "ai_determined",
+       "6": "ai_determined",
+       "7": "ai_determined",
+       "8": "ai_determined",
+       "9": "ai_determined"
+      },
+      "page": 20,
+      "roof_source": "ai_determined",
+      "trace_id": "ai_room_trace_3c8d4f705bc6fc5d32"
+     }
+    ],
+    "window_count": 0
+   }
+  },
+  "found_site": "TENANCY MZ01,M38, MELROSE CENTRAL",
+  "height_overrides": [],
+  "id": "20260226-butcher-buffet-_-melrose-park-construction-rev-b_2_-1792058065",
+  "name": "20260226 Butcher Buffet @ Melrose Park CONSTRUCTION REV B(2)",
+  "needs_you": {
+   "drawings": 1,
+   "phase1": 1,
+   "phase2": 0,
+   "results": 0
+  },
+  "pages": null,
+  "phase1_complete": false,
+  "phase2_complete": false,
+  "result_stale": false,
+  "results_ready": false,
+  "room_heights": {
+   "room-use:unassigned-level:bar": {
+    "ceiling_height_mm": 2700.0,
+    "origin": "preliminary_fallback"
+   },
+   "room-use:unassigned-level:kitchen": {
+    "ceiling_height_mm": 2700.0,
+    "origin": "preliminary_fallback"
+   },
+   "room-use:unassigned-level:shop": {
+    "ceiling_height_mm": 2700.0,
+    "origin": "preliminary_fallback"
+   }
+  },
+  "rooms": {
+   "included": 2,
+   "total": 3,
+   "with_area": 2
+  },
+  "stage": "drawings",
+  "subtabs": {
+   "project": {
+    "job_site": {
+     "count": 1,
+     "detail": "Review the address found on the drawings.",
+     "state": "check"
+    },
+    "tenancy_context": {
+     "count": 1,
+     "detail": "Tell us what is above the tenancy.",
+     "state": "needed"
+    }
+   },
+   "rooms": {
+    "measurements": {
+     "count": 2,
+     "detail": "Review the area for 2 room(s).",
+     "state": "check"
+    },
+    "room_details": {
+     "count": 0,
+     "detail": "Room details are ready.",
+     "state": "done"
+    }
+   },
+   "walls": {
+    "roof": {
+     "count": 2,
+     "detail": "Review AI roof decisions in 2 room(s).",
+     "state": "check"
+    },
+    "walls": {
+     "count": 34,
+     "detail": "Review 34 AI wall decision(s).",
+     "state": "check"
+    }
+   }
+  },
+  "tabs": {
+   "drawings": {
+    "detail": "Some drawing checks need attention.",
+    "state": "check"
+   },
+   "project": {
+    "detail": "Check the address and what's above the tenancy.",
+    "state": "check"
+   },
+   "results": {
+    "detail": "Not calculated yet.",
+    "state": "todo"
+   },
+   "rooms": {
+    "detail": "2 rooms to check",
+    "state": "check"
+   },
+   "walls": {
+    "detail": "Check wall and roof boundaries",
+    "state": "check"
+   },
+   "windows": {
+    "detail": "",
+    "state": "done"
+   }
+  },
+  "total_kw": null,
+  "traced_rooms": {
+   "room-use:unassigned-level:coolroom": {
+    "area_m2": 7.52,
+    "pages": [
+     20
+    ],
+    "source": "ai_determined"
+   },
+   "room-use:unassigned-level:freezer": {
+    "area_m2": 8.31,
+    "pages": [
+     20
+    ],
+    "source": "ai_determined"
+   },
+   "room-use:unassigned-level:kitchen": {
+    "area_m2": 113.69,
+    "pages": [
+     20
+    ],
+    "source": "ai_determined"
+   },
+   "room-use:unassigned-level:shop": {
+    "area_m2": 259.19,
+    "pages": [
+     20
+    ],
+    "source": "ai_determined"
+   }
+  },
+  "weather_ai_pick": "Sydney",
+  "weather_ai_why": "The site is Melrose Central in Melrose Park, NSW, which is a suburb of Sydney.",
+  "weather_location": "",
+  "weather_locations": [
+   "Adelaide",
+   "Albany",
+   "Albury",
+   "Alice Springs",
+   "Ballarat",
+   "Bendigo",
+   "Brisbane",
+   "Broken Hill",
+   "Broome",
+   "Bunbury",
+   "Cairns",
+   "Canberra",
+   "Cooma",
+   "Darwin",
+   "Geelong",
+   "Geraldton",
+   "Grafton",
+   "Griffith",
+   "Hobart",
+   "Kalgoorlie",
+   "Katherine",
+   "Launceston",
+   "Melbourne",
+   "Mildura",
+   "Mt. Gambier",
+   "Mt. Isa",
+   "Newcastle",
+   "Perth",
+   "Pt. Augusta",
+   "Pt. Hedland",
+   "Pt. Lincoln",
+   "Pt. Pirie",
+   "Sale",
+   "Sydney",
+   "Tennant Ck.",
+   "Toowoomba",
+   "Townsville",
+   "Wagga",
+   "Woomera",
+   "Wyndham"
+  ],
+  "weather_suggestion": "Sydney"
+ }
+}

@@ -1282,11 +1282,11 @@ test("analysis reaches results without browser errors", async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
-test("normal entry keeps the established workspace and makes an uploaded PDF actionable", async ({page}) => {
+test("the classic entry keeps the established workspace and makes an uploaded PDF actionable", async ({page}) => {
   await mockApi(page);
-  await page.goto("/");
+  await page.goto("/?classic=1");
   await expect(page.locator(".shell")).toBeVisible();
-  await expect(page.locator("#guidedApp")).toBeHidden();
+  await expect(page.locator("#jobApp")).toBeHidden();
   await page.locator("#pdf").setInputFiles({name:"demo.pdf",mimeType:"application/pdf",buffer:Buffer.from("%PDF-1.4\\n%%EOF")});
   await expect(page.locator("#fState")).toHaveText("Ready");
   await expect(page.getByRole("heading",{name:"Your PDF is ready"})).toBeVisible();
