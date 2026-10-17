@@ -63,6 +63,20 @@ OPENROUTER_STEP_MODELS = {"PASS1": "deepseek/deepseek-v4.1-flash", "PASS2": "goo
 # A thinking model's reasoning counts against the reply cap (DeepSeek V4.1 Flash thought about 10,000 tokens a call).
 OPENROUTER_MAX_OUTPUT_TOKENS = 48000
 TIMEOUT_S = 600
+# The drawing tasks are bounded as a whole request, not per socket read: on Casa Nova (2026-10-17) one room-outline
+# call sent a few bytes and then went quiet, and the per-read limit let it hold the job for 676 s before failing. The
+# slowest successful drawing call in the saved runs was a room outline at 189 s (about 26,000 output tokens), most
+# take under 50 s; 300 s leaves room for that and stops a stalled request in five minutes.
+DRAWING_TIMEOUT_S = 300
+
+
+def drawing_timeout_s():
+    """The whole-request limit for a drawing-task call: ARCHIE_DRAWING_TIMEOUT_S (30–900 s), else DRAWING_TIMEOUT_S."""
+    try:
+        value = int(os.environ.get("ARCHIE_DRAWING_TIMEOUT_S", "").strip() or DRAWING_TIMEOUT_S)
+    except ValueError:
+        return DRAWING_TIMEOUT_S
+    return min(max(value, 30), 900)
 # Replies are stored whole (a retry re-checks a stored reply instead of paying for a new one); this only guards size.
 MAX_REPLY_CHARS = 2_000_000
 MAX_OUTPUT_TOKENS = 16000
@@ -87,6 +101,14 @@ class ProviderUnavailable(RuntimeError):
 
 class UsageLimitReached(RuntimeError):
     """The plan's or account's AI allowance is used up; every further call would fail the same way."""
+
+
+class ProviderTimeout(RuntimeError):
+    """No complete reply within the request's time limit; the request was abandoned (nothing was saved from it)."""
+
+    def __init__(self, seconds):
+        super().__init__(f"No reply from the AI within {seconds} seconds, so the request was stopped.")
+        self.seconds = seconds
 
 
 class InvalidProviderReply(RuntimeError):
@@ -292,6 +314,8 @@ class _HttpProvider:
         self.api_key = api_key if api_key is not None else os.environ.get(self.key_env, "")
         self.model = (model or os.environ.get("ARCHIE_AI_MODEL", "") or DEFAULT_MODELS[self.name]).strip()
         self.timeout = timeout
+        # Whole-request limit in seconds (None: only the per-read timeout applies). Set for the drawing tasks.
+        self.deadline_s = None
         self.opener = opener or urllib.request.urlopen
         if not self.api_key:
             raise ProviderUnavailable(f"No {self.key_env} is set on this server, so the {self.name} API can't be used.")
@@ -302,9 +326,15 @@ class _HttpProvider:
     def _post(self, url, headers, body):
         request = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), method="POST",
                                          headers={"Content-Type": "application/json", **headers})
+        deadline = time.monotonic() + self.deadline_s if self.deadline_s else None
         try:
-            with self.opener(request, timeout=self.timeout) as response:
-                return json.loads(response.read().decode("utf-8"))
+            with self.opener(request, timeout=min(self.timeout, self.deadline_s) if deadline else self.timeout) as response:
+                body = _read_before(response, deadline) if deadline else response.read()
+                return json.loads(body.decode("utf-8"))
+        except TimeoutError as error:  # socket.timeout: no bytes for the whole remaining time
+            if deadline:
+                raise ProviderTimeout(self.deadline_s) from error
+            raise
         except urllib.error.HTTPError as error:
             detail = error.read().decode("utf-8", "replace")[:2000] if hasattr(error, "read") else ""
             limit = usage_limit_message(detail)
@@ -314,7 +344,32 @@ class _HttpProvider:
                 raise RuntimeError("The AI provider is rate-limiting requests (HTTP 429). Retry shortly.") from error
             raise RuntimeError(f"The {self.name} API returned HTTP {error.code}: {' '.join(detail.split())[:300]}") from error
         except urllib.error.URLError as error:
+            if deadline and isinstance(error.reason, TimeoutError):
+                raise ProviderTimeout(self.deadline_s) from error
             raise RuntimeError(f"The {self.name} API couldn't be reached: {error.reason}") from error
+
+
+def _response_socket(response):
+    """The socket under an http.client response, when it can be reached (None for test doubles)."""
+    raw = getattr(getattr(response, "fp", None), "raw", None)
+    return getattr(raw, "_sock", None)
+
+
+def _read_before(response, deadline):
+    """Read the whole body, giving up at the deadline even when the host trickles bytes (each read is limited to the
+    time left, so a host that sends a little and then goes quiet can't hold the request open)."""
+    sock = _response_socket(response)
+    chunks = []
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("deadline passed while reading the reply")
+        if sock is not None:
+            sock.settimeout(remaining)
+        chunk = response.read(65536)
+        if not chunk:
+            return b"".join(chunks)
+        chunks.append(chunk)
 
 
 class OpenAIProvider(_HttpProvider):
@@ -485,6 +540,11 @@ def get(task=""):
     model = model_for(task)
     provider = CLASSES[chosen()](model=model) if model else CLASSES[chosen()]()
     provider.step = step_of(task)
+    if provider.step == "DRAWINGS":
+        # A drawing call is bounded as a whole request (see DRAWING_TIMEOUT_S); the codex CLI route uses timeout.
+        limit = drawing_timeout_s()
+        provider.timeout = min(getattr(provider, "timeout", limit) or limit, limit)
+        provider.deadline_s = limit
     provider.check_signed_in()
     return provider
 
@@ -529,7 +589,7 @@ class recorded:
                 **entry,
                 "model": raw.get("model") or entry["model"],
                 "seconds": raw.get("seconds") or raw.get("duration_seconds") or round(time.monotonic() - started, 2),
-                "error": "failed",
+                "error": "timeout" if isinstance(error, ProviderTimeout) else "failed",
                 "detail": str(error)[:300],
                 **({"input_tokens": usage["input_tokens"]} if isinstance(usage.get("input_tokens"), int) else {}),
                 **({"output_tokens": usage["output_tokens"]} if isinstance(usage.get("output_tokens"), int) else {}),

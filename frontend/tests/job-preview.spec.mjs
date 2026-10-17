@@ -321,6 +321,95 @@ test("preview renders the Drawings frame and current room outline", async ({
   await expect(page.locator(".shell")).toBeHidden();
 });
 
+// Drawing tasks running after every page was read: the progress the server saves before and after each AI call.
+function runningDrawingTasks(overrides = {}) {
+  return {
+    status: "running", step: "answer", step_label: "The AI is answering 12 drawing tasks (round 2)",
+    answered: 31, refused: 2, rounds: 2, calls: 33,
+    current_task: "P0_room_outlines", current_task_label: "Tracing the room outlines", current_target: "page-33",
+    task_number: 3, tasks_in_round: 12, tasks_done: 2, tasks_remaining: 10,
+    request_seconds: 130, seconds_since_progress: 130, request_limit_s: 300, last_problem: "",
+    ...overrides,
+  };
+}
+
+async function liveDrawings(page, sequence) {
+  await preview(page, { status: { stage: "drawings" } });
+  const counts = { plan: 0, tasks: 0 };
+  await page.route("**/api/job-plan**", async (route) => {
+    counts.plan += 1;
+    await route.fallback();
+  });
+  await page.route("**/api/page-reading**", (route) =>
+    route.fulfill({ json: { status: "done", pages_read: 73, page_count: 73, read: 73 } }),
+  );
+  await page.route("**/api/drawing-tasks**", (route) => {
+    const reply = sequence[Math.min(counts.tasks, sequence.length - 1)];
+    counts.tasks += 1;
+    return route.fulfill({ json: reply });
+  });
+  await page.clock.install();
+  await page.goto("/?preview=1#/job/job-1/drawings");
+  return counts;
+}
+
+test("once every page is read, the working stage is the drawing tasks with the current task and wait", async ({
+  page,
+}) => {
+  await liveDrawings(page, [runningDrawingTasks()]);
+  const reading = page.locator('[data-stage="pages"]');
+  await expect(reading).toHaveClass(/done/);
+  await expect(reading).toContainText("73 of 73 pages read.");
+  const tracing = page.locator('[data-stage="rooms"]');
+  await expect(tracing).toHaveClass(/active/);
+  await expect(tracing).toContainText(
+    "Tracing the room outlines on page 33: task 3 of 12 in round 2. Waiting for the AI for 2 min 10 s (it stops waiting at 5 min). 31 tasks answered so far.",
+  );
+  await expect(page.locator(".job-status")).toContainText("Tracing the room outlines on page 33");
+});
+
+test("the stage list refreshes in place while drawing tasks run, without re-reading the plan", async ({
+  page,
+}) => {
+  const counts = await liveDrawings(page, [
+    runningDrawingTasks(),
+    runningDrawingTasks({ task_number: 4, tasks_done: 3, answered: 32, request_seconds: 5,
+                          current_task_label: "Finding north", current_task: "P2_north", current_target: "page-1" }),
+  ]);
+  const tracing = page.locator('[data-stage="rooms"]');
+  await expect(tracing).toContainText("task 3 of 12");
+  await page.clock.runFor(5000);
+  await expect(tracing).toContainText("Finding north on page 1: task 4 of 12 in round 2. Waiting for the AI for 5 s. 32 tasks answered so far.");
+  expect(counts.plan).toBe(1);
+});
+
+test("a timed-out drawing call is explained, and finishing redraws the screen once", async ({ page }) => {
+  const problem = "Tracing the room outlines (page 33) got no reply within 300 seconds; it will be tried once more.";
+  const counts = await liveDrawings(page, [
+    runningDrawingTasks({ last_problem: problem }),
+    { status: "done", step: "skills", answered: 41, refused: 8, rounds: 5, last_problem: problem },
+  ]);
+  await expect(page.locator("[data-stage-problem]")).toHaveText(problem);
+  await page.clock.runFor(5000);
+  await expect(page.locator('[data-stage="rooms"]')).toHaveClass(/done/);
+  await expect.poll(() => counts.plan).toBe(2);
+  await page.clock.runFor(20000);
+  // First load, one refresh, then the redraw's own read; nothing is working any more, so polling stopped.
+  expect(counts.tasks).toBe(3);
+});
+
+test("polling stops when the person leaves the Drawings screen", async ({ page }) => {
+  const counts = await liveDrawings(page, [runningDrawingTasks()]);
+  await expect(page.locator('[data-stage="rooms"]')).toHaveClass(/active/);
+  await page.clock.runFor(5000);
+  await expect.poll(() => counts.tasks).toBe(2);
+  await page.evaluate(() => { location.hash = "#/job/job-1/rooms"; });
+  await expect(page.getByRole("heading", { name: "What the AI is doing" })).toHaveCount(0);
+  const before = counts.tasks;
+  await page.clock.runFor(20000);
+  expect(counts.tasks).toBe(before);
+});
+
 test("a refused AI key stops page reading with a plain reason and Try again", async ({
   page,
 }) => {

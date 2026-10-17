@@ -20,12 +20,14 @@ Every call is logged in the job's ai_usage.jsonl under "drawing:<task>" with its
 """
 
 import json
+import re
+from datetime import datetime
 from pathlib import Path
 
 from PIL import Image
 
 from backend import ai_provider
-from backend.job_runner import BackgroundJob, read_json, write_json
+from backend.job_runner import BackgroundJob, now, read_json, write_json
 
 JOB_FILE = "drawing_tasks_job.json"
 STEPS = [("build", "Preparing the drawing tasks"), ("answer", "The AI is answering the drawing tasks"),
@@ -36,10 +38,40 @@ _JOB = BackgroundJob(JOB_FILE, STEPS, "archie-drawing-tasks",
                      "The drawing tasks stopped before they finished (the server was restarted). Retry to finish them.")
 
 
+# What each drawing task is doing, in the words the Drawings screen shows.
+TASK_LABELS = {
+    "P0_dimensions": "Reading the scale from a printed dimension",
+    "P0_wall_styles": "Telling the wall styles apart",
+    "P0_room_names": "Finding the room names",
+    "P0_room_outlines": "Tracing the room outlines",
+    "P0_room_sizes": "Finding the room sizes",
+    "S1_printed_areas": "Reading printed room areas",
+    "S3_title_transcription": "Reading the title block",
+    "P1_site": "Reading the site details",
+    "P2_north": "Finding north",
+    "P3_boundaries": "Working out what each wall faces",
+    "P4_openings": "Finding the shopfront openings",
+    "P5_roof": "Working out what is above",
+    "P6_kitchen": "Listing the kitchen equipment",
+}
+
+
+def _seconds_since(stamp):
+    try:
+        return max(0, round((datetime.now().astimezone() - datetime.fromisoformat(stamp)).total_seconds()))
+    except (TypeError, ValueError):
+        return None
+
+
 def status(web, project):
     job = _JOB.status(project)
     if job.get("provider_limited"):
         job["warning"] = "The drawing provider's usage limit was reached. Unanswered tasks are saved; retry after the limit resets."
+    # Ages worked out here, so the screen doesn't depend on the browser's clock.
+    if job.get("status") in {"queued", "running"}:
+        job["request_seconds"] = _seconds_since(job.get("request_started_at")) if job.get("request_started_at") else None
+        job["seconds_since_progress"] = _seconds_since(job.get("last_progress_at"))
+        job["request_limit_s"] = ai_provider.drawing_timeout_s()
     return job
 
 
@@ -75,7 +107,7 @@ def start(web, project, then_skills=True):
                 pass
         return result
 
-    return _JOB.start(web, project, {"answered": 0, "refused": 0, "rounds": 0}, work)
+    return _JOB.start(web, project, {"answered": 0, "refused": 0, "rounds": 0, "last_progress_at": now()}, work)
 
 
 def _waiting(root):
@@ -160,6 +192,7 @@ def answer_all(web, project, step=lambda *args: None, provider_for=None):
     provider_for = provider_for or (lambda task: ai_provider.get(f"drawing:{task}"))
     tried = {}                 # run id -> calls made, so a task that keeps failing can't loop
     answered = refused = calls = rounds = 0
+    problem = ""
     for rounds in range(1, MAX_ROUNDS + 1):
         step("build")
         autonomous_tasks_service.post(web, project, {"action": "run_all"})
@@ -168,19 +201,34 @@ def answer_all(web, project, step=lambda *args: None, provider_for=None):
         if not waiting:
             break
         step("answer", f"The AI is answering {len(waiting)} drawing task{'s' if len(waiting) != 1 else ''} (round {rounds})")
-        for record in waiting:
+        for number, record in enumerate(waiting, start=1):
             tried[record["run_id"]] = tried.get(record["run_id"], 0) + 1
             images = _images(root, record)
             sizes = _sizes(images)
             grid = uses_grid(record["task"], sizes)
+            # Saved before the call, so the screen can say which task the AI is on and for how long.
+            _progress(root, answered=answered, refused=refused, rounds=rounds, calls=calls,
+                      current_task=record["task"], current_task_label=TASK_LABELS.get(record["task"], "A drawing task"),
+                      current_target=str(record.get("target") or ""), task_number=number,
+                      tasks_in_round=len(waiting), tasks_done=number - 1, tasks_remaining=len(waiting) - number + 1,
+                      request_started_at=now(), last_progress_at=now(), last_problem=problem)
             try:
                 provider = ai_provider.recorded(provider_for(record["task"]), root, f"drawing:{record['task']}")
                 reply, _raw = provider.propose(_prompt(record, grid), image_paths=images)
                 calls += 1
             except ai_provider.UsageLimitReached:
                 raise
-            except Exception:  # an unreadable reply or a failed call: tried again next round, up to MAX_ATTEMPTS
+            except Exception as error:  # an unreadable reply or a failed call: tried again next round, up to MAX_ATTEMPTS
                 calls += 1
+                label = TASK_LABELS.get(record["task"], "A drawing task")
+                again = tried[record["run_id"]] < MAX_ATTEMPTS
+                why = (f"got no reply within {error.seconds} seconds" if isinstance(error, ai_provider.ProviderTimeout)
+                       else "failed")
+                problem = (f"{label} ({_target_text(record)}) {why}; "
+                           + ("it will be tried once more." if again else "it was left for a person to check."))
+                _progress(root, answered=answered, refused=refused, rounds=rounds, calls=calls,
+                          tasks_done=number, tasks_remaining=len(waiting) - number,
+                          request_started_at=None, last_progress_at=now(), last_problem=problem)
                 continue
             size = _grid_size(record["task"], reply, sizes) if grid else None
             if size:
@@ -193,13 +241,24 @@ def answer_all(web, project, step=lambda *args: None, provider_for=None):
                 refused += 1
             else:
                 answered += 1
-        _progress(root, answered, refused, rounds)
+            _progress(root, answered=answered, refused=refused, rounds=rounds, calls=calls,
+                      tasks_done=number, tasks_remaining=len(waiting) - number,
+                      request_started_at=None, last_progress_at=now())
+    _progress(root, answered=answered, refused=refused, rounds=rounds, calls=calls, current_task=None,
+              current_task_label=None, current_target=None, request_started_at=None, last_progress_at=now())
     return {"answered": answered, "refused": refused, "rounds": rounds, "calls": calls}
 
 
-def _progress(root, answered, refused, rounds):
+def _target_text(record):
+    """Where a task looks, for the screen: "page 20" (from targets such as "page-20-dimension-1")."""
+    match = re.search(r"page-(\d+)", str(record.get("target") or ""))
+    return f"page {match.group(1)}" if match else "the drawing set"
+
+
+def _progress(root, **fields):
+    """Merge live progress into the running job's file (left alone when no run is in progress)."""
     path = root / JOB_FILE
     job = read_json(path)
-    if job:
-        job.update({"answered": answered, "refused": refused, "rounds": rounds})
+    if job and job.get("status") in {"queued", "running"}:
+        job.update(fields)
         write_json(path, job)

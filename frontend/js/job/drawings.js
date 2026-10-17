@@ -15,7 +15,7 @@ const RUNNING = new Set([
 function stateOf(data) {
   const status = String(data?.status || data?.state || "").toLowerCase();
   if (
-    ["done", "complete", "completed", "confirmed", "ready"].includes(status)
+    ["done", "complete", "completed", "confirmed", "ready", "needs_review"].includes(status)
   ) {
     return "done";
   }
@@ -36,6 +36,38 @@ function pageReadingProblem(data) {
   return "Reading the pages stopped before it finished. Try again to continue.";
 }
 
+const pageOf = (target) => {
+  const match = String(target || "").match(/page-(\d+)/);
+  return match ? ` on page ${match[1]}` : "";
+};
+
+function duration(seconds) {
+  const value = Math.max(0, Math.round(Number(seconds) || 0));
+  if (value < 60) return `${value} s`;
+  const minutes = Math.floor(value / 60);
+  const rest = value % 60;
+  return rest ? `${minutes} min ${rest} s` : `${minutes} min`;
+}
+
+// What the drawing-task job is doing right now, from the progress it saves before and after each AI call.
+function drawingTaskProgress(data) {
+  if (!data?.current_task_label) {
+    return data?.step_label ? `${data.step_label}.` : "Getting the drawing tasks ready.";
+  }
+  const parts = [
+    `${data.current_task_label}${pageOf(data.current_target)}: task ${data.task_number} of ${data.tasks_in_round} in round ${data.rounds || 1}.`,
+  ];
+  if (Number.isFinite(Number(data.request_seconds)) && data.request_seconds !== null) {
+    const limit = Number(data.request_limit_s);
+    parts.push(
+      `Waiting for the AI for ${duration(data.request_seconds)}${limit && data.request_seconds >= 60 ? ` (it stops waiting at ${duration(limit)})` : ""}.`,
+    );
+  }
+  const answered = Number(data.answered) || 0;
+  if (answered) parts.push(`${answered} task${answered === 1 ? "" : "s"} answered so far.`);
+  return parts.join(" ");
+}
+
 function stageLine(data, kind, status, plan) {
   if (kind === "pages") {
     if (STOPPED.has(String(data?.status || "").toLowerCase())) {
@@ -43,6 +75,9 @@ function stageLine(data, kind, status, plan) {
     }
     const read = Number(data?.pages_read ?? data?.read ?? 0);
     const total = Number(data?.page_count ?? data?.total ?? 0);
+    if (stateOf(data) === "done") {
+      return total ? `${total} of ${total} pages read.` : "Every page has been read.";
+    }
     return total
       ? `${read} of ${total} pages read.`
       : "Reading the drawing pages.";
@@ -53,6 +88,10 @@ function stageLine(data, kind, status, plan) {
       : "Looking for equipment in the drawing set.";
   }
   if (kind === "rooms") {
+    if (stateOf(data) === "active") return drawingTaskProgress(data);
+    if (STOPPED.has(String(data?.status || "").toLowerCase())) {
+      return "Tracing the rooms stopped before it finished. What it found so far is kept.";
+    }
     const traced = (plan.rooms || []).filter((room) => room.has_outline);
     const stillFinding = (plan.rooms || []).filter(
       (room) => room.state === "finding_area",
@@ -69,6 +108,12 @@ function stageLine(data, kind, status, plan) {
       : "Reading the room labels and plan outlines.";
   }
   if (kind === "envelope") {
+    if (data?.status === "needs_review") {
+      return "Wall, roof, floor and window details are ready. Values the drawings don't give are labelled assumptions.";
+    }
+    if (data?.status === "running" || data?.status === "queued") {
+      return "Working through the room boundaries and materials.";
+    }
     if (data?.status === "failed") {
       return "Working out the walls, roof and floor stopped part-way. What it found so far is kept.";
     }
@@ -101,7 +146,11 @@ function stage(title, data, kind, status, plan, retryEndpoint = "") {
     failed && retryEndpoint
       ? `<button class="job-button secondary" data-retry="${retryEndpoint}">Try again</button><p class="job-note" role="status"></p>`
       : "";
-  return `<li class="job-stage ${state}"><span class="job-stage-icon" aria-hidden="true">${state === "done" ? "✓" : ""}</span><span><strong>${title}</strong><p>${escapeHtml(copy)}</p>${retry}</span></li>`;
+  const problem =
+    kind === "rooms" && data?.last_problem
+      ? `<p class="job-caption" data-stage-problem>${escapeHtml(data.last_problem)}</p>`
+      : "";
+  return `<li class="job-stage ${state}" data-stage="${kind}"><span class="job-stage-icon" aria-hidden="true">${state === "done" ? "✓" : ""}</span><span><strong>${title}</strong><p>${escapeHtml(copy)}</p>${problem}${retry}</span></li>`;
 }
 
 // The first step of a new job: the PDF is read (titles, drawing types, previews) and its drawing pages prepared.
@@ -185,52 +234,135 @@ function statusSentence(data, status, plan) {
 }
 
 const preparing = (newJob) => Boolean(newJob && !newJob.drawings_ready);
-const REFRESH_MS = 4000;
+const REFRESH_MS = 5000;
+let watchGeneration = 0;
 
-// While the PDF is being read, keep the step's line current and redraw the screen when it finishes.
-function watchPreparation(projectId, newJob) {
-  if (newJob?.state !== "running") return;
-  const hash = location.hash;
-  const tick = async () => {
-    if (location.hash !== hash || !document.querySelector("[data-preparation-stage]")) return;
-    const next = await getJson(`/api/new-job${query(projectId)}`).catch(() => null);
-    if (location.hash !== hash) return;
-    if (next?.state === "running") {
-      const line = document.querySelector("[data-preparation-line]");
-      if (line && next.step_label) line.textContent = next.step_label;
-      setTimeout(tick, REFRESH_MS);
-    } else {
+// The light status endpoints behind the stage list (the plan itself is only re-read when a stage finishes).
+async function fetchStages(projectId) {
+  const [reading, equipment, rooms, envelope, calculation, newJob] = await Promise.all([
+    getJson(`/api/page-reading${query(projectId)}`).catch(() => null),
+    getJson(`/api/page-extraction${query(projectId)}&kind=equipment_appliances`).catch(() => null),
+    getJson(`/api/drawing-tasks${query(projectId)}`).catch(() => null),
+    getJson(`/api/skill-workflow${query(projectId)}`).catch(() => null),
+    getJson(`/api/job-calculation${query(projectId)}`).catch(() => null),
+    getJson(`/api/new-job${query(projectId)}`).catch(() => null),
+  ]);
+  return { reading, equipment, rooms, envelope, calculation, newJob };
+}
+
+function stagesMarkup(data, status, plan) {
+  return `${preparationStage(data.newJob)}
+        ${stage("Read every page", data.reading, "pages", status, plan, "/api/page-reading")}
+        ${stage("Find equipment", data.equipment, "equipment", status, plan)}
+        ${stage("Trace the rooms and walls", data.rooms, "rooms", status, plan, "/api/drawing-tasks")}
+        ${stage("Work out walls, roof, floor and windows", data.envelope, "envelope", status, plan, "/api/skill-workflow")}
+        ${stage("Calculate each room’s empty-room load", data.calculation, "calculation", status, plan, "/api/job-calculation")}`;
+}
+
+function sentenceFor(data, status, plan) {
+  const newJob = data.newJob;
+  if (preparing(newJob)) {
+    return newJob.state === "failed"
+      ? "Preparing the drawing set stopped. Try again to continue."
+      : newJob.state === "running"
+        ? "Toki is reading the PDF. You can close this page; it keeps going."
+        : "Read the PDF to start this job.";
+  }
+  return statusSentence(data, status, plan);
+}
+
+// Which stages are finished and which one is working; when this changes, the plan and facts are re-read too.
+function stageShape(data) {
+  const kinds = ["reading", "equipment", "rooms", "envelope", "calculation"];
+  const shape = kinds.map((kind) => `${kind}:${stateOf(data[kind])}`);
+  shape.push(`prep:${data.newJob?.state || ""}`);
+  return shape.join("|");
+}
+
+function anyWorking(data) {
+  if (data.newJob?.state === "running") return true;
+  return ["reading", "equipment", "rooms", "envelope", "calculation"].some(
+    (kind) => stateOf(data[kind]) === "active",
+  );
+}
+
+function bindStageButtons(projectId, container) {
+  container.querySelector("[data-start-new-job]")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      await sendJson("/api/new-job", { project_id: projectId });
       window.dispatchEvent(new HashChangeEvent("hashchange"));
+    } catch (error) {
+      button.disabled = false;
+      const note = button.parentElement?.querySelector(".job-note");
+      if (note) note.textContent = error.message;
     }
+  });
+  container.querySelectorAll("[data-retry]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      try {
+        const endpoint = button.dataset.retry;
+        const body =
+          endpoint === "/api/job-calculation"
+            ? { project_id: projectId, phase: "phase1_base_room", reviewer: "Job workspace" }
+            : {
+                project_id: projectId,
+                action: "retry",
+                ...(endpoint === "/api/page-extraction" ? { kind: "equipment_appliances" } : {}),
+              };
+        await sendJson(endpoint, body);
+        window.dispatchEvent(new HashChangeEvent("hashchange"));
+      } catch (error) {
+        button.disabled = false;
+        const note = button.parentElement?.querySelector(".job-note");
+        if (note) note.textContent = error.message;
+      }
+    });
+  });
+}
+
+// While any stage is working, re-read the stage statuses every few seconds and redraw the list in place. Nothing is
+// started or restarted here. It stops when the person leaves this screen, when a newer redraw starts its own watch,
+// or when nothing is working; a stage finishing redraws the whole screen once (so the plan and facts update too).
+function watchStages(projectId, data, status, plan) {
+  const generation = ++watchGeneration;
+  if (!anyWorking(data)) return;
+  const hash = location.hash;
+  const list = document.querySelector(".job-stage-list");
+  let shape = stageShape(data);
+  const stillHere = () =>
+    generation === watchGeneration && location.hash === hash && list && document.contains(list);
+  const tick = async () => {
+    if (!stillHere()) return;
+    const next = await fetchStages(projectId);
+    if (!stillHere()) return;
+    if (stageShape(next) !== shape) {
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+      return;
+    }
+    shape = stageShape(next);
+    list.innerHTML = stagesMarkup(next, status, plan);
+    bindStageButtons(projectId, list);
+    const sentence = document.querySelector(".job-status");
+    if (sentence) sentence.textContent = sentenceFor(next, status, plan);
+    if (anyWorking(next)) setTimeout(tick, REFRESH_MS);
   };
   setTimeout(tick, REFRESH_MS);
 }
 
 export async function renderDrawings(project, projectId) {
-  const [plan, reading, equipment, rooms, envelope, calculation, newJob] =
-    await Promise.all([
-      getJson(`/api/job-plan${query(projectId)}`),
-      getJson(`/api/page-reading${query(projectId)}`).catch(() => null),
-      getJson(
-        `/api/page-extraction${query(projectId)}&kind=equipment_appliances`,
-      ).catch(() => null),
-      getJson(`/api/drawing-tasks${query(projectId)}`).catch(() => null),
-      getJson(`/api/skill-workflow${query(projectId)}`).catch(() => null),
-      getJson(`/api/job-calculation${query(projectId)}`).catch(() => null),
-      getJson(`/api/new-job${query(projectId)}`).catch(() => null),
-    ]);
+  const [plan, data] = await Promise.all([
+    getJson(`/api/job-plan${query(projectId)}`),
+    fetchStages(projectId),
+  ]);
   const status = plan.status || {};
-  const data = { reading, equipment, rooms, envelope, calculation };
   const content = `<div class="job-columns">
     <section class="job-panel job-progress-panel" aria-labelledby="doing-title">
       <h2 id="doing-title">What the AI is doing</h2>
       <ol class="job-stage-list">
-        ${preparationStage(newJob)}
-        ${stage("Read every page", reading, "pages", status, plan, "/api/page-reading")}
-        ${stage("Find equipment", equipment, "equipment", status, plan)}
-        ${stage("Trace the rooms and walls", rooms, "rooms", status, plan, "/api/drawing-tasks")}
-        ${stage("Work out walls, roof, floor and windows", envelope, "envelope", status, plan, "/api/skill-workflow")}
-        ${stage("Calculate each room’s empty-room load", calculation, "calculation", status, plan, "/api/job-calculation")}
+        ${stagesMarkup(data, status, plan)}
       </ol>
       <p class="job-caption">The review keeps going in the background. You can close this page and come back later.</p>
     </section>
@@ -244,56 +376,11 @@ export async function renderDrawings(project, projectId) {
   return {
     content,
     status,
-    statusLine: preparing(newJob)
-      ? newJob.state === "failed"
-        ? "Preparing the drawing set stopped. Try again to continue."
-        : newJob.state === "running"
-          ? "Toki is reading the PDF. You can close this page; it keeps going."
-          : "Read the PDF to start this job."
-      : statusSentence(data, status, plan),
+    statusLine: sentenceFor(data, status, plan),
     plan,
     bind: () => {
-      watchPreparation(projectId, newJob);
-      document.querySelector("[data-start-new-job]")?.addEventListener("click", async (event) => {
-        const button = event.currentTarget;
-        button.disabled = true;
-        try {
-          await sendJson("/api/new-job", { project_id: projectId });
-          window.dispatchEvent(new HashChangeEvent("hashchange"));
-        } catch (error) {
-          button.disabled = false;
-          const note = button.parentElement?.querySelector(".job-note");
-          if (note) note.textContent = error.message;
-        }
-      });
-      document.querySelectorAll("[data-retry]").forEach((button) => {
-        button.addEventListener("click", async () => {
-          button.disabled = true;
-          try {
-            const endpoint = button.dataset.retry;
-            const body =
-              endpoint === "/api/job-calculation"
-                ? {
-                    project_id: projectId,
-                    phase: "phase1_base_room",
-                    reviewer: "Job workspace",
-                  }
-                : {
-                    project_id: projectId,
-                    action: "retry",
-                    ...(endpoint === "/api/page-extraction"
-                      ? { kind: "equipment_appliances" }
-                      : {}),
-                  };
-            await sendJson(endpoint, body);
-            location.reload();
-          } catch (error) {
-            button.disabled = false;
-            const note = button.parentElement?.querySelector(".job-note");
-            if (note) note.textContent = error.message;
-          }
-        });
-      });
+      bindStageButtons(projectId, document.querySelector(".job-progress-panel") || document);
+      watchStages(projectId, data, status, plan);
     },
   };
 }
