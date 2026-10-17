@@ -68,6 +68,35 @@ function drawingTaskProgress(data) {
   return parts.join(" ");
 }
 
+// Drawing tasks the AI couldn't answer because a call failed (not because of anything on the drawing).
+const CALL_FAILURES = new Set(["connection", "timeout", "service_error"]);
+const callFailures = (data) =>
+  (data?.unresolved || []).filter((row) => CALL_FAILURES.has(row.kind));
+
+function unansweredLine(data) {
+  const failed = callFailures(data);
+  const connection = failed.filter((row) => row.kind === "connection").length;
+  const named = failed.map((row) => `${row.label}${pageOf(row.target)}`).join("; ");
+  const why = data?.connection_stopped
+    ? "the connection to the AI service kept failing, so the calls were stopped"
+    : connection === failed.length
+      ? "the connection to the AI service failed"
+      : "the AI's calls failed or timed out";
+  const notTried = Number(data?.not_tried) || 0;
+  return `${failed.length} drawing task${failed.length === 1 ? "" : "s"} got no answer because ${why}: ${named}.${notTried ? ` ${notTried} more ${notTried === 1 ? "was" : "were"} not tried.` : ""} Nothing was concluded about the drawings. Try again to send them again.`;
+}
+
+// The failed envelope step(s), by name and reason, and what is redone on retry.
+function envelopeFailureLine(data) {
+  const steps = data?.failed_steps || [];
+  if (!steps.length) {
+    return "Working out the walls, roof and floor stopped part-way. What it found so far is kept.";
+  }
+  const named = steps.map((row) => `${row.label}: ${row.reason}.`).join(" ");
+  const uses = [...new Set(steps.flatMap((row) => row.uses_it || []))];
+  return `${named} The other steps finished and are kept. Try again redoes ${steps.map((row) => row.label.toLowerCase()).join(" and ")}${uses.length ? `, and ${uses.join(", ").toLowerCase()} if ${steps.length === 1 ? "its" : "their"} answer changes` : ""}.`;
+}
+
 function stageLine(data, kind, status, plan) {
   if (kind === "pages") {
     if (STOPPED.has(String(data?.status || "").toLowerCase())) {
@@ -89,6 +118,7 @@ function stageLine(data, kind, status, plan) {
   }
   if (kind === "rooms") {
     if (stateOf(data) === "active") return drawingTaskProgress(data);
+    if (stateOf(data) === "done" && callFailures(data).length) return unansweredLine(data);
     if (STOPPED.has(String(data?.status || "").toLowerCase())) {
       return "Tracing the rooms stopped before it finished. What it found so far is kept.";
     }
@@ -114,9 +144,7 @@ function stageLine(data, kind, status, plan) {
     if (data?.status === "running" || data?.status === "queued") {
       return "Working through the room boundaries and materials.";
     }
-    if (data?.status === "failed") {
-      return "Working out the walls, roof and floor stopped part-way. What it found so far is kept.";
-    }
+    if (data?.status === "failed") return envelopeFailureLine(data);
     return data?.status === "done" || data?.status === "complete"
       ? "Wall, roof, floor and window details are ready."
       : "Working through the room boundaries and materials.";
@@ -139,15 +167,19 @@ function stage(title, data, kind, status, plan, retryEndpoint = "") {
         : RUNNING.has(String(data?.status || "").toLowerCase())
           ? "active"
           : "waiting"
-      : stateOf(data);
-  const failed = STOPPED.has(String(data?.status || "").toLowerCase());
+      : kind === "rooms" && stateOf(data) === "done" && callFailures(data).length
+        ? "waiting"
+        : stateOf(data);
+  const failed =
+    STOPPED.has(String(data?.status || "").toLowerCase()) ||
+    (kind === "rooms" && stateOf(data) === "done" && callFailures(data).length > 0);
   const copy = stageLine(data, kind, status, plan);
   const retry =
     failed && retryEndpoint
       ? `<button class="job-button secondary" data-retry="${retryEndpoint}">Try again</button><p class="job-note" role="status"></p>`
       : "";
   const problem =
-    kind === "rooms" && data?.last_problem
+    kind === "rooms" && data?.last_problem && stateOf(data) === "active"
       ? `<p class="job-caption" data-stage-problem>${escapeHtml(data.last_problem)}</p>`
       : "";
   return `<li class="job-stage ${state}" data-stage="${kind}"><span class="job-stage-icon" aria-hidden="true">${state === "done" ? "✓" : ""}</span><span><strong>${title}</strong><p>${escapeHtml(copy)}</p>${problem}${retry}</span></li>`;
@@ -210,16 +242,25 @@ function statusSentence(data, status, plan) {
     ["envelope", data.envelope],
     ["calculation", data.calculation],
   ];
-  const current = order.find(([kind, value]) => {
+  // A stage that stopped and needs Try again comes first, then the one working right now, then the first unfinished.
+  const unfinished = ([kind, value]) => {
     if (kind === "calculation") return !status.phase1_complete;
+    if (kind === "rooms" && stateOf(value) === "done" && callFailures(value).length) return true;
     return value && stateOf(value) !== "done";
-  });
+  };
+  const current =
+    order.find(([, value]) => STOPPED.has(String(value?.status || "").toLowerCase())) ||
+    order.find(([kind, value]) => kind !== "calculation" && stateOf(value) === "active") ||
+    order.find(unfinished);
   if (!current) return "The drawing review is ready to continue.";
   const [kind, value] = current;
+  if (kind === "rooms" && stateOf(value) === "done") {
+    return `Some drawing tasks got no answer because ${value.connection_stopped || callFailures(value).every((row) => row.kind === "connection") ? "the connection to the AI service failed" : "the AI's calls failed"}. Try again under Trace the rooms and walls.`;
+  }
   if (STOPPED.has(String(value?.status || "").toLowerCase())) {
     if (kind === "pages") return pageReadingProblem(value);
     return kind === "envelope"
-      ? "Working out the walls, roof and floor stopped. Try again to continue."
+      ? `${(value.failed_steps || []).map((row) => row.label).join(" and ") || "Working out the walls, roof and floor"} stopped. Try again to continue; finished steps are kept.`
       : "A drawing step stopped. Try again to continue.";
   }
   const copy = stageLine(value, kind, status, plan);

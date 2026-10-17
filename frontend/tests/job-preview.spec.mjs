@@ -410,6 +410,79 @@ test("polling stops when the person leaves the Drawings screen", async ({ page }
   expect(counts.tasks).toBe(before);
 });
 
+test("drawing tasks left unanswered by a failed connection are listed, not ticked, and can be sent again", async ({
+  page,
+}) => {
+  await preview(page, { status: { stage: "drawings" } });
+  const posts = [];
+  await page.route("**/api/page-reading**", (route) =>
+    route.fulfill({ json: { status: "done", pages_read: 38, page_count: 38 } }),
+  );
+  await page.route("**/api/skill-workflow**", (route) => route.fulfill({ json: { status: "needs_review" } }));
+  await page.route("**/api/drawing-tasks**", async (route) => {
+    if (route.request().method() === "POST") {
+      posts.push(route.request().postDataJSON());
+      return route.fulfill({ json: { status: "running" } });
+    }
+    return route.fulfill({
+      json: {
+        status: "done", answered: 0, refused: 0, rounds: 1, calls: 3, connection_stopped: true, not_tried: 9,
+        unresolved: [
+          { task: "P0_dimensions", target: "page-20-dimension-1", label: "Reading the scale from a printed dimension", kind: "connection" },
+          { task: "P2_north", target: "page-25", label: "Finding north", kind: "connection" },
+        ],
+      },
+    });
+  });
+  await page.goto("/?preview=1#/job/job-1/drawings");
+  const tracing = page.locator('[data-stage="rooms"]');
+  await expect(tracing).not.toHaveClass(/done/);
+  await expect(tracing).toContainText(
+    "2 drawing tasks got no answer because the connection to the AI service kept failing, so the calls were stopped: Reading the scale from a printed dimension on page 20; Finding north on page 25. 9 more were not tried. Nothing was concluded about the drawings.",
+  );
+  await expect(page.locator(".job-status")).toContainText(
+    "Some drawing tasks got no answer because the connection to the AI service failed.",
+  );
+  await tracing.getByRole("button", { name: "Try again" }).click();
+  await expect.poll(() => posts.length).toBe(1);
+  expect(posts[0]).toEqual({ project_id: "job-1", action: "retry" });
+});
+
+test("a failed envelope step is named with its reason, and Try again resumes it", async ({ page }) => {
+  await preview(page, { status: { stage: "drawings" } });
+  const posts = [];
+  await page.route("**/api/page-reading**", (route) =>
+    route.fulfill({ json: { status: "done", pages_read: 38, page_count: 38 } }),
+  );
+  await page.route("**/api/drawing-tasks**", (route) => route.fulfill({ json: { status: "done", answered: 12 } }));
+  await page.route("**/api/skill-workflow**", async (route) => {
+    if (route.request().method() === "POST") {
+      posts.push(route.request().postDataJSON());
+      return route.fulfill({ json: { status: "running" } });
+    }
+    return route.fulfill({
+      json: {
+        status: "failed",
+        failed_steps: [{
+          id: "ceiling_height_volume", label: "Ceiling heights", kind: "answer_rejected",
+          reason: "the AI's answer didn't pass the checks (Each inference must be an object with a field name.)",
+          uses_it: ["Wall, roof and floor areas"],
+        }],
+      },
+    });
+  });
+  await page.goto("/?preview=1#/job/job-1/drawings");
+  const envelope = page.locator('[data-stage="envelope"]');
+  await expect(envelope).toContainText(
+    "Ceiling heights: the AI's answer didn't pass the checks (Each inference must be an object with a field name.). The other steps finished and are kept. Try again redoes ceiling heights, and wall, roof and floor areas if its answer changes.",
+  );
+  await expect(page.locator(".job-status")).toContainText("Ceiling heights stopped. Try again to continue; finished steps are kept.");
+  await expect(page.locator('[data-stage="rooms"]')).toHaveClass(/done/);   // the drawing tasks are not blamed
+  await envelope.getByRole("button", { name: "Try again" }).click();
+  await expect.poll(() => posts.length).toBe(1);
+  expect(posts[0]).toEqual({ project_id: "job-1", action: "retry" });
+});
+
 test("a refused AI key stops page reading with a plain reason and Try again", async ({
   page,
 }) => {

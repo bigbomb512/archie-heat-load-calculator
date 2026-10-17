@@ -1092,6 +1092,108 @@ def _text_citation(text):
             **({"page": pages[0]} if len(pages) == 1 else {"physical_pages": pages}), "excerpt": text.strip()[:400]}
 
 
+_INFERENCE_PART = re.compile(r"\s*([a-z_]+)\s*=\s*(.*?)\s*$", re.S)
+
+
+def _inference_from_text(text):
+    """An inference written as "field=heights[x].height_mm | value=2600 | unit=mm | method=... | citation_ids=p22,p29"
+    as an object; text that doesn't start with a field name is returned unchanged (and fails the shape check)."""
+    parts = str(text).split(" | ")
+    first = _INFERENCE_PART.match(parts[0])
+    if not first or first.group(1) != "field":
+        return text
+    item, key = {}, None
+    for part in parts:
+        match = _INFERENCE_PART.match(part)
+        if match:
+            key = match.group(1)
+            item[key] = match.group(2)
+        elif key:                                   # a " | " inside a value: keep it with that value
+            item[key] = f"{item[key]} | {part.strip()}"
+    value = item.get("value")
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"null", "none", ""}:
+            item["value"] = None
+        else:
+            try:
+                number = float(lowered)
+                item["value"] = int(number) if number.is_integer() and "." not in lowered else number
+            except ValueError:
+                pass
+    if isinstance(item.get("citation_ids"), str):
+        item["citation_ids"] = [entry.strip() for entry in item["citation_ids"].split(",") if entry.strip()]
+    return item
+
+
+def _public_text(value):
+    """Text safe to show: local file paths and anything that looks like a key are removed."""
+    text = str(value or "")
+    text = re.sub(r"(?:/Users/|/private/|/var/folders/|/tmp/|/home/)[^\s,;]+", "[project-local source]", text)
+    text = re.sub(r"(?i)(sk-[A-Za-z0-9_-]{12,}|Bearer\s+\S+)", "[redacted]", text)
+    return text[:500]
+
+
+# The steps of the review in the words the Drawings screen uses (others fall back to their id, spaced out).
+SUBSKILL_LABELS = {
+    "sheet_identity": "Drawing titles", "revision_scope": "Drawing revisions", "page_relationships": "How the pages relate",
+    "site_clue_extraction": "Site clues", "address_confirmation": "Site address",
+    "weather_source_matching": "Weather location", "room_identity_use": "Room names and uses",
+    "room_boundaries_areas": "Room areas", "ceiling_height_volume": "Ceiling heights",
+    "surface_inventory": "List of walls, roof and floor", "surface_area": "Wall, roof and floor areas",
+    "construction_matching": "Wall and roof construction", "boundary_resolution": "What each surface faces",
+    "cross_sheet_opening_match": "Doors and windows", "glazing_properties": "Glass properties",
+    "exposure_orientation": "Orientation", "shading": "Shading",
+}
+
+
+def _subskill_label(skill_id):
+    return SUBSKILL_LABELS.get(skill_id) or str(skill_id).replace("_", " ").capitalize()
+
+
+def _failure_reason(row):
+    """Why a step failed, in one plain clause, told apart by kind: the AI's answer, the connection, time, account."""
+    code = str(row.get("error_code") or "")
+    remediation = row.get("remediation")
+    text = " ".join(remediation) if isinstance(remediation, list) else str(remediation or "")
+    detail = str(row.get("validation_detail") or "")
+    if code == "skill_provider_usage_limit":
+        return "usage_limit", "the AI account's usage limit was reached"
+    if code == "skill_workflow_interrupted":
+        return "interrupted", "the server stopped while it was running"
+    if "connection to the" in text and "AI service failed" in text:
+        return "connection", "the connection to the AI service failed, so nothing was learned from the drawings"
+    if "No reply from the AI within" in text or code == "codex_cli_timeout":
+        return "timeout", "the AI didn't reply in time, so nothing was learned from the drawings"
+    if code == "skill_provider_invalid_json":
+        return "unreadable_reply", "the AI's reply couldn't be read"
+    if row.get("failure_phase") == "proposal_validation" or code.startswith("subskill_"):
+        return "answer_rejected", f"the AI's answer didn't pass the checks ({_public_text(detail or text)[:200]})"
+    if code.startswith("skill_provider_http_error_"):
+        return "service_error", "the AI service returned an error"
+    return "failed", _public_text(text or detail)[:200] or "it stopped unexpectedly"
+
+
+def _failed_steps(subskills):
+    """Each failed step with its reason and the steps that use its result (they are redone on retry if it changes)."""
+    in_scope = {row["id"]: row for row in subskills if row.get("status") not in {"not_in_scope", "not_applicable"}}
+    steps = []
+    for row in in_scope.values():
+        if row.get("status") != "failed":
+            continue
+        dependents, frontier = [], [row["id"]]
+        while frontier:
+            current = frontier.pop()
+            for other in in_scope.values():
+                if current in (other.get("prerequisites") or []) and other["id"] not in dependents:
+                    dependents.append(other["id"])
+                    frontier.append(other["id"])
+        kind, reason = _failure_reason(row)
+        steps.append({"id": row["id"], "label": _subskill_label(row["id"]), "kind": kind, "reason": reason,
+                      "uses_it": [_subskill_label(item) for item in dependents]})
+    return steps
+
+
 def _validate_subskill_output(subskill, result, registry, allowed_pages=None):
     envelope = set(registry["proposal_envelope"]["required"])
     if not isinstance(result, dict):
@@ -1181,6 +1283,16 @@ def _validate_subskill_output(subskill, result, registry, allowed_pages=None):
                 return True
         return False
     inferences, uncited = [], []
+    # A model sometimes writes each inference as one "field=... | value=... | unit=..." line instead of an object
+    # (Butcher Buffet's ceiling heights, 2026-10-17, which failed the whole skill). Those lines are read into objects
+    # and checked like any other inference; a line without a field name still fails below.
+    if isinstance(result.get("inferences"), list):
+        converted = [_inference_from_text(item) if isinstance(item, str) else item for item in result["inferences"]]
+        read_as_text = sum(1 for before, after in zip(result["inferences"], converted) if before is not after)
+        result["inferences"] = converted
+        if read_as_text:
+            result["remediation"] = list(result.get("remediation") or []) + [
+                f"Read {read_as_text} inference{'s' if read_as_text != 1 else ''} written as text lines."]
     for index, inference in enumerate(result.get("inferences", [])):
         if not isinstance(inference, dict) or not inference.get("field"):
             _validation_error("inference_shape", f"inferences[{index}]", "Each inference must be an object with a field name.")
@@ -3637,11 +3749,7 @@ def _response(web, project):
         manifest.update({"status": "failed", "error_code": "skill_workflow_interrupted", "remediation": INTERRUPTED_REMEDIATION})
     safe = deepcopy(manifest)
     safe.pop("error_details", None)
-    def public_text(value):
-        text = str(value or "")
-        text = re.sub(r"(?:/Users/|/private/|/var/folders/|/tmp/|/home/)[^\s,;]+", "[project-local source]", text)
-        text = re.sub(r"(?i)(sk-[A-Za-z0-9_-]{12,}|Bearer\s+\S+)", "[redacted]", text)
-        return text[:500]
+    public_text = _public_text
     labels = {
         "document_mapping": "Drawing set and page mapping", "project_location_weather": "Project location and weather",
         "rooms_geometry_gains": "Rooms, geometry, and gains", "opaque_envelope": "Opaque envelope",
@@ -3781,6 +3889,7 @@ def _response(web, project):
                           "provider set up on this server).")
     issues = [{"name": row["id"], "status": row["status"], "reason": public_text(_issue_reason(row))}
               for row in subskills if row["status"] in {"failed", "blocked"}]
+    failed_steps = _failed_steps(subskills)
     scan_state = safe.get("preparation", {}).get("scan_reading", {})
     if scan_state.get("status") in {"failed", "blocked"}:
         issues.append({"name": "Scanned plan area reading", "status": scan_state["status"],
@@ -3791,7 +3900,8 @@ def _response(web, project):
         "stale_reasons": [public_text(item) for item in safe.get("stale_reasons", [])], "remediation": public_text(safe.get("remediation", "")),
         "stages": stages, "findings": findings,
         "blocked_reason": public_text(blocked_reason or safe.get("blocked_reason", "")), "read_only": read_only,
-        "subskills": subskills, "issues": issues, "answers": _read(paths["root"] / ANSWERS_FILE, {}).get("answers", {}),
+        "subskills": subskills, "issues": issues, "failed_steps": failed_steps,
+        "answers": _read(paths["root"] / ANSWERS_FILE, {}).get("answers", {}),
         "answer_options": _answer_options(web, project, findings),
         "preparation": {"status": safe.get("preparation", {}).get("status", "not_started"),
                         "candidate_count": safe.get("preparation", {}).get("candidate_count", 0),

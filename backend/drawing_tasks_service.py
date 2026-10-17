@@ -34,6 +34,9 @@ STEPS = [("build", "Preparing the drawing tasks"), ("answer", "The AI is answeri
          ("skills", "Starting the skills")]
 MAX_ROUNDS = 8          # scale -> names -> outlines -> walls/openings -> kitchen: five stages, with room to spare
 MAX_ATTEMPTS = 2        # a refused reply is tried once more, told why it was refused
+# Connection failures on this many calls in a row mean the connection itself is broken (on Butcher Buffet,
+# 2026-10-17, all 24 calls failed the same way): the run stops calling instead of spending a call on every task.
+MAX_CONNECTION_FAILURES_IN_A_ROW = 3
 _JOB = BackgroundJob(JOB_FILE, STEPS, "archie-drawing-tasks",
                      "The drawing tasks stopped before they finished (the server was restarted). Retry to finish them.")
 
@@ -191,9 +194,14 @@ def answer_all(web, project, step=lambda *args: None, provider_for=None):
     root = Path(project["review_dir"])
     provider_for = provider_for or (lambda task: ai_provider.get(f"drawing:{task}"))
     tried = {}                 # run id -> calls made, so a task that keeps failing can't loop
+    failures = {}              # run id -> the last failed call of a task (it stays unanswered unless a later call works)
     answered = refused = calls = rounds = 0
     problem = ""
+    connection_failures_in_a_row = 0
+    connection_stopped = False
     for rounds in range(1, MAX_ROUNDS + 1):
+        if connection_stopped:
+            break
         step("build")
         autonomous_tasks_service.post(web, project, {"action": "run_all"})
         waiting = [record for record in _waiting(root) if tried.get(record["run_id"], 0) < MAX_ATTEMPTS
@@ -218,18 +226,28 @@ def answer_all(web, project, step=lambda *args: None, provider_for=None):
                 calls += 1
             except ai_provider.UsageLimitReached:
                 raise
-            except Exception as error:  # an unreadable reply or a failed call: tried again next round, up to MAX_ATTEMPTS
+            except Exception as error:  # a failed call or an unreadable reply: tried again next round, up to MAX_ATTEMPTS
                 calls += 1
-                label = TASK_LABELS.get(record["task"], "A drawing task")
-                again = tried[record["run_id"]] < MAX_ATTEMPTS
-                why = (f"got no reply within {error.seconds} seconds" if isinstance(error, ai_provider.ProviderTimeout)
-                       else "failed")
-                problem = (f"{label} ({_target_text(record)}) {why}; "
-                           + ("it will be tried once more." if again else "it was left for a person to check."))
+                kind = failure_kind(error)
+                failure = {"task": record["task"], "target": str(record.get("target") or ""),
+                           "label": TASK_LABELS.get(record["task"], "A drawing task"), "kind": kind,
+                           "message": failure_message(record, kind, error, again=tried[record["run_id"]] < MAX_ATTEMPTS)}
+                failures[record["run_id"]] = failure
+                problem = failure["message"]
+                connection_failures_in_a_row = connection_failures_in_a_row + 1 if kind == "connection" else 0
+                connection_stopped = connection_failures_in_a_row >= MAX_CONNECTION_FAILURES_IN_A_ROW
+                if connection_stopped:
+                    problem = (f"The connection to the AI service failed on {connection_failures_in_a_row} calls in a "
+                               "row, so the drawing tasks stopped calling it. Nothing was concluded about the drawings; "
+                               "try again when the connection works.")
                 _progress(root, answered=answered, refused=refused, rounds=rounds, calls=calls,
                           tasks_done=number, tasks_remaining=len(waiting) - number,
                           request_started_at=None, last_progress_at=now(), last_problem=problem)
+                if connection_stopped:
+                    break
                 continue
+            connection_failures_in_a_row = 0
+            failures.pop(record["run_id"], None)
             size = _grid_size(record["task"], reply, sizes) if grid else None
             if size:
                 reply = to_pixels(reply, size)
@@ -244,9 +262,44 @@ def answer_all(web, project, step=lambda *args: None, provider_for=None):
             _progress(root, answered=answered, refused=refused, rounds=rounds, calls=calls,
                       tasks_done=number, tasks_remaining=len(waiting) - number,
                       request_started_at=None, last_progress_at=now())
+    # Tasks whose calls failed and that are still unanswered: listed with why, never read as a finding.
+    unresolved = [failure for run_id, failure in failures.items()
+                  if (autonomous_tasks_service._current_task(root, failure["task"], failure["target"]) or {}).get("run_id") == run_id
+                  and (autonomous_tasks_service._current_task(root, failure["task"], failure["target"]) or {}).get("status") == "waiting_for_reply"]
+    not_tried = len([record for record in _waiting(root) if record["run_id"] not in tried]) if connection_stopped else 0
     _progress(root, answered=answered, refused=refused, rounds=rounds, calls=calls, current_task=None,
-              current_task_label=None, current_target=None, request_started_at=None, last_progress_at=now())
-    return {"answered": answered, "refused": refused, "rounds": rounds, "calls": calls}
+              current_task_label=None, current_target=None, request_started_at=None, last_progress_at=now(),
+              unresolved=unresolved, connection_stopped=connection_stopped, not_tried=not_tried)
+    return {"answered": answered, "refused": refused, "rounds": rounds, "calls": calls, "unresolved": unresolved,
+            "connection_stopped": connection_stopped, "not_tried": not_tried}
+
+
+def failure_kind(error):
+    """connection, timeout, service_error or unreadable_reply: what went wrong with a call, not with the drawing."""
+    if isinstance(error, ai_provider.ProviderTimeout):
+        return "timeout"
+    if isinstance(error, (ai_provider.ProviderTransportError, ConnectionError)) or (
+            isinstance(error, OSError) and not isinstance(error, TimeoutError)):
+        return "connection"
+    if isinstance(error, ValueError):
+        return "unreadable_reply"
+    return "service_error"
+
+
+def failure_message(record, kind, error, again):
+    """One plain sentence for the Drawings screen. A failed call says nothing about the drawing, and the text says so."""
+    where = f"{TASK_LABELS.get(record['task'], 'A drawing task')} ({_target_text(record)})"
+    if kind == "connection":
+        what = f"{where} couldn't get an answer: the connection to the AI service failed. Nothing was concluded about the drawing."
+    elif kind == "timeout":
+        what = f"{where} got no reply within {error.seconds} seconds. Nothing was concluded about the drawing."
+    elif kind == "unreadable_reply":
+        what = f"{where}: the AI's reply couldn't be read."
+    else:
+        what = f"{where}: the AI service returned an error. Nothing was concluded about the drawing."
+    if again:
+        return f"{what} It will be tried once more."
+    return f"{what} {'It was left for a person to check.' if kind == 'unreadable_reply' else 'Try again to send it again.'}"
 
 
 def _target_text(record):

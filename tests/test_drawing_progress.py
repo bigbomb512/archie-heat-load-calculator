@@ -16,8 +16,8 @@ from backend.job_runner import write_json
 from tests.test_drawing_tasks import FakeTasks
 
 
-class TricklingResponse:
-    """A host that sends a byte every 50 ms and never finishes (what held the Casa Nova run for 676 s)."""
+class StalledResponse:
+    """A host that answers the headers and then goes quiet (what held the Casa Nova run for 676 s)."""
 
     def __enter__(self):
         return self
@@ -26,8 +26,8 @@ class TricklingResponse:
         return False
 
     def read(self, amount=-1):
-        time.sleep(0.05)
-        return b" "
+        time.sleep(3)
+        return b"{}"
 
 
 class WholeReplyResponse(io.BytesIO):
@@ -39,8 +39,8 @@ class WholeReplyResponse(io.BytesIO):
 
 
 class ProviderTimeLimitTests(unittest.TestCase):
-    def test_a_trickling_reply_is_stopped_at_the_whole_request_limit(self):
-        provider = ai_provider.OpenRouterProvider(api_key="or-test", opener=lambda request, timeout=None: TricklingResponse())
+    def test_a_stalled_reply_is_stopped_at_the_whole_request_limit(self):
+        provider = ai_provider.OpenRouterProvider(api_key="or-test", opener=lambda request, timeout=None: StalledResponse())
         provider.deadline_s = 0.3
         started = time.monotonic()
         with self.assertRaises(ai_provider.ProviderTimeout) as caught:
@@ -72,7 +72,8 @@ class ProviderTimeLimitTests(unittest.TestCase):
         provider = ai_provider.OpenRouterProvider(api_key="or-test", opener=open_)
         provider.deadline_s = 300
         self.assertEqual(provider.propose("x")[0], {"answer": "ok"})
-        self.assertEqual(seen, [300])
+        self.assertEqual(len(seen), 1)
+        self.assertTrue(299 < seen[0] <= 300)
 
     def test_only_drawing_calls_get_the_limit_and_it_can_be_set(self):
         with patch.dict(os.environ, {"OPENROUTER_API_KEY": "or-test", "ARCHIE_AI_PROVIDER": "openrouter"}, clear=False):
@@ -155,8 +156,9 @@ class DrawingProgressTests(unittest.TestCase):
         self.assertEqual(len(outline_calls), 2)                     # bounded: one retry in the next round, no more
         self.assertEqual(fake.records[("P0_room_outlines", "page-20")]["status"], "waiting_for_reply")   # evidence kept
         self.assertEqual(job["last_problem"],
-                         "Tracing the room outlines (page 20) got no reply within 300 seconds; "
-                         "it was left for a person to check.")
+                         "Tracing the room outlines (page 20) got no reply within 300 seconds. Nothing was concluded "
+                         "about the drawing. Try again to send it again.")
+        self.assertEqual([(row["task"], row["kind"]) for row in job["unresolved"]], [("P0_room_outlines", "timeout")])
         self.assertEqual(sum(row.get("error") == "timeout" for row in log), 2)
         self.assertEqual(fake.records[("P0_room_names", "page-20")]["status"], "applied")   # other tasks carried on
 

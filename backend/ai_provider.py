@@ -32,12 +32,15 @@ pass, provider and model, seconds, tokens, prompt size, images, and whether it s
 """
 
 import base64
+import errno
+import http.client
 from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import socket
 import subprocess
 import tempfile
 import threading
@@ -68,6 +71,9 @@ TIMEOUT_S = 600
 # slowest successful drawing call in the saved runs was a room outline at 189 s (about 26,000 output tokens), most
 # take under 50 s; 300 s leaves room for that and stops a stalled request in five minutes.
 DRAWING_TIMEOUT_S = 300
+# A connection refused or unreachable before the request is sent is tried again after these waits (fresh request each
+# time); nothing reached the service, so nothing was charged. Failures after sending are not retried here.
+CONNECT_RETRY_DELAYS_S = (2, 5)
 
 
 def drawing_timeout_s():
@@ -101,6 +107,16 @@ class ProviderUnavailable(RuntimeError):
 
 class UsageLimitReached(RuntimeError):
     """The plan's or account's AI allowance is used up; every further call would fail the same way."""
+
+
+class ProviderTransportError(RuntimeError):
+    """The connection to the AI service failed (refused, reset, closed, unreachable). Says nothing about the drawings
+    or pages: the task stays unanswered. may_have_run is False only when the request never reached the service."""
+
+    def __init__(self, provider_name, reason, may_have_run=True):
+        detail = getattr(reason, "strerror", None) or str(reason) or type(reason).__name__
+        super().__init__(f"The connection to the {provider_name} AI service failed ({detail}).")
+        self.may_have_run = may_have_run
 
 
 class ProviderTimeout(RuntimeError):
@@ -324,17 +340,54 @@ class _HttpProvider:
         return None
 
     def _post(self, url, headers, body):
+        """POST and read the JSON reply. A connection that fails before the request reaches the service is tried again
+        with a fresh request (CONNECT_RETRY_DELAYS_S, nothing can have been charged); a failure after it was sent is
+        raised at once (ProviderTransportError), because the service may already have run and charged it. With
+        deadline_s set, the whole request (every try and wait) ends at that limit."""
+        deadline = time.monotonic() + self.deadline_s if self.deadline_s else None
+        for delay in (*CONNECT_RETRY_DELAYS_S, None):
+            try:
+                return self._post_within(url, headers, body, deadline)
+            except ProviderTransportError as error:
+                if error.may_have_run or delay is None or (deadline and time.monotonic() + delay >= deadline):
+                    raise
+                time.sleep(delay)
+
+    def _post_within(self, url, headers, body, deadline):
+        """One fresh request; with a deadline it runs in a worker thread and is abandoned at the deadline."""
+        if deadline is None:
+            return self._post_once(url, headers, body, self.timeout)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ProviderTimeout(self.deadline_s)
+        outcome = {}
+
+        def run():
+            try:
+                outcome["reply"] = self._post_once(url, headers, body, min(self.timeout, remaining))
+            except BaseException as error:  # handed to the waiting thread
+                outcome["error"] = error
+
+        worker = threading.Thread(target=run, daemon=True, name="archie-ai-request")
+        worker.start()
+        worker.join(remaining)
+        if worker.is_alive():
+            # The worker stops on its own at its socket timeout; its reply, if any, is discarded.
+            raise ProviderTimeout(self.deadline_s)
+        if "error" in outcome:
+            error = outcome["error"]
+            if isinstance(error, TimeoutError) or (isinstance(error, ProviderTransportError)
+                                                   and isinstance(error.__cause__, TimeoutError)):
+                raise ProviderTimeout(self.deadline_s) from error
+            raise error
+        return outcome["reply"]
+
+    def _post_once(self, url, headers, body, timeout):
         request = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), method="POST",
                                          headers={"Content-Type": "application/json", **headers})
-        deadline = time.monotonic() + self.deadline_s if self.deadline_s else None
         try:
-            with self.opener(request, timeout=min(self.timeout, self.deadline_s) if deadline else self.timeout) as response:
-                body = _read_before(response, deadline) if deadline else response.read()
-                return json.loads(body.decode("utf-8"))
-        except TimeoutError as error:  # socket.timeout: no bytes for the whole remaining time
-            if deadline:
-                raise ProviderTimeout(self.deadline_s) from error
-            raise
+            with self.opener(request, timeout=timeout) as response:
+                reply = response.read()
         except urllib.error.HTTPError as error:
             detail = error.read().decode("utf-8", "replace")[:2000] if hasattr(error, "read") else ""
             limit = usage_limit_message(detail)
@@ -344,32 +397,22 @@ class _HttpProvider:
                 raise RuntimeError("The AI provider is rate-limiting requests (HTTP 429). Retry shortly.") from error
             raise RuntimeError(f"The {self.name} API returned HTTP {error.code}: {' '.join(detail.split())[:300]}") from error
         except urllib.error.URLError as error:
-            if deadline and isinstance(error.reason, TimeoutError):
-                raise ProviderTimeout(self.deadline_s) from error
-            raise RuntimeError(f"The {self.name} API couldn't be reached: {error.reason}") from error
+            if isinstance(error.reason, TimeoutError):
+                raise ProviderTransportError(self.name, error.reason, may_have_run=True) from error.reason
+            raise ProviderTransportError(self.name, error.reason,
+                                         may_have_run=not _failed_before_sending(error.reason)) from error
+        except TimeoutError:
+            raise
+        except (OSError, http.client.HTTPException) as error:
+            # Reset, closed or broken connections while waiting for or reading the reply: the request was sent.
+            raise ProviderTransportError(self.name, error, may_have_run=True) from error
+        return json.loads(reply.decode("utf-8"))
 
 
-def _response_socket(response):
-    """The socket under an http.client response, when it can be reached (None for test doubles)."""
-    raw = getattr(getattr(response, "fp", None), "raw", None)
-    return getattr(raw, "_sock", None)
-
-
-def _read_before(response, deadline):
-    """Read the whole body, giving up at the deadline even when the host trickles bytes (each read is limited to the
-    time left, so a host that sends a little and then goes quiet can't hold the request open)."""
-    sock = _response_socket(response)
-    chunks = []
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise TimeoutError("deadline passed while reading the reply")
-        if sock is not None:
-            sock.settimeout(remaining)
-        chunk = response.read(65536)
-        if not chunk:
-            return b"".join(chunks)
-        chunks.append(chunk)
+def _failed_before_sending(reason):
+    """True when the connection failed before the request could reach the service (no answer, no charge)."""
+    return isinstance(reason, (ConnectionRefusedError, socket.gaierror)) or (
+        isinstance(reason, OSError) and reason.errno in {errno.ECONNREFUSED, errno.ENETUNREACH, errno.EHOSTUNREACH})
 
 
 class OpenAIProvider(_HttpProvider):
@@ -589,7 +632,8 @@ class recorded:
                 **entry,
                 "model": raw.get("model") or entry["model"],
                 "seconds": raw.get("seconds") or raw.get("duration_seconds") or round(time.monotonic() - started, 2),
-                "error": "timeout" if isinstance(error, ProviderTimeout) else "failed",
+                "error": ("timeout" if isinstance(error, ProviderTimeout)
+                          else "connection" if isinstance(error, ProviderTransportError) else "failed"),
                 "detail": str(error)[:300],
                 **({"input_tokens": usage["input_tokens"]} if isinstance(usage.get("input_tokens"), int) else {}),
                 **({"output_tokens": usage["output_tokens"]} if isinstance(usage.get("output_tokens"), int) else {}),
