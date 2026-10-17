@@ -184,6 +184,24 @@ class HttpProviderTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "not valid JSON"):
             provider.propose("x")
 
+    def test_invalid_json_reply_retains_provider_output_and_completion_metadata(self):
+        captured = []
+        reply = {
+            "model": "deepseek/deepseek-v4.1-flash",
+            "provider": "DigitalOcean",
+            "choices": [{"message": {"content": '{"rooms": ['}, "finish_reason": "length"}],
+            "usage": {"prompt_tokens": 1000, "completion_tokens": 48000},
+        }
+        provider = ai_provider.OpenRouterProvider(
+            api_key="or-test", model="deepseek/deepseek-v4.1-flash", opener=opener(reply, captured)
+        )
+        with self.assertRaises(ai_provider.InvalidProviderReply) as raised:
+            provider.propose("Trace the rooms.")
+        self.assertEqual(raised.exception.raw_record["reply_text"], '{"rooms": [')
+        self.assertEqual(raised.exception.raw_record["finish_reason"], "length")
+        self.assertEqual(raised.exception.raw_record["upstream"], "DigitalOcean")
+        self.assertEqual(raised.exception.raw_record["usage"]["output_tokens"], 48000)
+
 
 class CodexCliTests(unittest.TestCase):
     def setUp(self):
@@ -366,6 +384,28 @@ class UsageLogTests(unittest.TestCase):
         self.assertEqual(summary["by_pass"]["skills"]["input_tokens"], 1000)
         with tempfile.TemporaryDirectory() as empty:
             self.assertEqual(ai_provider.usage_summary(empty)["total"]["calls"], 0)
+
+    def test_failed_json_reply_still_records_usage_and_provider_metadata(self):
+        class Fake:
+            name, model = "openrouter", "deepseek/deepseek-v4.1-flash"
+
+            def propose(self, prompt, image_paths=()):
+                raise ai_provider.InvalidProviderReply(
+                    "The reply was not valid JSON.",
+                    {"provider": self.name, "model": self.model, "reply_text": "{broken",
+                     "upstream": "DigitalOcean", "seconds": 3.2,
+                     "usage": {"input_tokens": 1000, "output_tokens": 48000, "cost_usd": 0.04}},
+                )
+
+        with tempfile.TemporaryDirectory() as folder:
+            with self.assertRaises(ai_provider.InvalidProviderReply):
+                ai_provider.recorded(Fake(), folder, "skill:room_boundaries_areas").propose("prompt")
+            row = json.loads((Path(folder) / ai_provider.USAGE_FILE).read_text().splitlines()[0])
+            summary = ai_provider.usage_summary(folder)["total"]
+        self.assertEqual((row["error"], row["output_tokens"], row["cost_usd"], row["upstream"]),
+                         ("failed", 48000, 0.04, "DigitalOcean"))
+        self.assertEqual((summary["output_tokens"], summary["tokens"], summary["cost_usd"]),
+                         (48000, 49000, 0.04))
 
 
 if __name__ == "__main__":

@@ -1440,6 +1440,36 @@ class SkillWorkflowTests(unittest.TestCase):
         self.assertEqual(str(raised.exception), "codex_cli_failed")
         self.assertEqual(raised.exception.raw_record["stderr_tail"], "not authorized")
 
+    def test_case_file_invalid_json_archives_the_provider_reply_and_classifies_failure(self):
+        from backend import ai_provider
+
+        class Provider:
+            name = "openrouter"
+            model = "deepseek/deepseek-v4.1-flash"
+
+            def propose(self, _prompt, image_paths=()):
+                raise ai_provider.InvalidProviderReply(
+                    "The reply was not valid JSON.",
+                    {"provider": self.name, "model": self.model, "reply_text": '{"rooms": [',
+                     "finish_reason": "length", "usage": {"output_tokens": 48000}},
+                )
+
+        with tempfile.TemporaryDirectory() as folder:
+            attempt = {"prompt": "", "images": [], "raw_record": {}}
+            project = {"id": "invalid-json-case-file", "review_dir": folder}
+            skills._USAGE_STOPPED.pop(str(Path(folder).resolve()), None)
+            with patch.object(skills, "CASE_FILE_PROVIDER_FACTORY", return_value=Provider()):
+                with self.assertRaises(skills.SkillProviderError) as raised:
+                    skills._send_case_file_prompt(
+                        project, "skill:room_boundaries_areas", "Trace the rooms.", [], attempt
+                    )
+
+        self.assertEqual(str(raised.exception), "skill_provider_invalid_json")
+        self.assertEqual(raised.exception.raw_record["reply_text"], '{"rooms": [')
+        self.assertEqual(raised.exception.raw_record["finish_reason"], "length")
+        self.assertIs(raised.exception.attempt_record, attempt)
+        self.assertEqual(attempt["raw_record"]["provider"], "openrouter")
+
     def test_generic_domain_evidence_excludes_unvalidated_vector_candidates(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

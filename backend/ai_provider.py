@@ -89,6 +89,14 @@ class UsageLimitReached(RuntimeError):
     """The plan's or account's AI allowance is used up; every further call would fail the same way."""
 
 
+class InvalidProviderReply(RuntimeError):
+    """The provider replied, but its content could not be used as a JSON object."""
+
+    def __init__(self, message, raw_record):
+        super().__init__(message)
+        self.raw_record = raw_record or {}
+
+
 def usage_limit_message(text):
     """A plain message when a provider's error text says the usage limit is reached, else ""."""
     text = " ".join(str(text or "").split())
@@ -146,6 +154,13 @@ def _close_open_brackets(text):
     if in_string or not stack:
         raise ValueError("not a reply that only ends short")
     return text + "".join(reversed(stack))
+
+
+def _parse_provider_reply(text, raw_record):
+    try:
+        return parse_json_reply(text)
+    except RuntimeError as error:
+        raise InvalidProviderReply(str(error), raw_record) from error
 
 
 def _codex_user_config(path=None):
@@ -266,7 +281,7 @@ class CodexCliProvider:
                     raise UsageLimitReached(limit)
                 tail = " ".join((result.stderr or result.stdout or "").split())[-300:]
                 raise RuntimeError(f"Codex CLI failed (exit {result.returncode}): {tail or 'no reply'}")
-            return parse_json_reply(reply_text), raw
+            return _parse_provider_reply(reply_text, raw), raw
 
 
 class _HttpProvider:
@@ -321,19 +336,22 @@ class OpenAIProvider(_HttpProvider):
         reply = self._post(self.url(), {"Authorization": f"Bearer {self.api_key}", **self.headers()},
                            {"model": self.model, "messages": [{"role": "user", "content": content}],
                             "response_format": {"type": "json_object"}, **self.extra_body()})
-        text = ((reply.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+        choice = (reply.get("choices") or [{}])[0]
+        message = choice.get("message") or {}
+        text = message.get("content") or ""
         usage = reply.get("usage") or {}
         # Cached input: OpenAI reports it under prompt_tokens_details, DeepSeek as prompt_cache_hit_tokens.
         cached = usage.get("prompt_cache_hit_tokens", (usage.get("prompt_tokens_details") or {}).get("cached_tokens"))
         cost = usage.get("cost")                      # OpenRouter reports what the call was charged, in US dollars
         raw = {"provider": self.name, "model": reply.get("model", self.model), "reply_text": text[:MAX_REPLY_CHARS],
+               "finish_reason": choice.get("finish_reason"),
                "usage": {"input_tokens": usage.get("prompt_tokens"), "output_tokens": usage.get("completion_tokens"),
                          **({"cached_input_tokens": cached} if isinstance(cached, int) else {}),
                          **({"cost_usd": float(cost)} if isinstance(cost, (int, float)) and not isinstance(cost, bool) else {})},
                "seconds": round(time.monotonic() - started, 2)}
         if getattr(self, "upstream_header", ""):
             raw["upstream"] = reply.get("provider", "")      # which host OpenRouter used for this call
-        return parse_json_reply(text), raw
+        return _parse_provider_reply(text, raw), raw
 
 
 class DeepSeekProvider(OpenAIProvider):
@@ -397,7 +415,7 @@ class AnthropicProvider(_HttpProvider):
         raw = {"provider": self.name, "model": reply.get("model", self.model), "reply_text": text[:MAX_REPLY_CHARS],
                "usage": {"input_tokens": usage.get("input_tokens"), "output_tokens": usage.get("output_tokens")},
                "seconds": round(time.monotonic() - started, 2)}
-        return parse_json_reply(text), raw
+        return _parse_provider_reply(text, raw), raw
 
 
 CLASSES = {"codex_cli": CodexCliProvider, "openai": OpenAIProvider, "anthropic": AnthropicProvider, "deepseek": DeepSeekProvider,
@@ -500,7 +518,28 @@ class recorded:
             record_usage(self.root, {**entry, "seconds": round(time.monotonic() - started, 2), "error": "usage_limit", "detail": str(error)[:300]})
             raise
         except Exception as error:
-            record_usage(self.root, {**entry, "seconds": round(time.monotonic() - started, 2), "error": "failed", "detail": str(error)[:300]})
+            raw = getattr(error, "raw_record", {}) or {}
+            usage = raw.get("usage") or {}
+            total_tokens = usage.get("total_tokens")
+            if not isinstance(total_tokens, int):
+                input_tokens = usage.get("input_tokens") or 0
+                output_tokens = usage.get("output_tokens") or 0
+                total_tokens = input_tokens + output_tokens or None
+            failed_entry = {
+                **entry,
+                "model": raw.get("model") or entry["model"],
+                "seconds": raw.get("seconds") or raw.get("duration_seconds") or round(time.monotonic() - started, 2),
+                "error": "failed",
+                "detail": str(error)[:300],
+                **({"input_tokens": usage["input_tokens"]} if isinstance(usage.get("input_tokens"), int) else {}),
+                **({"output_tokens": usage["output_tokens"]} if isinstance(usage.get("output_tokens"), int) else {}),
+                **({"cached_input_tokens": usage["cached_input_tokens"]} if isinstance(usage.get("cached_input_tokens"), int) else {}),
+                **({"reasoning_output_tokens": usage["reasoning_output_tokens"]} if isinstance(usage.get("reasoning_output_tokens"), int) else {}),
+                **({"total_tokens": total_tokens} if isinstance(total_tokens, int) else {}),
+                **({"cost_usd": usage["cost_usd"]} if isinstance(usage.get("cost_usd"), (int, float)) else {}),
+                **({"upstream": raw["upstream"]} if raw.get("upstream") else {}),
+            }
+            record_usage(self.root, failed_entry)
             raise
         raw = result[1] if isinstance(result, tuple) and len(result) == 2 and isinstance(result[1], dict) else getattr(result, "raw_record", {}) or {}
         usage = raw.get("usage") or {}

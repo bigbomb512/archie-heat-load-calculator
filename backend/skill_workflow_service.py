@@ -2791,6 +2791,18 @@ def _send_case_file_prompt(project, purpose, prompt, images, attempt_record):
     try:
         result = _provider_call_with_retry(
             lambda: provider.propose(prompt, image_paths=[str(path) for path in images]), attempt_record)
+    except ai_provider.InvalidProviderReply as error:
+        raw_record = {**error.raw_record, "provider": error.raw_record.get("provider", provider.name),
+                      "model": error.raw_record.get("model") or model}
+        attempt_record["raw_record"] = raw_record
+        rejected = SkillProviderError("skill_provider_invalid_json", raw_record)
+        rejected.detail = (
+            "The AI reply was cut off before it finished. Its response was saved; retry this review step."
+            if raw_record.get("finish_reason") == "length"
+            else "The AI reply was not valid JSON. Its response was saved; retry this review step."
+        )
+        rejected.attempt_record = attempt_record
+        raise rejected from error
     except ai_provider.UsageLimitReached as error:
         _USAGE_STOPPED[key] = str(error)
         attempt_record["raw_record"] = {"provider": "codex_case_file", "model": model, "reply_text": ""}
@@ -3539,6 +3551,8 @@ def _run_worker(web, project, run_id, source_fp, catalog):
                         # not a crash: one line, no traceback.
                         LOGGER.warning("Archie skill %s: reply refused (%s at %s: %s)", skill_id, validation.get("check"),
                                        validation.get("path"), validation.get("detail"))
+                    elif code == "skill_provider_invalid_json":
+                        LOGGER.warning("Archie skill %s: provider reply was not valid JSON; response archived for retry.", skill_id)
                     else:
                         LOGGER.exception("Archie runtime subskill failed", extra={"subskill_id": skill_id, "failure_phase": failure_phase, "error_code": code})
                     attempt_metadata["model"] = attempt_record.get("raw_record", {}).get("model", attempt_record.get("model", ""))
