@@ -205,6 +205,11 @@ values) and `ARCHIE_AI_MODEL_SKILLS` (the skills and the needs list); on OpenRou
 `ARCHIE_PAGE_BATCH`, default 4). In tests on Butcher Buffet (2026-10-09/10) DeepSeek V4.1 Flash read pages and wrote
 the needs list well and very cheaply but missed equipment drawn on plans; Gemini 3.8 Flash read plan equipment well
 two pages per call.
+Gemini thinks at low effort for equipment and the drawing tasks (`ARCHIE_OPENROUTER_REASONING_PASS2` and
+`_DRAWINGS`; `minimal`, `low`, `medium`, `high`, or `default` for the model's own setting). Compared on the four
+answer-key sets (2026-10-18, `tools/compare_vision_models.py`), its default thinking was about 95% of what it wrote;
+at low effort it scored the same or better on every keyed task and cost 4–30 times less (Butcher Buffet drawing
+tasks US$0.28 to 0.06, equipment US$0.34 to 0.07). Qwen 3.8 Flash can't be used: its only host may store prompts.
 Equipment is read from the schedule pages first; the other pages are then read with the schedule's codes, so a plan
 label ("COMBI OVEN") comes back as the scheduled item (E06) instead of a second copy (Butcher Buffet on Gemini: 80
 items without the codes, 48 with them). An item still read without a code is marked on its card when it probably is

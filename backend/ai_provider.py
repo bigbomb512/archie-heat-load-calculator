@@ -63,6 +63,11 @@ OPENROUTER_STEP_MODELS = {"PASS1": "deepseek/deepseek-v4.1-flash", "PASS2": "goo
                           # The drawing tasks (scale, outlines, north, walls) read cropped plan images: the model
                           # that read drawn symbols best.
                           "DRAWINGS": "google/gemini-3.8-flash"}
+# How much the model thinks per step unless ARCHIE_OPENROUTER_REASONING(_<STEP>) says otherwise. Measured 2026-10-18
+# (tools/compare_vision_models.py, four answer-key sets): Gemini 3.8 Flash's default thinking was ~95% of what it
+# wrote; at "low" it scored the same or better on every keyed task and cost 4–30x less (Butcher Buffet drawing tasks
+# US$0.28 -> 0.06, equipment 0.34 -> 0.07; a scanned set 0.69 -> 0.02). "default" turns it back to the model's own.
+OPENROUTER_STEP_REASONING = {"PASS2": "low", "DRAWINGS": "low"}
 # A thinking model's reasoning counts against the reply cap (DeepSeek V4.1 Flash thought about 10,000 tokens a call).
 OPENROUTER_MAX_OUTPUT_TOKENS = 48000
 TIMEOUT_S = 600
@@ -441,10 +446,13 @@ class OpenAIProvider(_HttpProvider):
         # Cached input: OpenAI reports it under prompt_tokens_details, DeepSeek as prompt_cache_hit_tokens.
         cached = usage.get("prompt_cache_hit_tokens", (usage.get("prompt_tokens_details") or {}).get("cached_tokens"))
         cost = usage.get("cost")                      # OpenRouter reports what the call was charged, in US dollars
+        # Thinking billed as output: OpenRouter and OpenAI report it under completion_tokens_details.
+        reasoning = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
         raw = {"provider": self.name, "model": reply.get("model", self.model), "reply_text": text[:MAX_REPLY_CHARS],
                "finish_reason": choice.get("finish_reason"),
                "usage": {"input_tokens": usage.get("prompt_tokens"), "output_tokens": usage.get("completion_tokens"),
                          **({"cached_input_tokens": cached} if isinstance(cached, int) else {}),
+                         **({"reasoning_output_tokens": reasoning} if isinstance(reasoning, int) else {}),
                          **({"cost_usd": float(cost)} if isinstance(cost, (int, float)) and not isinstance(cost, bool) else {})},
                "seconds": round(time.monotonic() - started, 2)}
         if getattr(self, "upstream_header", ""):
@@ -492,8 +500,13 @@ class OpenRouterProvider(OpenAIProvider):
         if hosts:
             routing.update({"order": hosts, "allow_fallbacks": False})
         body = {"max_tokens": max_output_tokens(OPENROUTER_MAX_OUTPUT_TOKENS), "provider": routing}
-        # How much a thinking model reasons before answering (low / medium / high); its thinking is billed as output.
-        effort = os.environ.get("ARCHIE_OPENROUTER_REASONING", "").strip().lower()
+        # How much a thinking model reasons before answering (minimal / low / medium / high); its thinking is billed
+        # as output. Per step (ARCHIE_OPENROUTER_REASONING_DRAWINGS, _PASS2, ...) before the setting for every step;
+        # a provider made for a comparison can carry its own (reasoning_effort).
+        effort = (getattr(self, "reasoning_effort", "")
+                  or (os.environ.get(f"ARCHIE_OPENROUTER_REASONING_{step}", "") if step else "")
+                  or os.environ.get("ARCHIE_OPENROUTER_REASONING", "")
+                  or OPENROUTER_STEP_REASONING.get(step, "")).strip().lower()
         if effort in {"minimal", "low", "medium", "high"}:
             body["reasoning"] = {"effort": effort}
         return body
