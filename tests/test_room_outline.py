@@ -307,6 +307,18 @@ def wall_style_completion_checks():
     check("a style that encloses no more rooms is not added", (more, extra) == (complete, []))
     check("no objects or no names: nothing to do", ro.complete_wall_styles([], VIEWPORT, MM_PER_PX, partition_only, 2) ==
           (partition_only, []))
+    # A counter (heavier line) that closes off an alcove only once the outer walls are in: turned down in the first
+    # pass, kept in the second, so the alcove's floor is enclosed and can be named.
+    counter = (0.96, 0.1, None)
+    # The alcove stands 1.5 m clear of the rooms (wider than a door gap), open on its left until the counter closes it.
+    alcove = [line((1250, 300), (1390, 300), outer), line((1390, 300), (1390, 600), outer),
+              line((1250, 600), (1390, 600), outer), line((1250, 300), (1250, 600), counter)]
+    with_alcove = objects + [dict(item, points=[list(point) for point in item["points"]]) for item in alcove]
+    styles, added = ro.complete_wall_styles(with_alcove, VIEWPORT, MM_PER_PX, partition_only, 2,
+                                            ro.style_summary(with_alcove, VIEWPORT))
+    rooms = ro.enclosed_rooms(ro.wall_geometry(with_alcove, styles, VIEWPORT), VIEWPORT, MM_PER_PX)
+    check("a style that encloses floor only after another is added is kept on the second pass",
+          added == [ro.style_id(outer), ro.style_id(counter)] and len(rooms) == 3)
 
 
 def main():

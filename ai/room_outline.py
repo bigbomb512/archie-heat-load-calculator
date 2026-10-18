@@ -146,6 +146,8 @@ def wall_geometry(objects, wall_style_ids, viewport=None, line_half_width_px=1.0
 
 # How many unchosen line styles may be tried when the chosen wall styles enclose too few rooms.
 WALL_STYLE_TRIES = 6
+# An added style must enclose at least this much more floor (a style that only redraws walls adds next to nothing).
+MIN_MORE_FLOOR_M2 = 1.0
 
 
 def complete_wall_styles(objects, viewport, mm_per_px, chosen, expected_rooms, summary=None, tries=WALL_STYLE_TRIES):
@@ -154,8 +156,10 @@ def complete_wall_styles(objects, viewport, mm_per_px, chosen, expected_rooms, s
     The wall styles are picked per drawing by a vision task, which sometimes leaves one out: on Butcher Buffet
     (2026-10-18) Gemini left out the heavy outline of the main walls (8 long polylines), so no room was enclosed and
     every room fell back to an outline sketched by eye (9-26% off). When the chosen styles enclose fewer rooms than
-    the plan has room names, unchosen non-hatch styles are tried, heaviest line first, and one is kept only if the
-    walls then enclose more rooms and more floor. Returns (styles, added styles)."""
+    the plan has room names, unchosen non-hatch styles are tried, heaviest line first. One is kept if the walls then
+    enclose at least MIN_MORE_FLOOR_M2 more floor without losing an area: floor that was open to the plan edge
+    (Butcher Buffet's buffet stations, part of the Shop) is then enclosed and can be named, which counting rooms
+    alone missed. Returns (styles, added styles)."""
     chosen = list(chosen or [])
     if not objects or expected_rooms <= 0:
         return chosen, []
@@ -174,14 +178,19 @@ def complete_wall_styles(objects, viewport, mm_per_px, chosen, expected_rooms, s
         length[style] += sum(math.dist(a, b) for a, b in zip(item["points"], item["points"][1:]))
     candidates = sorted((style for style in weight if style not in chosen and style not in hatch and weight[style] > 0),
                         key=lambda style: (-weight[style], -length[style]))[:tries]
+    more_floor_px = MIN_MORE_FLOOR_M2 * 1e6 / mm_per_px ** 2
     added = []
-    for style in candidates:
-        if len(current) >= expected_rooms:
-            break
-        trial = rooms_for(chosen + added + [style])
-        if len(trial) > len(current) and sum(room.area for room in trial) > sum(room.area for room in current):
-            added.append(style)
-            current = trial
+    # Two passes: a style can enclose nothing until another is added (a counter line closes an area only once the
+    # main walls are in), so styles turned down in the first pass are tried once more.
+    for _pass in range(2):
+        if _pass and not added:
+            break                       # nothing changed in the first pass: a second would give the same answers
+        for style in [style for style in candidates if style not in added]:
+            trial = rooms_for(chosen + added + [style])
+            if (len(trial) >= len(current)
+                    and sum(room.area for room in trial) >= sum(room.area for room in current) + more_floor_px):
+                added.append(style)
+                current = trial
     return chosen + added, added
 
 
@@ -319,7 +328,9 @@ def room_naming_prompt(room_names, area_count):
     return ("The image is one architectural floor plan. Enclosed areas are tinted and numbered 1 to "
             f"{area_count}. This tenancy's rooms are: {rooms}. Name each numbered area using that list, judging from "
             "what is drawn in it (equipment, furniture, doors, signage, text). A room can sit inside another one (a bar "
-            "walled off in the middle of a dining area): name it as that room. If an area is not a room (a void, "
+            "walled off in the middle of a dining area): name it as that room. Buffet, servery and self-serve stations "
+            "that customers walk up to belong to the dining or shop area they face, even when walls enclose them on "
+            "three sides; a kitchen is the back-of-house area where food is prepared and cooked. If an area is not a room (a void, "
             "planter, duct, shaft or outside space) say \"not_a_room\". If one numbered area contains **two** of the "
             "rooms with no wall between them, give a split: a line in image pixels drawn along the drawn feature that "
             "separates them (counter edge, floor-finish change, bulkhead), and one point inside each room. "

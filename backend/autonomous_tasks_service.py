@@ -853,14 +853,32 @@ def _p0_followup_packets(root):
     return result
 
 
+WALL_STYLE_COMPLETION_FILE = "wall_style_completion.json"
+
+
 def _completed_wall_styles(root, context, calibration, wall_style_ids):
     """The wall styles the vision task chose, completed when they enclose fewer rooms than the plan has names
     (room_outline.complete_wall_styles). Every place that turns wall styles into enclosed areas uses this, so the
-    numbered areas in the naming question are the areas its answer is applied to."""
+    numbered areas in the naming question are the areas its answer is applied to.
+
+    Worked out once per page and set of inputs and saved in the job: on a detailed plan one enclosed-area pass takes
+    about 12 s (Global Exchange), and the drawing tasks rebuild their questions every round."""
     expected = len({row["label"] for row in _inferred_room_data(root)})
     mm_per_px = context.get("declared_mm_per_px") or calibration["mm_per_px"]
-    return room_outline.complete_wall_styles(context["objects"], context["viewport"], mm_per_px, wall_style_ids,
-                                             expected, context.get("summary"))
+    key = autonomous_tasks.fingerprint({"summary": context.get("summary"), "viewport": list(context["viewport"]),
+                                        "chosen": sorted(wall_style_ids), "expected": expected,
+                                        "mm_per_px": round(float(mm_per_px), 6),
+                                        "version": [room_outline.WALL_STYLE_TRIES, room_outline.MIN_MORE_FLOOR_M2]})
+    path = Path(root) / "ai_tasks" / WALL_STYLE_COMPLETION_FILE
+    saved = _read(path, {})
+    if isinstance(saved.get(key), dict):
+        return list(saved[key]["styles"]), list(saved[key]["added"])
+    styles, added = room_outline.complete_wall_styles(context["objects"], context["viewport"], mm_per_px, wall_style_ids,
+                                                      expected, context.get("summary"))
+    saved = _read(path, {})
+    saved[key] = {"styles": styles, "added": added}
+    _write(path, saved)
+    return styles, added
 
 
 def _p0_wall_style_records(root, page):
