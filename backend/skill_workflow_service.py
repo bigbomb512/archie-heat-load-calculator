@@ -3726,6 +3726,38 @@ def _run_worker(web, project, run_id, source_fp, catalog):
                     manifest.pop("queued_automatic_source_fingerprint", None)
                     _write_manifest(run_path, manifest)
                 LOGGER.exception("Queued Archie skill workflow could not start", extra={"scope": queued_scope})
+        else:
+            start_phase1_after_review(web, project, run_id)
+
+
+PHASE1_AFTER_REVIEW = {"completed", "needs_review", "failed", "blocked", "provisional"}
+
+
+def start_phase1_after_review(web, project, run_id):
+    """Phase 1 runs without a person: when the envelope review finishes (also when a step failed or is blocked; the
+    calculation uses the saved evidence and lists what is missing), start the empty-room load on the server, unless a
+    current Phase 1 result already exists. The calculation job joins a run already going, so this can't double up.
+
+    Until 2026-10-18 only an open browser started it, so a review that finished with nobody watching never got its
+    Phase 1 load (Butcher Buffet). Returns the started job, or None when nothing was started."""
+    if web is None:
+        return None
+    manifest = _read(_project_paths(project)["manifest"], {})
+    if (manifest.get("run_id") != run_id or manifest.get("scope") != "phase1_envelope"
+            or manifest.get("status") not in PHASE1_AFTER_REVIEW):
+        return None
+    try:
+        from backend import ai_preliminary_service, calculation_service
+        current = web.project_by_id(project["id"]) if hasattr(web, "project_by_id") else project
+        model = ai_preliminary_service.get(web, current, "workspace", check_freshness=True)
+        base = model.get("phase1_base_room_load_report") or {}
+        if base.get("status") not in {None, "", "not_calculated"} and not model.get("phase1_base_room_load_report_stale"):
+            return None                       # the saved Phase 1 result is current: nothing to redo
+        return calculation_service.start(web, current, {"phase": "phase1_base_room",
+                                                        "reviewer": "Automatic, after the drawing review"})
+    except Exception:
+        LOGGER.exception("Phase 1 could not start after the drawing review", extra={"project_id": project.get("id")})
+        return None
 
 
 def _response(web, project):

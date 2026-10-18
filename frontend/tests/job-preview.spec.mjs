@@ -483,6 +483,67 @@ test("a failed envelope step is named with its reason, and Try again resumes it"
   expect(posts[0]).toEqual({ project_id: "job-1", action: "retry" });
 });
 
+// The drawing review has finished; Phase 1 is started by the server, never by this page.
+async function reviewFinished(page, calculations) {
+  await preview(page, { status: { stage: "phase1", phase1_complete: false } });
+  const seen = { gets: 0, posts: [] };
+  await page.route("**/api/page-reading**", (route) =>
+    route.fulfill({ json: { status: "done", pages_read: 38, page_count: 38 } }),
+  );
+  await page.route("**/api/drawing-tasks**", (route) => route.fulfill({ json: { status: "done", answered: 12 } }));
+  await page.route("**/api/skill-workflow**", (route) => route.fulfill({ json: { status: "needs_review" } }));
+  await page.route("**/api/job-calculation**", (route) => {
+    if (route.request().method() === "POST") {
+      seen.posts.push(route.request().postDataJSON());
+      return route.fulfill({ json: { status: "queued", phase: "phase1_base_room" } });
+    }
+    const reply = calculations[Math.min(seen.gets, calculations.length - 1)];
+    seen.gets += 1;
+    return route.fulfill({ json: reply });
+  });
+  await page.clock.install();
+  await page.goto("/?preview=1#/job/job-1/drawings");
+  return seen;
+}
+
+test("after the review finishes the page waits for the server's Phase 1 start and never starts it itself", async ({
+  page,
+}) => {
+  const seen = await reviewFinished(page, [
+    { status: "none" },
+    { status: "running", phase: "phase1_base_room", step_label: "Calculating the room load" },
+  ]);
+  const calculation = page.locator('[data-stage="calculation"]');
+  await expect(calculation).toHaveClass(/active/);
+  await expect(calculation).toContainText("Starting the empty-room load calculation.");
+  await page.clock.runFor(5000);
+  await expect(calculation).toContainText("Calculating the room load");
+  expect(seen.posts).toEqual([]);
+});
+
+test("a job whose Phase 1 never started offers Calculate now after a minute", async ({ page }) => {
+  const seen = await reviewFinished(page, [{ status: "none" }]);
+  const calculation = page.locator('[data-stage="calculation"]');
+  await expect(calculation).toContainText("Starting the empty-room load calculation.");
+  for (let tick = 0; tick < 13; tick += 1) await page.clock.runFor(5000);
+  await expect(calculation).toContainText(
+    "The empty-room load hasn't started. Calculate now runs it from the saved drawing evidence.",
+  );
+  expect(seen.posts).toEqual([]);
+  await calculation.getByRole("button", { name: "Calculate now" }).click();
+  await expect.poll(() => seen.posts.length).toBe(1);
+  expect(seen.posts[0]).toEqual({ project_id: "job-1", phase: "phase1_base_room", reviewer: "Job workspace" });
+});
+
+test("an out-of-date Phase 1 result says it is redone after the review, not that Results has exceptions", async ({
+  page,
+}) => {
+  await reviewFinished(page, [{ status: "done", phase: "phase1_base_room" }]);
+  const calculation = page.locator('[data-stage="calculation"]');
+  await expect(calculation).toContainText("The empty-room load is recalculated when the drawing review finishes.");
+  await expect(page.getByText("on Results")).toHaveCount(0);
+});
+
 test("a refused AI key stops page reading with a plain reason and Try again", async ({
   page,
 }) => {

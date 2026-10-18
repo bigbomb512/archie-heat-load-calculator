@@ -149,14 +149,31 @@ function stageLine(data, kind, status, plan) {
       ? "Wall, roof, floor and window details are ready."
       : "Working through the room boundaries and materials.";
   }
-  if (status.phase1_complete) return "Saved empty-room loads are available.";
-  const reason = plan.phase1_report?.blocked_reasons?.[0];
-  const leftOut = plan.phase1_report?.phase1_coverage?.rooms_left_out || [];
-  if (reason) return String(reason);
-  if (leftOut.length) {
-    return `Still resolving ${leftOut.map((room) => room.label || room.name).join(", ")}.`;
+  if (kind === "calculation") {
+    if (status.phase1_complete) return "Saved empty-room loads are available.";
+    const reportReason = plan.phase1_report?.blocked_reasons?.[0];
+    const leftOut = plan.phase1_report?.phase1_coverage?.rooms_left_out || [];
+    if (reportReason) return String(reportReason);
+    if (leftOut.length) {
+      return `Calculated with ${leftOut.map((room) => room.label || room.name).join(", ")} left out.`;
+    }
+    if (RUNNING.has(String(data?.status || "").toLowerCase())) {
+      return data?.step_label || "Calculating each room’s empty-room load.";
+    }
+    if (data?.offerStart) {
+      return "The empty-room load hasn't started. Calculate now runs it from the saved drawing evidence.";
+    }
+    if (data?.pending) return "Starting the empty-room load calculation.";
+    if (STOPPED.has(String(data?.status || "").toLowerCase())) {
+      return data?.error || "The empty-room load calculation stopped. Try again to continue.";
+    }
+    if (data?.status === "done") {
+      return "The drawings changed since the last calculation. The empty-room load is recalculated when the drawing review finishes.";
+    }
+    return "Starts on its own when the drawing review finishes.";
   }
-  return "Waiting for room areas and boundary details.";
+  if (status.phase1_complete) return "Saved empty-room loads are available.";
+  return "The empty-room load calculation has not started yet.";
 }
 
 function stage(title, data, kind, status, plan, retryEndpoint = "") {
@@ -164,7 +181,7 @@ function stage(title, data, kind, status, plan, retryEndpoint = "") {
     kind === "calculation"
       ? status.phase1_complete
         ? "done"
-        : RUNNING.has(String(data?.status || "").toLowerCase())
+        : RUNNING.has(String(data?.status || "").toLowerCase()) || data?.pending
           ? "active"
           : "waiting"
       : kind === "rooms" && stateOf(data) === "done" && callFailures(data).length
@@ -174,6 +191,10 @@ function stage(title, data, kind, status, plan, retryEndpoint = "") {
     STOPPED.has(String(data?.status || "").toLowerCase()) ||
     (kind === "rooms" && stateOf(data) === "done" && callFailures(data).length > 0);
   const copy = stageLine(data, kind, status, plan);
+  const startNow =
+    kind === "calculation" && data?.offerStart
+      ? `<button class="job-button secondary" data-calculate-now>Calculate now</button><p class="job-note" role="status"></p>`
+      : "";
   const retry =
     failed && retryEndpoint
       ? `<button class="job-button secondary" data-retry="${retryEndpoint}">Try again</button><p class="job-note" role="status"></p>`
@@ -182,7 +203,7 @@ function stage(title, data, kind, status, plan, retryEndpoint = "") {
     kind === "rooms" && data?.last_problem && stateOf(data) === "active"
       ? `<p class="job-caption" data-stage-problem>${escapeHtml(data.last_problem)}</p>`
       : "";
-  return `<li class="job-stage ${state}" data-stage="${kind}"><span class="job-stage-icon" aria-hidden="true">${state === "done" ? "✓" : ""}</span><span><strong>${title}</strong><p>${escapeHtml(copy)}</p>${problem}${retry}</span></li>`;
+  return `<li class="job-stage ${state}" data-stage="${kind}"><span class="job-stage-icon" aria-hidden="true">${state === "done" ? "✓" : ""}</span><span><strong>${title}</strong><p>${escapeHtml(copy)}</p>${problem}${retry}${startNow}</span></li>`;
 }
 
 // The first step of a new job: the PDF is read (titles, drawing types, previews) and its drawing pages prepared.
@@ -277,6 +298,31 @@ function statusSentence(data, status, plan) {
 const preparing = (newJob) => Boolean(newJob && !newJob.drawings_ready);
 const REFRESH_MS = 5000;
 let watchGeneration = 0;
+// The server starts Phase 1 when the envelope review finishes. The few seconds between the review finishing and the
+// calculation job appearing are still "working", so the screen keeps checking instead of going quiet.
+const PHASE1_START_GRACE_MS = 60000;
+const reviewFinished = (data) =>
+  ["done", "waiting"].includes(stateOf(data.envelope)) &&
+  ["completed", "needs_review", "failed", "blocked", "provisional"].includes(String(data.envelope?.status || ""));
+
+function phase1Pending(data, status) {
+  return !status.phase1_complete && reviewFinished(data) && !RUNNING.has(String(data.calculation?.status || ""))
+    && !STOPPED.has(String(data.calculation?.status || "")) && data.calculation?.status !== "done";
+}
+
+const pendingSince = new Map();
+
+// Marks the calculation stage as waiting for the server's start, and after the grace period offers "Calculate now"
+// (a job whose review finished before the server started Phase 1 by itself never gets an automatic start).
+function withCalculationHints(projectId, data, status) {
+  if (!phase1Pending(data, status)) {
+    pendingSince.delete(projectId);
+    return data;
+  }
+  if (!pendingSince.has(projectId)) pendingSince.set(projectId, Date.now());
+  const offerStart = Date.now() - pendingSince.get(projectId) >= PHASE1_START_GRACE_MS;
+  return { ...data, calculation: { ...(data.calculation || {}), pending: !offerStart, offerStart } };
+}
 
 // The light status endpoints behind the stage list (the plan itself is only re-read when a stage finishes).
 async function fetchStages(projectId) {
@@ -322,12 +368,26 @@ function stageShape(data) {
 
 function anyWorking(data) {
   if (data.newJob?.state === "running") return true;
+  if (data.calculation?.pending) return true;
   return ["reading", "equipment", "rooms", "envelope", "calculation"].some(
     (kind) => stateOf(data[kind]) === "active",
   );
 }
 
 function bindStageButtons(projectId, container) {
+  container.querySelector("[data-calculate-now]")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      await sendJson("/api/job-calculation", { project_id: projectId, phase: "phase1_base_room", reviewer: "Job workspace" });
+      pendingSince.delete(projectId);
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    } catch (error) {
+      button.disabled = false;
+      const note = button.parentElement?.querySelector(".job-note");
+      if (note) note.textContent = error.message;
+    }
+  });
   container.querySelector("[data-start-new-job]")?.addEventListener("click", async (event) => {
     const button = event.currentTarget;
     button.disabled = true;
@@ -377,7 +437,7 @@ function watchStages(projectId, data, status, plan) {
     generation === watchGeneration && location.hash === hash && list && document.contains(list);
   const tick = async () => {
     if (!stillHere()) return;
-    const next = await fetchStages(projectId);
+    const next = withCalculationHints(projectId, await fetchStages(projectId), status);
     if (!stillHere()) return;
     if (stageShape(next) !== shape) {
       window.dispatchEvent(new HashChangeEvent("hashchange"));
@@ -394,11 +454,12 @@ function watchStages(projectId, data, status, plan) {
 }
 
 export async function renderDrawings(project, projectId) {
-  const [plan, data] = await Promise.all([
+  const [plan, stages] = await Promise.all([
     getJson(`/api/job-plan${query(projectId)}`),
     fetchStages(projectId),
   ]);
   const status = plan.status || {};
+  const data = withCalculationHints(projectId, stages, status);
   const content = `<div class="job-columns">
     <section class="job-panel job-progress-panel" aria-labelledby="doing-title">
       <h2 id="doing-title">What the AI is doing</h2>
