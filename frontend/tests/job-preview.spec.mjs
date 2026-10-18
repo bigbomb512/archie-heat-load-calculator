@@ -685,6 +685,40 @@ test("Operating loads show room inputs and sources without blocking typical valu
   ).toBeVisible();
 });
 
+test("an equipment card shows its schedule code, the printed quantity and how plan labels were tied to it", async ({
+  page,
+}) => {
+  await preview(page, { status: { phase1_complete: true } });
+  await page.route("**/api/page-extraction**", (route) =>
+    route.fulfill({
+      json: {
+        status: "done",
+        findings: [
+          {
+            id: "eq-1", status: "accepted", pages: [5, 19], evidence: "supported",
+            value: { code: "E21", name: "UB FRIDGE", quantity: 10 },
+            schedule_notes: ["Also labelled on the plans as UB FR 1500 (page 19): the same scheduled item, counted once."],
+          },
+          {
+            id: "eq-2", status: "proposed", pages: [19], evidence: "supported",
+            value: { code: "", name: "UB FRIDGE", quantity: 1 },
+            possibly_same_as: [{ id: "eq-1", label: "E21 UB FRIDGE" }, { id: "eq-3", label: "E02 UB FRIDGE" }],
+          },
+        ],
+      },
+    }),
+  );
+  await page.goto("/?preview=1#/job/job-1/operating");
+  const cards = page.locator(".job-equipment-list li");
+  await expect(cards.first()).toContainText("E21 UB FRIDGE × 10");
+  await expect(cards.first().locator("[data-schedule-note]")).toHaveText(
+    "Also labelled on the plans as UB FR 1500 (page 19): the same scheduled item, counted once.",
+  );
+  await expect(cards.nth(1).locator("[data-possible-duplicate]")).toHaveText(
+    "Possibly the same as E21 UB FRIDGE or E02 UB FRIDGE; reject it if so.",
+  );
+});
+
 test("Jobs and job details routes render the guided journey", async ({
   page,
 }) => {

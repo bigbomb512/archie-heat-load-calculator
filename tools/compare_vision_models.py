@@ -106,7 +106,7 @@ def sandbox_web():
 def spent_usd():
     """US$ charged so far for every call made in the sandbox (from each clone's usage log)."""
     total = 0.0
-    for log in SANDBOX.rglob("ai_usage.jsonl"):
+    for log in SANDBOX.rglob("*ai_usage.jsonl"):        # live logs, and runs replaced by a re-run
         for line in log.read_text(encoding="utf-8").splitlines():
             try:
                 total += float(json.loads(line).get("cost_usd") or 0)
@@ -230,6 +230,12 @@ def _clone(case, config, what):
     clone_id = f"{case}-{config}-{what}"
     clone = SANDBOX / "jobs" / clone_id
     if clone.exists():
+        # Keep what the earlier run of this setup was charged: the spending total sums every log in the sandbox.
+        log = clone / "ai_usage.jsonl"
+        if log.exists():
+            kept = SANDBOX / "spent" / f"{clone_id}-{datetime.now().strftime('%Y%m%dT%H%M%S')}.ai_usage.jsonl"
+            kept.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(log), str(kept))
         shutil.rmtree(clone)
     subprocess.run(["cp", "-cR", str(base), str(clone)], check=True)     # APFS clone: fast, no extra disk until written
     (clone / "ai_usage.jsonl").unlink(missing_ok=True)                    # pass 1's cost belongs to the base
@@ -279,17 +285,19 @@ def run_equipment(case, config, cap):
 # ---------------------------------------------------------------- scoring
 
 def schedule_key(pdf_path):
-    """Butcher Buffet's equipment schedule from the PDF's text layer: {code: name} (no AI)."""
-    import pdfplumber
-    key = {}
-    with pdfplumber.open(pdf_path) as doc:
-        for page in doc.pages:
-            text = page.extract_text() or ""
-            if "EQUIPMENT" not in text or len(set(re.findall(r"\bE\d{2}\b", text))) < 10:
-                continue
-            for code, name in re.findall(r"\b(E\d{2})\s+([A-Z0-9/&' .-]+?)\s+\d{2,5}MM", text):
-                key.setdefault(code, " ".join(name.split()))
-    return key
+    """The printed equipment schedule from the PDF's text layer, {code: name} (no AI): the same reader the app uses."""
+    from ai.page_extraction import printed_schedule
+    texts = {}
+    for page in range(1, 400):
+        result = subprocess.run(["pdftotext", "-f", str(page), "-l", str(page), "-layout", str(pdf_path), "-"],
+                                capture_output=True, text=True)
+        if result.returncode != 0:
+            break
+        texts[page] = result.stdout
+    schedule = {}
+    for page, text in texts.items():
+        schedule.update(printed_schedule({page: text}))
+    return {code: row["name"] for code, row in schedule.items()}
 
 
 def _words(text):
@@ -297,18 +305,23 @@ def _words(text):
 
 
 def score_equipment(clone, key):
+    """Codes read against the printed schedule. Benches, sinks and shelving give off no heat, so the prompt leaves
+    them out: "codes_found" is not a recall over every row. What matters: codes that aren't on the schedule (misread)
+    and items without a code (extras, or plan labels counted twice)."""
     findings = json.loads((clone / "page_extraction.json").read_text(encoding="utf-8")).get("equipment_appliances", {}).get("findings", [])
-    found, uncoded = {}, 0
+    found, uncoded, unknown = {}, 0, []
     for row in findings:
         value = row.get("value") or {}
         code = str(value.get("code") or "").upper()
         if code in key:
             found[code] = value.get("name", "")
+        elif code:
+            unknown.append(code)
         else:
             uncoded += 1
     named_right = sum(1 for code, name in found.items() if _words(name) & _words(key[code]))
     return {"schedule_items": len(key), "codes_found": len(found), "names_match": named_right,
-            "items_without_a_schedule_code": uncoded, "items_total": len(findings)}
+            "codes_not_on_schedule": unknown, "items_without_a_schedule_code": uncoded, "items_total": len(findings)}
 
 
 def _usage(clone):
@@ -361,7 +374,8 @@ def score():
             result = " / ".join(map(str, totals))
         else:
             eq = row["equipment"]
-            result = (f"{eq['codes_found']}/{eq['schedule_items']} schedule codes, {eq['names_match']} names right, "
+            result = (f"{eq['codes_found']} scheduled items ({eq['names_match']} names right), "
+                      f"{len(eq.get('codes_not_on_schedule', []))} codes not on the schedule, "
                       f"{eq['items_without_a_schedule_code']} without a code")
         lines.append(f"| {row['case']} | {row['config']} | {row['what']} | {result} | {row['calls']} | {row['failed_calls']} | "
                      f"{row['cost_usd']:.3f} | {row['written_tokens']:,} | {row['thinking_tokens']:,} | "

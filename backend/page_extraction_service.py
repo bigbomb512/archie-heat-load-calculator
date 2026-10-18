@@ -23,7 +23,8 @@ import threading
 import time
 
 from ai import equipment_heat
-from ai.page_extraction import EXTRACTORS, batch_prompt, build_prompt, merge, normalise_name, possible_duplicates, tiles, validate_reply
+from ai.page_extraction import (EXTRACTORS, batch_prompt, build_prompt, merge, normalise_name, possible_duplicates,
+                                printed_schedule, tiles, validate_reply)
 from backend import ai_provider, page_inventory_service as pass1
 from backend.job_runner import BackgroundJob, now, read_json, write_json
 
@@ -388,14 +389,19 @@ def start(web, project, data=None):
             rest = {key: value for key, value in images.items() if key[0] not in first}
             readings, failures, calls = read_sections(extractor, ahead, cache, recorded,
                                                       on_done=lambda done, _total: progress(done, len(images))) if ahead else ([], {}, 0)
-            codes = schedule_codes(readings)
+            # A schedule printed as text gives every code exactly (the AI's reading of it can miss or misread rows):
+            # the plans are read with that list, and the merge ties readings to its rows.
+            printed = (printed_schedule({page: texts.get(page, "") for page in first})
+                       if kind == "equipment_appliances" else {})
+            codes = {code: row["name"] for code, row in printed.items()} or schedule_codes(readings)
             more, more_failures, more_calls = read_sections(
                 extractor, rest, cache, recorded, codes=codes or None,
                 on_done=lambda done, _total: progress(len(ahead) + done, len(images))) if rest else ([], {}, 0)
             readings, calls = sorted(readings + more, key=lambda row: (row[0], row[1])), calls + more_calls
             failures = {**failures, **more_failures}
             step("merge")
-            findings = merge(extractor, readings, texts, {int(page): row.get("page_type") for page, row in pass1_pages.items()})
+            findings = merge(extractor, readings, texts, {int(page): row.get("page_type") for page, row in pass1_pages.items()},
+                             schedule=printed)
             results = read_json(root / RESULT_FILE)
             results[kind] = {"schema_version": 1, "extractor": extractor["version"],
                              "run": run_fingerprint(extractor, project, images), "read_at": now(), "pages": pages,

@@ -212,8 +212,13 @@ at low effort it scored the same or better on every keyed task and cost 4–30 t
 tasks US$0.28 to 0.06, equipment US$0.34 to 0.07). Qwen 3.8 Flash can't be used: its only host may store prompts.
 Equipment is read from the schedule pages first; the other pages are then read with the schedule's codes, so a plan
 label ("COMBI OVEN") comes back as the scheduled item (E06) instead of a second copy (Butcher Buffet on Gemini: 80
-items without the codes, 48 with them). An item still read without a code is marked on its card when it probably is
-one or two scheduled items, for the operator to reject; nothing is merged automatically. Sizes that agree in their
+items without the codes, 48 with them). When the schedule is printed as text (most CAD sets), Archie reads its rows
+itself (code, name, size, quantity): the plans are read with every printed code, a code the AI misreads ("E49" for
+"E48 6 BURNER") is corrected to the row its name and size match, and a plan label that matches exactly one row by
+name and width, or by width and depth ("UB FR 1500" is E21 UB FRIDGE 1500), is tied to that row and counted once, with
+a note on its card. A scheduled item's size and quantity are the printed row's. A label that could be two rows
+("UB FRIDGE" with no size, "OVEN" with a combi and a pizza oven) is not guessed: its card says which items it may be,
+for the operator to reject. Sizes that agree in their
 numbers ("4900X700" on a plan, "4900MM(W)X700MM(D)X850MM(H)" in the schedule) are not reported as a disagreement.
 After the equipment, the AI answers the drawing tasks itself (backend/drawing_tasks_service.py): the scale from a
 printed dimension, the room names, the room outlines, north, what each wall faces, shopfront openings and kitchen

@@ -123,6 +123,7 @@ function roomUse(room) {
 
 function equipmentItem(item) {
   const value = item.value || {};
+  const code = value.code ? `${value.code} ` : "";
   const rating = item.heat?.heat_w ?? value.rated_power;
   const source =
     item.heat?.rated_source || item.evidence || "Source not recorded";
@@ -132,9 +133,11 @@ function equipmentItem(item) {
       <div class="job-editor-actions"><button class="job-button secondary" data-equipment="${escapeHtml(item.id)}" data-decision="accepted" data-value="${escapeHtml(JSON.stringify(value))}">Accept or save rating</button><button class="job-button secondary" data-equipment="${escapeHtml(item.id)}" data-decision="rejected">Reject item</button></div>`
       : `<small>${escapeHtml(item.status || "Recorded")}</small>`;
   return `<li>
-    <strong>${escapeHtml(value.name || item.label || "Equipment")}</strong>
+    <strong>${escapeHtml(code + (value.name || item.label || "Equipment"))}${value.quantity > 1 ? ` × ${escapeHtml(value.quantity)}` : ""}</strong>
     <span>${escapeHtml(item.suggested_room || "Room not identified")}; ${rating == null ? "rating not found" : `${fmt(rating)} W`}</span>
     <small>Drawing pages ${(item.pages || []).join(", ") || "not cited"}. ${escapeHtml(source)}</small>
+    ${(item.schedule_notes || []).map((note) => `<small data-schedule-note>${escapeHtml(note)}</small>`).join("")}
+    ${(item.possibly_same_as || []).length ? `<small data-possible-duplicate>Possibly the same as ${escapeHtml(item.possibly_same_as.map((row) => row.label).join(" or "))}; reject it if so.</small>` : ""}
     ${ratingInput}
   </li>`;
 }

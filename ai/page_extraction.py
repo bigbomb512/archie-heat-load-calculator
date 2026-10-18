@@ -192,7 +192,7 @@ PICTURE_PAGE_TYPES = {"render_or_photo"}
 
 
 # Abbreviations seen on plan labels, for spotting a likely duplicate of a scheduled item ("UB FR 1500" = "UB FRIDGE").
-_LABEL_WORDS = {"ub": "underbench", "fr": "fridge", "frz": "freezer", "dr": "door", "disp": "dispenser",
+_LABEL_WORDS = {"ub": "underbench", "fr": "fridge", "frz": "freezer", "dr": "door", "disp": "display",
                 "refrigerator": "fridge", "dw": "dishwasher", "m": "maker", "tiere": "tier"}
 _LABEL_STOP = {"the", "and", "with", "of", "x", "mm", "unit"}
 
@@ -272,20 +272,158 @@ def _same_sizes(options):
     return sorted(merged, key=lambda row: row["pages"][0])
 
 
-def merge(extractor, readings, page_texts=None, page_types=None):
+# --- The printed equipment schedule -------------------------------------------------------------------------
+# A schedule printed as text (most CAD sets) gives every row's code, name, size and quantity exactly. The AI still
+# decides which rows give off heat; the printed rows correct what it misreads and tie plan labels to their rows.
+
+_ROW = re.compile(
+    r"(?<![A-Za-z0-9])(?P<code>[A-Z]{1,3}-?\d{1,3})[ ]{1,6}"
+    r"(?P<name>[A-Z0-9][A-Z0-9/&'.,()+-]*(?: [A-Z0-9/&'.,()+-]+)*)"
+    r"[ ]{2,}(?P<size>\S*\d\S*)(?:[ ]+(?P<qty>\d{1,3})(?=[ ]{2,}|[ ]*$|[ ]+[A-Z]))?")
+_CODE_ONLY = re.compile(r"^[A-Z]{1,3}-?\d{1,3}$")
+_SIZE_LIKE = re.compile(r"\d\s*(?:MM|X|\u00d7)", re.IGNORECASE)
+MIN_SCHEDULE_ROWS = 5
+# How far (lines up or down) a row's code may sit from its name in the text layer; Butcher Buffet's E33 is 3 below.
+ORPHAN_LINES = 3
+
+
+_UNCODED_ROW = re.compile(
+    r"(?<=  )(?P<name>[A-Z][A-Z0-9/&'.,()+-]*(?: [A-Z0-9/&'.,()+-]+)*)[ ]{2,}(?P<size>\S*\d\S*MM\S*)"
+    r"(?:[ ]+(?P<qty>\d{1,3})(?=[ ]{2,}|[ ]*$|[ ]+[A-Z]))?")
+_CODE_TOKEN = re.compile(r"(?<![A-Za-z0-9])[A-Z]{1,3}-?\d{1,3}(?![A-Za-z0-9])")
+
+
+def _row(code, name, size, qty, page):
+    if _CODE_ONLY.match(name.split()[0]) or not re.search(r"[A-Z]{2}", name):
+        return None
+    if _SIZE_LIKE.search(size):
+        quantity = int(qty) if qty else None
+    elif size.isdigit() and len(size) <= 3:
+        size, quantity = "", int(size)              # no size column: the number is the quantity
+    else:
+        return None
+    return {"code": code, "name": name.strip(), "size": size, "quantity": quantity, "page": page}
+
+
+def printed_schedule(page_texts):
+    """{code: {"code", "name", "size", "quantity", "page"}} from the text layer of the schedule pages
+    (page_texts = {page: pdftotext -layout text}); {} when no page has at least MIN_SCHEDULE_ROWS rows that share a
+    code prefix (a scan, or a page that only tags items). Plan tags printed on the same line ("E40 E41   E22 UB
+    FREEZER ...") are skipped, not mistaken for rows; a row whose code the text layer put on the line just above or
+    below ("DEEP FRYER 450MM... 3" with "E29" under it), within ORPHAN_LINES, is paired with the nearest unused code
+    just to its left."""
+    rows = {}
+    for page, text in sorted((page_texts or {}).items()):
+        lines = str(text or "").splitlines()
+        spans = {}
+        for index, line in enumerate(lines):
+            position = 0
+            while True:
+                match = _ROW.search(line, position)
+                if not match:
+                    break
+                row = _row(match.group("code"), match.group("name"), match.group("size"), match.group("qty"), page)
+                if row:
+                    rows.setdefault(row["code"], row)
+                    spans.setdefault(index, []).append((match.start("name"), match.end()))
+                    position = match.end()
+                else:
+                    position = match.start("code") + 1      # a plan tag: look again from just after it
+        for index, line in enumerate(lines):
+            for match in _UNCODED_ROW.finditer(line):
+                start = match.start("name")
+                if any(low <= start < high for low, high in spans.get(index, [])):
+                    continue
+                orphans = [(abs(near - index), abs(start - (token.end() + 3)), token.group(0))
+                           for near in range(index - ORPHAN_LINES, index + ORPHAN_LINES + 1)
+                           if near != index and 0 <= near < len(lines)
+                           for token in _CODE_TOKEN.finditer(lines[near])
+                           if start - 12 <= token.start() < start and token.group(0) not in rows]
+                if orphans:
+                    code = min(orphans)[2]
+                    row = _row(code, match.group("name"), match.group("size"), match.group("qty"), page)
+                    if row:
+                        rows.setdefault(code, row)
+    prefixes = {}
+    for code in rows:
+        prefixes.setdefault(re.match(r"[A-Z]+", code).group(0), []).append(code)
+    main = max(prefixes.values(), key=len, default=[])
+    return {code: rows[code] for code in sorted(main)} if len(main) >= MIN_SCHEDULE_ROWS else {}
+
+
+def _numbers(value):
+    return re.findall(r"\d{3,5}", str(value or ""))
+
+
+def schedule_match(item, schedule):
+    """The one printed row an item is, or None: the same name (plan abbreviations expanded) and width; else a name
+    one contains the other's, with the same width; else the same width and depth on exactly one row. Two or more
+    candidates (two underbench fridges, no size given) is no match."""
+    words = _label_words(item.get("name"))
+    numbers = _numbers(item.get("size")) or _numbers(item.get("name"))
+
+    def width_ok(row):
+        row_numbers = _numbers(row.get("size"))
+        return not numbers or (bool(row_numbers) and row_numbers[0] in numbers)
+
+    rows = list(schedule.values())
+    exact = [row for row in rows if words and _label_words(row["name"]) == words and width_ok(row)]
+    if len(exact) == 1:
+        return exact[0]["code"]
+    contained = [row for row in rows if words and width_ok(row)
+                 and (words <= _label_words(row["name"]) or _label_words(row["name"]) <= words)]
+    if len(contained) == 1:
+        return contained[0]["code"]
+    if len(numbers) >= 2:
+        sized = [row for row in rows if _numbers(row.get("size"))[:2] == numbers[:2]]
+        if len(sized) == 1:
+            return sized[0]["code"]
+    return None
+
+
+def tie_to_schedule(readings, schedule):
+    """Readings with codes checked against the printed schedule. A code the schedule doesn't have ("E49" for its
+    "E48 6 BURNER") is corrected when the item matches one row; an item read without a code that matches one row
+    (a plan label "UB FR 1500") is given that row's code and marked "label_only": it adds its page and quote to the
+    scheduled item but no values, so it is not counted twice. Items are copied, never changed in place."""
+    if not schedule:
+        return readings
+    result = []
+    for page, section, items in readings:
+        tied = []
+        for item in items:
+            item = dict(item)
+            code = str(item.get("code") or "").strip().upper()
+            if code and code not in schedule:
+                match = schedule_match(item, schedule)
+                if match:
+                    item.update({"code": match, "code_read_as": code})
+            elif not code:
+                match = schedule_match(item, schedule)
+                if match:
+                    item.update({"code": match, "label_only": True})
+            tied.append(item)
+        result.append((page, section, tied))
+    return result
+
+
+def merge(extractor, readings, page_texts=None, page_types=None, schedule=None):
     """Merge items from every page into findings.
 
-    readings = [(page, section index, [validated items])]; page_types = {page: pass 1 page_type}. Returns
-    findings, each with the merged value, pages, citations, conflicting fields with their readings, and an
-    evidence label: conflicting when pages disagree, inferred when seen only on renders or photos,
-    else supported.
+    readings = [(page, section index, [validated items])]; page_types = {page: pass 1 page_type}; schedule = the
+    printed schedule ({} or None when there is none). Returns findings, each with the merged value, pages, citations,
+    conflicting fields with their readings, and an evidence label: conflicting when pages disagree, inferred when
+    seen only on renders or photos, else supported. A scheduled item's size and quantity are the printed row's.
     """
-    page_texts, page_types = page_texts or {}, page_types or {}
+    page_texts, page_types, schedule = page_texts or {}, page_types or {}, schedule or {}
+    if extractor["kind"] == "equipment_appliances":
+        readings = tie_to_schedule(readings, schedule)
     groups = {}
     for page, section, items in readings:
         for item in items:
             groups.setdefault(extractor["identity"](item), []).append((page, section, item))
     folded = _fold_uncoded(extractor, groups)
+    folded.update(id(row) for rows in groups.values() for row in rows if row[2].get("label_only"))
     findings = []
     for identity, rows in sorted(groups.items()):
         value, conflicts = {}, {}
@@ -315,6 +453,21 @@ def merge(extractor, readings, page_texts=None, page_types=None):
             if field in extractor["compared"] and len(options) > 1:
                 conflicts[field] = options
             value[field] = options[0]["value"] if options else (None if field in ("quantity", "under_hood") else "")
+        printed = schedule.get(str(value.get("code") or "").upper()) if extractor["kind"] == "equipment_appliances" else None
+        notes = []
+        if printed:
+            # The printed row is exact: its size and quantity stand, and readings that differ aren't a conflict.
+            for field in ("size", "quantity"):
+                if printed.get(field) not in (None, ""):
+                    value[field] = printed[field]
+                    conflicts.pop(field, None)
+            misread = sorted({item["code_read_as"] for _p, _s, item in rows if item.get("code_read_as")})
+            if misread:
+                notes.append(f"Code read as {', '.join(misread)}; the printed schedule lists it as "
+                             f"{printed['code']} {printed['name']}.")
+            labels = sorted({f"{item.get('name')} (page {page})" for page, _s, item in rows if item.get("label_only")})
+            if labels:
+                notes.append("Also labelled on the plans as " + "; ".join(labels) + ": the same scheduled item, counted once.")
         pages = sorted({page for page, _s, _i in rows})
         matches = [text_match(item, page_texts.get(page), extractor["name_field"]) for page, _s, item in rows]
         known = [match for match in matches if match is not None]
@@ -324,6 +477,7 @@ def merge(extractor, readings, page_texts=None, page_types=None):
             "citations": [{"page": page, "excerpt": item.get("evidence", "")} for page, _s, item in rows],
             "conflicts": conflicts,
             "evidence": "conflicting" if conflicts else "inferred" if all(page_types.get(page) in PICTURE_PAGE_TYPES for page in pages) else "supported",
+            **({"schedule_row": printed, "schedule_notes": notes} if printed else {}),
             "pictures_only": all(page_types.get(page) in PICTURE_PAGE_TYPES for page in pages),
             "not_printed": [field for field in extractor["wanted"] if not value.get(field)],
             # Found when the name is printed on any cited page with a text layer: the check is for invented items.

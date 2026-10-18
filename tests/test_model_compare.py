@@ -72,7 +72,7 @@ class EquipmentScoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             (Path(folder) / "page_extraction.json").write_text(json.dumps({"equipment_appliances": {"findings": findings}}))
             result = compare.score_equipment(Path(folder), key)
-        self.assertEqual(result, {"schedule_items": 3, "codes_found": 2, "names_match": 1,
+        self.assertEqual(result, {"schedule_items": 3, "codes_found": 2, "names_match": 1, "codes_not_on_schedule": [],
                                   "items_without_a_schedule_code": 1, "items_total": 3})
 
 
