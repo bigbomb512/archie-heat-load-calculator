@@ -286,8 +286,32 @@ def raster_checks():
     check("a page with no images is never raster", not ro.page_is_raster(Page(), viewport, 2.5, mm, objects=[]))
 
 
+def wall_style_completion_checks():
+    """A wall style the vision task left out is added back when the chosen ones enclose too few rooms."""
+    outer = (0.48, 0.2, None)        # heavy main-wall outline, the style left out on Butcher Buffet
+    objects = [dict(item, style=outer, style_id=ro.style_id(outer)) if index < 4 else item
+               for index, item in enumerate(two_room_plan())]
+    summary = ro.style_summary(objects, VIEWPORT)
+    partition_only = [ro.style_id(WALL)]
+    check("only the partition encloses no room",
+          ro.enclosed_rooms(ro.wall_geometry(objects, partition_only, VIEWPORT), VIEWPORT, MM_PER_PX) == [])
+    styles, added = ro.complete_wall_styles(objects, VIEWPORT, MM_PER_PX, partition_only, 2, summary)
+    rooms = ro.enclosed_rooms(ro.wall_geometry(objects, styles, VIEWPORT), VIEWPORT, MM_PER_PX)
+    check("the heavy outline style is added back", added == [ro.style_id(outer)])
+    check("and both rooms are enclosed", sorted(round(ro.area_m2(room, MM_PER_PX), 1) for room in rooms) == [25.9, 28.5])
+    check("furniture and floor tiles are not added", ro.style_id(FURNITURE) not in styles and ro.style_id(TILE) not in styles)
+    complete = [ro.style_id(WALL), ro.style_id(outer)]
+    check("enough rooms already: nothing changes", ro.complete_wall_styles(objects, VIEWPORT, MM_PER_PX, complete, 2, summary)
+          == (complete, []))
+    more, extra = ro.complete_wall_styles(objects, VIEWPORT, MM_PER_PX, complete, 3, summary)
+    check("a style that encloses no more rooms is not added", (more, extra) == (complete, []))
+    check("no objects or no names: nothing to do", ro.complete_wall_styles([], VIEWPORT, MM_PER_PX, partition_only, 2) ==
+          (partition_only, []))
+
+
 def main():
     page_origin_checks()
+    wall_style_completion_checks()
     raster_checks()
     simplify_and_run_checks()
     outline_checks()

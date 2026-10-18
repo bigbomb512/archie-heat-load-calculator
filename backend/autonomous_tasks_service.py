@@ -833,6 +833,7 @@ def _p0_followup_packets(root):
                     result.append(("P0_room_names", f"page-{number}", {"task":"P0_room_names", "page":number}, "", [],
                                    "No wall styles were identified across the complete legend; enclosed-room naming is unavailable."))
                     continue
+                wall_style_ids, added_styles = _completed_wall_styles(root, context, calibration, wall_style_ids)
             _walls, areas, segments = _p0_walls_areas(root, number, context, calibration, wall_style_ids, raster_mode)
             if not areas:
                 continue
@@ -840,7 +841,8 @@ def _p0_followup_packets(root):
             room_names = sorted({row["label"] for row in _inferred_room_data(root)})
             naming_packet = {"task":"P0_room_names", "page":number, "area_count":len(areas), "room_names":room_names,
                              "transform":transform, "calibration":calibration, "areas_px": [list(poly.exterior.coords) for poly in areas],
-                             "wall_style_ids":wall_style_ids, "raster_mode":raster_mode}
+                             "wall_style_ids":wall_style_ids, "raster_mode":raster_mode,
+                             **({"wall_styles_added": added_styles} if not raster_mode and added_styles else {})}
             result.append(("P0_room_names", f"page-{number}", naming_packet,
                            room_outline.room_naming_prompt(room_names, len(areas)), [_png_bytes(image)], ""))
         except (OSError, ValueError, IndexError, KeyError, TypeError) as error:
@@ -849,6 +851,16 @@ def _p0_followup_packets(root):
     # Open-plan outline packets are built after the naming replies identify
     # which rooms already received enclosed or split areas.
     return result
+
+
+def _completed_wall_styles(root, context, calibration, wall_style_ids):
+    """The wall styles the vision task chose, completed when they enclose fewer rooms than the plan has names
+    (room_outline.complete_wall_styles). Every place that turns wall styles into enclosed areas uses this, so the
+    numbered areas in the naming question are the areas its answer is applied to."""
+    expected = len({row["label"] for row in _inferred_room_data(root)})
+    mm_per_px = context.get("declared_mm_per_px") or calibration["mm_per_px"]
+    return room_outline.complete_wall_styles(context["objects"], context["viewport"], mm_per_px, wall_style_ids,
+                                             expected, context.get("summary"))
 
 
 def _p0_wall_style_records(root, page):
@@ -899,6 +911,7 @@ def _p0_outline_packets(root):
                                          for style_id in row.get("applied_value", {}).get("wall_style_ids", [])})
                 if not wall_style_ids:
                     continue
+                wall_style_ids, _added = _completed_wall_styles(root, context, calibration, wall_style_ids)
             _walls, areas, _segments = _p0_walls_areas(root, number, context, calibration,
                                                         wall_style_ids, raster_mode)
             if names_record and areas:
