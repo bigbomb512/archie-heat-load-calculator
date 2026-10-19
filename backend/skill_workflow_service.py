@@ -27,6 +27,7 @@ from copy import deepcopy
 from pathlib import Path
 
 from backend.vision_extraction_service import _atomic_json
+from backend.job_runner import BackgroundJob, JobCancelled, checkpoint, recovery, _context, _write_json
 from backend.job_runner import _process_alive
 from ai.skill_registry import compose_subskill_instructions, instruction_path, load_subskill_registry, subskill_instructions_fingerprint
 from ai.vision_extraction import select_page_groups
@@ -38,6 +39,8 @@ _INSTRUCTIONS_PATH = Path(__file__).resolve().parents[1]
 _LOCK = threading.Lock()
 _PROJECT_LOCKS: dict[str, threading.Lock] = {}
 _RUNNING: set[str] = set()
+_RUNNING_FOLDERS: dict[str, str] = {}
+_CONTROL = BackgroundJob("skill_workflow_run.json", [("review", "Reviewing drawings")], "skill-control", "Review interrupted")
 _MAX_WORKERS = 4
 _GEOMETRY_VECTOR_DPI = 180
 LOGGER = logging.getLogger(__name__)
@@ -411,10 +414,15 @@ INTERRUPTED_PROBLEM = "The server stopped while the AI was working through the d
 INTERRUPTED_REMEDIATION = "Retry to finish the remaining steps; finished steps are kept."
 
 
-def _orphaned(manifest, project_id):
+def is_running(project):
+    return project["id"] in _RUNNING or str(Path(project["review_dir"]).resolve()) in _RUNNING_FOLDERS
+
+
+def _orphaned(manifest, project_id, root=None):
     """True for a run recorded as queued or running that no live server is working on: the server running it stopped
     (closed, restarted or crashed). A run owned by another live server process (its pid) is still running."""
-    if manifest.get("status") not in {"queued", "running"} or project_id in _RUNNING:
+    if (manifest.get("status") not in {"queued", "running"} or project_id in _RUNNING
+            or root is not None and _RUNNING_FOLDERS.get(str(Path(root).resolve())) == manifest.get("run_id")):
         return False
     pid = manifest.get("pid")
     return not (pid != os.getpid() and _process_alive(pid))
@@ -422,7 +430,13 @@ def _orphaned(manifest, project_id):
 
 def _write_manifest(path, manifest):
     manifest["updated_at"] = time.time()
-    _atomic_json(path, manifest)
+    checkpoint()
+    with _CONTROL.mutation_lock({"review_dir": str(Path(path).parent)}):
+        checkpoint()
+        previous = _read(path, {})
+        if previous.get("run_id") == manifest.get("run_id") and previous.get("restart_requested"):
+            manifest.update({key: previous[key] for key in ("restart_requested", "restart_requested_at", "restart_scope") if key in previous})
+        _atomic_json(path, manifest)
 
 
 def _page_rows(coverage):
@@ -444,6 +458,7 @@ def _wait_room_inference(web, project):
         status = state.get("status", state.get("room_inference", {}).get("status", "queued"))
     deadline = time.monotonic() + _ROOM_WAIT_SECONDS
     while status in {"queued", "running"} and time.monotonic() < deadline:
+        checkpoint()
         time.sleep(0.35)
         state = room_inference_service.get(web, project)
         status = state.get("status", state.get("room_inference", {}).get("status", "not_started"))
@@ -2140,6 +2155,7 @@ def _provider_call_with_retry(call, attempt_record):
     """Retry one interrupted request once; leave auth, budget, and content errors alone."""
     retries = 0
     while True:
+        checkpoint()
         try:
             result = call()
             if retries:
@@ -2642,7 +2658,7 @@ def _persist_skill_attempt(root, run_id, subskill_id, *, attempt_record, input_f
                    else {"page": None, "path": str(image)} for image in images]
     prompt = attempt_record.get("prompt", "") if isinstance(attempt_record, dict) else ""
     cli = {key: raw_record[key] for key in ("provider", "model", "exit_code", "stdout_tail", "stderr_tail",
-        "http_status", "duration_seconds") if key in raw_record}
+        "http_status", "duration_seconds", "recovered_reply", "cached_reply_ref") if key in raw_record}
     (attempt_dir / "prompt.txt").write_text(str(prompt), encoding="utf-8")
     (attempt_dir / "images.json").write_text(json.dumps(safe_images, indent=2, ensure_ascii=False), encoding="utf-8")
     (attempt_dir / "raw_output.txt").write_text(raw_output, encoding="utf-8")
@@ -3156,6 +3172,8 @@ def _execute_subskill(subskill, project, dependencies, source_fp):
         "prerequisites": {key: {"status": value.get("status", ""), "input_fingerprint": value.get("input_fingerprint", ""),
             "proposal_fingerprint": _fingerprint({k: v for k, v in (value.get("proposal") or {}).items() if k != "attempt_ref"})}
             for key, value in dependencies.items()}})
+    checkpoint()
+    recovery_cache = Path(project["review_dir"]) / "skill_reply_cache" / f"{input_fp}.json"
     settings_path = Path(project["review_dir"]) / "vision_extraction_settings.json"
     settings = _read(settings_path, {})
     test_mode = os.environ.get("ARCHIE_ENV") == "test" and os.environ.get("ARCHIE_TEST_MODE") == "1"
@@ -3167,6 +3185,11 @@ def _execute_subskill(subskill, project, dependencies, source_fp):
     reused = _reused_proposal(subskill, project, input_fp)
     if reused is not None:
         return reused
+    cached = _read(recovery_cache, {})
+    if cached.get("input_fingerprint") == input_fp and cached.get("status") not in {"failed", "blocked"}:
+        cached.setdefault("_attempt_record", {}).setdefault("raw_record", {}).update(
+            recovered_reply=True, cached_reply_ref=str(recovery_cache.relative_to(Path(project["review_dir"]))))
+        return cached
     if subskill["id"] == "address_confirmation":
         candidate = dependencies.get("site_clue_extraction", {}).get("proposal", {})
         candidate_fields = candidate.get("proposal_fields", {}) if isinstance(candidate, dict) else {}
@@ -3300,6 +3323,8 @@ def _execute_subskill(subskill, project, dependencies, source_fp):
     if not attempt_record["raw_record"]:
         attempt_record["raw_record"] = {"provider": provider_kind, "reply_text": json.dumps(proposal, ensure_ascii=False)}
     proposal["_attempt_record"] = attempt_record
+    if proposal.get("status") not in {"failed", "blocked"}:
+        _write_json(recovery_cache, json.loads(json.dumps(proposal, default=str)))
     return proposal
 
 
@@ -3371,6 +3396,7 @@ def _read_scanned_printed_areas(project, run_id):
         lambda: OpenAISkillProposalProvider(os.environ["OPENAI_API_KEY"], model))
     page_proposals, raw_replies, blocked, failed = [], {}, [], []
     for task, target, packet, prompt, image_bytes, reason in autonomous_tasks_service._s1_packets(paths["root"]):
+        checkpoint()
         page = packet.get("page")
         if page not in allowed_pages:
             continue
@@ -3454,12 +3480,33 @@ def _update_parent_stages(manifest, catalog, registry):
             "artifact_names": sorted({name for child in child_ids for name in manifest["subskills"][child].get("artifact_names", [])})})
 
 
+def _run_checked_subskill(check, *args):
+    _context.check = check
+    try:
+        check()
+        return _execute_subskill(*args)
+    finally:
+        _context.check = None
+
+
 def _run_worker(web, project, run_id, source_fp, catalog):
     paths = _project_paths(project)
     run_path = paths["manifest"]
     registry = load_subskill_registry()
     subskill_defs = {row["id"]: row for row in registry["subskills"]}
     selected_parents = set(catalog.get("enabled_skill_ids", catalog.get("pilot_skill_ids", [])))
+    def check():
+        current = _read(run_path, {})
+        if current.get("run_id") != run_id or current.get("restart_requested"):
+            raise JobCancelled()
+    from contextlib import contextmanager
+    @contextmanager
+    def guard():
+        with _CONTROL.mutation_lock(project):
+            check()
+            yield
+    _context.check, _context.guard = check, guard
+    cancelled = False
     try:
         with _project_lock(project["id"]):
             manifest = _read(run_path, {})
@@ -3495,6 +3542,7 @@ def _run_worker(web, project, run_id, source_fp, catalog):
         room_prepared = False
         case_file_route = _case_file_route(project)
         while pending:
+            check()
             ready = sorted(skill_id for skill_id in pending if set(subskill_defs[skill_id].get("depends_on", [])) <= completed | failures)
             if not ready:
                 raise RuntimeError("subskill_graph_blocked")
@@ -3563,7 +3611,7 @@ def _run_worker(web, project, run_id, source_fp, catalog):
                 _update_parent_stages(manifest, catalog, registry)
                 _write_manifest(run_path, manifest)
             with ThreadPoolExecutor(max_workers=min(_MAX_WORKERS, max(1, len(runnable)))) as pool:
-                futures = {pool.submit(_execute_subskill, subskill_defs[skill_id], project,
+                futures = {pool.submit(_run_checked_subskill, check, subskill_defs[skill_id], project,
                     {dep: {**manifest.get("subskills", {}).get(dep, {}), "proposal": _read(
                         paths["root"] / "skill_workflow_runs" / run_id / "proposals" / f"{dep}.json", {})}
                      for dep in subskill_defs[skill_id].get("depends_on", [])}, source_fp): skill_id for skill_id in runnable}
@@ -3572,8 +3620,10 @@ def _run_worker(web, project, run_id, source_fp, catalog):
                 failure_phase = "proposal_generation"
                 attempt_record = {"prompt": "", "images": [], "raw_record": {"provider": "unknown", "reply_text": ""}, "started_at": time.time()}
                 attempt_ref = ""
+                raw_result, validated = None, False
                 try:
                     raw_result = future.result()
+                    check()
                     attempt_record = raw_result.pop("_attempt_record", attempt_record)
                     attempt_ref, attempt_metadata = _persist_skill_attempt(
                         paths["root"], run_id, skill_id, attempt_record=attempt_record,
@@ -3582,6 +3632,7 @@ def _run_worker(web, project, run_id, source_fp, catalog):
                     failure_phase = "proposal_validation"
                     result = _validate_subskill_output(subskill_defs[skill_id], raw_result, registry,
                         allowed_pages={row.get("page") for row in _page_rows(_read(paths["coverage"], {})) if isinstance(row.get("page"), int)})
+                    validated = True
                     status = result.get("status", "needs_review")
                     if raw_result.get("provider_kind") == "prompt_budget_blocked":
                         attempt_metadata.update({"outcome": "blocked_over_budget", "failure_phase": "prompt_budget",
@@ -3598,6 +3649,7 @@ def _run_worker(web, project, run_id, source_fp, catalog):
                     result["attempt_ref"] = raw_result.get("attempt_ref", attempt_ref) if reused_from else attempt_ref
                     proposal_path = paths["root"] / "skill_workflow_runs" / run_id / "proposals" / f"{skill_id}.json"
                     proposal_path.parent.mkdir(parents=True, exist_ok=True)
+                    check()
                     _atomic_json(proposal_path, {key: value for key, value in result.items() if key not in {"provider_kind", "reused_from"}})
                     proposal_name = str(proposal_path.relative_to(paths["root"]))
                     with _project_lock(project["id"]):
@@ -3626,6 +3678,11 @@ def _run_worker(web, project, run_id, source_fp, catalog):
                     # (and can overwrite their proposal/manifest state).
                     pending.discard(skill_id)
                 except Exception as error:
+                    # A refused reply must not become a permanent cache hit on every deliberate retry.
+                    if raw_result and not validated and failure_phase == "proposal_validation":
+                        reply_fp = raw_result.get("input_fingerprint", "")
+                        if isinstance(reply_fp, str) and re.fullmatch(r"[0-9a-f]{64}", reply_fp):
+                            (paths["root"] / "skill_reply_cache" / f"{reply_fp}.json").unlink(missing_ok=True)
                     raw_code = str(error)
                     code = (raw_code if raw_code in _SAFE_SUBSKILL_ERROR_CODES or raw_code.startswith("skill_provider_http_error_")
                             else "subskill_execution_failed")
@@ -3702,7 +3759,10 @@ def _run_worker(web, project, run_id, source_fp, catalog):
             manifest["dependency_fingerprints"] = _derived_dependency_fingerprints(paths)
             manifest["finished_at"] = time.time()
             _write_manifest(run_path, manifest)
+    except JobCancelled:
+        cancelled = True
     except Exception:
+        _context.check = _context.guard = None
         with _project_lock(project["id"]):
             manifest = _read(run_path, {})
             if manifest.get("run_id") == run_id:
@@ -3710,13 +3770,28 @@ def _run_worker(web, project, run_id, source_fp, catalog):
                                  "remediation": "Review the workflow status and retry the failed evidence stage."})
                 _write_manifest(run_path, manifest)
     finally:
+        _context.check = _context.guard = None
         queued_scope = ""
-        with _project_lock(project["id"]):
+        with _project_lock(project["id"]), _CONTROL.mutation_lock(project):
             manifest = _read(run_path, {})
             queued_scope = str(manifest.get("queued_automatic_scope") or "")
-        with _LOCK:
-            _RUNNING.discard(project["id"])
-        if queued_scope in _WORKFLOW_SCOPES:
+            restart = manifest.get("run_id") == run_id and manifest.get("restart_requested")
+            if restart:
+                manifest.update(status="failed", finished_at=time.time())
+                manifest.pop("restart_requested", None)
+                _atomic_json(run_path, manifest)
+            with _LOCK:
+                root_key = str(paths["root"].resolve())
+                if _RUNNING_FOLDERS.get(root_key) in {None, run_id}:
+                    _RUNNING.discard(project["id"])
+                    _RUNNING_FOLDERS.pop(root_key, None)
+            if restart:
+                post(web, project, {"action": "retry", "scope": manifest.get("restart_scope") or manifest.get("scope", "phase1_envelope")})
+        if restart:
+            return
+        if cancelled:
+            return
+        elif queued_scope in _WORKFLOW_SCOPES:
             try:
                 post(web, project, {"action": "start", "scope": queued_scope, "automatic": True})
             except Exception:
@@ -3728,6 +3803,23 @@ def _run_worker(web, project, run_id, source_fp, catalog):
                 LOGGER.exception("Queued Archie skill workflow could not start", extra={"scope": queued_scope})
         else:
             start_phase1_after_review(web, project, run_id)
+
+
+def take_in_downstream(project, run_id):
+    """Record that a calculation has used this review's results. The calculation rewrites the domain files the
+    review lists as dependencies (room uses, ceiling heights, gains...) from the review's own proposals; without this,
+    calculating Phase 1 made its own review look stale at once (Butcher Buffet, 2026-10-19). A later change that
+    doesn't come through a calculation of this run still makes it stale. Returns True when recorded."""
+    paths = _project_paths(project)
+    with _project_lock(project["id"]):
+        manifest = _read(paths["manifest"], {})
+        if (not run_id or manifest.get("run_id") != run_id
+                or manifest.get("status") not in {"completed", "needs_review", "provisional"}):
+            return False
+        manifest["dependency_fingerprints"] = _derived_dependency_fingerprints(paths)
+        manifest["downstream_taken_in_at"] = time.time()
+        _write_manifest(paths["manifest"], manifest)
+    return True
 
 
 PHASE1_AFTER_REVIEW = {"completed", "needs_review", "failed", "blocked", "provisional"}
@@ -3749,12 +3841,7 @@ def start_phase1_after_review(web, project, run_id):
     try:
         from backend import ai_preliminary_service, calculation_service
         current = web.project_by_id(project["id"]) if hasattr(web, "project_by_id") else project
-        model = ai_preliminary_service.get(web, current, "workspace", check_freshness=True)
-        base = model.get("phase1_base_room_load_report") or {}
-        if base.get("status") not in {None, "", "not_calculated"} and not model.get("phase1_base_room_load_report_stale"):
-            return None                       # the saved Phase 1 result is current: nothing to redo
-        return calculation_service.start(web, current, {"phase": "phase1_base_room",
-                                                        "reviewer": "Automatic, after the drawing review"})
+        return calculation_service.maybe_start_phase1(web, current)
     except Exception:
         LOGGER.exception("Phase 1 could not start after the drawing review", extra={"project_id": project.get("id")})
         return None
@@ -3776,7 +3863,7 @@ def _response(web, project):
         for row in manifest.get("subskills", {}).values():
             if row.get("status") in {"resolved", "provisional", "needs_review", "excluded"}:
                 row["status"] = "stale"
-    interrupted = _orphaned(manifest, project["id"])
+    interrupted = _orphaned(manifest, project["id"], paths["root"])
     if interrupted:
         manifest.update({"status": "failed", "error_code": "skill_workflow_interrupted", "remediation": INTERRUPTED_REMEDIATION})
     safe = deepcopy(manifest)
@@ -3915,10 +4002,10 @@ def _response(web, project):
     visible_status = safe.get("status", "not_started")
     blocked_reason = ""
     read_only = not consent.get("owner_opt_in") and not _case_file_route(project)
-    if read_only:
+    if read_only and visible_status not in {"running", "queued", "completed", "needs_review", "provisional"}:
         visible_status = "blocked"
-        blocked_reason = ("Skills read the pages only after every page has been read (page reading on, and the AI "
-                          "provider set up on this server).")
+        from backend.workflow_recovery import stage_blocker
+        blocked_reason = stage_blocker(project, "envelope") or "AI drawing review is not enabled for this job. Check project consent and the server's AI provider setup, then resume."
     issues = [{"name": row["id"], "status": row["status"], "reason": public_text(_issue_reason(row))}
               for row in subskills if row["status"] in {"failed", "blocked"}]
     failed_steps = _failed_steps(subskills)
@@ -3926,7 +4013,13 @@ def _response(web, project):
     if scan_state.get("status") in {"failed", "blocked"}:
         issues.append({"name": "Scanned plan area reading", "status": scan_state["status"],
                        "reason": public_text(scan_state.get("remediation", ""))})
+    if safe.get("restart_requested") and not interrupted:
+        visible_status = "stopping"
+    stalled = bool(visible_status == "stopping" and time.time() - safe.get("restart_requested_at", time.time()) > 600)
+    recovery_reason = ("The AI request exceeded its expected timeout. Restart is still pending; no replacement has started."
+                       if stalled else blocked_reason or safe.get("blocked_reason", ""))
     return {
+        "recovery": recovery(visible_status, public_text(recovery_reason)), "restart_stalled": stalled,
         "project_id": project["id"], "status": visible_status,
         "run_id": safe.get("run_id", ""), "source_fingerprint": safe.get("source_fingerprint", ""),
         "stale_reasons": [public_text(item) for item in safe.get("stale_reasons", [])], "remediation": public_text(safe.get("remediation", "")),
@@ -4408,13 +4501,19 @@ def get(web, project):
 
 
 def post(web, project, data):
+    # Serialize run creation/restart across local server processes as well as threads.
+    with _CONTROL.mutation_lock(project):
+        return _post(web, project, data)
+
+
+def _post(web, project, data):
     action = str((data or {}).get("action", "start"))
     if action == "review_finding":
         return _review_finding(web, project, data)
     if action == "answer_need":
         return _answer_need(web, project, data)
-    if action not in {"start", "retry"}:
-        raise ValueError("Skill workflow action must be start, retry, review_finding or answer_need.")
+    if action not in {"start", "retry", "resume", "restart"}:
+        raise ValueError("Skill workflow action must be start, retry, resume, restart, review_finding or answer_need.")
     explicit_scope = (data or {}).get("scope")
     scope = str(explicit_scope or "pdf_review")
     if scope not in _WORKFLOW_SCOPES:
@@ -4426,10 +4525,26 @@ def post(web, project, data):
     source_fp = _source_fingerprint(paths, catalog)
     with _LOCK:
         existing = _read(paths["manifest"], {})
-        if action == "retry" and not explicit_scope and existing.get("scope") in _WORKFLOW_SCOPES:
+        if action == "restart" and data.get("expected_run_id") and existing.get("run_id") != data["expected_run_id"]:
+            return {**_response(web, project), "deduplicated": True}
+        if action in {"retry", "resume", "restart"} and not explicit_scope and existing.get("scope") in _WORKFLOW_SCOPES:
             # A retry repeats the interrupted or failed run's own scope.
             scope = existing["scope"]
-        if project["id"] in _RUNNING:
+        if action == "restart" and (is_running(project) or
+                (existing.get("status") in {"queued", "running"} and not _orphaned(existing, project["id"], paths["root"]))):
+            existing.update(restart_requested=True, restart_requested_at=existing.get("restart_requested_at") or time.time(), restart_scope=scope)
+            _write_manifest(paths["manifest"], existing)
+            return _response(web, project)
+        if action in {"resume", "restart"} and not is_running(project):
+            from backend.workflow_recovery import stage_blocker
+            reason = stage_blocker(project, "envelope")
+            if reason:
+                response = _response(web, project)
+                response["recovery"]["reason"] = reason
+                return response
+        if action in {"resume", "restart"}:
+            action = "retry" if existing.get("status") in {"failed", "blocked", "stale", "needs_review", "queued", "running"} else "start"
+        if is_running(project):
             running_manifest = _read(paths["manifest"], {})
             if (data.get("automatic") is True and scope == "phase1_envelope"
                     and (running_manifest.get("scope") != scope
@@ -4446,7 +4561,7 @@ def post(web, project, data):
         # an interrupted run (for example, after a local server restart). Do
         # not deduplicate forever against that orphaned state; make the
         # interruption visible and require the deliberate retry action.
-        if existing.get("status") in {"queued", "running"} and not _orphaned(existing, project["id"]):
+        if existing.get("status") in {"queued", "running"} and not _orphaned(existing, project["id"], paths["root"]):
             response = _response(web, project)       # another live server process is running it
             response["deduplicated"] = True
             return response
@@ -4482,11 +4597,13 @@ def post(web, project, data):
                 raise ValueError("Retry is available only after a failed or stale skill workflow.")
         manifest = _new_manifest(catalog, source_fp, scope)
         manifest["reuse_from"] = _reuse_table(paths, existing)
+        _RUNNING_FOLDERS[str(paths["root"].resolve())] = manifest["run_id"]
         _RUNNING.add(project["id"])       # before the manifest says queued, so a status read never sees it orphaned
         try:
             _write_manifest(paths["manifest"], manifest)
         except Exception:
             _RUNNING.discard(project["id"])
+            _RUNNING_FOLDERS.pop(str(paths["root"].resolve()), None)
             raise
         _USAGE_STOPPED.pop(str(paths["root"].resolve()), None)  # a new run tries again
     thread = threading.Thread(target=_run_worker, args=(web, deepcopy(project), manifest["run_id"], source_fp, catalog), daemon=True)

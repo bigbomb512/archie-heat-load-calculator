@@ -10,6 +10,7 @@ const RUNNING = new Set([
   "queued",
   "pending",
   "reading",
+  "stopping",
 ]);
 
 function stateOf(data) {
@@ -98,12 +99,15 @@ function envelopeFailureLine(data) {
 }
 
 function stageLine(data, kind, status, plan) {
+  if (data?.status === "stopping") return data.recovery?.reason || "Waiting for the current AI request to finish or time out, then resuming unfinished work.";
+  if (kind !== "calculation" && data?.recovery?.label === "Check and resume" && data?.recovery?.reason && !RUNNING.has(String(data.status || ""))) return data.recovery.reason;
   if (kind === "pages") {
     if (STOPPED.has(String(data?.status || "").toLowerCase())) {
       return pageReadingProblem(data);
     }
     const read = Number(data?.pages_read ?? data?.read ?? 0);
     const total = Number(data?.page_count ?? data?.total ?? 0);
+    if (stateOf(data) === "done" && data?.partial) return `${read} of ${total} pages read. Some pages could not be read; finished pages are kept.`;
     if (stateOf(data) === "done") {
       return total ? `${total} of ${total} pages read.` : "Every page has been read.";
     }
@@ -119,6 +123,7 @@ function stageLine(data, kind, status, plan) {
   if (kind === "rooms") {
     if (stateOf(data) === "active") return drawingTaskProgress(data);
     if (stateOf(data) === "done" && callFailures(data).length) return unansweredLine(data);
+    if (stateOf(data) === "done" && data?.recovery?.label === "Try again") return data.recovery.reason;
     if (STOPPED.has(String(data?.status || "").toLowerCase())) {
       return "Tracing the rooms stopped before it finished. What it found so far is kept.";
     }
@@ -145,6 +150,9 @@ function stageLine(data, kind, status, plan) {
       return "Working through the room boundaries and materials.";
     }
     if (data?.status === "failed") return envelopeFailureLine(data);
+    if (data?.status === "stale") {
+      return "Finished, but the drawings or inputs changed afterwards. Try again to work them out from the current drawings; the earlier result is kept until then.";
+    }
     return data?.status === "done" || data?.status === "complete"
       ? "Wall, roof, floor and window details are ready."
       : "Working through the room boundaries and materials.";
@@ -163,9 +171,10 @@ function stageLine(data, kind, status, plan) {
     if (data?.offerStart) {
       return "The empty-room load hasn't started. Calculate now runs it from the saved drawing evidence.";
     }
-    if (data?.pending) return "Starting the empty-room load calculation.";
+    if (data?.readiness?.ready && data?.status !== "done" && !STOPPED.has(String(data?.status || ""))) return "Starting the empty-room load calculation.";
+    if (data?.readiness?.reasons?.length) return data.readiness.reasons.join(" ");
     if (STOPPED.has(String(data?.status || "").toLowerCase())) {
-      return data?.error || "The empty-room load calculation stopped. Try again to continue.";
+      return data?.error || data?.problem || "The empty-room load calculation stopped. Try again to continue.";
     }
     if (data?.status === "done") {
       return "The drawings changed since the last calculation. The empty-room load is recalculated when the drawing review finishes.";
@@ -181,24 +190,19 @@ function stage(title, data, kind, status, plan, retryEndpoint = "") {
     kind === "calculation"
       ? status.phase1_complete
         ? "done"
-        : RUNNING.has(String(data?.status || "").toLowerCase()) || data?.pending
+        : RUNNING.has(String(data?.status || "").toLowerCase()) || data?.readiness?.ready && !data.offerStart && !STOPPED.has(String(data?.status || "")) && data?.status !== "done"
           ? "active"
           : "waiting"
-      : kind === "rooms" && stateOf(data) === "done" && callFailures(data).length
+      : stateOf(data) === "done" && data?.recovery?.label === "Try again"
         ? "waiting"
         : stateOf(data);
-  const failed =
-    STOPPED.has(String(data?.status || "").toLowerCase()) ||
-    (kind === "rooms" && stateOf(data) === "done" && callFailures(data).length > 0);
   const copy = stageLine(data, kind, status, plan);
-  const startNow =
-    kind === "calculation" && data?.offerStart
-      ? `<button class="job-button secondary" data-calculate-now>Calculate now</button><p class="job-note" role="status"></p>`
-      : "";
-  const retry =
-    failed && retryEndpoint
-      ? `<button class="job-button secondary" data-retry="${retryEndpoint}">Try again</button><p class="job-note" role="status"></p>`
-      : "";
+  const startNow = kind === "calculation" && data?.offerStart
+    ? `<button class="job-button secondary" data-calculate-now>Calculate now</button><p class="job-note" role="status"></p>` : "";
+  const retry = kind === "calculation"
+    ? STOPPED.has(String(data?.status || "")) && data?.readiness?.ready && retryEndpoint
+      ? `<button class="job-button secondary" data-retry="${retryEndpoint}">Try again</button><p class="job-note" role="status"></p>` : ""
+    : recoveryButton(data, retryEndpoint, kind);
   const problem =
     kind === "rooms" && data?.last_problem && stateOf(data) === "active"
       ? `<p class="job-caption" data-stage-problem>${escapeHtml(data.last_problem)}</p>`
@@ -206,25 +210,28 @@ function stage(title, data, kind, status, plan, retryEndpoint = "") {
   return `<li class="job-stage ${state}" data-stage="${kind}"><span class="job-stage-icon" aria-hidden="true">${state === "done" ? "✓" : ""}</span><span><strong>${title}</strong><p>${escapeHtml(copy)}</p>${problem}${retry}${startNow}</span></li>`;
 }
 
-// The first step of a new job: the PDF is read (titles, drawing types, previews) and its drawing pages prepared.
+const recoveryNotes = new Map();
+const pendingRequests = new Set();
+
+function recoveryButton(data, endpoint, kind) {
+  const control = data?.recovery;
+  if (!endpoint || !control?.label) return "";
+  const key = `${data.recovery_project_id}:${endpoint}`;
+  const busy = pendingRequests.has(key);
+  const disabled = busy || !control.action;
+  return `<button class="job-button secondary" data-recover="${endpoint}" data-action="${control.action || ""}" data-kind="${kind}" data-run-id="${escapeHtml(data.job_id || data.run_id || data.recovery_run_id || "")}" ${disabled ? "disabled" : ""}>${escapeHtml(busy ? "Requesting recovery…" : control.label)}</button><p class="job-note" role="status">${escapeHtml(recoveryNotes.get(key) || "")}</p>`;
+}
+
+// Preparation may be owned by the initial analysis job or by its page-preparation child.
 function preparationStage(newJob) {
   if (!newJob) return "";
-  if (newJob.drawings_ready) {
-    const pages = Number(newJob.pages);
-    return `<li class="job-stage done"><span class="job-stage-icon" aria-hidden="true">✓</span><span><strong>Prepare the drawing set</strong><p>${pages ? `${pages} pages ready.` : "The drawing pages are ready."}</p></span></li>`;
-  }
-  const running = newJob.state === "running";
-  const line = running
-    ? newJob.step_label || "Reading the PDF."
-    : newJob.state === "failed"
-      ? "Preparing the drawing set stopped before it finished. Try again to continue."
-      : newJob.analysed
-        ? "The drawing pages haven't been prepared yet."
-        : "This PDF hasn't been read yet.";
-  const button = running
-    ? ""
-    : `<button class="job-button${newJob.state === "failed" ? " secondary" : ""}" data-start-new-job>${newJob.state === "failed" ? "Try again" : "Read the PDF"}</button><p class="job-note" role="status"></p>`;
-  return `<li class="job-stage ${running ? "active" : "waiting"}" data-preparation-stage><span class="job-stage-icon" aria-hidden="true"></span><span><strong>Prepare the drawing set</strong><p data-preparation-line>${escapeHtml(line)}</p>${button}</span></li>`;
+  const ready = newJob.drawings_ready && newJob.state === "done";
+  const state = ready ? "done" : RUNNING.has(newJob.state) ? "active" : "waiting";
+  const line = ready ? `${Number(newJob.pages) || "Drawing"} pages ready.`
+    : newJob.state === "stopping" ? newJob.recovery?.reason || "Waiting for preparation to stop, then resuming."
+    : newJob.state === "running" ? newJob.step_label || "Reading the PDF."
+    : newJob.error || newJob.recovery?.reason || "Prepare the drawing set to continue.";
+  return `<li class="job-stage ${state}" data-preparation-stage><span class="job-stage-icon" aria-hidden="true">${ready ? "✓" : ""}</span><span><strong>Prepare the drawing set</strong><p data-preparation-line>${escapeHtml(line)}</p>${ready ? "" : recoveryButton(newJob, "/api/new-job", "preparation")}</span></li>`;
 }
 
 function facts(status, plan) {
@@ -263,22 +270,21 @@ function statusSentence(data, status, plan) {
     ["envelope", data.envelope],
     ["calculation", data.calculation],
   ];
-  // A stage that stopped and needs Try again comes first, then the one working right now, then the first unfinished.
+  // Report the active prerequisite before downstream waiting states.
   const unfinished = ([kind, value]) => {
     if (kind === "calculation") return !status.phase1_complete;
     if (kind === "rooms" && stateOf(value) === "done" && callFailures(value).length) return true;
     return value && stateOf(value) !== "done";
   };
   const current =
-    order.find(([, value]) => STOPPED.has(String(value?.status || "").toLowerCase())) ||
-    order.find(([kind, value]) => kind !== "calculation" && stateOf(value) === "active") ||
+    order.find(([, value]) => stateOf(value) === "active" || value?.recovery?.label === "Try again") ||
     order.find(unfinished);
   if (!current) return "The drawing review is ready to continue.";
   const [kind, value] = current;
-  if (kind === "rooms" && stateOf(value) === "done") {
+  if (kind === "rooms" && stateOf(value) === "done" && callFailures(value).length) {
     return `Some drawing tasks got no answer because ${value.connection_stopped || callFailures(value).every((row) => row.kind === "connection") ? "the connection to the AI service failed" : "the AI's calls failed"}. Try again under Trace the rooms and walls.`;
   }
-  if (STOPPED.has(String(value?.status || "").toLowerCase())) {
+  if (STOPPED.has(String(value?.status || "").toLowerCase()) && value?.recovery?.label === "Try again") {
     if (kind === "pages") return pageReadingProblem(value);
     return kind === "envelope"
       ? `${(value.failed_steps || []).map((row) => row.label).join(" and ") || "Working out the walls, roof and floor"} stopped. Try again to continue; finished steps are kept.`
@@ -295,61 +301,61 @@ function statusSentence(data, status, plan) {
   return `${copy} The review keeps going if you leave.`;
 }
 
-const preparing = (newJob) => Boolean(newJob && !newJob.drawings_ready);
+const preparing = (newJob) => Boolean(newJob && (!newJob.drawings_ready || ["running", "stopping", "failed"].includes(newJob.state)));
 const REFRESH_MS = 5000;
 let watchGeneration = 0;
-// The server starts Phase 1 when the envelope review finishes. The few seconds between the review finishing and the
-// calculation job appearing are still "working", so the screen keeps checking instead of going quiet.
-const PHASE1_START_GRACE_MS = 60000;
-const reviewFinished = (data) =>
-  ["done", "waiting"].includes(stateOf(data.envelope)) &&
-  ["completed", "needs_review", "failed", "blocked", "provisional"].includes(String(data.envelope?.status || ""));
-
-function phase1Pending(data, status) {
-  return !status.phase1_complete && reviewFinished(data) && !RUNNING.has(String(data.calculation?.status || ""))
-    && !STOPPED.has(String(data.calculation?.status || "")) && data.calculation?.status !== "done";
-}
-
-const pendingSince = new Map();
-
-// Marks the calculation stage as waiting for the server's start, and after the grace period offers "Calculate now"
-// (a job whose review finished before the server started Phase 1 by itself never gets an automatic start).
+// Calculation availability comes from the server, never from a browser timer.
 function withCalculationHints(projectId, data, status) {
-  if (!phase1Pending(data, status)) {
-    pendingSince.delete(projectId);
-    return data;
-  }
-  if (!pendingSince.has(projectId)) pendingSince.set(projectId, Date.now());
-  const offerStart = Date.now() - pendingSince.get(projectId) >= PHASE1_START_GRACE_MS;
-  return { ...data, calculation: { ...(data.calculation || {}), pending: !offerStart, offerStart } };
+  return { ...data, calculation: { ...(data.calculation || {}),
+    offerStart: !status.phase1_complete && data.calculation?.readiness?.ready === true && data.calculation?.offer_start === true } };
 }
 
-// The light status endpoints behind the stage list (the plan itself is only re-read when a stage finishes).
+const confirmedStages = new Map();
 async function fetchStages(projectId) {
-  const [reading, equipment, rooms, envelope, calculation, newJob] = await Promise.all([
-    getJson(`/api/page-reading${query(projectId)}`).catch(() => null),
-    getJson(`/api/page-extraction${query(projectId)}&kind=equipment_appliances`).catch(() => null),
-    getJson(`/api/drawing-tasks${query(projectId)}`).catch(() => null),
-    getJson(`/api/skill-workflow${query(projectId)}`).catch(() => null),
-    getJson(`/api/job-calculation${query(projectId)}`).catch(() => null),
-    getJson(`/api/new-job${query(projectId)}`).catch(() => null),
-  ]);
-  return { reading, equipment, rooms, envelope, calculation, newJob };
+  const entries = [
+    ["reading", `/api/page-reading${query(projectId)}`],
+    ["equipment", `/api/page-extraction${query(projectId)}&kind=equipment_appliances`],
+    ["rooms", `/api/drawing-tasks${query(projectId)}`],
+    ["envelope", `/api/skill-workflow${query(projectId)}`],
+    ["calculation", `/api/job-calculation${query(projectId)}`],
+    ["newJob", `/api/new-job${query(projectId)}`],
+  ];
+  const responses = await Promise.allSettled(entries.map(([, url]) => getJson(url)));
+  const data = { ...(confirmedStages.get(projectId) || {}) };
+  data.refreshProblem = responses.some((reply) => reply.status === "rejected");
+  responses.forEach((reply, index) => {
+    if (reply.status === "fulfilled") {
+      const name = entries[index][0];
+      const previous = data[name];
+      const next = { ...reply.value, recovery_project_id: projectId };
+      const previousRun = previous?.job_id || previous?.run_id;
+      const nextRun = next.job_id || next.run_id;
+      if (previous?.status === "stopping" && next.status === "running" && previousRun && previousRun === nextRun) return;
+      const key = `${projectId}:${entries[index][1].split("?")[0]}`;
+      if ((previous?.status === "stopping" || previous?.state === "stopping") && (next.status === "running" || next.state === "running")) recoveryNotes.set(key, "Resumed unfinished work.");
+      if (next.recovery?.label === "") recoveryNotes.delete(key);
+      data[name] = next;
+    }
+  });
+  confirmedStages.set(projectId, data);
+  return data;
 }
 
 function stagesMarkup(data, status, plan) {
   return `${preparationStage(data.newJob)}
         ${stage("Read every page", data.reading, "pages", status, plan, "/api/page-reading")}
-        ${stage("Find equipment", data.equipment, "equipment", status, plan)}
+        ${stage("Find equipment", data.equipment, "equipment", status, plan, "/api/page-extraction")}
         ${stage("Trace the rooms and walls", data.rooms, "rooms", status, plan, "/api/drawing-tasks")}
         ${stage("Work out walls, roof, floor and windows", data.envelope, "envelope", status, plan, "/api/skill-workflow")}
         ${stage("Calculate each room’s empty-room load", data.calculation, "calculation", status, plan, "/api/job-calculation")}`;
 }
 
 function sentenceFor(data, status, plan) {
+  if (data.refreshProblem) return "Unable to refresh status. Showing the last confirmed progress; checking again shortly.";
   const newJob = data.newJob;
   if (preparing(newJob)) {
-    return newJob.state === "failed"
+    return newJob.state === "stopping" ? "Restarting preparation; waiting for in-flight work to stop."
+      : newJob.state === "failed"
       ? "Preparing the drawing set stopped. Try again to continue."
       : newJob.state === "running"
         ? "Toki is reading the PDF. You can close this page; it keeps going."
@@ -361,14 +367,14 @@ function sentenceFor(data, status, plan) {
 // Which stages are finished and which one is working; when this changes, the plan and facts are re-read too.
 function stageShape(data) {
   const kinds = ["reading", "equipment", "rooms", "envelope", "calculation"];
-  const shape = kinds.map((kind) => `${kind}:${stateOf(data[kind])}`);
+  const shape = kinds.map((kind) => `${kind}:${data[kind]?.status || ""}:${JSON.stringify(data[kind]?.recovery || {})}:${JSON.stringify(data[kind]?.readiness || {})}:${data[kind]?.offerStart || false}`);
   shape.push(`prep:${data.newJob?.state || ""}`);
   return shape.join("|");
 }
 
 function anyWorking(data) {
   if (data.newJob?.state === "running") return true;
-  if (data.calculation?.pending) return true;
+  if (data.refreshProblem || data.calculation?.readiness?.ready && !["done", "failed", "interrupted"].includes(data.calculation?.status)) return true;
   return ["reading", "equipment", "rooms", "envelope", "calculation"].some(
     (kind) => stateOf(data[kind]) === "active",
   );
@@ -380,7 +386,6 @@ function bindStageButtons(projectId, container) {
     button.disabled = true;
     try {
       await sendJson("/api/job-calculation", { project_id: projectId, phase: "phase1_base_room", reviewer: "Job workspace" });
-      pendingSince.delete(projectId);
       window.dispatchEvent(new HashChangeEvent("hashchange"));
     } catch (error) {
       button.disabled = false;
@@ -388,17 +393,32 @@ function bindStageButtons(projectId, container) {
       if (note) note.textContent = error.message;
     }
   });
-  container.querySelector("[data-start-new-job]")?.addEventListener("click", async (event) => {
-    const button = event.currentTarget;
-    button.disabled = true;
-    try {
-      await sendJson("/api/new-job", { project_id: projectId });
-      window.dispatchEvent(new HashChangeEvent("hashchange"));
-    } catch (error) {
-      button.disabled = false;
-      const note = button.parentElement?.querySelector(".job-note");
-      if (note) note.textContent = error.message;
-    }
+  container.querySelectorAll("[data-recover]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const endpoint = button.dataset.recover;
+      const key = `${projectId}:${endpoint}`;
+      if (pendingRequests.has(key)) return;
+      pendingRequests.add(key);
+      button.disabled = true;
+      button.textContent = button.dataset.action === "restart" ? "Requesting restart…" : "Checking…";
+      try {
+        const reply = await sendJson(endpoint, { project_id: projectId, action: button.dataset.action,
+          ...(button.dataset.action === "restart" && button.dataset.runId ? { expected_run_id: button.dataset.runId } : {}),
+          ...(button.dataset.kind === "envelope" ? { scope: "phase1_envelope" } : {}),
+          ...(button.dataset.kind === "equipment" ? { kinds: ["equipment_appliances"] } : {}) });
+        const name = { preparation: "newJob", pages: "reading", equipment: "equipment", rooms: "rooms", envelope: "envelope" }[button.dataset.kind];
+        const saved = confirmedStages.get(projectId) || {};
+        confirmedStages.set(projectId, { ...saved, [name]: { ...reply, recovery_project_id: projectId } });
+        recoveryNotes.set(key, reply.recovery?.reason || (reply.status === "stopping" || reply.state === "stopping"
+          ? "Restart requested. Waiting for in-flight work to finish or time out."
+          : reply.deduplicated ? "This step is already running." : "Resumed unfinished work; checking progress."));
+      } catch (error) {
+        recoveryNotes.set(key, error.message);
+      } finally {
+        pendingRequests.delete(key);
+        window.dispatchEvent(new HashChangeEvent("hashchange"));
+      }
+    });
   });
   container.querySelectorAll("[data-retry]").forEach((button) => {
     button.addEventListener("click", async () => {
@@ -426,10 +446,10 @@ function bindStageButtons(projectId, container) {
 
 // While any stage is working, re-read the stage statuses every few seconds and redraw the list in place. Nothing is
 // started or restarted here. It stops when the person leaves this screen, when a newer redraw starts its own watch,
-// or when nothing is working; a stage finishing redraws the whole screen once (so the plan and facts update too).
+// or after completion; waiting stages continue polling so external recovery is visible. Stage changes refresh the plan too.
 function watchStages(projectId, data, status, plan) {
   const generation = ++watchGeneration;
-  if (!anyWorking(data)) return;
+  if (status.phase1_complete && !anyWorking(data)) return;
   const hash = location.hash;
   const list = document.querySelector(".job-stage-list");
   let shape = stageShape(data);
@@ -448,7 +468,7 @@ function watchStages(projectId, data, status, plan) {
     bindStageButtons(projectId, list);
     const sentence = document.querySelector(".job-status");
     if (sentence) sentence.textContent = sentenceFor(next, status, plan);
-    if (anyWorking(next)) setTimeout(tick, REFRESH_MS);
+    if (!status.phase1_complete || anyWorking(next)) setTimeout(tick, REFRESH_MS);
   };
   setTimeout(tick, REFRESH_MS);
 }

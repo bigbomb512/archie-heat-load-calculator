@@ -42,6 +42,9 @@ class CalculationJobTests(unittest.TestCase):
         (self.root / "hourly_ai_preliminary_load_report.json").write_text(json.dumps({"included_scope_peak": {"final_design_total_kw": 34.4}}))
         self.web = FakeWeb(self.root)
         self.calls = []
+        self.ready_patch = patch.object(service, "phase1_readiness", return_value={"ready": True, "reasons": [], "usable_rooms": ["shop"], "exceptions": []})
+        self.ready_patch.start()
+        self.addCleanup(self.ready_patch.stop)
 
     def tearDown(self):
         service._RUNNING.clear()
@@ -119,14 +122,23 @@ class CalculationJobTests(unittest.TestCase):
         self.assertNotIn("rooms", [call[0] if isinstance(call, tuple) else call for call in self.calls])
         self.assertIn(("calculate", "phase1_base_room"), self.calls)
 
+    def test_a_finished_calculation_records_the_review_it_used_as_current(self):
+        from backend import skill_workflow_service
+        (self.root / "skill_workflow_run.json").write_text(json.dumps({"run_id": "r7", "scope": "phase1_envelope"}))
+        with patch.object(skill_workflow_service, "take_in_downstream") as take_in:
+            _, done = self.run_job({"include": {"shop": False, "store": True}})
+        self.assertEqual(done["status"], "done")
+        take_in.assert_called_once()
+        self.assertEqual(take_in.call_args.args[1], "r7")
+
     def test_the_jobs_phase_one_note_is_added_to_the_reports_own_note_not_written_over_it(self):
         own = "Shop: every wall and the ceiling face conditioned space, so its envelope load is 0 kW."
         (self.root / "phase1_base_room_load_report.json").write_text(json.dumps({"phase1_automation_note": own,
                                                                                  "included_scope_peak": {"final_design_total_kw": 0.0}}))
-        with patch.object(service, "_phase1_evidence_state", return_value="One evidence task could not be read."):
+        with patch.object(service, "phase1_readiness", return_value={"ready": True, "reasons": [], "usable_rooms": ["shop"], "exceptions": ["Store"]}):
             self.run_job({"phase": "phase1_base_room"})
         saved = json.loads((self.root / "phase1_base_room_load_report.json").read_text())
-        self.assertEqual(saved["phase1_automation_note"], "One evidence task could not be read. " + own)
+        self.assertEqual(saved["phase1_automation_note"], "Unresolved or excluded rooms: Store. " + own)
 
     def test_input_resolution_never_starts_a_skills_run_with_or_without_consent(self):
         from backend import model_input_resolution_service, skill_workflow_service

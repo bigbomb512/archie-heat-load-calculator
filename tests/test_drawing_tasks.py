@@ -99,6 +99,19 @@ class DrawingTaskTests(unittest.TestCase):
             self.assertEqual(len(log), 4)
             self.assertTrue(all(row["purpose"].startswith("drawing:") for row in log))
 
+    def test_deliberate_retry_only_repeats_unfinished_tasks_and_discards_refused_cache(self):
+        with tempfile.TemporaryDirectory() as folder:
+            fake, prompts = FakeTasks(folder), []
+            with patch.object(tasks_service, "post", fake.post), patch.object(tasks_service, "_all_current", fake.all_current), \
+                    patch.object(tasks_service, "_current_task", fake.current), patch.object(tasks_service, "_task_dir", fake.task_dir):
+                drawing.answer_all(None, {"id": "j", "review_dir": folder}, provider_for=lambda task: FakeProvider(prompts))
+                again = drawing.answer_all(None, {"id": "j", "review_dir": folder}, provider_for=lambda task: FakeProvider(prompts))
+            self.assertEqual(again["calls"], 2)
+            self.assertEqual(again["answered"], 0)
+            self.assertEqual(again["refused"], 2)
+            self.assertEqual(len(prompts), 6)
+            self.assertTrue(all("P0_room_outlines" in prompt for prompt in prompts[-2:]))
+
     def test_grid_coordinates_become_image_pixels_by_the_image_or_the_chosen_crop(self):
         # Gemini read a 1,536 x 1,469 plan on a 0-1000 grid: the Kitchen's corner (480, 217) is pixel (737.3, 318.8).
         outline = {"rooms": [{"room": "Kitchen", "points_px": [[480, 217], [798, 585]], "open_sides": ""}]}

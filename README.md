@@ -44,9 +44,9 @@ brew install poppler
 ./start_web --port 8000
 ```
 
-Open `http://127.0.0.1:8000`. It opens the job workspace (Jobs, then Drawings, Rooms, Operating loads and
-Results per job). The old app is still at `http://127.0.0.1:8000/?classic=1`; the engineer tools (`?engineer=1`) and
-the manual AI task review (`?operator=1`) open in it.
+Open `http://127.0.0.1:8000`. It opens the job workspace: Jobs (with New job, Import a job and Export per job),
+then Drawings, Rooms, Operating loads and Results per job (Results creates the report). The old app, its engineer
+tools and the manual AI task review were removed on 2026-10-19.
 
 Before opening a pull request, run the dependency-free quality and repository
 hygiene checks:

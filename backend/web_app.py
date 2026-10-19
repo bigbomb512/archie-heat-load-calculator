@@ -13,6 +13,7 @@ import json
 import logging
 import re
 import time
+import threading
 import uuid
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -1710,6 +1711,8 @@ def analyse_project(project, review_dir=None, *, app=None, persist_project=True)
     pdf_path = Path(project["pdf"])
     review_dir = Path(review_dir) if review_dir is not None else WEB_REVIEW / project["id"]
     result = create_review_packet(pdf_path, review_dir, include_structure=True)
+    from backend.job_runner import checkpoint
+    checkpoint()
 
     packet = load_json(result["packet"])
     ai_output = Path(result["review_dir"]) / "ai_input.json"
@@ -1739,6 +1742,7 @@ def analyse_project(project, review_dir=None, *, app=None, persist_project=True)
     # The reviewed workflow remains unchanged. This only records an isolated
     # preliminary provider state when the project has explicitly opted in.
     app = app or sys.modules[__name__]
+    checkpoint()
     ai_preliminary_service.after_pdf_analysis(app, project)
     if persist_project:
         app.update_project(project)
@@ -1746,6 +1750,7 @@ def analyse_project(project, review_dir=None, *, app=None, persist_project=True)
     # automatically started only when project-local consent already exists;
     # the consent endpoint starts it when consent is granted later.
     from backend import skill_workflow_service
+    checkpoint()
     skill_workflow_service.start_after_analysis(app, project)
     # Pass 1 of the PDF review: every page read by the AI (switched off per job or by ARCHIE_PAGE_READING=off).
     page_inventory_service.start_after_analysis(app, project)
@@ -4165,10 +4170,15 @@ def api_save_model_input_resolution(request):
     return model_input_resolution_service.post(sys.modules[__name__], project, data)
 
 
+def _project_for_job_status(project_id):
+    """A new upload has a predictable job folder before analysis persists review_dir."""
+    project = project_by_id(project_id)
+    return {**project, "review_dir": project.get("review_dir") or str(WEB_REVIEW / project["id"])}
+
+
 def api_skill_workflow(request):
     query = parse_qs(urlparse(request.path).query)
-    project = project_by_id(query.get("project_id", [""])[0])
-    ensure_review_dir(project)
+    project = _project_for_job_status(query.get("project_id", [""])[0])
     return skill_workflow_service.get(sys.modules[__name__], project)
 
 
@@ -4224,7 +4234,7 @@ def api_autonomous_tasks(request):
 
 def api_calculation_status(request):
     query = parse_qs(urlparse(request.path).query)
-    return calculation_service.status(sys.modules[__name__], project_by_id(query.get("project_id", [""])[0]))
+    return calculation_service.status(sys.modules[__name__], _project_for_job_status(query.get("project_id", [""])[0]))
 
 
 def api_start_calculation(request):
@@ -4256,7 +4266,7 @@ def api_start_page_preparation(request):
 
 def api_page_reading_status(request):
     query = parse_qs(urlparse(request.path).query)
-    return page_inventory_service.status(sys.modules[__name__], project_by_id(query.get("project_id", [""])[0]))
+    return page_inventory_service.status(sys.modules[__name__], _project_for_job_status(query.get("project_id", [""])[0]))
 
 
 def api_page_reading(request):
@@ -4268,9 +4278,16 @@ def api_page_reading(request):
     action = data.get("action", "start")
     if action == "set_enabled":
         return page_inventory_service.set_enabled(sys.modules[__name__], project, data)
-    if action in {"start", "retry"}:
+    if action in {"start", "retry", "resume", "restart"}:
+        if action == "restart" and page_inventory_service._JOB.request_restart(project, data.get("expected_run_id")) is not None:
+            return page_inventory_service.status(sys.modules[__name__], project)
+        if action in {"resume", "restart"}:
+            from backend.workflow_recovery import stage_blocker, blocked_status
+            reason = stage_blocker(project, "pages")
+            if reason:
+                return blocked_status(page_inventory_service.status(sys.modules[__name__], project), reason)
         return page_inventory_service.start(sys.modules[__name__], project, data)
-    raise ValueError("Page reading action must be start, retry or set_enabled.")
+    raise ValueError("Page reading action must be start, retry, resume, restart or set_enabled.")
 
 
 def api_result_status(request):
@@ -4303,7 +4320,7 @@ def api_guide(request):
 
 def api_drawing_tasks_status(request):
     query = parse_qs(urlparse(request.path).query)
-    return drawing_tasks_service.status(sys.modules[__name__], project_by_id(query.get("project_id", [""])[0]))
+    return drawing_tasks_service.status(sys.modules[__name__], _project_for_job_status(query.get("project_id", [""])[0]))
 
 
 def api_drawing_tasks(request):
@@ -4312,14 +4329,20 @@ def api_drawing_tasks(request):
     project = project_by_id(data.get("project_id") or data.get("id", ""))
     ensure_review_dir(project)
     security.require_project_role(project, request._identity(), "editor")
-    if data.get("action", "start") in {"start", "retry"}:
-        return drawing_tasks_service.start(sys.modules[__name__], project, then_skills=True)   # the skills then see the new rooms
-    raise ValueError("Drawing tasks action must be start or retry.")
+    if data.get("action", "start") in {"start", "retry", "resume", "restart"}:
+        if data.get("action") == "restart" and drawing_tasks_service._JOB.request_restart(project, data.get("expected_run_id")) is not None:
+            return drawing_tasks_service.status(sys.modules[__name__], project)
+        from backend.workflow_recovery import stage_blocker, blocked_status
+        reason = stage_blocker(project, "rooms")
+        if reason:
+            return blocked_status(drawing_tasks_service.status(sys.modules[__name__], project), reason)
+        return drawing_tasks_service.start(sys.modules[__name__], project, then_skills=True, action=data.get("action", "start"), expected_run_id=data.get("expected_run_id"))   # the skills then see the new rooms
+    raise ValueError("Drawing tasks action must be start, retry, resume or restart.")
 
 
 def api_page_extraction_status(request):
     query = parse_qs(urlparse(request.path).query)
-    return page_extraction_service.status(sys.modules[__name__], project_by_id(query.get("project_id", [""])[0]),
+    return page_extraction_service.status(sys.modules[__name__], _project_for_job_status(query.get("project_id", [""])[0]),
                                           query.get("kind", ["equipment_appliances"])[0])
 
 
@@ -4332,9 +4355,16 @@ def api_page_extraction(request):
     action = data.get("action", "start")
     if action == "review":
         return page_extraction_service.review(sys.modules[__name__], project, data)
-    if action in {"start", "retry"}:
+    if action in {"start", "retry", "resume", "restart"}:
+        if action == "restart" and page_extraction_service._JOB.request_restart(project, data.get("expected_run_id")) is not None:
+            return page_extraction_service.status(sys.modules[__name__], project)
+        if action in {"resume", "restart"}:
+            from backend.workflow_recovery import stage_blocker, blocked_status
+            reason = stage_blocker(project, "equipment")
+            if reason:
+                return blocked_status(page_extraction_service.status(sys.modules[__name__], project), reason)
         return page_extraction_service.start(sys.modules[__name__], project, data)
-    raise ValueError("Page extraction action must be start, retry or review.")
+    raise ValueError("Page extraction action must be start, retry, resume, restart or review.")
 
 
 def api_job_status(request):
@@ -4359,7 +4389,7 @@ def api_start_new_job(request):
     project = project_by_id(data.get("project_id") or data.get("id", ""))
     security.require_project_role(project, request._identity(), "editor")
     from backend import new_job_service
-    return new_job_service.start(sys.modules[__name__], project)
+    return new_job_service.start(sys.modules[__name__], project, data)
 
 
 def api_job_plan(request):
@@ -5846,7 +5876,6 @@ def main():
     parser.add_argument("--test", action="store_true", help="Enable the isolated local test workspace on loopback.")
     args = parser.parse_args()
     if args.test:
-        import os
         os.environ["ARCHIE_ENV"] = "test"
         os.environ["ARCHIE_TEST_MODE"] = "1"
     configuration = security.config()
@@ -5860,6 +5889,9 @@ def main():
     print(f"Open http://{args.host}:{args.port}")
     if args.test:
         print("Local test workspace enabled. The isolated walkthrough is available in the workspace banner.")
+    if os.environ.get("ARCHIE_RECOVER_HANDOFFS", "").lower() != "off" and os.environ.get("ARCHIE_ENV") != "test":
+        threading.Thread(target=calculation_service.reconcile_finished_reviews, args=(sys.modules[__name__],),
+                         daemon=True, name="archie-recover-handoffs").start()
     server.serve_forever()
 
 

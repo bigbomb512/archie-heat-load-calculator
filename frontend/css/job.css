@@ -1332,3 +1332,18 @@ body.job-preview {
 .job-preview a.job-button.secondary {
   color: var(--action);
 }
+
+/* Jobs: Import a job beside New job; Results: the report button and its result line. */
+.job-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+.job-report {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+}

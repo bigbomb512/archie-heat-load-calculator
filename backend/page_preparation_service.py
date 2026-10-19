@@ -59,4 +59,4 @@ def start(web, project, data):
             autonomous_tasks_service.run_all(web, web.project_by_id(project_id))
         return {}
 
-    return _JOB.start(web, project, fields, work)
+    return _JOB.start(web, project, fields, work, action=data.get("action", "start"), expected_run_id=data.get("expected_run_id"))

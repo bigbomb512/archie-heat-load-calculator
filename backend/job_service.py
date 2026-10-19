@@ -1,6 +1,6 @@
 """Job workspace backend: job setup, typed room areas and one status call for the tab rail.
 
-The workspace (frontend/js/workspace.js) shows one tab at a time. This module
+The job workspace (frontend/js/job/) shows one step at a time. This module
 gives it what the rail and header need in a single request, so opening a job
 does not load every artifact:
 

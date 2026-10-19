@@ -160,7 +160,9 @@ class DrawingConnectionFailureTests(unittest.TestCase):
         self.assertEqual(fake.records[("P0_dimensions", "page-20-dimension-1")]["status"], "applied")
         self.assertEqual(len(fake.records[("P0_room_outlines", "page-20")]["reply_attempts"]), 2)
         self.assertFalse(result["connection_stopped"])
-        self.assertEqual(result["unresolved"], [])            # the retry worked, so nothing is listed
+        # The connection recovered; the separately refused outline stays an explicit exception.
+        self.assertEqual([row["kind"] for row in result["unresolved"]], ["answer_rejected"])
+        self.assertEqual(result["unresolved"][0]["task"], "P0_room_outlines")
 
     def test_repeated_connection_failures_stop_the_calls_and_say_nothing_about_the_drawings(self):
         with tempfile.TemporaryDirectory() as folder:

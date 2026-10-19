@@ -10,7 +10,7 @@ the AI starts from the analysis itself, as before.
 from pathlib import Path
 
 from backend import page_preparation_service
-from backend.job_runner import BackgroundJob
+from backend.job_runner import BackgroundJob, recovery, read_json
 
 JOB_FILE = "new_job_job.json"
 STEPS = [("analyse", "Reading the PDF: page titles, drawing types and previews"),
@@ -46,27 +46,48 @@ def status(web, project):
     preparation = page_preparation_service.status(web, folder_project)
     analysed = bool(project.get("analysed") and project.get("packet"))
     ready = bool(project.get("reasoning_packet"))
-    if ready:
-        state = "done"
+    if any(row.get("status") == "stopping" for row in (job, preparation)):
+        state = "stopping"
     elif job.get("status") in {"queued", "running"} or preparation.get("status") in {"queued", "running"}:
         state = "running"
     elif job.get("status") in {"failed", "interrupted"} or preparation.get("status") in {"failed", "interrupted"}:
         state = "failed"
+    elif ready:
+        state = "done"
     else:
         state = "not_started"
-    running = preparation if preparation.get("status") in {"queued", "running"} else job
+    running = preparation if preparation.get("status") in {"queued", "running", "stopping"} else job
     error = next((row.get("error") for row in (preparation, job)
                   if row.get("status") in {"failed", "interrupted"} and row.get("error")), "")
     return {"id": project["id"], "state": state, "analysed": analysed, "drawings_ready": ready,
             "pages": project.get("pages"), "step_label": running.get("step_label", "") if state == "running" else "",
-            "error": error if state == "failed" else "", "job": job, "preparation": preparation}
+            "error": error if state == "failed" else "", "job": job, "preparation": preparation,
+            "recovery_run_id": running.get("job_id"),
+            "recovery": running.get("recovery", recovery(state)) if state == "stopping" else recovery(state)}
 
 
-def start(web, project):
-    """Read the PDF (when not read yet) and start preparing its default pages; joins a run already going."""
-    if project.get("reasoning_packet"):
+def start(web, project, data=None):
+    """Read or safely resume preparation; joins active work unless restart is requested."""
+    data = data or {}
+    if data.get("action", "start") not in {"start", "retry", "resume", "restart"}:
+        raise ValueError("Preparation action must be start, retry, resume or restart.")
+    if data.get("action") == "restart":
+        folder_project = _with_folder(web, project)
+        owner = page_preparation_service._JOB if page_preparation_service._JOB.status(folder_project).get("status") in {"running", "queued", "stopping"} else _JOB
+        if owner.request_restart(folder_project, data.get("expected_run_id")) is not None:
+            return status(web, project)
+    folder_project = _with_folder(web, project)
+    parent_state = _JOB.status(folder_project).get("status")
+    preparation = page_preparation_service.status(web, folder_project)
+    if preparation.get("status") in {"failed", "interrupted"}:
+        saved_pages = read_json(Path(folder_project["review_dir"]) / "reviewed_decisions.json").get("pages")
+        page_preparation_service.start(web, folder_project, {"pages": saved_pages or default_pages(web, project),
+                                                            "action": data.get("action", "resume")})
         return status(web, project)
-    if page_preparation_service.status(web, _with_folder(web, project)).get("status") in {"queued", "running"}:
+    if project.get("reasoning_packet") and parent_state not in {"running", "queued", "stopping", "failed", "interrupted"}:
+        return status(web, project)
+    if page_preparation_service.status(web, _with_folder(web, project)).get("status") in {"queued", "running", "stopping"}:
+        page_preparation_service.start(web, project, {"pages": default_pages(web, project), "action": data.get("action", "resume")})
         return status(web, project)
 
     def work(web, project_id, step):
@@ -84,5 +105,5 @@ def start(web, project):
         started = page_preparation_service.start(web, current, {"pages": pages, "requested_by": "New job"})
         return {"preparation_job_id": started.get("job_id", "")}
 
-    _JOB.start(web, _with_folder(web, project), {"requested_by": "New job"}, work)
-    return status(web, project)
+    started = _JOB.start(web, _with_folder(web, project), {"requested_by": "New job"}, work, action=data.get("action", "start"), expected_run_id=data.get("expected_run_id"))
+    return {**status(web, project), "deduplicated": bool(started.get("deduplicated"))}

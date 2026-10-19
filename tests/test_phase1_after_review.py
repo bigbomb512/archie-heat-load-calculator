@@ -22,7 +22,7 @@ class Phase1AfterReviewTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.project = {"id": "p1", "review_dir": self.tmp.name}
+        self.project = {"id": "p1", "review_dir": self.tmp.name, "reasoning_packet": "prepared"}
         self.app = App(self.project)
 
     def finish_review(self, status="needs_review", scope="phase1_envelope", run_id="r1"):
@@ -32,7 +32,7 @@ class Phase1AfterReviewTests(unittest.TestCase):
     def run_trigger(self, base_report=None, stale=False, run_id="r1"):
         model = {"phase1_base_room_load_report": base_report or {"status": "not_calculated"},
                  "phase1_base_room_load_report_stale": stale}
-        with patch.object(ai_preliminary_service, "get", return_value=model), \
+        with patch.object(calculation_service, "phase1_readiness", return_value={"ready": True}), patch.object(ai_preliminary_service, "get", return_value=model), \
                 patch.object(calculation_service, "start", return_value={"status": "queued"}) as start:
             result = service.start_phase1_after_review(self.app, self.project, run_id)
         return result, start
@@ -69,7 +69,7 @@ class Phase1AfterReviewTests(unittest.TestCase):
 
     def test_a_failure_to_start_is_logged_not_raised(self):
         self.finish_review()
-        with patch.object(ai_preliminary_service, "get", side_effect=RuntimeError("model unreadable")), \
+        with patch.object(calculation_service, "phase1_readiness", return_value={"ready": True}), patch.object(ai_preliminary_service, "get", side_effect=RuntimeError("model unreadable")), \
                 patch.object(calculation_service, "start") as start, self.assertLogs(service.LOGGER, "ERROR"):
             self.assertIsNone(service.start_phase1_after_review(self.app, self.project, "r1"))
         start.assert_not_called()
@@ -80,6 +80,40 @@ class Phase1AfterReviewTests(unittest.TestCase):
                 patch.object(service, "load_subskill_registry", return_value={"subskills": []}):
             service._run_worker(self.app, self.project, "r1", "fp", {"enabled_skill_ids": []})
         trigger.assert_called_once_with(self.app, self.project, "r1")
+
+
+class TakeInDownstreamTests(unittest.TestCase):
+    """Calculating Phase 1 rewrites the review's dependency files from its own results; that must not make it stale."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.project = {"id": "p2", "review_dir": self.tmp.name}
+        (self.root / "room_use_resolution.json").write_text(json.dumps({"records": ["before"]}))
+        manifest = {"run_id": "r1", "scope": "phase1_envelope", "status": "needs_review",
+                    "dependency_fingerprints": service._derived_dependency_fingerprints(service._project_paths(self.project))}
+        (self.root / "skill_workflow_run.json").write_text(json.dumps(manifest))
+
+    def stale(self):
+        manifest = json.loads((self.root / "skill_workflow_run.json").read_text())
+        return manifest["dependency_fingerprints"] != service._derived_dependency_fingerprints(service._project_paths(self.project))
+
+    def test_a_calculation_of_this_run_keeps_the_review_current_and_a_later_change_still_counts(self):
+        (self.root / "room_use_resolution.json").write_text(json.dumps({"records": ["rebuilt by the calculation"]}))
+        self.assertTrue(self.stale())
+        self.assertTrue(service.take_in_downstream(self.project, "r1"))
+        self.assertFalse(self.stale())
+        (self.root / "room_use_resolution.json").write_text(json.dumps({"records": ["changed later"]}))
+        self.assertTrue(self.stale())
+
+    def test_another_run_or_an_unfinished_one_is_left_alone(self):
+        (self.root / "room_use_resolution.json").write_text(json.dumps({"records": ["rebuilt"]}))
+        self.assertFalse(service.take_in_downstream(self.project, "r0"))
+        manifest = json.loads((self.root / "skill_workflow_run.json").read_text())
+        (self.root / "skill_workflow_run.json").write_text(json.dumps({**manifest, "status": "running"}))
+        self.assertFalse(service.take_in_downstream(self.project, "r1"))
+        self.assertTrue(self.stale())
 
 
 if __name__ == "__main__":

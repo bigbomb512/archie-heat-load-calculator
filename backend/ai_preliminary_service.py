@@ -25,12 +25,14 @@ from ai.geometry_resolution import build_geometry_resolution
 from ai.research_cache import empty_research_cache, validate_cache
 from backend import productization, weather_pick_service
 from backend.room_proposal import room_proposal
+from backend.job_runner import guarded_write
 
 
 def _read(path, default):
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else default
 
 
+@guarded_write
 def _write(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     # Keep the automatic local room proposal when provider-status updates are

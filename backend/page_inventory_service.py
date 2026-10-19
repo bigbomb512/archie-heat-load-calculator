@@ -108,11 +108,13 @@ def pass2_batch_size():
     return batch_size("ARCHIE_PASS2_BATCH")
 
 
-def read_pages(images, cache_dir, provider, workers=WORKERS, on_page=None, batch=None):
+def read_pages(images, cache_dir, provider, workers=WORKERS, on_page=None, batch=None, check=None):
     """Read each page image (cached per page). Returns ({page: reading}, {page: failure reason}, calls made).
 
     Pages not in the cache are read a few per call (batch_size()); each page's reading is checked and cached on its
     own, so a page left out of a reply, or whose reading fails the checks, is read again on its own."""
+    from backend.job_runner import current_check
+    check = check or current_check()
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
     model = getattr(provider, "model", "") or "default"
@@ -127,10 +129,12 @@ def read_pages(images, cache_dir, provider, workers=WORKERS, on_page=None, batch
                     "reading": reading, "raw": raw, **({"read_with_pages": batch_pages} if batch_pages else {})})
 
     def one(page, image):
+        check()
         if stopped.is_set():
             return [(page, None, stopped.reason)], 0
         calls = 0
         for attempt in range(TRANSIENT_READ_RETRIES + 1):
+            check()
             try:
                 calls += 1
                 reply, raw = provider.propose(prompt, image_paths=[image])
@@ -148,6 +152,7 @@ def read_pages(images, cache_dir, provider, workers=WORKERS, on_page=None, batch
                 return [(page, None, " ".join(str(error).split())[:400] or error.__class__.__name__)], calls
 
     def several(pages):
+        check()
         if len(pages) == 1:
             return one(pages[0], images[pages[0]])
         if stopped.is_set():
@@ -247,6 +252,9 @@ def status(web, project):
     # "error" field as a failed request, which would hide the very run that needs attention.
     job = _JOB.status(project)
     problem = job.pop("error", "")
+    from backend.job_runner import recovery
+    if job.get("partial"):
+        job["recovery"] = recovery("failed", "Some pages could not be read. Retry reads only missing or changed pages.")
     return {**job, "problem": problem, "enabled": enabled(project), **summary(project)}
 
 
@@ -264,7 +272,7 @@ def start(web, project, data=None):
     if not enabled(project):
         raise ValueError("Page reading is switched off for this job. Switch it on to read the pages.")
     try:
-        provider = ai_provider.recorded(_provider(), root, "pass1")
+        _provider()
     except PageReadingUnavailable as error:
         if _JOB.status(project).get("status") not in {"queued", "running"}:
             write_json(_JOB.path(project), {"schema_version": 1, "status": "blocked", "error": str(error), "finished_at": now()})
@@ -272,6 +280,7 @@ def start(web, project, data=None):
     fields = {"requested_by": " ".join(str(data.get("requested_by") or "").split())[:80], "pages_done": 0, "page_count": 0}
 
     def work(web, project_id, step):
+        provider = ai_provider.recorded(_provider(), root, "pass1")
         step("render")
         images = render_pages(pdf, root / WORK_DIR / "pages")
         job_path = _JOB.path(project)
@@ -303,7 +312,7 @@ def start(web, project, data=None):
         return {"pages_read": len(readings), "calls": calls, "partial": bool(failures),
                 "failed_pages": sorted(failures), "failure_reasons": failures}
 
-    started = _JOB.start(web, project, fields, work)
+    started = _JOB.start(web, project, fields, work, action=data.get("action", "start"), expected_run_id=data.get("expected_run_id"))
     return {**status(web, project), "deduplicated": bool(started.get("deduplicated"))}
 
 

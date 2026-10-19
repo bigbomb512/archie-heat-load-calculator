@@ -31,11 +31,9 @@ def _python_display_strings(source: str) -> list[str]:
 
 
 class OperatorCopyTests(unittest.TestCase):
-    def test_workspace_has_no_retired_user_wording(self):
-        source = (ROOT / "frontend/js/workspace.js").read_text()
-        # The workspace's internal status keys contain contractor as part of an
-        # identifier; word-boundary matching deliberately leaves those intact.
-        self.assertIsNone(RETIRED_TERMS.search(source))
+    def test_job_screens_have_no_retired_user_wording(self):
+        for path in sorted((ROOT / "frontend/js/job").glob("*.js")):
+            self.assertIsNone(RETIRED_TERMS.search(path.read_text()), path.name)
 
     def test_backend_display_strings_have_no_retired_user_wording(self):
         matches = []
@@ -47,17 +45,6 @@ class OperatorCopyTests(unittest.TestCase):
                 if RETIRED_TERMS.search(value):
                     matches.append(f"{relative}: {value!r}")
         self.assertEqual(matches, [])
-
-    def test_saved_status_codes_remain_available_for_existing_jobs(self):
-        source = (ROOT / "frontend/js/workspace.js").read_text()
-        self.assertIn('"needs_contractor_answer"', source)
-        self.assertIn('"contractor_answered_not_sure"', source)
-        self.assertIn('"Waiting for your answer"', source)
-        self.assertIn('"Answered: not sure"', source)
-
-    def test_legacy_source_label_is_reworded_only_when_displayed(self):
-        source = (ROOT / "frontend/js/app.js").read_text()
-        self.assertIn('rawSource === "contractor override" ? "Operator override" : rawSource', source)
 
 
 if __name__ == "__main__":

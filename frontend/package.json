@@ -1,17 +1,15 @@
 {
   "name": "archie-heat-load-calculator",
   "version": "1.0.0",
-  "description": "Archie Heat Load Calculator — evidence-first PDF intake, AI research handoff, and cooling/heating load calculation.",
+  "description": "Archie Heat Load Calculator \u2014 evidence-first PDF intake, AI research handoff, and cooling/heating load calculation.",
   "private": true,
   "license": "MIT",
   "scripts": {
     "dev": "cd .. && python3 -m backend.web_app --port 8000",
     "start": "cd .. && python3 -m backend.web_app --port 8000",
-    "test:python": "cd .. && for test in tests/test_*.py; do [ \"$test\" = \"tests/test_frontend_contract.py\" ] || PYTHONPATH=. python3 \"$test\" || exit 1; done",
-    "test:contract": "cd .. && PYTHONPATH=. python3 tests/test_frontend_contract.py",
+    "test:python": "cd .. && for test in tests/test_*.py; do PYTHONPATH=. python3 \"$test\" || exit 1; done",
     "test:frontend": "playwright test",
-    "test:journey": "playwright test --grep \"analysis gives one clear next action\"",
-    "test": "cd .. && export ARCHIE_DESIGN_WEATHER_TABLE=/nonexistent ARCHIE_U_VALUE_TABLE=/nonexistent OPENROUTER_API_KEY= OPENAI_API_KEY= ANTHROPIC_API_KEY= DEEPSEEK_API_KEY= && for test in tests/test_*.py; do [ \"$test\" = \"tests/test_frontend_contract.py\" ] || PYTHONPATH=. python3 \"$test\" || exit 1; done && PYTHONPATH=. python3 tests/test_frontend_contract.py && cd frontend && playwright test"
+    "test": "cd .. && export ARCHIE_DESIGN_WEATHER_TABLE=/nonexistent ARCHIE_U_VALUE_TABLE=/nonexistent OPENROUTER_API_KEY= OPENAI_API_KEY= ANTHROPIC_API_KEY= DEEPSEEK_API_KEY= && for test in tests/test_*.py; do PYTHONPATH=. python3 \"$test\" || exit 1; done && cd frontend && playwright test"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1"
@@ -20,7 +18,7 @@
     "python": ">=3.9"
   },
   "_note": [
-    "The frontend has no build step or runtime npm dependency — index.html, css/ and js/",
+    "The frontend has no build step or runtime npm dependency \u2014 index.html, css/ and js/",
     "are served as-is. Playwright is a development dependency for browser tests. This file exists so tooling that expects a package.json can find",
     "one, and so `npm run dev` starts the app.",
     "",

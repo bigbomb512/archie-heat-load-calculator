@@ -136,11 +136,13 @@ def schedule_codes(readings):
     return codes
 
 
-def read_sections(extractor, images, cache_dir, provider, workers=pass1.WORKERS, on_done=None, batch=None, codes=None):
+def read_sections(extractor, images, cache_dir, provider, workers=pass1.WORKERS, on_done=None, batch=None, codes=None, check=None):
     """Read every section (cached per section). Returns ([(page, section, items)], {"page.section": reason}, calls).
 
     Sections not in the cache are read a few per call (pass1.pass2_batch_size()), each its own full-size image; each
     section's items are checked and cached on their own, and one left out of a reply is read again on its own."""
+    from backend.job_runner import current_check
+    check = check or current_check()
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
     model = getattr(provider, "model", "") or "default"
@@ -157,11 +159,13 @@ def read_sections(extractor, images, cache_dir, provider, workers=pass1.WORKERS,
                                   **({"read_with": [list(other) for other in together]} if together else {})})
 
     def one(key):
+        check()
         page, section = key
         image, count = images[key]
         if stopped.is_set():  # the plan's usage limit was hit: further calls would fail the same way
             return [(key, None, stopped.reason)], 0
         for attempt in range(TRANSIENT_READ_RETRIES + 1):
+            check()
             try:
                 reply, raw = provider.propose(build_prompt(extractor, page, section, count, codes), image_paths=[image])
                 items = validate_reply(extractor, reply)
@@ -179,6 +183,7 @@ def read_sections(extractor, images, cache_dir, provider, workers=pass1.WORKERS,
         return [(key, items, None)], attempt + 1
 
     def several(keys):
+        check()
         if len(keys) == 1:
             return one(keys[0])
         if stopped.is_set():
@@ -338,6 +343,9 @@ def status(web, project, kind="equipment_appliances"):
             row = next(item for item in findings if item["id"] == row_id)
             row["possibly_same_as"] = [{"id": match["id"], "label": f"{match['value'].get('code', '')} {match['value'].get('name', '')}".strip()}
                                        for match in matches]
+    if job.get("partial"):
+        from backend.job_runner import recovery
+        job["recovery"] = recovery("failed", "Some equipment sections could not be read. Completed readings are kept.")
     open_count = sum(1 for row in findings if row["status"] == "proposed")
     return {**job, "problem": problem, "kind": kind, "label": extractor["label"], "pages": result.get("pages", []),
             "failures": result.get("failures", {}), "findings": findings, "open": open_count,
@@ -357,13 +365,14 @@ def start(web, project, data=None):
     if not read_json(root / pass1.RESULT_FILE).get("pages"):
         raise ValueError("Read some pages first (pass 2 reads the pages it flags).")
     try:
-        provider = pass1._provider("pass2")
+        pass1._provider("pass2")
     except pass1.PageReadingUnavailable as error:
         if _JOB.status(project).get("status") not in {"queued", "running"}:
             write_json(_JOB.path(project), {"schema_version": 1, "status": "blocked", "error": str(error), "finished_at": now()})
         return status(web, project, kinds[0])
 
     def work(web, project_id, step):
+        provider = pass1._provider("pass2")
         job_path = _JOB.path(project)
         problems, totals = [], {}
         for kind in kinds:
@@ -413,10 +422,11 @@ def start(web, project, data=None):
                 pages_failed = sorted({int(key.split(".")[0]) for key in failures})
                 problems.append(f"{extractor['label']}: {len(failures)} of {len(images)} page sections couldn't be read "
                                 f"(pages {', '.join(map(str, pages_failed))}). First reason: {failures[min(failures)]}")
+        step("merge")
         _start_skills(web, project_id)
         return {"kinds": totals, "partial": bool(problems), "problems": problems}
 
-    started = _JOB.start(web, project, {"kinds": kinds, "sections_done": 0, "section_count": 0}, work)
+    started = _JOB.start(web, project, {"kinds": kinds, "sections_done": 0, "section_count": 0}, work, action=data.get("action", "start"), expected_run_id=data.get("expected_run_id"))
     return {**status(web, project, kinds[0]), "deduplicated": bool(started.get("deduplicated"))}
 
 

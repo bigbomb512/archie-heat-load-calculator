@@ -2,6 +2,7 @@ import tempfile
 import threading
 import time
 import unittest
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -41,6 +42,23 @@ class NewJobServiceTests(unittest.TestCase):
             project_by_id=lambda project_id: dict(self.projects[project_id]),
             analyse_project=analyse_project,
             analysis_response=lambda project: {"sheets": sheets})
+
+    def test_failed_preparation_resumes_saved_page_choices_even_when_a_packet_exists(self):
+        root = Path(self.tmp.name) / "p1"
+        root.mkdir()
+        saved = [{"page": 3, "decision": "Keep as reference", "note": "Selected previously"}]
+        (root / "reviewed_decisions.json").write_text(json.dumps({"pages": saved}))
+        self.projects["p1"].update(review_dir=str(root), reasoning_packet="prepared")
+        state = {"status": "failed", "error": "Checks stopped"}
+        def start(web, project, data):
+            self.assertEqual(data["pages"], saved)
+            state.update(status="running")
+            return state
+        with patch.object(new_job_service.page_preparation_service, "status", side_effect=lambda *args: dict(state)), \
+                patch.object(new_job_service.page_preparation_service, "start", side_effect=start) as prepare:
+            result = new_job_service.start(self.web, self.projects["p1"], {"action": "resume"})
+        prepare.assert_called_once()
+        self.assertEqual(result["state"], "running")
 
     def test_default_pages_follow_the_workspace_choice(self):
         pages = new_job_service.default_pages(self.web, self.projects["p1"])

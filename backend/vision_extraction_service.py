@@ -28,6 +28,7 @@ from ai.vision_extraction import (
 )
 from ai.skill_registry import catalog_fingerprint, vision_guidance
 from ai.chatgpt_packet import render_high_res_page
+from backend.job_runner import guarded_write
 
 
 LOCK = threading.RLock()
@@ -40,6 +41,7 @@ def _read(path, default):
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else default
 
 
+@guarded_write
 def _atomic_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     # A shared ``<file>.stage`` name is unsafe when two local jobs update

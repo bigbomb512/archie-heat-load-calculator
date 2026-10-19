@@ -114,7 +114,8 @@ class SkillWorkflowTests(unittest.TestCase):
             settings_path.write_text(json.dumps({"owner_opt_in": False, "selected_group_ids": []}), encoding="utf-8")
             no_consent = skills.post(web, project, {"action": "start"})
             self.assertEqual(no_consent["status"], "blocked")
-            self.assertIn("every page has been read", no_consent["blocked_reason"].lower())
+            self.assertIn("prepare the drawing set", no_consent["blocked_reason"].lower())
+            self.assertEqual(no_consent["recovery"]["label"], "Check and resume")
             self.assertFalse((Path(folder) / "skill_workflow_run.json").exists())
             settings_path.write_text(json.dumps({"owner_opt_in": True, "selected_group_ids": []}), encoding="utf-8")
             with patch.dict(os.environ, {}, clear=True):

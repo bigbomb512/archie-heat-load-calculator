@@ -20,6 +20,7 @@ Every call is logged in the job's ai_usage.jsonl under "drawing:<task>" with its
 """
 
 import json
+import hashlib
 import re
 from datetime import datetime
 from pathlib import Path
@@ -27,7 +28,7 @@ from pathlib import Path
 from PIL import Image
 
 from backend import ai_provider
-from backend.job_runner import BackgroundJob, now, read_json, write_json
+from backend.job_runner import BackgroundJob, now, read_json, write_json, checkpoint, _write_json
 
 JOB_FILE = "drawing_tasks_job.json"
 STEPS = [("build", "Preparing the drawing tasks"), ("answer", "The AI is answering the drawing tasks"),
@@ -70,6 +71,9 @@ def status(web, project):
     job = _JOB.status(project)
     if job.get("provider_limited"):
         job["warning"] = "The drawing provider's usage limit was reached. Unanswered tasks are saved; retry after the limit resets."
+    if job.get("status") == "done" and (job.get("unresolved") or job.get("provider_limited")):
+        from backend.job_runner import recovery
+        job["recovery"] = recovery("failed", job.get("warning") or "Some drawing tasks could not be resolved. Retry unfinished tasks; completed drawing tasks are kept.")
     # Ages worked out here, so the screen doesn't depend on the browser's clock.
     if job.get("status") in {"queued", "running"}:
         job["request_seconds"] = _seconds_since(job.get("request_started_at")) if job.get("request_started_at") else None
@@ -78,7 +82,7 @@ def status(web, project):
     return job
 
 
-def start(web, project, then_skills=True):
+def start(web, project, then_skills=True, action="start", expected_run_id=None):
     """Start the drawing tasks (or join the run already going). Raises ValueError when no AI provider is set up."""
     if not ai_provider.configured():
         raise ValueError("No AI provider is set up on this server, so the drawing tasks can't run.")
@@ -93,6 +97,7 @@ def start(web, project, then_skills=True):
             result = {"answered": 0, "refused": len(_waiting(Path(current["review_dir"]))),
                       "rounds": 0, "calls": 0, "provider_limited": True,
                       "warning": str(error)[:500]}
+        checkpoint()
         if not result.get("provider_limited"):
             # Phase 1 runs without a person: when nobody has chosen the weather location, the AI picks it from the
             # site details (one small text call, labelled in the result; user decision 2026-10-15).
@@ -110,7 +115,8 @@ def start(web, project, then_skills=True):
                 pass
         return result
 
-    return _JOB.start(web, project, {"answered": 0, "refused": 0, "rounds": 0, "last_progress_at": now()}, work)
+    return _JOB.start(web, project, {"answered": 0, "refused": 0, "rounds": 0, "last_progress_at": now(),
+                                     "request_limit_s": ai_provider.drawing_timeout_s()}, work, action=action, expected_run_id=expected_run_id)
 
 
 def _waiting(root):
@@ -195,7 +201,7 @@ def answer_all(web, project, step=lambda *args: None, provider_for=None):
     provider_for = provider_for or (lambda task: ai_provider.get(f"drawing:{task}"))
     tried = {}                 # run id -> calls made, so a task that keeps failing can't loop
     failures = {}              # run id -> the last failed call of a task (it stays unanswered unless a later call works)
-    answered = refused = calls = rounds = 0
+    answered = refused = calls = rounds = reused_replies = 0
     problem = ""
     connection_failures_in_a_row = 0
     connection_stopped = False
@@ -204,12 +210,12 @@ def answer_all(web, project, step=lambda *args: None, provider_for=None):
             break
         step("build")
         autonomous_tasks_service.post(web, project, {"action": "run_all"})
-        waiting = [record for record in _waiting(root) if tried.get(record["run_id"], 0) < MAX_ATTEMPTS
-                   and len(record.get("reply_attempts") or []) < MAX_ATTEMPTS]
+        waiting = [record for record in _waiting(root) if tried.get(record["run_id"], 0) < MAX_ATTEMPTS]
         if not waiting:
             break
         step("answer", f"The AI is answering {len(waiting)} drawing task{'s' if len(waiting) != 1 else ''} (round {rounds})")
         for number, record in enumerate(waiting, start=1):
+            checkpoint()
             tried[record["run_id"]] = tried.get(record["run_id"], 0) + 1
             images = _images(root, record)
             sizes = _sizes(images)
@@ -222,8 +228,20 @@ def answer_all(web, project, step=lambda *args: None, provider_for=None):
                       request_started_at=now(), last_progress_at=now(), last_problem=problem)
             try:
                 provider = ai_provider.recorded(provider_for(record["task"]), root, f"drawing:{record['task']}")
-                reply, _raw = provider.propose(_prompt(record, grid), image_paths=images)
-                calls += 1
+                prompt = _prompt(record, grid)
+                key = hashlib.sha256(json.dumps([prompt, getattr(provider, "model", ""),
+                    [hashlib.sha256(Path(image).read_bytes()).hexdigest() for image in images]]).encode()).hexdigest()
+                cached_path = root / "drawing_reply_cache" / f"{key}.json"
+                cached = read_json(cached_path)
+                if "reply" in cached:
+                    reply, _raw = cached["reply"], cached.get("raw", {})
+                    reused_replies += 1
+                else:
+                    checkpoint()
+                    reply, _raw = provider.propose(prompt, image_paths=images)
+                    _write_json(cached_path, {"reply": reply, "raw": _raw})
+                    calls += 1
+                checkpoint()
             except ai_provider.UsageLimitReached:
                 raise
             except Exception as error:  # a failed call or an unreadable reply: tried again next round, up to MAX_ATTEMPTS
@@ -251,12 +269,20 @@ def answer_all(web, project, step=lambda *args: None, provider_for=None):
             size = _grid_size(record["task"], reply, sizes) if grid else None
             if size:
                 reply = to_pixels(reply, size)
-            autonomous_tasks_service.post(web, project, {"action": "validate_apply", "task": record["task"],
-                                                         "target": record["target"], "reply": json.dumps(reply),
-                                                         "model_note": f"AI provider ({getattr(provider, 'model', '') or 'default'})"})
+            try:
+                autonomous_tasks_service.post(web, project, {"action": "validate_apply", "task": record["task"],
+                                                             "target": record["target"], "reply": json.dumps(reply),
+                                                             "model_note": f"AI provider ({getattr(provider, 'model', '') or 'default'})"})
+            except Exception:
+                cached_path.unlink(missing_ok=True)
+                raise
             after = autonomous_tasks_service._current_task(root, record["task"], record["target"]) or {}
             if after.get("run_id") == record["run_id"] and after.get("status") == "waiting_for_reply":
                 refused += 1
+                cached_path.unlink(missing_ok=True)
+                failures[record["run_id"]] = {"task": record["task"], "target": str(record.get("target") or ""),
+                    "label": TASK_LABELS.get(record["task"], "A drawing task"), "kind": "answer_rejected",
+                    "message": "The reply did not pass the drawing checks; completed tasks are kept."}
             else:
                 answered += 1
             _progress(root, answered=answered, refused=refused, rounds=rounds, calls=calls,
@@ -270,7 +296,7 @@ def answer_all(web, project, step=lambda *args: None, provider_for=None):
     _progress(root, answered=answered, refused=refused, rounds=rounds, calls=calls, current_task=None,
               current_task_label=None, current_target=None, request_started_at=None, last_progress_at=now(),
               unresolved=unresolved, connection_stopped=connection_stopped, not_tried=not_tried)
-    return {"answered": answered, "refused": refused, "rounds": rounds, "calls": calls, "unresolved": unresolved,
+    return {"answered": answered, "refused": refused, "rounds": rounds, "calls": calls, "reused_replies": reused_replies, "unresolved": unresolved,
             "connection_stopped": connection_stopped, "not_tried": not_tried}
 
 

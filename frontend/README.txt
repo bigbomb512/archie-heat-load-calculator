@@ -1,9 +1,9 @@
 Archie — website bundle
 =======================
 
-  index.html                    markup only
-  css/styles.css                all styles
-  js/app.js                     all behaviour
+  index.html                    loads the job workspace
+  css/job.css                   all styles of the job workspace
+  js/job/                       the job workspace (one module per screen)
   assets/images/toki-wordmark-exact.png  current logo artwork
   package.json                  local scripts and browser test dependency
 

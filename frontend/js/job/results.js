@@ -192,7 +192,13 @@ function resultsContent({ plan, report, gaps, projectId, stale, canUpdate }) {
       <div><h1>Design cooling load for the tenancy</h1>
         <strong class="job-total">${fmt(total)} <span>kW</span></strong>
         <p>${statusSentence}</p>
-        ${reportUrl ? `<a class="job-button" href="${escapeHtml(reportUrl)}" download>Download the report</a>` : `<p class="job-muted">The report download is not available yet.</p>`}
+        ${stale
+          ? `<p class="job-muted">Update the final load before creating the report.</p>`
+          : `<div class="job-report" data-report>
+              <button class="job-button" type="button" data-create-report>Create the report</button>
+              ${reportUrl ? `<a class="job-link-button" href="${escapeHtml(reportUrl)}" download>Download the last report</a>` : ""}
+              <p class="job-note" role="status" data-report-status></p>
+            </div>`}
       </div>
     </section>
     <div class="job-columns job-results-columns">
@@ -215,6 +221,24 @@ function resultsContent({ plan, report, gaps, projectId, stale, canUpdate }) {
       </section>
     </div>
     <section class="job-panel ${stale ? "stale" : ""}"><h2>Still assumed</h2>${assumptionsList(assumptions, projectId)}</section>`;
+}
+
+// The cooling report (HTML and PDF) is built on the server from the current final load, then offered to open or save.
+function bindReport(projectId) {
+  const button = document.querySelector("[data-create-report]");
+  const status = document.querySelector("[data-report-status]");
+  button?.addEventListener("click", async () => {
+    button.disabled = true;
+    status.textContent = "Creating the report…";
+    try {
+      const report = await sendJson("/api/report-package", { project_id: projectId, report_type: "cooling" });
+      status.innerHTML = `Report ready: <a href="${escapeHtml(report.pdf_url)}" download>Download the PDF</a> or <a href="${escapeHtml(report.html_url)}" target="_blank" rel="noopener">open it in a new tab</a>.`;
+    } catch (error) {
+      status.textContent = `The report couldn’t be created: ${error.message}`;
+    } finally {
+      button.disabled = false;
+    }
+  });
 }
 
 export async function renderResults(projectId) {
@@ -254,6 +278,7 @@ export async function renderResults(projectId) {
     statusLine,
     content,
     bind: () => {
+      bindReport(projectId);
       document
         .querySelector("#job-update-final")
         ?.addEventListener("click", async (event) => {
