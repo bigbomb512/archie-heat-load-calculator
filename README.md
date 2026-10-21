@@ -96,14 +96,7 @@ evidence is not the same as a complete calculation input: unresolved occupancy,
 schedules, airflow, envelope or other required fields remain visible in
 readiness and keep the cooling report draft or blocked.
 
-Run the research handoff after a reviewed `ai_input.json` exists:
-
-```bash
-PYTHONPATH=. python3 ai/research_packet.py output/review/<project>/ai_input.json
-```
-
-See [the research handoff guide](docs/ai_research_handoff.md), [the reviewed
-envelope guide](docs/reviewed_envelope_slice.md), [the cooling workflow runbook](docs/cooling_workflow_runbook.md),
+See [the reviewed envelope guide](docs/reviewed_envelope_slice.md), [the cooling workflow runbook](docs/cooling_workflow_runbook.md),
 and [the cooling roadmap](docs/cool_heat_load_roadmap.md).
 
 For a private drawing-based case, use `tools/create_reviewed_cooling_case.py`.
@@ -155,15 +148,6 @@ roof constructions (roofs use the summer value) or takes a U-value typed from an
 room. Answered external walls and exposed roofs use it; the others keep the preliminary U-values (walls 0.6, roof
 0.5 W/m²K), which the Results tab lists as typical. The handbook has no sun-on-surface (sol-air) data, so sun on walls
 stays the preliminary pack's allowance and roof sun is not assessed until DA09 or ASHRAE data is available.
-
-## Next step card
-
-Every tab of a job shows one **Next step** card (backend/guide_service.py, `/api/guide`): the step to do now in plain
-words, why it matters, and one button that goes exactly there (or calculates), with the job's whole list of steps
-underneath. The order is: the AI reads the drawings; the address and weather location; what is above the shop; rooms;
-walls; roof; windows; the questions the drawings don't answer; the equipment; calculate; the AI's other findings
-(optional); the result. The project steps can be done while the AI reads; the steps that check the AI's work wait
-for it.
 
 ## Walls to unconditioned spaces
 

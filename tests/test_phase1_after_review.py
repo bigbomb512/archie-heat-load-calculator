@@ -24,6 +24,9 @@ class Phase1AfterReviewTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.project = {"id": "p1", "review_dir": self.tmp.name, "reasoning_packet": "prepared"}
         self.app = App(self.project)
+        from backend import phase1_supervisor_service as supervisor
+        (Path(self.tmp.name) / supervisor.JOB_FILE).write_text(json.dumps({"status": "done",
+            "source_fingerprint": supervisor.source_fingerprint(self.project)}))
 
     def finish_review(self, status="needs_review", scope="phase1_envelope", run_id="r1"):
         (Path(self.tmp.name) / "skill_workflow_run.json").write_text(
@@ -45,6 +48,17 @@ class Phase1AfterReviewTests(unittest.TestCase):
                 self.assertEqual(result, {"status": "queued"})
                 start.assert_called_once()
                 self.assertEqual(start.call_args.args[2]["phase"], "phase1_base_room")
+
+    def test_finished_skill_review_starts_supervision_before_calculation(self):
+        from backend import phase1_supervisor_service as supervisor
+        self.finish_review()
+        (Path(self.tmp.name) / supervisor.JOB_FILE).unlink()
+        with patch.object(supervisor, "start", return_value={"status": "running"}) as check, \
+                patch.object(calculation_service, "start") as calculate:
+            result = service.start_phase1_after_review(self.app, self.project, "r1")
+        self.assertIsNone(result)
+        check.assert_called_once()
+        calculate.assert_not_called()
 
     def test_an_out_of_date_phase1_result_is_recalculated(self):
         self.finish_review()

@@ -44,12 +44,27 @@ def guarded_write(function):
     return wrapped
 
 
+# Every step's file uses its own status words ("needs_review", "interrupted", "queued"...); step_state turns any of them
+# into one of five, so the screens, the recovery buttons and the prerequisite checks agree on what a word means.
+_ACTIVE = frozenset({"queued", "running", "working", "reading", "in_progress", "pending"})
+_DONE = frozenset({"done", "complete", "completed", "confirmed", "ready", "needs_review", "provisional"})
+_FAILED = frozenset({"failed", "error", "blocked", "interrupted"})
+
+
+def step_state(status):
+    """waiting, active, stopping, done or failed, for any step's own status word."""
+    status = str(status or "").lower()
+    return ("stopping" if status == "stopping" else "active" if status in _ACTIVE else "done" if status in _DONE
+            else "failed" if status in _FAILED else "waiting")
+
+
 def recovery(state, reason=""):
-    if state in {"done", "complete", "completed", "needs_review", "provisional"}:
+    kind = step_state(state)
+    if kind == "done":
         return {"action": None, "label": "", "reason": reason}
-    if state == "stopping":
+    if kind == "stopping":
         return {"action": None, "label": "Restarting…", "reason": reason or "Waiting for in-flight work to finish or time out; saved results are kept."}
-    if state in {"running", "queued", "working"}:
+    if kind == "active":
         return {"action": "restart", "label": "Restart this step", "reason": reason}
     return {"action": "resume", "label": "Try again" if state in {"failed", "error", "interrupted", "stale"} else "Check and resume", "reason": reason}
 
@@ -144,7 +159,7 @@ class BackgroundJob:
     def status(self, project):
         job = read_json(self.path(project))
         if not job:
-            return {"id": project["id"], "status": "none", "recovery": recovery("none")}
+            return {"id": project["id"], "status": "none", "step_state": "waiting", "recovery": recovery("none")}
         alive = (self.key(project) in self.running
                  or (job.get("pid") != os.getpid() and _process_alive(job.get("pid"))))
         if job.get("status") in {"queued", "running"} and not alive:
@@ -155,7 +170,8 @@ class BackgroundJob:
             job["restart_stalled"] = age > job.get("request_limit_s", 600)
         reason = ("The previous request is taking longer than its expected timeout. Restart is still pending; no replacement has started."
                   if job.get("restart_stalled") else "")
-        return {"id": project["id"], **job, "recovery": recovery(job.get("status"), reason)}
+        return {"id": project["id"], **job, "step_state": step_state(job.get("status")),
+                "recovery": recovery(job.get("status"), reason)}
 
     def request_restart(self, project, expected_run_id=None):
         """Signal an existing worker without revalidating its now-unavailable inputs/provider."""
@@ -249,7 +265,7 @@ class BackgroundJob:
 
             elif outcome.get("status") == "done" and self.file_name in {
                     "new_job_job.json", "page_preparation_job.json", "page_inventory_job.json",
-                    "page_extraction_job.json", "drawing_tasks_job.json"} and web is not None:
+                    "page_extraction_job.json", "drawing_tasks_job.json", "phase1_supervisor_job.json"} and web is not None:
                 try:
                     from backend.calculation_service import maybe_start_phase1
                     maybe_start_phase1(web, project)

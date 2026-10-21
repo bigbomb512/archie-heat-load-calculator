@@ -188,6 +188,7 @@ function resultsContent({ plan, report, gaps, projectId, stale, canUpdate }) {
     ? `The previous result covered ${peaks.length} rooms${peak.display_hour == null ? "" : ` at hour ${escapeHtml(peak.display_hour)}`}. Room-by-room loads are out of date. Safety allowance: ${fmt(allowance)} kW.`
     : `${rooms.length} rooms counted${peak.display_hour == null ? "" : ` at the peak hour ${escapeHtml(peak.display_hour)}`}. Safety allowance: ${fmt(allowance)} kW. Refrigeration is sized separately.`;
   return `${outOfDate}
+    ${report.equipment_coverage && !report.equipment_coverage.coverage_complete ? `<section class="job-panel" role="status"><h2>Some equipment isn't counted</h2><p>${fmt(Number(report.equipment_coverage.summary?.no_value || 0) + Number(report.equipment_coverage.summary?.no_room || 0))} item(s) have no value yet or no room. Those rooms use their typical equipment allowance instead.</p><a href="#/job/${encodeURIComponent(projectId)}/operating">See the equipment</a></section>` : ""}
     <section class="job-panel job-result-summary ${stale ? "stale" : ""}">
       <div><h1>Design cooling load for the tenancy</h1>
         <strong class="job-total">${fmt(total)} <span>kW</span></strong>

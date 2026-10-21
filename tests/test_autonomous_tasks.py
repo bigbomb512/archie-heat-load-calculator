@@ -498,7 +498,7 @@ class AutonomousTaskTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "needs quoted evidence"):
             autonomous_tasks.validate_boundary_reply(packet, json.dumps({"edges": [
                 {"index": 0, "boundary": "mall", "evidence": ""}, {"index": 1, "boundary": "internal"}]}))
-        with self.assertRaisesRegex(ValueError, "cannot be internal"):
+        with self.assertRaisesRegex(ValueError, "can't be internal"):
             autonomous_tasks.validate_boundary_reply(packet, json.dumps({"edges": [
                 {"index": 0, "boundary": "internal", "evidence": "neighbour"}, {"index": 1, "boundary": "internal"}]}))
         accepted = autonomous_tasks.validate_boundary_reply(packet, json.dumps({"edges": [
@@ -611,6 +611,224 @@ class AutonomousTaskTests(unittest.TestCase):
             target=next(row[2] for row in packets if row[0]=="P4_openings" and row[2].get("edge_indices")==[0,1])
             self.assertAlmostEqual(target["wall_run_span_m"],11.97)
             self.assertAlmostEqual(target["edge_length_mm"],11970)
+
+    def test_the_storefront_wall_answer_must_place_the_storefront_with_evidence(self):
+        packet = {"run_spans_m": {"1": 11.44, "2": 23.32, "3": 11.77},
+                  "elevation_titles": {"26": "Storefront Elevation", "29": "External Elevation - Rear"}}
+        good = {"elevations": [{"page": 26, "run_numbers": [2], "faces": "street", "overall_width_mm": 23500, "evidence": "Entry doors and glazing on wall 2 face Melrose Dr"},
+                               {"page": 29, "run_numbers": [], "overall_width_mm": None, "evidence": "Rear wall of the coolroom, not a cooled room"}]}
+        result = autonomous_tasks.validate_storefront_wall_reply(packet, json.dumps(good))
+        self.assertEqual(result["elevations"][26]["run_indices"], [1])
+        self.assertEqual(result["elevations"][29]["run_indices"], [])         # an external elevation may show no cooled wall
+        cases = (({"elevations": [{**good["elevations"][0], "run_numbers": []}, good["elevations"][1]]}, "storefront elevation: it shows at least one"),
+                 ({"elevations": [{**good["elevations"][0], "overall_width_mm": 11500}, good["elevations"][1]]}, "doesn't match wall\\(s\\) \\[2\\]"),
+                 ({"elevations": [{**good["elevations"][0], "run_numbers": [4]}, good["elevations"][1]]}, "numbered outside walls"),
+                 ({"elevations": [good["elevations"][0]]}, "page\\(s\\) \\[29\\]"),
+                 ({"elevations": [{**good["elevations"][0], "evidence": "wall 2"}, good["elevations"][1]]}, "drawing evidence"),
+                 ({"elevations": [{**good["elevations"][0], "faces": None}, good["elevations"][1]]}, "street \\(outside\\) or the inside"))
+        for reply, message in cases:
+            with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
+                autonomous_tasks.validate_storefront_wall_reply(packet, json.dumps(reply))
+        # Two numbered walls (a front broken by a setback) are checked against their combined length.
+        both = {"elevations": [{"page": 26, "run_numbers": [1, 3], "faces": "mall", "overall_width_mm": 23300, "evidence": "Shopfront wraps both sides of the column"},
+                               good["elevations"][1]]}
+        self.assertEqual(autonomous_tasks.validate_storefront_wall_reply(packet, json.dumps(both))["elevations"][26]["run_indices"], [0, 2])
+
+    def test_without_a_printed_width_the_ai_is_asked_which_wall_then_the_storefront_is_placed(self):
+        # Butcher Buffet, 2026-10-20: the elevation width was drawn as outlines, three outside walls fitted, and the
+        # storefront was silently left out of Phase 1.
+        from PIL import Image
+        from ai import ceiling_volume_resolution
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "room_use_resolution.json").write_text(json.dumps({"records": [{"room_id": "shop", "space_scope": "comfort_hvac"}]}))
+            (root / "ai_input.json").write_text(json.dumps({"drawing_set": {"pages": [{"page": 26, "title": "Storefront Elevation"}]}}))
+            (root / "spatial_ocr.json").write_text(json.dumps({"pages": [{"page": 26, "dimension_candidates": [{"value_mm": 430}]}]}))
+            (root / "ceiling_volume_resolution.json").write_text("{}")
+            trace = {"trace_id": "bb-shop", "room_id": "shop", "room_label": "Shop", "level_name": "Ground", "page": 20,
+                     "points_image_px": [[0, 0], [1145, 0], [1145, 300], [0, 300], [0, 0]],
+                     "calibration": {"status": "agreed", "mm_per_px": 10},
+                     "edges": [{"index": 0, "boundary": "external"}, {"index": 1, "boundary": "external"},
+                               {"index": 2, "boundary": "external"}, {"index": 3, "boundary": "adjacent_tenancy"}]}
+            p3 = self._p3_applied_lookup(trace)
+            wall = {}
+            lookup = lambda _root, task, target: wall.get("record") if task == "P4_storefront_wall" else p3(_root, task, target)
+            key = ceiling_volume_resolution.room_identity("Shop", "Ground")
+
+            def build():
+                with patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "current_records", return_value=[trace]), \
+                        patch.object(autonomous_tasks_service, "_current_task", side_effect=lookup), \
+                        patch.object(ceiling_volume_resolution, "values_by_room", return_value={key: {"ceiling_height_mm": 2700}}), \
+                        patch.object(autonomous_tasks_service, "_perimeter_task_image", return_value=(Image.new("RGB", (32, 32)), {})), \
+                        patch.object(autonomous_tasks_service, "_p4_elevation_image", return_value=Image.new("RGB", (32, 32))), \
+                        patch.object(autonomous_tasks_service, "_png_bytes", return_value=b"png"):
+                    return autonomous_tasks_service._p4_packets(root)
+            [(task, target, packet, prompt, images, blocked)] = build()
+            self.assertEqual((task, target, blocked, len(images)), ("P4_storefront_wall", "page-20", "", 2))
+            self.assertIn("A storefront elevation always shows at least one of these walls", prompt)
+            self.assertLessEqual(len(prompt), autonomous_tasks.TASKS["P4_storefront_wall"]["budget_chars"])
+            number = next(int(n) for n, span in packet["run_spans_m"].items() if abs(span - 11.45) < .01)
+            answer = autonomous_tasks.validate_storefront_wall_reply(packet, json.dumps({"elevations": [
+                {"page": 26, "run_numbers": [number], "faces": "street", "overall_width_mm": None, "evidence": "Entry doors and glazing drawn on this wall"}]}))
+            wall["record"] = autonomous_tasks_service._apply_p4_wall(None, {}, None,
+                {"accuracy": {"auto_apply": False}, "quality_label": "AI-determined (below accuracy bar)", "packet": packet}, answer)
+            [(task, target, packet, prompt, images, blocked)] = build()
+            self.assertEqual((task, blocked), ("P4_openings", ""))
+            self.assertEqual(packet["wall_run_indices"], [number - 1])
+            self.assertAlmostEqual(packet["edge_length_mm"], 11450)
+            self.assertIn(f"The AI placed it on wall(s) [{number}]", packet["storefront_match_reason"])
+
+    def test_a_storefront_on_a_wall_classed_adjacent_tenancy_is_still_offered_and_the_wall_is_corrected(self):
+        # Butcher Buffet, 2026-10-20: the AI found the storefront on the 11.9 m top wall (elevation tag, 11,900 mm), but
+        # the wall-facing step had classed it adjacent tenancy, so it wasn't offered and "none" was rejected twice.
+        from PIL import Image
+        from ai import ceiling_volume_resolution
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "room_use_resolution.json").write_text(json.dumps({"records": [{"room_id": "shop", "space_scope": "comfort_hvac"}]}))
+            (root / "ai_input.json").write_text(json.dumps({"drawing_set": {"pages": [{"page": 26, "title": "Storefront Elevation"}]}}))
+            (root / "spatial_ocr.json").write_text(json.dumps({"pages": [{"page": 26, "dimension_candidates": []}]}))
+            (root / "ceiling_volume_resolution.json").write_text("{}")
+            trace = {"trace_id": "bb-shop", "room_id": "shop", "room_label": "Shop", "level_name": "Ground", "page": 20,
+                     "points_image_px": [[0, 0], [1190, 0], [1190, 300], [0, 300], [0, 0]],
+                     "calibration": {"status": "agreed", "mm_per_px": 10},
+                     "edges": [{"index": 0, "boundary": "adjacent_tenancy"}, {"index": 1, "boundary": "external"},
+                               {"index": 2, "boundary": "external"}, {"index": 3, "boundary": "adjacent_tenancy"}]}
+            p3 = self._p3_applied_lookup(trace)
+            key = ceiling_volume_resolution.room_identity("Shop", "Ground")
+            with patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "current_records", return_value=[trace]), \
+                    patch.object(autonomous_tasks_service, "_current_task", side_effect=lambda r, task, target: None if task == "P4_storefront_wall" else p3(r, task, target)), \
+                    patch.object(ceiling_volume_resolution, "values_by_room", return_value={key: {"ceiling_height_mm": 2700}}), \
+                    patch.object(autonomous_tasks_service, "_perimeter_task_image", return_value=(Image.new("RGB", (32, 32)), {})), \
+                    patch.object(autonomous_tasks_service, "_p4_elevation_image", return_value=Image.new("RGB", (32, 32))), \
+                    patch.object(autonomous_tasks_service, "_png_bytes", return_value=b"png"):
+                [(task, target, packet, prompt, images, blocked)] = autonomous_tasks_service._p4_packets(root)
+            self.assertEqual(task, "P4_storefront_wall")
+            self.assertEqual(len(packet["run_spans_m"]), 4)                    # every perimeter wall, not just the outside ones
+            self.assertIn("street (outside) or the inside of a shopping centre", prompt)
+            top = next(int(n) for n, span in packet["run_spans_m"].items() if abs(span - 11.9) < .01
+                       and trace["edges"][int(n) - 1]["boundary"] == "adjacent_tenancy") if False else None
+            perimeter = autonomous_tasks_service._page_perimeter_data([trace])
+            top = next(row["perimeter_run_index"] + 1 for row in perimeter["trace_edges"]["bb-shop"] if row["edge_index"] == 0)
+            answer = autonomous_tasks.validate_storefront_wall_reply(packet, json.dumps({"elevations": [
+                {"page": 26, "run_numbers": [top], "faces": "mall", "overall_width_mm": 11900, "evidence": "Elevation tag 01/300 on the top wall"}]}))
+            posted = []
+            with patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "current_records", return_value=[trace]), \
+                    patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "post", side_effect=lambda web, project, data: posted.append(data)):
+                record = autonomous_tasks_service._apply_p4_wall(None, {}, root, {"run_id": "r1", "accuracy": {"auto_apply": False},
+                                                                               "quality_label": "AI", "packet": packet}, answer)
+            [saved] = posted
+            self.assertEqual({row["index"]: row["boundary"] for row in saved["edges"]}[0], "mall")
+            self.assertEqual(record["applied_value"]["corrected_walls"], [{"room": "Shop", "edge_index": 0, "boundary": "mall"}])
+        # The wall-facing step can't later call the storefront wall internal.
+        with self.assertRaisesRegex(ValueError, "is the storefront wall"):
+            autonomous_tasks.validate_boundary_reply({"edges": [{"index": 0}], "storefront_run_indices": [0]},
+                                                     json.dumps({"runs": [{"run_number": 1, "boundary": "adjacent_tenancy", "evidence": "party wall"}]}))
+
+    def test_rooms_sharing_the_storefront_wall_each_take_only_their_share_of_its_glass(self):
+        trace = {"trace_id": "shop", "room_label": "Shop", "points_image_px": [[0, 0], [600, 0], [600, 300], [0, 300], [0, 0]],
+                 "calibration": {"mm_per_px": 10}, "edges": [], "roof": "unknown", "openings": []}
+        record = {"run_id": "r1", "accuracy": {"auto_apply": False}, "quality_label": "AI",
+                  "packet": {"trace_id": "shop", "trace_ids": ["shop"], "part_edges": [{"trace_id": "shop", "edge_index": 0, "length_m": 6.0}],
+                             "run_total_length_m": 12.0, "page": 26, "glazing_choice": "retail", "shading_category": "unshaded"}}
+        validated = {"total_width_mm": 12000, "excluded": [],
+                     "panels": [{"panel_index": 0, "width_mm": 8000, "sill_mm": 0, "head_mm": 2700}]}
+        posted = []
+        with patch.object(autonomous_tasks_service, "_current_trace", return_value=trace), \
+                patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "post",
+                             side_effect=lambda web, project, data: posted.append(data)):
+            autonomous_tasks_service._apply_p4(None, {}, Path("."), record, validated)
+        [opening] = posted[0]["openings"]
+        self.assertAlmostEqual(opening["width_m"], 4.0)       # half the wall, half the 8 m of glass
+
+    def test_printed_height_labels_are_read_by_code_including_rotated_ones(self):
+        items = [{"text": "CH:2600MM", "bbox": [628, 377, 680, 387]}, {"text": "MM0062:HC", "bbox": [471, 457, 481, 508]},
+                 {"text": "MM0062:HC", "bbox": [471, 457, 481, 508]}, {"text": "C.H. 3150", "bbox": [381, 104, 430, 114]},
+                 {"text": "CH:0900MM", "bbox": [1, 1, 2, 2]}, {"text": "EXIT"}, {"text": "2600AFFL", "bbox": [5, 5, 9, 9]},
+                 {"text": "U/S", "bbox": [337.5, 413.6, 347.5, 420.3]}, {"text": "SLAB", "bbox": [352.0, 413.6, 371.5, 420.3]},
+                 {"text": "3750MM", "bbox": [373.0, 413.6, 398.0, 420.3]}, {"text": "SERVICES ZONE 2950-3150MM"}]
+        labels = autonomous_tasks.height_labels(items, "ceiling_plan")
+        self.assertEqual([(row["id"], row["height_mm"], row["text"]) for row in labels],
+                         [("H1", 2600, "CH:2600MM"), ("H2", 2600, "CH:2600MM"), ("H3", 3150, "C.H. 3150"),
+                          ("H4", 3750, "U/S SLAB 3750MM")])   # its words are stored separately   # 900 is out of range; a services zone isn't a ceiling
+        self.assertEqual([row["height_mm"] for row in autonomous_tasks.height_labels(items, "elevation")], [2600])
+
+    def test_the_ceiling_height_answer_names_labels_and_the_height_comes_from_the_label(self):
+        packet = {"rooms": ["Shop", "Bar", "Coolroom"], "labels": [
+            {"id": "H1", "height_mm": 2900, "text": "CH:2900MM"}, {"id": "H2", "height_mm": 3150, "text": "CH:3150MM"},
+            {"id": "H3", "height_mm": 2600, "text": "CH:2600MM"}]}
+        reply = {"rooms": [{"room": "Shop", "label_ids": ["H1", "H2"], "shares": [0.75, 0.25], "evidence": "raised ceiling over the counter"},
+                           {"room": "bar", "label_ids": ["H2"], "evidence": "label inside the bar"},
+                           {"room": "Coolroom", "label_ids": [], "not_shown": "Coolroom panel ceiling is not labelled on this sheet"}]}
+        result = autonomous_tasks.validate_ceiling_height_reply(packet, json.dumps(reply))
+        self.assertEqual(result["heights"]["Shop"]["height_mm"], round(2900 * .75 + 3150 * .25))
+        self.assertEqual((result["heights"]["Bar"]["height_mm"], result["heights"]["Bar"]["labels"]), (3150, ["CH:3150MM"]))
+        self.assertIn("Coolroom", result["not_shown"])
+        bad = ((dict(reply, rooms=[{**reply["rooms"][0], "shares": None}, *reply["rooms"][1:]]), "different heights"),
+               (dict(reply, rooms=[{**reply["rooms"][1], "label_ids": ["H9"]}, reply["rooms"][0], reply["rooms"][2]]), "marked labels"),
+               (dict(reply, rooms=reply["rooms"][:2]), "Coolroom too"),
+               (dict(reply, rooms=[*reply["rooms"][:2], {"room": "Coolroom", "label_ids": []}]), "why this sheet"))
+        for value, message in bad:
+            with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
+                autonomous_tasks.validate_ceiling_height_reply(packet, json.dumps(value))
+
+    def test_ceiling_plan_first_then_elevations_only_for_rooms_it_leaves_unlabelled(self):
+        from PIL import Image
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "room_use_resolution.json").write_text(json.dumps({"records": [
+                {"room_id": "shop", "space_scope": "comfort_hvac"}, {"room_id": "kitchen", "space_scope": "comfort_hvac"}]}))
+            (root / "ai_input.json").write_text(json.dumps({"drawing_set": {"pages": [
+                {"page": 22, "title": "Reflective Ceiling Plan", "type": "reflected_ceiling_plan"},
+                {"page": 27, "title": "Internal Elevation"}, {"page": 30, "title": "Lighting Plan"}]}}))
+            (root / "spatial_ocr.json").write_text(json.dumps({"pages": [
+                {"page": 22, "width": 1191, "height": 842, "standalone_text_items": [{"text": "CH:2900MM", "bbox": [470, 150, 520, 160]}]},
+                {"page": 27, "width": 1191, "height": 842, "standalone_text_items": [{"text": "2600AFFL", "bbox": [190, 410, 230, 420]}]},
+                {"page": 30, "standalone_text_items": [{"text": "CH:2900MM", "bbox": [1, 1, 5, 5]}]}]}))
+            traces = [{"trace_id": "s", "room_id": "shop", "room_label": "Shop", "page": 20},
+                      {"trace_id": "k", "room_id": "kitchen", "room_label": "Kitchen", "page": 20}]
+            answered = {}
+            lookup = lambda _root, task, target: answered.get(target) if task == "P7_ceiling_heights" else None
+
+            def build():
+                with patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "current_records", return_value=traces), \
+                        patch.object(autonomous_tasks_service, "_current_task", side_effect=lookup), \
+                        patch.object(autonomous_tasks_service, "_height_task_image", return_value=Image.new("RGB", (32, 32))), \
+                        patch.object(autonomous_tasks_service, "_png_bytes", return_value=b"png"):
+                    return autonomous_tasks_service._p7_packets(root)
+            [(task, target, packet, prompt, images, blocked)] = build()
+            self.assertEqual((task, target, packet["kind"], packet["rooms"], blocked), ("P7_ceiling_heights", "page-22", "ceiling_plan", ["Kitchen", "Shop"], ""))
+            self.assertLessEqual(len(prompt), autonomous_tasks.TASKS["P7_ceiling_heights"]["budget_chars"])
+            validated = autonomous_tasks.validate_ceiling_height_reply(packet, json.dumps({"rooms": [
+                {"room": "Shop", "label_ids": ["H1"], "evidence": "inside the shop"},
+                {"room": "Kitchen", "label_ids": [], "not_shown": "The kitchen ceiling has no label on this sheet"}]}))
+            answered["page-22"] = autonomous_tasks_service._apply_p7(
+                {"packet": packet, "accuracy": {"auto_apply": False}, "quality_label": "AI"}, validated)
+            [(task, target, packet, prompt, images, blocked)] = build()
+            self.assertEqual((target, packet["kind"], packet["rooms"]), ("page-27", "elevation", ["Kitchen"]))
+            self.assertIn("not a bulkhead", prompt)
+
+    def test_printed_heights_reach_the_ceiling_resolver_over_the_fallback(self):
+        from ai import ai_preliminary, ceiling_volume_resolution
+        from backend import ai_preliminary_service
+        record = {"task": "P7_ceiling_heights", "status": "below_accuracy_bar",
+                  "applied_value": {"page": 22, "kind": "ceiling_plan", "heights": {"Bar": {"height_mm": 3150, "labels": ["CH:3150MM"]}}}}
+        elevation = {"task": "P7_ceiling_heights", "status": "applied",
+                     "applied_value": {"page": 27, "kind": "elevation", "heights": {"Bar": {"height_mm": 3750, "labels": ["3750AFFL"]},
+                                                                                   "Kitchen": {"height_mm": 2600, "labels": ["2600AFFL"]}}}}
+        with patch.object(autonomous_tasks_service, "_all_current", return_value=[elevation, record]):
+            printed = autonomous_tasks_service.drawing_ceiling_heights(Path("."))
+            self.assertEqual((printed["bar"]["height_mm"], printed["kitchen"]["height_mm"]), (3150, 2600))   # the ceiling plan wins
+            proposal = ai_preliminary_service._with_printed_ceiling_heights({"root": Path(".")}, {"rooms": [
+                {"kind": "room", "label": "Bar", "level_name": "Ground", "evidence": [{"page": 20, "excerpt": "BAR"}]},
+                {"kind": "room", "label": "Shop", "level_name": "Ground", "evidence": [{"page": 20, "excerpt": "SHOP"}]}]})
+        building = {"spaces": [{"name": "Bar", "level_name": "Ground", "area_m2": 20}, {"name": "Shop", "level_name": "Ground", "area_m2": 90}]}
+        resolved = ceiling_volume_resolution.values_by_room(ceiling_volume_resolution.resolve(
+            building, proposal=proposal, assumption_pack=ai_preliminary.load_pack()))
+        bar = resolved[ceiling_volume_resolution.room_identity("Bar", "Ground")]
+        shop = resolved[ceiling_volume_resolution.room_identity("Shop", "Ground")]
+        self.assertEqual((bar["ceiling_height_mm"], bar["origin"]), (3150, "ai_estimated"))
+        self.assertEqual(shop["origin"], "preliminary_fallback")              # nothing printed for it: labelled fallback
 
     def test_p4_uses_only_shopfront_evidence_and_waits_for_p3(self):
         from PIL import Image
@@ -1587,7 +1805,7 @@ class AutonomousTaskTests(unittest.TestCase):
             packets=autonomous_tasks_service._p6_kitchen_packets(Path("/tmp"))
         self.assertEqual(packets[0][-1],"Waiting for room outlines (P0).")
 
-    def test_p4_omits_rooms_with_no_external_or_mall_perimeter_run(self):
+    def test_p4_asks_where_the_storefront_is_when_no_wall_is_classed_outside_and_may_hear_not_here(self):
         from ai import ceiling_volume_resolution
         with TemporaryDirectory() as temporary:
             root=Path(temporary)
@@ -1597,10 +1815,26 @@ class AutonomousTaskTests(unittest.TestCase):
                 "points_image_px":[[0,0],[100,0],[100,100],[0,100],[0,0]],"calibration":{"status":"agreed","mm_per_px":10}}
             p3={"task":"P3_boundaries","target":"page-20","status":"applied",
                 "applied_value":{"runs":[{"index":i,"boundary":"internal"} for i in range(4)]}}
+            from PIL import Image
             with patch.object(autonomous_tasks_service.reviewer_room_geometry_service,"current_records",return_value=[trace]), \
-                 patch.object(autonomous_tasks_service,"_current_task",return_value=p3), \
+                 patch.object(autonomous_tasks_service,"_current_task",side_effect=lambda r,task,target: p3 if task=="P3_boundaries" else None), \
+                 patch.object(ceiling_volume_resolution,"values_by_room",return_value={}), \
+                 patch.object(autonomous_tasks_service,"_perimeter_task_image",return_value=(Image.new("RGB",(32,32)),{})), \
+                 patch.object(autonomous_tasks_service,"_p4_elevation_image",return_value=Image.new("RGB",(32,32))), \
+                 patch.object(autonomous_tasks_service,"_png_bytes",return_value=b"png"):
+                packets=autonomous_tasks_service._p4_packets(root)
+            # The storefront may still be on one of these walls (the wall-facing step can be wrong), or on another level.
+            [(task,target,packet,prompt,images,blocked)]=packets
+            self.assertEqual((task,packet["allow_none"]),("P4_storefront_wall",True))
+            self.assertIn("isn't on this plan",prompt)
+            none=autonomous_tasks.validate_storefront_wall_reply(packet,json.dumps({"elevations":[
+                {"page":26,"run_numbers":[],"evidence":"This plan is the first floor; the storefront is on the ground floor."}]}))
+            self.assertEqual(none["elevations"][26]["run_indices"],[])
+            wall=autonomous_tasks_service._apply_p4_wall(None,{},None,{"accuracy":{"auto_apply":False},"quality_label":"AI","packet":packet},none)
+            with patch.object(autonomous_tasks_service.reviewer_room_geometry_service,"current_records",return_value=[trace]), \
+                 patch.object(autonomous_tasks_service,"_current_task",side_effect=lambda r,task,target: p3 if task=="P3_boundaries" else wall), \
                  patch.object(ceiling_volume_resolution,"values_by_room",return_value={}):
-                self.assertEqual(autonomous_tasks_service._p4_packets(root),[])
+                self.assertEqual(autonomous_tasks_service._p4_packets(root),[])   # answered "not here": not asked again
 
     def test_p3_persists_boundary_exclusion_quality_label(self):
         with TemporaryDirectory() as temporary:

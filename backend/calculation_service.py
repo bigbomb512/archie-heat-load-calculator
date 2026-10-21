@@ -29,23 +29,24 @@ NEEDS_INPUTS = re.compile(r"missing required|out of date|resolve model inputs|st
 WORKFLOW_TIMEOUT_S = 600
 
 
-def _phase1_drawing_problems(project):
+def _phase1_drawing_problems(project, include_supervisor=True):
     """Prerequisites checked before both assembly and calculation."""
     from backend import ai_preliminary_service
-    from backend.workflow_recovery import JOBS, ACTIVE, TERMINAL
+    from backend.job_progress import STEPS, in_flight, step_state
     if not project.get("review_dir"):
         return ["Prepare the drawing set first."]
     root = Path(project["review_dir"])
     reasons = []
     if not project.get("reasoning_packet"):
         reasons.append("Prepare the drawing set first.")
-    for _kind, filename, label in JOBS:
-        job = ai_preliminary_service._read(root / filename, {})
-        if job.get("status") in ACTIVE or job.get("restart_requested"):
+    for _kind, filename, label in STEPS:
+        if _kind == "supervisor" and not include_supervisor:
+            continue
+        if in_flight(ai_preliminary_service._read(root / filename, {})):
             reasons.append(f"Waiting for {label} to finish.")
     manifest = ai_preliminary_service._read(root / "skill_workflow_run.json", {})
     if (not manifest.get("run_id") or manifest.get("scope") != "phase1_envelope"
-            or manifest.get("status") not in TERMINAL):
+            or step_state(manifest.get("status")) not in {"done", "failed"}):
         reasons.append("The empty-room drawing review has not finished.")
     if manifest.get("source_fingerprint"):
         from backend import skill_workflow_service
@@ -53,6 +54,11 @@ def _phase1_drawing_problems(project):
         current = skill_workflow_service._source_fingerprint(paths, skill_workflow_service.load_catalog())
         if current != manifest["source_fingerprint"]:
             reasons.append("The drawings changed after the review. Resume the envelope review first.")
+    if include_supervisor:
+        from backend import phase1_supervisor_service as supervisor
+        state = supervisor.status(None, project)
+        if state.get("step_state") != "done" or not state.get("current"):
+            reasons.append("Finish checking the empty-room model before calculating.")
     return reasons
 
 
@@ -91,7 +97,8 @@ def status(web, project):
     from backend.job_runner import read_json
     auto = read_json(Path(project["review_dir"]) / "phase1_automatic_start.json")
     manifest = read_json(Path(project["review_dir"]) / "skill_workflow_run.json")
-    offer = bool(readiness["ready"] and auto.get("error") and auto.get("run_id") == manifest.get("run_id")
+    supervisor_fp = read_json(Path(project["review_dir"]) / "phase1_supervisor_job.json").get("result_fingerprint", "")
+    offer = bool(auto.get("supervisor_fingerprint", "") == supervisor_fp and readiness["ready"] and auto.get("error") and auto.get("run_id") == manifest.get("run_id")
                  and job.get("status") not in {"running", "queued", "stopping", "failed", "interrupted"})
     # A current report is never replaced by a recovery button.
     if offer:
@@ -108,7 +115,14 @@ def maybe_start_phase1(web, project):
     if web is None:
         return None
     current = web.project_by_id(project["id"]) if hasattr(web, "project_by_id") else project
-    if _phase1_drawing_problems(current):
+    if _phase1_drawing_problems(current, include_supervisor=False):
+        return None
+    from backend import phase1_supervisor_service as supervisor
+    checked = supervisor.status(web, current)
+    if checked.get("step_state") != "done" or not checked.get("current"):
+        # Failed/interrupted checks retain deliberate recovery controls; a new job starts itself once.
+        if checked.get("status") in {"none", "done", "stale"}:
+            supervisor.start(web, current)
         return None
     # Serialize automatic handoffs from different finishing jobs and browser recovery requests.
     with _JOB.mutation_lock(current):
@@ -130,14 +144,15 @@ def maybe_start_phase1(web, project):
     marker = root / "phase1_automatic_start.json"
     # Failed automatic startup stays actionable until the operator retries it or a new review finishes.
     previous = read_json(marker)
-    if previous.get("run_id") == run_id and (previous.get("error") or _JOB.status(current).get("status") in {"failed", "interrupted"}):
+    supervisor_fp = read_json(root / "phase1_supervisor_job.json").get("result_fingerprint", "")
+    if previous.get("run_id") == run_id and previous.get("supervisor_fingerprint", "") == supervisor_fp and (previous.get("error") or _JOB.status(current).get("status") in {"failed", "interrupted"}):
         return None
     try:
         result = start(web, current, {"phase": "phase1_base_room", "reviewer": "Automatic, after the drawing review"})
-        write_json(marker, {"run_id": run_id, "status": "started"})
+        write_json(marker, {"run_id": run_id, "supervisor_fingerprint": supervisor_fp, "status": "started"})
         return result
     except Exception as error:
-        write_json(marker, {"run_id": run_id, "error": str(error) or type(error).__name__})
+        write_json(marker, {"run_id": run_id, "supervisor_fingerprint": supervisor_fp, "error": str(error) or type(error).__name__})
         return None
 
 
@@ -223,6 +238,12 @@ def start(web, project, data):
                 raise ValueError(" ".join(readiness["reasons"]))
             if readiness["exceptions"]:
                 phase1_note = "Unresolved or excluded rooms: " + ", ".join(readiness["exceptions"]) + "."
+
+        if phase == "full":
+            from backend import equipment_catalogue_service
+            proposal = ai_preliminary_service._proposal_for_resolution(paths, equipment=False)
+            names = [room["label"] for room in proposal.get("rooms", []) if room.get("label")]
+            coverage = equipment_catalogue_service.assess_for_calculation(project, names)
 
         def model_and_calculate():
             step("model")

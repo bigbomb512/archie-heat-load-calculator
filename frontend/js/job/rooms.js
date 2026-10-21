@@ -355,10 +355,13 @@ function renderLayout(plan, status, roomId, uses, projectId, editor = {}) {
       <tbody>${roomRows(plan, room)}</tbody>
     </table></div>
   </section>`;
+  const remaining = plan.phase1_report?.supervisor_exceptions || [];
+  const exceptionPanel = remaining.length
+    ? `<section class="job-panel" data-model-exceptions><h2>Unresolved drawing checks</h2><p>The empty-room result covers the supported inputs. These checks remain unresolved.</p><ul>${remaining.map((row) => `<li>${escapeHtml(row.message)}</li>`).join("")}</ul></section>` : "";
   const right = roomDetails(plan, room, status, uses, editor);
   return {
     room,
-    content: `${needsYou(plan, projectId)}<div class="job-columns job-rooms-layout">${left}${right}</div>`,
+    content: `${needsYou(plan, projectId)}${exceptionPanel}<div class="job-columns job-rooms-layout">${left}${right}</div>`,
   };
 }
 

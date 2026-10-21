@@ -1,6 +1,6 @@
 # Drawing workflow recovery
 
-Unfinished preparation, page reading, equipment reading, room tracing and envelope review expose a recovery control. The status endpoint supplies `recovery: {action, label, reason}`; clients do not decide recovery availability from a generic failure flag.
+Unfinished preparation, page reading, equipment reading, room tracing, room/site review and the empty-room model supervisor expose a recovery control. The status endpoint supplies `recovery: {action, label, reason}`; clients do not decide recovery availability from a generic failure flag.
 
 | State | Control | Request |
 | --- | --- | --- |
@@ -36,6 +36,33 @@ Changed input fingerprints continue to mark saved results stale. Recovery does n
 
 ## Verification
 
-`tests/test_workflow_recovery.py` covers the reported early-button state, partial evidence, explicit internal rooms, pending restarts, startup failures, worker cancellation, cached reply reuse, repeated requests, another server process, orphaned jobs, and skill scope preservation. Existing service tests cover provider failures, partial page retries, calculation/report behaviour and evidence reuse.
+Where each step is comes from one model, `backend/job_progress.py`: the step table, the prerequisite check (`stage_blocker`) and the job's stage (`milestones`), with `job_runner.step_state` turning every step's own status word into waiting, active, stopping, done or failed. Every step reply carries that `step_state`, and the Drawings screen reads it. `tests/test_job_progress.py` covers the vocabulary, the stage rule and the jobs list agreeing with the job screen. `tests/test_workflow_recovery.py` covers the reported early-button state, partial evidence, explicit internal rooms, pending restarts, startup failures, worker cancellation, cached reply reuse, repeated requests, another server process, orphaned jobs, and skill scope preservation. Existing service tests cover provider failures, partial page retries, calculation/report behaviour and evidence reuse.
 
 `frontend/tests/job-preview.spec.mjs` checks automatic startup, gated manual recovery, running/stopping/resumed controls, protected status fetches, failed polling, and page-reading progress. Screenshot artifacts are written to `frontend/test-results/recovery-pages-reading.png` and `frontend/test-results/recovery-restarting.png` during that suite.
+
+## Empty-room model supervisor
+
+The room/site skill review is limited to sheet identity, revision scope, page relationships, site clues,
+address selection and room identity/use. Drawing tasks supply geometry and envelope inputs. A separate
+`phase1_supervisor_job.json` BackgroundJob follows the review in `job_progress.STEPS`; its status and recovery
+endpoint is `/api/phase1-supervisor`. Calculation readiness requires this job to have settled with a current
+source fingerprint. Old skill manifests containing an `agentic` object remain readable, but that object no
+longer schedules skill investigations.
+
+The supervisor rebuilds current calculation inputs, audits them deterministically and locally previews the
+empty-room calculation. It queues every material gap in priority order, with up to `ARCHIE_AI_PARALLEL_CALLS`
+provider requests simultaneously (default 8, shared with page reading, equipment reading and skills). Network
+answers are cached before cancellation checks; publication uses the owning job's guarded writes and the task's
+current run identity. Task replies, including rejected and failed replies, stay in their existing run archives.
+After applying a fix, dependent drawing packets and the assembled model are refreshed before re-auditing.
+
+There are at most two targeted attempts per stable gap, an early stop when neither model inputs nor the gap
+set changed, and a three-cycle backstop. There is no spend cap. `ai_usage.jsonl` records `supervisor:<task>`
+calls and reported cost, including failed replies; the screen also says when prices were not reported.
+HTTP 429 / too-many-requests responses retry inside the provider's whole-request deadline, honouring
+Retry-After or using exponential backoff with jitter. They are not logged as additional paid answers.
+
+Remaining material gaps are retained as supervisor exceptions in the Phase 1 report and Rooms screen.
+A completed supervisor means its bounded investigation finished; it does not certify complete engineering evidence.
+The normal calculation job publishes the result after the supervisor settles. Operating loads still start only
+when the user continues to that stage. No web research is performed by this supervisor.

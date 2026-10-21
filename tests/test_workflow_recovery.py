@@ -162,7 +162,7 @@ print(count[0])
     def test_skill_restart_drains_inflight_tasks_without_publishing_and_keeps_scope(self):
         skills = skill_workflow_service
         catalog = skills.load_catalog()
-        run = skills._new_manifest(catalog, "fp", "all")
+        run = skills._new_manifest(catalog, "fp", "pdf_review")
         _write_json(self.root / "skill_workflow_run.json", run)
         _write_json(self.root / "ai_input.json", {})
         skills._RUNNING.add(self.project["id"])
@@ -249,6 +249,8 @@ print(count[0])
                 skills._run_worker(None, self.project, run["run_id"], "source-a", catalog)
                 self.assertEqual(read_json(self.root / "skill_workflow_run.json")["status"], "failed")
                 self.assertEqual(list((self.root / "skill_reply_cache").glob("*.json")), [])
+            # Each new Phase 1 run retries once through its targeted supervisor after
+            # the baseline reply is rejected; the rejected reply is not a cache hit.
             self.assertEqual(provider.call_count, 2)
 
 
@@ -284,6 +286,9 @@ class ReadinessTests(unittest.TestCase):
         _write_json(self.root / "skill_workflow_run.json", {"run_id": "r1", "scope": "phase1_envelope", "status": "failed"})
         _write_json(self.root / "ai_preliminary_input_set.json", {"material": {"hourly_load_model": {"rooms": [
             {"room_id": "shop", "cooling_load": {"envelope_surfaces": [{"surface_id": "wall"}]}}]}}})
+
+        from backend import phase1_supervisor_service as supervisor
+        _write_json(self.root / supervisor.JOB_FILE, {"status": "done", "source_fingerprint": supervisor.source_fingerprint(self.project)})
 
     def test_screenshot_combination_cannot_calculate_even_after_a_long_wait(self):
         _write_json(self.root / "page_inventory_job.json", {"status": "running", "started_at": "2000-01-01"})

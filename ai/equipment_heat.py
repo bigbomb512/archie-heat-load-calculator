@@ -58,6 +58,7 @@ HEAT_TO_ROOM = {
 def normalise(name):
     text = str(name or "").lower().replace("u/b", "underbench")
     text = " ".join(re.sub(r"[^a-z0-9\"]+", " ", text).split())
+    text = re.sub(r"\b(fridge|freezer|oven|fryer|grill|burner|dishwasher|sign|screen|monitor)s\b", r"\1", text)   # plurals
     return re.sub(r"\bub\b", "underbench", text)
 
 
@@ -132,7 +133,7 @@ def _quantity(value):
 
 def from_data_sheet(value):
     """True when the operator entered the item's heat to the room from its data sheet."""
-    return bool(_each(value, "sensible_to_room_w"))
+    return _each(value, "sensible_to_room_w") is not None
 
 
 def latent_w(value):

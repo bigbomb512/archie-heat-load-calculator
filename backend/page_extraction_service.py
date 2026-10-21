@@ -16,6 +16,7 @@ page_extraction_decisions.json (the operator's decisions), page_extraction/ (ima
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import json
+import math
 from pathlib import Path
 import struct
 import subprocess
@@ -136,7 +137,7 @@ def schedule_codes(readings):
     return codes
 
 
-def read_sections(extractor, images, cache_dir, provider, workers=pass1.WORKERS, on_done=None, batch=None, codes=None, check=None):
+def read_sections(extractor, images, cache_dir, provider, workers=None, on_done=None, batch=None, codes=None, check=None):
     """Read every section (cached per section). Returns ([(page, section, items)], {"page.section": reason}, calls).
 
     Sections not in the cache are read a few per call (pass1.pass2_batch_size()), each its own full-size image; each
@@ -238,7 +239,7 @@ def read_sections(extractor, images, cache_dir, provider, workers=pass1.WORKERS,
     chunks = [todo[index:index + size] for index in range(0, len(todo), size)]
     if on_done and readings:
         on_done(len(readings), len(images))
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+    with ThreadPoolExecutor(max_workers=max(1, workers if workers is not None else ai_provider.parallel_calls())) as pool:
         futures = [pool.submit(several, chunk) for chunk in chunks]
         for future in as_completed(futures):
             rows, made = future.result()
@@ -304,7 +305,7 @@ def rooms(project):
         proposal = ai_preliminary_service._proposal_for_resolution(ai_preliminary_service._paths(project), equipment=False)
     except Exception:
         return []
-    return sorted({str(row.get("label")) for row in proposal.get("rooms", []) if isinstance(row, dict) and row.get("label")})
+    return sorted(str(row.get("label")) for row in proposal.get("rooms", []) if isinstance(row, dict) and row.get("label"))
 
 
 def suggested_room(location, room_names):
@@ -321,6 +322,12 @@ def status(web, project, kind="equipment_appliances"):
     result = read_json(Path(project["review_dir"]) / RESULT_FILE).get(kind, {})
     decisions = read_json(Path(project["review_dir"]) / DECISIONS_FILE).get(kind, {})
     room_names = rooms(project) if kind == "equipment_appliances" else []
+    catalogue_coverage = None
+    catalogue_rows = {}
+    if kind == "equipment_appliances":
+        from backend import equipment_catalogue_service
+        catalogue_coverage = equipment_catalogue_service.resolve(project, room_names)
+        catalogue_rows = {row["id"]: row for row in catalogue_coverage["records"]}
     findings = []
     for row in result.get("findings", []):
         decision = decisions.get(row["id"], {})
@@ -329,14 +336,15 @@ def status(web, project, kind="equipment_appliances"):
         extra = {}
         if kind == "equipment_appliances":
             decided = decision.get("value") or {}
-            extra = {"heat": equipment_heat.proposal(row["value"]),
+            extra = {"heat": {"heat_w": None, "rated_source": "Equipment catalogue", "needed": catalogue_rows.get(row["id"], {}).get("reasons", [])},
+                     "catalogue_resolution": catalogue_rows.get(row["id"], {}),
                      "suggested_room": suggested_room(row["value"].get("location"), room_names),
-                     "accepted_heat_w": equipment_heat.heat_w(decided) if decision.get("status") == "accepted" else None,
-                     "accepted_latent_w": equipment_heat.latent_w(decided) if decision.get("status") == "accepted" else None,
+                     "accepted_heat_w": catalogue_rows.get(row["id"], {}).get("sensible_total_w"),
+                     "accepted_latent_w": catalogue_rows.get(row["id"], {}).get("latent_total_w"),
                      "from_data_sheet": decision.get("status") == "accepted" and equipment_heat.from_data_sheet(decided),
-                     "in_calculation": bool(decision.get("status") == "accepted" and decided.get("room") in room_names
-                                            and equipment_heat.heat_w(decided) is not None)}
-        findings.append({**row, **extra, "status": decision.get("status", "proposed"), "decided_value": decision.get("value"),
+                     "in_calculation": catalogue_rows.get(row["id"], {}).get("status") in equipment_catalogue_service.COUNTED}
+        automatic = catalogue_rows.get(row["id"], {}).get("status") in equipment_catalogue_service.COUNTED
+        findings.append({**row, **extra, "status": "accepted" if automatic else decision.get("status", "proposed"), "decided_value": decision.get("value"),
                          "reviewer": decision.get("reviewer", ""), "reviewed_at": decision.get("at", "")})
     if kind == "equipment_appliances":
         for row_id, matches in possible_duplicates(findings).items():
@@ -346,10 +354,12 @@ def status(web, project, kind="equipment_appliances"):
     if job.get("partial"):
         from backend.job_runner import recovery
         job["recovery"] = recovery("failed", "Some equipment sections could not be read. Completed readings are kept.")
-    open_count = sum(1 for row in findings if row["status"] == "proposed")
+    open_count = (catalogue_coverage["summary"]["no_value"] + catalogue_coverage["summary"]["no_room"]
+                  if catalogue_coverage is not None else sum(1 for row in findings if row["status"] == "proposed"))
     return {**job, "problem": problem, "kind": kind, "label": extractor["label"], "pages": result.get("pages", []),
             "failures": result.get("failures", {}), "findings": findings, "open": open_count,
-            "run": result.get("run", ""), "read_at": result.get("read_at", ""), "rooms": room_names}
+            "run": result.get("run", ""), "read_at": result.get("read_at", ""), "rooms": room_names,
+            "equipment_coverage": catalogue_coverage}
 
 
 def start(web, project, data=None):
@@ -441,12 +451,18 @@ def _check_equipment_numbers(value):
             number = float(value[field])
         except (TypeError, ValueError):
             raise ValueError(f"{field.replace('_', ' ')} must be a number.") from None
-        if number < low or (high is not None and number > high) or (field in {"rated_input_w", "sensible_to_room_w"} and number == 0):
+        if not math.isfinite(number) or number < low or (high is not None and number > high) or (field == "rated_input_w" and number == 0):
             raise ValueError({"rated_input_w": "Rated power must be above 0 W.",
                               "heat_to_space_factor": "The heat-to-room factor must be between 0 and 1.",
                               "sensible_to_room_w": "The heat to the room must be above 0 W.",
                               "latent_to_room_w": "The moisture heat can't be negative."}[field])
         value[field] = number
+    if "equipment_schedule" in value:
+        from backend.equipment_catalogue_service import _schedule
+        if not _schedule(value["equipment_schedule"]):
+            raise ValueError("Provide 24 fractions from 0 to 1 for weekday, saturday, sunday and holiday; Sunday and holiday must match the shared calculation day type.")
+    if "quantity" in value and (type(value["quantity"]) is not int or value["quantity"] <= 0):
+        raise ValueError("Equipment quantity must be a positive whole number.")
     value["heat_reference"] = " ".join(str(value.get("heat_reference") or "").split())[:160]
     if value["latent_to_room_w"] is not None and value["sensible_to_room_w"] is None:
         raise ValueError("Enter the data sheet's heat to the room (sensible) with its moisture heat.")

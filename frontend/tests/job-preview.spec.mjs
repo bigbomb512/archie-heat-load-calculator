@@ -135,6 +135,7 @@ async function preview(page, overrides = {}) {
   const currentPlan = structuredClone(plan);
   currentPlan.status = { ...currentPlan.status, ...(overrides.status || {}) };
   if (overrides.final_report) currentPlan.final_report = overrides.final_report;
+  if (overrides.phase1_report) currentPlan.phase1_report = overrides.phase1_report;
   if (overrides.rooms) currentPlan.rooms = overrides.rooms;
   const currentProject = {
     ...project,
@@ -147,26 +148,27 @@ async function preview(page, overrides = {}) {
   await page.route("**/api/projects", (route) =>
     route.fulfill({ json: [currentProject] }),
   );
-  await page.route("**/api/new-job**", route => route.fulfill({ json: { state: "done", drawings_ready: true, pages: 38 } }));
+  await page.route("**/api/new-job**", route => route.fulfill({ json: { state: "done", step_state: "done", drawings_ready: true, pages: 38 } }));
   await page.route("**/api/job-plan**", (route) =>
     route.fulfill({ json: currentPlan }),
   );
   await page.route("**/api/page-reading**", (route) =>
     route.fulfill({
-      json: { status: "working", enabled: true, read: 1, page_count: 2 },
+      json: { status: "working", step_state: "active", enabled: true, read: 1, page_count: 2 },
     }),
   );
   await page.route("**/api/page-extraction**", (route) =>
-    route.fulfill({ json: { status: "done", findings: [] } }),
+    route.fulfill({ json: { status: "done", step_state: "done", findings: [] } }),
   );
   await page.route("**/api/drawing-tasks**", (route) =>
-    route.fulfill({ json: { status: "running", tasks_done: 1 } }),
+    route.fulfill({ json: { status: "running", step_state: "active", tasks_done: 1 } }),
   );
   await page.route("**/api/skill-workflow**", (route) =>
-    route.fulfill({ json: { status: "running" } }),
+    route.fulfill({ json: { status: "running", step_state: "active" } }),
   );
+  await page.route("**/api/phase1-supervisor**", route => route.fulfill({ json: { status: "none", step_state: "waiting", spend: { cost_usd: 0 } } }));
   await page.route("**/api/job-calculation**", (route) =>
-    route.fulfill({ json: { status: "none" } }),
+    route.fulfill({ json: { status: "none", step_state: "waiting" } }),
   );
   await page.route("**/api/job-status**", (route) =>
     route.fulfill({
@@ -259,24 +261,24 @@ async function realContractPreview(page, source = doneFixture) {
       ],
     }),
   );
-  await page.route("**/api/new-job**", route => route.fulfill({ json: { state: "done", drawings_ready: true, pages: 38 } }));
+  await page.route("**/api/new-job**", route => route.fulfill({ json: { state: "done", step_state: "done", drawings_ready: true, pages: 38 } }));
   await page.route("**/api/job-plan**", (route) =>
     route.fulfill({ json: plan }),
   );
   await page.route("**/api/page-reading**", (route) =>
-    route.fulfill({ json: { status: "done", pages_read: 29, page_count: 29 } }),
+    route.fulfill({ json: { status: "done", step_state: "done", pages_read: 29, page_count: 29 } }),
   );
   await page.route("**/api/page-extraction**", (route) =>
-    route.fulfill({ json: { status: "done", findings: [] } }),
+    route.fulfill({ json: { status: "done", step_state: "done", findings: [] } }),
   );
   await page.route("**/api/drawing-tasks**", (route) =>
-    route.fulfill({ json: { status: "done", tasks_done: 1 } }),
+    route.fulfill({ json: { status: "done", step_state: "done", tasks_done: 1 } }),
   );
   await page.route("**/api/skill-workflow**", (route) =>
-    route.fulfill({ json: { status: "done", findings: [], answers: {} } }),
+    route.fulfill({ json: { status: "done", step_state: "done", findings: [], answers: {} } }),
   );
   await page.route("**/api/job-calculation**", (route) =>
-    route.fulfill({ json: { status: "done", phase: "phase1_base_room" } }),
+    route.fulfill({ json: { status: "done", step_state: "done", phase: "phase1_base_room" } }),
   );
   await page.route("**/api/result-status**", (route) =>
     route.fulfill({ json: { report_url: "/report.html", assumptions: [] } }),
@@ -322,7 +324,7 @@ test("preview renders the Drawings frame and current room outline", async ({
 // Drawing tasks running after every page was read: the progress the server saves before and after each AI call.
 function runningDrawingTasks(overrides = {}) {
   return {
-    status: "running", step: "answer", step_label: "The AI is answering 12 drawing tasks (round 2)",
+    status: "running", step_state: "active", step: "answer", step_label: "The AI is answering 12 drawing tasks (round 2)",
     answered: 31, refused: 2, rounds: 2, calls: 33,
     current_task: "P0_room_outlines", current_task_label: "Tracing the room outlines", current_target: "page-33",
     task_number: 3, tasks_in_round: 12, tasks_done: 2, tasks_remaining: 10,
@@ -339,7 +341,7 @@ async function liveDrawings(page, sequence) {
     await route.fallback();
   });
   await page.route("**/api/page-reading**", (route) =>
-    route.fulfill({ json: { status: "done", pages_read: 73, page_count: 73, read: 73 } }),
+    route.fulfill({ json: { status: "done", step_state: "done", pages_read: 73, page_count: 73, read: 73 } }),
   );
   await page.route("**/api/drawing-tasks**", (route) => {
     const reply = sequence[Math.min(counts.tasks, sequence.length - 1)];
@@ -385,7 +387,7 @@ test("a timed-out drawing call is explained, and finishing redraws the screen on
   const problem = "Tracing the room outlines (page 33) got no reply within 300 seconds; it will be tried once more.";
   const counts = await liveDrawings(page, [
     runningDrawingTasks({ last_problem: problem }),
-    { status: "done", step: "skills", answered: 41, refused: 8, rounds: 5, last_problem: problem },
+    { status: "done", step_state: "done", step: "skills", answered: 41, refused: 8, rounds: 5, last_problem: problem },
   ]);
   await expect(page.locator("[data-stage-problem]")).toHaveText(problem);
   await page.clock.runFor(5000);
@@ -414,17 +416,17 @@ test("drawing tasks left unanswered by a failed connection are listed, not ticke
   await preview(page, { status: { stage: "drawings" } });
   const posts = [];
   await page.route("**/api/page-reading**", (route) =>
-    route.fulfill({ json: { status: "done", pages_read: 38, page_count: 38 } }),
+    route.fulfill({ json: { status: "done", step_state: "done", pages_read: 38, page_count: 38 } }),
   );
-  await page.route("**/api/skill-workflow**", (route) => route.fulfill({ json: { status: "needs_review" } }));
+  await page.route("**/api/skill-workflow**", (route) => route.fulfill({ json: { status: "needs_review", step_state: "done" } }));
   await page.route("**/api/drawing-tasks**", async (route) => {
     if (route.request().method() === "POST") {
       posts.push(route.request().postDataJSON());
-      return route.fulfill({ json: { status: "running" } });
+      return route.fulfill({ json: { status: "running", step_state: "active" } });
     }
     return route.fulfill({
       json: {
-        status: "done", recovery: { action: "resume", label: "Try again" }, answered: 0, refused: 0, rounds: 1, calls: 3, connection_stopped: true, not_tried: 9,
+        status: "done", step_state: "done", recovery: { action: "resume", label: "Try again" }, answered: 0, refused: 0, rounds: 1, calls: 3, connection_stopped: true, not_tried: 9,
         unresolved: [
           { task: "P0_dimensions", target: "page-20-dimension-1", label: "Reading the scale from a printed dimension", kind: "connection" },
           { task: "P2_north", target: "page-25", label: "Finding north", kind: "connection" },
@@ -451,10 +453,10 @@ test("a stale walls-and-roof review says why and offers Try again instead of loo
 }) => {
   await preview(page, { status: { stage: "phase1", phase1_complete: true } });
   await page.route("**/api/page-reading**", (route) =>
-    route.fulfill({ json: { status: "done", pages_read: 38, page_count: 38 } }),
+    route.fulfill({ json: { status: "done", step_state: "done", pages_read: 38, page_count: 38 } }),
   );
-  await page.route("**/api/drawing-tasks**", (route) => route.fulfill({ json: { status: "done", answered: 13 } }));
-  await page.route("**/api/skill-workflow**", (route) => route.fulfill({ json: { status: "stale", recovery: { action: "resume", label: "Try again" } } }));
+  await page.route("**/api/drawing-tasks**", (route) => route.fulfill({ json: { status: "done", step_state: "done", answered: 13 } }));
+  await page.route("**/api/skill-workflow**", (route) => route.fulfill({ json: { status: "stale", step_state: "waiting", recovery: { action: "resume", label: "Try again" } } }));
   await page.goto("/?preview=1#/job/job-1/drawings");
   const envelope = page.locator('[data-stage="envelope"]');
   await expect(envelope).not.toHaveClass(/active/);
@@ -463,21 +465,91 @@ test("a stale walls-and-roof review says why and offers Try again instead of loo
   await expect(envelope.getByRole("button", { name: "Try again" })).toBeVisible();
 });
 
+test("Phase 1 supervisor progress shows its current investigation and bounded cycle", async ({ page }) => {
+  await preview(page, { status: { stage: "drawings" } });
+  await page.route("**/api/page-reading**", (route) =>
+    route.fulfill({ json: { status: "done", step_state: "done", pages_read: 38, page_count: 38 } }),
+  );
+  await page.route("**/api/page-extraction**", (route) =>
+    route.fulfill({ json: { status: "done", step_state: "done", findings: [] } }),
+  );
+  await page.route("**/api/drawing-tasks**", (route) =>
+    route.fulfill({ json: { status: "done", step_state: "done", answered: 12 } }),
+  );
+  await page.route("**/api/skill-workflow**", route => route.fulfill({ json: { status: "done", step_state: "done" } }));
+  await page.route("**/api/phase1-supervisor**", route => route.fulfill({ json: {
+    status: "running", step_state: "active", recovery: { action: "restart", label: "Restart this step" },
+    step_label: "Checking the Shop's ceiling height on the ceiling plan (page 22)", cycle: 2, max_cycles: 3,
+    gaps_found: 5, gaps_fixed: 2, spend: { cost_usd: .1234, unpriced_calls: 0 },
+    exceptions: [{ message: "The Shop's north direction remains unresolved." }],
+  } }));
+  await page.route("**/api/job-calculation**", (route) => route.fulfill({ json: {
+    status: "waiting", step_state: "waiting", readiness: { ready: false, reasons: ["Waiting for drawing review."] },
+  } }));
+  await page.goto("/?preview=1#/job/job-1/drawings");
+  const supervisor = page.locator('[data-stage="supervisor"]');
+  await expect(supervisor).toContainText("Investigation cycle 2 of 3");
+  await expect(supervisor).toContainText("ceiling plan (page 22)");
+  await expect(supervisor).toContainText("5 gaps found · 2 fixed");
+  await expect(supervisor).toContainText("US$0.1234");
+  await expect(supervisor.locator("[data-supervisor-exceptions]")).toContainText("north direction remains unresolved");
+  await expect(supervisor).not.toContainText("P7_ceiling_heights");
+  await page.screenshot({ path: "test-results/supervisor-progress.png", fullPage: true });
+});
+
+test("supervisor recovery keeps confirmed status through a failed poll and shows resumed work", async ({ page }) => {
+  await preview(page, { status: { phase1_complete: false } });
+  let state = "running";
+  let fail = false;
+  let runId = "check-1";
+  const posts = [];
+  await page.route("**/api/phase1-supervisor**", async route => {
+    if (route.request().method() === "POST") {
+      posts.push(route.request().postDataJSON()); state = "stopping";
+    } else if (fail) return route.abort();
+    return route.fulfill({ json: { status: state, step_state: state === "stopping" ? "stopping" : "active", job_id: runId,
+      cycle: 1, max_cycles: 3, step_label: "Checking the Shop's ceiling height (page 22)", spend: { cost_usd: .03 },
+      recovery: state === "stopping" ? { action: null, label: "Restarting…" } : { action: "restart", label: "Restart this step" } } });
+  });
+  await page.clock.install();
+  await page.goto("/?preview=1#/job/job-1/drawings");
+  const check = page.locator('[data-stage="supervisor"]');
+  fail = true;
+  await page.clock.runFor(5000);
+  await expect(page.locator(".job-status")).toContainText("last confirmed progress");
+  await expect(check.getByRole("button", { name: "Restart this step" })).toBeVisible();
+  fail = false;
+  await check.getByRole("button", { name: "Restart this step" }).click();
+  await expect(check.getByRole("button", { name: "Restarting…" })).toBeDisabled();
+  expect(posts).toEqual([{ project_id: "job-1", action: "restart", expected_run_id: "check-1" }]);
+  runId = "check-2"; state = "running";
+  await page.clock.runFor(5000);
+  await expect(check.getByRole("button", { name: "Restart this step" })).toBeVisible();
+});
+
+test("empty-room results display unresolved model checks", async ({ page }) => {
+  await preview(page, { status: { stage: "phase1", phase1_complete: true }, phase1_report: {
+    supervisor_exceptions: [{ message: "The Shop's roof exposure remains unresolved." }],
+  } });
+  await page.goto("/?preview=1#/job/job-1/rooms/shop");
+  await expect(page.locator("[data-model-exceptions]")).toContainText("roof exposure remains unresolved");
+});
+
 test("a failed envelope step is named with its reason, and Try again resumes it", async ({ page }) => {
   await preview(page, { status: { stage: "drawings" } });
   const posts = [];
   await page.route("**/api/page-reading**", (route) =>
-    route.fulfill({ json: { status: "done", pages_read: 38, page_count: 38 } }),
+    route.fulfill({ json: { status: "done", step_state: "done", pages_read: 38, page_count: 38 } }),
   );
-  await page.route("**/api/drawing-tasks**", (route) => route.fulfill({ json: { status: "done", answered: 12 } }));
+  await page.route("**/api/drawing-tasks**", (route) => route.fulfill({ json: { status: "done", step_state: "done", answered: 12 } }));
   await page.route("**/api/skill-workflow**", async (route) => {
     if (route.request().method() === "POST") {
       posts.push(route.request().postDataJSON());
-      return route.fulfill({ json: { status: "running" } });
+      return route.fulfill({ json: { status: "running", step_state: "active" } });
     }
     return route.fulfill({
       json: {
-        status: "failed", recovery: { action: "resume", label: "Try again" },
+        status: "failed", step_state: "failed", recovery: { action: "resume", label: "Try again" },
         failed_steps: [{
           id: "ceiling_height_volume", label: "Ceiling heights", kind: "answer_rejected",
           reason: "the AI's answer didn't pass the checks (Each inference must be an object with a field name.)",
@@ -503,14 +575,14 @@ async function reviewFinished(page, calculations) {
   await preview(page, { status: { stage: "phase1", phase1_complete: false } });
   const seen = { gets: 0, posts: [] };
   await page.route("**/api/page-reading**", (route) =>
-    route.fulfill({ json: { status: "done", pages_read: 38, page_count: 38 } }),
+    route.fulfill({ json: { status: "done", step_state: "done", pages_read: 38, page_count: 38 } }),
   );
-  await page.route("**/api/drawing-tasks**", (route) => route.fulfill({ json: { status: "done", answered: 12 } }));
-  await page.route("**/api/skill-workflow**", (route) => route.fulfill({ json: { status: "needs_review" } }));
+  await page.route("**/api/drawing-tasks**", (route) => route.fulfill({ json: { status: "done", step_state: "done", answered: 12 } }));
+  await page.route("**/api/skill-workflow**", (route) => route.fulfill({ json: { status: "needs_review", step_state: "done" } }));
   await page.route("**/api/job-calculation**", (route) => {
     if (route.request().method() === "POST") {
       seen.posts.push(route.request().postDataJSON());
-      return route.fulfill({ json: { status: "queued", phase: "phase1_base_room" } });
+      return route.fulfill({ json: { status: "queued", step_state: "active", phase: "phase1_base_room" } });
     }
     const reply = calculations[Math.min(seen.gets, calculations.length - 1)];
     seen.gets += 1;
@@ -525,8 +597,8 @@ test("after the review finishes the page waits for the server's Phase 1 start an
   page,
 }) => {
   const seen = await reviewFinished(page, [
-    { status: "none", readiness: { ready: true } },
-    { status: "running", phase: "phase1_base_room", step_label: "Calculating the room load" },
+    { status: "none", step_state: "waiting", readiness: { ready: true } },
+    { status: "running", step_state: "active", phase: "phase1_base_room", step_label: "Calculating the room load" },
   ]);
   const calculation = page.locator('[data-stage="calculation"]');
   await expect(calculation).toHaveClass(/active/);
@@ -537,7 +609,7 @@ test("after the review finishes the page waits for the server's Phase 1 start an
 });
 
 test("Calculate now requires server readiness and an automatic startup failure", async ({ page }) => {
-  const seen = await reviewFinished(page, [{ status: "none", readiness: { ready: true }, offer_start: true }]);
+  const seen = await reviewFinished(page, [{ status: "none", step_state: "waiting", readiness: { ready: true }, offer_start: true }]);
   const calculation = page.locator('[data-stage="calculation"]');
   await expect(calculation.getByRole("button", { name: "Calculate now" })).toBeVisible();
   expect(seen.posts).toEqual([]);
@@ -548,15 +620,15 @@ test("Calculate now requires server readiness and an automatic startup failure",
 
 test("a blocked review never unlocks calculation after a minute while pages are reading", async ({ page }) => {
   await preview(page, { status: { phase1_complete: false } });
-  await page.route("**/api/page-reading**", route => route.fulfill({ json: { status: "running", read: 4, page_count: 38,
+  await page.route("**/api/page-reading**", route => route.fulfill({ json: { status: "running", step_state: "active", read: 4, page_count: 38,
     recovery: { action: "restart", label: "Restart this step" } } }));
-  await page.route("**/api/skill-workflow**", route => route.fulfill({ json: { status: "blocked",
+  await page.route("**/api/skill-workflow**", route => route.fulfill({ json: { status: "blocked", step_state: "failed",
     recovery: { action: "resume", label: "Check and resume", reason: "Waiting for reading the pages to finish." } } }));
-  await page.route("**/api/job-calculation**", route => route.fulfill({ json: { status: "none", offer_start: false,
+  await page.route("**/api/job-calculation**", route => route.fulfill({ json: { status: "none", step_state: "waiting", offer_start: false,
     readiness: { ready: false, reasons: ["Waiting for reading the pages to finish."] } } }));
-  await page.route("**/api/page-extraction**", route => route.fulfill({ json: { status: "none",
+  await page.route("**/api/page-extraction**", route => route.fulfill({ json: { status: "none", step_state: "waiting",
     recovery: { action: "resume", label: "Check and resume", reason: "Waiting for reading the pages to finish." } } }));
-  await page.route("**/api/drawing-tasks**", route => route.fulfill({ json: { status: "none",
+  await page.route("**/api/drawing-tasks**", route => route.fulfill({ json: { status: "none", step_state: "waiting",
     recovery: { action: "resume", label: "Check and resume", reason: "Waiting for reading the pages to finish." } } }));
   await page.clock.install();
   await page.goto("/?preview=1#/job/job-1/drawings");
@@ -579,13 +651,13 @@ test("restart stays disabled until the old worker exits and resumes with one req
       recovery: state === "stopping" ? { action: null, label: "Restarting…", reason: "Waiting for the current AI request to finish." }
         : { action: "restart", label: "Restart this step" } } });
   });
-  await page.route("**/api/page-extraction**", route => route.fulfill({ json: { status: "none",
+  await page.route("**/api/page-extraction**", route => route.fulfill({ json: { status: "none", step_state: "waiting",
     recovery: { action: "resume", label: "Check and resume", reason: "Waiting for reading the pages to finish." } } }));
-  await page.route("**/api/drawing-tasks**", route => route.fulfill({ json: { status: "none",
+  await page.route("**/api/drawing-tasks**", route => route.fulfill({ json: { status: "none", step_state: "waiting",
     recovery: { action: "resume", label: "Check and resume", reason: "Waiting for reading the pages to finish." } } }));
-  await page.route("**/api/skill-workflow**", route => route.fulfill({ json: { status: "not_started",
+  await page.route("**/api/skill-workflow**", route => route.fulfill({ json: { status: "not_started", step_state: "waiting",
     recovery: { action: "resume", label: "Check and resume", reason: "Waiting for reading the pages to finish." } } }));
-  await page.route("**/api/job-calculation**", route => route.fulfill({ json: { status: "none",
+  await page.route("**/api/job-calculation**", route => route.fulfill({ json: { status: "none", step_state: "waiting",
     readiness: { ready: false, reasons: ["Waiting for reading the pages to finish."] } } }));
   await page.clock.install();
   await page.goto("/?preview=1#/job/job-1/drawings");
@@ -607,7 +679,7 @@ test("a failed status refresh keeps confirmed controls and retries polling", asy
   await preview(page, { status: { phase1_complete: false } });
   let fail = false;
   await page.route("**/api/page-reading**", route => fail ? route.fulfill({ status: 503, json: { error: "Unavailable" } })
-    : route.fulfill({ json: { status: "running", read: 3, page_count: 38,
+    : route.fulfill({ json: { status: "running", step_state: "active", read: 3, page_count: 38,
       recovery: { action: "restart", label: "Restart this step" } } }));
   await page.clock.install();
   await page.goto("/?preview=1#/job/job-1/drawings");
@@ -625,7 +697,7 @@ test("a failed status refresh keeps confirmed controls and retries polling", asy
 test("an out-of-date Phase 1 result says it is redone after the review, not that Results has exceptions", async ({
   page,
 }) => {
-  await reviewFinished(page, [{ status: "done", phase: "phase1_base_room" }]);
+  await reviewFinished(page, [{ status: "done", step_state: "done", phase: "phase1_base_room" }]);
   const calculation = page.locator('[data-stage="calculation"]');
   await expect(calculation).toContainText("The empty-room load is recalculated when the drawing review finishes.");
   await expect(page.getByText("on Results")).toHaveCount(0);
@@ -639,11 +711,11 @@ test("a refused AI key stops page reading with a plain reason and Try again", as
   await page.route("**/api/page-reading**", async (route) => {
     if (route.request().method() === "POST") {
       posts.push(route.request().postDataJSON());
-      return route.fulfill({ json: { status: "queued" } });
+      return route.fulfill({ json: { status: "queued", step_state: "active" } });
     }
     return route.fulfill({
       json: {
-        status: "failed", recovery: { action: "resume", label: "Try again" },
+        status: "failed", step_state: "failed", recovery: { action: "resume", label: "Try again" },
         page_count: 73,
         problem:
           'None of 73 pages could be read (pages 1, 2, 3). First reason: The openrouter API returned HTTP 401: {"error":{"message":"API key expired.","code":401}} Retry to read them.',
@@ -694,11 +766,11 @@ test("Correct area saves through the existing override and recalculates Phase 1"
     if (route.request().method() === "POST") {
       calculated = route.request().postDataJSON();
       await route.fulfill({
-        json: { status: "done", phase: "phase1_base_room" },
+        json: { status: "done", step_state: "done", phase: "phase1_base_room" },
       });
     } else
       await route.fulfill({
-        json: { status: "done", phase: "phase1_base_room" },
+        json: { status: "done", step_state: "done", phase: "phase1_base_room" },
       });
   });
   await page.goto("/?preview=1#/job/job-1/rooms/shop");
@@ -728,7 +800,7 @@ test("ceiling height uses the existing override and wall edits use envelope clas
   await page.route("**/api/job-calculation", async (route) => {
     if (route.request().method() === "POST") calculationCount++;
     await route.fulfill({
-      json: { status: "done", phase: "phase1_base_room" },
+      json: { status: "done", step_state: "done", phase: "phase1_base_room" },
     });
   });
   await page.goto("/?preview=1#/job/job-1/rooms/shop");
@@ -779,7 +851,7 @@ test("an equipment card shows its schedule code, the printed quantity and how pl
   await page.route("**/api/page-extraction**", (route) =>
     route.fulfill({
       json: {
-        status: "done",
+        status: "done", step_state: "done",
         findings: [
           {
             id: "eq-1", status: "accepted", pages: [5, 19], evidence: "supported",
@@ -984,10 +1056,10 @@ test("New job is one large drop tile; a chosen PDF uploads, starts the server jo
   await page.route("**/api/new-job**", async (route) => {
     if (route.request().method() === "POST") {
       started = route.request().postDataJSON();
-      return route.fulfill({ json: { id: "new-job", state: "running" } });
+      return route.fulfill({ json: { id: "new-job", state: "running", step_state: "active" } });
     }
     return route.fulfill({
-      json: { id: "new-job", state: "running", analysed: false, drawings_ready: false,
+      json: { id: "new-job", state: "running", step_state: "active", analysed: false, drawings_ready: false,
               step_label: "Reading the PDF: page titles, drawing types and previews" },
     });
   });
@@ -1033,10 +1105,10 @@ test("a stopped PDF reading offers Try again, which restarts the server job", as
   await page.route("**/api/new-job**", async (route) => {
     if (route.request().method() === "POST") {
       posts.push(route.request().postDataJSON());
-      return route.fulfill({ json: { state: "running" } });
+      return route.fulfill({ json: { state: "running", step_state: "active" } });
     }
     return route.fulfill({
-      json: { id: "job-1", state: "failed", recovery: { action: "resume", label: "Try again" }, analysed: false, drawings_ready: false,
+      json: { id: "job-1", state: "failed", step_state: "failed", recovery: { action: "resume", label: "Try again" }, analysed: false, drawings_ready: false,
               error: "Reading the PDF stopped before it finished (the server was restarted). Start it again." },
     });
   });
@@ -1050,7 +1122,7 @@ test("a stopped PDF reading offers Try again, which restarts the server job", as
 
 test("failed preparation remains recoverable even when a drawing packet already exists", async ({ page }) => {
   await preview(page, { status: { phase1_complete: false } });
-  await page.route("**/api/new-job**", route => route.fulfill({ json: { state: "failed", drawings_ready: true,
+  await page.route("**/api/new-job**", route => route.fulfill({ json: { state: "failed", step_state: "failed", drawings_ready: true,
     recovery: { action: "resume", label: "Try again" }, error: "Preparing the checks stopped." } }));
   await page.goto("/?preview=1#/job/job-1/drawings");
   const preparation = page.locator("[data-preparation-stage]");
@@ -1061,7 +1133,7 @@ test("failed preparation remains recoverable even when a drawing packet already 
 test("a prepared job shows the drawing set step as done", async ({ page }) => {
   await preview(page, { status: { stage: "rooms" } });
   await page.route("**/api/new-job**", (route) =>
-    route.fulfill({ json: { id: "job-1", state: "done", analysed: true, drawings_ready: true, pages: 38 } }),
+    route.fulfill({ json: { id: "job-1", state: "done", step_state: "done", analysed: true, drawings_ready: true, pages: 38 } }),
   );
   await page.goto("/?preview=1#/job/job-1/drawings");
   await expect(page.locator(".job-stage.done", { hasText: "Prepare the drawing set" })).toContainText("38 pages ready.");
@@ -1194,7 +1266,7 @@ test("Phase 1 completion controls the Drawings calculation check and failure cop
   await page.route("**/api/skill-workflow**", (route) =>
     route.fulfill({
       json: {
-        status: "failed", recovery: { action: "resume", label: "Try again" },
+        status: "failed", step_state: "failed", recovery: { action: "resume", label: "Try again" },
         remediation: "Internal evidence tasks need operator exceptions",
       },
     }),
@@ -1202,9 +1274,9 @@ test("Phase 1 completion controls the Drawings calculation check and failure cop
   await page.reload();
   const envelope = page
     .locator(".job-stage")
-    .filter({ hasText: "Work out walls, roof, floor and windows" });
+    .filter({ hasText: "Review room names and site" });
   await expect(envelope).toContainText(
-    "Working out the walls, roof and floor stopped part-way. What it found so far is kept.",
+    "The room and site review stopped part-way. Its saved findings are kept.",
   );
   await expect(
     envelope.getByRole("button", { name: "Try again" }),
@@ -1232,7 +1304,7 @@ test("an operating load job that is running or already current never starts anot
     if (state === "running") {
       await page.route("**/api/job-calculation**", async (route) => {
         if (route.request().method() === "POST") posts++;
-        await route.fulfill({ json: { status: "running" } });
+        await route.fulfill({ json: { status: "running", step_state: "active" } });
       });
     }
     await page.goto(`/?preview=1#/job/${fixture.status.id}/operating`);

@@ -270,17 +270,27 @@ def resolve(building, vision=None, proposal=None, room_use=None, pack=None,
             lighting = _field(None, "unresolved", .0, "Lighting area or fixture evidence is unavailable.", evidence)
         fields["lighting_load_w"] = lighting
         fields["lighting_diversity"] = _field(_positive(profile.get("lighting_diversity")), "controlled_preliminary_profile", .3, "Controlled lighting diversity.", evidence)
-        equipment = _equipment_sources(sources)
+        catalogue_managed = (isinstance((proposal or {}).get("equipment_catalogue_coverage"), dict)
+                             or any(source.get("equipment_catalogue_managed") for source in sources if isinstance(source, dict)))
+        equipment = _equipment_sources([source for source in sources if source.get("equipment_catalogue_managed")] if catalogue_managed else sources)
         equipment_records = []
+        seen_equipment_ids = set()
         for item in equipment:
-            rated = _positive(item.get("rated_input_w", item.get("watts")))
+            equipment_id = item.get("equipment_id")
+            if equipment_id and equipment_id in seen_equipment_ids:
+                continue
+            if equipment_id:
+                seen_equipment_ids.add(equipment_id)
+            rated = _nonnegative(item.get("rated_input_w", item.get("watts")))
             qty = _positive(item.get("quantity")) or 1
             factor = _nonnegative(item.get("heat_to_space_factor"))
-            if rated and factor is not None and _has_citation(item):
+            if rated is not None and factor is not None and _has_citation(item):
                 equipment_records.append({"name": _text(item.get("name", item.get("model", "equipment"))), "quantity": qty,
                     "rated_input_w": rated, "heat_to_space_factor": factor,
-                    **({"latent_w": _positive(item.get("latent_w"))} if _positive(item.get("latent_w")) else {}),
-                    "diversity": _positive(item.get("diversity_factor")) or _positive(profile.get("equipment_diversity")),
+                    **({"latent_w": _nonnegative(item.get("latent_w"))} if _nonnegative(item.get("latent_w")) is not None else {}),
+                    "diversity": (_nonnegative(item.get("diversity_factor")) if item.get("equipment_schedule")
+                                  else _positive(item.get("diversity_factor")) or _positive(profile.get("equipment_diversity"))),
+                    **{key: deepcopy(item[key]) for key in ("equipment_schedule", "equipment_id", "catalogue_id", "catalogue_hash", "source") if key in item},
                     "origin": "direct_project_evidence", "confidence": .85, "evidence": _evidence(item),
                     "formula": "quantity × rated_input_w × heat_to_space_factor"})
         if not equipment_records and scope not in {"refrigeration_process", "unresolved_scope", "not_a_room"} and area and _positive(profile.get("equipment_w_m2")):
@@ -326,6 +336,7 @@ def resolve(building, vision=None, proposal=None, room_use=None, pack=None,
                   "remediation": "Provide cited occupancy, lighting, equipment heat-to-space, or schedule evidence." if status == "needs_review" else "",
                   "override": deepcopy(override) if override else None, "status": status, "source_fingerprints": deepcopy(source_fingerprints or {})}
         record["confidence_band"] = confidence_band(record["confidence_score"])
+        record["equipment_catalogue_managed"] = catalogue_managed
         record["record_fingerprint"] = fingerprint(record)
         records.append(record)
     present = {row["room_id"] for row in records}

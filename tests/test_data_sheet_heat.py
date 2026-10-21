@@ -45,7 +45,7 @@ class DataSheetHeatTests(unittest.TestCase):
             with patch.object(page_extraction_service, "rooms", return_value=["Kitchen"]):
                 for value, message in (({**item, "sensible_to_room_w": 1500}, "where the heat figure comes from"),
                                        ({**item, "latent_to_room_w": 900, "heat_reference": "sheet"}, "heat to the room \\(sensible\\)"),
-                                       ({**item, "sensible_to_room_w": 0, "heat_reference": "sheet"}, "above 0 W"),
+                                       ({**item, "sensible_to_room_w": -5, "heat_reference": "sheet"}, "above 0 W"),
                                        ({**item, "sensible_to_room_w": 1500, "latent_to_room_w": -1, "heat_reference": "sheet"}, "negative")):
                     with self.assertRaisesRegex(ValueError, message):
                         page_extraction_service.review(None, project, {**base, "value": value})
@@ -58,11 +58,16 @@ class DataSheetHeatTests(unittest.TestCase):
 
     def test_a_data_sheet_item_reaches_the_draft_with_its_moisture_heat_and_label(self):
         proposal = {"rooms": [{"label": "Kitchen", "room_id": "k"}]}
-        with tempfile.TemporaryDirectory() as folder, patch.object(page_extraction_service, "accepted", return_value=[OVEN]):
-            result = ai_preliminary_service._with_accepted_equipment({"root": Path(folder)}, proposal)
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / page_extraction_service.RESULT_FILE).write_text(json.dumps({"equipment_appliances": {
+                "run": "r1", "findings": [{"id": "oven", "value": {"name": "Combi oven", "code": "E06"}, "pages": [5]}]}}))
+            (root / page_extraction_service.DECISIONS_FILE).write_text(json.dumps({"equipment_appliances": {
+                "oven": {"status": "accepted", "run": "r1", "reviewer": "Sam", "value": OVEN}}}))
+            result = ai_preliminary_service._with_accepted_equipment({"root": root}, proposal)
         [row] = result["rooms"][0]["equipment"]
         self.assertEqual((row["rated_input_w"], row["heat_to_space_factor"], row["latent_w"]), (1500.0, 1.0, 900.0))
-        self.assertIn("Data sheet (Maker X combi 6-1/1 data sheet)", row["source"])
+        self.assertIn("Data sheet: Maker X combi 6-1/1 data sheet", row["source"])
 
         building = {"spaces": [{"name": "Kitchen", "level_name": "Ground", "area_m2": 30, "evidence": [{"page": 2, "excerpt": "KITCHEN"}]}]}
         room = {"kind": "room", "label": "Kitchen", "level_name": "Ground", "area_m2": 30, "preliminary_profile_id": "hospitality", "page": 2,
@@ -84,24 +89,27 @@ class DataSheetHeatTests(unittest.TestCase):
         self.assertGreater(with_moisture["latent_kw"], dry["latent_kw"])
         self.assertAlmostEqual(with_moisture["sensible_kw"], dry["sensible_kw"], places=3)
 
-    def test_results_list_kitchen_appliances_not_yet_counted_and_skip_data_sheet_ones(self):
+    def test_results_list_equipment_without_a_value_or_a_room(self):
+        # No typical values filled and no rooms known: the fryer and dishwasher have no value; the data-sheet oven has a
+        # value but no room. Neither is counted; the rooms keep their typical allowance. The griddle was rejected.
+        empty_sheet = {"hash": "t", "records": [], "patterns": {}, "waiting": [], "diagnostics": [], "error": ""}
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             (root / "page_extraction.json").write_text(json.dumps({"equipment_appliances": {"run": "r1", "findings": [
                 {"id": "a", "value": {"code": "E06", "name": "COMBI OVEN"}}, {"id": "b", "value": {"code": "E07", "name": "DEEP FRYER"}},
                 {"id": "c", "value": {"code": "E08", "name": "GRIDDLE"}}, {"id": "d", "value": {"code": "E09", "name": "DISHWASHER"}}]}}))
             (root / "page_extraction_decisions.json").write_text(json.dumps({"equipment_appliances": {
-                "a": {"status": "accepted", "run": "r1", "value": {**OVEN, "name": "COMBI OVEN"}},
+                "a": {"status": "accepted", "run": "r1", "reviewer": "Sam", "value": {**OVEN, "name": "COMBI OVEN"}},
                 "c": {"status": "rejected", "run": "r1", "value": None},
                 "d": {"status": "accepted", "run": "r1", "value": {"code": "E09", "name": "DISHWASHER", "rated_input_w": None}}}}))
-            with patch("backend.skill_workflow_service.get", return_value={}):
+            with patch("backend.skill_workflow_service.get", return_value={}), \
+                    patch("ai.equipment_catalogue.load_typical", return_value=empty_sheet):
                 items = result_status_service.gather(None, {"id": "j", "review_dir": str(root)})["items"]
-        kitchen = [row for row in items if row["topic"] == "Kitchen equipment"]
-        self.assertEqual(len(kitchen), 1)
-        self.assertEqual(kitchen[0]["kind"], "to_find")
-        self.assertEqual(kitchen[0]["detail"], "E07 DEEP FRYER, E09 DISHWASHER")   # the oven is counted, the griddle rejected
-        self.assertFalse(any("COMBI OVEN" in row.get("detail", "") for row in items))
-
+        no_value = next(row for row in items if row["topic"] == "Equipment with no value")
+        self.assertEqual((no_value["kind"], no_value["detail"]), ("to_find", "E07 DEEP FRYER, E09 DISHWASHER"))
+        no_room = next(row for row in items if row["topic"] == "Equipment with no room")
+        self.assertEqual(no_room["detail"], "E06 COMBI OVEN")
+        self.assertFalse(any("GRIDDLE" in row.get("detail", "") for row in items))
 
 if __name__ == "__main__":
     unittest.main()

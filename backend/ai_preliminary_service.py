@@ -125,7 +125,7 @@ def _file_fingerprint(path, default, use_saved=False):
 
 def _sources(paths):
     run = _read(paths["run"], {})
-    proposal = _proposal_for_resolution(paths)
+    proposal = _proposal_for_resolution(paths, equipment=False)
     resolution = _read(paths["value_resolution"], value_resolver.empty_value_resolution())
     state = {
         key: resolution.get(key) for key in ("research_consent", "source_pack_version", "research_jobs", "project_sources", "overrides")
@@ -275,7 +275,7 @@ def _resolution(paths):
 
 
 def _room_use_sources(paths):
-    proposal = _proposal_for_resolution(paths)
+    proposal = _proposal_for_resolution(paths, equipment=False)
     return {
         "building_evidence": ai_preliminary.fingerprint(_read(paths["building"], {})),
         "vision_response": ai_preliminary.fingerprint(_read(paths["vision"], {})),
@@ -285,7 +285,7 @@ def _room_use_sources(paths):
 
 def _resolve_room_uses(paths, persist=False):
     existing = _read(paths["room_use"], room_use_resolution.empty_room_use_resolution())
-    proposal = _proposal_for_resolution(paths)
+    proposal = _proposal_for_resolution(paths, equipment=False)
     artifact = room_use_resolution.resolve(
         _read(paths["building"], {}), _read(paths["vision"], {}),
         proposal,
@@ -302,7 +302,7 @@ def _resolve_room_uses(paths, persist=False):
 
 
 def _ceiling_sources(paths):
-    proposal = _proposal_for_resolution(paths)
+    proposal = _proposal_for_resolution(paths, equipment=False)
     return {
         "building_evidence": ai_preliminary.fingerprint(_read(paths["building"], {})),
         "vision_response": ai_preliminary.fingerprint(_read(paths["vision"], {})),
@@ -324,7 +324,7 @@ def _internal_gains_sources(paths):
 
 
 def _airflow_sources(paths):
-    proposal = _proposal_for_resolution(paths)
+    proposal = _proposal_for_resolution(paths, equipment=False)
     site_weather_path = paths.get("site_design_weather") or paths.get("site_weather")
     pack = ai_preliminary.load_pack()
     return {
@@ -342,7 +342,7 @@ def _airflow_sources(paths):
 def _resolve_ceiling_volumes(paths, persist=False):
     from backend import job_service
     existing = _read(paths["ceiling_volume"], ceiling_volume_resolution.empty_ceiling_volume_resolution())
-    proposal = _proposal_for_resolution(paths)
+    proposal = _proposal_for_resolution(paths, equipment=False)
     # Heights typed in the job workspace enter as contractor overrides (they beat drawing and default heights).
     artifact = job_service.drop_typed_height_stubs(ceiling_volume_resolution.resolve(
         _read(paths["building"], {}), _read(paths["vision"], {}), proposal if isinstance(proposal, dict) else {"rooms": []},
@@ -383,7 +383,7 @@ def _resolve_airflow(paths, persist=False):
     room_use = room_use_resolution.validate(_read(paths["room_use"], room_use_resolution.empty_room_use_resolution()))
     ceiling = ceiling_volume_resolution.validate(_read(paths["ceiling_volume"], ceiling_volume_resolution.empty_ceiling_volume_resolution()))
     artifact = airflow_resolution.resolve(
-        _read(paths["building"], {}), _read(paths["vision"], {}), _proposal_for_resolution(paths), room_use,
+        _read(paths["building"], {}), _read(paths["vision"], {}), _proposal_for_resolution(paths, equipment=False), room_use,
         ceiling, ai_preliminary.load_pack(), _airflow_sources(paths), existing,
     )
     if persist:
@@ -397,40 +397,62 @@ def _resolve_airflow(paths, persist=False):
 
 
 def _proposal_for_resolution(paths, equipment=True):
-    """The room proposal the resolvers read: room-use findings, then accepted equipment from the PDF review."""
+    """The room proposal the resolvers read: room-use findings, then each valued equipment item. Only internal gains
+    read the equipment; room uses, ceiling heights and airflow take the proposal without it (equipment=False), so an
+    equipment or workbook change doesn't make them, or Phase 1 through them, out of date."""
     from backend import need_answers_service
-    proposal = need_answers_service.apply_hours(paths["root"], _proposal_with_skill_findings(paths))
+    proposal = _with_printed_ceiling_heights(paths, need_answers_service.apply_hours(paths["root"], _proposal_with_skill_findings(paths)))
     return _with_accepted_equipment(paths, proposal) if equipment else proposal
 
 
-def _with_accepted_equipment(paths, proposal):
-    """Add each accepted pass-2 equipment item to its room, as cited equipment the internal-gains resolver uses.
-
-    Only items accepted on the current reading, assigned to a room, with a rated input and a heat-to-room
-    factor, or the heat to the room from the data sheet, are added. A data-sheet item enters as its sensible heat
-    (factor 1) with its moisture heat. A room with any such item uses its listed equipment instead of the
-    area-based allowance (never below its typical level).
-    """
-    from ai import equipment_heat
-    from backend import page_extraction_service
-    items = page_extraction_service.accepted({"review_dir": str(paths["root"])}, "equipment_appliances")
-    if not items:
+def _with_printed_ceiling_heights(paths, proposal):
+    """Each room's ceiling height as printed on the drawings (autonomous_tasks_service P7: the ceiling plan's label,
+    else an elevation's or section's), with the label quoted. The ceiling resolver takes it over the preliminary
+    fallback; a typed height still wins."""
+    from backend import autonomous_tasks_service
+    printed = autonomous_tasks_service.drawing_ceiling_heights(paths["root"])
+    if not printed:
         return proposal
-    by_label = {str(row.get("label", "")).strip().casefold(): row for row in proposal.get("rooms", [])
-                if isinstance(row, dict) and row.get("label")}
-    for item in items:
-        room = by_label.get(str(item.get("room") or "").strip().casefold())
-        if room is None or equipment_heat.heat_w(item) is None:
+    for room in proposal.get("rooms", []):
+        found = printed.get(str(room.get("label", "")).strip().casefold()) if isinstance(room, dict) else None
+        if not found:
             continue
-        sheet = equipment_heat.from_data_sheet(item)
+        where = "ceiling plan" if found.get("kind") == "ceiling_plan" else "elevation or section"
+        room.update({"ceiling_height_mm": found["height_mm"], "ceiling_scope": "room", "ceiling_confidence": .85,
+                     "ceiling_rationale": f"Printed on the {where}, page {found.get('page')}: {', '.join(found.get('labels', []))}."})
+        room["evidence"] = [*(room.get("evidence") or []),
+                            {"page": found.get("page"), "excerpt": ", ".join(found.get("labels", []))}]
+    return proposal
+
+
+def _with_accepted_equipment(paths, proposal):
+    """Every valued equipment item goes into its room, labelled with where its value came from
+    (equipment_catalogue_service: data sheet, matched model, typical or generic value). Items with no value or no
+    room are listed, not counted; the room's typical equipment allowance stays as a floor (ai.ai_preliminary)."""
+    from backend import equipment_catalogue_service
+    names = [row["label"] for row in proposal.get("rooms", []) if row.get("label")]
+    resolution = equipment_catalogue_service.resolve({"review_dir": str(paths["root"])}, names)
+    by_label = {row.get("label"): row for row in proposal.get("rooms", [])}
+    for room in by_label.values():
+        room["equipment_catalogue_managed"] = True
+        # The catalogue resolution owns drawing equipment. Keep separately entered project equipment.
+        room["equipment"] = [item for item in room.get("equipment", [])
+                             if item.get("origin") == "contractor_override"]
+    for item in resolution["records"]:
+        room = by_label.get(item.get("room"))
+        if room is None or item["status"] not in equipment_catalogue_service.COUNTED:
+            continue
         room.setdefault("equipment", []).append({
-            "name": item.get("name"), "quantity": item.get("quantity") or 1,
-            "rated_input_w": item["sensible_to_room_w"] if sheet else item["rated_input_w"],
-            "heat_to_space_factor": 1.0 if sheet else item["heat_to_space_factor"],
-            **({"latent_w": item.get("latent_to_room_w") or 0} if sheet else {}),
-            "source": (f"Data sheet ({item.get('heat_reference')}), entered by the operator" if sheet
-                       else "PDF review (accepted by the operator)"),
-            "evidence": [{"page": page, "excerpt": f"{item.get('code') or ''} {item.get('name')}".strip()} for page in item.get("pages", [])]})
+            "name": item["name"], "quantity": item["quantity"], "equipment_id": item["id"],
+            "rated_input_w": item["sensible_w"], "heat_to_space_factor": 1.0, "latent_w": item["latent_w"],
+            **({"equipment_schedule": item["schedule"]} if item.get("schedule") else {}),
+            **({"diversity_factor": item["diversity_factor"]} if item.get("diversity_factor") is not None else {}),
+            "catalogue_hash": item["catalogue_hash"],
+            "catalogue_id": item.get("catalogue_id") or item.get("typical_id"), "origin": item["origin"],
+            "source": f"{item['label']}: {item.get('source') or ''}".rstrip(": "),
+            "evidence": [{"page": page, "excerpt": item["name"], "reference": item.get("source") or item["label"]}
+                         for page in item["pages"]]})
+    proposal["equipment_catalogue_coverage"] = resolution
     return proposal
 
 
@@ -1831,6 +1853,7 @@ def _workspace_report(report):
     return {
         "status": report.get("status", "not_calculated"),
         "report_type": report.get("report_type", ""),
+        "phase1_input_fingerprint": report.get("phase1_input_fingerprint"),
         "calculation_phase": report.get("calculation_phase"),
         "blocked_reasons": [str(item) for item in (report.get("blocked_reasons", []) or [])[:5]],
         "label": report.get("label", ""),
@@ -1854,7 +1877,10 @@ def _workspace_report(report):
                                               for item in report.get("refrigeration_process_exclusions", [])
                                               if isinstance(item, dict)],
         "confirmed_rooms": [{key: row.get(key) for key in confirmed_fields} for row in confirmed if isinstance(row, dict)],
+        "equipment_coverage": report.get("equipment_coverage", {}),
         "phase1_coverage": report.get("phase1_coverage") if isinstance(report.get("phase1_coverage"), dict) else {},
+        "supervisor_exceptions": report.get("supervisor_exceptions", []),
+        "supervisor_spend": report.get("supervisor_spend", {}),
         "room_scope_confirmation": {key: confirmation.get(key) for key in ("reviewer", "confirmed_at")
                                      if isinstance(confirmation, dict) and confirmation.get(key)},
     }
@@ -1892,8 +1918,19 @@ def _response(web, project, response_view="full", check_freshness=None):
     report = _read(paths["report"], {})
     base_report = _read(paths["base_report"], {})
     stale_reasons = _stale_reasons(paths, input_set) if check_freshness else []
-    base_report_stale = bool(base_report and (stale_reasons or
-                                base_report.get("preliminary_input_set_fingerprint") != input_set.get("input_fingerprint")))
+    from backend import equipment_catalogue_service
+    equipment_rooms = [r.get("label") for r in _proposal_for_resolution(paths, equipment=False).get("rooms", []) if r.get("label")]
+    equipment_coverage = equipment_catalogue_service.resolve(project, equipment_rooms)
+    equipment_stale = bool(report and report.get("equipment_source_hash") != equipment_coverage["source_hash"])
+    phase1_stale = [reason for reason in stale_reasons if reason not in {
+        "internal_gains_resolution", "airflow_resolution", "ahu_resolution", "plant_resolution"}]
+    base_report_stale = bool(base_report and (phase1_stale or (
+        base_report.get("phase1_input_fingerprint") != _phase1_input_fingerprint(input_set)
+        if base_report.get("phase1_input_fingerprint") else
+        base_report.get("preliminary_input_set_fingerprint") != input_set.get("input_fingerprint"))))
+    checks = _read(paths["root"] / "phase1_supervisor_job.json", {})
+    if base_report and checks.get("status") == "done" and checks.get("result_fingerprint"):
+        base_report_stale = base_report_stale or base_report.get("supervisor_fingerprint") != checks["result_fingerprint"]
     run = _read(paths["run"], {})
     value_resolution = _resolution(paths)
     link_names = ({"codex_handoff", "codex_response"} if response_view == "workspace" else
@@ -1909,6 +1946,8 @@ def _response(web, project, response_view="full", check_freshness=None):
             "phase1_base_room_load_report": _workspace_report(base_report),
             "phase1_base_room_load_report_stale": base_report_stale,
             "phase2_room_inputs": _phase2_room_inputs(input_set),
+            "equipment_coverage": equipment_coverage,
+            "hourly_ai_preliminary_load_report_stale": bool(stale_reasons or equipment_stale),
             "status": ("stale" if stale_reasons else ("current" if input_set else "not_calculated"))
                       if check_freshness else "freshness_pending",
             "freshness_pending": not check_freshness,
@@ -1923,6 +1962,8 @@ def _response(web, project, response_view="full", check_freshness=None):
         "model": _read(paths["model"], {}), "input_set": input_set,
         "hourly_ai_preliminary_load_report": report,
         "phase1_base_room_load_report": base_report,
+        "equipment_coverage": equipment_coverage,
+        "hourly_ai_preliminary_load_report_stale": bool(stale_reasons or equipment_stale),
         "phase1_base_room_load_report_stale": base_report_stale,
         "status": "stale" if stale_reasons else ("current" if input_set else "not_calculated"),
         "stale_reasons": stale_reasons,
@@ -2055,6 +2096,22 @@ def _apply_codex_response(web, project):
     return proposal
 
 
+def _phase1_input_fingerprint(input_set):
+    """Envelope-only dependencies; changing equipment cannot stale an empty-room result."""
+    if not input_set.get("material", {}).get("hourly_load_model"):
+        return None
+    projected = ai_preliminary._base_room_load_input_set(input_set)
+    material = projected["material"]
+    return ai_preliminary.content_fingerprint({
+        "rooms": material["hourly_load_model"].get("rooms", []),
+        "weather": material.get("design_day_scenarios", {}),
+        "floor_basis": projected.get("phase1_floor_basis", {}),
+        "assumptions": projected.get("phase1_assumptions", []),
+        "policy": material.get("preliminary_policy", {}),
+        "safety": projected.get("safety_factor_resolution", {}),
+    })
+
+
 def _assemble(web, project, source="manual_placeholder"):
     paths = _paths(project)
     building, vision = _read(paths["building"], {}), _read(paths["vision"], {})
@@ -2115,6 +2172,7 @@ def _assemble(web, project, source="manual_placeholder"):
     input_set["safety_factor_resolution"] = safety_artifact
     input_set["run_source"] = source
     input_set["phase1_floor_basis"] = _floor_basis(_read(paths["root"] / "ai_input.json", {}))
+    input_set["phase1_input_fingerprint"] = _phase1_input_fingerprint(input_set)
     _write(paths["sets"] / f"{input_set['input_fingerprint']}.json", input_set)
     _write(paths["current_set"], input_set)
     model = {
@@ -2145,12 +2203,18 @@ def _assemble(web, project, source="manual_placeholder"):
     return input_set
 
 
-def _calculate(web, project, scope="full"):
+def _calculate(web, project, scope="full", persist=True):
     paths = _paths(project)
     input_set = _read(paths["current_set"], {})
     if not input_set:
         raise ValueError("Assemble an AI preliminary model before calculating.")
     stale = _stale_reasons(paths, input_set)
+    if scope != "phase1_base_room":
+        proposal = _proposal_for_resolution(paths)
+        coverage = proposal["equipment_catalogue_coverage"]
+        saved_coverage = input_set.get("proposal", {}).get("equipment_catalogue_coverage", {})
+        if saved_coverage.get("source_hash") != coverage["source_hash"]:
+            stale.append("equipment catalogue or applicability evidence")
     if stale:
         raise ValueError("AI preliminary inputs are stale because " + ", ".join(stale) + " changed. Assemble again before calculating.")
     required = {
@@ -2197,9 +2261,24 @@ def _calculate(web, project, scope="full"):
     policy_artifact = _read(paths["safety_factor_resolution"], safety_factor_resolution.empty_safety_factor_resolution())
     policy = safety_factor_resolution.policy_for(policy_artifact, "cooling", preliminary=True)
     report = ai_preliminary.calculate(confirmed_set, safety_factor_policy=policy, scope=scope)
+    if scope != "phase1_base_room":
+        report["equipment_source_hash"] = coverage["source_hash"]
+        report["equipment_catalogue_hash"] = coverage["catalogue_hash"]
+        report["equipment_coverage"] = coverage
+        report["equipment_coverage_incomplete"] = not coverage["coverage_complete"]
+        summary = coverage["summary"]
+        estimated = summary["typical"] + summary["generic"]
+        if estimated:
+            report["label"] = (str(report.get("label", "Draft room load"))
+                               + f" — {summary['typical']} typical and {summary['generic']} generic equipment values")
+        report.setdefault("unresolved_room_inputs", []).extend(
+            {"room_name": row.get("room"), "component_type": "equipment", "component": row["name"],
+             "component_id": row["id"], "reason": row["note"]}
+            for row in coverage["records"] if row["status"] in {"no_value", "no_room"})
     report["confirmed_rooms"] = confirmed_rooms
     report["room_scope_confirmation"] = confirmation_summary
     if scope == "phase1_base_room":
+        report["phase1_input_fingerprint"] = _phase1_input_fingerprint(input_set)
         _phase1_coverage(report, candidates, confirmed_set)
     # Provenance is attached at render time; it does not change any hourly
     # load value or reviewed artifact.
@@ -2210,7 +2289,18 @@ def _calculate(web, project, scope="full"):
         report["provenance"] = shared_resolution.build_report_provenance(report, register)
     except (OSError, TypeError, ValueError):
         report["provenance"] = {"schema_version": 1, "register_fingerprint": "", "by_component_id": {}, "governing_components": []}
-    _write(paths["base_report"] if scope == "phase1_base_room" else paths["report"], report)
+    if scope == "phase1_base_room":
+        from backend.job_runner import read_json
+        saved_checks = read_json(paths["root"] / "phase1_supervisor_job.json")
+        report["supervisor_exceptions"] = [{key: row.get(key) for key in ("message", "room", "pages", "attempts")}
+                                            for row in saved_checks.get("exceptions", [])]
+        report["supervisor_spend"] = saved_checks.get("spend", {})
+        report["supervisor_fingerprint"] = saved_checks.get("result_fingerprint", "")
+        if report["supervisor_exceptions"]:
+            report.setdefault("warnings", []).extend(row["message"] for row in report["supervisor_exceptions"])
+            report.setdefault("phase1_coverage", {})["complete"] = False
+    if persist:
+        _write(paths["base_report"] if scope == "phase1_base_room" else paths["report"], report)
     return report
 
 

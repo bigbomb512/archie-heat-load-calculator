@@ -23,6 +23,8 @@ TASKS = {
     "S1_printed_areas": {"id": "scanned_printed_room_areas", "inputs": ["scanned_plan_tiles", "raster_room_outlines"], "budget_chars": 3000, "media": "image", "prompt_builder": "scan_reading.area_prompt", "reply_validator": "scan_reading.validate_area_reply", "apply_function": "_apply_s1_areas", "fallback": None},
     "S3_title_transcription": {"id": "scanned_title_transcription", "inputs": ["scanned_title_block"], "budget_chars": 1000, "media": "image", "prompt_builder": "scan_reading.transcription_prompt", "reply_validator": "scan_reading.validate_transcription", "apply_function": "_apply_s3_transcription", "fallback": None},
     "P3_boundaries": {"id": "boundary_classification", "inputs": ["current_room_trace", "boundary_evidence"], "budget_chars": 1500, "media": "image", "prompt_builder": "build_boundary_packets", "reply_validator": "validate_boundary_reply", "apply_function": "_apply_p3", "fallback": "tenancy_boundary"},
+    "P7_ceiling_heights": {"id": "ceiling_heights", "inputs": ["ceiling_plan_or_elevation", "printed_height_labels", "room_names"], "budget_chars": 2000, "media": "image", "prompt_builder": "_p7_packets", "reply_validator": "validate_ceiling_height_reply", "apply_function": "_apply_p7", "fallback": "preliminary_ceiling_height"},
+    "P4_storefront_wall": {"id": "storefront_wall", "inputs": ["numbered_outside_walls", "storefront_elevation"], "budget_chars": 1500, "media": "image", "prompt_builder": "_storefront_runs", "reply_validator": "validate_storefront_wall_reply", "apply_function": "_apply_p4_wall", "fallback": None},
     "P4_openings": {"id": "storefront_openings", "inputs": ["storefront_elevation", "current_room_trace"], "budget_chars": 2000, "media": "image", "prompt_builder": "build_opening_packets", "reply_validator": "validate_opening_reply", "apply_function": "_apply_p4", "fallback": "opening_dimensions"},
     "P1_site": {"id": "site_identification", "inputs": ["site_location_resolution.infer_pdf_context"],
                 "budget_chars": 4000, "media": "text", "prompt_builder": "build_site_packet",
@@ -245,8 +247,9 @@ def validate_boundary_reply(packet, reply):
         if boundary != "unknown" and index not in shared_question_runs and not evidence:
             raise ValueError(f"Run {index + 1} needs quoted evidence for a non-unknown classification.")
         storefront_index = packet.get("storefront_run_index", packet.get("storefront_edge_index"))
-        if index == storefront_index and boundary in {"adjacent_tenancy", "internal"}:
-            raise ValueError("The run matching the storefront elevation width cannot be internal or adjacent_tenancy.")
+        if (index == storefront_index or index in packet.get("storefront_run_indices", [])) and boundary in {"adjacent_tenancy", "internal"}:
+            raise ValueError(f"Run {index + 1} is the storefront wall (it matches the storefront elevation), so it "
+                             "can't be internal or adjacent_tenancy.")
         result.append({"index": index, "boundary": boundary, "evidence": evidence[:300]})
         seen.add(index)
     if seen != set(expected):
@@ -263,6 +266,142 @@ def storefront_width_matches(total_mm, span_mm):
     return (math.isfinite(total_mm) and math.isfinite(span_mm) and span_mm > 0
             and total_mm > 0 and (0 <= total_mm - span_mm <= 600
                                  or abs(total_mm - span_mm) / span_mm <= .02))
+
+
+# Printed ceiling heights. Ceiling plans: "CH:2600MM", "C.H. 2700", "CLG HT 2400", "CEILING 3000"; elevations and
+# sections: "2600AFFL", "2700 MM AFFL". Rotated labels come out of the text layer backwards ("MM0062:HC").
+_CEILING_LABEL = re.compile(r"^\s*(?:C\.?\s?H\.?|CLG\.?(?:\s*(?:HT|HEIGHT))?|CEILING(?:\s*(?:HT|HEIGHT))?)\s*[:=@\-]?\s*(\d{4})\s*(?:MM)?\s*$", re.I)
+# An open ceiling: "U/S OF SLAB 3750MM", "U/S SOFFIT 3600".
+_SOFFIT_LABEL = re.compile(r"^\s*U\s*/\s*S\.?\s*(?:OF\s+)?(?:SLAB|SOFFIT|ROOF|DECK)\s*[:=@\-]?\s*(\d{4})\s*(?:MM)?\s*$", re.I)
+_LEVEL_LABEL = re.compile(r"^\s*(\d{4})\s*(?:MM)?\s*(?:AFFL|A\.F\.F\.L\.?|ABOVE\s+FFL)\s*$", re.I)
+CEILING_HEIGHT_RANGE_MM = (1800, 8000)
+
+
+def height_labels(items, kind):
+    """The printed height labels on a page, from its text layer: [{"id": "H1", "height_mm", "text", "center", "box"}].
+    The height is read from the printed text here, never typed by the AI (it only says which label is which room's)."""
+    patterns = (_CEILING_LABEL, _SOFFIT_LABEL) if kind == "ceiling_plan" else (_LEVEL_LABEL,)
+    found, seen = [], set()
+    for item in [*(items or []), *_joined_words(items)]:
+        text = str(item.get("text", "") if isinstance(item, dict) else item)
+        for candidate in (text, text[::-1]):
+            match = next((m for m in (pattern.match(candidate) for pattern in patterns) if m), None)
+            if not match:
+                continue
+            height = int(match.group(1))
+            box = item.get("bbox") if isinstance(item, dict) else None
+            center = [round((box[0] + box[2]) / 2, 1), round((box[1] + box[3]) / 2, 1)] if isinstance(box, list) and len(box) == 4 else None
+            key = (height, tuple(round(value / 5) for value in center) if center else text)
+            if CEILING_HEIGHT_RANGE_MM[0] <= height <= CEILING_HEIGHT_RANGE_MM[1] and key not in seen:
+                seen.add(key)
+                found.append({"id": f"H{len(found) + 1}", "height_mm": height, "text": candidate.strip(), "center": center,
+                              **({"box": [round(value, 1) for value in box]} if center else {})})
+            break
+    return found
+
+
+def _joined_words(items, max_gap_pt=8.0):
+    """Words printed on one line joined into phrases ("U/S" "SLAB" "3750MM" -> "U/S SLAB 3750MM"): the text layer
+    often stores a label's words separately. Only horizontal words with boxes are joined."""
+    words = sorted((item for item in items or [] if isinstance(item, dict) and isinstance(item.get("bbox"), list)
+                    and len(item["bbox"]) == 4 and item.get("orientation", "horizontal") == "horizontal"),
+                   key=lambda item: (round(item["bbox"][1]), item["bbox"][0]))
+    phrases, current = [], []
+    for word in words:
+        if current:
+            last = current[-1]["bbox"]
+            box = word["bbox"]
+            if abs(box[1] - last[1]) <= 1.5 and 0 <= box[0] - last[2] <= max_gap_pt:
+                current.append(word)
+                continue
+            if len(current) > 1:
+                phrases.append(current)
+        current = [word]
+    if len(current) > 1:
+        phrases.append(current)
+    return [{"text": " ".join(str(word.get("text", "")) for word in phrase),
+             "bbox": [min(w["bbox"][0] for w in phrase), min(w["bbox"][1] for w in phrase),
+                      max(w["bbox"][2] for w in phrase), max(w["bbox"][3] for w in phrase)]} for phrase in phrases]
+
+
+def validate_ceiling_height_reply(packet, reply):
+    """Each room: the printed label(s) of its ceiling, or not shown on this sheet with the reason. Heights come from
+    the labels; a room with two ceiling heights lists both with the share of its floor under each."""
+    value = parse_json_reply(reply)
+    rows = value.get("rooms")
+    if not isinstance(rows, list):
+        raise ValueError("Return a rooms list.")
+    labels = {row["id"]: row for row in packet["labels"]}
+    wanted = {name.casefold(): name for name in packet["rooms"]}
+    heights, not_shown = {}, {}
+    for row in rows:
+        name = wanted.get(str(row.get("room", "")).casefold()) if isinstance(row, dict) else None
+        if not name:
+            raise ValueError(f"Answer for each of these rooms, by name: {sorted(wanted.values())}.")
+        ids = row.get("label_ids") or []
+        if not isinstance(ids, list) or any(item not in labels for item in ids):
+            raise ValueError(f"label_ids must be marked labels on the image: {sorted(labels)}.")
+        if not ids:
+            reason = " ".join(str(row.get("not_shown") or "").split())
+            if len(reason) < 8:
+                raise ValueError(f"{name}: give the label of its ceiling, or say why this sheet doesn't show it.")
+            not_shown[name] = reason
+            continue
+        shares = row.get("shares") or [1 / len(ids)] * len(ids)
+        if (not isinstance(shares, list) or len(shares) != len(ids)
+                or any(type(share) not in (int, float) or share <= 0 for share in shares) or abs(sum(shares) - 1) > .02):
+            raise ValueError(f"{name}: shares must give the part of the floor under each label and add up to 1.")
+        if len(ids) > 1 and not row.get("shares") and len({labels[item]["height_mm"] for item in ids}) > 1:
+            raise ValueError(f"{name} has labels of different heights: give the share of its floor under each.")
+        heights[name] = {"height_mm": round(sum(labels[item]["height_mm"] * share for item, share in zip(ids, shares))),
+                         "labels": [labels[item]["text"] for item in ids], "shares": shares,
+                         "evidence": " ".join(str(row.get("evidence") or "").split())[:200]}
+    missing = sorted(set(wanted.values()) - set(heights) - set(not_shown))
+    if missing:
+        raise ValueError(f"Answer for {', '.join(missing)} too: its label, or why this sheet doesn't show it.")
+    return {"heights": heights, "not_shown": not_shown}
+
+
+def validate_storefront_wall_reply(packet, reply):
+    """Which numbered outside wall(s) each storefront elevation shows. A shopfront elevation always shows at least one
+    (user decision 2026-10-20: the AI always places the storefront); an overall width it reads must match the walls."""
+    value = parse_json_reply(reply)
+    rows = value.get("elevations")
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("Say which numbered outside wall each storefront elevation shows.")
+    spans = {int(number): float(span) for number, span in packet["run_spans_m"].items()}
+    titles = {int(page): str(title) for page, title in packet["elevation_titles"].items()}
+    result = {}
+    for row in rows:
+        if not isinstance(row, dict) or row.get("page") not in titles:
+            raise ValueError(f"Each answer needs the page of one of the elevations: {sorted(titles)}.")
+        numbers, evidence = row.get("run_numbers"), " ".join(str(row.get("evidence") or "").split())
+        if not isinstance(numbers, list) or any(type(n) is not int or n not in spans for n in numbers):
+            raise ValueError(f"run_numbers must list the numbered outside walls the elevation shows: {sorted(spans)}.")
+        if not numbers and re.search(r"\b(?:shopfront|storefront)\b", titles[row["page"]], re.I) and not packet.get("allow_none"):
+            raise ValueError(f"Page {row['page']} is the storefront elevation: it shows at least one of the numbered walls "
+                             "(look for the entry doors and glazing on the plan, and the street or mall it faces).")
+        if len(evidence) < 10:
+            raise ValueError("Give the drawing evidence for each choice (doors, glazing, street or mall, gridlines, width).")
+        width = row.get("overall_width_mm")
+        if width is not None:
+            if type(width) not in (int, float) or not math.isfinite(width) or width <= 0:
+                raise ValueError("overall_width_mm must be a positive number, or null when it isn't printed.")
+            total = sum(spans[n] for n in numbers) * 1000
+            if numbers and not storefront_width_matches(float(width), total):
+                raise ValueError(f"The elevation's overall width ({width:g} mm) doesn't match wall(s) {numbers} "
+                                 f"({total / 1000:.2f} m). Check which walls it shows: a front split by a setback or a "
+                                 "column can be more than one numbered wall.")
+        faces = row.get("faces")
+        if numbers and faces not in {"street", "mall"}:
+            raise ValueError(f"Page {row['page']}: say whether the storefront faces a street (outside) or the inside of "
+                             "a shopping centre (mall).")
+        result[row["page"]] = {"run_indices": sorted({n - 1 for n in numbers}), "faces": faces if numbers else None,
+                               "overall_width_mm": width, "evidence": evidence}
+    missing = sorted(set(titles) - set(result))
+    if missing:
+        raise ValueError(f"Say which wall elevation page(s) {missing} show.")
+    return {"elevations": result}
 
 
 def validate_opening_reply(packet, reply):

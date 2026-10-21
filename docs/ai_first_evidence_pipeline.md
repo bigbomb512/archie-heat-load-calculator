@@ -332,11 +332,11 @@ provider cost, input limits and reviewability all scale with prompt size.
   sections in the remediation. Evidence is never silently dropped to fit.
 - Each attempt archive and run manifest row records the prompt size, budget,
   status, and largest sections (`prompt_budget`).
-- The skill workflow accepts `scope`: `all` (default) or `rooms_only`. The
-  rooms-only scope runs page identity, revision scope, page relationships,
-  room identity and use, room boundaries and areas, and ceiling height and
-  volume; other tasks are recorded as `not_in_scope`. Test mode exposes it as
-  the `codex_rooms_only` scenario.
+- The skill workflow accepts `scope`: `phase1_envelope` (the walls, roof, floor
+  and window review a job runs before Phase 1) or `pdf_review` (the default: the
+  "What we need to find" list and what it depends on). Other tasks are recorded
+  as `not_in_scope`. The `all`, `full_review` and `rooms_only` scopes and the
+  local test workspace were removed on 2026-10-19.
 
 On the archived Butcher Buffet Codex run, these rules reduced the 24 prompts
 from 5,565,061 to 893,718 characters; the largest task fell from 3,984,817 to

@@ -12,7 +12,6 @@ from ai.glazing_gate import WEATHER_FACADE_GLAZING_POLICY, validate_glazing_meth
 from ai.opening_resolution import resolve_openings
 from ai.site_orientation import validate_site_orientation
 from ai.window_scan import normalize_sightings, resolve_clusters
-from backend.window_scan_service import _validate_glazing_system_review
 
 
 def check(label, condition):
@@ -57,20 +56,11 @@ def main():
               "opening_coverage": {"status": "complete", "source": "Plan + elevation", "citations": citations("01.01/02.01")},
               "source": "Plan + elevation", "citations": citations("01.01/02.01"), "review_mode": "engineering_reviewed",
               "scan_fingerprint": "scan-fingerprint"}
-    _validate_glazing_system_review(review, opening)
     resolved = resolve_openings({}, "evidence-source", {1: {}, 2: {}}, register,
                                 {"source_fingerprint": "scan-source", "fingerprint": "review-fingerprint", "openings": {opening["opening_id"]: review}})
     row = resolved["openings"][0]
     check("reviewed shopfront system preserves ownership, geometry and coverage", row["status"] == "reviewed" and row["system_name"] == "Main shopfront glazing" and row["opening_coverage"]["status"] == "complete")
     check("reviewed system does not invent a façade direction", "façade orientation remains unresolved" in row["unresolved_fields"])
-    broken = deepcopy(review)
-    broken["external_exposure"] = "unresolved"
-    try:
-        _validate_glazing_system_review(broken, opening)
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("unresolved exposure must be rejected")
 
     library = validate_envelope_library({"windows": [{"record_id": "shopfront-window", "title": "Shopfront system",
         "revision": 1, "review_status": "confirmed", "source": "Supplier data sheet", "citations": citations("DS-01"),

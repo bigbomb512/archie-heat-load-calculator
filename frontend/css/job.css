@@ -1169,6 +1169,10 @@ body.job-preview {
 .job-operating-detail {
   padding: 8px 14px 22px;
 }
+.job-operating-detail .job-key-facts strong {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .job-operating-detail h2 {
   font-size: 24px;
 }

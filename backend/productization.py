@@ -342,7 +342,9 @@ def _report_summary(report, report_type):
         "active_room_ids": scope.get("active_room_ids", []),
         "included_room_ids": scope.get("included_room_ids", []),
         "blocked_rooms": scope.get("blocked_rooms", []),
-        "complete_scope": bool(scope.get("complete_scope")),
+        "complete_scope": bool(scope.get("complete_scope")) and not report.get("equipment_coverage_incomplete", False),
+        "equipment_coverage": report.get("equipment_coverage", {}),
+        "equipment_coverage_incomplete": report.get("equipment_coverage_incomplete", False),
         "peak": peak,
         "blocked_reasons": report.get("blocked_reasons", []),
         "excluded_components": report.get("excluded_components", report.get("known_exclusions", [])),
@@ -419,6 +421,11 @@ def build_report_package(project, paths, report_type, report, *, current=True, s
         if report_type == "annual":
             for name, section in summary.get("annual_sections", {}).items():
                 pdf_lines.append(f"{name.title()}: {section.get('annual_energy_kwh', 0.0)} kWh · peak {section.get('peak_kw', 0.0)} kW")
+        if summary.get("equipment_coverage_incomplete"):
+            pdf_lines.append("Some equipment has no value or no room; the rooms' typical equipment allowance covers it.")
+            pdf_lines.extend("Equipment: " + row["name"] + ": " + row.get("note", "")
+                             for row in summary.get("equipment_coverage", {}).get("records", [])
+                             if row.get("status") in {"no_value", "no_room"})
         pdf_lines.extend(f"Issue: {item.get('reason', item)}" for item in summary["readiness_issues"])
         pdf_path.write_bytes(_minimal_pdf(pdf_lines))
         if renderer_hint == "playwright-chromium":

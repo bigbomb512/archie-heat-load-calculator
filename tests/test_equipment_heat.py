@@ -18,7 +18,8 @@ class TypeAndRatingTests(unittest.TestCase):
                  "Combi oven": "cooking", "6 BURNER": "cooking", "Pizza deck oven": "cooking", "DISHWASHER": "dishwashing",
                  "Coffee machine": "hot_drinks", "75 INCH TV": "electronics", "POS": "electronics", "CPU 2": "electronics",
                  "Illuminated sign": "signage", "RANGE HOOD": "exhaust_hood", "COOLROOM": "refrigerated_room",
-                 "Freezer room": "refrigerated_room", "Pub table": "other"}
+                 "Freezer room": "refrigerated_room", "Pub table": "other", "DRINK FRIDGES": "refrigeration",
+                 "2 x OVENS": "cooking", "MENU SCREENS": "electronics"}
         self.assertEqual({name: heat.equipment_type(name) for name in cases}, cases)
 
     def test_printed_watts_only_from_power_units(self):
@@ -52,7 +53,7 @@ class RoomAndHandOffTests(unittest.TestCase):
         self.assertEqual(page_extraction_service.suggested_room("shop storage", rooms), "Shop Storage")
         self.assertEqual(page_extraction_service.suggested_room("front of house", rooms), "")
 
-    def test_only_accepted_items_with_a_room_rating_and_factor_reach_internal_gains(self):
+    def test_legacy_acceptance_does_not_bypass_catalogue_applicability(self):
         accepted = [
             {"id": "a", "name": "UB FRIDGE", "code": "E21", "quantity": 10, "room": "Kitchen", "rated_input_w": 350.0,
              "heat_to_space_factor": 1.0, "pages": [5]},
@@ -62,12 +63,10 @@ class RoomAndHandOffTests(unittest.TestCase):
         proposal = {"rooms": [{"label": "Kitchen", "room_id": "k"}, {"label": "Shop", "room_id": "s"}]}
         with tempfile.TemporaryDirectory() as folder, patch.object(page_extraction_service, "accepted", return_value=accepted):
             result = ai_preliminary_service._with_accepted_equipment({"root": Path(folder)}, proposal)
-        kitchen = result["rooms"][0]
-        self.assertEqual([row["name"] for row in kitchen["equipment"]], ["UB FRIDGE"])
-        row = _equipment_sources([kitchen])[0]
-        self.assertEqual((row["quantity"], row["rated_input_w"], row["heat_to_space_factor"], row["evidence"][0]["page"]),
-                         (10, 350.0, 1.0, 5))
-        self.assertNotIn("equipment", result["rooms"][1])
+        self.assertEqual(result["rooms"][0]["equipment"], [])
+        self.assertTrue(result["rooms"][0]["equipment_catalogue_managed"])
+        self.assertEqual(result["rooms"][1]["equipment"], [])
+
 
 
 class ReviewValidationTests(unittest.TestCase):
@@ -85,10 +84,12 @@ class ReviewValidationTests(unittest.TestCase):
                                        ({"name": "TV", "rated_input_w": "lots"}, "must be a number")):
                     with self.assertRaisesRegex(ValueError, message):
                         page_extraction_service.review(None, project, {**base, "value": value})
-                state = page_extraction_service.review(None, project, {**base, "value": {"name": "TV", "quantity": 1, "room": "Shop",
-                                                                                          "rated_input_w": "150", "heat_to_space_factor": 1}})
+                    state = page_extraction_service.review(None, project, {**base, "reviewer": "Sam", "value": {
+                    "name": "TV", "quantity": 1, "room": "Shop", "rated_input_w": "180", "heat_to_space_factor": 0.5}})
             [finding] = state["findings"]
-            self.assertEqual((finding["in_calculation"], finding["accepted_heat_w"]), (True, 150))
+            # A rating the operator typed beats the generic placeholder (150 W for a TV), labelled as theirs.
+            self.assertEqual((finding["in_calculation"], finding["accepted_heat_w"]), (True, 90.0))
+            self.assertIn("entered by the operator", finding["catalogue_resolution"]["source"])
 
 
 if __name__ == "__main__":

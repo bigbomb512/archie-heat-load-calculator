@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise every resolution GET endpoint through the HTTP handler."""
+"""Exercise every read endpoint the job screens use through the HTTP handler, on fresh and saved jobs."""
 
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -17,18 +17,25 @@ from backend import web_app
 
 
 ENDPOINTS = (
-    "/api/site-location-resolution",
-    "/api/site-design-weather-resolution",
+    "/api/job-status",
+    "/api/job-plan",
+    "/api/new-job",
+    "/api/page-extraction",
+    "/api/page-reading",
+    "/api/drawing-tasks",
+    "/api/skill-workflow",
+    "/api/reviewer-room-geometry",
     "/api/room-use-resolution",
-    "/api/ceiling-volume-resolution",
-    "/api/internal-gains-resolution",
+    "/api/ai-preliminary-model",
+    "/api/job-calculation",
+    "/api/result-status",
+    "/api/report-package",
+)
+# Screens of the old interface, removed 2026-10-19; their routes must stay gone.
+REMOVED = (
+    "/api/site-location-resolution",
     "/api/thermal-surface-resolution",
-    "/api/value-resolution",
-    "/api/model-input-resolution",
     "/api/airflow-resolution",
-    "/api/ahu-resolution",
-    "/api/plant-resolution",
-    "/api/safety-factor-resolution",
     "/api/hourly-load-model",
 )
 
@@ -46,18 +53,6 @@ def get(server, path):
         response = connection.getresponse()
         status, content_type, body = response.status, response.getheader("Content-Type", ""), response.read()
         return status, content_type, body
-    finally:
-        connection.close()
-
-
-def post(server, path, payload):
-    body = json.dumps(payload)
-    connection = http.client.HTTPConnection(*server.server_address, timeout=10)
-    try:
-        connection.request("POST", path, body=body, headers={"Content-Type": "application/json"})
-        response = connection.getresponse()
-        status, content_type, response_body = response.status, response.getheader("Content-Type", ""), response.read()
-        return status, content_type, response_body
     finally:
         connection.close()
 
@@ -106,20 +101,10 @@ def main():
                             raise AssertionError(f"{project_id} {endpoint} did not return JSON: {body[:300]!r}") from error
                         check(f"{project_id} {endpoint} returns successful JSON without API error",
                               status == 200 and "application/json" in content_type and isinstance(payload, dict)
-                              and "error" not in payload)
-                for service in ("airflow", "ahu", "plant", "safety-factor"):
-                    endpoint = f"/api/{service}-resolution"
-                    try:
-                        status, content_type, body = post(server, endpoint, {"project_id": "artifacts", "action": "resolve"})
-                    except (OSError, http.client.HTTPException) as error:
-                        raise AssertionError(f"POST {endpoint} dropped the connection: {error}") from error
-                    try:
-                        payload = json.loads(body)
-                    except (json.JSONDecodeError, UnicodeDecodeError) as error:
-                        raise AssertionError(f"POST {endpoint} did not return JSON: {body[:300]!r}") from error
-                    check(f"POST {endpoint} resolves without Handler attribute error",
-                          status == 200 and "application/json" in content_type and "error" not in payload
-                          and "Handler" not in json.dumps(payload))
+                              and not payload.get("error"))
+                for endpoint in REMOVED:
+                    status, _content_type, _body = get(server, f"{endpoint}?project_id=artifacts")
+                    check(f"removed {endpoint} is not served", status == 404)
             finally:
                 server.shutdown()
                 server.server_close()

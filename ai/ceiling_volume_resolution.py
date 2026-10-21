@@ -176,7 +176,7 @@ def _proposal_candidates(room, all_rooms):
         if room_identity(room["label"], room["level"]) not in normalized:
             continue
         candidate = _candidate(
-            item.get("ceiling_height_mm"), "ai_estimated", _evidence(item), confidence=item.get("confidence"),
+            item.get("ceiling_height_mm"), "ai_estimated", _evidence(item), confidence=item.get("ceiling_confidence", item.get("confidence")),
             rationale=item.get("ceiling_rationale", item.get("rationale", "AI-linked ceiling-height evidence.")),
             scope_type=scope, applies_to=normalized, source_page=item.get("page"),
             datum_operands=item.get("ceiling_datum_operands", {}), conflicts=item.get("ceiling_conflicts", []),

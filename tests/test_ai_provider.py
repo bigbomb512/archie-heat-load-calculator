@@ -154,6 +154,27 @@ class HttpProviderTests(unittest.TestCase):
             entry = json.loads((Path(folder) / ai_provider.USAGE_FILE).read_text().splitlines()[0])
         self.assertEqual((summary["cost_usd"], entry["upstream"]), (0.0188, "Google AI Studio"))
 
+    def test_a_reply_stopped_at_its_cap_is_recognised_logged_and_the_retry_settings_are_sent(self):
+        captured = []
+        cut = {"model": "deepseek/deepseek-v4.1-flash", "choices": [{"message": {"content": '{"proposal_fields": {"walls": ['},
+                                                                     "finish_reason": "length"}],
+               "usage": {"prompt_tokens": 27089, "completion_tokens": 48000,
+                         "completion_tokens_details": {"reasoning_tokens": 34739}}}
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {"ARCHIE_MAX_OUTPUT_TOKENS": "", "ARCHIE_OPENROUTER_REASONING": ""}):
+            provider = ai_provider.OpenRouterProvider(api_key="or-test", model="deepseek/deepseek-v4.1-flash", opener=opener(cut, captured))
+            with self.assertRaises(ai_provider.InvalidProviderReply) as raised:
+                ai_provider.recorded(provider, folder, "skill:surface_area").propose("x")
+            entry = json.loads((Path(folder) / ai_provider.USAGE_FILE).read_text())
+        self.assertTrue(ai_provider.cut_off(raised.exception.raw_record))
+        self.assertEqual((entry["finish_reason"], entry["max_tokens"], entry["output_tokens"]), ("length", 48000, 48000))
+        # All of the cap used counts as cut off even when the host doesn't say "length"; a normal reply doesn't.
+        self.assertTrue(ai_provider.cut_off({"usage": {"output_tokens": 48000}, "max_tokens": 48000}))
+        self.assertFalse(ai_provider.cut_off({"usage": {"output_tokens": 9000}, "max_tokens": 48000, "finish_reason": "stop"}))
+        provider.reasoning_effort, provider.max_tokens_override = "low", ai_provider.CUT_OFF_RETRY_MAX_OUTPUT_TOKENS
+        with self.assertRaises(ai_provider.InvalidProviderReply):
+            provider.propose("x")
+        self.assertEqual((captured[-1]["body"]["max_tokens"], captured[-1]["body"]["reasoning"]), (96000, {"effort": "low"}))
+
     def test_anthropic_sends_images_first_and_reads_a_fenced_json_reply(self):
         captured = []
         reply = {"model": "claude-sonnet-5-5", "content": [{"type": "text", "text": "```json\n{\"items\": []}\n```"}],
@@ -171,8 +192,8 @@ class HttpProviderTests(unittest.TestCase):
         provider = ai_provider.OpenAIProvider(api_key="k", opener=failing(429, '{"error": {"code": "insufficient_quota", "message": "You exceeded your current quota"}}'))
         with self.assertRaises(ai_provider.UsageLimitReached):
             provider.propose("x")
-        provider = ai_provider.OpenAIProvider(api_key="k", opener=failing(429, '{"error": "slow down"}'))
-        with self.assertRaisesRegex(RuntimeError, "rate-limiting"):
+        provider = ai_provider.OpenAIProvider(api_key="k", timeout=.001, opener=failing(429, '{"error": "slow down"}'))
+        with self.assertRaises(ai_provider.ProviderTimeout):
             provider.propose("x")
         provider = ai_provider.AnthropicProvider(api_key="k", opener=failing(400, '{"error": {"message": "Your credit balance is too low"}}'))
         with self.assertRaises(ai_provider.UsageLimitReached):
@@ -201,7 +222,6 @@ class HttpProviderTests(unittest.TestCase):
         self.assertEqual(raised.exception.raw_record["finish_reason"], "length")
         self.assertEqual(raised.exception.raw_record["upstream"], "DigitalOcean")
         self.assertEqual(raised.exception.raw_record["usage"]["output_tokens"], 48000)
-
 
 class CodexCliTests(unittest.TestCase):
     def setUp(self):

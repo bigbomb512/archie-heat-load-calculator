@@ -1,8 +1,10 @@
 # Subskill: address_confirmation
 
-- Present ranked address candidates and citations, then wait for a person to
-  confirm or correct the exact project address.
-- Record the confirmation actor/time and consent reference as user evidence;
-  never synthesize them or click/confirm on the user's behalf.
-- If unconfirmed, return `needs_review`, no coordinates, and the explicit
-  next action. Do not trigger external location/weather lookup.
+- In ordinary PDF review, present ranked address candidates and citations, then
+  wait for a person to confirm or correct the exact project address.
+- In autonomous Phase 1 only, select an address when one distinct project-site
+  candidate is directly supported by cited drawing evidence. Record the method
+  as an AI inference. Never invent a person, confirmation time, or consent ref.
+- If candidates materially conflict, return `needs_review` and leave the
+  address unset. This task does not research the site or select weather; the
+  drawing site task and the separate weather picker own those inputs.

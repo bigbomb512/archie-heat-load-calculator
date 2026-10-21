@@ -598,6 +598,7 @@ def validate_manual_placeholder_entities(raw):
             "people_latent_w_per_person": _number(item.get("people_latent_w_per_person")),
             "lighting_fixtures": deepcopy(item.get("lighting_fixtures", [])) if isinstance(item.get("lighting_fixtures", []), list) else [],
             "equipment": deepcopy(item.get("equipment", [])) if isinstance(item.get("equipment", []), list) else [],
+            "equipment_catalogue_managed": item.get("equipment_catalogue_managed") is True,
             "schedules": deepcopy(item.get("schedules", {})) if isinstance(item.get("schedules", {}), dict) else {},
         })
     identities = [_room_identity(row["label"], row["level_name"]) for row in result]
@@ -733,6 +734,8 @@ def validate_placeholder_proposal(raw):
               "envelope_assessments": [deepcopy(row) for row in raw.get("envelope_assessments", []) if isinstance(row, dict)]
               if isinstance(raw.get("envelope_assessments", []), list) else [],
               "issues": [deepcopy(item) for item in raw_issues if isinstance(item, dict)] if isinstance(raw_issues, list) else []}
+    if isinstance(raw.get("equipment_catalogue_coverage"), dict):
+        result["equipment_catalogue_coverage"] = deepcopy(raw["equipment_catalogue_coverage"])
     for group, prefix in (("surfaces", "ai-preliminary-surface"), ("openings", "ai-preliminary-opening")):
         rows = raw.get(group, [])
         if not isinstance(rows, list):
@@ -1054,6 +1057,8 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                    "verification_status": "provisional", "source": _source(profile_id), "envelope_surfaces": [], "glazing_surfaces": []}
         equipment_rows = internal_record.get("equipment", []) if internal_record and internal_record.get("fields", {}).get("equipment", {}).get("origin") in {"direct_project_evidence", "contractor_override", "project_evidence", "ai_interpretation", "ai_estimated"} else []
         allowance_w = area * profile["equipment_w_m2"] * profile["equipment_space_gain"] * profile["equipment_diversity"]
+        # Catalogue-valued items count like any listed item: the room still takes the larger of its listed items and
+        # its typical allowance, so items with no value or no room (equipment_catalogue_service) never leave it at zero.
         if not equipment_rows:
             equipment_rows = [{"name": "Preliminary profile equipment", "quantity": 1, "rated_input_w": area * profile["equipment_w_m2"], "heat_to_space_factor": profile["equipment_space_gain"], "diversity": profile["equipment_diversity"], "origin": "controlled_preliminary_profile"}]
         else:
@@ -1076,7 +1081,11 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                                "rationale": f"Listed equipment gives {listed_w:.0f} W to the room, below the typical allowance of "
                                             f"{allowance_w:.0f} W for {area:g} m² of {profile['label']}; topped up to the allowance.",
                                "evidence": []})
-        heat_sources = [{"name": item.get("name", "Equipment"), "quantity": item.get("quantity", 1), "watts": round(item.get("rated_input_w", 0), 3), "kind": "other", "diversity_factor": item.get("diversity", profile["equipment_diversity"]), "space_gain_factor": item.get("heat_to_space_factor", profile["equipment_space_gain"]), **({"latent_w": item["latent_w"]} if item.get("latent_w") else {}), "verification_status": "provisional", "source": item.get("origin", _source(profile_id))} for item in equipment_rows]
+        heat_sources = [{"name": item.get("name", "Equipment"), "quantity": item.get("quantity", 1), "watts": round(item.get("rated_input_w", 0), 3), "kind": "other", "diversity_factor": item.get("diversity", profile["equipment_diversity"]), "space_gain_factor": item.get("heat_to_space_factor", profile["equipment_space_gain"]), **({"latent_w": item["latent_w"]} if item.get("latent_w") else {}), "verification_status": "provisional", "source": item.get("source") or item.get("origin", _source(profile_id))} for item in equipment_rows]
+        for heat_source, equipment_item in zip(heat_sources, equipment_rows):
+            for field in ("equipment_schedule", "equipment_id", "catalogue_hash", "catalogue_id"):
+                if field in equipment_item:
+                    heat_source[field] = deepcopy(equipment_item[field])
         requirements_zones.append({"zone_id": zone_id, "name": row["name"], "usage": profile["label"], "source_room_labels": [row["name"]],
                                    "area_m2": area, "occupancy": occupancy, "ceiling_height_mm": room_resolution.get("ceiling_height_mm"),
                                    "heat_sources": heat_sources,
@@ -1146,6 +1155,23 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
         resolved_internal = internal_records.get(room_use_resolver.room_identity(row["name"], row["level"]), {})
         internal_schedule_id = resolved_internal.get("schedule_id") or f"prelim-{profile_id}"
         room["schedule_assignments"] = {"people": internal_schedule_id, "lighting": internal_schedule_id, "outside_air": internal_schedule_id, "infiltration": "", "equipment": {source["source_id"]: internal_schedule_id for source in room["heat_sources"]}, "solar": {}}
+        for source, item in zip(room["heat_sources"], resolved_internal.get("equipment", [])):
+            day_profiles = item.get("equipment_schedule")
+            for key in ("equipment_id", "catalogue_hash", "catalogue_id"):
+                if key in item:
+                    source[key] = item[key]
+            if not day_profiles:
+                continue
+            schedule_id = f"equipment-{source['source_id']}"
+            citations = [{"reference": source.get("catalogue_id") or source.get("source"), "excerpt": source.get("name", "Equipment")}]
+            schedules.append({"schedule_id": schedule_id, "title": "Evidenced equipment operating schedule",
+                              "description": "Absolute equipment fractions; no additional room diversity applied.",
+                              "status": "provisional", "source": source.get("source"), "citations": citations,
+                              "day_profiles": {day: {"values": day_profiles[key], "status": "provisional",
+                                                       "source": source.get("source"), "citations": citations}
+                                               for day, key in (("weekday", "weekday"), ("saturday", "saturday"),
+                                                                ("sunday_holiday", "sunday"))}})
+            room["schedule_assignments"]["equipment"][source["source_id"]] = schedule_id
         infiltration_record = room_airflows.get("infiltration", {})
         if infiltration_record.get("air_path_type") == "infiltration" and infiltration_record.get("status") not in {"blocked", "excluded"} and infiltration_record.get("value") is not None:
             infiltration_schedule_id = f"airflow-infiltration-{room['room_id']}"

@@ -110,9 +110,10 @@ def get(web, project):
     if not project.get("review_dir"):
         # A new upload whose PDF hasn't been read yet: nothing to draw, and the Drawings step is still first.
         name = str(project.get("name") or "").removesuffix(".pdf")
-        status = {"id": project["id"], "name": name, "stage": "drawings", "drawings_confirmed": False,
-                  "phase1_complete": False, "phase2_complete": False, "results_ready": False, "result_stale": False,
-                  "needs_you": {"drawings": 0, "phase1": 0, "phase2": 0, "results": 0}, "area_overrides": []}
+        from backend import job_progress
+        status = {"id": project["id"], "name": name, "area_overrides": [], **job_progress.milestones(
+            drawings_confirmed=False, checks={}, phase1_complete=False, result_exists=False, result_stale=False,
+            rooms=[], areas_still_being_found=False, open_needs=0)}
         return {"project_id": project["id"], "status": status, "rooms": [], "outlines": [], "pages": [],
                 "rooms_without_outline": [], "area_basis_labels": {key: {"label": label, "line_style": style}
                                                                    for key, (label, style) in AREA_BASIS.items()},

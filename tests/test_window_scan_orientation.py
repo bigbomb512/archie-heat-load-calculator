@@ -1,21 +1,15 @@
 #!/usr/bin/env python3
-"""Offline all-page scan and site-orientation regression cases."""
+"""Offline opening-sighting and site-orientation regression cases."""
 
 from copy import deepcopy
-import json
-from io import BytesIO
-import os
 from pathlib import Path
 import sys
-from tempfile import TemporaryDirectory
-import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ai.opening_resolution import resolve_openings
 from ai.site_orientation import outward_azimuth, validate_site_orientation
 from ai.window_scan import normalize_sightings, page_batches, resolve_clusters
-from backend import site_orientation_service, window_scan_service
 
 
 def check(label, condition):
@@ -79,68 +73,6 @@ def main():
           reviewed_scan["openings"][0]["owner_room_id"] == "room-1"
           and reviewed_scan["openings"][0]["status"] == "ai_estimated"
           and "façade orientation remains unresolved" in reviewed_scan["openings"][0]["unresolved_fields"])
-
-    original_urlopen = site_orientation_service.urllib.request.urlopen
-    imagery_request_urls = []
-    def fake_urlopen(request, timeout):
-        imagery_request_urls.append(request.full_url)
-        return BytesIO(json.dumps({"features": [{"attributes": {
-            "OBJECTID": 5, "BlockName": "test imagery", "BlockType": "Aerial",
-            "BlockStartDate": 1704067200000, "Resolution_cm": 10}}]}).encode())
-    try:
-        site_orientation_service.urllib.request.urlopen = fake_urlopen
-        imagery = site_orientation_service.nsw_imagery_candidates(151.2, -33.8)
-    finally:
-        site_orientation_service.urllib.request.urlopen = original_urlopen
-    check("dated imagery lookup uses NSW point service and retains candidate date",
-          "/NSW_Imagery_Dates/MapServer/0/query?" in imagery_request_urls[0]
-          and imagery["candidates"][0]["imagery_date"] == "2024-01-01"
-          and imagery["status"] == "date_candidate_only_not_tenancy_or_facade_evidence")
-
-    with TemporaryDirectory() as temporary:
-        root = Path(temporary)
-        ai_input = {"source_pdf": "synthetic-test-only", "drawing_set": {"pages": pages[:9]}}
-        (root / "ai_input.json").write_text(json.dumps(ai_input))
-        (root / "vision_extraction_settings.json").write_text(json.dumps({"owner_opt_in": True}))
-        project = {"id": "test", "review_dir": str(root)}
-        web = type("Web", (), {"project_by_id": staticmethod(lambda _: project), "safe_link": staticmethod(lambda path: "/safe/" + Path(path).name)})()
-        old_render = window_scan_service._page_image
-        old_factory = window_scan_service.PROVIDER_FACTORY
-        calls = []
-        class FakeProvider:
-            def scan(self, batch):
-                calls.append(batch["batch_id"])
-                if batch["batch_id"] == "windows-002" and calls.count("windows-002") == 1:
-                    raise RuntimeError("transient test failure")
-                return {"sightings": []}
-            def match(self, sightings): return {"clusters": []}
-        def render(_ai_input, _page, target):
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(b"test image")
-            return target
-        try:
-            window_scan_service._page_image = render
-            window_scan_service.PROVIDER_FACTORY = lambda model: FakeProvider()
-            first_job = window_scan_service.post(web, project, {"action": "start", "confirm_all_pages": True})
-            for _ in range(100):
-                if window_scan_service.get(web, project)["job"]["status"] == "failed": break
-                time.sleep(0.01)
-            check("failed batch preserves immutable manifest", window_scan_service.get(web, project)["job"]["status"] == "failed")
-            manifest_id = first_job["job"]["run_id"]
-            saved_manifest = json.loads((root / "window_scan_runs" / manifest_id / "manifest.json").read_text())
-            check("retry manifest pins exact scan and matching prompts",
-                  saved_manifest["scan_prompt"] == window_scan_service.SCAN_PROMPT
-                  and saved_manifest["match_prompt"] == window_scan_service.MATCH_PROMPT)
-            window_scan_service.post(web, project, {"action": "retry", "confirm_all_pages": True})
-            for _ in range(100):
-                if window_scan_service.get(web, project)["job"]["status"] == "completed": break
-                time.sleep(0.01)
-            finished = window_scan_service.get(web, project)
-            check("retry reuses successful first batch", calls.count("windows-001") == 1 and calls.count("windows-002") == 2)
-            check("retry uses same manifest and covers all pages", finished["job"]["run_id"] == manifest_id and finished["register"]["pages_inspected"] == list(range(1, 10)))
-        finally:
-            window_scan_service._page_image = old_render
-            window_scan_service.PROVIDER_FACTORY = old_factory
 
 
 if __name__ == "__main__": main()

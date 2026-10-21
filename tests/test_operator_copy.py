@@ -46,6 +46,18 @@ class OperatorCopyTests(unittest.TestCase):
                     matches.append(f"{relative}: {value!r}")
         self.assertEqual(matches, [])
 
+    def test_supervisor_progress_and_exceptions_never_expose_internal_identifiers(self):
+        from backend import phase1_supervisor_service as supervisor
+        from tests.test_phase1_supervisor import room, snapshot
+        value = snapshot(room("room-use:level-1:shop", area_m2=None,
+            height={"origin": "preliminary_fallback"}), height_pages=[22], storefront_pages=[25])
+        gaps = supervisor.audit(value)
+        self.assertTrue(gaps)
+        for gap in gaps:
+            self.assertIsNone(re.search(r"room-use:|P[0-7]_|\.json|skill_id|surface_area", gap["message"]))
+        self.assertEqual(supervisor._name("/private/project.json"), "the room")
+
+
 
 if __name__ == "__main__":
     unittest.main()

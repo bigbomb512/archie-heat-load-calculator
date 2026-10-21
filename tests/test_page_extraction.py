@@ -269,7 +269,8 @@ class ServiceTests(unittest.TestCase):
         service.review(None, self.project, {"finding_id": oven["id"], "decision": "accepted",
                                             "value": {**oven["value"], "quantity": 1}, "reviewer": "Sam"})
         state = service.review(None, self.project, {"finding_id": tv["id"], "decision": "rejected"})
-        self.assertEqual(state["open"], 0)
+        # "open" counts items the calculation can't place: with no rooms known here, the oven isn't counted.
+        self.assertEqual(state["open"], 1)
         self.assertEqual([(row["name"], row["quantity"]) for row in service.accepted(self.project)], [("Combi oven", 1)])
         with self.assertRaisesRegex(ValueError, "accept or reject"):
             service.review(None, self.project, {"finding_id": tv["id"], "decision": "maybe"})

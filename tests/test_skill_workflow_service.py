@@ -101,11 +101,11 @@ class SkillWorkflowTests(unittest.TestCase):
         by_id = {row["id"]: row for row in registry["subskills"]}
         for skill_id in selected:                                  # closed over prerequisites
             self.assertLessEqual(set(by_id[skill_id].get("depends_on", [])) - {"policy_source"}, selected, skill_id)
-        full = skills._scoped_subskill_ids(registry, enabled, "full_review")
-        self.assertTrue({"system_detection", "plant_detection", "airflow_deduplication"}.issubset(full))
-        for selected_scope in (selected, full):
-            self.assertNotIn("policy_source", selected_scope)
-            self.assertNotIn("report_readiness", selected_scope)
+        self.assertNotIn("policy_source", selected)
+        self.assertNotIn("report_readiness", selected)
+        for retired in ("all", "full_review", "rooms_only"):          # only the two scopes a job runs are accepted
+            with self.assertRaisesRegex(ValueError, "one of: pdf_review, phase1_envelope"):
+                skills._scoped_subskill_ids(registry, enabled, retired)
 
     def test_review_requires_consent_and_reports_missing_provider_as_blocked(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -548,6 +548,8 @@ class SkillWorkflowTests(unittest.TestCase):
         self.assertEqual({row["page"] for row in room["evidence"]}, {20, 21, 22})
 
     def test_run_executes_subskills_reuses_and_marks_stale(self):
+        # These check the runner itself: no scanned plans to read in the PDF review.
+        self.enterContext(patch.object(skills, "_read_scanned_printed_areas", return_value=None))
         original_execute = skills._execute_subskill
         original_prepare = skills._ensure_room_evidence
         try:
@@ -569,7 +571,7 @@ class SkillWorkflowTests(unittest.TestCase):
                 project = self.project(folder)
                 web = Web()
                 with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
-                    started = skills.post(web, project, {"action": "start", "scope": "all"})
+                    started = skills.post(web, project, {"action": "start", "scope": "pdf_review"})
                 self.assertIn(started["status"], {"queued", "running", "needs_review"})
                 deadline = time.time() + 30
                 while time.time() < deadline:
@@ -590,7 +592,7 @@ class SkillWorkflowTests(unittest.TestCase):
                 self.assertEqual(manifest["preparation"]["status"], "completed")
                 self.assertNotIn(folder, json.dumps(state))
                 with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
-                    repeated = skills.post(web, project, {"action": "start", "scope": "all"})
+                    repeated = skills.post(web, project, {"action": "start", "scope": "pdf_review"})
                 self.assertEqual(repeated["run_id"], state["run_id"])
                 (Path(folder) / "drawing_coverage.json").write_text(json.dumps({"pages": [{"page": 2}]}), encoding="utf-8")
                 self.assertEqual(skills.get(web, project)["status"], "stale")
@@ -599,6 +601,8 @@ class SkillWorkflowTests(unittest.TestCase):
             skills._ensure_room_evidence = original_prepare
 
     def test_failed_subskill_blocks_only_dependents(self):
+        # These check the runner itself: no scanned plans to read in the PDF review.
+        self.enterContext(patch.object(skills, "_read_scanned_printed_areas", return_value=None))
         original_execute = skills._execute_subskill
         original_prepare = skills._ensure_room_evidence
         try:
@@ -618,7 +622,7 @@ class SkillWorkflowTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as folder:
                 project, web = self.project(folder), Web()
                 with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
-                    skills.post(web, project, {"action": "start", "scope": "all"})
+                    skills.post(web, project, {"action": "start", "scope": "pdf_review"})
                 deadline = time.time() + 30
                 while time.time() < deadline:
                     state = skills.get(web, project)
@@ -637,6 +641,8 @@ class SkillWorkflowTests(unittest.TestCase):
             skills._ensure_room_evidence = original_prepare
 
     def test_independent_pilot_subskills_run_concurrently(self):
+        # These check the runner itself: no scanned plans to read in the PDF review.
+        self.enterContext(patch.object(skills, "_read_scanned_printed_areas", return_value=None))
         original_execute = skills._execute_subskill
         original_prepare = skills._ensure_room_evidence
         active = 0
@@ -668,7 +674,7 @@ class SkillWorkflowTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as folder:
                 project, web = self.project(folder), Web()
                 with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
-                    skills.post(web, project, {"action": "start", "scope": "all"})
+                    skills.post(web, project, {"action": "start", "scope": "pdf_review"})
                 deadline = time.time() + 30
                 while time.time() < deadline:
                     state = skills.get(web, project)
@@ -697,7 +703,7 @@ class SkillWorkflowTests(unittest.TestCase):
                 project, web = self.project(folder), Web()
                 paths = skills._project_paths(project)
                 catalog = skills.load_catalog()
-                old = skills._new_manifest(catalog, skills._source_fingerprint(paths, catalog))
+                old = skills._new_manifest(catalog, skills._source_fingerprint(paths, catalog), "pdf_review")
                 old.update({"status": "running", "run_id": "orphaned-run"})
                 skills._write_manifest(paths["manifest"], old)
 
@@ -1120,7 +1126,7 @@ class SkillWorkflowTests(unittest.TestCase):
             (root / "drawing_coverage.json").write_text(json.dumps({"page_roles": [{"page": 8}]}))
             proposal_root = root / "skill_workflow_runs" / "run-1" / "proposals"
             proposal_root.mkdir(parents=True)
-            proposal = {"subskill_id": "glazing_properties", "status": "needs_review",
+            proposal = {"subskill_id": "room_identity_use", "status": "needs_review",
                 "citations": [{"id": "c1", "page": 8, "excerpt": "Window schedule: double glazing"},
                               {"id": "c2", "page": 8, "excerpt": "Unambiguous second window row"}],
                 "inferences": [{"field": "properties", "target": "opening-1", "value": 2.4,
@@ -1132,12 +1138,17 @@ class SkillWorkflowTests(unittest.TestCase):
                     {"opening_id": "opening-1", "u_value_w_m2k": 2.4, "confidence": 0.82, "citation_ids": ["c1"]},
                     {"opening_id": "opening-2", "u_value_w_m2k": 3.2, "confidence": 0.95, "citation_ids": ["c2"]},
                 ]}}
-            (proposal_root / "glazing_properties.json").write_text(json.dumps(proposal))
+            (proposal_root / "room_identity_use.json").write_text(json.dumps(proposal))
             manifest = {"run_id": "run-1", "source_fingerprint": "a" * 64, "scope": "phase1_envelope", "subskills": {}}
             self.assertEqual(skills._auto_review_confident_findings(root, manifest), 1)
             decisions = json.loads((root / "skill_review_decisions.json").read_text())["decisions"]
-            self.assertEqual(list(decisions), ["glazing_properties:properties:0"])
-            self.assertEqual(decisions["glazing_properties:properties:0"]["usage_scope"], "phase1_draft_only")
+            self.assertEqual(list(decisions), ["room_identity_use:properties:0"])
+            self.assertEqual(decisions["room_identity_use:properties:0"]["usage_scope"], "phase1_draft_only")
+            # Envelope proposals are outside the trimmed Phase 1 skill review.
+            (proposal_root / "glazing_properties.json").write_text(json.dumps({**proposal, "subskill_id": "glazing_properties"}))
+            self.assertEqual(skills._auto_review_confident_findings(root, manifest), 0)
+            decisions = json.loads((root / "skill_review_decisions.json").read_text())["decisions"]
+            self.assertNotIn("glazing_properties:properties:0", decisions)
 
     def test_provider_call_retries_one_transient_transport_failure(self):
         calls = []
@@ -1412,35 +1423,6 @@ class SkillWorkflowTests(unittest.TestCase):
                     self.assertEqual(saved["validation_check"], check)
                     self.assertEqual(saved["outcome"], outcome)
 
-    def test_codex_provider_archives_invalid_json_and_cli_stderr(self):
-        from types import SimpleNamespace
-        provider = skills.CodexCliSkillProposalProvider(executable="codex")
-        def invalid_json(command, **_kwargs):
-            output_path = Path(command[command.index("--output-last-message") + 1])
-            output_path.write_text("{broken", encoding="utf-8")
-            return SimpleNamespace(returncode=0, stdout="", stderr="")
-        with patch("backend.skill_workflow_service.subprocess.run", side_effect=invalid_json):
-            with self.assertRaises(skills.SkillProviderError) as raised:
-                provider.propose("prompt")
-        self.assertEqual(str(raised.exception), "skill_provider_invalid_json")
-        self.assertEqual(raised.exception.raw_record["reply_text"], "{broken")
-        raw_reply = "  ```json\n{}\n```  \n"
-        def fenced_reply(command, **_kwargs):
-            output_path = Path(command[command.index("--output-last-message") + 1])
-            output_path.write_text(raw_reply, encoding="utf-8")
-            return SimpleNamespace(returncode=0, stdout="", stderr="")
-        with patch("backend.skill_workflow_service.subprocess.run", side_effect=fenced_reply):
-            result = provider.propose("prompt")
-        self.assertEqual(result.raw_record["reply_text"], raw_reply)
-        self.assertEqual(result.proposal, {})
-        def failed_cli(_command, **_kwargs):
-            return SimpleNamespace(returncode=2, stdout="", stderr="not authorized")
-        with patch("backend.skill_workflow_service.subprocess.run", side_effect=failed_cli):
-            with self.assertRaises(skills.SkillProviderError) as raised:
-                provider.propose("prompt")
-        self.assertEqual(str(raised.exception), "codex_cli_failed")
-        self.assertEqual(raised.exception.raw_record["stderr_tail"], "not authorized")
-
     def test_case_file_invalid_json_archives_the_provider_reply_and_classifies_failure(self):
         from backend import ai_provider
 
@@ -1678,84 +1660,30 @@ class SkillWorkflowTests(unittest.TestCase):
         self.assertEqual(attempt_record["prompt_budget"]["budget_chars"], 1000)
         self.assertEqual(attempt_record["raw_record"]["provider"], "none_prompt_over_budget")
 
-    def test_rooms_only_scope_runs_room_tasks_and_their_prerequisites(self):
-        original_execute = skills._execute_subskill
-        original_prepare = skills._ensure_room_evidence
-        executed = []
-        try:
-            def execute(subskill, _project, _dependencies, source_fp):
-                executed.append(subskill["id"])
-                return {"subskill_id": subskill["id"], "subskill_version": subskill["version"], "status": "needs_review",
-                        "affected_ids": [], "observations": [], "inferences": [], "citations": [], "confidence": None,
-                        "alternatives": [], "unresolved_fields": [], "remediation": [], "input_fingerprint": source_fp,
-                        "proposal_fields": empty_typed_proposal(subskill), "artifact_names": []}
-
-            skills._execute_subskill = execute
-            skills._ensure_room_evidence = lambda _web, _project: {"candidate_count": 1, "artifact_names": []}
-            with tempfile.TemporaryDirectory() as folder:
-                project = self.project(folder)
-                web = Web()
-                with self.assertRaisesRegex(ValueError, "scope"):
-                    skills.post(web, project, {"action": "start", "scope": "everything"})
-                with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
-                    skills.post(web, project, {"action": "start", "scope": "rooms_only"})
-                deadline = time.time() + 30
-                while time.time() < deadline:
-                    state = skills.get(web, project)
-                    if state["status"] in {"needs_review", "completed", "failed", "blocked"}:
-                        break
-                    time.sleep(0.01)
-                manifest = json.loads((Path(folder) / "skill_workflow_run.json").read_text())
-                with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
-                    reused = skills.post(web, project, {"action": "start", "scope": "rooms_only"})
-                    full_run = skills.post(web, project, {"action": "start", "scope": "all"})
-                deadline = time.time() + 30
-                while time.time() < deadline:
-                    if skills.get(web, project)["status"] in {"needs_review", "completed", "failed", "blocked"}:
-                        break
-                    time.sleep(0.01)
-                full_manifest = json.loads((Path(folder) / "skill_workflow_run.json").read_text())
-        finally:
-            skills._execute_subskill = original_execute
-            skills._ensure_room_evidence = original_prepare
-        expected = {"sheet_identity", "revision_scope", "page_relationships", "room_identity_use",
-                    "room_boundaries_areas", "ceiling_height_volume"}
-        self.assertEqual(set(executed[:len(expected)]), expected)
-        self.assertEqual(manifest["scope"], "rooms_only")
-        self.assertEqual(state["status"], "completed")
-        self.assertEqual({key for key, row in manifest["subskills"].items() if row["status"] != "not_in_scope"}, expected)
-        self.assertEqual(manifest["skills"]["plant_hydraulics"]["status"], "not_in_scope")
-        self.assertEqual(reused["run_id"], state["run_id"])
-        self.assertNotEqual(full_run["run_id"], state["run_id"])
-        self.assertEqual(full_manifest["scope"], "all")
-        self.assertFalse(any(row["status"] == "not_in_scope" for row in full_manifest["subskills"].values()))
-
-    def test_phase1_envelope_scope_covers_envelope_evidence_without_phase2_tasks(self):
+    def test_phase1_envelope_scope_is_room_identity_and_site_only(self):
         catalog = skills.load_catalog()
         registry = skills.load_subskill_registry()
         selected = skills._scoped_subskill_ids(registry, set(catalog["enabled_skill_ids"]), "phase1_envelope")
-        self.assertTrue({
-            "room_boundaries_areas", "ceiling_height_volume", "surface_inventory", "surface_area",
-            "construction_matching", "boundary_resolution", "cross_sheet_opening_match",
-            "glazing_properties", "exposure_orientation", "shading",
-        }.issubset(selected))
-        self.assertTrue({"sheet_identity", "revision_scope", "page_relationships", "room_identity_use"}.issubset(selected))
-        self.assertTrue({"equipment_evidence", "occupancy_seating", "lighting_evidence", "outside_air",
-                         "infiltration", "plant_detection", "coil_duty"}.isdisjoint(selected))
-        # The weather comes from the chosen or AI-picked location; the weather-source step only blocked the review.
-        self.assertNotIn("weather_source_matching", selected)
-        by_id = {row["id"]: row for row in registry["subskills"]}
-        # Opening-to-wall matching must wait for the surface inventory so it
-        # can use the same stable wall IDs that the area resolver consumes.
-        self.assertIn("surface_inventory", by_id["cross_sheet_opening_match"].get("depends_on", []))
-        self.assertIn("cross_sheet_opening_match", by_id["surface_area"].get("depends_on", []))
-        self.assertIn("glazing_properties", by_id["surface_area"].get("depends_on", []))
-        self.assertIn("surface_inventory", by_id["boundary_resolution"].get("depends_on", []))
-        self.assertNotIn("weather_source_matching", by_id["boundary_resolution"].get("depends_on", []))
-        inventory_rules = " ".join(by_id["surface_inventory"].get("constraints", []))
-        self.assertIn("full physical wall-plane host", inventory_rules)
-        self.assertEqual(by_id["surface_area"]["version"], 5)
-        self.assertEqual(by_id["glazing_properties"]["version"], 4)
+        self.assertEqual(selected, {"sheet_identity", "revision_scope", "page_relationships",
+                                    "site_clue_extraction", "address_confirmation", "room_identity_use"})
+
+    def test_phase1_address_uses_sole_cited_candidate_without_claiming_person_confirmation(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            project = self.project(root)
+            spec = next(row for row in skills.load_subskill_registry()["subskills"] if row["id"] == "address_confirmation")
+            spec = {**spec, "_phase1_autonomous": True}
+            candidate = {"subskill_id": "site_clue_extraction", "confidence": 0.94,
+                "citations": [{"id": "site-page-5", "page": 5, "excerpt": "Project site: 12 Main Road, Gosford NSW 2250"}],
+                "proposal_fields": {"site_candidates": [{"address": "12 Main Road, Gosford NSW 2250"}]}}
+            with patch.object(skills, "_shared_evidence_packet", return_value=({}, [])), \
+                    patch.object(skills, "_reused_proposal", return_value=None):
+                result = skills._execute_subskill(spec, project,
+                    {"site_clue_extraction": {"proposal": candidate}}, "source-fingerprint")
+            self.assertEqual(result["proposal_fields"]["confirmed_address"], "12 Main Road, Gosford NSW 2250")
+            self.assertIsNone(result["proposal_fields"]["confirmation_actor"])
+            self.assertIn("no person confirmation is represented", result["inferences"][0]["method"])
+            self.assertEqual(result["inferences"][0]["citation_ids"], ["site-page-5"])
 
     def test_construction_packet_includes_consented_indexed_material_schedule_evidence(self):
         with tempfile.TemporaryDirectory() as folder:

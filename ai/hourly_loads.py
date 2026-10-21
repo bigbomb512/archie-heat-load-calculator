@@ -1220,7 +1220,7 @@ def resolved_profiles(library, day_type, room):
 
 
 def heat_source_is_timed(source):
-    return float(source.get("quantity", 0)) * float(source.get("watts", 0)) * float(source.get("diversity_factor", 0)) * float(source.get("space_gain_factor", 0)) != 0
+    return float(source.get("quantity", 0)) * (float(source.get("watts", 0)) * float(source.get("space_gain_factor", 0)) + float(source.get("latent_w", 0))) * float(source.get("diversity_factor", 0)) != 0
 
 
 def solar_is_timed(surface):

@@ -258,13 +258,6 @@ def drop_typed_height_stubs(artifact):
 
 
 # ---------------------------------------------------------------- status for the rail
-def _tab(state, detail="", count=None):
-    result = {"state": state, "detail": detail}
-    if count is not None:
-        result["count"] = count
-    return result
-
-
 def traced_rooms(root):
     """Area of each room traced on a plan, from the saved outline and its printed-dimension scale.
 
@@ -397,8 +390,8 @@ def open_information_needs(root):
 
 
 def status(web, project):
-    """Header facts and tab states: done / check / needed / working / todo."""
-    from backend import ai_preliminary_service, autonomous_tasks_service
+    """Header facts, the job's stage (job_progress.milestones) and the room facts the job screens show."""
+    from backend import ai_preliminary_service, autonomous_tasks_service, job_progress
     root = _root(project)
     setup = job_setup(project)
     tasks = autonomous_tasks_service._all_current(root)
@@ -407,23 +400,7 @@ def status(web, project):
     site_task = next((row for row in tasks if row.get("task") == "P1_site" and row.get("applied_value")), None)
     found_site = (site_task or {}).get("applied_value", {}).get("site_text", "") if site_task else ""
     address = setup.get("address") or ""
-    roof_open = [row for row in tasks if row.get("task") == "P5_roof" and row.get("status") == "needs_contractor_answer"]
-    if not address and not found_site and not setup.get("above"):
-        project_tab = _tab("needed", "Add the site address and what's above the tenancy.")
-    elif not address or roof_open or not setup.get("above"):
-        project_tab = _tab("check", "Check the address and what's above the tenancy.")
-    else:
-        project_tab = _tab("done")
-
     confirmed = bool(project.get("reasoning_packet"))
-    if not confirmed:
-        drawings_tab = _tab("needed", "The drawing pages haven't been prepared yet.")
-    elif progress["waiting"]:
-        drawings_tab = _tab("working", "Toki is reviewing the drawings.")
-    elif progress["blocked"]:
-        drawings_tab = _tab("check", "Some drawing checks need attention.")
-    else:
-        drawings_tab = _tab("done")
 
     model = ai_preliminary_service.get(web, project, "workspace", check_freshness=True) if confirmed else {}
     scope = model.get("room_scope") or {}
@@ -443,166 +420,25 @@ def status(web, project):
                    for row in overrides if row["room_id"] not in known]
     included = [row for row in candidates if row.get("include")]
     with_area = [row for row in included if row.get("area_m2") is not None]
-    uncertain = [row for row in included if row.get("status") == "needs_use"
-                 or "below accuracy bar" in str(row.get("area_quality_label") or "")]
-    if not with_area:
-        rooms_tab = _tab("needed", "No room has an area yet.")
-    elif len(with_area) < len(included):
-        rooms_tab = _tab("check", f"{len(with_area)} of {len(included)} rooms have an area")
-    elif uncertain:
-        rooms_tab = _tab("check", f"{len(uncertain)} room{'s' if len(uncertain) != 1 else ''} to check")
-    else:
-        rooms_tab = _tab("done", f"{len(with_area)} rooms")
-
-    envelope = envelope_rooms(root)
-    outlined_included = [row for row in included if envelope.get(row.get("key"), {}).get("has_outline")]
-    missing_outline = [row for row in included if not envelope.get(row.get("key"), {}).get("has_outline")]
-    if missing_outline or not included:
-        walls_detail = ("Select a room to cool on the Rooms tab." if not included
-                        else f"Add outlines for {len(missing_outline)} cooled room(s).")
-        walls_tab = _tab("needed", walls_detail)
-    elif any(room.get("below_accuracy_bar") or room.get("roof") == "unknown"
-             or any(edge.get("boundary") == "unknown" for edge in room.get("edges", []))
-             for room in (envelope.get(row.get("key"), {}) for row in outlined_included)):
-        walls_tab = _tab("check", "Check wall and roof boundaries")
-    else:
-        walls_tab = _tab("done")
-
-    # Child-tab summaries give the workspace enough context to show calm,
-    # specific guidance without changing calculation readiness rules.
-    # Job name, address, and building type are useful context, not new
-    # calculation requirements. Only ask for review when the drawings found
-    # a specific site clue that could be accepted.
-    site_state = "check" if found_site and not address else "done"
-    site_detail = ("Review the address found on the drawings." if found_site and not address else
-                   "Address saved." if address else "Optional job and site details.")
-    tenancy_state = ("check" if setup.get("above") == "not_sure" or roof_open else "done" if setup.get("above") else "needed")
-    tenancy_detail = ("Check the roof information." if roof_open else "Review the tenancy context." if setup.get("above") == "not_sure"
-                      else "Tell us what is above the tenancy." if not setup.get("above") else "Tenancy context saved.")
-    room_detail_rows = [row for row in included if row.get("status") == "needs_use"]
-    if not candidates and not confirmed and progress["waiting"]:
-        room_details_tab = _tab("working", "Preparing the room list.", 0)
-    elif not candidates and not confirmed:
-        room_details_tab = _tab("todo", "Rooms appear after the drawings are read.", 0)
-    elif not candidates:
-        room_details_tab = _tab("needed", "Check the drawings or add a room.", 1)
-    elif room_detail_rows:
-        room_details_tab = _tab("check", f"Choose a use for {len(room_detail_rows)} room(s).", len(room_detail_rows))
-    else:
-        room_details_tab = _tab("done", "Room details are ready.", 0)
-
-    if not candidates and not confirmed and progress["waiting"]:
-        measurements_tab = _tab("working", "Preparing room measurements.", 0)
-    elif not candidates:
-        measurements_tab = _tab("todo", "Measurements appear when rooms are listed.", 0)
-    elif not included:
-        measurements_tab = _tab("needed", "Choose which rooms are cooled.", 1)
-    elif len(with_area) < len(included) and _areas_still_being_found(tasks):
-        # The AI's area steps (outlines, then the last room-size step) are still running: nobody is asked yet.
-        measurements_tab = _tab("working", f"Finding the area of {len(included) - len(with_area)} room(s).", 0)
-    elif len(with_area) < len(included):
-        measurements_tab = _tab("needed", f"Type the area for {len(included) - len(with_area)} room(s) the drawings don't give.",
-                                len(included) - len(with_area))
-    else:
-        below_area_bar = [row for row in with_area
-                          if "below accuracy bar" in str(row.get("area_quality_label") or "").lower()]
-        measurements_tab = (_tab("check", f"Review the area for {len(below_area_bar)} room(s).", len(below_area_bar))
-                            if below_area_bar else _tab("done", "Room measurements are ready.", 0))
-
-    if not candidates and not confirmed and progress["waiting"]:
-        walls_subtab = _tab("working", "Preparing rooms before wall review.", 0)
-        roof_subtab = _tab("working", "Preparing rooms before roof review.", 0)
-    elif not candidates:
-        walls_subtab = _tab("todo", "Walls can be reviewed after rooms are listed.", 0)
-        roof_subtab = _tab("todo", "Roof details appear after rooms are listed.", 0)
-    elif not included:
-        walls_subtab = _tab("needed", "Choose which rooms are cooled on the Rooms tab.", 1)
-        roof_subtab = _tab("todo", "Choose cooled rooms before roof review.", 0)
-    elif missing_outline:
-        detail = f"Add outlines for {len(missing_outline)} cooled room(s)."
-        walls_subtab = _tab("needed", detail, len(missing_outline))
-        roof_subtab = _tab("todo", "Add room outlines before roof review.", 0)
-    else:
-        unknown_walls = sum(edge.get("boundary") == "unknown"
-                            for row in outlined_included for edge in envelope.get(row.get("key"), {}).get("edges", []))
-        unknown_roofs = sum(envelope.get(row.get("key"), {}).get("roof", "unknown") == "unknown"
-                            for row in outlined_included)
-        wall_review_edges = sum(
-            1 for row in outlined_included
-            for edge in envelope.get(row.get("key"), {}).get("edges", [])
-            if str(edge.get("source") or "").startswith("ai")
-        )
-        wall_review_edges += sum(
-            1 for row in outlined_included
-            if any("below accuracy bar" in str(trace.get("ai_quality_label") or "").lower()
-                   for trace in envelope.get(row.get("key"), {}).get("traces", []))
-            and not any(str(edge.get("source") or "").startswith("ai")
-                        for edge in envelope.get(row.get("key"), {}).get("edges", []))
-        )
-        roof_review_rooms = sum(
-            1 for row in outlined_included
-            if str(envelope.get(row.get("key"), {}).get("roof_source") or "").startswith("ai")
-        )
-        walls_subtab = (_tab("needed", f"Classify {unknown_walls} wall(s).", unknown_walls) if unknown_walls else
-                        _tab("check", f"Review {wall_review_edges} AI wall decision(s).", wall_review_edges) if wall_review_edges else
-                        _tab("done", "Wall boundaries are ready.", 0))
-        roof_subtab = (_tab("needed", f"Choose what is above {unknown_roofs} room(s).", unknown_roofs) if unknown_roofs else
-                       _tab("check", f"Review AI roof decisions in {roof_review_rooms} room(s).", roof_review_rooms) if roof_review_rooms else
-                       _tab("done", "Roof details are ready.", 0))
-    if not outlined_included:
-        windows_tab = _tab("todo", "No outlined rooms yet.")
-    elif any(any(edge.get("boundary") == "unknown" for edge in envelope.get(row.get("key"), {}).get("edges", []))
-             for row in outlined_included):
-        windows_tab = _tab("todo", "Classify the walls first")
-    elif any(edge.get("boundary") in {"external", "mall"}
-             and not any(opening.get("trace_id") == edge.get("trace_id")
-                         and opening.get("edge_index") == edge.get("index")
-                         for opening in envelope.get(row.get("key"), {}).get("openings", []))
-             and not any(mark.get("trace_id") == edge.get("trace_id") and mark.get("index") == edge.get("index")
-                         for mark in envelope.get(row.get("key"), {}).get("no_glazing_edges", []))
-             for row in outlined_included for edge in envelope.get(row.get("key"), {}).get("edges", [])):
-        windows_tab = _tab("check", "Check glazing or confirm no glazing on each outside or mall wall")
-    else:
-        windows_tab = _tab("done")
 
     report = model.get("hourly_ai_preliminary_load_report") or {}
     peak = report.get("included_scope_peak") or {}
     total = peak.get("final_design_total_kw", peak.get("design_total_kw"))
-    stale = scope.get("status") != "confirmed" or _typed_since_result(root) or model.get("status") == "stale"
-    if total is None:
-        results_tab = _tab("todo", "Not calculated yet.")
-    elif stale:
-        results_tab = _tab("check", "Inputs changed since the last calculation.")
-    else:
-        results_tab = _tab("done")
-
-    # The guided job flow uses these compact stage facts to lock later work.
-    # Keep legacy tabs intact for engineer mode and existing links.
+    stale = (scope.get("status") != "confirmed" or _typed_since_result(root) or model.get("status") == "stale"
+             or model.get("hourly_ai_preliminary_load_report_stale", False))
     base_report = model.get("phase1_base_room_load_report") or {}
-    base_stale = bool(model.get("phase1_base_room_load_report_stale"))
     base_coverage = base_report.get("phase1_coverage") if isinstance(base_report.get("phase1_coverage"), dict) else {}
-    phase1_complete = bool(base_report and not base_stale and not base_report.get("blocked_reasons")
-                          and base_coverage.get("complete") is True)
-    results_ready = total is not None
-    phase2_complete = bool(results_ready and not stale and results_tab.get("state") == "done")
-    needs_you = {
-        "drawings": int(progress.get("blocked", 0) or 0),
-        # Missing areas are not a contractor action while the area workflow is
-        # still running. Keep the job list and in-job Needs you count aligned.
-        "phase1": sum((row.get("area_m2") is None and not _areas_still_being_found(tasks))
-                      or row.get("status") == "needs_use" for row in candidates),
-        "phase2": open_information_needs(root),
-        "results": 0,
-    }
-    stage = ("drawings" if not confirmed or progress.get("waiting") or progress.get("blocked")
-             else "phase1" if not phase1_complete
-             else "phase2" if not phase2_complete
-             else "results")
+    phase1_complete = bool(base_report and not model.get("phase1_base_room_load_report_stale")
+                           and not base_report.get("blocked_reasons") and base_coverage.get("complete") is True)
+    progress_facts = job_progress.milestones(
+        drawings_confirmed=confirmed, checks=progress, phase1_complete=phase1_complete,
+        result_exists=total is not None, result_stale=stale,
+        rooms=[(row.get("area_m2") is None, row.get("status") == "needs_use") for row in candidates],
+        areas_still_being_found=_areas_still_being_found(tasks), open_needs=open_information_needs(root))
 
     # Ceiling height per room-list key: typed first, otherwise the last resolved height (drawing or default).
     from ai.ceiling_volume_resolution import room_identity as ceiling_identity
-    heights = height_overrides(root)
-    typed_heights = {row["room_id"]: row for row in heights}
+    typed_heights = {row["room_id"]: row for row in height_overrides(root)}
     ceiling = _read(root / "ceiling_volume_resolution.json", {})
     resolved = {row["room_id"]: row for row in (ceiling.get("records", []) if isinstance(ceiling, dict) else [])
                 if isinstance(row, dict) and row.get("room_id") and row.get("ceiling_height_mm") is not None}
@@ -614,33 +450,16 @@ def status(web, project):
         elif cid in resolved:
             room_heights[row.get("key")] = {"ceiling_height_mm": resolved[cid]["ceiling_height_mm"],
                                             "origin": resolved[cid].get("origin", "")}
-    analysis = project.get("analysis") if isinstance(project.get("analysis"), dict) else {}
     return {
         "id": project["id"],
         "name": setup.get("name") or str(project.get("name") or "").removesuffix(".pdf"),
         "address": address, "found_site": found_site,
         "building_type": setup.get("building_type", ""), "above": setup.get("above", ""),
         **_weather_choice(root, setup, address or found_site),
-        "total_kw": total, "result_stale": bool(total is not None and stale),
-        "drawings_confirmed": confirmed, "checks": progress,
-        "stage": stage,
-        "phase1_complete": phase1_complete,
-        "phase2_complete": phase2_complete,
-        "results_ready": results_ready,
-        "needs_you": needs_you,
+        **progress_facts,
         "rooms": {"total": len(candidates), "included": len(included), "with_area": len(with_area)},
-        "area_overrides": overrides, "height_overrides": heights, "room_heights": room_heights,
-        "traced_rooms": traced,
-        "envelope": envelope,
-        "subtabs": {
-            "project": {"job_site": _tab(site_state, site_detail, 0 if site_state == "done" else 1),
-                        "tenancy_context": _tab(tenancy_state, tenancy_detail, 0 if tenancy_state == "done" else 1)},
-            "rooms": {"room_details": room_details_tab, "measurements": measurements_tab},
-            "walls": {"walls": walls_subtab, "roof": roof_subtab},
-        },
-        "tabs": {"project": project_tab, "drawings": drawings_tab, "rooms": rooms_tab,
-                 "walls": walls_tab, "windows": windows_tab, "results": results_tab},
-        "pages": analysis.get("pages_analysed"),
+        "area_overrides": overrides, "room_heights": room_heights,
+        "envelope": envelope_rooms(root),
     }
 
 
@@ -677,11 +496,14 @@ def _saved_result_facts(root):
         "current_fingerprint": input_set.get("input_fingerprint"),
         "base_exists": bool(base_report),
         "base_fingerprint": base_report.get("preliminary_input_set_fingerprint"),
+        "phase1_input_fingerprint": input_set.get("phase1_input_fingerprint"),
+        "base_phase1_fingerprint": base_report.get("phase1_input_fingerprint"),
         "coverage_complete": coverage.get("complete") is True,
         "base_blocked": bool(base_report.get("blocked_reasons")),
         "full_exists": bool(full_report),
         "full_fingerprint": full_report.get("preliminary_input_set_fingerprint") or full_report.get("input_fingerprint"),
         "full_has_result": bool(full_report.get("included_scope_peak") or full_report.get("scenario_results")),
+        "full_catalogue_hash": full_report.get("equipment_catalogue_hash"),
         "candidates": [{"no_area": row.get("area_m2") is None, "needs_use": row.get("status") == "needs_use"}
                        for row in (scope.get("candidates") or []) if isinstance(row, dict)],
     }
@@ -693,51 +515,37 @@ def _saved_result_facts(root):
 def project_list_summary(web, project):
     """Return quick job-list facts from saved JSON, without rebuilding model freshness.
 
-    Opening a job still calls :func:`status` for the complete, current answer. The
-    jobs page can contain many projects, so it must not perform those expensive
-    per-project geometry and input-fingerprint checks before it can render.
+    Opening a job still calls :func:`status` for the complete, current answer; both use job_progress.milestones,
+    so the list and the job agree on the stage. The jobs page can contain many projects, so it must not perform the
+    expensive per-project geometry and input-fingerprint checks before it can render.
     """
-    from backend import autonomous_tasks_service
+    from backend import autonomous_tasks_service, job_progress
 
     root = _root(project)
     setup = job_setup(project)
     tasks = autonomous_tasks_service._all_current(root)
-    progress = autonomous_tasks_service._task_progress(root)
-    confirmed = bool(project.get("reasoning_packet"))
     site = next((row.get("applied_value", {}).get("site_text", "") for row in tasks
                  if row.get("task") == "P1_site" and isinstance(row.get("applied_value"), dict)), "")
-
     facts = _saved_result_facts(root)
-    areas_still_being_found = _areas_still_being_found(tasks)
-    phase1_needs = sum(1 for row in facts["candidates"]
-                       if (row["no_area"] and not areas_still_being_found) or row["needs_use"])
-
     current_fingerprint = facts["current_fingerprint"]
+    phase1_fingerprint_matches = (facts["base_phase1_fingerprint"] == facts["phase1_input_fingerprint"]
+                                  if facts["base_phase1_fingerprint"] else facts["base_fingerprint"] == current_fingerprint)
     phase1_current = bool(facts["base_exists"] and current_fingerprint
-                          and facts["base_fingerprint"] == current_fingerprint
+                          and phase1_fingerprint_matches
                           and facts["coverage_complete"] and not facts["base_blocked"])
-    full_current = bool(facts["full_exists"] and current_fingerprint and facts["full_fingerprint"] == current_fingerprint
+    from ai import equipment_catalogue
+    # A change to either equipment workbook makes the saved Phase 2 result out of date.
+    catalogue_current = facts["full_catalogue_hash"] == equipment_catalogue.current_hash()
+    full_current = bool(catalogue_current and facts["full_exists"] and current_fingerprint and facts["full_fingerprint"] == current_fingerprint
                         and not _typed_since_result(root))
-    results_ready = bool(full_current and facts["full_has_result"])
-    phase2_complete = bool(phase1_current and results_ready)
-    stage = ("drawings" if not confirmed or progress.get("waiting") or progress.get("blocked")
-             else "phase1" if not phase1_current
-             else "phase2" if not phase2_complete
-             else "results")
-    needs_you = {
-        "drawings": int(progress.get("blocked", 0) or 0),
-        "phase1": int(phase1_needs),
-        "phase2": open_information_needs(root),
-        "results": 0,
-    }
     return {
         "name": setup.get("name") or str(project.get("name") or "").removesuffix(".pdf"),
-        "stage": stage,
-        "needs_you": needs_you,
-        "phase1_complete": phase1_current,
-        "phase2_complete": phase2_complete,
-        "results_ready": results_ready,
         "address": setup.get("address", ""),
         "found_site": site,
-        "result_stale": bool(facts["full_exists"] and not full_current),
+        **job_progress.milestones(
+            drawings_confirmed=bool(project.get("reasoning_packet")),
+            checks=autonomous_tasks_service._task_progress(root), phase1_complete=phase1_current,
+            result_exists=facts["full_has_result"], result_stale=not full_current,
+            rooms=[(row["no_area"], row["needs_use"]) for row in facts["candidates"]],
+            areas_still_being_found=_areas_still_being_found(tasks), open_needs=open_information_needs(root)),
     }

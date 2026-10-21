@@ -226,6 +226,31 @@ Note: `mall` is a new boundary class. The envelope method treats it like
 `adjacent_tenancy` (no conduction in the preliminary method) until a mall
 temperature method exists.
 
+## P4 `storefront_wall`: which outside wall is the storefront (plan + elevation images, ≤ 1,500 characters)
+
+Added 2026-10-20. The storefront is never left out (user decision): when the elevation's printed overall width
+matches exactly one outside or mall wall, code picks it; one outside wall settles it alone. Otherwise (Butcher Buffet:
+the width is drawn as outlines, so it isn't in the text layer, and three outside walls fit) the AI gets the plan with
+the outside walls numbered in red plus the storefront elevation, and says which numbered wall(s) each elevation shows,
+with evidence (entry doors and glazing on the plan, the street or mall, gridlines, width).
+
+**Cross-checks:** the numbers are numbered walls; a shopfront/storefront elevation shows at least one; evidence is
+given; an overall width it reads must match the chosen walls' combined length (2 % or up to 600 mm wider). A rejected
+answer is sent back with the reason. Every room on the chosen wall(s) then gets a `storefront_openings` task and takes
+the share of the glass along its own length of the wall (rooms sharing the wall aren't counted twice).
+
+## P7 `ceiling_heights` (one page image with the height labels boxed, ≤ 2,000 characters)
+
+Added 2026-10-20. Heights are read **by code** from the printed labels in the text layer: ceiling plans ("CH:2600MM",
+"C.H. 2700", "CLG HT 2400", "U/S OF SLAB 3750MM"; rotated labels come out backwards and words split over separate
+items are joined); elevations and sections ("2600AFFL"). The AI only says which boxed label (H1, H2…) is which
+room's ceiling, or why the sheet doesn't show it; a room with two ceiling heights lists both with the share of its
+floor under each (area-weighted height). Ceiling plans are asked first; elevations and sections only for the rooms
+their labels don't cover. The answered heights go into the room list (`ai_preliminary_service.
+_with_printed_ceiling_heights`), where the ceiling resolver takes them over the preliminary 2,700 mm (a typed height
+still wins), and into the storefront glazing (glass to ceiling). Only a room no sheet labels keeps the labelled
+preliminary height.
+
 ## P4 `storefront_openings` (one elevation crop ≤ 2,048 px, ≤ 2,000 characters)
 
 Inputs: the elevation view crop, its dimension and level strings with
@@ -293,7 +318,7 @@ reach it through the slab rule even when the AI answers unknown.
 | Value | Evidence missing | Applied value | Shown in result |
 |---|---|---|---|
 | Wall beyond a perimeter edge | Nothing drawn or noted | adjacent tenancy (storefront edge: mall or external, per P3) | "Assumed: typical for a tenancy in a centre" |
-| Roof exposure | No section, level or slab note | none: ask the contractor (user decision 2026-10-05) | "Answered by the contractor" |
+| Roof exposure | No decisive section, level or slab note | most likely case from P5 (user decision 2026-10-15) | "Assumed (most likely case)" |
 | Shopfront sill | Not printed | 0 mm | "Assumed glass to floor" |
 | Shopfront head | Not printed | ceiling height | "Assumed glass to ceiling" |
 | North | No north arrow | none (sun not assessed) | "North not found; façade sun not assessed" |
@@ -420,3 +445,18 @@ the AI outline task on the scan), which is the next step for walls and roof on
 scanned sets. The cover sheet's address block (top left of p. 1) is outside the two
 title-block crops; on this set the title strips carried the site, but a set whose
 site appears only on the cover would be missed.
+
+## Checking the model after drawing tasks (2026-10-20)
+
+`backend/phase1_supervisor_service.py` audits the current traced rooms, room uses, drawing task outcomes,
+printed ceiling heights and assembled envelope inputs. It locally previews the empty-room calculation to
+find omissions and zero-load outcomes. The skill review is limited to room identity/use and site/document
+mapping; it is not the source of envelope repairs.
+
+Material gaps are queued by importance. Independent provider requests share `ARCHIE_AI_PARALLEL_CALLS`
+(default 8). Geometry, boundary, height/roof and storefront checks follow their dependencies within the
+same investigation cycle, rebuilding between dependent checks. A short targeted note is included in each
+usual task packet and its fingerprint. Existing validators and apply functions remain authoritative.
+Each gap gets at most two targeted attempts, with an early stop when neither physical model inputs nor
+the gap set changed, and three cycles as a backstop. Remaining gaps are listed with the draft result;
+there is no spend cap, web lookup or automatic operating-load startup.

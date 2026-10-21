@@ -10,7 +10,7 @@ the AI starts from the analysis itself, as before.
 from pathlib import Path
 
 from backend import page_preparation_service
-from backend.job_runner import BackgroundJob, recovery, read_json
+from backend.job_runner import BackgroundJob, recovery, read_json, step_state
 
 JOB_FILE = "new_job_job.json"
 STEPS = [("analyse", "Reading the PDF: page titles, drawing types and previews"),
@@ -59,7 +59,7 @@ def status(web, project):
     running = preparation if preparation.get("status") in {"queued", "running", "stopping"} else job
     error = next((row.get("error") for row in (preparation, job)
                   if row.get("status") in {"failed", "interrupted"} and row.get("error")), "")
-    return {"id": project["id"], "state": state, "analysed": analysed, "drawings_ready": ready,
+    return {"id": project["id"], "state": state, "step_state": step_state(state), "analysed": analysed, "drawings_ready": ready,
             "pages": project.get("pages"), "step_label": running.get("step_label", "") if state == "running" else "",
             "error": error if state == "failed" else "", "job": job, "preparation": preparation,
             "recovery_run_id": running.get("job_id"),

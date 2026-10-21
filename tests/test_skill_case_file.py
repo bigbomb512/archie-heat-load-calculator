@@ -122,6 +122,44 @@ class CallTests(CaseFileTests):
         self.assertEqual([Path(path).name for path in provider.images[0]], ["p-05.png", "p-20.png"])
         self.assertEqual((record["provider"], record["evidence_pages"]), ("codex_case_file", [5, 20]))
 
+    def test_a_reply_cut_off_at_the_cap_is_sent_once_more_with_less_thinking_and_more_room(self):
+        from backend import ai_provider
+        cut = ai_provider.InvalidProviderReply("The reply was not valid JSON.", {
+            "finish_reason": "length", "max_tokens": 48000, "usage": {"output_tokens": 48000, "reasoning_output_tokens": 34739}})
+        first, second = FakeProvider(error=cut), FakeProvider()
+        made = iter([first, second])
+        skills.CASE_FILE_PROVIDER_FACTORY = lambda: next(made)
+        record = {"raw_record": {}}
+        raw = skills._call_case_file_provider(self.subskill("surface_area"), self.project, {}, {}, record)
+        self.assertEqual(raw["status"], "needs_review")
+        self.assertEqual((len(first.prompts), len(second.prompts)), (1, 1))
+        self.assertEqual((second.reasoning_effort, second.max_tokens_override), ("low", 96000))
+        self.assertEqual(record["cut_off_retry"]["first_reasoning_tokens"], 34739)
+
+    def test_an_unreadable_reply_that_wasnt_cut_off_is_not_sent_again(self):
+        from backend import ai_provider
+        broken = ai_provider.InvalidProviderReply("The reply was not valid JSON.", {"finish_reason": "stop", "usage": {"output_tokens": 900}})
+        provider = FakeProvider(error=broken)
+        skills.CASE_FILE_PROVIDER_FACTORY = lambda: provider
+        with self.assertRaises(skills.SkillProviderError) as raised:
+            skills._call_case_file_provider(self.subskill("surface_area"), self.project, {}, {}, {"raw_record": {}})
+        self.assertEqual(len(provider.prompts), 1)
+        self.assertIn("not valid JSON", raised.exception.detail)
+
+    def test_cut_off_twice_fails_with_a_plain_reason(self):
+        from backend import ai_provider
+        cut = ai_provider.InvalidProviderReply("The reply was not valid JSON.", {"finish_reason": "length", "usage": {}})
+        providers = [FakeProvider(error=cut), FakeProvider(error=cut)]
+        made = iter(providers)
+        skills.CASE_FILE_PROVIDER_FACTORY = lambda: next(made)
+        with self.assertRaises(skills.SkillProviderError) as raised:
+            skills._call_case_file_provider(self.subskill("surface_area"), self.project, {}, {}, {"raw_record": {}})
+        self.assertEqual([len(p.prompts) for p in providers], [1, 1])                  # one retry, not more
+        self.assertIn("too long and was cut off", raised.exception.detail)
+        steps = skills._failed_steps([{"id": "surface_area", "status": "failed", "prerequisites": [],
+                                       "error_code": "skill_provider_invalid_json", "remediation": [raised.exception.detail]}])
+        self.assertEqual(steps[0]["kind"], "cut_off")
+
     def test_after_the_usage_limit_no_more_skills_are_sent(self):
         limit = skills.SkillProviderError("codex_cli_failed", {"stderr_tail": "ERROR: You've hit your usage limit. try again at 6:01 PM."})
         provider = FakeProvider(error=limit)
@@ -292,8 +330,9 @@ class RunTests(unittest.TestCase):
                 manifest = json.loads((root / "skill_workflow_run.json").read_text())
             called = {skill_id for prompt in provider.prompts for skill_id in called_skills(prompt)}
             self.assertEqual(manifest["scope"], "phase1_envelope")
-            self.assertIn("room_boundaries_areas", called)
-            self.assertIn("construction_matching", called)
+            self.assertIn("room_identity_use", called)
+            self.assertNotIn("room_boundaries_areas", called)  # Drawing tasks own the envelope.
+            self.assertNotIn("construction_matching", called)
             self.assertNotIn("equipment_evidence", called)
             self.assertEqual(manifest["subskills"]["equipment_evidence"]["status"], "not_in_scope")
         finally:

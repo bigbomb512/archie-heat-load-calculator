@@ -12,9 +12,7 @@ Read-only: it gathers from the result and the answer files and changes nothing.
 import json
 from pathlib import Path
 
-from ai.equipment_heat import PLACEHOLDER, from_data_sheet, heat_w, proposal as heat_proposal
 
-KITCHEN_TYPES = {"cooking", "dishwashing", "hot_drinks"}
 ORDER = {"to_find": 0, "not_set": 1, "assumed": 2, "typical": 3, "placeholder": 4}
 # The calculation uses a room's own value only from these origins; anything else falls back to the room type's typical
 # value (ai.ai_preliminary._resolved_internal_value), so it is listed as typical.
@@ -90,38 +88,26 @@ def gather(web, project):
             items.append(_item("typical", room.get("name", "Room"), "Equipment is topped up to the typical allowance: the listed items "
                                                                    "give less heat than a typical room of this kind.", "drawings"))
 
-    # Equipment accepted with typical ratings or the generic heat-to-room factors.
-    equipment = _read(root / "page_extraction.json", {}).get("equipment_appliances", {})
-    decisions = _read(root / "page_extraction_decisions.json", {}).get("equipment_appliances", {})
-    typical_rating, generic_factor, uncounted = [], [], []
-    for finding in equipment.get("findings", []):
-        decision = decisions.get(finding.get("id"), {})
-        if decision.get("run") != equipment.get("run"):
-            decision = {}
-        value, suggested = decision.get("value") or finding.get("value") or {}, heat_proposal(finding.get("value") or {})
-        name = f"{value.get('code') + ' ' if value.get('code') else ''}{value.get('name', '')}".strip()
-        if decision.get("status") != "accepted" or heat_w(value) is None:
-            # Kitchen appliances read from the drawings but not in the calculation: their heat needs the data sheet.
-            if decision.get("status") != "rejected" and suggested["type"] in KITCHEN_TYPES:
-                uncounted.append(name)
-            continue
-        if from_data_sheet(value):
-            continue                                  # its heat is the data sheet's figure, not a typical value
-        if suggested["rated_source"] == PLACEHOLDER and value.get("rated_input_w") == suggested["rated_input_w"]:
-            typical_rating.append(name)
-        if value.get("heat_to_space_factor") == suggested["heat_to_space_factor"]:
-            generic_factor.append(name)
-    if uncounted:
-        items.append(_item("to_find", "Kitchen equipment", f"{len(uncounted)} kitchen appliance(s) on the drawings aren't in the "
-                                                           "calculation: enter each one's heat to the room from its data sheet "
-                                                           "(or its rated power and heat-to-room factor), or reject it.",
-                           "drawings", ", ".join(uncounted[:12])))
-    if typical_rating:
-        items.append(_item("typical", "Equipment", f"{len(typical_rating)} item(s) use a typical rating, not a spec-sheet one.", "drawings",
-                           ", ".join(typical_rating[:12])))
-    if generic_factor:
-        items.append(_item("placeholder", "Equipment", f"{len(generic_factor)} item(s) use the generic heat-to-room factor (AIRAH DA09 pending).",
-                           "drawings", ", ".join(generic_factor[:12])))
+    # Catalogue resolution replaces proposal-by-proposal equipment approval.
+    from backend import equipment_catalogue_service, page_extraction_service
+    coverage = equipment_catalogue_service.resolve(project, page_extraction_service.rooms(project))
+    if coverage.get("reading_note") and report:
+        items.append(_item("to_find", "Equipment reading", coverage["reading_note"], "operating"))
+    if coverage["catalogue_error"]:
+        items.append(_item("to_find", "Equipment catalogue", coverage["catalogue_error"], "operating"))
+    by_status = {}
+    for row in coverage["records"]:
+        name = f"{row['value'].get('code') or ''} {row['name']}".strip()
+        by_status.setdefault(row["status"], []).append(f"{name} ({row['room']})" if row.get("room") else name)
+    for status, kind, topic, detail in (
+            ("no_value", "to_find", "Equipment with no value", "No typical or generic value for these yet; the room's typical "
+                                                               "equipment allowance covers them. Add the type to the typical values sheet."),
+            ("no_room", "to_find", "Equipment with no room", "The drawings don't show which room these are in, so they aren't counted."),
+            ("typical", "typical", "Equipment", "Typical values for the type and size, not the installed model's data sheet."),
+            ("generic", "placeholder", "Equipment", "Generic values for the kind of item: check these.")):
+        if by_status.get(status):
+            items.append(_item(kind, topic, f"{len(by_status[status])} item(s). {detail}", "operating",
+                               ", ".join(by_status[status][:12])))
 
     # Methods assumed by default.
     for room, answer in (_read(root / "exhaust_answers.json", {}).get("rooms") or {}).items():
@@ -180,10 +166,6 @@ def gather(web, project):
                      and row.get("status") not in {"accepted", "rejected"}]
     if open_findings:
         items.append(_item("to_find", "PDF review", f"{len(open_findings)} finding(s) from the drawings are still to review; they aren't in the number.", "drawings"))
-    if equipment.get("findings"):
-        unreviewed = sum(1 for finding in equipment["findings"] if decisions.get(finding.get("id"), {}).get("run") != equipment.get("run"))
-        if unreviewed:
-            items.append(_item("to_find", "Equipment", f"{unreviewed} equipment item(s) found in the drawings are still to review; they aren't in the number.", "drawings"))
 
     # What is above the tenancy.
     try:

@@ -2,27 +2,16 @@ import { getJson, sendJson, escapeHtml } from "./api.js";
 import { planSvg, lineLegend } from "./plan.js";
 
 const query = (projectId) => `?project_id=${encodeURIComponent(projectId)}`;
-const STOPPED = new Set(["failed", "error", "blocked", "interrupted"]);
-const RUNNING = new Set([
-  "working",
-  "running",
-  "in_progress",
-  "queued",
-  "pending",
-  "reading",
-  "stopping",
-]);
+// Where each step is comes from the server (job_runner.step_state): waiting, active, stopping, done or failed,
+// whatever word the step's own file uses.
+const stepOf = (data) => String(data?.step_state || "waiting");
+const working = (data) => ["active", "stopping"].includes(stepOf(data));
+const stopped = (data) => stepOf(data) === "failed";
 
 function stateOf(data) {
-  const status = String(data?.status || data?.state || "").toLowerCase();
-  if (
-    ["done", "complete", "completed", "confirmed", "ready", "needs_review"].includes(status)
-  ) {
-    return "done";
-  }
-  if (STOPPED.has(status) || data?.enabled === false) return "waiting";
-  if (RUNNING.has(status)) return "active";
-  return "waiting";
+  if (stepOf(data) === "done") return "done";
+  if (data?.enabled === false) return "waiting";
+  return working(data) ? "active" : "waiting";
 }
 
 // A refused or expired AI key stops every page; say so in plain words instead of the provider's raw error.
@@ -91,7 +80,7 @@ function unansweredLine(data) {
 function envelopeFailureLine(data) {
   const steps = data?.failed_steps || [];
   if (!steps.length) {
-    return "Working out the walls, roof and floor stopped part-way. What it found so far is kept.";
+    return "The room and site review stopped part-way. Its saved findings are kept.";
   }
   const named = steps.map((row) => `${row.label}: ${row.reason}.`).join(" ");
   const uses = [...new Set(steps.flatMap((row) => row.uses_it || []))];
@@ -99,10 +88,10 @@ function envelopeFailureLine(data) {
 }
 
 function stageLine(data, kind, status, plan) {
-  if (data?.status === "stopping") return data.recovery?.reason || "Waiting for the current AI request to finish or time out, then resuming unfinished work.";
-  if (kind !== "calculation" && data?.recovery?.label === "Check and resume" && data?.recovery?.reason && !RUNNING.has(String(data.status || ""))) return data.recovery.reason;
+  if (stepOf(data) === "stopping") return data.recovery?.reason || "Waiting for the current AI request to finish or time out, then resuming unfinished work.";
+  if (kind !== "calculation" && data?.recovery?.label === "Check and resume" && data?.recovery?.reason && !working(data)) return data.recovery.reason;
   if (kind === "pages") {
-    if (STOPPED.has(String(data?.status || "").toLowerCase())) {
+    if (stopped(data)) {
       return pageReadingProblem(data);
     }
     const read = Number(data?.pages_read ?? data?.read ?? 0);
@@ -116,7 +105,7 @@ function stageLine(data, kind, status, plan) {
       : "Reading the drawing pages.";
   }
   if (kind === "equipment") {
-    return data?.status === "done"
+    return stepOf(data) === "done"
       ? `${data.findings?.length || 0} equipment items found.`
       : "Looking for equipment in the drawing set.";
   }
@@ -124,7 +113,7 @@ function stageLine(data, kind, status, plan) {
     if (stateOf(data) === "active") return drawingTaskProgress(data);
     if (stateOf(data) === "done" && callFailures(data).length) return unansweredLine(data);
     if (stateOf(data) === "done" && data?.recovery?.label === "Try again") return data.recovery.reason;
-    if (STOPPED.has(String(data?.status || "").toLowerCase())) {
+    if (stopped(data)) {
       return "Tracing the rooms stopped before it finished. What it found so far is kept.";
     }
     const traced = (plan.rooms || []).filter((room) => room.has_outline);
@@ -138,24 +127,37 @@ function stageLine(data, kind, status, plan) {
         ? `${found} Working out the area of ${stillFinding.map((room) => room.name).join(", ")}.`
         : found;
     }
-    return data?.status === "done"
+    return stepOf(data) === "done"
       ? "The room outlines are ready."
       : "Reading the room labels and plan outlines.";
   }
   if (kind === "envelope") {
     if (data?.status === "needs_review") {
-      return "Wall, roof, floor and window details are ready. Values the drawings don't give are labelled assumptions.";
+      return "Room names and site details have been reviewed.";
     }
-    if (data?.status === "running" || data?.status === "queued") {
-      return "Working through the room boundaries and materials.";
+    if (working(data)) {
+      return "Reviewing room names and site details.";
     }
-    if (data?.status === "failed") return envelopeFailureLine(data);
+    if (stopped(data)) return envelopeFailureLine(data);
     if (data?.status === "stale") {
       return "Finished, but the drawings or inputs changed afterwards. Try again to work them out from the current drawings; the earlier result is kept until then.";
     }
-    return data?.status === "done" || data?.status === "complete"
-      ? "Wall, roof, floor and window details are ready."
-      : "Working through the room boundaries and materials.";
+    return stepOf(data) === "done"
+      ? "Room names and site details have been reviewed."
+      : "Reviewing room names and site details.";
+  }
+  if (kind === "supervisor") {
+    const copy = working(data) ? data.step_label || "Checking the empty-room model."
+      : stepOf(data) === "done" ? data.outcome === "needs_information"
+        ? "The model checks finished, but no cooled room has enough supported inputs yet. See the remaining exceptions."
+        : "The model checks are finished; remaining uncertainties are listed with the result."
+      : stopped(data) ? "Checking the empty-room model stopped. Resume to keep the saved answers."
+      : data?.recovery?.reason || "Starts after the room and site review.";
+    const cycle = Number(data?.cycle) || 0;
+    const gaps = `${Number(data?.gaps_found) || 0} gaps found · ${Number(data?.gaps_fixed) || 0} fixed`;
+    const price = data?.spend;
+    const spend = price ? ` · US$${Number(price.cost_usd || 0).toFixed(4)} spent${price.unpriced_calls ? " (some calls have no reported price)" : ""}` : "";
+    return `${copy}${cycle ? ` Investigation cycle ${cycle} of ${data.max_cycles || 3}. ${gaps}${spend}.` : spend}`;
   }
   if (kind === "calculation") {
     if (status.phase1_complete) return "Saved empty-room loads are available.";
@@ -165,18 +167,18 @@ function stageLine(data, kind, status, plan) {
     if (leftOut.length) {
       return `Calculated with ${leftOut.map((room) => room.label || room.name).join(", ")} left out.`;
     }
-    if (RUNNING.has(String(data?.status || "").toLowerCase())) {
+    if (working(data)) {
       return data?.step_label || "Calculating each room’s empty-room load.";
     }
     if (data?.offerStart) {
       return "The empty-room load hasn't started. Calculate now runs it from the saved drawing evidence.";
     }
-    if (data?.readiness?.ready && data?.status !== "done" && !STOPPED.has(String(data?.status || ""))) return "Starting the empty-room load calculation.";
+    if (data?.readiness?.ready && stepOf(data) !== "done" && !stopped(data)) return "Starting the empty-room load calculation.";
     if (data?.readiness?.reasons?.length) return data.readiness.reasons.join(" ");
-    if (STOPPED.has(String(data?.status || "").toLowerCase())) {
+    if (stopped(data)) {
       return data?.error || data?.problem || "The empty-room load calculation stopped. Try again to continue.";
     }
-    if (data?.status === "done") {
+    if (stepOf(data) === "done") {
       return "The drawings changed since the last calculation. The empty-room load is recalculated when the drawing review finishes.";
     }
     return "Starts on its own when the drawing review finishes.";
@@ -190,7 +192,7 @@ function stage(title, data, kind, status, plan, retryEndpoint = "") {
     kind === "calculation"
       ? status.phase1_complete
         ? "done"
-        : RUNNING.has(String(data?.status || "").toLowerCase()) || data?.readiness?.ready && !data.offerStart && !STOPPED.has(String(data?.status || "")) && data?.status !== "done"
+        : working(data) || data?.readiness?.ready && !data.offerStart && !stopped(data) && stepOf(data) !== "done"
           ? "active"
           : "waiting"
       : stateOf(data) === "done" && data?.recovery?.label === "Try again"
@@ -200,14 +202,16 @@ function stage(title, data, kind, status, plan, retryEndpoint = "") {
   const startNow = kind === "calculation" && data?.offerStart
     ? `<button class="job-button secondary" data-calculate-now>Calculate now</button><p class="job-note" role="status"></p>` : "";
   const retry = kind === "calculation"
-    ? STOPPED.has(String(data?.status || "")) && data?.readiness?.ready && retryEndpoint
+    ? stopped(data) && data?.readiness?.ready && retryEndpoint
       ? `<button class="job-button secondary" data-retry="${retryEndpoint}">Try again</button><p class="job-note" role="status"></p>` : ""
     : recoveryButton(data, retryEndpoint, kind);
+  const exceptions = kind === "supervisor" && data?.exceptions?.length
+    ? `<ul class="job-note" data-supervisor-exceptions>${data.exceptions.map((row) => `<li>${escapeHtml(row.message)}</li>`).join("")}</ul>` : "";
   const problem =
     kind === "rooms" && data?.last_problem && stateOf(data) === "active"
       ? `<p class="job-caption" data-stage-problem>${escapeHtml(data.last_problem)}</p>`
       : "";
-  return `<li class="job-stage ${state}" data-stage="${kind}"><span class="job-stage-icon" aria-hidden="true">${state === "done" ? "✓" : ""}</span><span><strong>${title}</strong><p>${escapeHtml(copy)}</p>${problem}${retry}${startNow}</span></li>`;
+  return `<li class="job-stage ${state}" data-stage="${kind}"><span class="job-stage-icon" aria-hidden="true">${state === "done" ? "✓" : ""}</span><span><strong>${title}</strong><p>${escapeHtml(copy)}</p>${problem}${exceptions}${retry}${startNow}</span></li>`;
 }
 
 const recoveryNotes = new Map();
@@ -225,11 +229,11 @@ function recoveryButton(data, endpoint, kind) {
 // Preparation may be owned by the initial analysis job or by its page-preparation child.
 function preparationStage(newJob) {
   if (!newJob) return "";
-  const ready = newJob.drawings_ready && newJob.state === "done";
-  const state = ready ? "done" : RUNNING.has(newJob.state) ? "active" : "waiting";
+  const ready = newJob.drawings_ready && stepOf(newJob) === "done";
+  const state = ready ? "done" : working(newJob) ? "active" : "waiting";
   const line = ready ? `${Number(newJob.pages) || "Drawing"} pages ready.`
-    : newJob.state === "stopping" ? newJob.recovery?.reason || "Waiting for preparation to stop, then resuming."
-    : newJob.state === "running" ? newJob.step_label || "Reading the PDF."
+    : stepOf(newJob) === "stopping" ? newJob.recovery?.reason || "Waiting for preparation to stop, then resuming."
+    : stepOf(newJob) === "active" ? newJob.step_label || "Reading the PDF."
     : newJob.error || newJob.recovery?.reason || "Prepare the drawing set to continue.";
   return `<li class="job-stage ${state}" data-preparation-stage><span class="job-stage-icon" aria-hidden="true">${ready ? "✓" : ""}</span><span><strong>Prepare the drawing set</strong><p data-preparation-line>${escapeHtml(line)}</p>${ready ? "" : recoveryButton(newJob, "/api/new-job", "preparation")}</span></li>`;
 }
@@ -268,6 +272,7 @@ function statusSentence(data, status, plan) {
     ["equipment", data.equipment],
     ["rooms", data.rooms],
     ["envelope", data.envelope],
+    ["supervisor", data.supervisor],
     ["calculation", data.calculation],
   ];
   // Report the active prerequisite before downstream waiting states.
@@ -284,7 +289,7 @@ function statusSentence(data, status, plan) {
   if (kind === "rooms" && stateOf(value) === "done" && callFailures(value).length) {
     return `Some drawing tasks got no answer because ${value.connection_stopped || callFailures(value).every((row) => row.kind === "connection") ? "the connection to the AI service failed" : "the AI's calls failed"}. Try again under Trace the rooms and walls.`;
   }
-  if (STOPPED.has(String(value?.status || "").toLowerCase()) && value?.recovery?.label === "Try again") {
+  if (stopped(value) && value?.recovery?.label === "Try again") {
     if (kind === "pages") return pageReadingProblem(value);
     return kind === "envelope"
       ? `${(value.failed_steps || []).map((row) => row.label).join(" and ") || "Working out the walls, roof and floor"} stopped. Try again to continue; finished steps are kept.`
@@ -301,7 +306,7 @@ function statusSentence(data, status, plan) {
   return `${copy} The review keeps going if you leave.`;
 }
 
-const preparing = (newJob) => Boolean(newJob && (!newJob.drawings_ready || ["running", "stopping", "failed"].includes(newJob.state)));
+const preparing = (newJob) => Boolean(newJob && (!newJob.drawings_ready || working(newJob) || stopped(newJob)));
 const REFRESH_MS = 5000;
 let watchGeneration = 0;
 // Calculation availability comes from the server, never from a browser timer.
@@ -317,6 +322,7 @@ async function fetchStages(projectId) {
     ["equipment", `/api/page-extraction${query(projectId)}&kind=equipment_appliances`],
     ["rooms", `/api/drawing-tasks${query(projectId)}`],
     ["envelope", `/api/skill-workflow${query(projectId)}`],
+    ["supervisor", `/api/phase1-supervisor${query(projectId)}`],
     ["calculation", `/api/job-calculation${query(projectId)}`],
     ["newJob", `/api/new-job${query(projectId)}`],
   ];
@@ -330,9 +336,9 @@ async function fetchStages(projectId) {
       const next = { ...reply.value, recovery_project_id: projectId };
       const previousRun = previous?.job_id || previous?.run_id;
       const nextRun = next.job_id || next.run_id;
-      if (previous?.status === "stopping" && next.status === "running" && previousRun && previousRun === nextRun) return;
+      if (stepOf(previous) === "stopping" && stepOf(next) === "active" && previousRun && previousRun === nextRun) return;
       const key = `${projectId}:${entries[index][1].split("?")[0]}`;
-      if ((previous?.status === "stopping" || previous?.state === "stopping") && (next.status === "running" || next.state === "running")) recoveryNotes.set(key, "Resumed unfinished work.");
+      if (stepOf(previous) === "stopping" && stepOf(next) === "active") recoveryNotes.set(key, "Resumed unfinished work.");
       if (next.recovery?.label === "") recoveryNotes.delete(key);
       data[name] = next;
     }
@@ -346,7 +352,8 @@ function stagesMarkup(data, status, plan) {
         ${stage("Read every page", data.reading, "pages", status, plan, "/api/page-reading")}
         ${stage("Find equipment", data.equipment, "equipment", status, plan, "/api/page-extraction")}
         ${stage("Trace the rooms and walls", data.rooms, "rooms", status, plan, "/api/drawing-tasks")}
-        ${stage("Work out walls, roof, floor and windows", data.envelope, "envelope", status, plan, "/api/skill-workflow")}
+        ${stage("Review room names and site", data.envelope, "envelope", status, plan, "/api/skill-workflow")}
+        ${stage("Check the empty-room model", data.supervisor, "supervisor", status, plan, "/api/phase1-supervisor")}
         ${stage("Calculate each room’s empty-room load", data.calculation, "calculation", status, plan, "/api/job-calculation")}`;
 }
 
@@ -354,10 +361,10 @@ function sentenceFor(data, status, plan) {
   if (data.refreshProblem) return "Unable to refresh status. Showing the last confirmed progress; checking again shortly.";
   const newJob = data.newJob;
   if (preparing(newJob)) {
-    return newJob.state === "stopping" ? "Restarting preparation; waiting for in-flight work to stop."
-      : newJob.state === "failed"
+    return stepOf(newJob) === "stopping" ? "Restarting preparation; waiting for in-flight work to stop."
+      : stopped(newJob)
       ? "Preparing the drawing set stopped. Try again to continue."
-      : newJob.state === "running"
+      : stepOf(newJob) === "active"
         ? "Toki is reading the PDF. You can close this page; it keeps going."
         : "Read the PDF to start this job.";
   }
@@ -366,16 +373,16 @@ function sentenceFor(data, status, plan) {
 
 // Which stages are finished and which one is working; when this changes, the plan and facts are re-read too.
 function stageShape(data) {
-  const kinds = ["reading", "equipment", "rooms", "envelope", "calculation"];
-  const shape = kinds.map((kind) => `${kind}:${data[kind]?.status || ""}:${JSON.stringify(data[kind]?.recovery || {})}:${JSON.stringify(data[kind]?.readiness || {})}:${data[kind]?.offerStart || false}`);
-  shape.push(`prep:${data.newJob?.state || ""}`);
+  const kinds = ["reading", "equipment", "rooms", "envelope", "supervisor", "calculation"];
+  const shape = kinds.map((kind) => `${kind}:${data[kind]?.status || ""}:${JSON.stringify(data[kind]?.recovery || {})}:${JSON.stringify(data[kind]?.readiness || {})}:${JSON.stringify([data[kind]?.cycle, data[kind]?.gaps_fixed, data[kind]?.exceptions, data[kind]?.spend])}:${data[kind]?.offerStart || false}`);
+  shape.push(`prep:${stepOf(data.newJob)}`);
   return shape.join("|");
 }
 
 function anyWorking(data) {
-  if (data.newJob?.state === "running") return true;
-  if (data.refreshProblem || data.calculation?.readiness?.ready && !["done", "failed", "interrupted"].includes(data.calculation?.status)) return true;
-  return ["reading", "equipment", "rooms", "envelope", "calculation"].some(
+  if (stepOf(data.newJob) === "active") return true;
+  if (data.refreshProblem || data.calculation?.readiness?.ready && !["done", "failed"].includes(stepOf(data.calculation))) return true;
+  return ["reading", "equipment", "rooms", "envelope", "supervisor", "calculation"].some(
     (kind) => stateOf(data[kind]) === "active",
   );
 }
@@ -406,10 +413,10 @@ function bindStageButtons(projectId, container) {
           ...(button.dataset.action === "restart" && button.dataset.runId ? { expected_run_id: button.dataset.runId } : {}),
           ...(button.dataset.kind === "envelope" ? { scope: "phase1_envelope" } : {}),
           ...(button.dataset.kind === "equipment" ? { kinds: ["equipment_appliances"] } : {}) });
-        const name = { preparation: "newJob", pages: "reading", equipment: "equipment", rooms: "rooms", envelope: "envelope" }[button.dataset.kind];
+        const name = { preparation: "newJob", pages: "reading", equipment: "equipment", rooms: "rooms", envelope: "envelope", supervisor: "supervisor" }[button.dataset.kind];
         const saved = confirmedStages.get(projectId) || {};
         confirmedStages.set(projectId, { ...saved, [name]: { ...reply, recovery_project_id: projectId } });
-        recoveryNotes.set(key, reply.recovery?.reason || (reply.status === "stopping" || reply.state === "stopping"
+        recoveryNotes.set(key, reply.recovery?.reason || (stepOf(reply) === "stopping"
           ? "Restart requested. Waiting for in-flight work to finish or time out."
           : reply.deduplicated ? "This step is already running." : "Resumed unfinished work; checking progress."));
       } catch (error) {

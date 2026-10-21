@@ -14,8 +14,6 @@ import logging
 import math
 import os
 import re
-import shutil
-import subprocess
 import threading
 import time
 import tempfile
@@ -27,7 +25,7 @@ from copy import deepcopy
 from pathlib import Path
 
 from backend.vision_extraction_service import _atomic_json
-from backend.job_runner import BackgroundJob, JobCancelled, checkpoint, recovery, _context, _write_json
+from backend.job_runner import BackgroundJob, JobCancelled, checkpoint, recovery, step_state, _context, _write_json
 from backend.job_runner import _process_alive
 from ai.skill_registry import compose_subskill_instructions, instruction_path, load_subskill_registry, subskill_instructions_fingerprint
 from ai.vision_extraction import select_page_groups
@@ -41,7 +39,7 @@ _PROJECT_LOCKS: dict[str, threading.Lock] = {}
 _RUNNING: set[str] = set()
 _RUNNING_FOLDERS: dict[str, str] = {}
 _CONTROL = BackgroundJob("skill_workflow_run.json", [("review", "Reviewing drawings")], "skill-control", "Review interrupted")
-_MAX_WORKERS = 4
+from backend.ai_provider import parallel_calls
 _GEOMETRY_VECTOR_DPI = 180
 LOGGER = logging.getLogger(__name__)
 _ROOM_WAIT_SECONDS = 180
@@ -90,42 +88,17 @@ _VALUE_TARGET_KEYWORDS = {
     "glazing_properties": ("glazing", "window", "opening", "shgc", "solar", "u_value"),
     "construction_matching": ("construction", "u_value", "surface", "wall", "roof", "floor", "ceiling"),
 }
-# Workflow scopes. "rooms_only" runs the document-mapping and room tasks needed
-# to test room identity, boundaries and ceiling heights at a fraction of the
-# full workflow's provider usage.
+# Workflow scopes: the two a job runs. Each is closed over its skills' prerequisites.
 _WORKFLOW_SCOPES = {
-    "all": None,
-    # PDF review is the "What we need to find" list and every skill it depends on (the scope is closed over
-    # prerequisites), plus the address step, which makes no AI call. The weather-source step is left out: the design
-    # weather comes from the Project tab's weather location, and that step only waited for a map-confirmed site. Skills whose results nothing reads
-    # (airflow reconciliation, surface areas, shading, solar, zones, plant and coils) are left out: about a third of the
-    # calls of a full review. Their findings never reached the calculation; "full_review" still runs them on request.
+    # PDF review is the "What we need to find" list (Phase 2's questions) and every skill it depends on, plus the
+    # address step, which makes no AI call. The weather-source step is left out: the design weather comes from the
+    # job's weather location, and that step only waited for a map-confirmed site. Skills whose results nothing reads
+    # (airflow reconciliation, surface areas, shading, solar, zones, plant and coils) are left out.
     "pdf_review": frozenset({"information_needs", "address_confirmation"}),
-    # Evidence discovery across every domain. Policy approval and final model reconciliation happen afterwards.
-    "full_review": frozenset({
-        "sheet_identity", "revision_scope", "page_relationships", "site_clue_extraction",
-        "address_confirmation", "weather_source_matching", "room_identity_use", "room_boundaries_areas",
-        "ceiling_height_volume", "occupancy_seating", "lighting_evidence", "equipment_evidence",
-        "schedule_evidence", "surface_inventory", "surface_area", "construction_matching",
-        "boundary_resolution", "cross_sheet_opening_match", "glazing_properties", "exposure_orientation",
-        "solar_source", "shading", "outside_air", "infiltration", "process_exhaust", "make_up_air",
-        "airflow_deduplication", "system_detection", "zone_ownership", "air_path_reconciliation",
-        "component_inputs", "coil_duty", "plant_detection", "circuit_mapping", "pump_inputs",
-        "pipe_effects", "coincident_duty", "information_needs",
-    }),
-    "rooms_only": frozenset({"sheet_identity", "revision_scope", "page_relationships",
-                             "room_identity_use", "room_boundaries_areas", "ceiling_height_volume"}),
-    # Phase 1 envelope evidence: room geometry plus the physical surfaces and
-    # openings needed for a room-by-room base envelope calculation. This keeps
-    # equipment, occupancy, airflow, and plant discovery out of the run. The weather-source step is left out, as for
-    # the PDF review: Phase 1's design days come from the chosen or AI-picked weather location (weather_pick_service),
-    # and that step only waited for a map-confirmed address, which marked every Phase 1 review blocked.
+    # Envelope inputs are produced by the drawing tasks; skills identify rooms and the site.
     "phase1_envelope": frozenset({
         "sheet_identity", "revision_scope", "page_relationships", "site_clue_extraction",
         "address_confirmation", "room_identity_use",
-        "room_boundaries_areas", "ceiling_height_volume", "surface_inventory", "surface_area",
-        "construction_matching", "boundary_resolution", "cross_sheet_opening_match",
-        "glazing_properties", "exposure_orientation", "shading",
     }),
 }
 _DOMAIN_ARTIFACTS = (
@@ -363,8 +336,6 @@ def _scoped_subskill_ids(registry, selected_parents, scope):
     by_id = {row["id"]: row for row in registry["subskills"]}
     enabled = {row["id"] for row in registry["subskills"] if row["parent"] in selected_parents}
     wanted = _WORKFLOW_SCOPES[scope]
-    if wanted is None:
-        return enabled
     result, stack = set(), [item for item in wanted if item in enabled]
     while stack:
         skill_id = stack.pop()
@@ -375,7 +346,7 @@ def _scoped_subskill_ids(registry, selected_parents, scope):
     return result
 
 
-def _new_manifest(catalog, source_fp, scope="all"):
+def _new_manifest(catalog, source_fp, scope):
     skills = {}
     selected = set(catalog.get("enabled_skill_ids", catalog.get("pilot_skill_ids", [])))
     registry = load_subskill_registry()
@@ -407,6 +378,7 @@ def _new_manifest(catalog, source_fp, scope="all"):
         "updated_at": time.time(), "skills": skills, "subskills": subskill_states,
         "preparation": {"status": "not_started", "artifact_names": [], "error_code": "", "remediation": ""},
         "stale_reasons": [],
+
     }
 
 
@@ -1180,6 +1152,8 @@ def _failure_reason(row):
         return "connection", "the connection to the AI service failed, so nothing was learned from the drawings"
     if "No reply from the AI within" in text or code == "codex_cli_timeout":
         return "timeout", "the AI didn't reply in time, so nothing was learned from the drawings"
+    if code == "skill_provider_invalid_json" and "cut off" in text:
+        return "cut_off", "the AI's answer was too long and was cut off, also when sent again with less thinking"
     if code == "skill_provider_invalid_json":
         return "unreadable_reply", "the AI's reply couldn't be read"
     if row.get("failure_phase") == "proposal_validation" or code.startswith("subskill_"):
@@ -2219,62 +2193,6 @@ class OpenAISkillProposalProvider:
             "reply_text": text, "duration_seconds": round(time.monotonic() - started, 3)})
 
 
-class CodexCliSkillProposalProvider:
-    """Use the local Codex CLI for an isolated, read-only Archie test run."""
-
-    def __init__(self, executable=None, timeout=600):
-        self.executable = executable or shutil.which("codex")
-        self.timeout = timeout
-        if not self.executable:
-            raise RuntimeError("codex_cli_unavailable")
-
-    def propose(self, prompt, image_paths=()):
-        started = time.monotonic()
-        with tempfile.TemporaryDirectory(prefix="archie-codex-skill-") as temp_dir:
-            output = Path(temp_dir) / "proposal.json"
-            command = [self.executable, "exec", "--sandbox", "read-only", "--ephemeral",
-                       "--ignore-user-config", "--skip-git-repo-check", "--output-last-message", str(output)]
-            model = os.environ.get("ARCHIE_CODEX_MODEL", "").strip()
-            if model:
-                command.extend(["--model", model])
-            for image in image_paths:
-                image_path = image.get("path") if isinstance(image, dict) else image
-                if image_path:
-                    command.extend(["--image", str(image_path)])
-            command.append("-")
-            # Do not expose the web app's API key to the model/tool process.
-            child_env = {key: value for key, value in os.environ.items() if key != "OPENAI_API_KEY"}
-            try:
-                result = subprocess.run(command, input=str(prompt), text=True, capture_output=True,
-                                        timeout=self.timeout, check=False, env=child_env)
-            except subprocess.TimeoutExpired as error:
-                stdout = error.stdout.decode("utf-8", "replace") if isinstance(error.stdout, bytes) else (error.stdout or "")
-                stderr = error.stderr.decode("utf-8", "replace") if isinstance(error.stderr, bytes) else (error.stderr or "")
-                raw_record = {"provider": "codex_cli", "model": model, "exit_code": None,
-                    "stdout_tail": stdout[-_ATTEMPT_TEXT_LIMIT:], "stderr_tail": stderr[-_ATTEMPT_TEXT_LIMIT:],
-                    "reply_text": "", "duration_seconds": round(time.monotonic() - started, 3)}
-                raise SkillProviderError("codex_cli_timeout", raw_record) from error
-            stdout = (result.stdout or "")[-_ATTEMPT_TEXT_LIMIT:]
-            stderr = (result.stderr or "")[-_ATTEMPT_TEXT_LIMIT:]
-            raw_response = output.read_text(encoding="utf-8") if output.is_file() else ""
-            raw_record = {"provider": "codex_cli", "model": model, "exit_code": result.returncode,
-                "stdout_tail": stdout, "stderr_tail": stderr,
-                "reply_text": raw_response if raw_response else (stdout or stderr),
-                "duration_seconds": round(time.monotonic() - started, 3)}
-            if result.returncode != 0 or not output.is_file():
-                raise SkillProviderError("codex_cli_failed", raw_record)
-            response = raw_response.strip()
-            if response.startswith("```"):
-                response = re.sub(r"^```(?:json)?\s*|\s*```$", "", response, flags=re.IGNORECASE)
-            try:
-                proposal = json.loads(response)
-            except json.JSONDecodeError as error:
-                raise SkillProviderError("skill_provider_invalid_json", raw_record) from error
-            if not isinstance(proposal, dict):
-                raise SkillProviderError("skill_provider_invalid_json", raw_record)
-            return SkillProviderResult(proposal, raw_record)
-
-
 def _whole_px(point):
     if isinstance(point, (list, tuple)) and len(point) == 2 and all(isinstance(value, (int, float)) for value in point):
         return [int(round(point[0])), int(round(point[1]))]
@@ -2891,7 +2809,7 @@ def _call_case_file_provider(subskill, project, dependencies, evidence, attempt_
     if budget["status"] != "within_budget":
         attempt_record["raw_record"] = {"provider": "none_prompt_over_budget", "reply_text": ""}
         return None
-    return _send_case_file_prompt(project, f"skill:{subskill['id']}", prompt, images, attempt_record)
+    return _send_case_file_prompt(project, subskill.get("_usage_purpose") or f"skill:{subskill['id']}", prompt, images, attempt_record)
 
 
 def _send_case_file_prompt(project, purpose, prompt, images, attempt_record):
@@ -2915,18 +2833,34 @@ def _send_case_file_prompt(project, purpose, prompt, images, attempt_record):
         raise unavailable from error
     model = getattr(provider, "model", "") or model
     attempt_record["model"] = model
-    provider = ai_provider.recorded(provider, project["review_dir"], purpose)
+    recorded = ai_provider.recorded(provider, project["review_dir"], purpose)
     try:
-        result = _provider_call_with_retry(
-            lambda: provider.propose(prompt, image_paths=[str(path) for path in images]), attempt_record)
+        try:
+            result = _provider_call_with_retry(
+                lambda: recorded.propose(prompt, image_paths=[str(path) for path in images]), attempt_record)
+        except ai_provider.InvalidProviderReply as error:
+            if not ai_provider.cut_off(error.raw_record):
+                raise
+            # Cut off at the output cap: send it once more with less thinking and more room (ai_provider).
+            retry = CASE_FILE_PROVIDER_FACTORY() if CASE_FILE_PROVIDER_FACTORY is not None else ai_provider.get(purpose)
+            retry.reasoning_effort = ai_provider.CUT_OFF_RETRY_REASONING
+            retry.max_tokens_override = ai_provider.CUT_OFF_RETRY_MAX_OUTPUT_TOKENS
+            usage = error.raw_record.get("usage") or {}
+            attempt_record["cut_off_retry"] = {"first_output_tokens": usage.get("output_tokens"),
+                                               "first_reasoning_tokens": usage.get("reasoning_output_tokens"),
+                                               "reasoning": retry.reasoning_effort, "max_tokens": retry.max_tokens_override}
+            again = ai_provider.recorded(retry, project["review_dir"], purpose)
+            result = _provider_call_with_retry(
+                lambda: again.propose(prompt, image_paths=[str(path) for path in images]), attempt_record)
     except ai_provider.InvalidProviderReply as error:
-        raw_record = {**error.raw_record, "provider": error.raw_record.get("provider", provider.name),
+        raw_record = {**error.raw_record, "provider": error.raw_record.get("provider", getattr(provider, "name", "provider")),
                       "model": error.raw_record.get("model") or model}
         attempt_record["raw_record"] = raw_record
         rejected = SkillProviderError("skill_provider_invalid_json", raw_record)
         rejected.detail = (
-            "The AI reply was cut off before it finished. Its response was saved; retry this review step."
-            if raw_record.get("finish_reason") == "length"
+            "The AI's answer was too long and was cut off, also when sent again with less thinking. Its response was "
+            "saved; retry this review step."
+            if ai_provider.cut_off(raw_record)
             else "The AI reply was not valid JSON. Its response was saved; retry this review step."
         )
         rejected.attempt_record = attempt_record
@@ -3161,8 +3095,13 @@ def _proposal_from_raw(subskill, raw, input_fp):
     return proposal
 
 
-def _execute_subskill(subskill, project, dependencies, source_fp):
+def _execute_subskill(subskill, project, dependencies, source_fp, investigation=None):
+    paths = _project_paths(project)
     evidence, artifact_names = _shared_evidence_packet(subskill, project)
+    if isinstance(investigation, dict):
+        # The targeted question is part of the task input and therefore its cache key.
+        # A targeted retry cannot accidentally reuse the untargeted baseline answer.
+        evidence = {**evidence, "supervisor_investigation": deepcopy(investigation)}
     registry = load_subskill_registry()
     built_by = _CODE_BUILT_VERSIONS.get(subskill["id"]) if _case_file_route(project) else None
     input_fp = _fingerprint({"source": source_fp, "subskill": subskill, "evidence": evidence,
@@ -3176,8 +3115,6 @@ def _execute_subskill(subskill, project, dependencies, source_fp):
     recovery_cache = Path(project["review_dir"]) / "skill_reply_cache" / f"{input_fp}.json"
     settings_path = Path(project["review_dir"]) / "vision_extraction_settings.json"
     settings = _read(settings_path, {})
-    test_mode = os.environ.get("ARCHIE_ENV") == "test" and os.environ.get("ARCHIE_TEST_MODE") == "1"
-    codex_test_mode = test_mode and os.environ.get("ARCHIE_TEST_CODEX") == "1" and project.get("test_run") is True
     has_evidence = bool(evidence.get("task_evidence", {}).get(next(iter(subskill["proposal_fields"]), ""), [])) or bool(evidence.get("vision_entities"))
     raw = None
     attempt_record = {"prompt": "", "images": [], "raw_record": {}, "started_at": time.time()}
@@ -3190,7 +3127,39 @@ def _execute_subskill(subskill, project, dependencies, source_fp):
         cached.setdefault("_attempt_record", {}).setdefault("raw_record", {}).update(
             recovered_reply=True, cached_reply_ref=str(recovery_cache.relative_to(Path(project["review_dir"]))))
         return cached
-    if subskill["id"] == "address_confirmation":
+    if subskill["id"] == "address_confirmation" and subskill.get("_phase1_autonomous"):
+        candidate = dependencies.get("site_clue_extraction", {}).get("proposal", {})
+        fields = candidate.get("proposal_fields", {}) if isinstance(candidate, dict) else {}
+        candidates = fields.get("site_candidates", []) if isinstance(fields, dict) else []
+        unique = {}
+        for row in candidates if isinstance(candidates, list) else []:
+            if not isinstance(row, dict):
+                continue
+            address = str(row.get("address") or "").strip()
+            if address:
+                unique.setdefault(" ".join(address.casefold().split()), (address, row))
+        citations = deepcopy(candidate.get("citations", [])) if isinstance(candidate, dict) else []
+        selected = next(iter(unique.values())) if len(unique) == 1 else None
+        address = selected[0] if selected else None
+        citation_ids = [str(row.get("id") or row.get("citation_id")) for row in citations if isinstance(row, dict)
+                        and (row.get("id") or row.get("citation_id"))]
+        proposal = {"subskill_id": subskill["id"], "subskill_version": subskill["version"],
+            "status": "provisional" if address and citations else "needs_review",
+            "affected_ids": candidate.get("affected_ids", []) if isinstance(candidate, dict) else [],
+            "observations": deepcopy(candidate.get("observations", [])) if isinstance(candidate, dict) else [],
+            "inferences": ([{"field": "confirmed_address", "value": address,
+                "method": "AI selected the sole cited project-address candidate from the drawing evidence; no person confirmation is represented.",
+                "citation_ids": citation_ids, "confidence": candidate.get("confidence")}]
+                if address and citation_ids else []),
+            "citations": citations, "confidence": candidate.get("confidence") if isinstance(candidate, dict) else None,
+            "alternatives": deepcopy(candidate.get("alternatives", [])) if isinstance(candidate, dict) else [],
+            "unresolved_fields": [] if address and citations else ["confirmed_address"],
+            "remediation": [] if address and citations else ["No single cited project address was established; location-dependent inputs remain unresolved."],
+            "input_fingerprint": input_fp,
+            "proposal_fields": {"confirmed_address": address, "confirmation_actor": None,
+                "confirmation_time": None, "consent_ref": None}, "artifact_names": []}
+        provider_kind = "ai_inferred_pdf_site_candidate"
+    elif subskill["id"] == "address_confirmation":
         candidate = dependencies.get("site_clue_extraction", {}).get("proposal", {})
         candidate_fields = candidate.get("proposal_fields", {}) if isinstance(candidate, dict) else {}
         citations = candidate.get("citations", []) if isinstance(candidate, dict) else []
@@ -3211,59 +3180,17 @@ def _execute_subskill(subskill, project, dependencies, source_fp):
             "remediation": ["Confirm the project address and design basis, then run the location resolver."],
             "input_fingerprint": input_fp, "proposal_fields": {"weather_candidates": []}, "artifact_names": []}
         provider_kind = "confirmation_dependency"
-    elif codex_test_mode and subskill["id"] in _CODE_MAPPED_TASKS:
-        # Keep the real workflow's deterministic page mapping in the Codex
-        # integration test too. Sending exhaustive cross-sheet link candidates
-        # to the model made this test-only path exceed the prompt budget and
-        # blocked unrelated room geometry work.
+    elif _case_file_route(project) and subskill["id"] in _CODE_MAPPED_TASKS and not investigation:
         proposal = _document_map_proposal(subskill, project, input_fp)
         provider_kind = "page_reading_by_code"
-    elif codex_test_mode:
-        raw = _call_skill_provider(subskill, project, dependencies, evidence, attempt_record,
-                                   CodexCliSkillProposalProvider, "codex_cli")
-        if raw is _NO_EVIDENCE_PAGES:
-            proposal = _not_applicable_proposal(subskill, input_fp)
-            provider_kind = "no_evidence_pages"
-        elif raw is None:
-            proposal = _over_budget_proposal(subskill, input_fp, attempt_record["prompt_budget"])
-            provider_kind = "prompt_budget_blocked"
-        else:
-            if not isinstance(raw, dict):
-                _validation_error("provider_proposal_object", "$", "Provider response must be a JSON object.")
-            proposal = {"subskill_id": subskill["id"], "subskill_version": subskill["version"],
-                "status": raw.get("status", "needs_review"), "affected_ids": raw.get("affected_ids", []),
-                "observations": raw.get("observations", []), "inferences": raw.get("inferences", []),
-                "citations": raw.get("citations", []), "confidence": raw.get("confidence"),
-                "alternatives": raw.get("alternatives", []), "unresolved_fields": raw.get("unresolved_fields", []),
-                "remediation": raw.get("remediation", []), "input_fingerprint": input_fp,
-                "proposal_fields": raw.get("proposal_fields", {}), "artifact_names": []}
-            provider_kind = "local_codex_cli_test"
-    elif test_mode:
-        if subskill["id"] in {"sheet_identity", "revision_scope", "page_relationships", "room_identity_use", "room_boundaries_areas",
-                               "ceiling_height_volume", "occupancy_seating", "lighting_evidence", "equipment_evidence", "schedule_evidence"}:
-            fields, existing_artifacts = _subskill_records(subskill["id"], project)
-            proposal = _build_subskill_proposal(subskill, fields, existing_artifacts, dependencies, source_fp)
-            if not proposal["affected_ids"] and not proposal["citations"]:
-                proposal = _not_applicable_proposal(subskill, input_fp)
-        else:
-            proposal = {"subskill_id": subskill["id"], "subskill_version": subskill["version"],
-                "status": "needs_review" if has_evidence else "not_applicable", "affected_ids": [],
-                "observations": [], "inferences": [], "citations": [], "confidence": None,
-                "alternatives": [], "unresolved_fields": list(subskill["proposal_fields"]) if has_evidence else [],
-                "remediation": ["No deterministic fixture record is available for this domain task."] if has_evidence else [],
-                "input_fingerprint": input_fp, "proposal_fields": _empty_fields(subskill), "artifact_names": []}
-        provider_kind = "local_test_fixture"
-    elif _case_file_route(project) and subskill["id"] in _CODE_MAPPED_TASKS:
-        proposal = _document_map_proposal(subskill, project, input_fp)
-        provider_kind = "page_reading_by_code"
-    elif _case_file_route(project) and not _worth_a_call(subskill, project):
+    elif _case_file_route(project) and not investigation and not _worth_a_call(subskill, project):
         # No page shows anything this skill works on: not applicable, without spending an AI call.
         proposal = _not_applicable_proposal(subskill, input_fp)
         proposal["observations"] = [{"description": "No page of the drawing set shows the kinds of information this skill works on; "
                                                     "it was skipped without an AI call."}]
         provider_kind = "skipped_no_relevant_pages"
     elif _case_file_route(project):
-        if subskill["id"] in _GROUP_OF:
+        if subskill["id"] in _GROUP_OF and not investigation:
             raw = _group_member_reply(subskill, project, dependencies, evidence, attempt_record, source_fp)
         else:
             raw = _call_case_file_provider(subskill, project, dependencies, evidence, attempt_record)
@@ -3512,7 +3439,7 @@ def _run_worker(web, project, run_id, source_fp, catalog):
             manifest = _read(run_path, {})
             if manifest.get("run_id") != run_id:
                 return
-            selected = _scoped_subskill_ids(registry, selected_parents, manifest.get("scope", "all"))
+            selected = _scoped_subskill_ids(registry, selected_parents, manifest["scope"])
             manifest["status"] = "running"
             _write_manifest(run_path, manifest)
 
@@ -3598,7 +3525,9 @@ def _run_worker(web, project, run_id, source_fp, catalog):
             with _project_lock(project["id"]):
                 manifest = _read(run_path, {})
                 for skill_id in runnable:
-                    spec = subskill_defs[skill_id]
+                    spec = deepcopy(subskill_defs[skill_id])
+                    if manifest.get("scope") == "phase1_envelope":
+                        spec["_phase1_autonomous"] = True
                     dependency_outputs = {}
                     for key in spec.get("depends_on", []):
                         dependency_outputs[key] = {
@@ -3610,7 +3539,7 @@ def _run_worker(web, project, run_id, source_fp, catalog):
                     manifest["skills"][spec["parent"]].update({"status": "running", "started_at": manifest["skills"][spec["parent"]].get("started_at") or time.time()})
                 _update_parent_stages(manifest, catalog, registry)
                 _write_manifest(run_path, manifest)
-            with ThreadPoolExecutor(max_workers=min(_MAX_WORKERS, max(1, len(runnable)))) as pool:
+            with ThreadPoolExecutor(max_workers=min(parallel_calls(), max(1, len(runnable)))) as pool:
                 futures = {pool.submit(_run_checked_subskill, check, subskill_defs[skill_id], project,
                     {dep: {**manifest.get("subskills", {}).get(dep, {}), "proposal": _read(
                         paths["root"] / "skill_workflow_runs" / run_id / "proposals" / f"{dep}.json", {})}
@@ -4004,7 +3933,7 @@ def _response(web, project):
     read_only = not consent.get("owner_opt_in") and not _case_file_route(project)
     if read_only and visible_status not in {"running", "queued", "completed", "needs_review", "provisional"}:
         visible_status = "blocked"
-        from backend.workflow_recovery import stage_blocker
+        from backend.job_progress import stage_blocker
         blocked_reason = stage_blocker(project, "envelope") or "AI drawing review is not enabled for this job. Check project consent and the server's AI provider setup, then resume."
     issues = [{"name": row["id"], "status": row["status"], "reason": public_text(_issue_reason(row))}
               for row in subskills if row["status"] in {"failed", "blocked"}]
@@ -4020,7 +3949,7 @@ def _response(web, project):
                        if stalled else blocked_reason or safe.get("blocked_reason", ""))
     return {
         "recovery": recovery(visible_status, public_text(recovery_reason)), "restart_stalled": stalled,
-        "project_id": project["id"], "status": visible_status,
+        "project_id": project["id"], "status": visible_status, "step_state": step_state(visible_status),
         "run_id": safe.get("run_id", ""), "source_fingerprint": safe.get("source_fingerprint", ""),
         "stale_reasons": [public_text(item) for item in safe.get("stale_reasons", [])], "remediation": public_text(safe.get("remediation", "")),
         "stages": stages, "findings": findings,
@@ -4035,6 +3964,7 @@ def _response(web, project):
                         "remediation": safe.get("preparation", {}).get("remediation", "")},
         "catalog": {"id": catalog["catalog_id"], "version": catalog["schema_version"]},
         "scope": safe.get("scope", ""), **({"problem": INTERRUPTED_PROBLEM} if interrupted else {}),
+        "agentic": deepcopy(safe.get("agentic", {"enabled": False, "status": "not_enabled"})),
         "artifact_links": {name: web.safe_link(paths["root"] / name) for name in {artifact for row in safe.get("skills", {}).values() for artifact in row.get("artifact_names", [])} if (paths["root"] / name).exists()},
     }
 
@@ -4536,7 +4466,7 @@ def _post(web, project, data):
             _write_manifest(paths["manifest"], existing)
             return _response(web, project)
         if action in {"resume", "restart"} and not is_running(project):
-            from backend.workflow_recovery import stage_blocker
+            from backend.job_progress import stage_blocker
             reason = stage_blocker(project, "envelope")
             if reason:
                 response = _response(web, project)
@@ -4590,7 +4520,7 @@ def _post(web, project, data):
             _write_manifest(paths["manifest"], blocked)
             return _response(web, project)
         if (action == "start" and existing.get("source_fingerprint") == source_fp
-                and existing.get("scope", "all") == scope and existing.get("status") in {"completed", "needs_review"}):
+                and existing.get("scope") == scope and existing.get("status") in {"completed", "needs_review"}):
             return _response(web, project)
         if action == "retry" and existing.get("status") not in {"failed", "blocked", "stale", "needs_review"}:
             if existing:

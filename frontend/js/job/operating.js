@@ -22,7 +22,7 @@ function sourceLabel(row) {
       edited: "Entered by you",
     }[row?.origin] ||
     row?.source ||
-    "AI estimate"
+    "Not resolved"
   );
 }
 
@@ -91,9 +91,14 @@ function roomCard(room, plan, model) {
     </tr>`,
     )
     .join("");
-  const equipment = (data.equipment || []).length
-    ? `<ul class="job-equipment-list">${data.equipment
-        .map((item) => equipmentItem(item))
+  const roomEquipment = model.equipment_coverage
+    ? model.equipment_coverage.records.filter((item) => item.room === room.name).map((item) => ({
+        id: item.id, value: item.value, pages: item.pages, catalogue_resolution: item,
+      }))
+    : data.equipment || [];
+  const equipment = roomEquipment.length
+    ? `<ul class="job-equipment-list">${roomEquipment
+        .map((item) => equipmentItem(item, false))
         .join("")}</ul>`
     : `<p class="job-muted">Equipment will appear here when it is found in the drawings.</p>`;
   return `<details class="job-operating-room" ${room.room_id === plan.rooms?.find((item) => item.kind !== "refrigeration")?.room_id ? "open" : ""}>
@@ -112,7 +117,7 @@ function roomCard(room, plan, model) {
         <tbody>${operating}</tbody>
       </table></div>
       <h3>Equipment</h3>${equipment}
-      <p class="job-caption">Typical values and estimates are shown with their source. They do not stop the calculation.</p>
+      <p class="job-caption">Each item says where its value came from: data sheet, matched model, typical or generic value. Items with no value or no room aren't counted; the room keeps its typical equipment allowance.</p>
     </div>
   </details>`;
 }
@@ -121,24 +126,84 @@ function roomUse(room) {
   return room.kind === "refrigeration" ? "Refrigeration" : "Comfort-HVAC room";
 }
 
-function equipmentItem(item) {
-  const value = item.value || {};
+function scheduleEditor(schedule) {
+  return `<fieldset><legend>Equipment operating hours</legend>
+    <p>Enter hours from 0 to 24 and the operating fraction from 0 to 1. Enter fraction 0 for days it is off. Sunday also applies to public holidays.${schedule ? " Leave all hours blank to keep the saved schedule." : ""}</p>
+    ${["weekday", "saturday", "sunday"].map((day) => `<div class="job-fields">
+      <b>${day === "sunday" ? "Sunday and public holidays" : day === "weekday" ? "Weekdays" : "Saturday"}</b>
+      <label class="job-field"><span>Start hour</span><input name="${day}_start" type="number" min="0" max="24" step="0.25"></label>
+      <label class="job-field"><span>End hour</span><input name="${day}_end" type="number" min="0" max="24" step="0.25"></label>
+      <label class="job-field"><span>Operating fraction</span><input name="${day}_fraction" type="number" min="0" max="1" step="0.01"></label>
+    </div>`).join("")}</fieldset>`;
+}
+
+function editedSchedule(form, existing) {
+  const days = ["weekday", "saturday", "sunday"];
+  if (existing && days.every((day) => ["start", "end", "fraction"].every((field) => form.elements[`${day}_${field}`].value === ""))) return existing;
+  const schedule = {};
+  for (const day of days) {
+    const values = ["start", "end", "fraction"].map((field) => form.elements[`${day}_${field}`].value);
+    if (values[2] === "") throw new Error("Provide an operating fraction for each day type.");
+    const fraction = Number(values[2]);
+    if (fraction === 0) { schedule[day] = Array(24).fill(0); continue; }
+    if (values[0] === "" || values[1] === "") throw new Error("Provide start and end hours for each operating day.");
+    const [start, end] = values.map(Number);
+    schedule[day] = Array.from({length: 24}, (_, hour) => {
+      const overlap = (lo, hi) => Math.max(0, Math.min(hour + 1, hi) - Math.max(hour, lo));
+      return fraction * (end >= start ? overlap(start, end) : overlap(start, 24) + overlap(0, end));
+    });
+  }
+  schedule.holiday = [...schedule.sunday];
+  return schedule;
+}
+
+const COUNTED = new Set(["data_sheet", "matched_model", "typical", "generic"]);
+
+// One line on how the equipment was valued; it never stops the calculation (user decision 2026-10-20).
+function equipmentSummary(coverage) {
+  if (!coverage) return "";
+  const count = (status) => Number(coverage.summary?.[status] || 0);
+  const parts = [["data_sheet", "from data sheets"], ["matched_model", "matched models"], ["typical", "typical values"],
+    ["generic", "generic values"], ["no_value", "with no value yet"], ["no_room", "with no room"]]
+    .filter(([status]) => count(status)).map(([status, words]) => `${count(status)} ${words}`);
+  const text = parts.length ? `Equipment: ${parts.join(", ")}.` : "";
+  return [coverage.catalogue_error, text, coverage.reading_note].filter(Boolean).join(" ");
+}
+
+function equipmentItem(item, editable = true) {
+  const resolution = item.catalogue_resolution || {};
+  const value = item.decided_value || item.value || {};
   const code = value.code ? `${value.code} ` : "";
-  const rating = item.heat?.heat_w ?? value.rated_power;
-  const source =
-    item.heat?.rated_source || item.evidence || "Source not recorded";
-  const ratingInput =
-    item.status === "proposed"
-      ? `<label class="job-field"><span>Data-sheet rating in watts, if known</span><input type="number" min="0" step="1" data-rating-for="${escapeHtml(item.id)}" value="${escapeHtml(value.rated_power || "")}"></label>
-      <div class="job-editor-actions"><button class="job-button secondary" data-equipment="${escapeHtml(item.id)}" data-decision="accepted" data-value="${escapeHtml(JSON.stringify(value))}">Accept or save rating</button><button class="job-button secondary" data-equipment="${escapeHtml(item.id)}" data-decision="rejected">Reject item</button></div>`
-      : `<small>${escapeHtml(item.status || "Recorded")}</small>`;
-  return `<li>
-    <strong>${escapeHtml(code + (value.name || item.label || "Equipment"))}${value.quantity > 1 ? ` × ${escapeHtml(value.quantity)}` : ""}</strong>
-    <span>${escapeHtml(item.suggested_room || "Room not identified")}; ${rating == null ? "rating not found" : `${fmt(rating)} W`}</span>
+  const label = resolution.label || "No value yet";
+  const usable = COUNTED.has(resolution.status);
+  const contribution = usable
+    ? `${fmt(resolution.sensible_total_w)} W sensible; ${fmt(resolution.latent_total_w)} W latent before the use pattern${resolution.heat_basis ? ` (${resolution.heat_basis})` : ""}`
+    : resolution.status === "excluded" ? "Not counted as equipment heat" : "Not counted";
+  const source = resolution.source || item.evidence || "";
+  const controls = `<div class="job-editor-actions">
+    <button class="job-button secondary" data-edit-equipment="${escapeHtml(item.id)}">Edit equipment</button>
+    <button class="job-button secondary" data-equipment="${escapeHtml(item.id)}" data-decision="rejected">Reject item</button>
+    </div>
+    <form data-equipment-editor="${escapeHtml(item.id)}" hidden>
+      <label class="job-field"><span>Room</span><input name="room" value="${escapeHtml(value.room || resolution.room || "")}" required></label>
+      <label class="job-field"><span>Quantity</span><input name="quantity" type="number" min="1" step="1" value="${escapeHtml(value.quantity ?? "")}" required></label>
+      <label class="job-field"><span>Sensible heat to room (W/unit)</span><input name="sensible" type="number" min="0" step="any" value="${escapeHtml(value.sensible_to_room_w ?? "")}" required></label>
+      <label class="job-field"><span>Latent heat to room (W/unit)</span><input name="latent" type="number" min="0" step="any" value="${escapeHtml(value.latent_to_room_w ?? "")}" required></label>
+      <label class="job-field"><span>Manufacturer reference or measurement</span><input name="reference" value="${escapeHtml(value.heat_reference || "")}" required></label>
+      ${scheduleEditor(value.equipment_schedule || resolution.schedule)}
+      <button class="job-button secondary">Save equipment</button><p role="status"></p>
+    </form>`;
+  return `<li data-equipment-status="${escapeHtml(resolution.status || "no_value")}">
+    <strong>${escapeHtml(code + (value.name || item.label || resolution.name || "Equipment"))}${value.quantity > 1 ? ` × ${escapeHtml(value.quantity)}` : ""}</strong>
+    <b>${label}</b>
+    <span>${escapeHtml(resolution.room || value.room || item.suggested_room || "Room not identified")}; quantity ${escapeHtml(resolution.quantity ?? value.quantity ?? "unknown")}; ${escapeHtml(contribution)}</span>
     <small>Drawing pages ${(item.pages || []).join(", ") || "not cited"}. ${escapeHtml(source)}</small>
+    ${resolution.source_row ? `<small>${escapeHtml(resolution.typical_id ? "Typical values sheet" : "Catalogue")} row ${escapeHtml(resolution.source_row)}${resolution.use_pattern ? `; use pattern ${escapeHtml(resolution.use_pattern)}` : ""}.</small>` : ""}
     ${(item.schedule_notes || []).map((note) => `<small data-schedule-note>${escapeHtml(note)}</small>`).join("")}
     ${(item.possibly_same_as || []).length ? `<small data-possible-duplicate>Possibly the same as ${escapeHtml(item.possibly_same_as.map((row) => row.label).join(" or "))}; reject it if so.</small>` : ""}
-    ${ratingInput}
+    ${resolution.note ? `<p>${escapeHtml(resolution.note)}</p>` : ""}
+    ${(resolution.reasons || []).map((reason) => `<small>${escapeHtml(reason)}</small>`).join("")}
+    ${editable ? controls : ""}
   </li>`;
 }
 
@@ -193,11 +258,15 @@ export async function renderOperating(projectId) {
     ).catch(() => ({})),
     getJson(`/api/job-calculation${query(projectId)}`).catch(() => ({})),
   ]);
-  const status = plan.status || {};
+  const status = { ...(plan.status || {}) };
+  if (model.hourly_ai_preliminary_load_report_stale) status.result_stale = true;
+  const coverage = equipment.equipment_coverage || model.equipment_coverage;
+  const coverageMessage = equipmentSummary(coverage);
+  const catalogueWarnings = (coverage?.catalogue_diagnostics || []).map((row) => `Row ${row.row}: ${row.reasons.join(" ")}`).join(" ");
   const needs = unresolvedNeeds(workflow);
   const equipmentItems = equipment.findings || [];
   const equipmentMarkup = equipmentItems.length
-    ? `<ul class="job-equipment-list">${equipmentItems.map(equipmentItem).join("")}</ul>`
+    ? `<ul class="job-equipment-list">${equipmentItems.map((item) => equipmentItem(item)).join("")}</ul>`
     : `<p class="job-muted">No equipment items have been read yet.</p>`;
   const rooms = (plan.rooms || []).filter(
     (room) => room.kind !== "refrigeration" && room.included,
@@ -209,56 +278,50 @@ export async function renderOperating(projectId) {
       <div class="job-operating-list">${rooms.map((room) => roomCard(room, plan, model)).join("")}</div>
     </section>
     <section class="job-panel job-operating-needs" aria-labelledby="operating-needs-title">
-      <h2 id="operating-needs-title">What still needs an answer <span>(${status.needs_you?.phase2 || 0})</span></h2>
+      <h2 id="operating-needs-title">Operating-load questions <span>(${needs.length})</span></h2>
       ${needsMarkup(needs)}
       <h3>Equipment found in the drawings</h3>
+      ${coverageMessage ? `<p role="status" data-equipment-coverage>${escapeHtml(coverageMessage)}</p>` : ""}
+      ${catalogueWarnings ? `<details><summary>Catalogue entries needing correction</summary><p>${escapeHtml(catalogueWarnings)}</p></details>` : ""}
+      ${coverage?.assessment_error ? `<p>${escapeHtml(coverage.assessment_error)}</p>` : ""}
       ${equipmentMarkup}
+      ${status.results_ready && status.result_stale ? `<button class="job-button" id="job-update-equipment-result">Update final load</button><p>The saved report is retained until you recalculate.</p>` : ""}
       <p class="job-note" id="job-full-calculation" role="status"></p>
     </section>
   </div>`;
   return {
     status,
-    statusLine: calculationStatus(calculation, status, needs, projectId),
+    statusLine: coverageMessage || calculationStatus(calculation, status, needs, projectId),
     content,
     bind: () => {
-      const hasCurrentResult = status.results_ready && !status.result_stale;
       const calculationRunning = ["queued", "running"].includes(
         calculation.status,
       );
-      if (
-        status.phase1_complete &&
-        Number(status.needs_you?.phase2 || 0) === 0 &&
-        !calculationRunning &&
-        !hasCurrentResult &&
-        !activeCalculations.has(projectId)
-      ) {
+      const startCalculation = async () => {
+        if (activeCalculations.has(projectId)) return;
         activeCalculations.add(projectId);
         const line = document.querySelector("#job-full-calculation");
+        const button = document.querySelector("#job-update-equipment-result");
+        if (button) button.disabled = true;
         if (line) line.textContent = "Calculating the final room loads…";
-        (async () => {
-          try {
-            let job = await sendJson("/api/job-calculation", {
-              project_id: projectId,
-              phase: "full",
-              reviewer: "Job workspace",
-            });
-            while (["queued", "running"].includes(job.status)) {
-              await new Promise((resolve) => setTimeout(resolve, 2000));
-              job = await getJson(`/api/job-calculation${query(projectId)}`);
-            }
-            if (job.status !== "done") {
-              throw new Error(
-                job.error || "The final load calculation did not finish.",
-              );
-            }
-            navigate(projectId, "results");
-          } catch (error) {
-            activeCalculations.delete(projectId);
-            if (line)
-              line.textContent = `Could not finish the final load: ${error.message}`;
+        try {
+          let job = await sendJson("/api/job-calculation", { project_id: projectId, phase: "full", reviewer: "Job workspace" });
+          while (["queued", "running"].includes(job.status)) {
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+            job = await getJson(`/api/job-calculation${query(projectId)}`);
           }
-        })();
-      }
+          if (job.status !== "done") throw new Error(job.error || "The final load calculation did not finish.");
+          navigate(projectId, "results");
+        } catch (error) {
+          if (line) line.textContent = `Could not finish the final load: ${error.message}`;
+        } finally {
+          activeCalculations.delete(projectId);
+          if (button) button.disabled = false;
+        }
+      };
+      if (status.phase1_complete && Number(status.needs_you?.phase2 || 0) === 0 && !calculationRunning
+          && !status.results_ready) startCalculation();
+      document.querySelector("#job-update-equipment-result")?.addEventListener("click", startCalculation);
       document.querySelectorAll(".job-need-form").forEach((form) => {
         form.addEventListener("submit", async (event) => {
           event.preventDefault();
@@ -279,6 +342,31 @@ export async function renderOperating(projectId) {
             form.querySelector(".job-note").textContent = error.message;
             button.disabled = false;
           }
+        });
+      });
+      document.querySelectorAll("[data-edit-equipment]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const form = button.closest("li").querySelector("form");
+          form.hidden = !form.hidden;
+        });
+      });
+      document.querySelectorAll("[data-equipment-editor]").forEach((form) => {
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const button = form.querySelector("button");
+          button.disabled = true;
+          try {
+            const original = equipmentItems.find((item) => item.id === form.dataset.equipmentEditor);
+            const value = { ...(original.decided_value || original.value), room: form.elements.room.value,
+              quantity: Number(form.elements.quantity.value), sensible_to_room_w: Number(form.elements.sensible.value),
+              latent_to_room_w: Number(form.elements.latent.value), heat_reference: form.elements.reference.value,
+              equipment_schedule: editedSchedule(form, original.decided_value?.equipment_schedule || original.value?.equipment_schedule || original.catalogue_resolution?.schedule) };
+            await sendJson("/api/page-extraction", { project_id: projectId, action: "review", kind: "equipment_appliances",
+              finding_id: original.id, decision: "accepted", value, reviewer: "Job workspace" });
+            navigate(projectId, "operating");
+          } catch (error) {
+            form.querySelector("[role=status]").textContent = error.message;
+          } finally { button.disabled = false; }
         });
       });
       document.querySelectorAll("[data-equipment]").forEach((button) => {

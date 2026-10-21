@@ -54,6 +54,8 @@ TASK_LABELS = {
     "P1_site": "Reading the site details",
     "P2_north": "Finding north",
     "P3_boundaries": "Working out what each wall faces",
+    "P7_ceiling_heights": "Reading the ceiling heights",
+    "P4_storefront_wall": "Finding which wall is the shopfront",
     "P4_openings": "Finding the shopfront openings",
     "P5_roof": "Working out what is above",
     "P6_kitchen": "Listing the kitchen equipment",
@@ -341,3 +343,68 @@ def _progress(root, **fields):
     if job and job.get("status") in {"queued", "running"}:
         job.update(fields)
         write_json(path, job)
+
+
+def request_investigation(project, record, provider_for=None, check=None):
+    """Request/cache one targeted reply. Publication is serialized by the supervisor after ownership checks."""
+    from backend.job_runner import _context, current_check
+    previous_check = getattr(_context, "check", None)
+    _context.check = check or current_check()
+    try:
+        checkpoint()
+        root = Path(project["review_dir"])
+        images = _images(root, record)
+        sizes = _sizes(images)
+        grid = uses_grid(record["task"], sizes)
+        provider = (provider_for or (lambda task: ai_provider.get(f"drawing:{task}")))(record["task"])
+        prompt = _prompt(record, grid)
+        key = hashlib.sha256(json.dumps([prompt, getattr(provider, "model", ""),
+            [hashlib.sha256(Path(image).read_bytes()).hexdigest() for image in images]]).encode()).hexdigest()
+        cached_path = root / "drawing_reply_cache" / f"{key}.json"
+        cached = read_json(cached_path)
+        reused = "reply" in cached
+        if reused:
+            reply, raw = cached["reply"], cached.get("raw", {})
+        else:
+            reply, raw = ai_provider.recorded(provider, root, f"supervisor:{record['task']}").propose(prompt, image_paths=images)
+            # A cancelled caller may reuse the paid answer. Domain publication still requires ownership below.
+            _write_json(cached_path, {"reply": reply, "raw": raw})
+        checkpoint()
+        size = _grid_size(record["task"], reply, sizes) if grid else None
+        return {"reply": to_pixels(reply, size) if size else reply, "raw": raw,
+                "cache_path": str(cached_path), "reused": reused}
+    finally:
+        _context.check = previous_check
+
+
+def apply_investigation(web, project, record, result):
+    from backend import autonomous_tasks_service as tasks
+    checkpoint()
+    root = Path(project["review_dir"])
+    current = tasks._current_task(root, record["task"], record["target"]) or {}
+    if current.get("run_id") != record["run_id"]:
+        return {"status": "superseded", "reason": "The drawing inputs changed while this check was running."}
+    tasks.post(web, project, {"action": "validate_apply", "task": record["task"], "target": record["target"],
+                            "reply": json.dumps(result["reply"]), "model_note": "Targeted drawing check"},
+               defer_evidence_rebuild=True)
+    after = tasks._current_task(root, record["task"], record["target"]) or {}
+    if not after.get("applied_value") or after.get("status") in {"blocked", "waiting_for_reply"}:
+        # Keep the reply in its run archive; a rejected answer may not be a cache hit next time.
+        Path(result["cache_path"]).unlink(missing_ok=True)
+    return {"status": after.get("status"), "reason": after.get("block_reason", ""), "reused": result["reused"]}
+
+
+def archive_investigation_failure(project, record, error):
+    """Keep failed targeted replies beside accepted/rejected task replies, with a specific failure reason."""
+    from backend import autonomous_tasks_service as tasks
+    checkpoint()
+    root = Path(project["review_dir"])
+    if (tasks._current_task(root, record["task"], record["target"]) or {}).get("run_id") != record["run_id"]:
+        return
+    raw = getattr(error, "raw_record", {}) or {}
+    path = tasks._archive_reply(root, record, str(raw.get("reply_text") or ""), "Targeted drawing check")
+    entry = read_json(path)
+    entry.update(outcome="provider_failed", reason=str(error)[:500], raw_record=raw)
+    write_json(path, entry)
+    record["reply_attempts"][-1].update(outcome="provider_failed", reason=str(error)[:500])
+    tasks._update_record(root, record)

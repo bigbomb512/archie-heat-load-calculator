@@ -41,7 +41,9 @@ class GatherTests(unittest.TestCase):
                  "value": {"target": "E06 Combi oven", "field": "rated_input_w", "why": "No rating printed.", "where_to_look": "spec sheet"}},
                 {"id": "information_needs:needs:1", "subskill_id": "information_needs", "field": "needs", "value": {"target": "Tenancy", "field": "operating_hours"}},
                 {"id": "lighting_evidence:lighting:0", "subskill_id": "lighting_evidence", "field": "lighting", "status": "proposed"}]}
-            with patch.object(skill_workflow_service, "get", return_value=review), patch.object(job_service, "job_setup", return_value={"above": ""}):
+            empty_sheet = {"hash": "t", "records": [], "patterns": {}, "waiting": [], "diagnostics": [], "error": ""}
+            with patch.object(skill_workflow_service, "get", return_value=review), patch.object(job_service, "job_setup", return_value={"above": ""}), \
+                    patch("ai.equipment_catalogue.load_typical", return_value=empty_sheet):
                 result = status.gather(None, {"id": "j", "review_dir": folder})
         items = result["items"]
         texts = {(row["kind"], row["topic"]): row for row in items}
@@ -49,16 +51,16 @@ class GatherTests(unittest.TestCase):
         self.assertIn(("to_find", "E06 Combi oven"), texts)                         # unanswered need
         self.assertNotIn(("to_find", "Tenancy"), texts)                             # answered need
         self.assertIn("1 finding(s)", texts[("to_find", "PDF review")]["text"])
-        self.assertIn("1 equipment item(s)", texts[("to_find", "Equipment")]["text"])   # the TV, not reviewed
+        # No rooms are known here: the fridge and TV get generic values but no room; the oven (cooking) has no value.
+        self.assertEqual(texts[("to_find", "Equipment with no room")]["detail"], "E21 UB FRIDGE, TV")
+        self.assertEqual(texts[("to_find", "Equipment with no value")]["detail"], "E06 COMBI OVEN")
         self.assertEqual({row["topic"] for row in items if row["kind"] == "not_set"}, {"Site", "Roof"})
         self.assertIn("1200 L/s assumed", texts[("assumed", "Kitchen")]["text"])
         shop = [row["text"] for row in items if row["topic"] == "Shop"]
         self.assertTrue(any("people (typical density), lighting (typical W/m²)" in text for text in shop))
         self.assertTrue(any("Opening hours are typical" in text for text in shop))
         self.assertFalse(any(row["topic"] in {"Kitchen", "Coolroom"} and row["kind"] == "typical" for row in items))
-        equipment = [row for row in items if row["topic"] == "Equipment"]
-        self.assertEqual(next(row for row in equipment if row["kind"] == "typical")["detail"], "E21 UB FRIDGE")    # typical rating kept
-        self.assertEqual(next(row for row in equipment if row["kind"] == "placeholder")["detail"], "E21 UB FRIDGE")  # oven factor was edited
+        self.assertNotIn(("placeholder", "Equipment"), texts)
         self.assertIn(("typical", "Windows"), texts)
         self.assertEqual({row["topic"] for row in items if row["kind"] == "placeholder"} - {"Equipment"}, {"Weather", "Sun"})
 

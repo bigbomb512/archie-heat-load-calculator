@@ -29,7 +29,6 @@ RESULT_FILE = "page_inventory.json"
 SETTINGS_FILE = "page_reading_settings.json"
 WORK_DIR = "page_inventory"
 DPI = 100
-WORKERS = 4
 PAGE_TIMEOUT_S = 300
 TRANSIENT_READ_RETRIES = 2
 TRANSIENT_RETRY_DELAYS = (1, 3)
@@ -108,7 +107,7 @@ def pass2_batch_size():
     return batch_size("ARCHIE_PASS2_BATCH")
 
 
-def read_pages(images, cache_dir, provider, workers=WORKERS, on_page=None, batch=None, check=None):
+def read_pages(images, cache_dir, provider, workers=None, on_page=None, batch=None, check=None):
     """Read each page image (cached per page). Returns ({page: reading}, {page: failure reason}, calls made).
 
     Pages not in the cache are read a few per call (batch_size()); each page's reading is checked and cached on its
@@ -207,7 +206,7 @@ def read_pages(images, cache_dir, provider, workers=WORKERS, on_page=None, batch
         on_page(len(readings), len(images))
     size = batch or batch_size()
     chunks = [todo[index:index + size] for index in range(0, len(todo), size)]
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+    with ThreadPoolExecutor(max_workers=max(1, workers if workers is not None else ai_provider.parallel_calls())) as pool:
         futures = [pool.submit(several, chunk) for chunk in chunks]
         for future in as_completed(futures):
             rows, made = future.result()

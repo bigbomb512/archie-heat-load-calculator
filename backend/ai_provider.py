@@ -36,6 +36,8 @@ import errno
 import http.client
 from datetime import datetime, timezone
 import json
+import random
+from email.utils import parsedate_to_datetime
 import os
 from pathlib import Path
 import re
@@ -70,6 +72,12 @@ OPENROUTER_STEP_MODELS = {"PASS1": "deepseek/deepseek-v4.1-flash", "PASS2": "goo
 OPENROUTER_STEP_REASONING = {"PASS2": "low", "DRAWINGS": "low"}
 # A thinking model's reasoning counts against the reply cap (DeepSeek V4.1 Flash thought about 10,000 tokens a call).
 OPENROUTER_MAX_OUTPUT_TOKENS = 48000
+# A reply cut off at that cap is sent once more with less thinking and twice the room (every DeepSeek V4.1 Flash host
+# on OpenRouter allows at least 131,072 output tokens). On Butcher Buffet (2026-10-20) the wall, roof and floor areas
+# step thought for 34,739 of its 48,000 tokens and its answer was cut off; the biggest review steps often use
+# 30,000-40,000.
+CUT_OFF_RETRY_MAX_OUTPUT_TOKENS = 96000
+CUT_OFF_RETRY_REASONING = "low"
 TIMEOUT_S = 600
 # The drawing tasks are bounded as a whole request, not per socket read: on Casa Nova (2026-10-17) one room-outline
 # call sent a few bytes and then went quiet, and the per-read limit let it hold the job for 676 s before failing. The
@@ -197,6 +205,14 @@ def _close_open_brackets(text):
     if in_string or not stack:
         raise ValueError("not a reply that only ends short")
     return text + "".join(reversed(stack))
+
+
+def cut_off(raw_record):
+    """True when a reply stopped at its output cap (finish reason "length", or all of max_tokens used)."""
+    raw_record = raw_record or {}
+    output = (raw_record.get("usage") or {}).get("output_tokens")
+    cap = raw_record.get("max_tokens")
+    return raw_record.get("finish_reason") == "length" or bool(isinstance(output, int) and cap and output >= cap)
 
 
 def _parse_provider_reply(text, raw_record):
@@ -327,6 +343,30 @@ class CodexCliProvider:
             return _parse_provider_reply(reply_text, raw), raw
 
 
+class RateLimited(RuntimeError):
+    """The service rejected the request before answering; retry without counting a paid answer."""
+
+    def __init__(self, retry_after=None):
+        super().__init__("The AI provider is rate-limiting requests; waiting before retrying.")
+        self.retry_after = None
+        if retry_after is not None:
+            try:
+                self.retry_after = max(0.0, float(retry_after))
+            except (TypeError, ValueError):
+                try:
+                    self.retry_after = max(0.0, parsedate_to_datetime(str(retry_after)).timestamp() - time.time())
+                except (TypeError, ValueError, OverflowError):
+                    pass
+
+
+def parallel_calls():
+    """One concurrency setting shared by page reading, equipment and specialists."""
+    try:
+        return max(1, int(os.environ.get("ARCHIE_AI_PARALLEL_CALLS", "8")))
+    except ValueError:
+        return 8
+
+
 class _HttpProvider:
     name = ""
     key_env = ""
@@ -345,18 +385,37 @@ class _HttpProvider:
         return None
 
     def _post(self, url, headers, body):
-        """POST and read the JSON reply. A connection that fails before the request reaches the service is tried again
-        with a fresh request (CONNECT_RETRY_DELAYS_S, nothing can have been charged); a failure after it was sent is
-        raised at once (ProviderTransportError), because the service may already have run and charged it. With
-        deadline_s set, the whole request (every try and wait) ends at that limit."""
-        deadline = time.monotonic() + self.deadline_s if self.deadline_s else None
-        for delay in (*CONNECT_RETRY_DELAYS_S, None):
+        """Retry rejected rate-limited requests and pre-send connection failures within one deadline."""
+        limit = self.deadline_s or self.timeout
+        deadline = time.monotonic() + limit
+        connection_attempt = rate_attempt = 0
+        while True:
+            from backend.job_runner import checkpoint
+            checkpoint()
             try:
                 return self._post_within(url, headers, body, deadline)
+            except RateLimited as error:
+                rate_limited = True
+                delay = error.retry_after
+                if delay is None:
+                    base = min(30.0, 2.0 ** min(rate_attempt, 5))
+                    delay = base + random.uniform(0, base * .25)
+                rate_attempt += 1
             except ProviderTransportError as error:
-                if error.may_have_run or delay is None or (deadline and time.monotonic() + delay >= deadline):
+                rate_limited = False
+                connection_error = error
+                if error.may_have_run or connection_attempt >= len(CONNECT_RETRY_DELAYS_S):
                     raise
-                time.sleep(delay)
+                delay = CONNECT_RETRY_DELAYS_S[connection_attempt]
+                connection_attempt += 1
+            if time.monotonic() + delay >= deadline:
+                if rate_limited:
+                    raise ProviderTimeout(limit)
+                raise connection_error
+            until = time.monotonic() + delay
+            while time.monotonic() < until:
+                checkpoint()
+                time.sleep(min(.25, max(0, until - time.monotonic())))
 
     def _post_within(self, url, headers, body, deadline):
         """One fresh request; with a deadline it runs in a worker thread and is abandoned at the deadline."""
@@ -364,7 +423,7 @@ class _HttpProvider:
             return self._post_once(url, headers, body, self.timeout)
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise ProviderTimeout(self.deadline_s)
+            raise ProviderTimeout(self.deadline_s or self.timeout)
         outcome = {}
 
         def run():
@@ -378,12 +437,12 @@ class _HttpProvider:
         worker.join(remaining)
         if worker.is_alive():
             # The worker stops on its own at its socket timeout; its reply, if any, is discarded.
-            raise ProviderTimeout(self.deadline_s)
+            raise ProviderTimeout(self.deadline_s or self.timeout)
         if "error" in outcome:
             error = outcome["error"]
             if isinstance(error, TimeoutError) or (isinstance(error, ProviderTransportError)
                                                    and isinstance(error.__cause__, TimeoutError)):
-                raise ProviderTimeout(self.deadline_s) from error
+                raise ProviderTimeout(self.deadline_s or self.timeout) from error
             raise error
         return outcome["reply"]
 
@@ -398,8 +457,8 @@ class _HttpProvider:
             limit = usage_limit_message(detail)
             if limit:
                 raise UsageLimitReached(limit) from error
-            if error.code == 429:
-                raise RuntimeError("The AI provider is rate-limiting requests (HTTP 429). Retry shortly.") from error
+            if error.code == 429 or "too many requests" in detail.casefold():
+                raise RateLimited((error.headers or {}).get("Retry-After")) from error
             raise RuntimeError(f"The {self.name} API returned HTTP {error.code}: {' '.join(detail.split())[:300]}") from error
         except urllib.error.URLError as error:
             if isinstance(error.reason, TimeoutError):
@@ -411,7 +470,10 @@ class _HttpProvider:
         except (OSError, http.client.HTTPException) as error:
             # Reset, closed or broken connections while waiting for or reading the reply: the request was sent.
             raise ProviderTransportError(self.name, error, may_have_run=True) from error
-        return json.loads(reply.decode("utf-8"))
+        result = json.loads(reply.decode("utf-8"))
+        if isinstance(result, dict) and result.get("error") and "too many requests" in str(result["error"]).casefold():
+            raise RateLimited()
+        return result
 
 
 def _failed_before_sending(reason):
@@ -436,9 +498,10 @@ class OpenAIProvider(_HttpProvider):
         started = time.monotonic()
         content = [{"type": "text", "text": str(prompt)}]
         content += [{"type": "image_url", "image_url": {"url": f"data:{media};base64,{data}"}} for media, data in _image_parts(image_paths)]
+        extra = self.extra_body()
         reply = self._post(self.url(), {"Authorization": f"Bearer {self.api_key}", **self.headers()},
                            {"model": self.model, "messages": [{"role": "user", "content": content}],
-                            "response_format": {"type": "json_object"}, **self.extra_body()})
+                            "response_format": {"type": "json_object"}, **extra})
         choice = (reply.get("choices") or [{}])[0]
         message = choice.get("message") or {}
         text = message.get("content") or ""
@@ -449,7 +512,7 @@ class OpenAIProvider(_HttpProvider):
         # Thinking billed as output: OpenRouter and OpenAI report it under completion_tokens_details.
         reasoning = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
         raw = {"provider": self.name, "model": reply.get("model", self.model), "reply_text": text[:MAX_REPLY_CHARS],
-               "finish_reason": choice.get("finish_reason"),
+               "finish_reason": choice.get("finish_reason"), **({"max_tokens": extra["max_tokens"]} if extra.get("max_tokens") else {}),
                "usage": {"input_tokens": usage.get("prompt_tokens"), "output_tokens": usage.get("completion_tokens"),
                          **({"cached_input_tokens": cached} if isinstance(cached, int) else {}),
                          **({"reasoning_output_tokens": reasoning} if isinstance(reasoning, int) else {}),
@@ -499,7 +562,8 @@ class OpenRouterProvider(OpenAIProvider):
         hosts = [item.strip() for item in pinned.split(",") if item.strip()]
         if hosts:
             routing.update({"order": hosts, "allow_fallbacks": False})
-        body = {"max_tokens": max_output_tokens(OPENROUTER_MAX_OUTPUT_TOKENS), "provider": routing}
+        body = {"max_tokens": getattr(self, "max_tokens_override", None) or max_output_tokens(OPENROUTER_MAX_OUTPUT_TOKENS),
+                "provider": routing}
         # How much a thinking model reasons before answering (minimal / low / medium / high); its thinking is billed
         # as output. Per step (ARCHIE_OPENROUTER_REASONING_DRAWINGS, _PASS2, ...) before the setting for every step;
         # a provider made for a comparison can carry its own (reasoning_effort).
@@ -510,6 +574,7 @@ class OpenRouterProvider(OpenAIProvider):
         if effort in {"minimal", "low", "medium", "high"}:
             body["reasoning"] = {"effort": effort}
         return body
+
 
 
 class AnthropicProvider(_HttpProvider):
@@ -569,7 +634,7 @@ def step_of(task=""):
         return "PASS2"
     if task.startswith("drawing"):
         return "DRAWINGS"
-    return "SKILLS" if task.startswith("skill") else ""
+    return "SKILLS" if task.startswith("skill") or task == "supervisor:room_identity_use" else "DRAWINGS" if task.startswith("supervisor:") else ""
 
 
 def model_for(task=""):
@@ -655,6 +720,8 @@ class recorded:
                 **({"total_tokens": total_tokens} if isinstance(total_tokens, int) else {}),
                 **({"cost_usd": usage["cost_usd"]} if isinstance(usage.get("cost_usd"), (int, float)) else {}),
                 **({"upstream": raw["upstream"]} if raw.get("upstream") else {}),
+                **({"finish_reason": raw["finish_reason"]} if raw.get("finish_reason") else {}),
+                **({"max_tokens": raw["max_tokens"]} if raw.get("max_tokens") else {}),
             }
             record_usage(self.root, failed_entry)
             raise
@@ -666,6 +733,7 @@ class recorded:
                                  "cached_input_tokens": usage.get("cached_input_tokens"),
                                  **({"cost_usd": usage["cost_usd"]} if "cost_usd" in usage else {}),
                                  **({"upstream": raw["upstream"]} if raw.get("upstream") else {}),
+                                 **({"finish_reason": raw["finish_reason"]} if raw.get("finish_reason") else {}),
                                  "reasoning_output_tokens": usage.get("reasoning_output_tokens"),
                                  "total_tokens": usage.get("total_tokens") or (
                                      (usage.get("input_tokens") or 0) + (usage.get("output_tokens") or 0) or None)})

@@ -133,7 +133,7 @@
       "id": "address_confirmation",
       "parent": "project_location_weather",
       "version": 1,
-      "task": "Present the highest-ranked site-address candidates and their cited evidence for explicit user confirmation. Record corrections as contractor-provided evidence and do not start geocoding before confirmation and project consent.",
+      "task": "For PDF review, present ranked site-address candidates for user confirmation. For an autonomous Phase 1 run, select a sole, directly cited project-address candidate as an explicitly labelled AI inference; if multiple materially different candidates remain, leave the address unresolved. Never record an AI selection as a user's confirmation.",
       "inputs": [
         "site_clue_extraction.proposal",
         "project_location_resolution.json",
@@ -149,8 +149,8 @@
         "consent_ref": "string|null"
       },
       "constraints": [
-        "AI cannot confirm an address for the user.",
-        "No coordinates or weather are resolved from an unconfirmed address."
+        "AI cannot represent an address as user-confirmed.",
+        "Do not resolve coordinates or select weather here; the drawing site task and separate weather picker own those inputs."
       ],
       "handoff": "site_location_resolution.json",
       "failure": "Pause lookup and ask the contractor to correct or confirm the address."
@@ -159,7 +159,7 @@
       "id": "weather_source_matching",
       "parent": "project_location_weather",
       "version": 1,
-      "task": "After address confirmation, match the location and selected comfort/critical basis to current released Australian design-weather records; return cited cooling and heating candidates with scope and applicability.",
+      "task": "After a user-confirmed address or an explicitly labelled AI-inferred Phase 1 address, match the location and selected comfort/critical basis to current released Australian design-weather records; return cited cooling and heating candidates with scope and applicability.",
       "inputs": [
         "address_confirmation.proposal",
         "released_weather_pack",
