@@ -852,11 +852,9 @@ def _validated_trace_openings(data, trace, paths, room, calibration_record):
     mm_per_px = calibration_record.get("mm_per_px")
     if not isinstance(mm_per_px, (int, float)) or mm_per_px <= 0:
         raise ValueError("A calibrated trace is required before adding shopfront openings.")
-    from ai import ceiling_volume_resolution
-    ceiling = ceiling_volume_resolution.values_by_room(_read(paths["root"] / "ceiling_volume_resolution.json", {}))
-    identity = ceiling_volume_resolution.room_identity(room.get("label", ""), room.get("level_name", ""))
-    room_values = ceiling.get(room.get("room_id")) or ceiling.get(identity) or {}
-    height_mm = room_values.get("ceiling_height_mm")
+    # The same height rule as the storefront glass step (typed, then printed on the drawings, then the saved value).
+    from backend.autonomous_tasks_service import room_ceiling_height
+    height_mm = room_ceiling_height(paths["root"], room.get("room_id"), room.get("label", ""), room.get("level_name", ""))
     if not isinstance(height_mm, (int, float)) or height_mm <= 0:
         raise ValueError("Resolve ceiling height before adding shopfront openings.")
     pack = ai_preliminary.load_pack()

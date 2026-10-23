@@ -3821,6 +3821,8 @@ def _response(web, project):
         if spec["parent"] not in catalog.get("enabled_skill_ids", catalog.get("pilot_skill_ids", [])):
             continue
         subskills.append({"id": spec["id"], "parent": spec["parent"], "status": row.get("status", "not_started"),
+            "label": _subskill_label(spec["id"]), "parent_label": labels.get(spec["parent"], "Evidence review"),
+            "started_at": row.get("started_at"), "finished_at": row.get("finished_at"),
             "prerequisites": spec.get("depends_on", []), "blocker_ids": row.get("blocker_ids", []),
             "summary": row.get("output_summary", {}), "remediation": [public_text(item) for item in row.get("remediation", [])] if isinstance(row.get("remediation"), list) else [public_text(row.get("remediation", ""))],
             "stale": row.get("status") == "stale", "attempt_ref": row.get("attempt_ref", ""),

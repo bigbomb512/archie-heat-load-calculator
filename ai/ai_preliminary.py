@@ -1121,10 +1121,10 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
         if exhaust_note:
             exclusions.append({"room_id": room_id, "component": "process exhaust", "reason": exhaust_note})
         if row["scope"] == "comfort_hvac_with_process_exception":
-            exclusions.extend({"room_id": room_id, "component": component, "reason": reason} for component, reason in (
-                *((("process exhaust", "Kitchen process exhaust remains a project-specific preliminary exclusion."),) if not exhaust else ()),
-                ("steam and named equipment", "Steam and named equipment heat remain explicit project-specific exclusions."),
-            ))
+            # Kitchen equipment heat is counted in full (user decision 2026-10-23); only an unresolved exhaust is excluded.
+            if not exhaust:
+                exclusions.append({"room_id": room_id, "component": "process exhaust",
+                                   "reason": "Kitchen process exhaust remains a project-specific preliminary exclusion."})
     weather_values = scenario_values["weather_profile"]
     requirements_raw = {"space_usage": "AI preliminary multi-room project", "occupancy": None, "operating_hours": "Controlled preliminary profiles", "indoor_cooling_setpoint_c": scenario_values["indoor_dry_bulb_c"], "outdoor_summer_db_c": max(point["db"] for point in weather_values["hours"]),
                         "cooling_load_conditions": {"indoor_cooling_wet_bulb_c": scenario_values["indoor_wet_bulb_c"], "indoor_wet_bulb_basis": "legacy_unverified", "outdoor_summer_wet_bulb_c": max(point["wb"] for point in weather_values["hours"]), "outdoor_wet_bulb_basis": max(weather_values["hours"], key=lambda point: point["wb"]).get("wet_bulb_basis", "legacy_unverified"), "atmospheric_pressure_kpa": weather_values["pressure_kpa"], "verification_status": "provisional", "source": _source("scenario")},

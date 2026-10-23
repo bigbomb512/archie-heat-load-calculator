@@ -1,5 +1,6 @@
 import { getJson, sendJson, escapeHtml } from "./api.js";
 import { planSvg, lineLegend } from "./plan.js";
+import { activityMarkup, updateActivity, bindActivity } from "./activity.js";
 
 const query = (projectId) => `?project_id=${encodeURIComponent(projectId)}`;
 // Where each step is comes from the server (job_runner.step_state): waiting, active, stopping, done or failed,
@@ -472,6 +473,7 @@ function watchStages(projectId, data, status, plan) {
     }
     shape = stageShape(next);
     list.innerHTML = stagesMarkup(next, status, plan);
+    updateActivity(document.querySelector("[data-ai-activity]"), next, projectId);
     bindStageButtons(projectId, list);
     const sentence = document.querySelector(".job-status");
     if (sentence) sentence.textContent = sentenceFor(next, status, plan);
@@ -493,6 +495,7 @@ export async function renderDrawings(project, projectId) {
       <ol class="job-stage-list">
         ${stagesMarkup(data, status, plan)}
       </ol>
+      <section class="job-activity" data-ai-activity aria-label="AI activity">${activityMarkup(data, projectId)}</section>
       <p class="job-caption">The review keeps going in the background. You can close this page and come back later.</p>
     </section>
     <section class="job-panel job-found-panel" aria-labelledby="found-title">
@@ -508,6 +511,7 @@ export async function renderDrawings(project, projectId) {
     statusLine: sentenceFor(data, status, plan),
     plan,
     bind: () => {
+      bindActivity(document.querySelector("[data-ai-activity]"), projectId);
       bindStageButtons(projectId, document.querySelector(".job-progress-panel") || document);
       watchStages(projectId, data, status, plan);
     },

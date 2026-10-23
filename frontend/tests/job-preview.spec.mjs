@@ -514,6 +514,9 @@ test("supervisor recovery keeps confirmed status through a failed poll and shows
   await page.clock.install();
   await page.goto("/?preview=1#/job/job-1/drawings");
   const check = page.locator('[data-stage="supervisor"]');
+  // Wait for the first confirmed status before failing the polls; under load the first request could otherwise be
+  // the one that fails, leaving nothing confirmed to keep.
+  await expect(check.getByRole("button", { name: "Restart this step" })).toBeVisible();
   fail = true;
   await page.clock.runFor(5000);
   await expect(page.locator(".job-status")).toContainText("last confirmed progress");
@@ -1450,4 +1453,54 @@ test("every preview screen fetches one job plan and displays no internal process
       await expect(page.locator("#jobApp")).not.toContainText(forbidden);
     }
   }
+});
+
+test("live activity shows parallel specialists, skill results and retains disclosures during updates", async ({ page }) => {
+  await preview(page);
+  let stopped = false;
+  let broken = false;
+  await page.route("**/api/skill-workflow**", route => route.fulfill({ json: {
+    status: "running", step_state: "active", subskills: [
+      { id: "sheet_identity", label: "Drawing identities", parent_label: "Document mapping", status: "resolved",
+        summary: { record_count: 38, citation_count: 38, unresolved_count: 0 } },
+      { id: "room_identity_use", label: "Room use", parent_label: "Rooms", status: "running" },
+      { id: "address_confirmation", label: "Site address", status: "queued", prerequisites: ["room_identity_use"] },
+      { id: "people", label: "People loads", status: "not_in_scope" },
+    ],
+  } }));
+  await page.route("**/api/phase1-supervisor**", route => broken ? route.abort() : route.fulfill({ json: {
+    status: stopped ? "done" : "running", step_state: stopped ? "done" : "active",
+    active_investigations: [
+      { label: "Storefront glass", message: "Check Shop glass on page 26", pages: [26] },
+      { label: "Roof exposure", message: "Check Kitchen roof on page 22", pages: [22] },
+    ],
+    recent_activity: [{ label: "Wall boundaries", status: "applied", cycle: 1 }],
+  } }));
+  await page.clock.install();
+  await page.goto("/?preview=1#/job/job-1/drawings");
+  const activity = page.locator("[data-ai-activity]");
+  await expect(activity.getByText("Check Shop glass on page 26")).toBeVisible();
+  await expect(activity.getByText("Check Kitchen roof on page 22")).toBeVisible();
+  await expect(activity).not.toContainText("People loads");
+  await activity.getByText("Skill tasks: 1 of 3 finished").click();
+  await expect(activity).toContainText("38 records returned; 38 citations");
+  await expect(activity).toContainText("Waiting for Room use");
+  await page.clock.runFor(5000);
+  await expect(activity.locator('[data-activity-details="skills"]')).toHaveAttribute("open", "");
+  broken = true;
+  await page.clock.runFor(5000);
+  await expect(activity).toContainText("Showing the last confirmed activity");
+  await expect(activity.getByText("Check Shop glass on page 26")).toBeVisible();
+  broken = false;
+  stopped = true;
+  await page.clock.runFor(5000);
+  await expect(activity.getByText("Check Shop glass on page 26")).toHaveCount(0);
+  await expect(activity.locator('[data-activity-details="skills"]')).toHaveAttribute("open", "");
+  await activity.getByText("Recent specialist answers").click();
+  await expect(activity).toContainText("Answer applied");
+  await page.screenshot({ path: "test-results/live-ai-activity.png", fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(activity).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: "test-results/live-ai-activity-mobile.png", fullPage: true });
 });

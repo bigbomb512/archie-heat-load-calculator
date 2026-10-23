@@ -31,6 +31,13 @@ class Phase1AfterReviewTests(unittest.TestCase):
     def finish_review(self, status="needs_review", scope="phase1_envelope", run_id="r1"):
         (Path(self.tmp.name) / "skill_workflow_run.json").write_text(
             json.dumps({"run_id": run_id, "scope": scope, "status": status}))
+        # A settled model check follows the review; fingerprint its actual input run.
+        from backend import phase1_supervisor_service as supervisor
+        path = Path(self.tmp.name) / supervisor.JOB_FILE
+        if path.exists():
+            checked = json.loads(path.read_text())
+            checked["source_fingerprint"] = supervisor.source_fingerprint(self.project)
+            path.write_text(json.dumps(checked))
 
     def run_trigger(self, base_report=None, stale=False, run_id="r1"):
         model = {"phase1_base_room_load_report": base_report or {"status": "not_calculated"},

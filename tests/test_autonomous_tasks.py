@@ -520,9 +520,29 @@ class AutonomousTaskTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "match the traced storefront edge"):
             autonomous_tasks.validate_opening_reply(packet, json.dumps({"total_width_mm": 10000,
                 "panels": [{"width_mm": 2025, "sill_mm": 1100, "head_mm": 2500, "source": "read_from_image"}]}))
-        with self.assertRaisesRegex(ValueError, "sum to the printed total"):
+        with self.assertRaisesRegex(ValueError, "add up to the total"):
             autonomous_tasks.validate_opening_reply(packet, json.dumps({"total_width_mm": 11970,
                 "panels": [{"width_mm": 2025, "sill_mm": 1100, "head_mm": 2500, "source": "read_from_image"}]}))
+
+    def test_dimensions_drawn_as_outlines_are_read_from_the_image_when_the_checks_hold(self):
+        # Butcher Buffet, 2026-10-21: the sheet's text layer has some heights ("3750AFFL") but the widths are drawn as
+        # outlines. The AI's correct answer (one 2,025 mm panel, sill 1,100) was refused twice for not being in the text.
+        packet = {"edge_length_mm": 11442, "ceiling_height_mm": 3580, "text_layer": ["3750AFFL", "INTERNAL", "AFFL", "WALL"]}
+        reply = {"total_width_mm": 11900, "total_width_text": "11900",
+                 "panels": [{"label": "Glazed window panel", "width_mm": 2025, "sill_mm": 1100, "head_mm": 3750,
+                             "printed_text": ["2025", "1100", "3750 AFFL"], "source": "printed_text"}],
+                 "excluded": [{"label": "Sign wall", "width_mm": 2950, "why": "solid"}, {"label": "Roller shutter", "width_mm": 3250, "why": "doorway"},
+                              {"label": "Menu board wall", "width_mm": 2000, "why": "solid"}, {"label": "Mirror sign", "width_mm": 1325, "why": "sign"},
+                              {"label": "Wall returns", "width_mm": 350, "why": "solid"}]}
+        result = autonomous_tasks.validate_opening_reply(packet, json.dumps(reply))
+        self.assertEqual([(row["width_mm"], row["sill_mm"], row["head_mm"], row["source"]) for row in result["panels"]],
+                         [(2025, 1100, 3580, "read_from_image")])                    # head capped at the ceiling
+        self.assertTrue(result["read_from_image"])
+        # The checks still bite: a total that doesn't match the traced wall, or parts that don't add up.
+        with self.assertRaisesRegex(ValueError, "match the traced storefront edge"):
+            autonomous_tasks.validate_opening_reply(packet, json.dumps({**reply, "total_width_mm": 9000}))
+        with self.assertRaisesRegex(ValueError, "add up to the total"):
+            autonomous_tasks.validate_opening_reply(packet, json.dumps({**reply, "excluded": reply["excluded"][:2]}))
 
     def test_p4_vision_width_sum_counts_excluded_parts_with_five_percent_tolerance(self):
         packet = {"edge_length_mm": 11450, "ceiling_height_mm": 2700,
@@ -541,14 +561,14 @@ class AutonomousTaskTests(unittest.TestCase):
         self.assertEqual(accepted["excluded"], excluded)
         incomplete = {**reply, "excluded": [{**excluded[0], "width_mm": None}, *excluded[1:]]}
         checked = autonomous_tasks.validate_opening_reply(packet, json.dumps(incomplete))
-        self.assertTrue(any("sum check skipped" in note for note in checked["notes"]))
+        self.assertTrue(any("sum check was skipped" in note for note in checked["notes"]))
         refused = {**reply, "excluded": [
             {"label": "Roller shutter", "width_mm": 3250, "why": "Doorway"},
             {"label": "Solid panel", "width_mm": 2000, "why": "Opaque"},
             {"label": "Signage", "width_mm": 1000, "why": "Sign"},
             {"label": "Door", "width_mm": 725, "why": "Entry"},
         ]}  # 2,025 glazed + excluded parts = 9,000 mm
-        with self.assertRaisesRegex(ValueError, "sum to the printed total within 5%"):
+        with self.assertRaisesRegex(ValueError, "add up to the total within 5%"):
             autonomous_tasks.validate_opening_reply(packet, json.dumps(refused))
         over_total = {**reply, "panels": [{**parts[0], "width_mm": 12000}]}
         with self.assertRaisesRegex(ValueError, "Glazed panel widths cannot exceed"):
@@ -808,6 +828,24 @@ class AutonomousTaskTests(unittest.TestCase):
             self.assertEqual((target, packet["kind"], packet["rooms"]), ("page-27", "elevation", ["Kitchen"]))
             self.assertIn("not a bulkhead", prompt)
 
+    def test_every_step_uses_one_ceiling_height_typed_then_printed_then_saved(self):
+        # Butcher Buffet, 2026-10-22: the glass step capped the Shop's window at the printed 3,622 mm, but the step that
+        # saves openings checked it against the saved 2,700 mm fallback (rebuilt only with the model) and refused it.
+        from ai import ceiling_volume_resolution
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            shop = ceiling_volume_resolution.room_identity("Shop", "Ground")
+            (root / "ceiling_volume_resolution.json").write_text(json.dumps({"records": [
+                {"room_id": shop, "status": "draft_ready", "ceiling_height_mm": 2700, "origin": "preliminary_fallback"}]}))
+            height = lambda: autonomous_tasks_service.room_ceiling_height(root, "room-use:ground:shop", "Shop", "Ground")
+            self.assertEqual(height(), 2700)
+            printed = {"task": "P7_ceiling_heights", "status": "applied",
+                       "applied_value": {"page": 22, "kind": "ceiling_plan", "heights": {"Shop": {"height_mm": 3622, "labels": ["CH:3150MM"]}}}}
+            with patch.object(autonomous_tasks_service, "_all_current", return_value=[printed]):
+                self.assertEqual(height(), 3622)
+                (root / "room_height_overrides.json").write_text(json.dumps({"overrides": [{"room_id": shop, "ceiling_height_mm": 3000}]}))
+                self.assertEqual(height(), 3000)                       # a typed height still wins
+
     def test_printed_heights_reach_the_ceiling_resolver_over_the_fallback(self):
         from ai import ai_preliminary, ceiling_volume_resolution
         from backend import ai_preliminary_service
@@ -870,7 +908,6 @@ class AutonomousTaskTests(unittest.TestCase):
             self.assertEqual(packet["page"],26)
             self.assertEqual(packet["edge_indices"],[0])
             self.assertAlmostEqual(packet["wall_run_span_m"],11.97)
-            self.assertTrue(packet["allow_vector_outline_read"])
 
     def test_p3_classifies_union_perimeter_and_keeps_jagged_prompt_bounded(self):
         from PIL import Image

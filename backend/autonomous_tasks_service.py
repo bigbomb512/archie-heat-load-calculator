@@ -1614,6 +1614,26 @@ def drawing_ceiling_heights(root):
     return heights
 
 
+def room_ceiling_height(root, room_id, label, level):
+    """A room's ceiling height in mm, the one rule every step uses: a height typed in the workspace, else the height
+    printed on the drawings (P7), else the ceiling resolver's saved value (which may be the labelled preliminary
+    fallback), else None. The saved value is only rebuilt with the model, so on a new job it still held the 2,700 mm
+    fallback while the drawings said 3,622 mm, and the Shop's storefront glass was refused (Butcher Buffet, 2026-10-22)."""
+    from ai import ceiling_volume_resolution
+    from backend import job_service
+    root = Path(root)
+    identity = ceiling_volume_resolution.room_identity(label or "", level or "")
+    typed = next((row for row in job_service.height_overrides(root) if row.get("room_id") == identity), None)
+    if typed and isinstance(typed.get("ceiling_height_mm"), (int, float)):
+        return float(typed["ceiling_height_mm"])
+    printed = drawing_ceiling_heights(root).get(str(label or "").strip().casefold())
+    if printed and isinstance(printed.get("height_mm"), (int, float)):
+        return float(printed["height_mm"])
+    saved = ceiling_volume_resolution.values_by_room(_read(root / "ceiling_volume_resolution.json", {}))
+    value = (saved.get(room_id) or saved.get(identity) or {}).get("ceiling_height_mm")
+    return float(value) if isinstance(value, (int, float)) and value > 0 else None
+
+
 def _apply_p7(record, validated):
     packet = record["packet"]
     record.update({"status": _status_for_accuracy("ai_determined", record["accuracy"]), "source": "ai_determined",
@@ -1685,11 +1705,6 @@ def _p4_packets(root, only_room_id=None):
     ai_input,spatial,_building=_load_inputs(root)
     elevation_pages=_storefront_elevation_pages(ai_input)
     if not elevation_pages: return result
-    try:
-        from ai import ceiling_volume_resolution
-        heights=ceiling_volume_resolution.values_by_room(_read(root/"ceiling_volume_resolution.json",{}))
-    except (OSError,ValueError,TypeError,KeyError): heights={}
-    printed_heights=drawing_ceiling_heights(root)
     comfort=_comfort_room_ids(root)
     assumption=__import__("ai.ai_preliminary",fromlist=["load_pack"]).load_pack()
     glazing="retail"; shading="unshaded"
@@ -1741,9 +1756,7 @@ def _p4_packets(root, only_room_id=None):
             target=f"{room_id}-run-{run_label}-page-{elevation['page']}-trace-{trace['trace_id']}"
             old=_current_task(root,"P4_openings",target)
             if only_room_id is None and old and old.get("status") in {"applied","below_accuracy_bar"}: continue
-            identity=ceiling_volume_resolution.room_identity(trace.get("room_label",""),trace.get("level_name",""))
-            values=heights.get(room_id) or heights.get(identity) or {}
-            ceiling=(printed_heights.get(str(trace.get("room_label","")).casefold()) or {}).get("height_mm") or values.get("ceiling_height_mm")
+            ceiling=room_ceiling_height(root,room_id,trace.get("room_label",""),trace.get("level_name",""))
             if not isinstance(ceiling,(int,float)) or ceiling<=0:
                 result.append(("P4_openings",target,{"task":"P4_openings","room":trace.get("room_label"),"page":elevation["page"]},"",[],
                     "Resolve ceiling height before applying elevation glazing; no head-height fallback is available.")); continue
@@ -1757,8 +1770,6 @@ def _p4_packets(root, only_room_id=None):
                 raw=page_ocr.get(field,[])
                 if isinstance(raw,str): text_layer.extend(raw.splitlines())
                 elif isinstance(raw,list): text_layer.extend(str(item.get("text",item)) if isinstance(item,dict) else str(item) for item in raw)
-            has_dimension_text=any(isinstance(item,dict) and isinstance(item.get("value_mm"),(int,float))
-                                  for item in (page_ocr.get("dimension_candidates") or []))
             prompt=("The image is a shopfront/external elevation for the selected outside wall run. List each glazed panel, excluding signage, solid panels and open doorways. "
                 "Use printed dimensions only; quote exact text. Return null for unprinted sill/head/width. Missing sill is assumed 0 (glass to floor); missing head is assumed ceiling height. "
                 "For vector-outline text, list each glazed panel and each excluded solid part (roller shutter, signage, or door), with width_mm when readable. Glazed widths must not exceed the total. Glazed plus stated excluded widths must sum to the read total within 5%; if any excluded width is unreadable, leave it null and the sum check will be skipped with a note. Outlines use inside faces; elevations give overall widths. Accept 0 <= total_mm - span_mm <= 600 (two wall thicknesses) OR |total-span|/span <= 2%. "
@@ -1776,7 +1787,7 @@ def _p4_packets(root, only_room_id=None):
                 "wall_run_index":run_index,"wall_run_indices":run_indices,"wall_run_span_m":run_span,"edge_length_mm":run_span*1000,
                 "run_total_length_m":run_total,
                 "page":page,"ceiling_height_mm":ceiling,"text_layer":text_layer[:60],
-                "storefront_match_reason":storefront_reason,"allow_vector_outline_read":not has_dimension_text,
+                "storefront_match_reason":storefront_reason,
                 "glazing_choice":glazing,"shading_category":shading,
                 "glazing_option":f"Preliminary single glazing (pack au-preliminary-v3): U {assumption['profiles'][glazing]['glazing_u_w_m2k']}, SHGC {assumption['profiles'][glazing]['shgc']}",
                 "frame_fraction":assumption.get("preliminary_envelope",{}).get("glazing_frame_fraction"),"evidence":{"page":page}}

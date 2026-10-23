@@ -1351,3 +1351,15 @@ body.job-preview {
   gap: 8px;
   margin-top: 16px;
 }
+
+/* Live evidence work uses the same type, ink and paper as the progress steps. */
+.job-activity { border-top: 1px solid var(--line); margin-top: 24px; padding-top: 24px; }
+.job-activity h3 { font-size: 18px; margin: 0 0 8px; }
+.job-activity-list { list-style: none; margin: 12px 0; padding: 0; }
+.job-activity-task { border-bottom: 1px solid var(--line-soft); padding: 12px 0; overflow-wrap: anywhere; }
+.job-activity-task > span, .job-activity-task > strong { display: block; }
+.job-activity-task.is-active { border-left: 2px solid var(--action); padding-left: 12px; }
+.job-activity-state { color: var(--ink-2); font-size: 13px; }
+.job-activity-task p { margin: 4px 0 0; font-size: 13px; color: var(--ink-2); }
+.job-activity summary { cursor: pointer; padding: 12px 0; min-height: 44px; }
+.job-activity summary:focus-visible { outline: 2px solid var(--action); outline-offset: 2px; }

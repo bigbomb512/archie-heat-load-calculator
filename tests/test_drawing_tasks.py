@@ -112,6 +112,46 @@ class DrawingTaskTests(unittest.TestCase):
             self.assertEqual(len(prompts), 6)
             self.assertTrue(all("P0_room_outlines" in prompt for prompt in prompts[-2:]))
 
+    def test_malformed_reply_is_archived_and_retried_with_feedback(self):
+        with tempfile.TemporaryDirectory() as folder:
+            project = {"id": "j", "review_dir": folder}
+            record = tasks_service._create_run(Path(folder), "P5_roof", "shop", {}, "Read roof")
+            prompts = []
+            class Provider:
+                model = "fake"
+                def propose(self, prompt, image_paths):
+                    prompts.append(prompt)
+                    raise ai_provider.InvalidProviderReply("The reply was not a JSON object.",
+                        {"reply_text": "[]", "usage": {"cost_usd": .001}})
+            def current_records(root):
+                return [tasks_service._current_task(root, "P5_roof", "shop")]
+            with patch.object(tasks_service, "post") as publish, \
+                    patch.object(tasks_service, "_all_current", side_effect=current_records):
+                result = drawing.answer_all(None, project, provider_for=lambda task: Provider())
+            self.assertEqual((result["calls"], result["refused"]), (2, 2))
+            self.assertEqual(result["unresolved"][0]["kind"], "answer_rejected")
+            self.assertIn("previous reply was refused: The reply was not a JSON object.", prompts[1])
+            saved = tasks_service._current_task(Path(folder), "P5_roof", "shop")
+            self.assertEqual([row["outcome"] for row in saved["reply_attempts"]], ["rejected", "rejected"])
+            archives = list((tasks_service._record_file(Path(folder), record).parent / "reply_attempts").glob("*.json"))
+            self.assertTrue(all(json.loads(path.read_text())["raw_reply"] == "[]" for path in archives))
+            self.assertTrue(all(call.args[2]["action"] == "run_all" for call in publish.call_args_list))
+
+    def test_status_reconciles_later_repairs_without_rewriting_history(self):
+        from copy import deepcopy
+        with tempfile.TemporaryDirectory() as folder:
+            original = {"status": "done", "unresolved": [
+                {"task": "P5_roof", "target": "shop", "kind": "service_error"}]}
+            project = {"id": "j", "review_dir": folder}
+            with patch.object(drawing._JOB, "status", side_effect=lambda project: deepcopy(original)), \
+                    patch.object(tasks_service, "_current_task", return_value={"status": "applied", "applied_value": {"roof": "not_exposed"}}):
+                self.assertEqual(drawing.status(None, project)["unresolved"], [])
+            with patch.object(drawing._JOB, "status", side_effect=lambda project: deepcopy(original)), \
+                    patch.object(tasks_service, "_current_task", return_value={"status": "waiting_for_reply",
+                        "reply_attempts": [{"outcome": "rejected", "reason": "Invalid JSON"}]}):
+                self.assertEqual(drawing.status(None, project)["unresolved"][0]["kind"], "answer_rejected")
+            self.assertEqual(original["unresolved"][0]["kind"], "service_error")
+
     def test_grid_coordinates_become_image_pixels_by_the_image_or_the_chosen_crop(self):
         # Gemini read a 1,536 x 1,469 plan on a 0-1000 grid: the Kitchen's corner (480, 217) is pixel (737.3, 318.8).
         outline = {"rooms": [{"room": "Kitchen", "points_px": [[480, 217], [798, 585]], "open_sides": ""}]}

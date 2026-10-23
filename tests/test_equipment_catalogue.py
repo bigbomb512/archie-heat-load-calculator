@@ -238,6 +238,89 @@ class LadderTests(unittest.TestCase):
         self.assertEqual((row["status"], row["room"], row["quantity"]), ("typical", "Kitchen", 2))
         self.assertIn("without a quote", " ".join(row["reasons"]))
 
+    def test_a_printed_zone_goes_to_the_room_the_plan_shows_it_in(self):
+        # Schedules print zones, not rooms: Butcher Buffet (2026-10-22) left its whole cooking line and buffet without
+        # a room because "COOKING LINE" and "BUFFET AREA" aren't room names.
+        fryer, wok = self.add("Deep fryer", location="COOKING LINE"), self.add("Wok", location="Cooking line")
+        plant, named = self.add("Deep fryer", location="SERVICES ZONE ABOVE"), self.add("Deep fryer", location="KITCHEN AREA")
+        asked, batches = [], []
+
+        def locate(locations, values, rooms):
+            asked.append(sorted(locations.values()))
+            return [{"location": "COOKING LINE", "room": "Kitchen", "reason": "Cooking line is inside the kitchen walls."},
+                    {"location": "SERVICES ZONE ABOVE", "room": None, "reason": "Above the ceiling."},
+                    {"location": "Somewhere else", "room": "Kitchen"}]
+        with patch.object(service.catalogue, "load", return_value=self.book), \
+                patch.object(service.catalogue, "load_typical", return_value=self.typical), \
+                patch.object(service, "_inputs", return_value=self.inputs):
+            result = service.resolve(self.project, ["Kitchen", "Office"], locate=locate,
+                                     assess=lambda batch, *rest: batches.append(batch) or [], persist=True)
+            again = service.resolve(self.project, ["Kitchen", "Office"], locate=locate)
+        self.assertEqual(asked, [["COOKING LINE", "SERVICES ZONE ABOVE"]])   # once per location; named rooms aren't asked
+        self.assertEqual((self.record(result, fryer)["room"], self.record(result, wok)["room"]), ("Kitchen", "Kitchen"))
+        self.assertIn('the plan shows "COOKING LINE" in that room', " ".join(self.record(result, fryer)["reasons"]))
+        self.assertEqual(self.record(result, named)["room"], "Kitchen")
+        unplaced = self.record(result, plant)
+        self.assertEqual((unplaced["status"], unplaced["label"]), ("no_room", "Typical value TV-3, room unknown"))
+        self.assertEqual(set(result["zones"]), {"cooking line", "services zone above"})   # the stray answer is dropped
+        hints = {row["id"]: row.get("location_is_in") for row in batches[0]}
+        self.assertEqual((hints[fryer], hints[wok], hints[plant]), ("Kitchen", "Kitchen", None))
+        self.assertEqual(self.record(again, wok)["room"], "Kitchen")          # saved answers are reused
+        self.assertEqual(len(asked), 1)
+
+    def test_a_failed_location_check_never_stops_the_values(self):
+        item = self.add("Deep fryer", location="COOKING LINE")
+        with patch.object(service.catalogue, "load", return_value=self.book), \
+                patch.object(service.catalogue, "load_typical", return_value=self.typical), \
+                patch.object(service, "_inputs", return_value=self.inputs):
+            result = service.resolve(self.project, ["Kitchen"], locate=lambda *args: (_ for _ in ()).throw(RuntimeError("timeout")))
+        self.assertEqual(self.record(result, item)["status"], "no_room")
+        self.assertIn("timeout", result["assessment_error"])
+
+    def test_the_location_check_sees_the_named_rooms_and_the_busiest_layout_pages(self):
+        from PIL import Image
+        shots = self.root / "chatgpt_packet" / "screenshots"; shots.mkdir(parents=True)
+        Image.new("RGB", (400, 300), "white").save(shots / "page_004.png")
+        u_shape = [[20, 20], [380, 20], [380, 280], [300, 280], [300, 60], [100, 60], [100, 280], [20, 280]]
+        image, page = service._room_plan_image(self.root, [{"page": 4, "room_label": "Shop", "points_image_px": u_shape}])
+        self.assertEqual((page, image.size), (4, (400, 300)))
+        self.assertEqual(image.getpixel((200, 160)), (255, 255, 255))   # the name isn't drawn in the U's open middle
+        renders = self.root / "page_inventory" / "pages"; renders.mkdir(parents=True)
+        Image.new("RGB", (10, 10)).save(renders / "p-19.png")
+        self.assertEqual(service._page_render(self.root, 4), shots / "page_004.png")
+        self.assertEqual(service._page_render(self.root, 19), renders / "p-19.png")   # an image-only layout sheet
+        self.assertIsNone(service._page_render(self.root, 7))
+        values = {"a": {"location": "BUFFET"}, "b": {"location": "BUFFET"}, "c": {"location": "BAR"}}
+        findings = [{"id": "a", "pages": [5, 19]}, {"id": "b", "pages": [19, 20]}, {"id": "c", "pages": [7]}]
+        inventory = {"5": {"page_type": "schedule"}, "19": {"page_type": "floor_plan"}, "20": {"page_type": "floor_plan"},
+                     "7": {"page_type": "floor_plan"}}
+        self.assertEqual(service._layout_pages({"buffet": "BUFFET"}, values, findings, inventory, {5, 7, 19, 20}, 20), [19])
+        self.assertEqual(service._layout_pages({"buffet": "BUFFET"}, values, findings, inventory, {5, 7, 20}, 20), [])
+
+    def test_dishwashers_have_their_own_hood_and_hooded_rows_without_a_hood_value_lose_their_moisture(self):
+        # User decisions 2026-10-23: a dishwasher counts as hooded when the drawings don't say; a generic row's
+        # under-hood value is used. Butcher Buffet's dishwasher added 5.6 kW of moisture as if it had no hood.
+        rows = [*TYPICAL_ROWS[:3], {**TYPICAL_ROWS[3], "hood_sensible_w": 200, "hood_latent_w": 0},
+                {"id": "TV-5", "type": "Dishwasher", "band": "Pass-through", "aliases": "dishwasher", "sensible_w": 1700,
+                 "latent_w": 5600, "pattern": "WHILE_OPEN"}]
+        typical_workbook(self.root / "hooded.xlsx", rows)
+        typical = cat.load_typical(self.root / "hooded.xlsx")
+        washer = self.add("Dishwasher", room="Kitchen", quantity=1, under_hood=False)
+        wok = self.add("Wok", room="Kitchen", quantity=1)
+        hooded_wok = {"id": wok, "under_hood": True, "checks": {"under_hood": check("FRYER UNDER EXHAUST CANOPY")}}
+        result = self.resolve([hooded_wok], typical=typical)
+        row = self.record(result, washer)
+        self.assertEqual((row["sensible_w"], row["latent_w"], row["heat_basis"]),
+                         (1700, 0.0, "under a hood (free-standing sensible)"))
+        self.assertIn("Taken to have its own hood", " ".join(row["reasons"]))
+        row = self.record(result, wok)
+        self.assertEqual((row["status"], row["sensible_w"], row["latent_w"], row["heat_basis"]), ("generic", 200, 0, "under a hood"))
+        self.assertEqual(self.record(self.resolve(typical=typical), wok)["sensible_w"], 1000)   # hood not shown
+        self.inputs["decisions"] = {washer: {"run": "r1", "status": "accepted", "reviewer": "Operator",
+                                             "value": {"name": "Dishwasher", "room": "Kitchen", "quantity": 1, "under_hood": False}}}
+        row = self.record(self.resolve(typical=typical), washer)
+        self.assertEqual((row["latent_w"], row["heat_basis"]), (5600, "free-standing"))       # the operator says no hood
+
     def test_hoods_cold_rooms_lighting_and_rejected_items_are_not_equipment_heat(self):
         hood, cold, light = self.add("Range hood", room="Kitchen"), self.add("Coolroom", room="Kitchen"), self.add("Downlight", category="Lighting")
         rejected = self.add("Deep fryer", room="Kitchen")

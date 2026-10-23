@@ -71,6 +71,21 @@ def _seconds_since(stamp):
 
 def status(web, project):
     job = _JOB.status(project)
+    # A supervisor or manual reply may have repaired a task since this job finished.
+    # Reconcile the response only; retain the original run's failure history on disk.
+    if job.get("status") == "done" and job.get("unresolved"):
+        from backend import autonomous_tasks_service as tasks
+        unresolved = []
+        for failure in job["unresolved"]:
+            current = tasks._current_task(Path(project["review_dir"]), failure["task"], failure["target"]) or {}
+            if current.get("status") in {"applied", "applied_fallback", "below_accuracy_bar"} and current.get("applied_value"):
+                continue
+            last = (current.get("reply_attempts") or [{}])[-1]
+            if last.get("outcome") == "rejected":
+                failure = {**failure, "kind": "answer_rejected",
+                           "message": "The reply did not pass the drawing checks; completed tasks are kept."}
+            unresolved.append(failure)
+        job["unresolved"] = unresolved
     if job.get("provider_limited"):
         job["warning"] = "The drawing provider's usage limit was reached. Unanswered tasks are saved; retry after the limit resets."
     if job.get("status") == "done" and (job.get("unresolved") or job.get("provider_limited")):
@@ -228,6 +243,7 @@ def answer_all(web, project, step=lambda *args: None, provider_for=None):
                       current_target=str(record.get("target") or ""), task_number=number,
                       tasks_in_round=len(waiting), tasks_done=number - 1, tasks_remaining=len(waiting) - number + 1,
                       request_started_at=now(), last_progress_at=now(), last_problem=problem)
+            unreadable = None
             try:
                 provider = ai_provider.recorded(provider_for(record["task"]), root, f"drawing:{record['task']}")
                 prompt = _prompt(record, grid)
@@ -248,33 +264,40 @@ def answer_all(web, project, step=lambda *args: None, provider_for=None):
                 raise
             except Exception as error:  # a failed call or an unreadable reply: tried again next round, up to MAX_ATTEMPTS
                 calls += 1
-                kind = failure_kind(error)
-                failure = {"task": record["task"], "target": str(record.get("target") or ""),
-                           "label": TASK_LABELS.get(record["task"], "A drawing task"), "kind": kind,
-                           "message": failure_message(record, kind, error, again=tried[record["run_id"]] < MAX_ATTEMPTS)}
-                failures[record["run_id"]] = failure
-                problem = failure["message"]
-                connection_failures_in_a_row = connection_failures_in_a_row + 1 if kind == "connection" else 0
-                connection_stopped = connection_failures_in_a_row >= MAX_CONNECTION_FAILURES_IN_A_ROW
-                if connection_stopped:
-                    problem = (f"The connection to the AI service failed on {connection_failures_in_a_row} calls in a "
-                               "row, so the drawing tasks stopped calling it. Nothing was concluded about the drawings; "
-                               "try again when the connection works.")
-                _progress(root, answered=answered, refused=refused, rounds=rounds, calls=calls,
-                          tasks_done=number, tasks_remaining=len(waiting) - number,
-                          request_started_at=None, last_progress_at=now(), last_problem=problem)
-                if connection_stopped:
-                    break
-                continue
+                if isinstance(error, ai_provider.InvalidProviderReply):
+                    archive_investigation_failure(project, record, error, model_note="Drawing task")
+                    unreadable = True
+                    reply = None
+                else:
+                    kind = failure_kind(error)
+                    failure = {"task": record["task"], "target": str(record.get("target") or ""),
+                               "label": TASK_LABELS.get(record["task"], "A drawing task"), "kind": kind,
+                               "message": failure_message(record, kind, error, again=tried[record["run_id"]] < MAX_ATTEMPTS)}
+                    failures[record["run_id"]] = failure
+                    problem = failure["message"]
+                    connection_failures_in_a_row = connection_failures_in_a_row + 1 if kind == "connection" else 0
+                    connection_stopped = connection_failures_in_a_row >= MAX_CONNECTION_FAILURES_IN_A_ROW
+                    if connection_stopped:
+                        problem = (f"The connection to the AI service failed on {connection_failures_in_a_row} calls in a "
+                                   "row, so the drawing tasks stopped calling it. Nothing was concluded about the drawings; "
+                                   "try again when the connection works.")
+                    _progress(root, answered=answered, refused=refused, rounds=rounds, calls=calls,
+                              tasks_done=number, tasks_remaining=len(waiting) - number,
+                              request_started_at=None, last_progress_at=now(), last_problem=problem)
+                    if connection_stopped:
+                        break
+                    continue
             connection_failures_in_a_row = 0
             failures.pop(record["run_id"], None)
-            size = _grid_size(record["task"], reply, sizes) if grid else None
-            if size:
-                reply = to_pixels(reply, size)
+            if reply is not None:
+                size = _grid_size(record["task"], reply, sizes) if grid else None
+                if size:
+                    reply = to_pixels(reply, size)
             try:
-                autonomous_tasks_service.post(web, project, {"action": "validate_apply", "task": record["task"],
-                                                             "target": record["target"], "reply": json.dumps(reply),
-                                                             "model_note": f"AI provider ({getattr(provider, 'model', '') or 'default'})"})
+                if not unreadable:
+                    autonomous_tasks_service.post(web, project, {"action": "validate_apply", "task": record["task"],
+                                                                 "target": record["target"], "reply": json.dumps(reply),
+                                                                 "model_note": f"AI provider ({getattr(provider, 'model', '') or 'default'})"})
             except Exception:
                 cached_path.unlink(missing_ok=True)
                 raise
@@ -309,7 +332,7 @@ def failure_kind(error):
     if isinstance(error, (ai_provider.ProviderTransportError, ConnectionError)) or (
             isinstance(error, OSError) and not isinstance(error, TimeoutError)):
         return "connection"
-    if isinstance(error, ValueError):
+    if isinstance(error, (ValueError, ai_provider.InvalidProviderReply)):
         return "unreadable_reply"
     return "service_error"
 
@@ -394,7 +417,7 @@ def apply_investigation(web, project, record, result):
     return {"status": after.get("status"), "reason": after.get("block_reason", ""), "reused": result["reused"]}
 
 
-def archive_investigation_failure(project, record, error):
+def archive_investigation_failure(project, record, error, model_note="Targeted drawing check"):
     """Keep failed targeted replies beside accepted/rejected task replies, with a specific failure reason."""
     from backend import autonomous_tasks_service as tasks
     checkpoint()
@@ -402,9 +425,15 @@ def archive_investigation_failure(project, record, error):
     if (tasks._current_task(root, record["task"], record["target"]) or {}).get("run_id") != record["run_id"]:
         return
     raw = getattr(error, "raw_record", {}) or {}
-    path = tasks._archive_reply(root, record, str(raw.get("reply_text") or ""), "Targeted drawing check")
+    path = tasks._archive_reply(root, record, str(raw.get("reply_text") or ""), model_note)
     entry = read_json(path)
-    entry.update(outcome="provider_failed", reason=str(error)[:500], raw_record=raw)
+    rejected = isinstance(error, ai_provider.InvalidProviderReply)
+    outcome = "rejected" if rejected else "provider_failed"
+    reason = str(error)[:500]
+    entry.update(outcome=outcome, reason=reason, raw_record=raw)
     write_json(path, entry)
-    record["reply_attempts"][-1].update(outcome="provider_failed", reason=str(error)[:500])
+    record["reply_attempts"][-1].update(outcome=outcome, reason=reason)
+    if rejected:
+        record.update(status="waiting_for_reply", block_reason=reason, validation={"valid": False, "error": reason})
     tasks._update_record(root, record)
+    return {"status": "waiting_for_reply" if rejected else "provider_failed", "reason": reason}

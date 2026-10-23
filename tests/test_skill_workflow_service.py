@@ -47,6 +47,18 @@ class SkillWorkflowTests(unittest.TestCase):
         (root / "vision_extraction_settings.json").write_text(json.dumps({"owner_opt_in": True, "selected_group_ids": []}), encoding="utf-8")
         return {"id": "skills-test-" + root.name, "review_dir": str(root)}
 
+    def test_status_exposes_skill_labels_and_actual_timestamps(self):
+        with tempfile.TemporaryDirectory() as folder:
+            project = self.project(folder)
+            manifest = skills._new_manifest(skills.load_catalog(), "source", "phase1_envelope")
+            manifest["subskills"]["sheet_identity"].update(status="resolved", started_at=123, finished_at=129)
+            (Path(folder) / "skill_workflow_run.json").write_text(json.dumps(manifest))
+            response = skills.get(Web(), project)
+            row = next(row for row in response["subskills"] if row["id"] == "sheet_identity")
+            self.assertEqual((row["started_at"], row["finished_at"]), (123, 129))
+            self.assertEqual(row["label"], skills._subskill_label("sheet_identity"))
+            self.assertEqual(row["parent_label"], "Drawing set and page mapping")
+
     def test_catalog_contracts_dependencies_and_full_enablement(self):
         catalog = skills.load_catalog()
         self.assertEqual(len(catalog["enabled_skill_ids"]), 10)

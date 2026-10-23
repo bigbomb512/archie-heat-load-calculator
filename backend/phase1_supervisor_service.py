@@ -7,6 +7,7 @@ import json
 import math
 from pathlib import Path
 import re
+import time
 import uuid
 
 from backend import ai_provider, autonomous_tasks_service as tasks, drawing_tasks_service as drawings
@@ -131,11 +132,21 @@ def _boundaries(traces):
 
 
 def _has_glass(room):
+    """The room's storefront glass is in: in the model, or placed on a wall the model gives no load by rule (a mall or
+    internal wall: Butcher Buffet's storefront faces the mall, 2026-10-21, so its glass correctly adds nothing). Glass
+    placed on an outside wall but missing from a current model is still a gap."""
     cooling = (room.get("model") or {}).get("cooling_load") or {}
     model_has_glass = bool(cooling.get("glazing_surfaces") or any(
         row.get("kind") in {"window", "glazing", "glazed_door"} and _positive(row.get("area_m2"))
         for row in cooling.get("envelope_surfaces", [])))
-    return model_has_glass if room.get("model_current") else model_has_glass or any(trace.get("openings") for trace in room.get("traces", []))
+    if model_has_glass:
+        return True
+    for trace in room.get("traces", []):
+        sides = {row.get("index"): row.get("boundary", "unknown") for row in trace.get("edges", []) if isinstance(row, dict)}
+        for opening in trace.get("openings", []) or []:
+            if not room.get("model_current") or sides.get(opening.get("edge_index")) in {"mall", "internal", "adjacent_tenancy"}:
+                return True
+    return False
 
 
 def _exposed(room):
@@ -468,7 +479,9 @@ def run(web, project, step=lambda *args: None):
                                    for gap_id in gap["gap_ids"])
             # Multiple gaps for the same drawing task must not replace one another's current run.
             # Prepare all network work first, then apply the validated replies serially.
-            active = {key: {"message": investigation_text(gap), "pages": gap["pages"]} for key, (_record, gap) in prepared.items()}
+            active = {key: {"message": investigation_text(gap), "pages": gap["pages"],
+                            "label": drawings.TASK_LABELS.get(_record["task"], "Drawing specialist"),
+                            "started_at": time.time()} for key, (_record, gap) in prepared.items()}
             progress(active_investigations=list(active.values()))
             if active:
                 step("investigate", next(iter(active.values()))["message"])
@@ -485,8 +498,8 @@ def run(web, project, step=lambda *args: None):
                         result = future.result()
                         outcome = drawings.apply_investigation(web, project, record, result)
                     except Exception as error:
-                        drawings.archive_investigation_failure(project, record, error)
-                        outcome = {"status": "provider_failed", "reason": str(error)[:500]}
+                        outcome = drawings.archive_investigation_failure(project, record, error) or {
+                            "status": "superseded", "reason": "The drawing inputs changed while this check was running."}
                     changed = changed or outcome.get("status") in SUCCESS
                     history.extend({"gap_id": gap_id, "task": record["task"], "target": record["target"],
                                     "cycle": cycle, "run_id": record["run_id"], **outcome} for gap_id in gap["gap_ids"])
@@ -497,6 +510,8 @@ def run(web, project, step=lambda *args: None):
             for gap in skills_to_run:
                 checkpoint()
                 step("investigate", investigation_text(gap))
+                progress(active_investigations=[{"message": investigation_text(gap), "pages": gap["pages"],
+                    "label": "Room-use specialist", "started_at": time.time()}])
                 try:
                     outcome = _room_use_investigation(web, project, gap)
                 except Exception as error:
@@ -514,8 +529,14 @@ def run(web, project, step=lambda *args: None):
         resolved = (resolved | (before[1] - after[1])) - after[1]
         progress(active_investigations=[])
         if before == after:
-            progress(stop_reason="no_progress")
-            break
+            # A rejected answer has not changed the model, but its correction feedback changes
+            # the next question. Allow the existing second attempt before declaring no progress.
+            correction_pending = any(
+                row.get("cycle") == cycle and row.get("status") == "waiting_for_reply"
+                and attempts.get(row.get("gap_id"), 0) < MAX_ATTEMPTS for row in history)
+            if not correction_pending:
+                progress(stop_reason="no_progress")
+                break
     exceptions = [{**gap, "attempts": attempts.get(gap["id"], 0),
                    "tried": [row for row in history if row.get("gap_id") == gap["id"]],
                    **({"message": gap["message"].rstrip(".") + ". " + unavailable} if unavailable else {})} for gap in gaps]
@@ -537,8 +558,20 @@ def source_fingerprint(project):
     root = Path(project["review_dir"])
     from backend.ai_preliminary_service import _file_fingerprint
     records = tasks._all_current(root)
+    # Inputs only. room_use_resolution.json and ceiling_volume_resolution.json are rebuilt from these whenever the model
+    # is assembled, so fingerprinting them made the check go out of date as soon as Phase 1 started (Butcher Buffet,
+    # 2026-10-21); their sources are the room-use answer, the typed overrides and the drawing tasks below.
+    review = read_json(root / "skill_workflow_run.json")
+    room_uses = root / "skill_workflow_runs" / str(review.get("run_id", "")) / "proposals" / "room_identity_use.json"
     return _fingerprint({"files": {name: _file_fingerprint(root / name, {}, use_saved=True) for name in
-        ("reviewer_room_geometry.json", "room_use_resolution.json", "ceiling_volume_resolution.json", "ai_input.json", "spatial_ocr.json")},
+        ("reviewer_room_geometry.json", "room_area_overrides.json", "ai_input.json", "spatial_ocr.json")},
+        "overrides": {name: sorted(
+            [{"room_id": row.get("room_id"), "override": row["override"]}
+             for row in read_json(root / name).get("records", []) if isinstance(row, dict) and row.get("override")],
+            key=lambda row: str(row["room_id"]))
+            for name in ("room_use_resolution.json", "ceiling_volume_resolution.json")},
+        "room_uses": {"run": review.get("run_id"), "status": (review.get("subskills", {}).get("room_identity_use") or {}).get("status"),
+                      "answer": _file_fingerprint(room_uses, {}, use_saved=True)},
         "tasks": [{key: row.get(key) for key in ("task", "target", "input_fingerprint", "status", "applied_value")} for row in records]})
 
 
@@ -546,6 +579,10 @@ def status(web, project):
     state = _JOB.status(project)
     state["spend"] = _usage(project["review_dir"])
     state["current"] = bool(state.get("source_fingerprint") and state["source_fingerprint"] == source_fingerprint(project))
+    state["recent_activity"] = [{
+        "label": drawings.TASK_LABELS.get(row.get("task"), "Room-use specialist" if row.get("task") == "room_identity_use" else "Model investigation"),
+        "status": row.get("status") or row.get("outcome", "unknown"), "cycle": row.get("cycle"),
+    } for row in state.get("history", [])[-8:]]
     for key in ("history", "attempts", "resolved_gap_ids"):
         state.pop(key, None)
     if state.get("error"):

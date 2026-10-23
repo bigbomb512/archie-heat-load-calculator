@@ -232,7 +232,11 @@ Added 2026-10-20. The storefront is never left out (user decision): when the ele
 matches exactly one outside or mall wall, code picks it; one outside wall settles it alone. Otherwise (Butcher Buffet:
 the width is drawn as outlines, so it isn't in the text layer, and three outside walls fit) the AI gets the plan with
 the outside walls numbered in red plus the storefront elevation, and says which numbered wall(s) each elevation shows,
-with evidence (entry doors and glazing on the plan, the street or mall, gridlines, width).
+with evidence (elevation tags, entry doors and glazing on the plan, the street or mall, gridlines, width). Every
+perimeter wall of the cooled rooms is offered, not only those the wall-facing step called outside or mall (2026-10-21:
+on Butcher Buffet it had classed the 11.9 m storefront wall "adjacent tenancy"). The AI also says whether the front
+faces a street or a mall, and the chosen walls are set to outside or mall accordingly; the wall-facing step then can't
+call them internal. "Not on this plan" is accepted only when the plan has no outside or mall wall (e.g. an upper level).
 
 **Cross-checks:** the numbers are numbered walls; a shopfront/storefront elevation shows at least one; evidence is
 given; an overall width it reads must match the chosen walls' combined length (2 % or up to 600 mm wider). A rejected
@@ -267,10 +271,11 @@ positions, the shopfront edge length, and the room ceiling height.
 > "printed_text": [string]}], "excluded": [{"label": string, "why": string}]}`
 
 **Cross-checks:**
-- every number appears in `printed_text`, and that text exists in the crop's
-  text layer;
+- a number quoted from the crop's text layer is labelled printed; one that isn't there (dimensions drawn as
+  outlines, as on Butcher Buffet's storefront elevation) is labelled *read from the image* (2026-10-21);
+- the total is within 2 % of the traced storefront wall (or up to 600 mm wider);
+- when anything was read from the image, the glazed and excluded widths add up to the total within 5 %;
 - the panel widths sum to ≤ the total;
-- the total is within 2 % of the shopfront edge;
 - head > sill; a head above the ceiling is capped at the ceiling.
 
 **Fallback:** a missing sill → 0 (glass to floor, typical shopfront); a

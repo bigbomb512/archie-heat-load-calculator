@@ -415,10 +415,12 @@ def validate_opening_reply(packet, reply):
     total_text = str(value.get("total_width_text") or "")
     if type(total) not in (int, float) or total <= 0:
         raise ValueError("A positive printed shopfront total width is required.")
-    if not total_text and not packet.get("allow_vector_outline_read"):
-        raise ValueError("Quote the printed total width from the elevation text layer.")
-    if total_text and text_layer and not packet.get("allow_vector_outline_read") and not any(total_text.casefold() in text.casefold() for text in text_layer):
-        raise ValueError("The printed total width text is not present in the elevation text layer.")
+    # Dimensions drawn as outlines aren't in the text layer (Butcher Buffet's storefront elevation, 2026-10-21): such
+    # a value is accepted as read from the image, labelled so, when the independent checks hold: the total matches
+    # the traced storefront wall, and the glazed plus excluded widths add up to it.
+    def in_text_layer(text):
+        return bool(text_layer) and any(str(text).casefold() in line.casefold() for line in text_layer)
+    image_read = not total_text or not in_text_layer(total_text)
     if not storefront_width_matches(total, edge_width):
         raise ValueError("The printed elevation total must match the traced storefront edge within 2% or exceed it by no more than 600 mm.")
     result, width_sum = [], 0.0
@@ -440,13 +442,10 @@ def validate_opening_reply(packet, reply):
         if not isinstance(panel, dict):
             raise ValueError("Every glazed panel must be an object.")
         width, sill, head = panel.get("width_mm"), panel.get("sill_mm"), panel.get("head_mm")
-        source = str(panel.get("source", "printed_text"))
         printed = panel.get("printed_text") if isinstance(panel.get("printed_text"), list) else []
-        if source == "read_from_image":
-            if not packet.get("allow_vector_outline_read"):
-                raise ValueError("Vision-read dimensions are allowed only for drawings with outlined dimension text.")
-        elif not text_layer or not printed or any(not any(str(text).casefold() in line.casefold() for line in text_layer) for text in printed):
-            raise ValueError("Every dimension must quote text found in the elevation text layer or be marked read_from_image.")
+        source = ("printed_text" if panel.get("source", "printed_text") != "read_from_image" and printed
+                  and all(in_text_layer(text) for text in printed) else "read_from_image")
+        image_read = image_read or source == "read_from_image"
         if width is None:
             excluded.append({"label": str(panel.get("label", f"Panel {index + 1}")),
                              "why": "Panel width is not printed; panel was not applied."})
@@ -475,13 +474,15 @@ def validate_opening_reply(packet, reply):
     if width_sum > total + 1e-6:
         raise ValueError("Glazed panel widths cannot exceed the printed total width.")
     notes = []
-    if packet.get("allow_vector_outline_read"):
+    if image_read:
         if has_unmeasured_excluded:
-            notes.append("Vision-read width sum check skipped because an excluded item has no width.")
+            notes.append("Some widths were read from the image and an excluded part has no width, so the sum check was skipped.")
         elif abs(width_sum + excluded_width_sum - total) / total > .05:
-            raise ValueError("Vision-read glazed and excluded widths must sum to the printed total within 5%.")
+            raise ValueError("Widths read from the image: the glazed and excluded widths must add up to the total within "
+                             f"5% (they add up to {width_sum + excluded_width_sum:g} mm of {total:g} mm). List every part "
+                             "of the front, glazed or not.")
     return {"total_width_mm": float(total), "total_width_text": total_text, "panels": result,
-            "excluded": excluded, "notes": notes}
+            "excluded": excluded, "notes": notes, "read_from_image": image_read}
 
 
 def fingerprint(value):

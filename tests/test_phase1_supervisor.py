@@ -46,6 +46,19 @@ class AuditTests(unittest.TestCase):
         value["rooms"][0]["model"] = {"cooling_load": {"glazing_surfaces": [{"area_m2": 12}]}}
         self.assertEqual(supervisor.audit(value), [])
 
+    def test_glass_on_a_mall_wall_is_placed_even_though_the_model_gives_it_no_load(self):
+        # Butcher Buffet, 2026-10-21: the storefront faces the mall; its glass is on the Shop's mall walls and the model
+        # (mall walls are zero by rule) has no glazing surface. That is right, not "no glass reached the model".
+        shop = room(model_current=True, traces=[{"page": 20, "roof": "not_exposed", "roof_source": "ai_determined",
+            "edges": [{"index": 0, "boundary": "external"}, {"index": 1, "boundary": "mall"}],
+            "openings": [{"edge_index": 1, "width_m": 1.57}]}])
+        self.assertEqual([gap["kind"] for gap in supervisor.audit(snapshot(shop, storefront_pages=[26]))], [])
+        lost = room(model_current=True, traces=[{**shop["traces"][0], "openings": [{"edge_index": 0, "width_m": 1.57}]}])
+        self.assertEqual(supervisor.audit(snapshot(lost, storefront_pages=[26]))[0]["kind"], "storefront_glass")
+        for index in (2, None):
+            unknown = room(model_current=True, traces=[{**shop["traces"][0], "openings": [{"edge_index": index}]}])
+            self.assertEqual(supervisor.audit(snapshot(unknown, storefront_pages=[26]))[0]["kind"], "storefront_glass")
+
     def test_fallback_ceiling_height_with_labels_reasks_the_labelled_page(self):
         gap = supervisor.audit(snapshot(room(height={"origin": "preliminary_fallback", "ceiling_height_mm": 2700}), height_pages=[22]))[0]
         self.assertEqual((gap["rank"], gap["task"], gap["pages"]), (4, "P7_ceiling_heights", [22]))
@@ -180,6 +193,18 @@ class RoutingAndCacheTests(unittest.TestCase):
         attempt = next((tasks._record_file(self.root, saved).parent / "reply_attempts").glob("*.json"))
         self.assertEqual(read_json(attempt)["raw_reply"], "broken")
 
+    def test_malformed_targeted_reply_is_rejected_and_correction_reaches_next_prompt(self):
+        from backend.ai_provider import InvalidProviderReply
+        record = tasks._create_run(self.root, "P5_roof", "shop", {}, "Read roof")
+        error = InvalidProviderReply("The reply was not a JSON object.", {"reply_text": "[]"})
+        outcome = drawings.archive_investigation_failure(self.project, record, error)
+        saved = tasks._current_task(self.root, "P5_roof", "shop")
+        self.assertEqual(outcome["status"], "waiting_for_reply")
+        self.assertEqual(saved["reply_attempts"][-1]["outcome"], "rejected")
+        self.assertIn("previous reply was refused: The reply was not a JSON object.", drawings._prompt(saved))
+        archive = next((tasks._record_file(self.root, saved).parent / "reply_attempts").glob("*.json"))
+        self.assertEqual(read_json(archive)["raw_reply"], "[]")
+
     def test_a_partial_room_use_reply_cannot_replace_the_full_room_list(self):
         from backend import skill_workflow_service as skills
         folder = self.root / "skill_workflow_runs" / "review" / "proposals"
@@ -256,6 +281,17 @@ class RunTests(unittest.TestCase):
         self.assertEqual((calls, saved["cycle"], saved["stop_reason"]), (1, 1, "no_progress"))
         self.assertEqual(result["exceptions"][0]["attempts"], 1)
         self.assertTrue(result["exceptions"][0]["tried"])
+
+    def test_rejected_answer_gets_its_bounded_correction_before_no_progress_stop(self):
+        value = snapshot(room(area_m2=None))
+        with patch.object(supervisor, "_rebuild", return_value=value), \
+                patch.object(tasks, "prepare_investigation", side_effect=self.fake_prepare), \
+                patch.object(drawings, "request_investigation", return_value={"reply": {}}) as ask, \
+                patch.object(drawings, "apply_investigation", return_value={"status": "waiting_for_reply", "reason": "Invalid JSON"}):
+            result = supervisor.run(None, self.project)
+        self.assertEqual(ask.call_count, 2)
+        self.assertEqual(result["exceptions"][0]["attempts"], 2)
+        self.assertEqual(read_json(self.root / supervisor.JOB_FILE)["stop_reason"], "no_progress")
 
     def test_each_gap_gets_at_most_two_attempts_even_if_other_inputs_improve(self):
         values = [snapshot(room(area_m2=None), model_inputs=[number]) for number in range(3)]
@@ -357,6 +393,53 @@ class ConsentTests(unittest.TestCase):
             supervisor.start(None, project)
         start.assert_called_once()
 
+
+
+class ActivityTests(unittest.TestCase):
+    def test_status_exposes_human_activity_without_raw_history(self):
+        with tempfile.TemporaryDirectory() as folder:
+            project = {"id": "activity", "review_dir": folder}
+            state = {"status": "running", "source_fingerprint": "fp", "history": [
+                {"task": "P4_openings", "status": "applied", "cycle": 1, "reason": "private raw response"}],
+                "active_investigations": [{"message": "Check Shop glass", "pages": [26]}]}
+            with patch.object(supervisor._JOB, "status", return_value=state), \
+                    patch.object(supervisor, "source_fingerprint", return_value="fp"):
+                result = supervisor.status(None, project)
+            self.assertEqual(result["recent_activity"][0]["label"], "Finding the shopfront openings")
+            self.assertEqual(result["recent_activity"][0]["status"], "applied")
+            self.assertNotIn("history", result)
+            self.assertNotIn("private raw response", json.dumps(result))
+            self.assertEqual(result["active_investigations"][0]["pages"], [26])
+
+
+class FreshnessTests(unittest.TestCase):
+    def test_rebuilding_the_model_does_not_make_the_check_out_of_date_but_new_inputs_do(self):
+        # Butcher Buffet, 2026-10-21: Phase 1's start rebuilt room uses and ceiling heights, the check went out of date
+        # and Phase 1 then waited for it again.
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            project = {"id": "fresh", "review_dir": folder}
+            write_json(root / "skill_workflow_run.json", {"run_id": "r1", "subskills": {"room_identity_use": {"status": "needs_review"}}})
+            (root / "skill_workflow_runs" / "r1" / "proposals").mkdir(parents=True)
+            write_json(root / "skill_workflow_runs" / "r1" / "proposals" / "room_identity_use.json", {"rooms": ["Shop"]})
+            write_json(root / "reviewer_room_geometry.json", {"records": [{"trace_id": "t"}]})
+            before = supervisor.source_fingerprint(project)
+            write_json(root / "room_use_resolution.json", {"records": [{"rebuilt": True}]})
+            write_json(root / "ceiling_volume_resolution.json", {"records": [{"rebuilt": True}]})
+            self.assertEqual(supervisor.source_fingerprint(project), before)
+            write_json(root / "ceiling_volume_resolution.json", {"records": [
+                {"room_id": "shop", "override": {"height_mm": 3000, "reviewer": "Contractor"}}]})
+            override = supervisor.source_fingerprint(project)
+            self.assertNotEqual(override, before)
+            write_json(root / "ceiling_volume_resolution.json", {"records": [
+                {"room_id": "shop", "override": {"height_mm": 3000, "reviewer": "Contractor"}, "rebuilt": True}]})
+            self.assertEqual(supervisor.source_fingerprint(project), override)
+            write_json(root / "room_use_resolution.json", {"records": [
+                {"room_id": "shop", "override": {"taxonomy_id": "restaurant", "reviewer": "Contractor"}}]})
+            typed = supervisor.source_fingerprint(project)
+            self.assertNotEqual(typed, override)
+            write_json(root / "skill_workflow_runs" / "r1" / "proposals" / "room_identity_use.json", {"rooms": ["Shop", "Bar"]})
+            self.assertNotEqual(supervisor.source_fingerprint(project), typed)
 
 class RecoveryTests(unittest.TestCase):
     def test_restart_deduplicates_waits_for_old_call_and_keeps_durable_attempts(self):

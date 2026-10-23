@@ -66,3 +66,26 @@ Remaining material gaps are retained as supervisor exceptions in the Phase 1 rep
 A completed supervisor means its bounded investigation finished; it does not certify complete engineering evidence.
 The normal calculation job publishes the result after the supervisor settles. Operating loads still start only
 when the user continues to that stage. No web research is performed by this supervisor.
+
+### Reply and freshness recovery
+
+Malformed provider replies are archived as rejected answers, with raw content, usage metadata and the parse
+reason. A rejected targeted answer may use its existing second attempt with correction feedback before the
+no-progress stop; the attempt and cycle limits remain unchanged. Both baseline and targeted drawing retries include that reason in the next prompt. Transport failures
+remain separate. Drawing status reconciles old failure summaries against the current task, so a later valid
+supervisor/manual answer clears the warning without erasing the original run history.
+
+The model check fingerprints source answers, geometry and operator overrides, excluding rebuilt room-use and
+ceiling-resolution bookkeeping. Rebuilding those resolutions cannot invalidate the check; changing an actual
+override or source answer can. Glass correctly placed on mall/internal/adjacent-tenancy walls counts as present
+under the existing zero-load boundary rules. Missing exterior glass and unknown host walls remain audit gaps.
+
+### Live activity
+
+The Drawings screen includes an AI activity panel, refreshed by the existing five-second status polling.
+It lists active page/equipment readers, the drawing specialist's current task, active skill workers and the
+supervisor's parallel investigations. The expandable skill list shows task state, prerequisite labels and
+returned record/citation/exception counts. Recent supervisor answers show their saved outcome and cycle.
+These are workflow records, not model reasoning or simulated agent conversations. Out-of-scope skills are
+hidden. A settled job cannot show an old investigation as active, and failed polling retains the last confirmed
+activity with a warning. Expanding a task list does not trigger or restart any work.
