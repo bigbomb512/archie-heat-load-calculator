@@ -156,6 +156,20 @@ def _room_label_context_is_note(text):
     ))
 
 
+# A room word followed on its own line by one of these is part of a note about a fitting, not a room label
+# ("STAFF LOCKERS / SHELVES", "KITCHEN EXHAUST", "BAR STOOLS", "SHOP FRONT"); Casa Nova's note made a "Staff" room.
+_FIXTURE_WORDS = (r"lockers?|shel(?:f|ves)|stations?|cabinets?|benche?s?|sinks?|racks?|fridges?|joinery|cupboards?|"
+                  r"stools?|exhaust|hoods?|canopy|canopies|equipment|fit-?out|signage|doors?|windows?|walls?|ceilings?|"
+                  r"lights?|lighting|tiles?|finish(?:es)?|front|drawings?|layout|elevations?|details?|basins?|"
+                  r"dispensers?|extinguishers?")
+
+
+def _names_a_fixture(text, context):
+    word = re.escape(_text(text).strip(" .,:;-/"))
+    return bool(word) and bool(re.search(r"(?<![a-z0-9])" + word + r"\s*[/&-]?\s*(?:" + _FIXTURE_WORDS + r")(?![a-z0-9])",
+                                         context, re.I))
+
+
 def _spatial_label_items(spatial_page):
     standalone = (spatial_page or {}).get("standalone_text_items")
     if isinstance(standalone, list) and standalone:
@@ -186,7 +200,7 @@ def _spatial_label_items(spatial_page):
             context = next((line for line, line_bbox in context_lines
                             if abs(((line_bbox[1] + line_bbox[3]) - (bbox[1] + bbox[3])) / 2) <= 2.5
                             and bbox[0] >= line_bbox[0] - 1 and bbox[0] <= line_bbox[2] + 1), "")
-        if context and _room_label_context_is_note(context):
+        if context and (_room_label_context_is_note(context) or _names_a_fixture(text, context)):
             continue
         label, _, area = parse_room_label_item(text)
         if label:

@@ -126,6 +126,9 @@ def _north_packets(root):
     return rows
 
 
+NOT_PLAN_PAGE_TYPES = {"elevation", "section", "detail"}
+
+
 def _p0_page_selection(root):
     """Select one main geometry sheet per level and explain every omitted plan page."""
     ai_input, spatial, _building = _load_inputs(root)
@@ -135,6 +138,10 @@ def _p0_page_selection(root):
     vector_by_page = {row.get("page"): row for row in (vector.get("geometry_key_points") or {}).get("pages", [])
                       if isinstance(row, dict)}
     spatial_by_page = {row.get("page"): row for row in spatial.get("pages", []) if isinstance(row, dict)}
+    # Page reading (pass 1) looks at each whole sheet; when it says elevation or section, a small plan inset on that
+    # sheet is not the floor plan (Casa Nova 2026-10-23: a toilet inset on an interior-elevation sheet was traced).
+    read_types = {str(number): str((row or {}).get("page_type") or "")
+                  for number, row in (_read(root / "page_inventory.json", {}).get("pages") or {}).items()}
     grouped = {}
     skipped = []
     notes = []
@@ -142,6 +149,13 @@ def _p0_page_selection(root):
         if not isinstance(page, dict) or type(page.get("page")) is not int:
             continue
         number = page["page"]
+        if read_types.get(str(number)) in NOT_PLAN_PAGE_TYPES:
+            note = {"page": number, "status": "skipped",
+                    "reason": f"Skipped: page reading shows this sheet is {'an' if read_types[str(number)][0] in 'aeiou' else 'a'} "
+                              f"{read_types[str(number)].replace('_', ' ')}, not a floor plan."}
+            skipped.append(note)
+            notes.append(note)
+            continue
         role_row = coverage_by_page.get(number, {})
         role = str(role_row.get("proposed_role") or page.get("plan_role") or "").casefold()
         kind = str(page.get("type") or page.get("sheet_classification") or "").casefold()
@@ -516,6 +530,9 @@ def _build_p0_context(root, page_number):
     page_ocr = next((row for row in spatial.get("pages", []) if row.get("page") == page_number), {})
     from ai.dimension_wall_matcher import page_mm_per_px
     declared_scale = page_mm_per_px(page_ocr.get("scale_candidates", []), render_dpi=72 * scale)
+    # Room finding needs the whole floor: grow the window over lines that run past it (lines of 1 m or more).
+    viewport = room_outline.grow_plan_viewport(viewport, objects, image.size,
+                                               (1000.0 / declared_scale) if declared_scale else 100.0)
     summary = room_outline.style_summary(objects, viewport, declared_scale)
     left, top, right, bottom = viewport
     origin_x, origin_y = page_bbox[:2]
@@ -962,7 +979,44 @@ def _p0_outline_packets(root, requested_rooms=None):
 # Where a room's area came from when no outline could measure it (P0_room_sizes), as shown in the result.
 ROOM_SIZE_SOURCES = {"printed_area": "printed (read from image)", "printed_dimensions": "printed dimensions",
                      "estimated": "AI estimate from the plan", "remainder": "tenancy area remainder"}
-OUTLINE_STEPS = {"P0_dimensions", "P0_wall_styles", "P0_room_names", "P0_room_outlines", "S1_printed_areas"}
+OUTLINE_STEPS = {"P0_dimensions", "P0_wall_styles", "P0_room_names", "P0_room_outlines", "P0_unnamed_space", "S1_printed_areas"}
+
+
+def _p0_unnamed_space_packets(root):
+    """Floor with no room (2026-10-23): once the naming and outline steps are answered, show each main plan with its
+    traced rooms tinted and ask once for any untinted room-sized floor, named by its use. Drawings often leave the main
+    dining or sales space unlabelled (Casa Nova: 53 m² of rooms traced in a tenancy of about 250 m²)."""
+    if any(record.get("task") in OUTLINE_STEPS - {"P0_unnamed_space"} and record.get("status") == "waiting_for_reply"
+           and len(record.get("reply_attempts") or []) < 2 for record in _all_current(root)):
+        return []
+    from shapely.geometry import Polygon
+    result = []
+    for page in _p0_main_geometry_pages(root):
+        number = page["page"]
+        current = _current_task(root, "P0_unnamed_space", f"page-{number}")
+        if current and current.get("status") in {"applied", "below_accuracy_bar", "waiting_for_reply"}:
+            continue
+        try:
+            context = _p0_context(root, number)
+            calibration, _error = _p0_calibration_ready(root, number, context)
+            if not calibration:
+                continue
+            traces = [row for row in reviewer_room_geometry_service.current_records(
+                          reviewer_room_geometry_service._paths({"review_dir": str(root)}))
+                      if row.get("page") == number and len(row.get("points_image_px") or []) >= 4]
+            rooms = [(row["room_label"], Polygon(row["points_image_px"]).buffer(0)) for row in traces]
+            image, transform = room_outline.render_traced_rooms(context["image"], [(label, polygon) for label, polygon in rooms
+                                                                                   if polygon.geom_type == "Polygon"],
+                                                                context["viewport"])
+            names = sorted({label for label, _polygon in rooms})
+            packet = {"task": "P0_unnamed_space", "page": number, "traced_names": names, "transform": transform,
+                      "calibration": calibration}
+            result.append(("P0_unnamed_space", f"page-{number}", packet, room_outline.unnamed_space_prompt(names),
+                           [_png_bytes(image)], ""))
+        except (OSError, ValueError, IndexError, KeyError, TypeError) as error:
+            result.append(("P0_unnamed_space", f"page-{number}", {"task": "P0_unnamed_space", "page": number}, "", [],
+                           f"The floor-with-no-room check is blocked: {error}"))
+    return result
 
 
 def _p0_size_packets(root, requested_rooms=None):
@@ -1890,6 +1944,11 @@ def _apply_p0_room_names(web, project, root, record, validated):
     walls, areas, segments = _p0_walls_areas(root, packet["page"], context, packet["calibration"],
                                              packet.get("wall_style_ids", []), packet.get("raster_mode", False))
     names, splits = validated["names"], validated["splits"]
+    # Rooms named by their use must be in the room list before their outlines are saved.
+    from backend import room_proposal
+    level = _page_level(root, packet["page"])
+    room_proposal.save_use_named_rooms(root, "P0_room_names", packet["page"], level, validated.get("use_named_rooms", []),
+                                       record["run_id"])
     snap_px = 250 / packet["calibration"]["mm_per_px"]
     by_room = {}
     for index, name in names.items():
@@ -1912,8 +1971,19 @@ def _apply_p0_room_names(web, project, root, record, validated):
     return record
 
 
+def _page_level(root, page):
+    return next((row.get("level_name") for row in _read(root / "drawing_coverage.json", {}).get("page_roles", [])
+                 if isinstance(row, dict) and row.get("page") == page and row.get("level_name")), "")
+
+
 def _apply_p0_outlines(web, project, root, record, validated):
     from shapely.geometry import Polygon
+    from backend import room_proposal
+    asked_names = {str(name).casefold() for name in record["packet"].get("room_names", [])}
+    use_named = sorted({row["room"] for row in validated if row["room"].casefold() not in asked_names})
+    # Rooms named by their use (a space no printed name covers) must be in the room list before their outlines are saved.
+    room_proposal.save_use_named_rooms(root, "P0_room_outlines", record["packet"]["page"],
+                                       _page_level(root, record["packet"]["page"]), use_named, record["run_id"])
     context = _p0_context(root, record["packet"]["page"])
     calibration = record["packet"]["calibration"]
     _walls, _areas, segments = _p0_walls_areas(root, record["packet"]["page"], context, calibration,
@@ -1942,10 +2012,59 @@ def _apply_p0_outlines(web, project, root, record, validated):
     rows = _p0_trace_rows(root, record, polygons)
     prepared = reviewer_room_geometry_service.persist_ai_determined_traces(web, project, rows,
         record["run_id"], record["quality_label"], replace_pages=[record["packet"]["page"]],
-        replace_room_labels=record["packet"].get("room_names", []))
+        replace_room_labels=[*record["packet"].get("room_names", []), *use_named])
     record.update({"status":_status_for_accuracy("ai_determined",record["accuracy"]),"source":"ai_determined",
         "applied_value":{"rooms":_p0_result_rooms(prepared),"label":record["quality_label"]},
         "validation":validated,"block_reason":""})
+    return record
+
+
+def _apply_p0_unnamed_space(web, project, root, record, validated):
+    """Save the untinted spaces as rooms named by their use: snapped to the drawn lines, less any traced room they
+    overlap, and only when what is left is room-sized."""
+    from shapely.geometry import Polygon
+    from shapely.ops import unary_union
+    from backend import room_proposal
+    packet = record["packet"]
+    page = packet["page"]
+    calibration = packet["calibration"]
+    mm_per_px = float(calibration["mm_per_px"])
+    context = _p0_context(root, page)
+    try:    # the drawn lines the outline snaps to, as for the open-plan outlines
+        raster_mode = _p0_is_raster(root, page, context, calibration)
+        wall_style_ids = [] if raster_mode else sorted({style_id for row in _p0_wall_style_records(root, page)
+                                                        for style_id in row.get("applied_value", {}).get("wall_style_ids", [])})
+        if wall_style_ids:
+            wall_style_ids, _added = _completed_wall_styles(root, context, calibration, wall_style_ids)
+        _walls, _areas, segments = _p0_walls_areas(root, page, context, calibration, wall_style_ids, raster_mode)
+    except (OSError, ValueError, KeyError, TypeError):
+        segments = []
+    traced = [Polygon(row["points_image_px"]).buffer(0) for row in reviewer_room_geometry_service.current_records(
+                  reviewer_room_geometry_service._paths(project))
+              if row.get("page") == page and len(row.get("points_image_px") or []) >= 4]
+    taken = unary_union(traced) if traced else None
+    polygons, dropped = [], []
+    for row in validated:
+        polygon, report = room_outline.snap_polygon(row["points"], segments, 250 / mm_per_px) if segments else (Polygon(row["points"]), {"snapped_edges": 0, "edges": len(row["points"])})
+        net = polygon.difference(taken) if taken is not None else polygon
+        if net.geom_type == "MultiPolygon":
+            net = max(net.geoms, key=lambda part: part.area)
+        if net.is_empty or room_outline.area_m2(net, mm_per_px) < room_outline.UNNAMED_SPACE_MIN_M2:
+            dropped.append({"room": row["room"], "reason": "Mostly inside rooms already traced, or smaller than a room."})
+            continue
+        polygons.append({"label": row["room"], "polygon": net, "method": "ai_outline_snapped",
+                         "note": f"Named by its use: {row['reason']}; snapped {report['snapped_edges']}/{report['edges']} edges"})
+    names = sorted({row["label"] for row in polygons})
+    room_proposal.save_use_named_rooms(root, "P0_unnamed_space", page, _page_level(root, page), names, record["run_id"])
+    prepared = []
+    if polygons:
+        rows = _p0_trace_rows(root, record, polygons)
+        prepared = reviewer_room_geometry_service.persist_ai_determined_traces(web, project, rows,
+            record["run_id"], record["quality_label"], replace_pages=[page], replace_room_labels=names)
+    record.update({"status": _status_for_accuracy("ai_determined", record["accuracy"]), "source": "ai_determined",
+                   "applied_value": {"rooms": _p0_result_rooms(prepared) if prepared else [], "dropped": dropped,
+                                     "label": record["quality_label"]},
+                   "validation": {"spaces": validated}, "block_reason": ""})
     return record
 
 
@@ -2266,7 +2385,7 @@ def _refresh_geometry_tasks(root, room_id=None, page_number=None):
     # If both packet lists are calculated together, the outline builder cannot
     # see the just-created naming tasks and offers an unnecessary second task.
     _refresh_site_tasks(root)
-    for packet_builder in (_p0_initial_packets, _p0_followup_packets, _p0_outline_packets, _s1_packets, _p0_size_packets):
+    for packet_builder in (_p0_initial_packets, _p0_followup_packets, _p0_outline_packets, _p0_unnamed_space_packets, _s1_packets, _p0_size_packets):
         for task,target,packet,prompt,images,reason in packet_builder(root):
             budget=autonomous_tasks.TASKS[task]["budget_chars"]
             _create_run(root,task,target,packet,prompt,images,reason or
@@ -2406,7 +2525,7 @@ def _run_all(web, project, root):
                      if task == "P0_dimensions" and len(prompt) > 1500 else
                      "Prompt exceeds the 3,000-character limit; evidence was not shortened."
                      if task == "P0_wall_styles" and len(prompt) > 3000 else ""))
-    for packet_builder in (_p0_followup_packets, _p0_outline_packets, _s1_packets, _p0_size_packets, _p3_packets, _p7_packets, _p4_packets, _p6_kitchen_packets):
+    for packet_builder in (_p0_followup_packets, _p0_outline_packets, _p0_unnamed_space_packets, _s1_packets, _p0_size_packets, _p3_packets, _p7_packets, _p4_packets, _p6_kitchen_packets):
         for task, target, packet, prompt, images, reason in packet_builder(root):
             budget = autonomous_tasks.TASKS[task]["budget_chars"]
             _create_run(root, task, target, packet, prompt, images,
@@ -2444,7 +2563,7 @@ def _export_determinations(root):
         result["P6_kitchen"] = kitchen_equipment.to_determinations(
             kitchen_record["applied_value"].get("items", []), source=source)
     rooms = {}
-    for task in ("S1_printed_areas", "P0_room_names", "P0_room_outlines", "P0_room_sizes"):
+    for task in ("S1_printed_areas", "P0_room_names", "P0_room_outlines", "P0_unnamed_space", "P0_room_sizes"):
         for record in (row for row in _all_current(root) if row.get("task") == task and row.get("applied_value")):
             for row in record["applied_value"].get("rooms", []):
                 key = str(row.get("label", "")).casefold()
@@ -2820,6 +2939,9 @@ def _post(web, project, data, *, defer_evidence_rebuild=False):
             record = _apply_p0_outlines(web, project, root, record, validated)
             record["applied_value"]["not_drawn"] = ([{"room": name, "reason": "The AI left it out."} for name in omitted]
                                                     + [{"room": name, "reason": reason} for name, reason in not_drawn.items()])
+        elif task == "P0_unnamed_space":
+            validated = autonomous_tasks.validate_p0_unnamed_space(record["packet"], reply)
+            record = _apply_p0_unnamed_space(web, project, root, record, validated)
         elif task == "P0_room_sizes":
             validated = autonomous_tasks.validate_room_size_reply(record["packet"], reply)
             record = _apply_p0_sizes(web, project, root, record, validated)

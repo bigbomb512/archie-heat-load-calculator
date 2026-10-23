@@ -143,6 +143,50 @@ Coolroom 10.76, Freezer 7.88, Kitchen 103.85, Shop 216.1 m². Scored keys 3/3;
 Kitchen is +4.96 %, mostly a 0.8 m servery strip that the trace gave to the
 Shop.
 
+**Unlabelled rooms, levels and sheet choice (2026-10-23, Casa Nova).** Casa Nova's Phase 1 had 53 m² of small rooms on
+a tenancy of about 250 m²: the main dining space has no printed name, so it never became a room. Four changes, each for
+every job:
+- **Room names from notes:** a room word whose own line continues with a fitting word ("STAFF LOCKERS / SHELVES",
+  "KITCHEN EXHAUST", "SHOP FRONT") is a note, not a room label (`ai/room_inference.py`).
+- **Rooms named by their use:**
+  - **Naming step (`P0_room_names`):** names an area that none of the printed names fits from a fixed list (Dining,
+    Shop, Kitchen, Bar, Office, Store, Toilet, Corridor; each maps to one room-use type). A new reply must answer
+    every numbered area: a listed room, a use name or `not_a_room`. Saved replies from before this change are still
+    read.
+  - **Open-plan outlines (`P0_room_outlines`):** may also draw room-sized spaces that no listed name covers, named the
+    same way.
+  - **Room list:** these rooms are kept in `ai_named_rooms.json`, per step and page, and join it through
+    `backend/room_proposal.py` (source `named_by_use`).
+- **Levels:** a bare "L1" is a legend or fixture tag ("LED STRIP L3") unless the page title or the word level/floor
+  names it (`ai/drawing_coverage.py`). Before this change, two tags made the one-floor shop three levels, each with its
+  own main plan.
+- **Sheet choice:** a page that page reading (pass 1) calls an elevation, section or detail is never a main plan, even
+  if the drawing-set classifier calls it a floor plan.
+
+**Effect on the saved Casa Nova inputs (no AI):**
+- **Main plans:** pages 32, 33 and 46 became page 33 only, the vector setout plan of the whole floor.
+- **Room names:** Bar, Bathroom/Level 3, Kitchen/Level 1 and Staff became Bar, Bathroom and Kitchen on one level.
+- **Butcher Buffet:** unchanged (page 20; the same five rooms).
+- **Global Exchange:** not compared; no saved job has the needed files.
+
+**Plan window and floor with no room (2026-10-24, Casa Nova).** The first run with these fixes still traced no dining
+area, for two reasons:
+- The room-finding window, taken from the densest cluster of drawing, cut off the right fifth of the long shop plan.
+  Areas touching the window edge are never rooms, and the outline image was cropped to the window. The window now grows
+  over every drawn line of 1 m or more that runs past it (`room_outline.grow_plan_viewport`; Butcher Buffet is
+  unchanged).
+- The prompt line asking the outline step for unnamed spaces was ignored.
+
+There is now a separate step, **`P0_unnamed_space`** ("Checking for floor with no room"):
+- **When:** once per main plan, after the naming and outline steps are answered.
+- **What it asks:** it shows the plan with the traced rooms tinted and named, and asks for any untinted room-sized floor
+  inside the tenancy, named by its use, or none.
+- **Checks:** a use name that isn't already a traced room; at least 4 m² once the traced rooms it overlaps are removed.
+- **Saving:** these rooms are saved like the other rooms named by their use.
+
+A code-measured tenancy outline was tried and rejected: Casa Nova's floor is open to the outside at the entry doors and
+to the kitchen through the servery, so no closed outline comes out of its walls.
+
 ## P1 `site_identification` (text only, ≤ 4,000 characters)
 
 Inputs: the title-block and notes excerpts already found by

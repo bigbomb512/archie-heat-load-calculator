@@ -19,6 +19,7 @@ TASKS = {
     "P0_wall_styles": {"id": "room_geometry_wall_styles", "inputs": ["plan_page_styles"], "budget_chars": 3000, "media": "image", "prompt_builder": "build_p0_packets", "reply_validator": "validate_wall_style_batch_reply", "apply_function": "_apply_p0_wall_styles", "fallback": None},
     "P0_room_names": {"id": "room_geometry_room_names", "inputs": ["calibrated_enclosed_areas", "room_registry"], "budget_chars": 4000, "media": "image", "prompt_builder": "build_p0_packets", "reply_validator": "validate_p0_room_names", "apply_function": "_apply_p0_room_names", "fallback": None},
     "P0_room_outlines": {"id": "room_geometry_outlines", "inputs": ["rooms_without_area", "plan_page"], "budget_chars": 3000, "media": "image", "prompt_builder": "build_p0_packets", "reply_validator": "validate_p0_outlines", "apply_function": "_apply_p0_outlines", "fallback": None},
+    "P0_unnamed_space": {"id": "floor_with_no_room", "inputs": ["traced_rooms", "plan_page"], "budget_chars": 2000, "media": "image", "prompt_builder": "unnamed_space_prompt", "reply_validator": "validate_p0_unnamed_space", "apply_function": "_apply_p0_unnamed_space", "fallback": None},
     "P0_room_sizes": {"id": "room_sizes_without_outline", "inputs": ["rooms_without_area", "plan_page", "name_sheets"], "budget_chars": 3000, "media": "image", "prompt_builder": "room_size_prompt", "reply_validator": "validate_room_size_reply", "apply_function": "_apply_p0_sizes", "fallback": "tenancy_remainder"},
     "S1_printed_areas": {"id": "scanned_printed_room_areas", "inputs": ["scanned_plan_tiles", "raster_room_outlines"], "budget_chars": 3000, "media": "image", "prompt_builder": "scan_reading.area_prompt", "reply_validator": "scan_reading.validate_area_reply", "apply_function": "_apply_s1_areas", "fallback": None},
     "S3_title_transcription": {"id": "scanned_title_transcription", "inputs": ["scanned_title_block"], "budget_chars": 1000, "media": "image", "prompt_builder": "scan_reading.transcription_prompt", "reply_validator": "scan_reading.validate_transcription", "apply_function": "_apply_s3_transcription", "fallback": None},
@@ -125,8 +126,16 @@ def validate_dimension_reply(packet, reply):
 def validate_p0_room_names(packet, reply):
     value = parse_json_reply(reply)
     from ai import room_outline as ro
-    names, splits = ro.validate_naming_reply(value, packet["area_count"], packet["room_names"], packet["transform"])
-    return {"names": names, "splits": splits}
+    names, splits = ro.validate_naming_reply(value, packet["area_count"], packet["room_names"], packet["transform"],
+                                             require_all=True)
+    listed = {str(name).casefold() for name in packet["room_names"]}
+    used = set(names.values()) | {item["room"] for split in splits for item in split["rooms"]}
+    return {"names": names, "splits": splits,
+            "use_named_rooms": sorted(name for name in used if name != ro.NOT_A_ROOM and name.casefold() not in listed)}
+
+
+def validate_p0_unnamed_space(packet, reply):
+    return room_outline.validate_unnamed_space_reply(parse_json_reply(reply), packet["traced_names"], packet["transform"])
 
 
 def validate_p0_outlines(packet, reply):

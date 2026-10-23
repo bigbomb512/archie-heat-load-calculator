@@ -48,6 +48,7 @@ TASK_LABELS = {
     "P0_wall_styles": "Telling the wall styles apart",
     "P0_room_names": "Finding the room names",
     "P0_room_outlines": "Tracing the room outlines",
+    "P0_unnamed_space": "Checking for floor with no room",
     "P0_room_sizes": "Finding the room sizes",
     "S1_printed_areas": "Reading printed room areas",
     "S3_title_transcription": "Reading the title block",

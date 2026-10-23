@@ -109,6 +109,11 @@ def main():
             x0 = word_index * 45
             note_items.append({"text": word, "bbox": [x0, line_index * 20, x0 + 35, line_index * 20 + 10]})
     check("full word items in notes and legends do not create room labels", not room_inference.room_label_items({"standalone_text_items": note_items}))
+    # Casa Nova (2026-10-23): "STAFF LOCKERS / SHELVES" is a note about a fitting; it made a "Staff" room.
+    fitting = [{"text": word, "bbox": [x0, 10, x0 + 30, 18]} for word, x0 in (("STAFF", 0), ("LOCKERS", 34), ("/", 68), ("SHELVES", 74))]
+    check("a room word in a fitting note is not a room", not room_inference.room_label_items({"standalone_text_items": fitting}))
+    check("the same word on its own is still a room",
+          [label for label, _area in room_inference.room_label_items({"standalone_text_items": [{"text": "STAFF", "bbox": [0, 10, 30, 18]}]})] == ["Staff"])
     geometry_page = {"page": 4, "title": "Ground floor plan", "detected_type": "floor_plan", "plan_role": "main_floor_plan",
                      "level_name": "Ground", "room_geometry_candidates": [{
                          "label": "Shop", "boundary_points_px": [[0, 0], [100, 0], [100, 50], [0, 50], [0, 0]],

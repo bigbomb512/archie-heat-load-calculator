@@ -158,12 +158,20 @@ def _level_candidates(page, ocr):
                 prefix + " " + text[match.end():match.end() + 64], re.I))
             address_context = address_shape and address_cue
             is_finish_code = bool(finish_code.fullmatch(raw))
+            # A bare "L1" is usually a legend or fixture tag ("LED STRIP L3", "SS1 WT1 L1"): a floor only in the page
+            # title or beside the word level/floor (Casa Nova 2026-10-23: two tags made a one-floor shop three levels).
+            bare_tag = (bool(re.fullmatch(r"L\s*0*\d{1,2}", raw, re.I)) and source != "page_title"
+                        and not re.search(r"\b(?:level|floor|storey|lvl)\b", near, re.I))
             detail = bool(re.match(r"^(?:\s|[-,:])*(?:[\w-]+\s+){0,3}(?:detail|section|elevation)\b",
                                    text[match.end():match.end() + 48], re.I))
             if is_finish_code and (finish_words.search(near) or in_finish_section):
                 kind, reason = "finish_or_tag_code", "FL/CL/WL/PT code is near finish/material wording or in a finish schedule/legend."
                 normalized = re.sub(r"\s+", " ", raw.upper())
                 key = normalized.replace(" ", "")
+            elif bare_tag:
+                kind, reason = "finish_or_tag_code", "A bare L-number is a legend or fixture tag unless the page title or the word level/floor names it."
+                normalized = re.sub(r"\s+", "", raw.upper())
+                key = normalized
             elif detail and not named:
                 kind, reason = "detail_label", "Level-like text is followed by Detail, Section, or Elevation."
                 normalized = f"Level {int(numeric)}" if numeric else raw

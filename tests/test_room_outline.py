@@ -124,6 +124,22 @@ def naming_and_split_checks():
                  lambda: ro.validate_naming_reply({"areas": [{"number": 1, "room": "Lounge"}]}, 1, ["Shop"], transform), "not in the room list")
     expect_error("an unknown area number is refused",
                  lambda: ro.validate_naming_reply({"areas": [{"number": 3, "room": "Shop"}]}, 2, ["Shop"], transform), "unknown area")
+    # Casa Nova (2026-10-23): the main dining space has no printed name; it is named by its use, and a new reply must
+    # answer every numbered area so a room-sized space can't be left out.
+    used, _none = ro.validate_naming_reply({"areas": [{"number": 1, "room": "Bar"}, {"number": 2, "room": "Dining"}]}, 2,
+                                           ["Bar"], transform, require_all=True)
+    check("an unnamed space may be named by its use", used == {0: "Bar", 1: "Dining"})
+    expect_error("every numbered area must be answered in a new reply",
+                 lambda: ro.validate_naming_reply({"areas": [{"number": 1, "room": "Bar"}]}, 2, ["Bar"], transform, require_all=True),
+                 "missing: 2")
+    check("a saved reply that skipped an area is still read", ro.validate_naming_reply(
+        {"areas": [{"number": 1, "room": "Bar"}]}, 2, ["Bar"], transform)[0] == {0: "Bar"})
+    drawn = ro.validate_outline_reply({"rooms": [{"room": "Dining", "points_px": [[0, 0], [10, 0], [10, 10]]}]}, ["Bar"], transform)
+    check("an open-plan outline may name an unlabelled space by its use", drawn[0]["room"] == "Dining")
+    from ai import room_use_resolution
+    taxonomy = room_use_resolution.load_taxonomy()
+    check("every use name maps to exactly one room-use type",
+          all(len(room_use_resolution._label_matches(name, taxonomy)) == 1 for name in ro.USE_ROOM_NAMES))
     merged, _none = ro.validate_naming_reply({"areas": [{"number": 1, "room": "Shop"}, {"number": 2, "room": "Shop"}]}, 2, ["Shop"], transform)
     check("one room may cover two enclosed areas", merged == {0: "Shop", 1: "Shop"})
     expect_error("a room both split out and named for another area is refused",
@@ -321,7 +337,40 @@ def wall_style_completion_checks():
           added == [ro.style_id(outer), ro.style_id(counter)] and len(rooms) == 3)
 
 
+def unnamed_space_and_window_checks():
+    # Casa Nova (2026-10-23): the plan window cut off the right fifth of a long shop plan, and the dining area, which
+    # the drawings don't name, was never traced.
+    style = (0.5, 0.0, None)
+    floor_line = {"kind": "line", "filled": False, "style": style, "points": [(100, 500), (1900, 500)]}
+    mark = {"kind": "line", "filled": False, "style": style, "points": [(1200, 300), (1210, 300)]}
+    border = {"kind": "line", "filled": False, "style": style, "points": [(5, 10), (5, 900)]}
+    grown = ro.grow_plan_viewport((100, 300, 1200, 800), [floor_line, mark, border], (2000, 1000), min_length_px=50)
+    check("the plan window grows over a line that runs past it", grown[2] >= 1900 and grown[0] <= 100)
+    check("short marks and lines at the sheet border don't grow it", grown[0] > 5)
+    check("a plan already inside its window is left alone",
+          ro.grow_plan_viewport((50, 300, 1950, 800), [floor_line], (2000, 1000), min_length_px=50) == (50.0, 300.0, 1950.0, 800.0))
+    transform = {"offset_px": [100, 100], "factor": 0.5}
+    spaces = ro.validate_unnamed_space_reply({"spaces": [{"room": "Dining", "points_px": [[0, 0], [100, 0], [100, 50], [0, 50]],
+                                                           "reason": "tables and chairs"}]}, ["Bar", "Kitchen"], transform)
+    check("an untinted space is named by its use and returned in page pixels",
+          spaces[0]["room"] == "Dining" and spaces[0]["points"][1] == (300.0, 100.0))
+    check("no untinted space is a valid answer", ro.validate_unnamed_space_reply({"spaces": []}, ["Bar"], transform) == [])
+    expect_error("a traced room's name is refused",
+                 lambda: ro.validate_unnamed_space_reply({"spaces": [{"room": "Bar", "points_px": [[0, 0], [9, 0], [9, 9]]}]}, ["Bar"], transform),
+                 "already a tinted room")
+    expect_error("a name outside the use list is refused",
+                 lambda: ro.validate_unnamed_space_reply({"spaces": [{"room": "Lounge", "points_px": [[0, 0], [9, 0], [9, 9]]}]}, [], transform),
+                 "one of")
+    from PIL import Image
+    image, shown = ro.render_traced_rooms(Image.new("RGB", (400, 300), "white"), [("Bar", box(50, 50, 150, 150))], (0, 0, 400, 300))
+    check("the traced rooms are tinted on the plan", image.size == (400, 300) and shown["factor"] == 1.0
+          and image.getpixel((60, 60)) != (255, 255, 255))
+    check("the prompt lists the use names and the tinted rooms",
+          all(name in ro.unnamed_space_prompt(["Bar"]) for name in (*ro.USE_ROOM_NAMES, "Bar")))
+
+
 def main():
+    unnamed_space_and_window_checks()
     page_origin_checks()
     wall_style_completion_checks()
     raster_checks()

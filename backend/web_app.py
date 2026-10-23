@@ -706,9 +706,8 @@ def _rebuild_evidence_chain(project):
     dimension_matches = optional_artifact("dimension_wall_matches.json")
     geometry_confirmation = optional_artifact("geometry_confirmation.json")
 
-    coverage = build_drawing_coverage(ai_input, spatial_ocr, vector_geometry)
     coverage_path = review_dir / "drawing_coverage.json"
-    coverage_path.write_text(json.dumps(coverage, indent=2), encoding="utf-8")
+    coverage = write_drawing_coverage(coverage_path, build_drawing_coverage(ai_input, spatial_ocr, vector_geometry))
     building = build_building_evidence(ai_input, coverage, spatial_ocr, vision_response)
     building_path = review_dir / "building_evidence.json"
     building_path.write_text(json.dumps(building, indent=2), encoding="utf-8")
@@ -863,7 +862,7 @@ def save_page_decisions(project, data):
     )
 
     project["decisions"] = str(decisions_path)
-    for key in [
+    stale_keys = [
         "page_triage", "page_triage_validation", "page_triage_ai_input", "page_triage_packet",
         "ai_input", "spatial_ocr", "vector_geometry",
         "wall_classification", "wall_classification_validation", "wall_classification_packet",
@@ -871,15 +870,16 @@ def save_page_decisions(project, data):
         "dimension_review_packet", "vision_response", "vision_validation", "coordinate_review",
         "geometry_confirmation", "reasoning_packet", "design_requirements", "drawing_coverage",
         "thermal_evidence", "thermal_model", "building_evidence", "heat_load_report", "ventilation_report", "parity_report",
-    ]:
+    ]
+    for key in stale_keys:
         project.pop(key, None)
     project["ai_input"] = pipeline["ai_input"]
     coverage_path = review_dir / "drawing_coverage.json"
-    coverage_path.write_text(json.dumps(build_drawing_coverage(
+    write_drawing_coverage(coverage_path, build_drawing_coverage(
         load_json(pipeline["ai_input"]),
         load_json(review_dir / "spatial_ocr.json"),
         load_json(review_dir / "vector_geometry.json"),
-    ), indent=2), encoding="utf-8")
+    ))
     project["drawing_coverage"] = str(coverage_path)
     building_path = review_dir / "building_evidence.json"
     building_path.write_text(json.dumps(build_building_evidence(load_json(pipeline["ai_input"]), load_json(coverage_path)), indent=2), encoding="utf-8")
@@ -898,7 +898,7 @@ def save_page_decisions(project, data):
     except (ValueError, KeyError, OSError, TypeError, AttributeError):
         pass
     project["updated_at"] = timestamp()
-    update_project(project)
+    update_project(project, removed=[key for key in stale_keys if key not in project])
     return {
         "id": project["id"],
         "decisions_url": safe_link(decisions_path),
@@ -2711,7 +2711,7 @@ def api_save_design_requirements(request):
     project["design_requirements"] = str(requirements_path)
     project["reasoning_packet"] = result["reasoning_packet_raw"]
     project["updated_at"] = timestamp()
-    update_project(project)
+    update_project(project, removed=["parity_report"])
     response = result["response"]
     response.update({
         "requirements_url": safe_link(requirements_path),
@@ -3186,7 +3186,7 @@ def process_upload(request):
     ai_input = build_ai_packet(packet, spatial_ocr=spatial_ocr)
     ai_output.write_text(json.dumps(ai_input, indent=2), encoding="utf-8")
     coverage_output = Path(result["review_dir"]) / "drawing_coverage.json"
-    coverage_output.write_text(json.dumps(build_drawing_coverage(ai_input), indent=2), encoding="utf-8")
+    write_drawing_coverage(coverage_output, build_drawing_coverage(ai_input))
     building_output = Path(result["review_dir"]) / "building_evidence.json"
     building_output.write_text(json.dumps(build_building_evidence(ai_input, load_json(coverage_output)), indent=2), encoding="utf-8")
 
@@ -3544,18 +3544,49 @@ def project_by_id(project_id):
     return project
 
 
-def update_project(project):
-    projects = load_projects()
-    previous = projects.get(project["id"])
-    projects[project["id"]] = project
-    save_projects(projects)
-    if project.get("review_dir") and (previous is None or productization.fingerprint(previous) != productization.fingerprint(project)):
+def write_drawing_coverage(path, coverage):
+    """Write the drawing coverage unless the saved file already says the same thing apart from when it was made.
+
+    The drawing review's input fingerprint includes this file, so rewriting identical content with a new
+    generated_at marked the review out of date and made it run (and spend) again (2026-10-23, Casa Nova)."""
+    path = Path(path)
+    if path.is_file():
+        try:
+            saved = load_json(path)
+        except (OSError, ValueError):
+            saved = None
+        if isinstance(saved, dict) and {k: v for k, v in saved.items() if k != "generated_at"} == \
+                {k: v for k, v in coverage.items() if k != "generated_at"}:
+            return saved
+    path.write_text(json.dumps(coverage, indent=2), encoding="utf-8")
+    return coverage
+
+
+_PROJECTS_LOCK = threading.RLock()
+
+
+def update_project(project, removed=()):
+    """Save a job's record by merging into the stored one: a field the caller's copy lacks is kept, not deleted.
+
+    Background steps each hold their own copy of the record, taken when they started. Replacing the stored record
+    with a copy let a step that started before a field was added wipe it on its next save (2026-10-23: Casa Nova lost
+    its prepared drawing set, so Phase 1 never started). A field is removed only when the caller names it in
+    `removed`."""
+    with _PROJECTS_LOCK:
+        projects = load_projects()
+        previous = projects.get(project["id"])
+        merged = {**(previous or {}), **project}
+        for key in removed:
+            merged.pop(key, None)
+        projects[project["id"]] = merged
+        save_projects(projects)
+    if merged.get("review_dir") and (previous is None or productization.fingerprint(previous) != productization.fingerprint(merged)):
         productization.append_audit_event(
-            project["review_dir"],
+            merged["review_dir"],
             action="project_metadata_updated",
             target="project.json",
             previous_fingerprint=productization.fingerprint(previous) if previous else "",
-            new_fingerprint=productization.fingerprint(project),
+            new_fingerprint=productization.fingerprint(merged),
             result="success",
         )
 

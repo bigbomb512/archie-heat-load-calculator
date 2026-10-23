@@ -3,7 +3,8 @@
 The proposal is the detected room list (local room inference) or, failing that,
 a saved manual placeholder proposal. Reviewer-added rooms are stored with the
 reviewer traces (reviewer_room_geometry.json) so they survive re-detection and
-re-analysis, and are merged in here so every consumer sees the same rooms.
+re-analysis, and are merged in here so every consumer sees the same rooms. So are rooms the room-naming step named by
+their use because the drawings print no name for them (ai_named_rooms.json; for example an unlabelled dining area).
 """
 
 from copy import deepcopy
@@ -39,6 +40,34 @@ def reviewer_rooms(root):
         return []
 
 
+USE_NAMED_ROOMS_FILE = "ai_named_rooms.json"
+
+
+def save_use_named_rooms(root, task, page, level_name, labels, run_id):
+    """Record the rooms one drawing step named by their use on one plan page (replacing that step's earlier answer for
+    the page; the enclosed-area naming and the open-plan outlines keep theirs separately)."""
+    path = Path(root) / USE_NAMED_ROOMS_FILE
+    try:
+        saved = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        saved = {}
+    pages = saved.get("pages") if isinstance(saved.get("pages"), dict) else {}
+    pages[f"{task}:page-{int(page)}"] = [{"label": label, "level_name": level_name or "Unassigned level", "page": int(page), "run_id": run_id}
+                        for label in labels]
+    path.write_text(json.dumps({"schema_version": 1, "pages": {key: rows for key, rows in pages.items() if rows}}, indent=2),
+                    encoding="utf-8")
+
+
+def use_named_rooms(root):
+    try:
+        saved = json.loads((Path(root) / USE_NAMED_ROOMS_FILE).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    pages = saved.get("pages") if isinstance(saved, dict) and isinstance(saved.get("pages"), dict) else {}
+    return [row for rows in pages.values() if isinstance(rows, list) for row in rows
+            if isinstance(row, dict) and row.get("label") and type(row.get("page")) is int]
+
+
 def proposal_room(row):
     """A reviewer-added room in the proposal-room shape detection produces."""
     page = row.get("page") if isinstance(row.get("page"), int) else None
@@ -58,6 +87,15 @@ def room_proposal(run, root):
         if row["room_id"] not in existing:
             proposal["rooms"].append(proposal_room(row))
             existing.add(row["room_id"])
+    for row in use_named_rooms(root):
+        identity = room_identity(row["label"], row["level_name"])
+        if identity in existing:
+            continue
+        proposal["rooms"].append({"kind": "room", "room_id": identity, "label": row["label"], "level_name": row["level_name"],
+            "page": row["page"], "source_pages": [row["page"]], "source": "named_by_use", "confidence": 0.6,
+            "evidence": [{"page": row["page"], "reference": "Room named by its use: the drawings print no name for this space",
+                          "excerpt": row["label"]}]})
+        existing.add(identity)
     tasks = Path(root) / "ai_tasks" / "S1_printed_areas"
     for pointer in tasks.glob("*/current.json"):
         try:

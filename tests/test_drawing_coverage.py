@@ -126,6 +126,16 @@ def main():
         {"pages": [{"page": 1, "title_blocks": [{"text_excerpt": "Job Address, Level 1"}]}]})["pages"][0]
     check("conflicting title and body text does not select a floor", conflict["level_name"], "")
     check("conflicting building-level text marks page ambiguous", conflict["level_status"], "ambiguous")
+    # Casa Nova (2026-10-23): legend and fixture tags "L1"/"L3" in title-block text made a one-floor shop three levels.
+    tags = build_drawing_coverage({"drawing_set": {"pages": [{"page": 1, "title": "Setout Plan"}]}},
+        {"pages": [{"page": 1, "title_blocks": [{"text_excerpt": "GL1 1LG G L1 SS1 978 LED STRIP L3 TILE WT7"}]}]})["pages"][0]
+    check("bare L-number tags are not floors", (tags["level_name"], {row["kind"] for row in tags["level_candidates"]}),
+          ("", {"finish_or_tag_code"}))
+    titled = build_drawing_coverage({"drawing_set": {"pages": [{"page": 1, "title": "L2 Floor Plan"}]}})["pages"][0]
+    check("an L-number in the page title is still a floor", titled["level_name"], "Level 2")
+    worded = build_drawing_coverage({"drawing_set": {"pages": [{"page": 1, "title": "Plan"}]}},
+        {"pages": [{"page": 1, "title_blocks": [{"text_excerpt": "FLOOR L1 TENANCY PLAN"}]}]})["pages"][0]
+    check("an L-number beside the word floor is still a floor", worded["level_name"], "Level 1")
     body_level = build_drawing_coverage({"drawing_set": {"pages": [{"page": 1,
         "structured_content": {"markdown": "Level 1 notes"}}]}})["pages"][0]
     check("body text level remains non-authoritative", body_level["level_candidates"][0]["kind"], "body_text_level")

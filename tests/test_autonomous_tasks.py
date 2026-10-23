@@ -274,6 +274,22 @@ class AutonomousTaskTests(unittest.TestCase):
             self.assertTrue(any(row["page"] == 3 and "scale" in row["reason"] for row in skipped))
             self.assertTrue(any(row["page"] == 4 and "second view" in row["reason"] for row in skipped))
 
+    def test_p0_never_traces_a_sheet_page_reading_calls_an_elevation(self):
+        # Casa Nova (2026-10-23): an interior-elevation sheet with a small toilet plan was classed as a floor plan
+        # and traced as its own level.
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            pages = [{"page": 32, "plan_role": "main_floor_plan", "level_name": "", "title": "Layout Plan", "scale": "1:75"},
+                     {"page": 46, "plan_role": "main_floor_plan", "level_name": "Level 3", "title": "Layout Plan", "scale": "1:50"}]
+            (root / "ai_input.json").write_text(json.dumps({"drawing_set": {"pages": pages}}))
+            (root / "drawing_coverage.json").write_text(json.dumps({"page_roles": [
+                {"page": row["page"], "proposed_role": row["plan_role"], "level_name": row["level_name"]} for row in pages]}))
+            (root / "page_inventory.json").write_text(json.dumps({"pages": {
+                "32": {"page_type": "floor_plan"}, "46": {"page_type": "elevation"}}}))
+            selection = autonomous_tasks_service._p0_page_selection(root)
+            self.assertEqual([row["page"] for row in selection["selected"]], [32])
+            self.assertTrue(any(row["page"] == 46 and "elevation" in row["reason"] for row in selection["skipped"]))
+
     def test_p0_uses_supporting_plan_when_level_has_no_main_plan(self):
         from PIL import Image
         with TemporaryDirectory() as temporary:
@@ -489,6 +505,48 @@ class AutonomousTaskTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "not in the room list"):
             room_outline.validate_naming_reply({"areas": [{"number": 1, "room": "Lobby"}]}, 1,
                 ["Shop"], {"offset_px": [0, 0], "factor": 1})
+        named = autonomous_tasks.validate_p0_room_names({"area_count": 2, "room_names": ["Bar"],
+            "transform": {"offset_px": [0, 0], "factor": 1}},
+            '{"areas":[{"number":1,"room":"Bar"},{"number":2,"room":"Dining"}]}')
+        self.assertEqual(named["use_named_rooms"], ["Dining"])
+
+    def test_untinted_floor_becomes_a_room_named_by_its_use(self):
+        from PIL import Image
+        from backend import room_proposal
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = {"id": "job", "review_dir": str(root)}
+            bar = {"room_label": "Bar", "page": 33, "points_image_px": [[0, 0], [100, 0], [100, 100], [0, 100], [0, 0]]}
+            record = {"run_id": "run-1", "quality_label": "AI-determined (below accuracy bar)", "accuracy": {"auto_apply": False},
+                      "packet": {"page": 33, "calibration": {"status": "agreed", "mm_per_px": 50.0}}}
+            spaces = [{"room": "Dining", "points": [(0, 0), (600, 0), (600, 400), (0, 400)], "reason": "tables"},
+                      {"room": "Store", "points": [(0, 0), (105, 0), (105, 105), (0, 105)], "reason": "mostly the bar"}]
+            saved = {}
+            with patch.object(autonomous_tasks_service, "_p0_context", return_value={"image": Image.new("RGB", (10, 10)), "viewport": (0, 0, 10, 10)}), \
+                    patch.object(autonomous_tasks_service, "_p0_is_raster", return_value=True), \
+                    patch.object(autonomous_tasks_service, "_p0_walls_areas", return_value=(None, [], [])), \
+                    patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "current_records", return_value=[bar]), \
+                    patch.object(autonomous_tasks_service, "_p0_trace_rows", side_effect=lambda _root, _record, polygons: polygons), \
+                    patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "persist_ai_determined_traces",
+                                 side_effect=lambda web, project, rows, *args, **kwargs: saved.update(rows=rows, kwargs=kwargs) or []):
+                autonomous_tasks_service._apply_p0_unnamed_space(None, project, root, record, spaces)
+            self.assertEqual([row["label"] for row in saved["rows"]], ["Dining"])
+            self.assertAlmostEqual(saved["rows"][0]["polygon"].area, 600 * 400 - 100 * 100)     # less the bar inside it
+            self.assertEqual(saved["kwargs"]["replace_room_labels"], ["Dining"])
+            self.assertEqual(record["applied_value"]["dropped"][0]["room"], "Store")             # mostly the bar: dropped
+            self.assertEqual([row["label"] for row in room_proposal.use_named_rooms(root)], ["Dining"])
+
+    def test_rooms_named_by_their_use_join_the_room_list_per_step(self):
+        from backend import room_proposal
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            room_proposal.save_use_named_rooms(root, "P0_room_names", 33, "", ["Dining"], "run-1")
+            room_proposal.save_use_named_rooms(root, "P0_room_outlines", 33, "", ["Store"], "run-2")
+            rooms = room_proposal.room_proposal({}, root)["rooms"]
+            self.assertEqual({(row["label"], row["level_name"], row["source"]) for row in rooms},
+                             {("Dining", "Unassigned level", "named_by_use"), ("Store", "Unassigned level", "named_by_use")})
+            room_proposal.save_use_named_rooms(root, "P0_room_names", 33, "", [], "run-3")   # a new answer replaces its own
+            self.assertEqual([row["label"] for row in room_proposal.room_proposal({}, root)["rooms"]], ["Store"])
         with self.assertRaisesRegex(ValueError, "crosses itself"):
             room_outline.validate_outline_reply({"rooms": [{"room": "Shop", "points_px": [[0,0],[10,10],[0,10],[10,0]]}],
                 "open_sides": "counter"}, ["Shop"], {"offset_px": [0, 0], "factor": 1})

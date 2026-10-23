@@ -124,6 +124,40 @@ def style_summary(objects, viewport=None, mm_per_px=None):
     return result
 
 
+def grow_plan_viewport(viewport, objects, image_size, min_length_px, max_rounds=10):
+    """The plan window grown to take in the whole of every drawn line that crosses its edge.
+
+    The window comes from the densest cluster of drawing on the sheet, which reaches only about a third of the sheet
+    width each way; a long shop plan ran past it (Casa Nova, 2026-10-23: the right fifth of the floor was cut off, and
+    areas touching the cut edge are never rooms, so the dining area and kitchen were lost). Hatching, short marks, lines
+    touching the sheet border and the title-block band don't grow it."""
+    from ai.vector_geometry import in_title_block_band, near_sheet_edge
+    hatch = hatch_styles(objects)
+    lines = []
+    for item in objects:
+        if item["style"] in hatch or len(item.get("points") or []) < 2:
+            continue
+        line = LineString(item["points"])
+        bounds = list(line.bounds)
+        if line.length >= min_length_px and not near_sheet_edge(bounds, image_size) \
+                and not in_title_block_band(bounds, image_size):
+            lines.append(line)
+    left, top, right, bottom = (float(value) for value in viewport)
+    for _round in range(max_rounds):
+        edge = box(left, top, right, bottom).exterior
+        grown = [left, top, right, bottom]
+        for line in lines:
+            if line.intersects(edge):
+                x0, y0, x1, y1 = line.bounds
+                grown = [min(grown[0], x0), min(grown[1], y0), max(grown[2], x1), max(grown[3], y1)]
+        if grown == [left, top, right, bottom]:
+            break
+        pad = 10.0
+        left, top = max(0.0, grown[0] - pad), max(0.0, grown[1] - pad)
+        right, bottom = min(float(image_size[0]), grown[2] + pad), min(float(image_size[1]), grown[3] + pad)
+    return (round(left, 2), round(top, 2), round(right, 2), round(bottom, 2))
+
+
 def wall_geometry(objects, wall_style_ids, viewport=None, line_half_width_px=1.0):
     """Union of all objects drawn in the chosen wall styles."""
     wanted = set(wall_style_ids)
@@ -299,6 +333,9 @@ def validate_wall_style_reply(reply, summary):
 # --- AI naming and open-plan splits -------------------------------------------------
 
 NOT_A_ROOM = "not_a_room"
+# Names for a room the drawings don't name (2026-10-23: Casa Nova's main dining space has no printed label, so it never
+# became a room). Each maps onto a room-use category (config/au_room_use_taxonomy_v1.json) by its alias.
+USE_ROOM_NAMES = ("Dining", "Shop", "Kitchen", "Bar", "Office", "Store", "Toilet", "Corridor")
 COLOURS = [(230, 25, 75), (60, 180, 75), (0, 130, 200), (245, 130, 48), (145, 30, 180),
            (70, 240, 240), (240, 50, 230), (160, 160, 0), (250, 150, 190), (0, 128, 128),
            (170, 110, 40), (128, 0, 0), (0, 0, 128), (128, 128, 128)]
@@ -323,6 +360,69 @@ def render_candidate_areas(page_image, areas, viewport, max_side=1536):
     return crop, {"offset_px": [left, top], "factor": factor}
 
 
+UNNAMED_SPACE_MIN_M2 = 4.0
+
+
+def render_traced_rooms(page_image, rooms, viewport, max_side=1536):
+    """Plan image with each traced room tinted and named: [(label, polygon)], for the floor-with-no-room check."""
+    from PIL import ImageDraw
+    from shapely.ops import polylabel
+    image = page_image.convert("RGB")
+    draw = ImageDraw.Draw(image, "RGBA")
+    for index, (label, polygon) in enumerate(rooms):
+        red, green, blue = COLOURS[index % len(COLOURS)]
+        draw.polygon(list(polygon.exterior.coords), fill=(red, green, blue, 90), outline=(red, green, blue, 255))
+    for label, polygon in rooms:
+        point = polylabel(polygon, tolerance=2) if polygon.is_valid else polygon.representative_point()
+        draw.text((point.x, point.y), str(label).upper(), fill=(0, 0, 0, 255), font_size=40, anchor="mm",
+                  stroke_width=5, stroke_fill=(255, 255, 255, 255))
+    left, top, right, bottom = viewport
+    crop = image.crop((int(left), int(top), int(right), int(bottom)))
+    factor = min(1.0, max_side / max(crop.size))
+    if factor < 1.0:
+        crop = crop.resize((int(crop.size[0] * factor), int(crop.size[1] * factor)))
+    return crop, {"offset_px": [left, top], "factor": factor}
+
+
+def unnamed_space_prompt(traced_names):
+    shown = ", ".join(traced_names) if traced_names else "none yet"
+    return ("The image is one architectural floor plan. The tinted, named areas are the rooms found so far ("
+            f"{shown}). Look for floor inside this tenancy that is not tinted and is big enough to be a room (about "
+            f"{UNNAMED_SPACE_MIN_M2:g} m² or more): drawings often leave the main dining or sales area, a corridor or "
+            "a store unlabelled. Outline each such space as the corner points of its floor, in order, following the "
+            "inside face of walls and the drawn boundary (shopfront glazing, tenancy line, counter edge) where there "
+            f"is no wall, and name it by its use with one of: {', '.join(USE_ROOM_NAMES)}. Don't outline tinted "
+            "rooms, the footpath, mall or outdoor seating outside the shopfront, voids, shafts or joinery. If there "
+            "is no such space, return an empty list. Give coordinates in image pixels. Reply with JSON only:\n"
+            "{\"spaces\": [{\"room\": string, \"points_px\": [[x, y], ...], \"reason\": string}]}")
+
+
+def validate_unnamed_space_reply(reply, traced_names, transform):
+    """The untinted spaces the AI outlined, named by their use; none is a valid answer. A name already traced on the
+    plan is refused (that room is tinted; its floor isn't missing)."""
+    if not isinstance(reply, dict) or not isinstance(reply.get("spaces"), list):
+        raise ValueError("The reply must contain a spaces list (empty when every room is tinted).")
+    allowed = {name.casefold(): name for name in USE_ROOM_NAMES}
+    traced = {str(name).casefold() for name in traced_names}
+    spaces = []
+    for row in reply["spaces"]:
+        room = str((row or {}).get("room", "")).strip()
+        if room.casefold() not in allowed:
+            raise ValueError(f"Name each space with one of: {', '.join(USE_ROOM_NAMES)} (got {room!r}).")
+        if room.casefold() in traced:
+            raise ValueError(f"{room} is already a tinted room; outline only floor that isn't tinted, with a use "
+                             "name no tinted room has.")
+        points = row.get("points_px")
+        if not isinstance(points, list) or len(points) < 3:
+            raise ValueError(f"The outline for {room} needs at least three corner points.")
+        polygon = Polygon([_to_page(point, transform) for point in points])
+        if not polygon.is_valid or polygon.area <= 0:
+            raise ValueError(f"The outline for {room} crosses itself or has no area.")
+        spaces.append({"room": allowed[room.casefold()], "points": list(polygon.exterior.coords)[:-1],
+                       "reason": str(row.get("reason", ""))[:300]})
+    return spaces
+
+
 def room_naming_prompt(room_names, area_count):
     rooms = ", ".join(room_names)
     return ("The image is one architectural floor plan. Enclosed areas are tinted and numbered 1 to "
@@ -335,7 +435,9 @@ def room_naming_prompt(room_names, area_count):
             "rooms with no wall between them, give a split: a line in image pixels drawn along the drawn feature that "
             "separates them (counter edge, floor-finish change, bulkhead), and one point inside each room. "
             "A room may cover more than one numbered area; give each of them the same name. "
-            "Use only the room names given. Reply with JSON only:\n"
+            "If an area is a room but none of those names fits (drawings often leave the main dining or sales space "
+            f"unlabelled), name it by its use with one of: {', '.join(USE_ROOM_NAMES)}. Answer every numbered area. "
+            "Use only these names. Reply with JSON only:\n"
             "{\"areas\": [{\"number\": int, \"room\": string}],\n"
             " \"splits\": [{\"number\": int, \"line_px\": [[x, y], ...], \"rooms\": [{\"room\": string, \"point_px\": [x, y]}],"
             " \"feature\": string}]}")
@@ -346,11 +448,14 @@ def _to_page(point, transform):
     return (point[0] / factor + transform["offset_px"][0], point[1] / factor + transform["offset_px"][1])
 
 
-def validate_naming_reply(reply, area_count, room_names, transform):
-    """Check the AI's naming/split reply and convert image points back to page pixels."""
+def validate_naming_reply(reply, area_count, room_names, transform, require_all=False):
+    """Check the AI's naming/split reply and convert image points back to page pixels. A room the drawings don't name
+    may be named by its use (USE_ROOM_NAMES). With require_all, every numbered area must be answered, so a room-sized
+    space can't be left out silently (replies saved before 2026-10-23 didn't have to)."""
     if not isinstance(reply, dict) or not isinstance(reply.get("areas"), list):
         raise ValueError("Naming reply must contain an areas list.")
-    allowed = {name.casefold(): name for name in room_names}
+    allowed = {name.casefold(): name for name in USE_ROOM_NAMES}
+    allowed.update({name.casefold(): name for name in room_names})
     names, used = {}, Counter()
     for row in reply["areas"]:
         number = row.get("number") if isinstance(row, dict) else None
@@ -390,6 +495,12 @@ def validate_naming_reply(reply, area_count, room_names, transform):
     clashes = sorted(room for room in split_rooms if room in set(names.values()))
     if clashes or any(sum(item["room"] == room for split in splits for item in split["rooms"]) > 1 for room in split_rooms):
         raise ValueError("A room split out of one area cannot also be given to another area: " + ", ".join(clashes or sorted(split_rooms)) + ".")
+    if require_all:
+        answered = set(names) | {split["area_index"] for split in splits}
+        missing = [index + 1 for index in range(area_count) if index not in answered]
+        if missing:
+            raise ValueError("Answer every numbered area (a listed room, a room named by its use, or not_a_room); "
+                             "missing: " + ", ".join(str(number) for number in missing) + ".")
     return names, splits
 
 
@@ -585,8 +696,10 @@ def outline_prompt(room_names, references=()):
              "own, and the larger room is drawn around its whole space; the inner room's area is taken off it. Name the "
              "drawn feature you followed for any side without a wall. Where no name is printed, recognise a room by "
              "what is drawn in it: cooking equipment and benches for a kitchen, insulated panel rooms with shelving for "
-             "a coolroom or freezer, tables and seats for a dining area or shop. Draw every room in the list; if a room "
-             "really is not on ")
+             "a coolroom or freezer, tables and seats for a dining area or shop. Also draw any other room-sized space "
+             "inside the tenancy that none of the listed names covers (drawings often leave the main dining or sales "
+             f"area unlabelled), naming it by its use with one of: {', '.join(USE_ROOM_NAMES)}. Draw every room in the "
+             "list; if a room really is not on ")
     if not references:
         return ("The image is one architectural floor plan. Draw the outline of each of these rooms: " + rooms + ". "
                 + shape + "this plan, put it under not_drawn with the reason. Give coordinates in image pixels. "
@@ -688,9 +801,12 @@ def wall_coverage(edge, segments, mm_per_px, max_offset_mm=400, max_angle_deg=8)
 
 
 def validate_outline_reply(reply, room_names, transform):
+    """The drawn outlines, for the listed rooms and for spaces no listed name covers, named by their use
+    (USE_ROOM_NAMES)."""
     if not isinstance(reply, dict) or not isinstance(reply.get("rooms"), list):
         raise ValueError("Outline reply must contain a rooms list.")
-    allowed = {name.casefold(): name for name in room_names}
+    allowed = {name.casefold(): name for name in USE_ROOM_NAMES}
+    allowed.update({name.casefold(): name for name in room_names})
     outlines, seen = [], set()
     for row in reply["rooms"]:
         room = str((row or {}).get("room", "")).strip()
