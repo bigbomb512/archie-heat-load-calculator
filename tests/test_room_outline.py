@@ -178,9 +178,24 @@ def outline_checks():
     outlines = ro.validate_outline_reply({"rooms": [{"room": "Counter", "points_px": [[0, 0], [100, 0], [100, 60], [0, 60]],
                                                      "open_sides": "tenancy line"}]}, ["Counter"], transform)
     check("an AI outline is converted back to page pixels", outlines[0]["points"][2] == (300.0, 170.0))
-    expect_error("a self-crossing outline is refused",
-                 lambda: ro.validate_outline_reply({"rooms": [{"room": "Counter", "points_px": [[0, 0], [100, 100], [100, 0], [0, 100]]}]},
-                                                   ["Counter"], transform), "crosses itself")
+    bow = ro.validate_outline_reply({"rooms": [{"room": "Counter", "points_px": [[0, 0], [100, 100], [100, 0], [0, 100]]}]},
+                                    ["Counter"], transform)
+    check("a self-crossing outline is split where it crosses and kept as parts of the room",
+          len(bow) == 2 and all(row["room"] == "Counter" and row.get("repaired") for row in bow))
+    expect_error("an outline with no area is still refused",
+                 lambda: ro.validate_outline_reply({"rooms": [{"room": "Counter", "points_px": [[0, 0], [50, 0], [100, 0]]}]},
+                                                   ["Counter"], transform), "no area")
+    # Casa Nova (2026-10-24): the AI's Dining outline looped around the bar and crossed itself; refused twice, the
+    # dining area was never traced. Repaired, it is two pieces of about 100 and 56 m² at the job's scale.
+    casa_nova_dining = [[1168.9, 230.1], [1430.0, 230.1], [1450.0, 522.5], [1374.7, 575.8], [1239.6, 576.6], [1239.6, 602.0],
+                        [1188.9, 604.4], [1168.9, 585.6], [1138.2, 585.6], [1132.0, 593.8], [1030.7, 595.4], [1030.7, 584.8],
+                        [1058.3, 583.9], [1059.8, 407.0], [927.7, 406.2], [752.6, 390.7], [723.5, 363.6], [752.6, 336.6],
+                        [927.7, 324.3], [1059.8, 324.3], [1061.4, 262.9], [1072.1, 261.3], [1072.1, 162.2], [1047.6, 161.3],
+                        [1044.5, 22.1], [800.3, 18.0], [543.7, 39.3], [428.5, 90.1], [428.5, 623.3]]
+    dining = ro.validate_unnamed_space_reply({"spaces": [{"room": "Dining", "points_px": casa_nova_dining, "reason": "main dining"}]},
+                                             ["Bar", "Kitchen"], {"offset_px": [0, 0], "factor": 1})
+    areas = sorted((Polygon(row["points"]).area for row in dining), reverse=True)
+    check("a self-crossing Dining outline becomes its two floor pieces", len(dining) == 2 and 1.6 < areas[0] / areas[1] < 2.0)
     expect_error("a room outlined twice is refused",
                  lambda: ro.validate_outline_reply({"rooms": [{"room": "Counter", "points_px": [[0, 0], [9, 0], [9, 9]]}] * 2},
                                                    ["Counter"], transform), "twice")
@@ -369,7 +384,22 @@ def unnamed_space_and_window_checks():
           all(name in ro.unnamed_space_prompt(["Bar"]) for name in (*ro.USE_ROOM_NAMES, "Bar")))
 
 
+def tenancy_checks():
+    # Casa Nova (2026-10-24): the AI's Dining outline ran out over the outdoor seating beyond the shopfront.
+    transform = {"offset_px": [0, 0], "factor": 1.0}
+    tenancy = ro.validate_tenancy_outline_reply({"points_px": [[0, 0], [400, 0], [400, 200], [0, 200]], "evidence": "glazing"}, transform)
+    check("the tenancy outline comes back in page pixels", Polygon(tenancy["points"]).area == 80000 and not tenancy["repaired"])
+    expect_error("a tenancy reply without an outline is refused",
+                 lambda: ro.validate_tenancy_outline_reply({"points_px": [[0, 0], [1, 1]]}, transform), "three corner points")
+    inside = ro.clip_to_tenancy(box(300, 100, 600, 300), Polygon(tenancy["points"]), mm_per_px=10)
+    check("an outline spilling outside the tenancy is cut back to it (with a small allowance for the wall)",
+          len(inside) == 1 and abs(inside[0].bounds[2] - 430) < 1e-6 and abs(inside[0].bounds[3] - 230) < 1e-6)
+    check("an outline wholly outside is dropped", ro.clip_to_tenancy(box(800, 800, 900, 900), Polygon(tenancy["points"]), 10) == [])
+    check("no tenancy outline leaves the room as drawn", ro.clip_to_tenancy(box(0, 0, 5, 5), None, 10)[0].area == 25)
+
+
 def main():
+    tenancy_checks()
     unnamed_space_and_window_checks()
     page_origin_checks()
     wall_style_completion_checks()

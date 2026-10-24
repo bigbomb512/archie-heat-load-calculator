@@ -397,6 +397,64 @@ def unnamed_space_prompt(traced_names):
             "{\"spaces\": [{\"room\": string, \"points_px\": [[x, y], ...], \"reason\": string}]}")
 
 
+REPAIR_KEEP_SHARE = 0.05
+
+
+def outline_parts(page_points, room):
+    """The valid floor pieces of an AI outline, and whether it had to be repaired.
+
+    An outline drawn around a room inside another (a bar in a dining area) often crosses itself; it is split where it
+    crosses and the pieces are kept as parts of the same room, instead of refusing the reply (Casa Nova, 2026-10-24:
+    the Dining outline was refused twice and the dining area never traced). Slivers under 5% of the whole are dropped.
+    An outline with no area is still refused."""
+    from shapely.validation import make_valid
+    polygon = Polygon(page_points)
+    if polygon.is_valid and polygon.area > 0:
+        return [list(polygon.exterior.coords)[:-1]], False
+    fixed = make_valid(polygon)
+    pieces = [part for part in getattr(fixed, "geoms", [fixed]) if part.geom_type == "Polygon" and part.area > 0]
+    pieces += [inner for part in getattr(fixed, "geoms", [fixed]) if part.geom_type == "MultiPolygon" for inner in part.geoms]
+    total = sum(piece.area for piece in pieces)
+    kept = [piece for piece in pieces if total > 0 and piece.area >= REPAIR_KEEP_SHARE * total]
+    if not kept:
+        raise ValueError(f"The outline for {room} has no area.")
+    return [list(piece.exterior.coords)[:-1] for piece in sorted(kept, key=lambda piece: -piece.area)], True
+
+
+TENANCY_MIN_M2 = 5.0
+TENANCY_CLIP_TOLERANCE_MM = 300.0
+
+
+def tenancy_outline_prompt():
+    return ("The image is one architectural floor plan. Outline this tenancy: the floor that belongs to the shop or "
+            "restaurant, inside its shopfront glazing and its outer walls. Give the corner points in order around it, "
+            "following the inside face of the outer walls and the shopfront glazing line; around a curved shopfront, use "
+            "enough points to follow the curve. Leave out everything outside: the footpath, mall, outdoor seating and "
+            "planters beyond the shopfront, neighbouring tenancies, stairs and services outside the walls. Give "
+            "coordinates in image pixels. Reply with JSON only:\n"
+            "{\"points_px\": [[x, y], ...], \"evidence\": string}")
+
+
+def validate_tenancy_outline_reply(reply, transform):
+    """The tenancy's floor outline in page pixels, one polygon (the largest piece when the AI's outline crossed
+    itself)."""
+    if not isinstance(reply, dict) or not isinstance(reply.get("points_px"), list) or len(reply["points_px"]) < 3:
+        raise ValueError("The reply must give the tenancy outline as at least three corner points.")
+    parts, repaired = outline_parts([_to_page(point, transform) for point in reply["points_px"]], "the tenancy")
+    return {"points": parts[0], "repaired": repaired, "evidence": str(reply.get("evidence", ""))[:300]}
+
+
+def clip_to_tenancy(polygon, tenancy, mm_per_px, min_m2=MIN_ROOM_M2):
+    """The pieces of an AI-drawn room outline inside the tenancy (with a small allowance so walls aren't shaved), so
+    a room can't spill onto the paving, a mall or a neighbour (Casa Nova, 2026-10-24: the Dining outline ran out over
+    the outdoor seating). No tenancy outline: the room as drawn."""
+    if tenancy is None or tenancy.is_empty:
+        return [polygon]
+    inside = polygon.intersection(tenancy.buffer(TENANCY_CLIP_TOLERANCE_MM / mm_per_px, join_style=2))
+    return [part for part in getattr(inside, "geoms", [inside])
+            if part.geom_type == "Polygon" and not part.is_empty and area_m2(part, mm_per_px) >= min_m2]
+
+
 def validate_unnamed_space_reply(reply, traced_names, transform):
     """The untinted spaces the AI outlined, named by their use; none is a valid answer. A name already traced on the
     plan is refused (that room is tinted; its floor isn't missing)."""
@@ -415,11 +473,9 @@ def validate_unnamed_space_reply(reply, traced_names, transform):
         points = row.get("points_px")
         if not isinstance(points, list) or len(points) < 3:
             raise ValueError(f"The outline for {room} needs at least three corner points.")
-        polygon = Polygon([_to_page(point, transform) for point in points])
-        if not polygon.is_valid or polygon.area <= 0:
-            raise ValueError(f"The outline for {room} crosses itself or has no area.")
-        spaces.append({"room": allowed[room.casefold()], "points": list(polygon.exterior.coords)[:-1],
-                       "reason": str(row.get("reason", ""))[:300]})
+        parts, repaired = outline_parts([_to_page(point, transform) for point in points], room)
+        spaces.extend({"room": allowed[room.casefold()], "points": part, "reason": str(row.get("reason", ""))[:300],
+                       **({"repaired": True} if repaired else {})} for part in parts)
     return spaces
 
 
@@ -818,12 +874,9 @@ def validate_outline_reply(reply, room_names, transform):
         points = row.get("points_px")
         if not isinstance(points, list) or len(points) < 3:
             raise ValueError(f"The outline for {room} needs at least three corner points.")
-        page_points = [_to_page(point, transform) for point in points]
-        polygon = Polygon(page_points)
-        if not polygon.is_valid or polygon.area <= 0:
-            raise ValueError(f"The outline for {room} crosses itself or has no area.")
-        outlines.append({"room": allowed[room.casefold()], "points": page_points,
-                         "open_sides": str(row.get("open_sides", ""))[:300]})
+        parts, repaired = outline_parts([_to_page(point, transform) for point in points], room)
+        outlines.extend({"room": allowed[room.casefold()], "points": part, "open_sides": str(row.get("open_sides", ""))[:300],
+                         **({"repaired": True} if repaired else {})} for part in parts)
     return outlines
 
 

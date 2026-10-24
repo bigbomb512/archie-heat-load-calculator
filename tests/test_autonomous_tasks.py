@@ -536,6 +536,36 @@ class AutonomousTaskTests(unittest.TestCase):
             self.assertEqual(record["applied_value"]["dropped"][0]["room"], "Store")             # mostly the bar: dropped
             self.assertEqual([row["label"] for row in room_proposal.use_named_rooms(root)], ["Dining"])
 
+    def test_untinted_floor_is_kept_inside_the_tenancy(self):
+        from PIL import Image
+        from shapely.geometry import box as shape_box
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            record = {"run_id": "run-1", "quality_label": "AI-determined (below accuracy bar)", "accuracy": {"auto_apply": False},
+                      "packet": {"page": 33, "calibration": {"status": "agreed", "mm_per_px": 50.0}}}
+            spill = [{"room": "Dining", "points": [(0, 0), (600, 0), (600, 400), (0, 400)], "reason": "runs over the paving"}]
+            saved = {}
+            with patch.object(autonomous_tasks_service, "_p0_context", return_value={"image": Image.new("RGB", (10, 10)), "viewport": (0, 0, 10, 10)}), \
+                    patch.object(autonomous_tasks_service, "_p0_is_raster", return_value=True), \
+                    patch.object(autonomous_tasks_service, "_p0_walls_areas", return_value=(None, [], [])), \
+                    patch.object(autonomous_tasks_service, "_tenancy_polygon", return_value=shape_box(0, 100, 600, 400)), \
+                    patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "current_records", return_value=[]), \
+                    patch.object(autonomous_tasks_service, "_p0_trace_rows", side_effect=lambda _root, _record, polygons: polygons), \
+                    patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "persist_ai_determined_traces",
+                                 side_effect=lambda web, project, rows, *args, **kwargs: saved.update(rows=rows) or []):
+                autonomous_tasks_service._apply_p0_unnamed_space(None, {"id": "job", "review_dir": str(root)}, root, record, spill)
+            bounds = saved["rows"][0]["polygon"].bounds
+            self.assertAlmostEqual(bounds[1], 100 - 300 / 50)     # cut back to the tenancy, less a 300 mm allowance
+
+    def test_room_outlines_wait_for_the_tenancy_outline_of_their_page(self):
+        with patch.object(autonomous_tasks_service, "_p0_main_geometry_pages", return_value=[{"page": 33}]), \
+                patch.object(autonomous_tasks_service, "_current_task",
+                             side_effect=lambda root, task, target: {"status": "waiting_for_reply", "reply_attempts": []}
+                             if task == "P0_tenancy_outline" else None), \
+                patch.object(autonomous_tasks_service, "_all_current", return_value=[]):
+            self.assertEqual(autonomous_tasks_service._p0_outline_packets(Path("/nonexistent")), [])
+            self.assertEqual(autonomous_tasks_service._p0_unnamed_space_packets(Path("/nonexistent")), [])
+
     def test_rooms_named_by_their_use_join_the_room_list_per_step(self):
         from backend import room_proposal
         with TemporaryDirectory() as temporary:
@@ -547,9 +577,9 @@ class AutonomousTaskTests(unittest.TestCase):
                              {("Dining", "Unassigned level", "named_by_use"), ("Store", "Unassigned level", "named_by_use")})
             room_proposal.save_use_named_rooms(root, "P0_room_names", 33, "", [], "run-3")   # a new answer replaces its own
             self.assertEqual([row["label"] for row in room_proposal.room_proposal({}, root)["rooms"]], ["Store"])
-        with self.assertRaisesRegex(ValueError, "crosses itself"):
-            room_outline.validate_outline_reply({"rooms": [{"room": "Shop", "points_px": [[0,0],[10,10],[0,10],[10,0]]}],
-                "open_sides": "counter"}, ["Shop"], {"offset_px": [0, 0], "factor": 1})
+        crossed = room_outline.validate_outline_reply({"rooms": [{"room": "Shop", "points_px": [[0,0],[10,10],[0,10],[10,0]]}],
+            "open_sides": "counter"}, ["Shop"], {"offset_px": [0, 0], "factor": 1})
+        self.assertTrue(crossed and all(row["room"] == "Shop" and row["repaired"] for row in crossed))
 
     def test_p3_boundary_validator_requires_evidence_and_protects_storefront(self):
         packet = {"edges": [{"index": 0}, {"index": 1}], "shared_edges": [1], "storefront_edge_index": 0}

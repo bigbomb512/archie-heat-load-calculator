@@ -184,6 +184,21 @@ There is now a separate step, **`P0_unnamed_space`** ("Checking for floor with n
 - **Checks:** a use name that isn't already a traced room; at least 4 m² once the traced rooms it overlaps are removed.
 - **Saving:** these rooms are saved like the other rooms named by their use.
 
+**Repairs after the third Casa Nova run (2026-10-24):**
+- **Self-crossing outlines:** an AI outline that crosses itself, usually one drawn around an inner room, is split where
+  it crosses and kept as parts of the room (`room_outline.outline_parts`). It used to be refused.
+- **Unanswered floor-with-no-room check:** the model check treats it as a first-priority gap.
+- **Model-check notes:** worded as what to look at, never as a finding. An AI read "no applied shopfront glass" as a
+  fact and excluded the whole shopfront.
+- **Glass questions:** fitted to their 2,000-character budget instead of being blocked.
+- **New step, `P0_tenancy_outline`** ("Outlining the tenancy"):
+  - **When:** asked once per main plan as soon as its scale is known; the outline steps wait for it.
+  - **What it asks:** the floor inside the shopfront glazing and the outer walls.
+  - **Clipping:** AI-drawn room outlines are clipped to it, with a 300 mm allowance, so a room can't spill onto the
+    paving, a mall or a neighbour (`room_outline.clip_to_tenancy`).
+  - **Door detection was dropped:** finding doors from their swing arcs was tried first. On Casa Nova the door swings
+    are drawn as many short segments, not arcs, and the dining floor still leaked somewhere else.
+
 A code-measured tenancy outline was tried and rejected: Casa Nova's floor is open to the outside at the entry doors and
 to the kitchen through the servery, so no closed outline comes out of its walls.
 

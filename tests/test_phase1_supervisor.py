@@ -37,6 +37,16 @@ class AuditTests(unittest.TestCase):
         gap = supervisor.audit(snapshot(tasks=[record]))[0]
         self.assertEqual((gap["rank"], gap["task"], gap["target"]), (2, "P5_roof", "shop"))
 
+    def test_an_unanswered_check_for_floor_with_no_room_is_a_first_priority_gap(self):
+        # Casa Nova (2026-10-24): the Dining answer was refused twice and nothing reported the untraced dining area.
+        record = {"task": "P0_unnamed_space", "target": "page-33", "packet": {"page": 33}, "status": "waiting_for_reply"}
+        gap = supervisor.audit(snapshot(tasks=[record]))[0]
+        self.assertEqual((gap["rank"], gap["kind"], gap["task"], gap["target"], gap["pages"]),
+                         (1, "missing_room", "P0_unnamed_space", "page-33", [33]))
+        self.assertIn("floor that no traced room covers", supervisor.group_investigations([gap])[0]["note"])
+        answered = {**record, "status": "below_accuracy_bar"}
+        self.assertEqual(supervisor.audit(snapshot(tasks=[answered])), [])
+
     def test_missing_storefront_glass_is_found_in_model_even_when_skills_claim_success(self):
         value = snapshot(storefront_pages=[25], skill_proposals={"glazing_properties": {"status": "completed"}})
         gap = supervisor.audit(value)[0]

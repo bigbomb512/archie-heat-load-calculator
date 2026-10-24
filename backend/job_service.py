@@ -352,7 +352,7 @@ def _typed_since_result(root):
     return any(path.exists() and path.stat().st_mtime > report.stat().st_mtime for path in typed)
 
 
-AREA_STEPS = {"P0_dimensions", "P0_wall_styles", "P0_room_names", "P0_room_outlines", "P0_unnamed_space", "S1_printed_areas", "P0_room_sizes"}
+AREA_STEPS = {"P0_dimensions", "P0_wall_styles", "P0_room_names", "P0_room_outlines", "P0_unnamed_space", "P0_tenancy_outline", "S1_printed_areas", "P0_room_sizes"}
 
 
 def _areas_still_being_found(tasks):

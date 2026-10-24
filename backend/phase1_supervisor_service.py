@@ -183,6 +183,17 @@ def audit(snapshot):
             add(1, "room_use", candidate, "room_identity_use",
                 f"Check how {_name(candidate.get('name'))} is used so the model can resolve whether it is cooled.")
 
+    # Floor no traced room covers: the check for it is per plan page, not per room (2026-10-24: Casa Nova's Dining
+    # answer was refused and nothing reported the untraced dining area).
+    for record in records:
+        if record.get("task") == "P0_unnamed_space" and (not record.get("current", True)
+                                                          or record.get("status") in {"failed", "blocked", "waiting_for_reply"}):
+            page = (record.get("packet") or {}).get("page")
+            add(1, "missing_room", {"id": f"floor:{record.get('target')}", "name": "the untraced floor",
+                                    "pages": [page] if type(page) is int else []},
+                "P0_unnamed_space", f"Check plan page {page} for floor that no traced room covers (drawings often leave "
+                "the main dining or sales area unlabelled); that check wasn't answered.", target=record.get("target"))
+
     for room in rooms:
         label = _name(room.get("name"))
         traces = room.get("traces", [])
@@ -208,7 +219,7 @@ def audit(snapshot):
             opening = next((row for row in records if row.get("task") == "P4_openings" and (
                 (row.get("packet") or {}).get("room_id") == room.get("id") or _key((row.get("packet") or {}).get("room_label")) == _key(label))), None)
             add(3, "storefront_glass", room, "P4_openings" if opening else "P4_storefront_wall",
-                f"Check {label}'s shopfront glass against the elevation; no glass reached the empty-room model.",
+                f"Read {label}'s shopfront glass panel by panel from the elevation; the empty-room model needs its glazed widths.",
                 pages=storefront, target=opening.get("target") if opening else None)
         if height_pages and room.get("height", {}).get("origin") == "preliminary_fallback":
             add(4, "ceiling_height", room, "P7_ceiling_heights", f"Check {label}'s ceiling height on the labelled ceiling plan, elevation or section.", pages=height_pages)
@@ -298,12 +309,16 @@ def group_investigations(gaps):
         item["pages"] = sorted(set([*item["pages"], *gap["pages"]]))
         item["notes"].append(gap["note"])
         item["kinds"].append(gap["kind"])
-        descriptions = {"room_area": "missing or estimated room outlines and areas", "room_use": "unresolved room use",
-            "unanswered": "an unanswered drawing check", "storefront_glass": "no applied shopfront glass",
-            "ceiling_height": "a fallback ceiling height despite printed height labels",
-            "internal_perimeter": "an internal perimeter despite a shopfront elevation", "unknown_walls": "unknown wall boundaries",
-            "roof": "unknown or assumed roof exposure", "zero_load": "a zero envelope load", "zero_tenancy": "a zero tenancy load",
-            "omitted_room": "a room omitted from the empty-room result"}
+        # Worded as what to look at, never as a finding: an AI read "no applied shopfront glass" as a fact about the
+        # drawing and excluded the whole shopfront (Casa Nova, 2026-10-24).
+        descriptions = {"room_area": "the room outline and area", "room_use": "how the room is used",
+            "unanswered": "the drawing check that wasn't answered", "storefront_glass": "the shopfront glass, panel by panel, on the elevation",
+            "ceiling_height": "the ceiling height printed on the drawings",
+            "internal_perimeter": "which walls face outside (a shopfront elevation exists)", "unknown_walls": "what each unclassified wall faces",
+            "roof": "what is above the room", "zero_load": "whether the room has an outside wall, roof or glass",
+            "zero_tenancy": "whether the tenancy has an outside wall, roof or glass",
+            "omitted_room": "why the room is missing from the empty-room result",
+            "missing_room": "floor that no traced room covers"}
         item["note"] = ("For " + ", ".join(item["room_names"]) + ", check "
             + "; ".join(descriptions[kind] for kind in dict.fromkeys(item["kinds"])) + "."
             + (" Start with drawing pages " + ", ".join(map(str, item["pages"])) + "." if item["pages"] else ""))

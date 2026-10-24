@@ -927,6 +927,8 @@ def _p0_outline_packets(root, requested_rooms=None):
     result = []
     for page in _p0_main_geometry_pages(root):
         number = page["page"]
+        if not requested_rooms and _tenancy_waiting(root, number):
+            continue      # its outlines are clipped to the tenancy once that is answered
         names_record = _current_task(root, "P0_room_names", f"page-{number}")
         if names_record and names_record.get("status") not in {"applied", "below_accuracy_bar"}: continue
         wall_records = _p0_wall_style_records(root, number)
@@ -979,22 +981,88 @@ def _p0_outline_packets(root, requested_rooms=None):
 # Where a room's area came from when no outline could measure it (P0_room_sizes), as shown in the result.
 ROOM_SIZE_SOURCES = {"printed_area": "printed (read from image)", "printed_dimensions": "printed dimensions",
                      "estimated": "AI estimate from the plan", "remainder": "tenancy area remainder"}
-OUTLINE_STEPS = {"P0_dimensions", "P0_wall_styles", "P0_room_names", "P0_room_outlines", "P0_unnamed_space", "S1_printed_areas"}
+OUTLINE_STEPS = {"P0_dimensions", "P0_wall_styles", "P0_room_names", "P0_tenancy_outline", "P0_room_outlines", "P0_unnamed_space",
+                 "S1_printed_areas"}
 
 
-def _p0_unnamed_space_packets(root):
+def _p0_tenancy_packets(root, force=False):
+    """The tenancy's floor outline (2026-10-24), asked once per main plan as soon as its scale is known: AI-drawn room
+    outlines are clipped to it, so a room can't spill onto the paving, a mall or a neighbour."""
+    result = []
+    for page in _p0_main_geometry_pages(root):
+        number = page["page"]
+        current = _current_task(root, "P0_tenancy_outline", f"page-{number}")
+        if not force and current and current.get("status") in {"applied", "below_accuracy_bar", "waiting_for_reply"}:
+            continue
+        try:
+            context = _p0_context(root, number)
+            calibration, _error = _p0_calibration_ready(root, number, context)
+            if not calibration:
+                continue
+            image, transform = room_outline.render_candidate_areas(context["image"], [], context["viewport"])
+            packet = {"task": "P0_tenancy_outline", "page": number, "transform": transform, "calibration": calibration}
+            result.append(("P0_tenancy_outline", f"page-{number}", packet, room_outline.tenancy_outline_prompt(),
+                           [_png_bytes(image)], ""))
+        except (OSError, ValueError, IndexError, KeyError, TypeError) as error:
+            result.append(("P0_tenancy_outline", f"page-{number}", {"task": "P0_tenancy_outline", "page": number}, "", [],
+                           f"The tenancy outline is blocked: {error}"))
+    return result
+
+
+def _tenancy_waiting(root, page):
+    record = _current_task(root, "P0_tenancy_outline", f"page-{page}")
+    return bool(record and record.get("status") == "waiting_for_reply" and len(record.get("reply_attempts") or []) < 2)
+
+
+def _tenancy_polygon(root, page):
+    """The answered tenancy outline for a plan page, or None (then AI-drawn rooms aren't clipped)."""
+    from shapely.geometry import Polygon
+    record = _current_task(root, "P0_tenancy_outline", f"page-{page}")
+    points = (record or {}).get("applied_value", {}).get("points") if (record or {}).get("status") in {"applied", "below_accuracy_bar"} else None
+    if not points or len(points) < 3:
+        return None
+    polygon = Polygon(points).buffer(0)
+    return polygon if polygon.geom_type == "Polygon" and not polygon.is_empty else None
+
+
+def _apply_p0_tenancy_outline(root, record, validated):
+    """Snap the tenancy outline to the drawn lines and keep it when it is at least a small room's size."""
+    from shapely.geometry import Polygon
+    packet = record["packet"]
+    mm_per_px = float(packet["calibration"]["mm_per_px"])
+    context = _p0_context(root, packet["page"])
+    styles = [row["style_id"] for row in context.get("summary", []) if not row.get("hatch")]
+    segments = room_outline.drawn_segments(context["objects"], styles, min_length_px=1000.0 / mm_per_px)
+    polygon, report = room_outline.snap_polygon(validated["points"], segments, 250 / mm_per_px)
+    if not polygon.is_valid or polygon.is_empty:
+        polygon, report = Polygon(validated["points"]), {"snapped_edges": 0, "edges": len(validated["points"])}
+    area = room_outline.area_m2(polygon, mm_per_px)
+    if area < room_outline.TENANCY_MIN_M2:
+        raise ValueError(f"The tenancy outline encloses only {area:.1f} m²; outline the whole floor inside the shopfront and outer walls.")
+    record.update({"status": _status_for_accuracy("ai_determined", record["accuracy"]), "source": "ai_determined",
+                   "applied_value": {"points": [[round(float(x), 2), round(float(y), 2)] for x, y in polygon.exterior.coords][:-1],
+                                     "area_m2": round(area, 1), "repaired": validated["repaired"],
+                                     "evidence": validated["evidence"], "snapped_edges": report["snapped_edges"],
+                                     "edges": report["edges"], "label": record["quality_label"]},
+                   "validation": validated, "block_reason": ""})
+    return record
+
+
+def _p0_unnamed_space_packets(root, force=False):
     """Floor with no room (2026-10-23): once the naming and outline steps are answered, show each main plan with its
     traced rooms tinted and ask once for any untinted room-sized floor, named by its use. Drawings often leave the main
     dining or sales space unlabelled (Casa Nova: 53 m² of rooms traced in a tenancy of about 250 m²)."""
-    if any(record.get("task") in OUTLINE_STEPS - {"P0_unnamed_space"} and record.get("status") == "waiting_for_reply"
-           and len(record.get("reply_attempts") or []) < 2 for record in _all_current(root)):
+    if not force and any(record.get("task") in OUTLINE_STEPS - {"P0_unnamed_space"} and record.get("status") == "waiting_for_reply"
+                         and len(record.get("reply_attempts") or []) < 2 for record in _all_current(root)):
         return []
     from shapely.geometry import Polygon
     result = []
     for page in _p0_main_geometry_pages(root):
         number = page["page"]
+        if not force and _tenancy_waiting(root, number):
+            continue
         current = _current_task(root, "P0_unnamed_space", f"page-{number}")
-        if current and current.get("status") in {"applied", "below_accuracy_bar", "waiting_for_reply"}:
+        if not force and current and current.get("status") in {"applied", "below_accuracy_bar", "waiting_for_reply"}:
             continue
         try:
             context = _p0_context(root, number)
@@ -1824,13 +1892,25 @@ def _p4_packets(root, only_room_id=None):
                 raw=page_ocr.get(field,[])
                 if isinstance(raw,str): text_layer.extend(raw.splitlines())
                 elif isinstance(raw,list): text_layer.extend(str(item.get("text",item)) if isinstance(item,dict) else str(item) for item in raw)
-            prompt=("The image is a shopfront/external elevation for the selected outside wall run. List each glazed panel, excluding signage, solid panels and open doorways. "
+            # The question must fit its 2,000-character budget: the room's wall pieces go as one length (the code keeps the
+            # list), and the elevation's text goes dimension-like first, trimmed until it fits. A room spanning several
+            # shopfront stretches was refused outright (Casa Nova, 2026-10-24).
+            text_layer=sorted(dict.fromkeys(item.strip() for item in text_layer if item and item.strip()),
+                              key=lambda item:(not re.search(r"\d{3,}",item), len(item)))[:60]
+            def opening_prompt(texts):
+              return ("The image is a shopfront/external elevation for the selected outside wall run. List each glazed panel, excluding signage, solid panels and open doorways. "
                 "Use printed dimensions only; quote exact text. Return null for unprinted sill/head/width. Missing sill is assumed 0 (glass to floor); missing head is assumed ceiling height. "
                 "For vector-outline text, list each glazed panel and each excluded solid part (roller shutter, signage, or door), with width_mm when readable. Glazed widths must not exceed the total. Glazed plus stated excluded widths must sum to the read total within 5%; if any excluded width is unreadable, leave it null and the sum check will be skipped with a note. Outlines use inside faces; elevations give overall widths. Accept 0 <= total_mm - span_mm <= 600 (two wall thicknesses) OR |total-span|/span <= 2%. "
                 "JSON only: {\"total_width_mm\":number,\"total_width_text\":string,\"panels\":[{\"label\":string,\"width_mm\":number|null,\"sill_mm\":number|null,\"head_mm\":number|null,\"printed_text\":[string],\"source\":\"printed_text|read_from_image\"}],\"excluded\":[{\"label\":string,\"width_mm\":number|null,\"why\":string}]}\n\n"
                 +json.dumps({"page":page,"room":trace.get("room_label"),"perimeter_run_numbers":[index+1 for index in run_indices],
-                    "room_part_edges":part_edges,"perimeter_run_span_m":run_span,"ceiling_height_mm":ceiling,
-                    "text_layer":text_layer[:60]},ensure_ascii=False,separators=(",",":")))
+                    "room_length_on_run_m":round(sum(float(row["length_m"]) for row in part_edges),2),
+                    "perimeter_run_span_m":run_span,"ceiling_height_mm":ceiling,
+                    "text_layer":texts},ensure_ascii=False,separators=(",",":")))
+            kept=len(text_layer)
+            prompt=opening_prompt(text_layer)
+            while len(prompt)>2000 and kept>0:
+                kept-=1
+                prompt=opening_prompt(text_layer[:kept])
             if len(prompt)>2000:
                 result.append(("P4_openings",target,{"task":"P4_openings","room":trace.get("room_label"),"page":page},"",[],
                     "Opening prompt exceeds 2,000 characters; evidence was not shortened.")); continue
@@ -1990,10 +2070,14 @@ def _apply_p0_outlines(web, project, root, record, validated):
         record["packet"].get("wall_style_ids", []), record["packet"].get("raster_mode", False))
     snap_px = 250 / record["packet"]["calibration"]["mm_per_px"]
     polygons = []
+    tenancy = _tenancy_polygon(root, record["packet"]["page"])
+    mm_per_px = float(calibration["mm_per_px"])
     for row in validated:
-        polygon, report = room_outline.snap_polygon(row["points"], segments, snap_px)
-        polygons.append({"label":row["room"], "polygon":polygon, "method":"ai_outline_snapped",
-                         "note":f"Open sides: {row.get('open_sides','')}; snapped {report['snapped_edges']}/{report['edges']} edges"})
+        snapped, report = room_outline.snap_polygon(row["points"], segments, snap_px)
+        note = (f"Open sides: {row.get('open_sides','')}; snapped {report['snapped_edges']}/{report['edges']} edges"
+                + ("; the AI's outline crossed itself and was split where it crossed" if row.get("repaired") else ""))
+        polygons.extend({"label":row["room"], "polygon":polygon, "method":"ai_outline_snapped", "note":note}
+                        for polygon in room_outline.clip_to_tenancy(snapped, tenancy, mm_per_px))
     # Rooms already traced on this page by the enclosed-wall step (e.g. a walled bar island) stay, and are taken off
     # an outer room drawn around them, like the rooms in this reply.
     asked = {str(name).casefold() for name in record["packet"].get("room_names", [])}
@@ -2043,17 +2127,22 @@ def _apply_p0_unnamed_space(web, project, root, record, validated):
                   reviewer_room_geometry_service._paths(project))
               if row.get("page") == page and len(row.get("points_image_px") or []) >= 4]
     taken = unary_union(traced) if traced else None
+    tenancy = _tenancy_polygon(root, page)
     polygons, dropped = [], []
     for row in validated:
         polygon, report = room_outline.snap_polygon(row["points"], segments, 250 / mm_per_px) if segments else (Polygon(row["points"]), {"snapped_edges": 0, "edges": len(row["points"])})
+        inside = room_outline.clip_to_tenancy(polygon, tenancy, mm_per_px, min_m2=0)
+        polygon = unary_union(inside) if inside else Polygon()
         net = polygon.difference(taken) if taken is not None else polygon
-        if net.geom_type == "MultiPolygon":
-            net = max(net.geoms, key=lambda part: part.area)
-        if net.is_empty or room_outline.area_m2(net, mm_per_px) < room_outline.UNNAMED_SPACE_MIN_M2:
+        pieces = [piece for piece in getattr(net, "geoms", [net]) if piece.geom_type == "Polygon" and not piece.is_empty
+                  and room_outline.area_m2(piece, mm_per_px) >= room_outline.UNNAMED_SPACE_MIN_M2]
+        if not pieces:
             dropped.append({"room": row["room"], "reason": "Mostly inside rooms already traced, or smaller than a room."})
             continue
-        polygons.append({"label": row["room"], "polygon": net, "method": "ai_outline_snapped",
-                         "note": f"Named by its use: {row['reason']}; snapped {report['snapped_edges']}/{report['edges']} edges"})
+        note = (f"Named by its use: {row['reason']}; snapped {report['snapped_edges']}/{report['edges']} edges"
+                + ("; the AI's outline crossed itself and was split where it crossed" if row.get("repaired") else ""))
+        polygons.extend({"label": row["room"], "polygon": piece, "method": "ai_outline_snapped", "note": note}
+                        for piece in pieces)
     names = sorted({row["label"] for row in polygons})
     room_proposal.save_use_named_rooms(root, "P0_unnamed_space", page, _page_level(root, page), names, record["run_id"])
     prepared = []
@@ -2385,7 +2474,7 @@ def _refresh_geometry_tasks(root, room_id=None, page_number=None):
     # If both packet lists are calculated together, the outline builder cannot
     # see the just-created naming tasks and offers an unnecessary second task.
     _refresh_site_tasks(root)
-    for packet_builder in (_p0_initial_packets, _p0_followup_packets, _p0_outline_packets, _p0_unnamed_space_packets, _s1_packets, _p0_size_packets):
+    for packet_builder in (_p0_initial_packets, _p0_followup_packets, _p0_tenancy_packets, _p0_outline_packets, _p0_unnamed_space_packets, _s1_packets, _p0_size_packets):
         for task,target,packet,prompt,images,reason in packet_builder(root):
             budget=autonomous_tasks.TASKS[task]["budget_chars"]
             _create_run(root,task,target,packet,prompt,images,reason or
@@ -2525,7 +2614,7 @@ def _run_all(web, project, root):
                      if task == "P0_dimensions" and len(prompt) > 1500 else
                      "Prompt exceeds the 3,000-character limit; evidence was not shortened."
                      if task == "P0_wall_styles" and len(prompt) > 3000 else ""))
-    for packet_builder in (_p0_followup_packets, _p0_outline_packets, _p0_unnamed_space_packets, _s1_packets, _p0_size_packets, _p3_packets, _p7_packets, _p4_packets, _p6_kitchen_packets):
+    for packet_builder in (_p0_followup_packets, _p0_tenancy_packets, _p0_outline_packets, _p0_unnamed_space_packets, _s1_packets, _p0_size_packets, _p3_packets, _p7_packets, _p4_packets, _p6_kitchen_packets):
         for task, target, packet, prompt, images, reason in packet_builder(root):
             budget = autonomous_tasks.TASKS[task]["budget_chars"]
             _create_run(root, task, target, packet, prompt, images,
@@ -2939,6 +3028,9 @@ def _post(web, project, data, *, defer_evidence_rebuild=False):
             record = _apply_p0_outlines(web, project, root, record, validated)
             record["applied_value"]["not_drawn"] = ([{"room": name, "reason": "The AI left it out."} for name in omitted]
                                                     + [{"room": name, "reason": reason} for name, reason in not_drawn.items()])
+        elif task == "P0_tenancy_outline":
+            validated = autonomous_tasks.validate_p0_tenancy_outline(record["packet"], reply)
+            record = _apply_p0_tenancy_outline(root, record, validated)
         elif task == "P0_unnamed_space":
             validated = autonomous_tasks.validate_p0_unnamed_space(record["packet"], reply)
             record = _apply_p0_unnamed_space(web, project, root, record, validated)
@@ -3025,6 +3117,8 @@ def prepare_investigation(project, investigation):
     builders = {
         "P0_room_outlines": lambda: _p0_outline_packets(root, requested_rooms=names),
         "P0_room_sizes": lambda: _p0_size_packets(root, requested_rooms=names),
+        "P0_unnamed_space": lambda: _p0_unnamed_space_packets(root, force=True),
+        "P0_tenancy_outline": lambda: _p0_tenancy_packets(root, force=True),
         "P3_boundaries": lambda: _p3_packets(root, page_number=investigation.get("plan_page"), force=True),
         "P4_storefront_wall": lambda: _p4_packets(root),
         "P4_openings": lambda: _p4_packets(root, only_room_id=investigation.get("room_id") or None),
@@ -3057,6 +3151,7 @@ def prepare_investigation(project, investigation):
         # reuses its cached reply on resume; a different question cannot reuse the baseline.
         note = investigation["note"]
         packet["supervisor_note"] = note
-        prompt += "\n\nTargeted check: " + note
+        prompt += ("\n\nWhy this is asked again (what to look at, not what the drawings show; answer from the drawings): "
+                   + note)
         prepared.append(_create_run(root, task, target, packet, prompt, images, reason))
     return prepared
