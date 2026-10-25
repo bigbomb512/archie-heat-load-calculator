@@ -173,8 +173,12 @@ class DrawingTaskTests(unittest.TestCase):
     def test_drawing_tasks_use_the_vision_model_and_need_a_provider(self):
         clear = {"ARCHIE_AI_PROVIDER": "", "ARCHIE_AI_MODEL": "", "ARCHIE_AI_MODEL_DRAWINGS": "", "ARCHIE_AI_SMALL_MODEL": ""}
         with patch.dict("os.environ", clear):
-            self.assertEqual(ai_provider.step_of("drawing:P0_room_outlines"), "DRAWINGS")
-            self.assertEqual(ai_provider.model_for("drawing:P0_room_outlines"), "google/gemini-3.8-flash")
+            self.assertEqual(ai_provider.step_of("drawing:P2_north"), "DRAWINGS")
+            self.assertEqual(ai_provider.model_for("drawing:P2_north"), "google/gemini-3.8-flash")
+            # Outlines and corner picking go to the model that traced Casa Nova's tenancy (2026-10-24).
+            for task in ("drawing:P0_room_outlines", "drawing:P0_outline_corners", "supervisor:P0_tenancy_outline", "drawing:P0_room_names"):
+                self.assertEqual((ai_provider.step_of(task), ai_provider.model_for(task)), ("OUTLINES", "anthropic/claude-haiku-5.5"))
+            self.assertFalse(drawing.uses_grid("P0_outline_corners", [(100, 100)]))
         with patch.dict("os.environ", {**clear, "OPENROUTER_API_KEY": ""}):
             with self.assertRaisesRegex(ValueError, "No AI provider is set up"):
                 drawing.start(None, {"id": "j", "review_dir": "/nonexistent"})

@@ -256,6 +256,15 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(wait(self.project)["status"], "done")
         self.assertEqual(sorted(reader.calls), [1, 3])
 
+    def test_renders_and_photos_are_not_read_for_values(self):
+        # Casa Nova (2026-10-24): 19 of 43 equipment pages were renders, with no item not found on a schedule or plan.
+        result_path = Path(self.project["review_dir"]) / pass1.RESULT_FILE
+        saved = json.loads(result_path.read_text())
+        saved["pages"]["7"] = {"page_type": "render_or_photo", "information": [{"kind": "equipment_appliances", "what": "TV"}]}
+        result_path.write_text(json.dumps(saved))
+        self.assertNotIn(7, service.flagged_pages(self.project, "equipment_appliances"))
+        self.assertIn(3, service.flagged_pages(self.project, "equipment_appliances"))
+
     def test_review_needs_a_choice_for_conflicts_and_decisions_expire_with_the_run(self):
         reader = FakeReader({1: {"items": [{"name": "Combi oven", "code": "E01", "quantity": 1}]},
                              3: {"items": [{"name": "Combi oven", "code": "E01", "quantity": 2}, {"name": "TV", "quantity": 1}]}})

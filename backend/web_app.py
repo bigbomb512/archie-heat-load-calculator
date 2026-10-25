@@ -3773,12 +3773,30 @@ def main():
 
     global SERVER_HOST
     SERVER_HOST = args.host
+    _register_stack_dump()
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"Open http://{args.host}:{args.port}")
     if os.environ.get("ARCHIE_RECOVER_HANDOFFS", "").lower() != "off" and os.environ.get("ARCHIE_ENV") != "test":
         threading.Thread(target=calculation_service.reconcile_finished_reviews, args=(sys.modules[__name__],),
                          daemon=True, name="archie-recover-handoffs").start()
     server.serve_forever()
+
+
+STACK_DUMP_FILE = ROOT / "output" / "server_stacks.log"
+_STACK_DUMP_HANDLE = None
+
+
+def _register_stack_dump():
+    """`kill -USR1 <server pid>` appends every thread's Python stack to output/server_stacks.log, and the server
+    carries on. Added 2026-10-24 to find where background steps sat idle for minutes between AI calls."""
+    global _STACK_DUMP_HANDLE
+    import faulthandler
+    import signal
+    if not hasattr(signal, "SIGUSR1"):
+        return
+    STACK_DUMP_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _STACK_DUMP_HANDLE = STACK_DUMP_FILE.open("a", encoding="utf-8")
+    faulthandler.register(signal.SIGUSR1, file=_STACK_DUMP_HANDLE, all_threads=True)
 
 
 def is_loopback_bind():

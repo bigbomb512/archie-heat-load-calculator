@@ -104,7 +104,7 @@ def _label_point(points):
 
 def get(web, project):
     """Assemble current plan polygons and room facts without changing evidence."""
-    from ai.room_use_resolution import room_identity
+    from ai.room_use_resolution import room_identity, load_taxonomy
     from backend import autonomous_tasks_service
 
     if not project.get("review_dir"):
@@ -130,6 +130,8 @@ def get(web, project):
     overrides = {row["room_id"]: row for row in status.get("area_overrides", []) if row.get("room_id")}
     traced_areas = reviewer_room_geometry_service.current_traced_areas(root)
     uses = job_service._read(root / "room_use_resolution.json", {})
+    gains = job_service._read(root / "internal_gains_resolution.json", {})
+    gains_by_id = {row.get("room_id"): row for row in gains.get("records", []) if isinstance(row, dict)}
     use_by_id = {str(row.get("room_id")): row for row in (uses.get("records") or [])
                  if isinstance(row, dict) and row.get("room_id")} if isinstance(uses, dict) else {}
     areas_still_being_found = job_service._areas_still_being_found(autonomous_tasks_service._all_current(root))
@@ -173,6 +175,9 @@ def get(web, project):
         final_kw = _load_number(final_peaks.get(identity, {}).get("design_total_kw")) if final_current else None
         level = "" if not level or level == "Unassigned level" else level
         return {"room_id": room_id, "name": name, "level": level, "area_m2": area,
+                "occupancy": (gains_by_id.get(room_id, {}).get("fields") or {}).get("occupancy_count", {}),
+                "seating": gains_by_id.get(room_id, {}).get("seating", {}),
+                "use": {key: use.get(key) for key in ("taxonomy_id", "taxonomy_label", "rationale", "confidence_band", "classification_origin", "use_assessment")},
                 "area_basis": basis, "area_label": AREA_BASIS.get(basis, ("", ""))[0],
                 "phase1_kw": load, "final_kw": final_kw,
                 "w_m2": round(load * 1000 / area, 1) if load is not None and area else None,
@@ -218,6 +223,7 @@ def get(web, project):
         room["has_outline"] = room["room_id"] in outlined
 
     return {"project_id": project["id"], "status": status, "rooms": rooms,
+            "room_use_options": {key: row["label"] for key, row in load_taxonomy()["categories"].items()},
             "outlines": outlines, "pages": pages,
             "rooms_without_outline": [row for row in rooms if row["room_id"] not in outlined],
             "area_basis_labels": {key: {"label": label, "line_style": style}

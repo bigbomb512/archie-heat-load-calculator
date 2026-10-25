@@ -10,7 +10,7 @@ page roles (main floor plan per level, ceiling plans, pages to keep). No I/O.
 
 import re
 
-PROMPT_VERSION = "page-inventory-v1"
+PROMPT_VERSION = "page-inventory-v2-seating"
 
 PAGE_TYPES = (
     "floor_plan", "reflected_ceiling_plan", "services_plan", "elevation", "section", "detail",
@@ -43,6 +43,11 @@ title: the printed drawing title in the title block or under the view. drawing_n
   (e.g. "Ground", "Level 1", "Mezzanine"), "" when not stated. Copy printed words; don't invent.
 information: every item of heat-load information visible on THIS page. kind is one of {", ".join(INFORMATION_KINDS)}.
   what = the information itself with its numbers and units (e.g. "Shopfront 11,900 mm wide", "75 inch TV on wall", "6.38 mm clear laminated glass").
+  For printed seating totals/schedules use kind people_occupancy, quote the seats column (not table quantities),
+  and include optional structured fields seat_total (integer total), seat_room (printed room or empty),
+  seat_scope (indoor_tenancy, indoor_room, outdoor, mixed_or_unknown). Record the schedule even on image-only pages.
+  Do not invent totals from people in renders, or combine outdoor seats with indoor totals. If the total is not
+  explicit, describe the schedule rows in what rather than inventing seat_total.
   evidence = a short quote or where on the page it is. List nothing that isn't visible here. An empty list is a valid answer.
 """
 PROMPT = ("You are reading ONE page of an architectural drawing set for a commercial HVAC cooling heat-load calculation.\n"
@@ -90,7 +95,14 @@ def validate_reply(reply):
         what = _text(row.get("what"), 400)
         if not what:
             raise ValueError("An information item has no 'what'.")
-        items.append({"kind": info_kind, "what": what, "evidence": _text(row.get("evidence"), 400)})
+        item = {"kind": info_kind, "what": what, "evidence": _text(row.get("evidence"), 400)}
+        if "seat_total" in row:
+            if info_kind != "people_occupancy" or type(row["seat_total"]) is not int or not 0 < row["seat_total"] <= 5000:
+                raise ValueError("seat_total must be a positive printed people_occupancy integer, at most 5000.")
+            if row.get("seat_scope") not in {"indoor_tenancy", "indoor_room", "outdoor", "mixed_or_unknown"}:
+                raise ValueError("A structured seat total needs its indoor/outdoor scope.")
+            item.update(seat_total=row["seat_total"],seat_scope=row["seat_scope"],seat_room=_text(row.get("seat_room"),80))
+        items.append(item)
     return {
         "page_type": page_type, "floor_plan_kind": kind,
         "whole_floor": bool(reply.get("whole_floor")) if page_type == "floor_plan" else False,

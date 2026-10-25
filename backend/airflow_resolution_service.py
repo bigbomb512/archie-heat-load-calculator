@@ -46,11 +46,13 @@ def _sources(paths):
 
 
 def _resolve(paths, existing=None):
+    from backend.ai_preliminary_service import _airflow_room_inputs
+    counts, areas = _airflow_room_inputs(paths)
     room_use = room_use_resolution.validate(_read(paths["room_use"], room_use_resolution.empty_room_use_resolution()))
     ceiling = ceiling_volume_resolution.validate(_read(paths["ceiling_volume"], ceiling_volume_resolution.empty_ceiling_volume_resolution()))
     artifact = resolver.resolve(
         _read(paths["building"], {}), _read(paths["vision"], {}), _proposal_for_resolution(paths), room_use, ceiling,
-        ai_preliminary.load_pack(), _sources(paths), existing,
+        ai_preliminary.load_pack(), _sources(paths), existing, occupancy_counts=counts, room_areas=areas,
     )
     return resolver.validate(artifact)
 

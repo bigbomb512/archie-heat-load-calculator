@@ -13,16 +13,41 @@ def test_normalizes_percentages_and_rejects_invalid_values():
             raise AssertionError("invalid safety factor was accepted")
 
 
-def test_draft_fallback_is_explicit_and_final_rollup_is_applied_once():
+def test_draft_fallback_adds_no_allowance():
     artifact = policy.resolve({})
+    for mode in policy.MODES:
+        row = policy.policy_for(artifact, mode, preliminary=True)
+        assert row["factor"] == 1.0
+        assert row["origin"] == "controlled_preliminary_fallback"
     row = policy.policy_for(artifact, "cooling", preliminary=True)
-    assert row["factor"] == 1.1
-    assert row["origin"] == "controlled_preliminary_fallback"
     report = {"status": "draft", "scope_summary": {"complete_scope": True}, "included_scope_peak": {"subtotal_kw": 100.0}, "scenario_results": []}
     result = policy.apply_final_policy(report, row, mode="cooling", preliminary=True)
     assert result["raw_coincident_total_kw"] == 100.0
+    assert result["safety_allowance_kw"] == 0.0
+    assert result["final_design_total_kw"] == 100.0
+
+
+def test_project_override_still_applies_once():
+    artifact = policy.apply_override(policy.resolve({}), "cooling", 10, "percentage", reviewer="Operator")
+    row = policy.policy_for(artifact, "cooling", preliminary=True)
+    report = {"status": "draft", "scope_summary": {"complete_scope": True}, "included_scope_peak": {"subtotal_kw": 100.0}, "scenario_results": []}
+    result = policy.apply_final_policy(report, row, mode="cooling", preliminary=True)
     assert result["safety_allowance_kw"] == 10.0
     assert result["final_design_total_kw"] == 110.0
+
+
+def test_old_saved_ten_percent_fallback_is_refreshed_but_cited_policies_are_kept():
+    old = policy.resolve({})
+    for mode in policy.MODES:
+        old["policies"][mode].update({"factor": 1.1, "allowance_percent": 10.0, "source": "au-preliminary-v3 controlled safety-factor assumption"})
+    refreshed, changed = policy.refresh_fallback(old)
+    assert changed and all(refreshed["policies"][mode]["factor"] == 1.0 for mode in policy.MODES)
+    assert refreshed["fingerprint"] != policy.validate(old)["fingerprint"]
+    assert policy.refresh_fallback(refreshed) == (policy.validate(refreshed), False)
+    overridden = policy.apply_override(old, "cooling", 1.15, reviewer="Operator")
+    kept, _changed = policy.refresh_fallback(overridden)
+    assert kept["policies"]["cooling"]["factor"] == 1.15
+    assert kept["policies"]["heating"]["factor"] == 1.0
 
 
 def test_reviewed_policy_requires_approval_and_citation():
@@ -84,7 +109,9 @@ def test_preliminary_policy_also_blocks_actual_room_hour_compounding():
 def main():
     tests = [
         test_normalizes_percentages_and_rejects_invalid_values,
-        test_draft_fallback_is_explicit_and_final_rollup_is_applied_once,
+        test_draft_fallback_adds_no_allowance,
+        test_project_override_still_applies_once,
+        test_old_saved_ten_percent_fallback_is_refreshed_but_cited_policies_are_kept,
         test_reviewed_policy_requires_approval_and_citation,
         test_approved_project_policy_uses_neutralized_room_factor_evidence_once,
         test_policy_blocks_only_when_room_factor_survives_in_calculated_hours,

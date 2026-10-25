@@ -2,6 +2,7 @@
 """Card P0: automatic room outlines from a plan's vector drawing (synthetic plans)."""
 
 from pathlib import Path
+import math
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -398,7 +399,55 @@ def tenancy_checks():
     check("no tenancy outline leaves the room as drawn", ro.clip_to_tenancy(box(0, 0, 5, 5), None, 10)[0].area == 25)
 
 
+def corner_checks():
+    # Casa Nova (2026-10-24): freehand outlines ran over the paving and cut across the curved shopfront; outlines are
+    # now built from corners the drawing really has.
+    wall, other = (0.5, 0.0, None), (0.3, 0.0, None)
+    objects = [{"kind": "line", "filled": False, "style": wall, "style_id": "wall", "points": [(0, 0), (100, 0)]},
+               {"kind": "line", "filled": False, "style": wall, "style_id": "wall", "points": [(100, 0), (100, 4)]},
+               {"kind": "line", "filled": False, "style": other, "style_id": "glass", "points": [(0, 50), (100, 50)]},
+               {"kind": "line", "filled": False, "style": other, "style_id": "glass", "points": [(200, 200), (201, 200)]},
+               {"kind": "curve", "filled": False, "style": other, "style_id": "glass",
+                "points": [(0, 100 + 20 * math.sin(math.radians(a))) for a in range(0, 1)] + [(10 * i, 100 + i) for i in range(0, 11)]}]
+    corners = ro.corner_candidates(objects, ["wall"], (0, 0, 300, 300), mm_per_px=100)
+    check("wall ends of 0.3 m and other lines of 1 m or more are corners; short marks are not",
+          (0.0, 0.0) in corners and (100.0, 4.0) in corners and (0.0, 50.0) in corners and (200.0, 200.0) not in corners)
+    check("points are added along a curve about every metre", sum(1 for x, y in corners if y > 99) >= 10)
+    check("corners are numbered top to bottom", corners == sorted(corners, key=lambda p: (round(p[1] / 4), p[0])))
+    # Casa Nova's curved shopfront: an arc drawn as many separate 0.2 m pieces; a heater circle drawn the same way.
+    arc = [(150 + 100 * math.cos(math.radians(a)), 150 + 100 * math.sin(math.radians(a))) for a in range(180, 271, 5)]
+    pieces = [{"kind": "line", "filled": False, "style": other, "style_id": "glass", "points": [arc[i], arc[i + 1]]} for i in range(len(arc) - 1)]
+    heater = [(250 + 3 * math.cos(math.radians(a)), 250 + 3 * math.sin(math.radians(a))) for a in range(0, 361, 30)]
+    pieces += [{"kind": "line", "filled": False, "style": other, "style_id": "glass", "points": [heater[i], heater[i + 1]]} for i in range(len(heater) - 1)]
+    on_arc = ro.corner_candidates(pieces, [], (0, 0, 300, 300), mm_per_px=100)
+    check("a curve drawn as short pieces gets points along it", sum(1 for x, y in on_arc if abs(math.dist((x, y), (150, 150)) - 100) < 1) >= 8)
+    check("a small round fixture drawn as short pieces gets none", all(math.dist(point, (250, 250)) > 5 for point in on_arc))
+    marked, kinds = ro.corner_candidates(pieces, [], (0, 0, 300, 300), mm_per_px=100, with_kinds=True)
+    check("points along a curve are marked as curve points (drawn green)",
+          all(kind == "curve" for point, kind in zip(marked, kinds) if abs(math.dist(point, (150, 150)) - 100) < 1))
+    crowded = [{"kind": "line", "filled": False, "style": wall, "style_id": "wall", "points": [(10 * i, 0), (10 * i, 50)]} for i in range(60)]
+    check("a crowded region is thinned to the limit", len(ro.corner_candidates(crowded, ["wall"], (0, 0, 600, 60), 100, limit=40)) <= 40)
+    from PIL import Image
+    image, shown = ro.render_numbered_corners(Image.new("RGB", (400, 300), "white"), [(50, 50), (150, 50)], (20, 20, 220, 120),
+                                              [(40, 40), (160, 40), (160, 90)])
+    check("the numbered image is the region around the sketch", image.size == (200, 100) and shown["offset_px"] == [20, 20])
+    square = [(0, 0), (100, 0), (100, 100), (0, 100), (50, 200)]
+    picked = ro.validate_corner_outline_reply({"corners": [1, 2, 3, 4, 1], "missing_sides": ""}, square, [(0, 0), (90, 0), (90, 110), (0, 110)], "Dining")
+    check("the outline is built from the exact picked corners", picked["parts"][0] and Polygon(picked["parts"][0]).area == 10000)
+    expect_error("a corner number that isn't on the image is refused",
+                 lambda: ro.validate_corner_outline_reply({"corners": [1, 2, 9]}, square, None, "Dining"), "not one of the numbered")
+    expect_error("fewer than three corners are refused",
+                 lambda: ro.validate_corner_outline_reply({"corners": [1, 2, 1]}, square, None, "Dining"), "at least three")
+    expect_error("corners enclosing far less than the sketch are refused",
+                 lambda: ro.validate_corner_outline_reply({"corners": [1, 2, 3, 4]}, square, [(0, 0), (300, 0), (300, 300), (0, 300)], "Dining"),
+                 "of the sketched area")
+    check("the prompt names the subject and the number of corners", "1 to 12" in ro.corner_outline_prompt("Dining", 12))
+    expect_error("a room may not enclose more than the tenancy",
+                 lambda: ro.validate_corner_outline_reply({"corners": [1, 2, 3, 4]}, square, None, "Dining", max_area=5000), "whole tenancy")
+
+
 def main():
+    corner_checks()
     tenancy_checks()
     unnamed_space_and_window_checks()
     page_origin_checks()

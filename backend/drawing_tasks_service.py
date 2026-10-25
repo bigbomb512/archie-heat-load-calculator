@@ -49,6 +49,7 @@ TASK_LABELS = {
     "P0_room_names": "Finding the room names",
     "P0_room_outlines": "Tracing the room outlines",
     "P0_tenancy_outline": "Outlining the tenancy",
+    "P0_outline_corners": "Matching outlines to the drawn corners",
     "P0_unnamed_space": "Checking for floor with no room",
     "P0_room_sizes": "Finding the room sizes",
     "S1_printed_areas": "Reading printed room areas",
@@ -179,7 +180,7 @@ def _grid_size(task, reply, sizes):
 
 
 # Tasks whose replies carry no coordinates: no grid note in the prompt.
-NO_GRID_TASKS = {"P0_room_sizes"}
+NO_GRID_TASKS = {"P0_room_sizes", "P0_outline_corners"}   # the corner question answers in corner numbers
 
 
 def uses_grid(task, sizes):

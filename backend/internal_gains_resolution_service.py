@@ -40,9 +40,13 @@ def _sources(paths):
 
 
 def _resolve(paths, existing=None):
+    from backend import seating_service
+    from backend.ai_preliminary_service import _resolved_room_areas
     room_use = room_use_resolution.validate(_read(paths["room_use"], room_use_resolution.empty_room_use_resolution()))
     artifact = resolver.resolve(_read(paths["building"], {}), _read(paths["vision"], {}), _proposal_for_resolution(paths), room_use,
-                               ai_preliminary.load_pack(), _sources(paths), existing)
+                               ai_preliminary.load_pack(), _sources(paths), existing,
+                               seating_evidence=seating_service.gather(paths["root"],room_use),
+                               room_areas=_resolved_room_areas(paths,room_use))
     return resolver.validate(artifact)
 
 

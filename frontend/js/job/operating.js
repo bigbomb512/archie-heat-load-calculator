@@ -16,6 +16,9 @@ function sourceLabel(row) {
   return (
     {
       pdf_evidence: "Printed on the drawings",
+      direct_project_evidence: "Printed/count evidence",
+      project_evidence: "Drawing estimate",
+      contractor_override: "Entered by you",
       accepted_finding: "Drawing evidence",
       controlled_preliminary_profile: "Typical value",
       unresolved: "Not resolved",

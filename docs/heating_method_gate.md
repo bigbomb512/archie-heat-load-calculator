@@ -10,7 +10,7 @@ Heating room checks require a sourced outside-air input with a non-missing revie
 
 The current implementation uses `infiltration_method_gate.json` (whose documented scope is cooling infiltration) as an eligibility check for heating infiltration. This records current software behavior; it does not decide that cooling approval covers heating. Whether heating needs a separate infiltration approval scope remains an open owner/engineering decision. No separate heating infiltration gate has been created.
 
-The AI-preliminary workflow uses a separate provisional 1.10 fallback once and remains draft-only. It is not an approved project policy. The preliminary workflow currently persists this artifact; whether a later strict report should ignore that fallback and use legacy room factors or remain blocked is unresolved and must not be inferred from this document.
+The AI-preliminary workflow uses a separate provisional fallback of 1.0 (no safety allowance, decided 2026-10-25) and remains draft-only. It is not an approved project policy. The preliminary workflow currently persists this artifact; whether a later strict report should ignore that fallback and use legacy room factors or remain blocked is unresolved and must not be inferred from this document.
 
 Winter scenarios require 24 cited outdoor dry-bulb and wet-bulb values plus cited atmospheric pressure. Room heating applicability, setpoint, source, and schedule assignment remain room-specific; no value is copied from another room and no heating default is used. Missing or stale inputs fail closed and remain visible as blockers or included-scope draft exclusions.
 

@@ -557,6 +557,60 @@ class AutonomousTaskTests(unittest.TestCase):
             bounds = saved["rows"][0]["polygon"].bounds
             self.assertAlmostEqual(bounds[1], 100 - 300 / 50)     # cut back to the tenancy, less a 300 mm allowance
 
+    def test_only_a_corner_built_tenancy_outline_clips_rooms(self):
+        # Casa Nova (2026-10-24): the freehand tenancy sketch cut about 40 m² of real dining floor off.
+        sketch = {"status": "below_accuracy_bar", "applied_value": {"points": [[0, 0], [100, 0], [100, 100]]}}
+        corners = {"status": "below_accuracy_bar", "applied_value": {"points": [[0, 0], [100, 0], [100, 100]], "method": "corners"}}
+        with patch.object(autonomous_tasks_service, "_current_task",
+                          side_effect=lambda root, task, target: sketch if task == "P0_tenancy_outline" else None):
+            self.assertIsNone(autonomous_tasks_service._tenancy_polygon(Path("/x"), 33))
+        with patch.object(autonomous_tasks_service, "_current_task",
+                          side_effect=lambda root, task, target: corners if task == "P0_outline_corners" else None):
+            self.assertEqual(autonomous_tasks_service._tenancy_polygon(Path("/x"), 33).area, 5000)
+
+    def test_a_corner_answer_is_not_judged_against_the_sketch(self):
+        # Casa Nova (2026-10-24): the tenancy sketch was 58 m² of a ~260 m² tenancy; good answers were refused against it.
+        corners = [[0, 0], [100, 0], [100, 100], [0, 100]]
+        packet = {"corners": corners, "sketch": [[0, 0], [10, 0], [10, 10]], "sketch_area_px": 50, "room": None}
+        self.assertEqual(autonomous_tasks.validate_p0_outline_corners(packet, '{"corners":[1,2,3,4]}')["corners"], [1, 2, 3, 4])
+        with self.assertRaisesRegex(ValueError, "whole tenancy"):
+            autonomous_tasks.validate_p0_outline_corners({**packet, "room": "Dining", "tenancy_area_px": 5000}, '{"corners":[1,2,3,4]}')
+
+    def test_room_corner_questions_wait_for_the_tenancy_corners(self):
+        tenancy = {"status": "below_accuracy_bar", "applied_value": {"points": [[0, 0], [100, 0], [100, 100], [0, 100]]}}
+        outlines = {"status": "below_accuracy_bar", "validation": [{"room": "Dining", "points": [[0, 0], [50, 0], [50, 50]]}]}
+        records = {"P0_tenancy_outline": tenancy, "P0_room_outlines": outlines}
+        def current(root, task, target, corner=None):
+            return records.get(task) if task != "P0_outline_corners" else corner
+        with patch.object(autonomous_tasks_service, "_current_task", side_effect=current):
+            self.assertEqual([row[0] for row in autonomous_tasks_service._corner_subjects(Path("/x"), 33)], ["tenancy-page-33"])
+        answered = {"status": "below_accuracy_bar"}
+        with patch.object(autonomous_tasks_service, "_current_task",
+                          side_effect=lambda root, task, target: current(root, task, target, answered)):
+            self.assertEqual([row[:3] for row in autonomous_tasks_service._corner_subjects(Path("/x"), 33)],
+                             [("tenancy-page-33", None, "P0_tenancy_outline"), ("room-dining-page-33", "Dining", "P0_room_outlines")])
+
+    def test_a_room_built_from_corners_replaces_its_sketch_inside_the_tenancy_less_rooms_inside_it(self):
+        from shapely.geometry import box as shape_box
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            record = {"run_id": "run-1", "quality_label": "AI-determined (below accuracy bar)", "accuracy": {"auto_apply": False},
+                      "packet": {"page": 33, "room": "Dining", "source_task": "P0_room_outlines",
+                                 "calibration": {"status": "agreed", "mm_per_px": 50.0}}}
+            bar = {"room_label": "Bar", "page": 33, "points_image_px": [[100, 100], [200, 100], [200, 200], [100, 200], [100, 100]]}
+            saved = {}
+            with patch.object(autonomous_tasks_service, "_tenancy_polygon", return_value=shape_box(0, 0, 600, 300)), \
+                    patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "current_records", return_value=[bar]), \
+                    patch.object(autonomous_tasks_service, "_p0_trace_rows", side_effect=lambda _root, _record, polygons: polygons), \
+                    patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "persist_ai_determined_traces",
+                                 side_effect=lambda web, project, rows, *args, **kwargs: saved.update(rows=rows, kwargs=kwargs) or []):
+                autonomous_tasks_service._apply_p0_outline_corners(None, {"id": "job", "review_dir": str(root)}, root, record,
+                    {"parts": [[(0, 0), (600, 0), (600, 400), (0, 400)]], "repaired": False, "missing_sides": ""})
+            dining = saved["rows"][0]["polygon"]
+            self.assertAlmostEqual(dining.area, 600 * 306 - 100 * 100)       # clipped to the tenancy (+300 mm below), less the bar
+            self.assertEqual(saved["kwargs"]["replace_room_labels"], ["Dining"])
+            self.assertEqual(saved["rows"][0]["method"], "ai_corner_outline")
+
     def test_room_outlines_wait_for_the_tenancy_outline_of_their_page(self):
         with patch.object(autonomous_tasks_service, "_p0_main_geometry_pages", return_value=[{"page": 33}]), \
                 patch.object(autonomous_tasks_service, "_current_task",
@@ -1781,6 +1835,54 @@ class AutonomousTaskTests(unittest.TestCase):
             rejected = autonomous_tasks_service._current_task(root, "P2_north", "page-21")
             self.assertEqual(rejected["status"], "blocked")
             self.assertIn("could not be applied", rejected["block_reason"])
+
+    def test_north_is_asked_only_on_the_main_plan_unless_it_has_no_arrow(self):
+        # Casa Nova (2026-10-24): all 22 plan-like pages were asked (66 images) for the one traced plan's north.
+        plans = [{"page": number, "type": "floor_plan"} for number in (20, 21, 22)]
+        records = {}
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "ai_input.json").write_text(json.dumps({"drawing_set": {"pages": plans}}))
+            with patch.object(autonomous_tasks_service, "_p0_main_geometry_pages", return_value=[{"page": 21}]), \
+                    patch.object(autonomous_tasks_service, "_current_task", side_effect=lambda r, t, g: records.get(g)):
+                self.assertEqual([row["page"] for row in autonomous_tasks_service._north_pages(root)], [21])
+                records["page-21"] = {"status": "below_accuracy_bar", "validation": {"valid": True, "result": {"found": False}}}
+                self.assertEqual([row["page"] for row in autonomous_tasks_service._north_pages(root)], [20, 21, 22])
+                records["page-21"] = {"status": "below_accuracy_bar", "validation": {"valid": True, "result": {"found": True}}}
+                self.assertEqual([row["page"] for row in autonomous_tasks_service._north_pages(root)], [21])
+        # Staged: the other floor plans and the site plan before the ceiling and services plans.
+        plans = [{"page": 20, "type": "floor_plan"}, {"page": 21, "type": "floor_plan"}, {"page": 22, "type": "reflected_ceiling_plan"},
+                 {"page": 23, "type": "site_or_location_plan", "title": "Locality & Site plan"}]
+        records = {"page-21": {"status": "below_accuracy_bar", "validation": {"valid": True, "result": {"found": False}}}}
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "ai_input.json").write_text(json.dumps({"drawing_set": {"pages": plans}}))
+            with patch.object(autonomous_tasks_service, "_p0_main_geometry_pages", return_value=[{"page": 21}]), \
+                    patch.object(autonomous_tasks_service, "_current_task", side_effect=lambda r, t, g: records.get(g)):
+                self.assertEqual([row["page"] for row in autonomous_tasks_service._north_pages(root)], [20, 21, 23])
+                for page in (20, 23):
+                    records[f"page-{page}"] = {"status": "below_accuracy_bar", "validation": {"valid": True, "result": {"found": False}}}
+                self.assertEqual([row["page"] for row in autonomous_tasks_service._north_pages(root)], [20, 21, 22, 23])
+
+    def test_a_main_plan_without_an_arrow_takes_the_agreed_north(self):
+        # Casa Nova (2026-10-24): the traced setout plan has no north arrow; its rooms had no compass directions.
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "ai_input.json").write_text(json.dumps({"drawing_set": {"pages": [
+                {"page": 32, "type": "floor_plan"}, {"page": 33, "type": "floor_plan"}]}}))
+            layout = autonomous_tasks_service._create_run(root, "P2_north", "page-32", {"task": "P2_north", "page": 32}, "north")
+            layout.update({"status": "waiting_for_reply", "accuracy": {"auto_apply": False}})
+            autonomous_tasks_service._update_record(root, layout)
+            setout = autonomous_tasks_service._create_run(root, "P2_north", "page-33", {"task": "P2_north", "page": 33}, "north")
+            setout.update({"status": "below_accuracy_bar", "validation": {"valid": True, "result": {"found": False}}})
+            autonomous_tasks_service._update_record(root, setout)
+            declared = []
+            with patch.object(autonomous_tasks_service, "_p0_main_geometry_pages", return_value=[{"page": 33}]), \
+                    patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "post",
+                                 side_effect=lambda _web, _project, body, **kwargs: declared.append((body["page"], body["plan_up_azimuth_deg"]))):
+                autonomous_tasks_service._apply_p2(None, {"id": "cn", "review_dir": str(root)}, root, layout,
+                                                   {"found": True, "plan_up_azimuth_deg": 90.0})
+            self.assertEqual(declared, [(32, 90.0), (33, 90.0)])
 
     def test_north_reply_maps_crop_coordinates_to_page_and_computes_bearing(self):
         packet = {"page": 4, "crops": [{"crop_index": 0, "width_px": 100, "height_px": 100,

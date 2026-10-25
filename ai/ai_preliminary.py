@@ -373,6 +373,23 @@ def _space_rows(building, vision, manual_entities=None, geometry_resolution=None
     return _apply_geometry_area_resolution(rows, geometry_resolution)
 
 
+def _room_area(row, profile, override=None, allow_area_fallbacks=False):
+    """The draft's existing area choice, shared with people and airflow resolution."""
+    return (_number((override or {}).get("area_m2")) or row.get("area_m2")
+            or (profile["fallback_area_m2"] if allow_area_fallbacks else None))
+
+
+def resolved_room_areas(building, vision, proposal, room_use, geometry=None):
+    """Read the same normalized area rows used by assembly; never sum raw traces here."""
+    proposal = validate_placeholder_proposal(proposal)
+    rows = _apply_room_use_resolution(_space_rows(building, vision, proposal.get("rooms", []), geometry), room_use)
+    return {room_use_resolver.room_identity(row["name"], row["level"]): {
+        "value": _room_area(row, {}, allow_area_fallbacks=False),
+        "origin": row.get("area_origin") or "unresolved", "evidence": deepcopy(row.get("evidence", [])),
+        "rationale": "Resolved room area used by the preliminary draft.",
+    } for row in rows}
+
+
 def _apply_geometry_area_resolution(rows, geometry_resolution):
     """Use active normalized geometry areas, preferring canonical room identity."""
     candidates = {}
@@ -976,7 +993,7 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
         internal_record = internal_records.get(room_use_resolver.room_identity(row["name"], row["level"]), {})
         internal_fields = internal_record.get("fields", {}) if isinstance(internal_record, dict) else {}
         override = overrides.get(row["key"], {}) if isinstance(overrides, dict) else {}
-        area = _number(override.get("area_m2")) or row["area_m2"] or (profile["fallback_area_m2"] if allow_area_fallbacks else None)
+        area = _room_area(row, profile, override, allow_area_fallbacks)
         area_origin = "contractor_override" if _number(override.get("area_m2")) else (row.get("area_origin") or "ai_assumption")
         score = row["confidence"] if row["area_m2"] else min(row["confidence"], 0.4)
         level_key = _slug(row["level"])

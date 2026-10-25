@@ -138,8 +138,11 @@ included-scope subtotals and list omitted rooms/components.
   block this mode. The calculation blocks only if a factor above 1.0 actually
   survives into calculated room hours, which would compound with the project
   policy.
-- **AI preliminary:** the named provisional 1.10 fallback is applied once and
-  the result remains draft-only. It is not an approved project policy.
+- **AI preliminary:** no safety allowance by default (decided 2026-10-25): the
+  fallback factor is 1.0, so the design total equals the calculated load. A
+  cited project policy or a contractor override can still set one, applied once.
+  Saved jobs holding the old 1.10 fallback take the new one on their next run.
+  The result remains draft-only.
 - **AHU and plant:** AHU room reconciliation uses unfactored room subtotals;
   coil duty comes from the air-state calculation. Plant aggregates AHU coil
   duties and does not apply another safety factor.

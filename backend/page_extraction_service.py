@@ -57,11 +57,18 @@ def png_size(path):
     return struct.unpack(">II", header[16:24])
 
 
+# Pages not read for values: a render or photo shows what the schedule and plans already list, and read on their own
+# they gave repeat items (Butcher Buffet's TVs and fridges) and half the reading calls (Casa Nova: 19 of 43 pages,
+# none with an item not found elsewhere; 2026-10-24).
+SKIPPED_PAGE_TYPES = {"render_or_photo"}
+
+
 def flagged_pages(project, kind):
-    """Pages whose pass 1 reading lists this kind of information."""
+    """Pages whose pass 1 reading lists this kind of information (renders and photos left out)."""
     result = read_json(Path(project["review_dir"]) / pass1.RESULT_FILE)
     return sorted(int(page) for page, row in (result.get("pages") or {}).items()
-                  if any(item.get("kind") == kind for item in row.get("information", [])))
+                  if row.get("page_type") not in SKIPPED_PAGE_TYPES
+                  and any(item.get("kind") == kind for item in row.get("information", [])))
 
 
 def page_images(pdf, folder, pages, dpi=DPI):

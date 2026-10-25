@@ -162,6 +162,13 @@ function resultsContent({ plan, report, gaps, projectId, stale, canUpdate }) {
     peak.safety_allowance_kw ??
       (Number(total) * (safetyFactor - 1)) / Math.max(safetyFactor, 1),
   );
+  // No allowance is added by default; a project policy can still set one, and only then is it shown.
+  const allowanceText =
+    allowance > 0 ? ` Safety allowance: ${fmt(allowance)} kW.` : "";
+  const allowanceRow =
+    allowance > 0
+      ? `<tr><th colspan="3">Safety allowance, ${Math.round((safetyFactor - 1) * 100)}%</th><td>${fmt(allowance)} kW</td></tr>`
+      : "";
   const rooms = (plan.rooms || []).filter(
     (room) => room.kind === "comfort" && room.included,
   );
@@ -185,8 +192,8 @@ function resultsContent({ plan, report, gaps, projectId, stale, canUpdate }) {
   const reportUrl = gaps.report_url || gaps.html_url || gaps.markdown_url;
   const assumptions = gaps.assumptions || gaps.items || gaps.open_items || [];
   const statusSentence = stale
-    ? `The previous result covered ${peaks.length} rooms${peak.display_hour == null ? "" : ` at hour ${escapeHtml(peak.display_hour)}`}. Room-by-room loads are out of date. Safety allowance: ${fmt(allowance)} kW.`
-    : `${rooms.length} rooms counted${peak.display_hour == null ? "" : ` at the peak hour ${escapeHtml(peak.display_hour)}`}. Safety allowance: ${fmt(allowance)} kW. Refrigeration is sized separately.`;
+    ? `The previous result covered ${peaks.length} rooms${peak.display_hour == null ? "" : ` at hour ${escapeHtml(peak.display_hour)}`}. Room-by-room loads are out of date.${allowanceText}`
+    : `${rooms.length} rooms counted${peak.display_hour == null ? "" : ` at the peak hour ${escapeHtml(peak.display_hour)}`}.${allowanceText} Refrigeration is sized separately.`;
   return `${outOfDate}
     ${report.equipment_coverage && !report.equipment_coverage.coverage_complete ? `<section class="job-panel" role="status"><h2>Some equipment isn't counted</h2><p>${fmt(Number(report.equipment_coverage.summary?.no_value || 0) + Number(report.equipment_coverage.summary?.no_room || 0))} item(s) have no value yet or no room. Those rooms use their typical equipment allowance instead.</p><a href="#/job/${encodeURIComponent(projectId)}/operating">See the equipment</a></section>` : ""}
     <section class="job-panel job-result-summary ${stale ? "stale" : ""}">
@@ -215,7 +222,7 @@ function resultsContent({ plan, report, gaps, projectId, stale, canUpdate }) {
         <div class="job-table-wrap"><table class="job-results-table">
           <thead><tr><th scope="col">Room</th><th scope="col">m²</th><th scope="col">Where the load comes from</th><th scope="col">kW</th></tr></thead>
           <tbody>${roomRows(rooms, peaks, maxLoad, stale)}
-            <tr><th colspan="3">Safety allowance, ${Math.round((safetyFactor - 1) * 100)}%</th><td>${fmt(allowance)} kW</td></tr>
+            ${allowanceRow}
             <tr class="job-grand-total"><th colspan="3">Design cooling load</th><td>${fmt(total)} kW</td></tr>
           </tbody>
         </table></div>

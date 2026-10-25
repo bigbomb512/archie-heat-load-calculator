@@ -14,6 +14,10 @@ import math
 SCHEMA_VERSION = 1
 MODES = ("cooling", "heating")
 STATUSES = {"proposed", "provisional", "approved", "blocked", "stale"}
+# No safety allowance by default (decided 2026-10-25): the draft is sized to the calculated load. A cited project
+# brief, engineer instruction or contractor override can still set one for a job.
+FALLBACK_FACTOR = 1.0
+FALLBACK_SOURCE = "No safety allowance: Archie sizes to the calculated load unless a project policy sets one."
 
 
 def now():
@@ -151,12 +155,35 @@ def resolve(sources=None, pack_fingerprint="", overrides=None, mode_scope=None):
             if row:
                 break
         if row is None:
-            row = _candidate(mode, {"factor": 1.10, "source": "au-preliminary-v3 controlled safety-factor assumption", "rationale": "No project policy was supplied; draft mode uses the named controlled fallback.", "assumptions": ["controlled preliminary assumption"]}, "controlled_preliminary_fallback", "controlled preliminary fallback", pack_fingerprint)
+            row = _fallback(mode, pack_fingerprint)
         result["policies"][mode] = row
+    _finish(result)
+    return result
+
+
+def _fallback(mode, pack_fingerprint=""):
+    return _candidate(mode, {"factor": FALLBACK_FACTOR, "source": FALLBACK_SOURCE, "rationale": "No project policy was supplied, so no safety allowance is added.", "assumptions": ["no safety allowance unless a project policy sets one"]}, "controlled_preliminary_fallback", "controlled preliminary fallback", pack_fingerprint)
+
+
+def _finish(result):
     result["status"] = "provisional" if any(row["status"] == "provisional" for row in result["policies"].values()) else ("proposed" if any(row["factor"] is not None for row in result["policies"].values()) else "blocked")
     result["updated_at"] = now()
     result["fingerprint"] = _artifact_fingerprint(result)
-    return result
+
+
+def refresh_fallback(artifact, pack_fingerprint=""):
+    """A saved file made before the fallback changed (the old 10% allowance) takes the current fallback. Cited
+    policies and contractor overrides are kept. Returns (artifact, changed)."""
+    result = validate(artifact)
+    changed = False
+    for mode in MODES:
+        row = result["policies"].get(mode) or {}
+        if row.get("origin") == "controlled_preliminary_fallback" and (row.get("factor") != FALLBACK_FACTOR or row.get("source") != FALLBACK_SOURCE):
+            result["policies"][mode] = _fallback(mode, pack_fingerprint or row.get("pack_fingerprint", ""))
+            changed = True
+    if changed:
+        _finish(result)
+    return result, changed
 
 
 def validate(artifact):
@@ -197,7 +224,7 @@ def clear_override(artifact, mode):
     result["policies"][mode]["status"] = "blocked"
     result["policies"][mode]["factor"] = None
     result["policies"][mode]["allowance_percent"] = None
-    result["policies"][mode]["remediation"] = "Resolve a cited policy or use the draft-only 1.10 fallback."
+    result["policies"][mode]["remediation"] = "Resolve a cited policy or use the no-allowance fallback."
     result["updated_at"] = now()
     result["fingerprint"] = _artifact_fingerprint(result)
     return result

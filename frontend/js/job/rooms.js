@@ -169,7 +169,7 @@ function useOptions(uses, room) {
       ${uses
         .map(
           ([id, name]) =>
-            `<option value="${escapeHtml(id)}">${escapeHtml(name)}</option>`,
+            `<option value="${escapeHtml(id)}" ${room.use?.taxonomy_id === id ? "selected" : ""}>${escapeHtml(name)}</option>`,
         )
         .join("")}
     </select>
@@ -282,11 +282,15 @@ function roomDetails(plan, room, status, uses, editor = {}) {
         )
         .join("")}</ul>`
     : `<p class="job-muted">No Phase 1 assumptions are recorded for this room.</p>`;
-  const useEditor = room.state === "needs_use" ? useOptions(uses, room) : "";
+  const useEditor = room.kind !== "refrigeration" && room.kind !== "not_a_room" ? useOptions(uses, room) : "";
+  const useReason = room.use?.rationale ? `<p class="job-caption" data-room-use-reason>${escapeHtml(room.use.rationale)} Confidence: ${escapeHtml(room.use.confidence_band || "not recorded")}.</p>` : "";
+  const factors = room.use?.use_assessment?.factors || [];
+  const useFactors = factors.length ? `<details><summary>Why this use was selected</summary><ul class="job-assumptions">${factors.map((factor) => `<li>${escapeHtml(factor.reason)} (${Number(factor.weight) || 0} points)</li>`).join("")}</ul></details>` : "";
   return `<section class="job-panel job-room-detail" aria-labelledby="room-detail-title">
     <h2 class="job-room-title" id="room-detail-title">${escapeHtml(room.name)}</h2>
-    <p class="job-room-use">${escapeHtml(room.kind === "refrigeration" ? "Refrigeration" : "Comfort-HVAC room")}</p>
-    ${useEditor}
+    <p class="job-room-use">${escapeHtml(room.use?.taxonomy_label || (room.kind === "refrigeration" ? "Refrigeration" : "Comfort-HVAC room"))}</p>
+    ${useReason}${useFactors}${useEditor}
+    ${room.occupancy?.value != null ? `<p class="job-caption" data-room-occupancy><strong>Design occupants (operating loads): ${fmt(room.occupancy.value, 0)}</strong><br>${escapeHtml(room.occupancy.rationale || "Saved occupancy; source not recorded.")}</p>` : ""}
     <dl class="job-key-facts">
       <div><dt>Floor area</dt><dd class="${areaClass(room)}" title="${escapeHtml(areaLabel)}">${escapeHtml(areaValue)}</dd></div>
       <div><dt>Ceiling height</dt><dd class="${height?.origin === "preliminary_fallback" ? "assumed" : ""}" title="${escapeHtml(height?.origin || "Height source not recorded")}">${escapeHtml(heightValue)} <button class="job-link-button" data-edit-height>Change</button></dd></div>
@@ -396,7 +400,7 @@ export async function renderRooms(project, projectId, roomId = "") {
         `/api/ai-preliminary-model${query(projectId)}&view=workspace`,
       )
     : {};
-  const uses = Object.entries(model.room_scope?.uses || {}).filter(
+  const uses = Object.entries(plan.room_use_options || model.room_scope?.uses || {}).filter(
     ([id]) => id !== "not_a_room",
   );
   const layout = renderLayout(plan, status, roomId, uses, projectId);

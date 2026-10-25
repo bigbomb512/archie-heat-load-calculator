@@ -275,21 +275,24 @@ def _resolution(paths):
 
 
 def _room_use_sources(paths):
+    from backend.room_use_resolution_service import gather_use_evidence
     proposal = _proposal_for_resolution(paths, equipment=False)
     return {
         "building_evidence": ai_preliminary.fingerprint(_read(paths["building"], {})),
         "vision_response": ai_preliminary.fingerprint(_read(paths["vision"], {})),
         "ai_preliminary_proposal": ai_preliminary.fingerprint(proposal),
+        "use_evidence": room_use_resolution.fingerprint({"policy": "room-use-factors-v1", "rooms": gather_use_evidence(paths["root"])}),
     }
 
 
 def _resolve_room_uses(paths, persist=False):
+    from backend.room_use_resolution_service import gather_use_evidence
     existing = _read(paths["room_use"], room_use_resolution.empty_room_use_resolution())
     proposal = _proposal_for_resolution(paths, equipment=False)
     artifact = room_use_resolution.resolve(
         _read(paths["building"], {}), _read(paths["vision"], {}),
         proposal,
-        _room_use_sources(paths), existing,
+        _room_use_sources(paths), existing, use_evidence=gather_use_evidence(paths["root"]),
     )
     if persist:
         _write(paths["room_use"], artifact)
@@ -311,7 +314,32 @@ def _ceiling_sources(paths):
     }
 
 
+def _resolved_room_areas(paths, room_use=None):
+    """Reuse draft preparation and area selection, including its reviewed multi-part area result."""
+    paths = {**_paths({"review_dir": str(paths["root"])}), **paths}
+    room_use = room_use if room_use is not None else _read(paths["room_use"], {})
+    geometry = _preliminary_geometry(paths)
+    proposal = _prepare_preliminary_proposal(paths, _proposal_for_resolution(paths), room_use, geometry)
+    return ai_preliminary.resolved_room_areas(
+        _read(paths["building"], {}), _read(paths["vision"], {}), proposal, room_use, geometry)
+
+
+def _airflow_room_inputs(paths):
+    """One occupant/area map for both airflow service entry points."""
+    gains = _resolve_internal_gains(paths, persist=False)
+    areas = _resolved_room_areas(paths)
+    counts, airflow_areas = {}, {}
+    for row in gains.get("records", []):
+        rid = airflow_resolution.room_id(row["original_label"], row["level"])
+        if row.get("occupancy_count") is not None:
+            counts[rid] = deepcopy(row["fields"]["occupancy_count"])
+        airflow_areas[rid] = deepcopy(areas.get(row["room_id"], {}))
+    return counts, airflow_areas
+
+
 def _internal_gains_sources(paths):
+    from backend import seating_service
+    seats = seating_service.gather(paths["root"], _read(paths["room_use"], {}))
     proposal = _proposal_for_resolution(paths)
     pack = ai_preliminary.load_pack()
     return {
@@ -320,10 +348,18 @@ def _internal_gains_sources(paths):
         "ai_preliminary_proposal": ai_preliminary.fingerprint(proposal),
         "room_use_resolution": ai_preliminary.fingerprint(_read(paths["room_use"], {})),
         "preliminary_pack": internal_gains_resolution.fingerprint(pack),
+        "seating": internal_gains_resolution.fingerprint(seats),
+        "resolved_room_areas": internal_gains_resolution.fingerprint(_resolved_room_areas(paths)),
     }
 
 
 def _airflow_sources(paths):
+    # Freshness reads inputs only; resolving here could reject an incomplete legacy
+    # artifact or repeat the whole equipment/occupancy resolution on every poll.
+    internal = _read(paths["root"] / "internal_gains_resolution.json", {})
+    occupancy_inputs = {"sources": _internal_gains_sources(paths), "overrides": {
+        row.get("room_id"): row["override"] for row in internal.get("records", [])
+        if isinstance(row, dict) and row.get("room_id") and row.get("override")}}
     proposal = _proposal_for_resolution(paths, equipment=False)
     site_weather_path = paths.get("site_design_weather") or paths.get("site_weather")
     pack = ai_preliminary.load_pack()
@@ -336,6 +372,7 @@ def _airflow_sources(paths):
         "site_design_weather_resolution": ai_preliminary.fingerprint(_read(site_weather_path, {}) if site_weather_path else {}),
         "value_resolution": ai_preliminary.fingerprint(_read(paths["value_resolution"], {})),
         "preliminary_pack": airflow_resolution.fingerprint(pack),
+        "occupancy_resolution": internal_gains_resolution.fingerprint(occupancy_inputs),
     }
 
 
@@ -360,11 +397,14 @@ def _resolve_ceiling_volumes(paths, persist=False):
 
 
 def _resolve_internal_gains(paths, persist=False):
-    existing = _read(paths["internal_gains"], internal_gains_resolution.empty_internal_gains_resolution())
+    from backend import seating_service
+    existing = _read(paths.get("internal_gains", paths["root"] / "internal_gains_resolution.json"), internal_gains_resolution.empty_internal_gains_resolution())
     room_use = room_use_resolution.validate(_read(paths["room_use"], room_use_resolution.empty_room_use_resolution()))
     artifact = internal_gains_resolution.resolve(
         _read(paths["building"], {}), _read(paths["vision"], {}), _proposal_for_resolution(paths),
         room_use, ai_preliminary.load_pack(), _internal_gains_sources(paths), existing,
+        seating_evidence=seating_service.gather(paths["root"], room_use),
+        room_areas=_resolved_room_areas(paths, room_use),
     )
     if persist:
         _write(paths["internal_gains"], artifact)
@@ -379,12 +419,13 @@ def _resolve_internal_gains(paths, persist=False):
 
 
 def _resolve_airflow(paths, persist=False):
+    occupancy_counts, room_areas = _airflow_room_inputs(paths)
     existing = _read(paths["airflow"], airflow_resolution.empty_airflow_resolution())
     room_use = room_use_resolution.validate(_read(paths["room_use"], room_use_resolution.empty_room_use_resolution()))
     ceiling = ceiling_volume_resolution.validate(_read(paths["ceiling_volume"], ceiling_volume_resolution.empty_ceiling_volume_resolution()))
     artifact = airflow_resolution.resolve(
         _read(paths["building"], {}), _read(paths["vision"], {}), _proposal_for_resolution(paths, equipment=False), room_use,
-        ceiling, ai_preliminary.load_pack(), _airflow_sources(paths), existing,
+        ceiling, ai_preliminary.load_pack(), _airflow_sources(paths), existing, occupancy_counts=occupancy_counts, room_areas=room_areas,
     )
     if persist:
         _write(paths["airflow"], artifact)
@@ -652,6 +693,11 @@ def _proposal_with_skill_findings(paths):
         row.setdefault("room_id", room_id)
         row.setdefault("level_name", finding.get("level") or "Unassigned level")
         category = finding.get("_draft_category") or finding.get("taxonomy_id")
+        decision = decisions.get(f"room_identity_use:rooms:{index}", {})
+        row["room_use_reviewed"] = bool(decision.get("run_id") == run_id
+            and decision.get("source_fingerprint") == current_source_fingerprint and decision.get("status") == "accepted"
+            and decision.get("reviewer") and not str(decision.get("reviewer")).startswith("AI")
+            and decision.get("source") != "ai_high_confidence")
         supporting_inferences = inference_by_id.get(room_id, [])
         taxonomy_inference = next((item for item in supporting_inferences if item.get("field", "").endswith(".taxonomy_id")), None)
         inferred_value = taxonomy_inference.get("value") if isinstance(taxonomy_inference, dict) else None
@@ -2131,7 +2177,11 @@ def _assemble(web, project, source="manual_placeholder"):
     plant_artifact = plant_resolution.validate(_read(paths["plant_resolution"], plant_resolution.empty_plant_resolution()))
     safety_path = paths["safety_factor_resolution"]
     if safety_path.exists():
-        safety_artifact = safety_factor_resolution.validate(_read(safety_path, safety_factor_resolution.empty_safety_factor_resolution()))
+        before = _read(safety_path, safety_factor_resolution.empty_safety_factor_resolution())
+        safety_artifact, refreshed = safety_factor_resolution.refresh_fallback(before)
+        if refreshed:
+            _write(safety_path, safety_artifact)
+            productization.record_change_if_fingerprint_changed(paths["root"], action="safety_factor_fallback_updated", target=safety_path.name, previous_fingerprint=safety_factor_resolution.fingerprint(before), new_fingerprint=safety_artifact["fingerprint"], affected_ids=["cooling", "heating"])
     else:
         safety_artifact = safety_factor_resolution.resolve({}, pack_fingerprint=ai_preliminary.fingerprint(ai_preliminary.load_pack()))
         _write(safety_path, safety_artifact)

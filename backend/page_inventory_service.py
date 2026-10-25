@@ -88,9 +88,10 @@ def _cache_key(image_path, model):
 
 
 def batch_size(setting="ARCHIE_PAGE_BATCH"):
-    """Pages per call (ARCHIE_PAGE_BATCH, default 4). Each call costs about 4,600 tokens before any page; one page
-    image about 2,300. Four pages per call cut a 38-page set from 38 calls to 10."""
-    fallback = 4 if setting == "ARCHIE_PAGE_BATCH" else batch_size()
+    """Pages per call (ARCHIE_PAGE_BATCH, default 6). Each call costs about 4,600 tokens before any page; one page
+    image about 2,300. Four pages per call cut a 38-page set from 38 calls to 10; six (2026-10-24, to cut separate
+    calls) take Casa Nova's 73 pages from 19 calls to 13. A page missing from a reply is read again on its own."""
+    fallback = 6 if setting == "ARCHIE_PAGE_BATCH" else batch_size()
     try:
         return max(1, min(8, int(os.environ.get(setting, "") or fallback)))
     except ValueError:

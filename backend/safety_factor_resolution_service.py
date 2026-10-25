@@ -42,7 +42,9 @@ def _sources(paths):
 
 def _response(web, project):
     paths = _paths(project)
-    artifact = safety_factor_resolution.validate(_read(paths["artifact"], safety_factor_resolution.empty_safety_factor_resolution()))
+    # Shown as it will be used: an old saved file's 10% fallback is replaced (and saved) on the next draft run.
+    artifact = _read(paths["artifact"], safety_factor_resolution.empty_safety_factor_resolution())
+    artifact = safety_factor_resolution.refresh_fallback(artifact)[0] if paths["artifact"].exists() else safety_factor_resolution.validate(artifact)
     return {"id": project["id"], "safety_factor_resolution": artifact, "status": artifact.get("status", "blocked"), "artifact_url": web.safe_link(paths["artifact"]) if paths["artifact"].exists() else "", "policies": deepcopy(artifact.get("policies", {}))}
 
 

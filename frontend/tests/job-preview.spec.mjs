@@ -137,6 +137,7 @@ async function preview(page, overrides = {}) {
   if (overrides.final_report) currentPlan.final_report = overrides.final_report;
   if (overrides.phase1_report) currentPlan.phase1_report = overrides.phase1_report;
   if (overrides.rooms) currentPlan.rooms = overrides.rooms;
+  if (overrides.room_use_options) currentPlan.room_use_options = overrides.room_use_options;
   const currentProject = {
     ...project,
     phase1_complete:
@@ -953,6 +954,59 @@ test("current Results show the total, room bars and assumptions", async ({
     /People/,
   );
   await expect(page.getByText("Window shading is not resolved")).toBeVisible();
+  // A project policy that sets an allowance is still shown.
+  await expect(page.getByText("Safety allowance, 10%")).toBeVisible();
+});
+
+test("Results with no safety allowance show no allowance line", async ({
+  page,
+}) => {
+  await preview(page, {
+    status: {
+      phase1_complete: true,
+      phase2_complete: true,
+      results_ready: true,
+      result_stale: false,
+    },
+    final_report: {
+      included_scope_peak: {
+        final_design_total_kw: 4.2,
+        design_total_kw: 4.2,
+        safety_factor: 1.0,
+        safety_allowance_kw: 0,
+      },
+      room_peaks: [{ name: "Shop", design_total_kw: 4.2 }],
+    },
+    rooms: [
+      {
+        ...plan.rooms[0],
+        state: "done",
+        phase1_kw: 2.5,
+        final_kw: 4.2,
+        final_w_m2: 84,
+      },
+    ],
+  });
+  await page.route("**/api/projects", (route) =>
+    route.fulfill({
+      json: [{ ...project, phase2_complete: true, results_ready: true }],
+    }),
+  );
+  await page.route("**/api/job-status**", (route) =>
+    route.fulfill({
+      json: {
+        ...plan.status,
+        phase1_complete: true,
+        phase2_complete: true,
+        results_ready: true,
+        result_stale: false,
+      },
+    }),
+  );
+  await page.goto("/?preview=1#/job/job-1/results");
+  await expect(page.locator(".job-total")).toContainText("4.2");
+  await expect(page.locator(".job-grand-total")).toContainText("4.2");
+  await expect(page.getByText(/Safety allowance/)).toHaveCount(0);
 });
 
 test("stale Results remain visible and offer a final-load update", async ({
@@ -1503,4 +1557,49 @@ test("live activity shows parallel specialists, skill results and retains disclo
   await expect(activity).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: "test-results/live-ai-activity-mobile.png", fullPage: true });
+});
+
+
+test("room use explains conflicting evidence and can be corrected without renaming the room", async ({ page }) => {
+  const room = { ...plan.rooms[0], name: "Dining", use: { taxonomy_id: "kitchen", taxonomy_label: "Kitchen", confidence_band: "high",
+    rationale: "Named Dining on the drawing, but it holds the cooking line and dishwasher: used as kitchen.",
+    use_assessment: { factors: [{ reason: "Cooking line and dishwasher inside this outline", weight: 13 }] } } };
+  await preview(page, { rooms: [room], room_use_options: { kitchen: "Kitchen", dining: "Dining", office: "Office" } });
+  const edits = [];
+  await page.route("**/api/room-use-resolution", route => {
+    edits.push(route.request().postDataJSON());
+    return route.fulfill({ json: { status: "draft_ready" } });
+  });
+  await page.route("**/api/job-calculation**", route => route.fulfill({ json: { status: "done" } }));
+  await page.goto(`/?preview=1#/job/job-1/rooms/${room.room_id}`);
+  await expect(page.locator(".job-room-title")).toHaveText("Dining");
+  await expect(page.locator("[data-room-use-reason]")).toContainText("cooking line and dishwasher");
+  await expect(page.locator("[data-room-use]")).toHaveValue("kitchen");
+  await page.getByText("Why this use was selected").click();
+  await expect(page.getByText("Cooking line and dishwasher inside this outline")).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: "test-results/room-use-evidence.png", fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator("[data-room-use-reason]")).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: "test-results/room-use-evidence-mobile.png", fullPage: true });
+  await page.locator("[data-room-use]").selectOption("office");
+  await expect.poll(() => edits.length).toBe(1);
+  expect(edits[0]).toMatchObject({ room_id: room.room_id, taxonomy_id: "office", action: "apply_override" });
+  expect(edits[0]).not.toHaveProperty("name");
+});
+
+
+test("room occupants show the seating source and fallback rationale", async ({ page }) => {
+  const room = { ...plan.rooms[0], occupancy: { value: 140, origin: "direct_project_evidence",
+    rationale: "140 seats from the seating schedule on page 19. Printed total takes precedence over 72 counted seats." } };
+  await preview(page, { rooms: [room] });
+  await page.goto(`/?preview=1#/job/job-1/rooms/${room.room_id}`);
+  await expect(page.locator("[data-room-occupancy]")).toContainText("Design occupants (operating loads): 140");
+  await expect(page.locator("[data-room-occupancy]")).toContainText("page 19");
+  await page.screenshot({ path: "test-results/room-seating.png", fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator("[data-room-occupancy]")).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: "test-results/room-seating-mobile.png", fullPage: true });
 });

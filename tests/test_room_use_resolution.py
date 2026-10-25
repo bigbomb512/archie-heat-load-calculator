@@ -4,6 +4,7 @@
 from copy import deepcopy
 from pathlib import Path
 import sys
+import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -79,5 +80,82 @@ def main():
     check("snapshot fingerprints the separate room-use resolution", assembled["dependency_fingerprints"]["room_use_resolution"] == artifact["fingerprint"])
 
 
+class MultiFactorTests(unittest.TestCase):
+    def resolve(self, label="Dining", names=(), **context):
+        room_id = room_use_resolution.room_identity(label, "Unassigned level")
+        evidence = {room_id: {"contents": [{"name": name} for name in names], **context}}
+        return room_use_resolution.resolve({"spaces": [{"name": label}]}, use_evidence=evidence)["records"][0]
+
+    def test_cooking_and_dishwasher_override_name_but_preserve_identity(self):
+        row = self.resolve(names=["cooking line", "dishwasher"])
+        self.assertEqual((row["original_label"], row["taxonomy_id"]), ("Dining", "kitchen"))
+        self.assertIn("Named Dining", row["rationale"])
+        self.assertGreater(row["use_assessment"]["scores"]["kitchen"], row["use_assessment"]["scores"]["dining"])
+
+    def test_shopfront_contents_select_use_by_tenancy(self):
+        for tenancy, expected in [("hospitality", "dining"), ("retail", "retail")]:
+            row = self.resolve("Kitchen", ["POS", "display fridge", "seating"], tenancy=tenancy, storefront=True)
+            self.assertEqual(row["taxonomy_id"], expected)
+
+    def test_operator_override_and_reviewer_decision_win(self):
+        label = "Dining"
+        base = self.resolve(label, ["cooking line", "dishwasher"])
+        base["override"] = {"taxonomy_id": "office", "reviewer": "Partner"}
+        evidence = {base["room_id"]: {"contents": [{"name": "cooking line"}, {"name": "dishwasher"}]}}
+        row = room_use_resolution.resolve({"spaces": [{"name": label}]}, existing={"records": [base]}, use_evidence=evidence)["records"][0]
+        self.assertEqual(row["taxonomy_id"], "office")
+        proposal = {"rooms": [{"kind": "room", "label": label, "room_use_category": "office", "room_use_reviewed": True}]}
+        row = room_use_resolution.resolve({}, proposal=proposal, use_evidence=evidence)["records"][0]
+        self.assertEqual((row["taxonomy_id"], row["classification_origin"]), ("office", "reviewer_decision"))
+
+    def test_refrigeration_and_excluded_scopes_are_not_rescored(self):
+        for label in ("Coolroom", "Freezer", "Plant room"):
+            row = self.resolve(label, ["oven", "dishwasher"])
+            self.assertIn(row["space_scope"], room_use_resolution.EXCLUDED_SCOPES)
+            self.assertNotIn("use_assessment", row)
+
+    def test_unclear_evidence_retains_label_at_reduced_confidence(self):
+        row = self.resolve("Office")
+        self.assertEqual((row["taxonomy_id"], row["confidence_band"]), ("office", "low"))
+        self.assertIn("reduced confidence", row["rationale"])
+        self.assertEqual(row["status"], "resolved")  # uncertainty alone must not schedule another paid skill call
+        self.assertTrue(row["review_recommended"])
+
+    def test_hand_basin_with_cooking_supports_kitchen_not_amenities(self):
+        self.assertEqual(self.resolve("Dining", ["wok burner", "hand basin"])["taxonomy_id"], "kitchen")
+
+    def test_small_wc_room_resolves_to_ancillary(self):
+        row = self.resolve("Dining", ["WC", "basin"], area_m2=4, enclosed=True)
+        self.assertEqual(row["taxonomy_id"], "ancillary_conditioned")
+
+    def test_name_only_placement_does_not_create_false_confidence(self):
+        label = "Kitchen"
+        rid = room_use_resolution.room_identity(label, "Unassigned level")
+        row = room_use_resolution.resolve({"spaces": [{"name": label}]}, use_evidence={rid: {
+            "contents": [{"name": "oven", "source": "equipment_location_label"}, {"name": "dishwasher", "source": "equipment_location_label"}]}})["records"][0]
+        self.assertEqual(row["confidence_band"], "low")
+        self.assertTrue(any(f["factor"] == "placement_uncertain" for f in row["use_assessment"]["factors"]))
+
+    def test_single_cooking_item_does_not_reclassify_a_large_trading_space(self):
+        row = self.resolve("Shop", ["oven"], tenancy="retail", area_m2=180)
+        self.assertEqual(row["taxonomy_id"], "retail")
+
+    def test_deterministic_scores_and_fingerprints(self):
+        one = self.resolve(names=["oven", "dishwasher"])
+        two = self.resolve(names=["dishwasher", "oven"])
+        self.assertEqual(one["use_assessment"], two["use_assessment"])
+        self.assertEqual(one["record_fingerprint"], two["record_fingerprint"])
+
+    def test_plan_registration_requires_distributed_consistent_anchors(self):
+        source = [{"text": str(110+i*100), "bbox": [i*100, (i%2)*30, i*100+4, (i%2)*30+4]} for i in range(4)]
+        target = [{**word, "bbox": [word["bbox"][0]+10, word["bbox"][1]-100, word["bbox"][2]+10, word["bbox"][3]-100]} for word in source]
+        fit = room_use_resolution.plan_text_translation(source, target)
+        self.assertEqual((fit["dx_pt"], fit["dy_pt"]), (10, -100))
+        self.assertIsNone(room_use_resolution.plan_text_translation(source[:3], target[:3]))
+        bad = deepcopy(target); bad[0]["bbox"][0] += 40
+        self.assertIsNone(room_use_resolution.plan_text_translation(source, bad))
+
+
 if __name__ == "__main__":
     main()
+    unittest.main(argv=[sys.argv[0]])

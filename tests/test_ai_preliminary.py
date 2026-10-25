@@ -126,7 +126,7 @@ def main():
     fallback_report = calculate(direct, safety_factor_policy=fallback_policy)
     fallback_peak = fallback_report["included_scope_peak"]
     fallback_hours = [hour for scenario in fallback_report["scenario_results"] for room in scenario["rooms"] for hour in room["hours"]]
-    check("preliminary fallback applies once, neutralizes room factors, and remains draft", fallback_report["status"] == "draft" and fallback_report["safety_policy_applied"] and fallback_report["safety_factor"] == 1.1 and fallback_peak["final_design_total_kw"] == round(fallback_peak["raw_coincident_total_kw"] * 1.1, 4) and all(hour["safety_factor"] == 1.0 and hour["safety_allowance_kw"] == 0 for hour in fallback_hours))
+    check("preliminary fallback adds no allowance, neutralizes room factors, and remains draft", fallback_report["status"] == "draft" and fallback_report["safety_policy_applied"] and fallback_report["safety_factor"] == 1.0 and fallback_peak["final_design_total_kw"] == fallback_peak["raw_coincident_total_kw"] and all(hour["safety_factor"] == 1.0 and hour["safety_allowance_kw"] == 0 for hour in fallback_hours))
     check("unsupported components remain explicit exclusions", {row["component"] for row in direct["exclusions"]} >= {"opaque envelope", "glazing and façade solar", "infiltration"})
     surface_vision = {"result": {"auto_extraction": {"entities": [{"kind": "surface", "page": 3, "label": "Retail tenancy external wall", "area_m2": 30,
         "surface_kind": "wall", "orientation": "N", "boundary_reference": "external", "confidence": "high"}]}}}

@@ -596,6 +596,10 @@ body.job-preview {
   font-weight: 700;
   white-space: nowrap;
 }
+.job-room-detail .job-key-facts dd {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .job-key-facts strong.assumed,
 .job-room-detail .assumed {
   text-decoration: underline dashed;

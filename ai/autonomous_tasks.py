@@ -20,6 +20,7 @@ TASKS = {
     "P0_room_names": {"id": "room_geometry_room_names", "inputs": ["calibrated_enclosed_areas", "room_registry"], "budget_chars": 4000, "media": "image", "prompt_builder": "build_p0_packets", "reply_validator": "validate_p0_room_names", "apply_function": "_apply_p0_room_names", "fallback": None},
     "P0_room_outlines": {"id": "room_geometry_outlines", "inputs": ["rooms_without_area", "plan_page"], "budget_chars": 3000, "media": "image", "prompt_builder": "build_p0_packets", "reply_validator": "validate_p0_outlines", "apply_function": "_apply_p0_outlines", "fallback": None},
     "P0_tenancy_outline": {"id": "tenancy_outline", "inputs": ["plan_page"], "budget_chars": 1500, "media": "image", "prompt_builder": "tenancy_outline_prompt", "reply_validator": "validate_p0_tenancy_outline", "apply_function": "_apply_p0_tenancy_outline", "fallback": None},
+    "P0_outline_corners": {"id": "outline_corners", "inputs": ["outline_sketch", "drawn_corners"], "budget_chars": 1500, "media": "image", "prompt_builder": "corner_outline_prompt", "reply_validator": "validate_p0_outline_corners", "apply_function": "_apply_p0_outline_corners", "fallback": None},
     "P0_unnamed_space": {"id": "floor_with_no_room", "inputs": ["traced_rooms", "plan_page"], "budget_chars": 2000, "media": "image", "prompt_builder": "unnamed_space_prompt", "reply_validator": "validate_p0_unnamed_space", "apply_function": "_apply_p0_unnamed_space", "fallback": None},
     "P0_room_sizes": {"id": "room_sizes_without_outline", "inputs": ["rooms_without_area", "plan_page", "name_sheets"], "budget_chars": 3000, "media": "image", "prompt_builder": "room_size_prompt", "reply_validator": "validate_room_size_reply", "apply_function": "_apply_p0_sizes", "fallback": "tenancy_remainder"},
     "S1_printed_areas": {"id": "scanned_printed_room_areas", "inputs": ["scanned_plan_tiles", "raster_room_outlines"], "budget_chars": 3000, "media": "image", "prompt_builder": "scan_reading.area_prompt", "reply_validator": "scan_reading.validate_area_reply", "apply_function": "_apply_s1_areas", "fallback": None},
@@ -137,6 +138,14 @@ def validate_p0_room_names(packet, reply):
 
 def validate_p0_tenancy_outline(packet, reply):
     return room_outline.validate_tenancy_outline_reply(parse_json_reply(reply), packet["transform"])
+
+
+def validate_p0_outline_corners(packet, reply):
+    # Not judged against the AI's sketch: on Casa Nova (2026-10-24) the tenancy sketch was 58 m² of a ~260 m² tenancy
+    # and good corner answers were refused for differing from it. A room may not exceed the corner-built tenancy.
+    return room_outline.validate_corner_outline_reply(parse_json_reply(reply), packet["corners"], None,
+                                                      packet.get("room") or "the tenancy",
+                                                      max_area=packet.get("tenancy_area_px") if packet.get("room") else None)
 
 
 def validate_p0_unnamed_space(packet, reply):

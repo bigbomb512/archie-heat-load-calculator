@@ -237,7 +237,7 @@ class ServiceTests(unittest.TestCase):
         with patch.dict(os.environ, {"ARCHIE_PAGE_BATCH": "1"}):
             self.assertEqual(service.batch_size(), 1)
         with patch.dict(os.environ, {"ARCHIE_PAGE_BATCH": "x"}):
-            self.assertEqual(service.batch_size(), 4)
+            self.assertEqual(service.batch_size(), 6)                       # the default: six pages a call
         with patch.dict(os.environ, {"ARCHIE_PAGE_BATCH": "4", "ARCHIE_PASS2_BATCH": "2"}):
             self.assertEqual((service.batch_size(), service.pass2_batch_size()), (4, 2))
         with patch.dict(os.environ, {"ARCHIE_PAGE_BATCH": "3", "ARCHIE_PASS2_BATCH": ""}):

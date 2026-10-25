@@ -64,12 +64,22 @@ OPENROUTER_STEP_MODELS = {"PASS1": "deepseek/deepseek-v4.1-flash", "PASS2": "goo
                           "SKILLS": "deepseek/deepseek-v4.1-flash",
                           # The drawing tasks (scale, outlines, north, walls) read cropped plan images: the model
                           # that read drawn symbols best.
-                          "DRAWINGS": "google/gemini-3.8-flash"}
+                          "DRAWINGS": "google/gemini-3.8-flash",
+                          # Outlines (the tenancy, open-plan rooms, floor with no room, picking drawn corners): tested
+                          # 2026-10-24 on Casa Nova's saved questions. Gemini 3.8 Flash at low reasoning gave unusable
+                          # corner lists; Claude Sonnet 5.5 traced the tenancy along its walls and shopfront (220 m²) at
+                          # about US$0.01 a question in under 10 s; Gemini Pro gave a similar outline at up to US$0.11 and
+                          # 140 s. Claude Haiku 5.5 then did nearly as well for about a twelfth of the cost (tenancy
+                          # 242.5 m² against Sonnet's 247.8, room names identical; US$0.0014 + 0.0005), while GPT-5.4
+                          # mini missed floor (188 m²) and misnamed rooms, and Qwen 3.7 Plus had no host meeting the
+                          # no-storage setting.
+                          "OUTLINES": "anthropic/claude-haiku-5.5"}
 # How much the model thinks per step unless ARCHIE_OPENROUTER_REASONING(_<STEP>) says otherwise. Measured 2026-10-18
 # (tools/compare_vision_models.py, four answer-key sets): Gemini 3.8 Flash's default thinking was ~95% of what it
 # wrote; at "low" it scored the same or better on every keyed task and cost 4–30x less (Butcher Buffet drawing tasks
 # US$0.28 -> 0.06, equipment 0.34 -> 0.07; a scanned set 0.69 -> 0.02). "default" turns it back to the model's own.
-OPENROUTER_STEP_REASONING = {"PASS2": "low", "DRAWINGS": "low"}
+# PASS1 joined 2026-10-24: Casa Nova's page reading wrote 135k tokens (mostly thinking) for 85k read, 13 US cents.
+OPENROUTER_STEP_REASONING = {"PASS1": "low", "PASS2": "low", "DRAWINGS": "low"}
 # A thinking model's reasoning counts against the reply cap (DeepSeek V4.1 Flash thought about 10,000 tokens a call).
 OPENROUTER_MAX_OUTPUT_TOKENS = 48000
 # A reply cut off at that cap is sent once more with less thinking and twice the room (every DeepSeek V4.1 Flash host
@@ -624,10 +634,18 @@ def configured():
 SMALL_TASKS = frozenset({"pass1", "skill:sheet_identity", "skill:revision_scope", "skill:site_clue_extraction"})
 
 
+# Room naming joined on 2026-10-24: on Casa Nova's saved question Gemini 3.8 Flash named all three enclosed areas
+# wrong (the dining end "Kitchen", the kitchen strip "Bar"); Sonnet 5.5 named two of three right for US$0.007.
+OUTLINE_TASKS = frozenset({"P0_tenancy_outline", "P0_room_outlines", "P0_unnamed_space", "P0_outline_corners", "P0_room_names"})
+
+
 def step_of(task=""):
-    """The review step a task belongs to: PASS1 (what is on each page), PASS2 (values such as equipment), SKILLS, or
-    DRAWINGS (the drawing tasks: scale, room outlines, north, walls, openings)."""
+    """The review step a task belongs to: PASS1 (what is on each page), PASS2 (values such as equipment), SKILLS,
+    OUTLINES (drawing an outline or picking its drawn corners) or DRAWINGS (the other drawing tasks: scale, room names,
+    north, walls, openings)."""
     task = str(task or "")
+    if task.split(":", 1)[0] in {"drawing", "supervisor"} and task.split(":", 1)[-1] in OUTLINE_TASKS:
+        return "OUTLINES"
     if task == "pass1":
         return "PASS1"
     if task.startswith("pass2"):
@@ -661,7 +679,7 @@ def get(task=""):
     model = model_for(task)
     provider = CLASSES[chosen()](model=model) if model else CLASSES[chosen()]()
     provider.step = step_of(task)
-    if provider.step == "DRAWINGS":
+    if provider.step in {"DRAWINGS", "OUTLINES"}:
         # A drawing call is bounded as a whole request (see DRAWING_TIMEOUT_S); the codex CLI route uses timeout.
         limit = drawing_timeout_s()
         provider.timeout = min(getattr(provider, "timeout", limit) or limit, limit)

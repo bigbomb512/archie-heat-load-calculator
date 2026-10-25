@@ -108,10 +108,48 @@ def _site_packet(root):
     return packet, prompt, {"ai_input": ai_input, "spatial_ocr": spatial, "building_evidence": building}
 
 
+def _north_pages(root):
+    """The pages asked for their north arrow, in stages: the main traced plan(s), as only their north is used; when
+    all of those were answered without an arrow, the other floor plans and the site or location plan; only when those
+    have none either, every plan page. Casa Nova (2026-10-24) asked all 22 plan-like pages (66 images, a third of the
+    drawing calls) because its setout plan has no arrow."""
+    ai_input = _read(root / "ai_input.json", {})
+    plans = autonomous_tasks.plan_pages(ai_input)
+    try:
+        main = {row["page"] for row in _p0_main_geometry_pages(root)}
+    except (OSError, ValueError, KeyError, TypeError):
+        main = set()
+
+    def kind(row):
+        return " ".join(str(row.get(key) or "") for key in ("type", "detected_type", "sheet_classification", "title")).casefold()
+    site = [row for row in (ai_input.get("drawing_set", {}) or {}).get("pages", [])
+            if isinstance(row, dict) and type(row.get("page")) is int and re.search(r"site|location|locality", kind(row))]
+    floor = [row for row in plans if row["page"] not in main and "floor_plan" in kind(row)
+             and not re.search(r"ceiling|rcp|services?|lighting|electric|hydraulic|mechanical|power", kind(row))]
+    stages = [[row for row in plans if row["page"] in main],
+              sorted({row["page"]: row for row in floor + site}.values(), key=lambda row: row["page"]),
+              plans]
+
+    def found(record):
+        value = (record or {}).get("validation", {})
+        value = value.get("result", value) if isinstance(value, dict) else {}
+        return isinstance(value, dict) and value.get("found")
+    asked = []
+    for stage in stages:
+        new = [row for row in stage if row["page"] not in {done["page"] for done in asked}]
+        if not new:
+            continue
+        asked += new
+        records = [_current_task(root, "P2_north", f"page-{row['page']}") for row in asked]
+        settled = all(record and record.get("status") in {"applied", "below_accuracy_bar", "blocked"} for record in records)
+        if not settled or any(found(record) for record in records):
+            break        # waiting for answers, or an arrow was found: no need to ask further pages
+    return sorted(asked, key=lambda row: row["page"])
+
+
 def _north_packets(root):
-    ai_input, _spatial, _building = _load_inputs(root)
     rows = []
-    for page in autonomous_tasks.plan_pages(ai_input):
+    for page in _north_pages(root):
         number = page["page"]
         target = f"page-{number}"
         try:
@@ -982,7 +1020,102 @@ def _p0_outline_packets(root, requested_rooms=None):
 ROOM_SIZE_SOURCES = {"printed_area": "printed (read from image)", "printed_dimensions": "printed dimensions",
                      "estimated": "AI estimate from the plan", "remainder": "tenancy area remainder"}
 OUTLINE_STEPS = {"P0_dimensions", "P0_wall_styles", "P0_room_names", "P0_tenancy_outline", "P0_room_outlines", "P0_unnamed_space",
-                 "S1_printed_areas"}
+                 "P0_outline_corners", "S1_printed_areas"}
+
+
+def _settled(record):
+    """Answered, or given up on (refused twice, or blocked)."""
+    return (not record or record.get("status") in {"applied", "below_accuracy_bar", "blocked", "failed"}
+            or len(record.get("reply_attempts") or []) >= 2)
+
+
+def _corner_subjects(root, page):
+    """What the AI sketched on a plan page that has no corner-built outline yet: [(target, room or None, source task,
+    [sketch pieces as point lists])]. The tenancy comes first; rooms only once its corners are settled."""
+    subjects = []
+    tenancy = _current_task(root, "P0_tenancy_outline", f"page-{page}")
+    if tenancy and tenancy.get("status") in {"applied", "below_accuracy_bar"} and tenancy.get("applied_value", {}).get("points"):
+        subjects.append((f"tenancy-page-{page}", None, "P0_tenancy_outline", [tenancy["applied_value"]["points"]]))
+    if subjects:
+        corner = _current_task(root, "P0_outline_corners", f"tenancy-page-{page}")
+        if corner is None or not _settled(corner):
+            return subjects   # rooms are clipped to the corner-built tenancy, so they wait for it
+    for task in ("P0_room_outlines", "P0_unnamed_space"):
+        record = _current_task(root, task, f"page-{page}")
+        if not record or record.get("status") not in {"applied", "below_accuracy_bar"}:
+            continue
+        value = record.get("validation")
+        value = value.get("result", value) if isinstance(value, dict) else value     # the reply handler wraps it
+        value = value.get("spaces", []) if isinstance(value, dict) else value
+        pieces = {}
+        for row in value if isinstance(value, list) else []:
+            if isinstance(row, dict) and row.get("room") and len(row.get("points") or []) >= 3:
+                pieces.setdefault(row["room"], []).append(row["points"])
+        for room, sketches in sorted(pieces.items()):
+            subjects.append((f"room-{re.sub(r'[^a-z0-9]+', '-', room.casefold()).strip('-')}-page-{page}", room, task, sketches))
+    return subjects
+
+
+def _p0_corner_packets(root, force=False):
+    """Each AI sketch (the tenancy, open-plan rooms, floor with no room) is redrawn from the drawing's own corners: the
+    plan around the sketch with its drawn corners numbered, and the AI lists them in order (2026-10-24)."""
+    from shapely.geometry import Polygon
+    from shapely.ops import unary_union
+    result = []
+    for page in _p0_main_geometry_pages(root):
+        number = page["page"]
+        subjects = _corner_subjects(root, number)
+        if not subjects:
+            continue
+        try:
+            context = _p0_context(root, number)
+            calibration, _error = _p0_calibration_ready(root, number, context)
+            if not calibration or _p0_is_raster(root, number, context, calibration):
+                continue            # an image-only plan has no drawn corners; its sketches stay
+            mm_per_px = float(context.get("declared_mm_per_px") or calibration["mm_per_px"])
+            wall_style_ids = sorted({style_id for row in _p0_wall_style_records(root, number)
+                                     for style_id in row.get("applied_value", {}).get("wall_style_ids", [])})
+            if wall_style_ids:
+                wall_style_ids, _added = _completed_wall_styles(root, context, calibration, wall_style_ids)
+        except (OSError, ValueError, IndexError, KeyError, TypeError) as error:
+            result.append(("P0_outline_corners", f"tenancy-page-{number}", {"task": "P0_outline_corners", "page": number},
+                           "", [], f"The corner question is blocked: {error}"))
+            continue
+        for target, room, source, sketches in subjects:
+            current = _current_task(root, "P0_outline_corners", target)
+            if (not force and current and current.get("packet", {}).get("sketches") == sketches
+                    and current.get("status") in {"applied", "below_accuracy_bar", "waiting_for_reply"}):
+                continue
+            shapes = [Polygon(points).buffer(0) for points in sketches]
+            union = unary_union([shape for shape in shapes if not shape.is_empty])
+            if union.is_empty:
+                continue
+            main = max(getattr(union, "geoms", [union]), key=lambda part: part.area)
+            # The tenancy is the whole floor: show the whole plan, as its sketch may have left part of it out. A room is
+            # shown within the corner-built tenancy (its sketch may be a fragment of it), else around its sketch.
+            tenancy = _tenancy_polygon(root, number) if room is not None else None
+            if room is None:
+                region = tuple(context["viewport"])
+            elif tenancy is not None:
+                region = room_outline.corner_region(unary_union([tenancy, union]), context["viewport"], mm_per_px, margin_mm=1000.0)
+            else:
+                region = room_outline.corner_region(union, context["viewport"], mm_per_px)
+            corners, kinds = room_outline.corner_candidates(context["objects"], wall_style_ids, region, mm_per_px, with_kinds=True)
+            subject = room or "the tenancy"
+            if len(corners) < 3:
+                result.append(("P0_outline_corners", target, {"task": "P0_outline_corners", "page": number, "room": room},
+                               "", [], "Fewer than three drawn corners near the sketch."))
+                continue
+            image, transform = room_outline.render_numbered_corners(context["image"], corners, region,
+                                                                    list(main.exterior.coords)[:-1], kinds=kinds)
+            packet = {"task": "P0_outline_corners", "page": number, "room": room, "source_task": source,
+                      "sketches": sketches, "sketch": [[round(x, 2), round(y, 2)] for x, y in list(main.exterior.coords)[:-1]],
+                      "sketch_area_px": round(union.area, 1), "corners": [[round(x, 2), round(y, 2)] for x, y in corners],
+                      "corner_kinds": kinds, **({"tenancy_area_px": round(tenancy.area, 1)} if tenancy is not None else {}),
+                      "transform": transform, "calibration": calibration}
+            result.append(("P0_outline_corners", target, packet, room_outline.corner_outline_prompt(subject, len(corners)),
+                           [_png_bytes(image)], ""))
+    return result
 
 
 def _p0_tenancy_packets(root, force=False):
@@ -1015,14 +1148,69 @@ def _tenancy_waiting(root, page):
 
 
 def _tenancy_polygon(root, page):
-    """The answered tenancy outline for a plan page, or None (then AI-drawn rooms aren't clipped)."""
+    """The tenancy outline built from drawn corners the AI picked, or None (then AI-drawn rooms aren't clipped).
+
+    The freehand tenancy sketch is not used for clipping: on Casa Nova (2026-10-24) it ran over the paving and cut
+    diagonally across the dining area, and clipping to it removed about 40 m² of real floor."""
     from shapely.geometry import Polygon
-    record = _current_task(root, "P0_tenancy_outline", f"page-{page}")
+    record = _current_task(root, "P0_outline_corners", f"tenancy-page-{page}")
     points = (record or {}).get("applied_value", {}).get("points") if (record or {}).get("status") in {"applied", "below_accuracy_bar"} else None
     if not points or len(points) < 3:
         return None
     polygon = Polygon(points).buffer(0)
     return polygon if polygon.geom_type == "Polygon" and not polygon.is_empty else None
+
+
+def _apply_p0_outline_corners(web, project, root, record, validated):
+    """The outline built from the picked corners: the tenancy becomes the clipping outline; a room's AI-sketched trace
+    is replaced, clipped to the tenancy, with rooms drawn inside it taken off (all traced rooms, for floor with no
+    room)."""
+    from shapely.geometry import Polygon
+    from shapely.ops import unary_union
+    packet = record["packet"]
+    page = packet["page"]
+    mm_per_px = float(packet["calibration"]["mm_per_px"])
+    parts = [Polygon(points).buffer(0) for points in validated["parts"]]
+    parts = [part for part in parts if part.geom_type == "Polygon" and not part.is_empty]
+    note = ("Built from drawn corners the AI picked"
+            + ("; the outline crossed itself and was split where it crossed" if validated.get("repaired") else "")
+            + (f"; sides with no drawn corner: {validated['missing_sides']}" if validated.get("missing_sides") else ""))
+    if packet.get("room") is None:
+        tenancy = max(parts, key=lambda part: part.area)
+        area = room_outline.area_m2(tenancy, mm_per_px)
+        if area < room_outline.TENANCY_MIN_M2:
+            raise ValueError(f"The listed corners enclose only {area:.1f} m²; list the corners all the way around the tenancy.")
+        record.update({"status": _status_for_accuracy("ai_determined", record["accuracy"]), "source": "ai_determined",
+                       "applied_value": {"points": [[round(float(x), 2), round(float(y), 2)] for x, y in tenancy.exterior.coords][:-1],
+                                         "area_m2": round(area, 1), "method": "corners", "note": note,
+                                         "label": record["quality_label"]},
+                       "validation": validated, "block_reason": ""})
+        return record
+    room = packet["room"]
+    tenancy = _tenancy_polygon(root, page)
+    clipped = [piece for part in parts for piece in room_outline.clip_to_tenancy(part, tenancy, mm_per_px, min_m2=0)]
+    others = [(row["room_label"], Polygon(row["points_image_px"]).buffer(0))
+              for row in reviewer_room_geometry_service.current_records(reviewer_room_geometry_service._paths(project))
+              if row.get("page") == page and row.get("room_label") != room and len(row.get("points_image_px") or []) >= 4]
+    minimum = room_outline.UNNAMED_SPACE_MIN_M2 if packet.get("source_task") == "P0_unnamed_space" else room_outline.MIN_ROOM_M2
+    polygons = []
+    for piece in clipped:
+        if packet.get("source_task") == "P0_unnamed_space":
+            net = piece.difference(unary_union([shape for _label, shape in others])) if others else piece
+        else:
+            net = room_outline.subtract_nested([(room, piece), *others])[0][0]
+        polygons.extend({"label": room, "polygon": shape, "method": "ai_corner_outline", "note": note}
+                        for shape in getattr(net, "geoms", [net])
+                        if shape.geom_type == "Polygon" and not shape.is_empty and room_outline.area_m2(shape, mm_per_px) >= minimum)
+    if not polygons:
+        raise ValueError(f"The listed corners leave no floor for {room} inside the tenancy and outside the other rooms.")
+    rows = _p0_trace_rows(root, record, polygons)
+    prepared = reviewer_room_geometry_service.persist_ai_determined_traces(web, project, rows, record["run_id"],
+        record["quality_label"], replace_pages=[page], replace_room_labels=[room])
+    record.update({"status": _status_for_accuracy("ai_determined", record["accuracy"]), "source": "ai_determined",
+                   "applied_value": {"rooms": _p0_result_rooms(prepared), "note": note, "label": record["quality_label"]},
+                   "validation": validated, "block_reason": ""})
+    return record
 
 
 def _apply_p0_tenancy_outline(root, record, validated):
@@ -2474,7 +2662,7 @@ def _refresh_geometry_tasks(root, room_id=None, page_number=None):
     # If both packet lists are calculated together, the outline builder cannot
     # see the just-created naming tasks and offers an unnecessary second task.
     _refresh_site_tasks(root)
-    for packet_builder in (_p0_initial_packets, _p0_followup_packets, _p0_tenancy_packets, _p0_outline_packets, _p0_unnamed_space_packets, _s1_packets, _p0_size_packets):
+    for packet_builder in (_p0_initial_packets, _p0_followup_packets, _p0_tenancy_packets, _p0_outline_packets, _p0_unnamed_space_packets, _p0_corner_packets, _s1_packets, _p0_size_packets):
         for task,target,packet,prompt,images,reason in packet_builder(root):
             budget=autonomous_tasks.TASKS[task]["budget_chars"]
             _create_run(root,task,target,packet,prompt,images,reason or
@@ -2614,7 +2802,7 @@ def _run_all(web, project, root):
                      if task == "P0_dimensions" and len(prompt) > 1500 else
                      "Prompt exceeds the 3,000-character limit; evidence was not shortened."
                      if task == "P0_wall_styles" and len(prompt) > 3000 else ""))
-    for packet_builder in (_p0_followup_packets, _p0_tenancy_packets, _p0_outline_packets, _p0_unnamed_space_packets, _s1_packets, _p0_size_packets, _p3_packets, _p7_packets, _p4_packets, _p6_kitchen_packets):
+    for packet_builder in (_p0_followup_packets, _p0_tenancy_packets, _p0_outline_packets, _p0_unnamed_space_packets, _p0_corner_packets, _s1_packets, _p0_size_packets, _p3_packets, _p7_packets, _p4_packets, _p6_kitchen_packets):
         for task, target, packet, prompt, images, reason in packet_builder(root):
             budget = autonomous_tasks.TASKS[task]["budget_chars"]
             _create_run(root, task, target, packet, prompt, images,
@@ -2652,7 +2840,7 @@ def _export_determinations(root):
         result["P6_kitchen"] = kitchen_equipment.to_determinations(
             kitchen_record["applied_value"].get("items", []), source=source)
     rooms = {}
-    for task in ("S1_printed_areas", "P0_room_names", "P0_room_outlines", "P0_unnamed_space", "P0_room_sizes"):
+    for task in ("S1_printed_areas", "P0_room_names", "P0_room_outlines", "P0_unnamed_space", "P0_outline_corners", "P0_room_sizes"):
         for record in (row for row in _all_current(root) if row.get("task") == task and row.get("applied_value")):
             for row in record["applied_value"].get("rooms", []):
                 key = str(row.get("label", "")).casefold()
@@ -2804,7 +2992,7 @@ def _apply_p2(web, project, root, record, validated):
     candidates_by_page[page] = float(validated["plan_up_azimuth_deg"])
     completed_pages.add(page)
     # Use the same complete plan-view list as the north packet builder and declare_north.
-    plan_page_numbers = [row["page"] for row in autonomous_tasks.plan_pages(_read(root / "ai_input.json", {}))]
+    plan_page_numbers = [row["page"] for row in _north_pages(root)]   # the pages asked, as the packet builder
     missing_pages = [number for number in plan_page_numbers if number not in completed_pages]
     if missing_pages:
         record.update({"status": "waiting_for_reply", "block_reason": "Waiting for a north-arrow check on plan page(s) " + ", ".join(map(str, missing_pages)) + ". All available pages must be checked before cross-page agreement is applied.", "validation": validated})
@@ -2826,7 +3014,7 @@ def _apply_p2(web, project, root, record, validated):
     reviewer = "Archie AI"
     task_records = {**other_records, page: record}
     primary_apply_failed = False
-    for north_page in plan_page_numbers:
+    for north_page in sorted(set(plan_page_numbers) | set(task_records)):   # every page asked or already answered
         declaration = _read(root / "reviewer_room_geometry.json", {}).get("page_north", {}).get(str(north_page), {})
         if declaration.get("declaration_source", "reviewer" if declaration else "") == "reviewer":
             continue
@@ -2860,6 +3048,26 @@ def _apply_p2(web, project, root, record, validated):
                        "validation": validated, "cross_check": consensus,
                        "block_reason": f"North agreement succeeded, but page {page} could not be applied."})
         return record
+    # A traced plan without its own north arrow takes the agreed north of the other sheets in the set (one set's
+    # sheets share their orientation), so its rooms' walls still get compass directions. Until 2026-10-24 such a page
+    # got none (Casa Nova's setout plan).
+    try:
+        main_pages = [row["page"] for row in _p0_main_geometry_pages(root)]
+    except (OSError, ValueError, KeyError, TypeError):
+        main_pages = []
+    declared = _read(root / "reviewer_room_geometry.json", {}).get("page_north", {})
+    for main_page in main_pages:
+        if str(main_page) in declared or main_page in task_records:   # given north already (now or before)
+            continue
+        try:
+            reviewer_room_geometry_service.post(web, project, {
+                "action": "declare_north", "page": main_page, "reviewer": f"{reviewer} (north of page {page}; no arrow on this sheet)",
+                "plan_up_azimuth_deg": applied_angle, "declaration_source": declaration_source,
+                "ai_run_id": record["run_id"],
+            }, _defer_evidence_rebuild=True)
+            task_records.setdefault(main_page, record)
+        except (ValueError, OSError, KeyError):
+            pass
     if task_records and web is not None:
         calculation_extraction_service.post(web, project, {"action": "build"})
     record.update({"status": _status_for_accuracy("ai_determined", record["accuracy"]), "source": "ai_determined",
@@ -3028,6 +3236,9 @@ def _post(web, project, data, *, defer_evidence_rebuild=False):
             record = _apply_p0_outlines(web, project, root, record, validated)
             record["applied_value"]["not_drawn"] = ([{"room": name, "reason": "The AI left it out."} for name in omitted]
                                                     + [{"room": name, "reason": reason} for name, reason in not_drawn.items()])
+        elif task == "P0_outline_corners":
+            validated = autonomous_tasks.validate_p0_outline_corners(record["packet"], reply)
+            record = _apply_p0_outline_corners(web, project, root, record, validated)
         elif task == "P0_tenancy_outline":
             validated = autonomous_tasks.validate_p0_tenancy_outline(record["packet"], reply)
             record = _apply_p0_tenancy_outline(root, record, validated)
@@ -3119,6 +3330,7 @@ def prepare_investigation(project, investigation):
         "P0_room_sizes": lambda: _p0_size_packets(root, requested_rooms=names),
         "P0_unnamed_space": lambda: _p0_unnamed_space_packets(root, force=True),
         "P0_tenancy_outline": lambda: _p0_tenancy_packets(root, force=True),
+        "P0_outline_corners": lambda: _p0_corner_packets(root, force=True),
         "P3_boundaries": lambda: _p3_packets(root, page_number=investigation.get("plan_page"), force=True),
         "P4_storefront_wall": lambda: _p4_packets(root),
         "P4_openings": lambda: _p4_packets(root, only_room_id=investigation.get("room_id") or None),

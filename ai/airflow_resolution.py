@@ -249,7 +249,7 @@ def _mark_stale_orphan(record, override, source_fingerprints):
     return row
 
 
-def resolve(building, vision, proposal, room_use, ceiling_volume, pack, source_fingerprints, existing=None):
+def resolve(building, vision, proposal, room_use, ceiling_volume, pack, source_fingerprints, existing=None, occupancy_counts=None, room_areas=None):
     """Resolve draft air paths from the current AI/PDF context."""
     existing = existing if isinstance(existing, dict) else empty_airflow_resolution()
     proposal = proposal if isinstance(proposal, dict) else {"rooms": []}
@@ -263,12 +263,21 @@ def resolve(building, vision, proposal, room_use, ceiling_volume, pack, source_f
     }
     for room in _room_rows(building, proposal, room_use):
         rid, sources, use, ceiling, area, volume, profile_id, profile, area_source = _room_context(building, proposal, room, room_use, ceiling_volume, pack)
+        if room_areas is not None:
+            area_source = room_areas.get(rid, {})
+            area = _number(area_source.get("value"), positive=True)
         evidence = next((value for value in (_evidence(source) for source in sources) if value), [])
         confidence = _confidence(use.get("confidence_score", use.get("confidence", .4))) if isinstance(use, dict) else .4
         schedule = _schedule(profile_id, next((source.get("schedules") for source in sources if isinstance(source, dict) and source.get("schedules")), None))
 
         people, people_source = _first(sources, ("occupancy_count", "people_count", "occupancy"))
-        people = _number(people, positive=True)
+        selected_people = (occupancy_counts or {}).get(rid)
+        if selected_people:
+            people = selected_people["value"]
+            people_source = selected_people
+        people = _number(people)
+        if people is not None and people < 0:
+            people = None
         if people is None and area is not None and _number(profile.get("occupancy_density_people_m2"), positive=True):
             people = area * float(profile["occupancy_density_people_m2"])
             people_source = {"origin": "controlled_fallback"}
@@ -280,16 +289,17 @@ def resolve(building, vision, proposal, room_use, ceiling_volume, pack, source_f
         fixed = _number(fixed, positive=True)
         people_flow = people * people_rate if people is not None and people_rate is not None else None
         area_flow = area * area_rate if area is not None and area_rate is not None else None
-        rates = [value for value in (people_flow, area_flow, fixed) if value is not None]
-        outside = max(rates) if rates else None
+        # Both contributions are required. A missing operand is unknown, not zero.
+        combined = people_flow + area_flow if people_flow is not None and area_flow is not None else None
+        outside = round(max(combined, fixed or 0), 3) if combined is not None else None
         outside_origin = "project_evidence" if any(_origin(source) == "project_evidence" for source in (people_rate_source, area_rate_source, fixed_source)) else "controlled_fallback"
         outside_status = "resolved" if outside is not None and outside_origin == "project_evidence" else "provisional" if outside is not None else "excluded"
         outside_record = _make_record("outside_air", rid, "room ventilation", value=outside, origin=outside_origin, confidence=confidence if outside_origin != "controlled_fallback" else .35,
-            evidence=evidence, rationale="Governing people/area/fixed ventilation rate.", schedule=schedule,
-            formula="max(occupancy × L/s/person, area × L/s/m², fixed minimum)",
-            operands={"occupancy": people, "people_rate_lps_per_person": people_rate, "area_m2": area, "area_rate_lps_per_m2": area_rate, "fixed_minimum_lps": fixed}, status=outside_status,
+            evidence=evidence, rationale="Sum of people and area ventilation, subject to a fixed minimum.", schedule=schedule,
+            formula="max(occupancy × L/s/person + area × L/s/m², fixed minimum)",
+            operands={"occupancy": people, "people_rate_lps_per_person": people_rate, "area_m2": area, "area_rate_lps_per_m2": area_rate, "fixed_minimum_lps": fixed, "people_flow_lps": people_flow, "area_flow_lps": area_flow}, status=outside_status,
             assumptions=["controlled room-use ventilation profile"] if outside_origin == "controlled_fallback" else [])
-        outside_record["field_resolution"] = {"occupancy": _field_record(people, "people", _origin(people_source, "controlled_fallback"), confidence, "room evidence", _evidence(people_source), "Resolved occupancy for outside-air calculation."),
+        outside_record["field_resolution"] = {"area": _field_record(area, "m²", _origin(area_source, "controlled_fallback"), confidence, "draft room area", _evidence(area_source), "Same resolved area as the preliminary draft."), "occupancy": _field_record(people, "people", _origin(people_source, "controlled_fallback"), confidence, "room evidence", _evidence(people_source), "Resolved occupancy for outside-air calculation."),
                                                "people_rate": _field_record(people_rate, "L/s/person", _origin(people_rate_source, "controlled_fallback"), confidence, "ventilation profile", _evidence(people_rate_source), "Selected people rate."),
                                                "area_rate": _field_record(area_rate, "L/s/m²", _origin(area_rate_source, "controlled_fallback"), confidence, "ventilation profile", _evidence(area_rate_source), "Selected area rate.")}
         records.append(outside_record)

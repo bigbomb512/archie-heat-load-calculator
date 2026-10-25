@@ -26,7 +26,8 @@ class ThinkingSettingTests(unittest.TestCase):
     def test_drawings_and_equipment_think_at_low_effort_by_default_and_it_can_be_changed(self):
         self.assertEqual(self.body("DRAWINGS")["reasoning"], {"effort": "low"})
         self.assertEqual(self.body("PASS2")["reasoning"], {"effort": "low"})
-        self.assertNotIn("reasoning", self.body("PASS1"))
+        self.assertEqual(self.body("PASS1")["reasoning"], {"effort": "low"})      # page reading too (2026-10-24)
+        self.assertNotIn("reasoning", self.body("SKILLS"))
         self.assertNotIn("reasoning", self.body("SKILLS"))
         self.assertEqual(self.body("DRAWINGS", env={"ARCHIE_OPENROUTER_REASONING_DRAWINGS": "high"})["reasoning"],
                          {"effort": "high"})
@@ -35,7 +36,7 @@ class ThinkingSettingTests(unittest.TestCase):
 
     def test_the_thinking_effort_can_be_set_per_step_or_per_provider(self):
         self.assertEqual(self.body("DRAWINGS", env={"ARCHIE_OPENROUTER_REASONING_DRAWINGS": "medium"})["reasoning"], {"effort": "medium"})
-        self.assertNotIn("reasoning", self.body("PASS1", env={"ARCHIE_OPENROUTER_REASONING_DRAWINGS": "medium"}))
+        self.assertNotIn("reasoning", self.body("SKILLS", env={"ARCHIE_OPENROUTER_REASONING_DRAWINGS": "medium"}))
         self.assertEqual(self.body("PASS1", env={"ARCHIE_OPENROUTER_REASONING": "high"})["reasoning"], {"effort": "high"})
         self.assertEqual(self.body("DRAWINGS", effort="minimal", env={"ARCHIE_OPENROUTER_REASONING_DRAWINGS": "low"})["reasoning"],
                          {"effort": "minimal"})

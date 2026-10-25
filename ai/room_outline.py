@@ -455,6 +455,194 @@ def clip_to_tenancy(polygon, tenancy, mm_per_px, min_m2=MIN_ROOM_M2):
             if part.geom_type == "Polygon" and not part.is_empty and area_m2(part, mm_per_px) >= min_m2]
 
 
+# --- Corner picking (2026-10-24) ------------------------------------------------------------
+# Freehand outlines in pixel coordinates drift (Casa Nova: rooms and the tenancy ran over the paving and cut across the
+# curved shopfront). The AI's sketch only finds the area; it then picks numbered corners the drawing really has, and the
+# outline is built from those exact points.
+CORNER_LIMIT = 80
+CORNER_MARGIN_MM = 3000.0
+CORNER_AREA_TOLERANCE = 0.4
+# (merge distance, shortest wall segment, shortest other segment), in mm: relaxed in turn until the corners fit.
+CORNER_PASSES = ((300.0, 300.0, 1000.0), (500.0, 500.0, 2000.0), (800.0, 1000.0, 3000.0), (1200.0, 1500.0, 5000.0))
+
+
+def corner_candidates(objects, wall_style_ids, region, mm_per_px, limit=CORNER_LIMIT, with_kinds=False):
+    """Drawn corners inside `region` (page pixels), numbered top-to-bottom, left-to-right: the ends of wall segments
+    and of long segments of any other non-hatch style (the shopfront glazing is often not a wall style), and points
+    about every metre along curves and along curves drawn as many short segments."""
+    hatch = hatch_styles(objects)
+    walls = set(wall_style_ids or [])
+    left, top, right, bottom = region
+
+    def inside(point):
+        return left <= point[0] <= right and top <= point[1] <= bottom
+
+    def along(line, step):
+        count = max(1, int(line.length / step))
+        return [line.coords[0], line.coords[-1],
+                *(line.interpolate(index * line.length / count).coords[0] for index in range(1, count))]
+    on_curves = set()
+
+    def turning(line):
+        coords = list(line.coords)
+        turns = []
+        for a, b, c in zip(coords, coords[1:], coords[2:]):
+            first = math.atan2(b[1] - a[1], b[0] - a[0])
+            second = math.atan2(c[1] - b[1], c[0] - b[0])
+            turns.append(abs(math.degrees((second - first + math.pi) % (2 * math.pi) - math.pi)))
+        return turns
+
+    def bends(line):
+        """A smooth curve: no single turn above 25° and at least 8° of turning in all. A straight wall drawn as short
+        pieces doesn't bend and a rectangle turns sharply; a 1.2 m run of Casa Nova's curved shopfront turns ~14°."""
+        turns = turning(line)
+        return bool(turns) and max(turns) <= 25.0 and sum(turns) >= 8.0
+
+    def fixture(line):
+        """A small round or swinging thing under 1.2 m across (a column, heater, round table or door swing): a nearly
+        closed loop or one turning 45° or more. A gentle run along a curved wall is kept, however short."""
+        x0, y0, x1, y1 = line.bounds
+        if max(x1 - x0, y1 - y0) >= 1200.0 / mm_per_px:
+            return False
+        return math.dist(line.coords[0], line.coords[-1]) < 0.3 * line.length or sum(turning(line)) >= 45.0
+
+    def gather(merge_mm, wall_mm, other_mm):
+        from shapely.ops import linemerge
+        found, short = [], {}
+        # Curves keep a fixed 1 m minimum in every pass (thinning spaces their points out instead): Casa Nova's curved
+        # shopfront is made of 1.2 m runs between mullions, which a stricter minimum dropped.
+        step, curve_min = max(1000.0, 2 * merge_mm) / mm_per_px, 1000.0 / mm_per_px
+        for item in objects:
+            points = [(float(x), float(y)) for x, y in item.get("points") or []]
+            if item["style"] in hatch or len(points) < 2:
+                continue
+            shortest = (wall_mm if item["style_id"] in walls else other_mm) / mm_per_px
+            for start, end in zip(points, points[1:]):
+                if math.dist(start, end) >= shortest:
+                    found.extend((start, end))
+                else:
+                    # ends rounded to the pixel, so segments that meet within a pixel join into one chain
+                    a, b = (round(start[0]), round(start[1])), (round(end[0]), round(end[1]))
+                    if a != b:
+                        short.setdefault(item["style_id"], []).append(LineString([a, b]))
+            line = LineString(points)
+            curvy = (item["kind"] == "curve" or len(points) > 6) and bends(line)
+            if curvy and line.length >= curve_min and not fixture(line):
+                sampled = along(line, step)
+                on_curves.update(sampled)
+                found.extend(sampled)
+        # A curve drawn as many separate short segments (Casa Nova's curved shopfront and arched bar wall): join the
+        # touching segments of one style and take points along each chain long enough to count.
+        for pieces in short.values():
+            merged = linemerge(pieces)
+            for chain in getattr(merged, "geoms", [merged]):
+                if chain.geom_type != "LineString" or chain.length < curve_min or fixture(chain):
+                    continue
+                if len(chain.coords) > 2 and bends(chain):
+                    sampled = along(chain, step)
+                    on_curves.update(sampled)
+                    found.extend(sampled)
+                else:
+                    found.extend((chain.coords[0], chain.coords[-1]))     # a straight run: its two ends are corners
+        merged, cell = [], max(1.0, merge_mm / mm_per_px)
+        grid = {}
+        for point in (point for point in found if inside(point)):
+            key = (int(point[0] // cell), int(point[1] // cell))
+            near = [other for dx in (-1, 0, 1) for dy in (-1, 0, 1) for other in grid.get((key[0] + dx, key[1] + dy), [])]
+            if any(math.dist(point, other) <= cell for other in near):
+                continue
+            grid.setdefault(key, []).append(point)
+            merged.append(point)
+        return merged
+
+    corners = []
+    for merge_mm, wall_mm, other_mm in CORNER_PASSES:
+        corners = gather(merge_mm, wall_mm, other_mm)
+        if len(corners) <= limit:
+            break
+    band = 400.0 / mm_per_px   # rows of about 0.4 m, so neighbouring numbers read in order
+    ordered = sorted(corners, key=lambda point: (round(point[1] / band), point[0]))
+    if with_kinds:   # which points lie along a curve (a merged point counts when it is within a merge distance of one)
+        reach = CORNER_PASSES[0][0] / mm_per_px
+        kinds = ["curve" if point in on_curves or any(math.dist(point, other) <= reach for other in on_curves) else "corner"
+                 for point in ordered]
+        return ordered, kinds
+    return ordered
+
+
+def corner_region(sketch_polygon, viewport, mm_per_px, margin_mm=CORNER_MARGIN_MM):
+    """The sketch's area plus a margin, inside the plan window."""
+    margin = margin_mm / mm_per_px
+    x0, y0, x1, y1 = sketch_polygon.bounds
+    left, top, right, bottom = viewport
+    return (max(left, x0 - margin), max(top, y0 - margin), min(right, x1 + margin), min(bottom, y1 + margin))
+
+
+def render_numbered_corners(page_image, corners, region, sketch_points=None, max_side=1536, kinds=None):
+    """The region of the plan with each corner marked and numbered (1-based) and the sketch drawn faintly; points along
+    a curve (kinds "curve") are green."""
+    from PIL import ImageDraw
+    left, top, right, bottom = region
+    crop = page_image.convert("RGB").crop((int(left), int(top), int(right), int(bottom)))
+    factor = min(1.0, max_side / max(crop.size))
+    if factor < 1.0:
+        crop = crop.resize((int(crop.size[0] * factor), int(crop.size[1] * factor)))
+    transform = {"offset_px": [int(left), int(top)], "factor": factor}
+
+    def at(point):
+        return ((point[0] - int(left)) * factor, (point[1] - int(top)) * factor)
+    draw = ImageDraw.Draw(crop, "RGBA")
+    if sketch_points and len(sketch_points) >= 3:
+        draw.line([at(point) for point in [*sketch_points, sketch_points[0]]], fill=(230, 25, 75, 110), width=3)
+    for index, point in enumerate(corners):
+        x, y = at(point)
+        curve = bool(kinds) and kinds[index] == "curve"
+        dot, ink = ((0, 160, 60, 255), (0, 120, 40, 255)) if curve else ((0, 90, 220, 255), (0, 60, 180, 255))
+        draw.ellipse([x - 5, y - 5, x + 5, y + 5], fill=dot)
+        label = str(index + 1)
+        draw.rectangle([x + 5, y - 22, x + 8 + 11 * len(label), y - 2], fill=(255, 255, 255, 230))
+        draw.text((x + 6, y - 22), label, fill=ink, font_size=18)
+    return crop, transform
+
+
+def corner_outline_prompt(subject, count):
+    return (f"The image is part of an architectural floor plan. Drawn corners of walls, glazing and other lines are "
+            f"marked with blue dots numbered 1 to {count}. The faint red line is a rough sketch of {subject}. List the "
+            f"numbers of the corners around {subject}'s floor, in order around it, following the inside face of walls "
+            "and the shopfront glazing, or the drawn boundary (counter edge, tenancy line) where there is no wall; "
+            "green points lie along curved walls or glazing: where the outline follows a curve, list every green point "
+            "along it in order, never cutting straight across. Skip numbers that are not on its outline. If a side has "
+            "no numbered corner, describe that side in missing_sides. Reply with JSON only:\n"
+            "{\"corners\": [int, ...], \"missing_sides\": string}")
+
+
+def validate_corner_outline_reply(reply, corners, sketch_points, subject, sketch_area=None, max_area=None):
+    """The outline built from the picked corners (pieces, if it crosses itself), checked against the sketch's area."""
+    if not isinstance(reply, dict) or not isinstance(reply.get("corners"), list):
+        raise ValueError("The reply must list the corner numbers in order around the outline.")
+    picked = []
+    for number in reply["corners"]:
+        if type(number) is not int or not 1 <= number <= len(corners):
+            raise ValueError(f"Corner {number!r} is not one of the numbered corners 1 to {len(corners)}.")
+        if not picked or picked[-1] != number:
+            picked.append(number)
+    if len(picked) > 1 and picked[0] == picked[-1]:
+        picked.pop()
+    if len(set(picked)) < 3:
+        raise ValueError("List at least three different corners around the outline.")
+    parts, repaired = outline_parts([tuple(corners[number - 1]) for number in picked], subject)
+    built = sum(Polygon(part).area for part in parts)
+    if sketch_area is None and sketch_points and len(sketch_points) >= 3:
+        sketch_area = Polygon(sketch_points).buffer(0).area
+    if sketch_area and abs(built - sketch_area) > CORNER_AREA_TOLERANCE * sketch_area:
+        raise ValueError(f"The listed corners enclose {built / sketch_area:.0%} of the sketched area; list the corners "
+                         f"all the way around {subject}, following its walls and glazing.")
+    if max_area and built > 1.1 * max_area:
+        raise ValueError(f"The listed corners enclose more than the whole tenancy; list only the corners around {subject}.")
+    return {"corners": picked, "parts": parts, "repaired": repaired,
+            "missing_sides": str(reply.get("missing_sides", ""))[:300]}
+
+
 def validate_unnamed_space_reply(reply, traced_names, transform):
     """The untinted spaces the AI outlined, named by their use; none is a valid answer. A name already traced on the
     plan is refused (that room is tinted; its floor isn't missing)."""

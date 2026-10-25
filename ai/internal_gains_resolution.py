@@ -200,7 +200,7 @@ def _equipment_sources(sources):
 
 
 def resolve(building, vision=None, proposal=None, room_use=None, pack=None,
-            source_fingerprints=None, existing=None):
+            source_fingerprints=None, existing=None, seating_evidence=None, room_areas=None):
     previous = {row.get("room_id"): row for row in (existing or {}).get("records", []) if isinstance(row, dict)}
     records, schedules = [], []
     for room in _room_rows(building, vision or {}, proposal or {}, room_use or {}):
@@ -226,16 +226,35 @@ def resolve(building, vision=None, proposal=None, room_use=None, pack=None,
                 "round(count)", {"count": count})
         else:
             area, area_source = _find_number(sources, ("area_m2", "room_area_m2"))
+            if room_areas is not None:
+                area_source = room_areas.get(room_id, {})
+                area = _positive(area_source.get("value"))
             density = _positive(profile.get("occupancy_density_people_m2"))
             if area and density:
-                count = round(area * density)
+                count = max(1, round(area * density))
                 fields["occupancy_count"] = _field(count, "controlled_preliminary_profile", .3,
-                    "No counted occupants were available; controlled room-use density fallback.",
+                    f"Density fallback: {density:g} people/m² × {area:g} m², rounded to {count} design occupants (minimum one).",
                     _evidence(area_source), "round(area_m2 × occupancy_density_people_m2)",
                     {"area_m2": area, "occupancy_density_people_m2": density})
             else:
                 fields["occupancy_count"] = _field(None, "unresolved", .0,
                     "Room area or occupancy density is unavailable.", evidence)
+        if fields["occupancy_count"]["origin"] == "controlled_preliminary_profile" and use.get("taxonomy_id") in {"dining", "retail"}:
+            reasons = [row["reason"] for row in (seating_evidence or {}).get("warnings", [])
+                       if row.get("room") in {None, room_id} and row.get("reason")]
+            if reasons:
+                fields["occupancy_count"]["rationale"] += " Seating unresolved: " + " ".join(dict.fromkeys(reasons))
+        seat_input = (seating_evidence or {}).get("rooms", {}).get(room_id)
+        seat_applied = bool(seat_input and fields["occupancy_count"]["origin"] != "direct_project_evidence")
+        if seat_applied:
+            staff = _nonnegative(profile.get("staff_allowance_people", profile.get("staff_allowance", 0))) or 0
+            count = seat_input["seat_count"] + staff
+            rationale = " ".join(part for part in (seat_input["rationale"],
+                f"Plus {staff:g} staff from the profile allowance." if staff else "No separate profile staff allowance is defined.",
+                seat_input.get("warning"), seat_input["basis"]) if part)
+            fields["occupancy_count"] = _field(round(count), seat_input["origin"], .85 if seat_input["origin"] == "direct_project_evidence" else .6,
+                rationale, seat_input["evidence"], "allocated seats + explicit profile staff allowance",
+                {"seats": seat_input["seat_count"], "staff_allowance": staff})
         explicit_people_s = None; explicit_people_l = None
         for source in sources:
             if _has_citation(source):
@@ -335,6 +354,8 @@ def resolve(building, vision=None, proposal=None, room_use=None, pack=None,
                   "rationale": "Resolved from room evidence and controlled preliminary profile precedence.", "unresolved_fields": [key for key, field in fields.items() if isinstance(field, dict) and field.get("origin") == "unresolved"] + (["schedules"] if invalid_schedule_days else []),
                   "remediation": "Provide cited occupancy, lighting, equipment heat-to-space, or schedule evidence." if status == "needs_review" else "",
                   "override": deepcopy(override) if override else None, "status": status, "source_fingerprints": deepcopy(source_fingerprints or {})}
+        if seat_input:
+            record["seating"] = {**deepcopy(seat_input), "applied": seat_applied and fields["occupancy_count"]["origin"] != "contractor_override"}
         record["confidence_band"] = confidence_band(record["confidence_score"])
         record["equipment_catalogue_managed"] = catalogue_managed
         record["record_fingerprint"] = fingerprint(record)

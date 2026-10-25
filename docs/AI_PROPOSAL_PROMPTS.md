@@ -199,6 +199,79 @@ There is now a separate step, **`P0_unnamed_space`** ("Checking for floor with n
   - **Door detection was dropped:** finding doors from their swing arcs was tried first. On Casa Nova the door swings
     are drawn as many short segments, not arcs, and the dining floor still leaked somewhere else.
 
+**Corner picking (`P0_outline_corners`, 2026-10-24).** Freehand outlines in pixel coordinates drifted: on Casa Nova
+the tenancy sketch ran over the paving, cut across the curved shopfront and dipped below the back wall, and clipping
+to it removed about 40 m² of real dining floor. Every AI sketch (the tenancy, open-plan room outlines, floor with no
+room) is now redrawn from the drawing's own corners.
+- **Corners** (`room_outline.corner_candidates`), merged within 300 mm:
+  - **Straight lines:** the ends of wall segments of 0.3 m or more, and of other non-hatch segments of 1 m or more (the
+    shopfront glazing is often not a wall style).
+  - **Curves:** points about every metre along curves, including curves drawn as many separate short pieces, which
+    are joined into chains first. Casa Nova's curved shopfront is 0.2 m pieces in 1.2 m runs between mullions.
+  - **Left out:** curves under 1.2 m across (columns, heaters, door swings).
+  - **Thinning:** above 80 corners, longer straight segments and wider merging are required, but curves always keep
+    their 1 m minimum.
+- **The question:**
+  - **Image:** the region around the sketch plus 3 m (the whole plan for the tenancy), with the corners numbered and
+    the sketch drawn faintly.
+  - **Answer:** the AI lists the corner numbers in order.
+  - **Check:** the outline is built from those exact corners, repaired if it crosses itself, and asked again if its
+    area is off from the sketch by more than 40%.
+- **Order:** the tenancy is asked first. Rooms wait for it, then are clipped to it and have rooms inside them removed
+  (all traced rooms, for floor with no room).
+- **Clipping:** only a corner-built tenancy clips rooms.
+- **Image-only plans:** have no drawn corners and keep their sketches.
+- **Previews (no AI):**
+  - Casa Nova page 33: 82 corners for the tenancy and 62 for the Dining area, readable, with points along both
+    curved shopfront ends and the bar arch.
+  - Butcher Buffet page 20: 152 corners, as table edges add many; still readable, with every outer wall corner
+    numbered. Its rooms are enclosed by walls, so there only the tenancy is asked.
+
+**Model for outlines (2026-10-24).** The first corner-picking run on Casa Nova (Gemini 3.8 Flash at low reasoning)
+gave unusable corner lists: two or three numbers, or outlines enclosing 3–11% of the room. On the same saved
+questions:
+- **Claude Sonnet 5.5** traced the tenancy along its walls and shopfront, 220 m², at about US$0.01 a question in
+  under 10 s.
+- **Gemini Pro** gave a similar outline at up to US$0.11 and 140 s.
+
+The four outline steps (`P0_tenancy_outline`, `P0_room_outlines`, `P0_unnamed_space`, `P0_outline_corners`) now go to
+a new model step, `OUTLINES`; the other drawing tasks stay on Gemini 3.8 Flash. `OUTLINES` started on Sonnet 5.5 and
+moved the same day, on cost, to **Claude Haiku 5.5**. On the same saved questions, Haiku traced the tenancy at 242.5 m²
+(Sonnet 247.8) and named the rooms identically, for about a twelfth of the cost (US$0.0019 for both questions).
+GPT-5.4 mini missed floor (188 m²) and misnamed rooms. Qwen 3.7 Plus had no host meeting the no-storage setting. Room
+naming (`P0_room_names`) joined it the same day. On Casa Nova's saved naming question, Gemini named all three enclosed
+areas wrong (the dining end "Kitchen", the kitchen strip "Bar"). Sonnet named the dining end and the kitchen strip
+correctly, and called the strip's left part "Bar" (US$0.007).
+
+Changes from that test:
+- **No check against the sketch:** the corner answer isn't compared with the AI's sketch, whose 58 m² tenancy sketch
+  refused good answers. A room may not exceed the corner-built tenancy.
+- **Curve points in green:** points along a smoothly bending wall or glazing line (no turn over 25°, at least 8° in
+  all) are drawn green, and the AI is told to follow them. Small loops and door swings (under 1.2 m across, closed or
+  turning 45°+) are left out.
+- **Room crops:** room questions show the area of the corner-built tenancy plus 1 m, not only their sketch.
+
+With these, Sonnet traced Casa Nova's tenancy around the curved shopfront: 32 corners, 247.8 m², no missing sides,
+US$0.018.
+
+**Fewer AI calls (2026-10-24).** Casa Nova's run made about 90 calls (46 US cents):
+- 22 north-arrow reads (66 images) for one traced plan;
+- 22 equipment calls, 19 of the 43 pages being renders;
+- 19 page-reading calls that wrote more thinking (135k tokens) than they read.
+
+Changes:
+- **North arrow:** asked only on the main traced plan page(s) (`_north_pages`); every plan page is asked only once
+  none of those shows a north arrow. The cross-page check waits only for the pages asked, and applies north to every
+  page asked or already answered.
+- **Equipment reading:** skips pages that page reading calls renders or photos (`page_extraction_service.SKIPPED_PAGE_TYPES`).
+  - **Casa Nova:** no item was lost.
+  - **Butcher Buffet:** four render-only items were lost (a TV screen, two drink fridges, a menu board), all apparent
+    repeats of scheduled items.
+- **Page reading:** "low" thinking (DeepSeek V4.1 Flash accepts it on OpenRouter) and six pages per call instead of
+  four.
+- **Roof question:** not grouped. It is still asked per room, because the operator's roof-answer flow, the export and
+  the model check are keyed by room, and the 3–7 calls cost under 1 US cent.
+
 A code-measured tenancy outline was tried and rejected: Casa Nova's floor is open to the outside at the entry doors and
 to the kitchen through the servery, so no closed outline comes out of its walls.
 
@@ -524,3 +597,84 @@ usual task packet and its fingerprint. Existing validators and apply functions r
 Each gap gets at most two targeted attempts, with an early stop when neither physical model inputs nor
 the gap set changed, and three cycles as a backstop. Remaining gaps are listed with the draft result;
 there is no spend cap, web lookup or automatic operating-load startup.
+
+## Deterministic room-use evidence (2026-10-25)
+
+A room's name and physical outline remain unchanged. `room_use_resolution_service.gather_use_evidence` reads saved
+traces, room-placed equipment, current P6 answers, pass-1 tenancy context and text inside the outline. It adds no
+provider or network calls and never writes equipment placements. Heat ratings and catalogue wattages are not use
+signals. Both the normal room-use service and preliminary assembly pass the same evidence to the pure scorer in
+`ai/room_use_resolution.py`; the source fingerprint includes the evidence and policy version.
+
+Precedence: explicit operator use override, human reviewer decision, protected refrigeration/excluded scope,
+then scored evidence. An existing refrigeration room stays in refrigeration scope. User exclusions continue to
+apply. AI acceptance is not a human reviewer decision.
+
+Weights are heuristic classification points, not heat-load coefficients:
+
+| Factor family | Points |
+| --- | ---: |
+| Existing label/use | 3 |
+| Cooking line/appliances | 8 per family, capped regardless of duplicates |
+| Dishwashing | 5 |
+| Prep refrigeration / PREP text | 4 |
+| Exhaust hood | 4 |
+| WC/toilet/urinal | 12 |
+| Basin | 4 |
+| Desks/workstations | 8 |
+| POS, display refrigeration, menu/buffet/food stations, seating | 9 to dining (hospitality tenancy) or retail (retail tenancy) |
+| Drink/ice equipment with a counter | 10 to dining/bar |
+| Confirmed shopfront wall, or glazing on an exterior/mall wall | 5 to front of house |
+| Largest traced open shopfront room | 3 to front of house |
+| Explicit internal access through another room | 2 to back of house (only if established, not inferred from missing doors) |
+| Enclosed area below 6 m² | 2 to ancillary; insufficient alone to change the use |
+
+A decisive choice needs at least 8 points and a lead of 4. Reclassifying a room to kitchen also needs two independent
+kitchen families or two distinct cooking items; one appliance does not turn a large trading space into a kitchen.
+A decisive choice has confidence 0.85. Otherwise keep the original selection, confidence 0.60 with an independent
+factor or 0.40 without one, and disclose the uncertainty. A retained specific label remains a usable draft selection;
+lower confidence alone does not schedule a new paid supervisor investigation. Generic/conflicting unresolved uses
+retain their existing review behavior. `use_assessment` records factors, weights, alternatives, scores and whether
+the choice was decisive; `review_recommended` flags weak decisions.
+
+Placement safeguards: a room-name-only equipment location is recorded as uncertain with zero weight. Code positions
+inside a plan outline, cited placement checks and saved physical-zone mappings can supply contents evidence. P6
+items are local only when their cited page is the plan crop's page; an elevation-only answer does not establish
+where its items sit in plan, even if its crop was chosen from a room called Kitchen. Nested outlines use the smallest
+containing polygon to avoid attributing a subsidiary room's contents to the whole tenancy.
+
+For existing same-size proposed-layout and traced plan sheets, local text can be transferred only after a pure
+same-scale translation agrees on at least four unique printed dimensions (100–20,000 mm), within 2 PDF points,
+spread at least 100 points horizontally and 20 vertically. Other rotations/scales or insufficient anchors are
+rejected. The recorded anchors, residual, source and destination pages disclose this inference. This is a heuristic
+registration guard, not engineering validation. No OCR, new AI reading or cross-page construction assumptions are
+introduced by this step.
+
+The Rooms view shows the chosen use, confidence, rationale and an expandable factor list beside the unchanged name.
+Its controlled use selector writes the existing operator override and recalculates through the existing flow.
+
+### Seating evidence for operating loads
+
+The `page-inventory-v2-seating` prompt asks the existing one-page pass to retain printed seating schedules as
+`people_occupancy` information with optional `seat_total`, `seat_room` and `seat_scope`. The total is the seats
+column, not the number of tables. Outdoor and mixed/unknown totals are not automatically assigned indoors.
+This changes future page readings without adding an AI call. Live capture has not been verified in this task.
+
+`backend/seating_service.py` also reads saved pass-1 information and spatial text, and estimates repeated chair/stool
+symbols in calibrated PDF vectors. Furniture/layout pages require a dimension-anchor translation into the traced
+plan frame. Full symbol containment excludes terrace seats outside cooled outlines. Views are alternatives, never
+summed. Explicitly labelled benches use floor(length / 600 mm); this spacing is a draft assumption. Raster seats,
+unregistered views, missing scale and weak counts remain unresolved; zero detected symbols is not zero occupants.
+Desk/workstation recognition is deferred.
+
+Precedence: operator occupancy, the room’s own cited count, printed seating total allocation, usable vector estimate, labelled room-profile density.
+A tenancy total is allocated by counted seats where available, otherwise by area of eligible front-of-house rooms;
+room-specific totals are reserved before distributing the balance. Conflicting totals are not selected arbitrarily.
+More than 15% disagreement is disclosed and the printed total wins. Staff are added only when an explicit numeric
+profile allowance exists. No current profile defines a separate allowance.
+
+Basis: `docs/australian_ventilation_rules.md` and `config/au_ventilation_rules_v1.json` provide no released seated
+occupancy rule. One seat is therefore assumed to be one design occupant; this is not an AS 1668.2 compliance claim.
+The resolved occupant count feeds both people gains and the existing outside-air resolver. Phase 1 still projects
+people and outside-air loads out. Seat evidence is fingerprinted with the internal-gains dependencies; operator
+edits survive re-resolution. The Rooms detail displays occupancy and its rationale.
