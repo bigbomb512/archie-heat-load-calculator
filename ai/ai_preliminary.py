@@ -76,6 +76,12 @@ def load_pack():
     profiles = envelope.get("cardinal_solar_profiles_w_m2", {})
     if set(profiles) != CARDINALS or any(not isinstance(profiles[key], list) or len(profiles[key]) != 24 for key in CARDINALS):
         raise ValueError("The AI preliminary assumption pack needs four 24-hour cardinal solar profiles.")
+    horizontal = envelope.get("horizontal_solar_profile_w_m2")
+    if not isinstance(horizontal, list) or len(horizontal) != 24 or any(not isinstance(value, (int, float)) or value < 0 for value in horizontal):
+        raise ValueError("The AI preliminary assumption pack needs a 24-hour horizontal (roof) solar profile.")
+    ratio = envelope.get("opaque_solar_absorptance_over_ho_m2k_w")
+    if not isinstance(ratio, (int, float)) or isinstance(ratio, bool) or not 0 < ratio <= 0.1:
+        raise ValueError("The AI preliminary assumption pack needs an opaque-surface solar absorptance / outside coefficient (0-0.1 m²K/W).")
     if not SHADING_CATEGORIES <= set(envelope.get("shading_categories", {})):
         raise ValueError("The AI preliminary assumption pack needs controlled shading categories.")
     height = pack.get("preliminary_defaults", {}).get("ceiling_height_mm")
@@ -1458,7 +1464,8 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
         if physical == "wall" and not fixed_adjacent and candidate.get("orientation") not in CARDINALS:
             phase1_assumptions.append({"room_id": room["room_id"], "component": "wall orientation",
                 "reason": "No north reference was resolved; the west-facing solar profile is used as the conservative preliminary orientation."})
-        solar_profile = envelope["cardinal_solar_profiles_w_m2"].get(orientation, [0] * 24)
+        solar_profile = (envelope["horizontal_solar_profile_w_m2"] if orientation == "horizontal"
+                         else envelope["cardinal_solar_profiles_w_m2"].get(orientation, [0] * 24))
         solar_peak = max(solar_profile)
         solar_schedule_id = f"prelim-solar-{candidate['candidate_id']}"
         if solar_peak:
@@ -1467,11 +1474,15 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
             room["schedule_assignments"]["solar"][candidate["candidate_id"]] = solar_schedule_id
         floor_u = envelope["opaque_constructions"]["floor"]["u_value_w_m2k"]
         partition_u = envelope["opaque_constructions"]["partition"]["u_value_w_m2k"]
+        u_value = (floor_u if physical == "floor" else profile["roof_u_w_m2k"] if physical in {"roof", "ceiling"}
+                   else partition_u if candidate.get("boundary_condition") == "internal" else profile["wall_u_w_m2k"])
+        # Sol-air: the sun on an opaque surface reaches the room as U × (absorptance / outside surface coefficient) of
+        # the incident solar, a few percent for an insulated wall or roof.
+        solar_factor = round(u_value * envelope["opaque_solar_absorptance_over_ho_m2k_w"], 6) if solar_peak else 0
         opaque = {"surface_id": candidate["candidate_id"], "kind": "floor" if physical == "floor" else "roof" if physical == "roof" else "ceiling" if physical == "ceiling" else "opaque_wall",
                   "label": candidate.get("label", ""), "boundary_condition": candidate.get("boundary_condition", ""),
-                  "orientation": orientation, "area_m2": net, "u_value_w_m2k": floor_u if physical == "floor" else profile["roof_u_w_m2k"] if physical in {"roof", "ceiling"}
-                  else partition_u if candidate.get("boundary_condition") == "internal" else profile["wall_u_w_m2k"],
-                  "solar_design_w_m2": solar_peak, "solar_gain_factor": envelope["opaque_solar_gain_factor"] if solar_peak else 0,
+                  "orientation": orientation, "area_m2": net, "u_value_w_m2k": u_value,
+                  "solar_design_w_m2": solar_peak, "solar_gain_factor": solar_factor,
                   "shading_factor": 1, "boundary_method": "external", "boundary_temperature_c": None, "construction_id": "",
                   "verification_status": "provisional",
                   "source": (_source(profile_id) + "; reviewer-declared boundary" if candidate.get("reviewer_trace_id")

@@ -255,15 +255,17 @@ def main():
         check("exposed reviewer roof uses traced area and the controlled roof U-value",
               roof["area_m2"] == 25.0 and roof["u_value_w_m2k"] == expected_u
               and roof["orientation"] == "horizontal" and roof["reviewer_trace_id"] == trace["trace_id"])
+        envelope_pack = ai_preliminary.load_pack()["preliminary_envelope"]
+        check("exposed roof takes the sun: horizontal profile peak and the sol-air factor U × α/h_o",
+              roof["solar_design_w_m2"] == max(envelope_pack["horizontal_solar_profile_w_m2"]) == 1000
+              and abs(roof["solar_gain_factor"] - expected_u * envelope_pack["opaque_solar_absorptance_over_ho_m2k_w"]) < 1e-9
+              and report["included_scope_peak"]["components"]["solar"]["sensible_kw"] > 0)
         walls = [surface for surface in room["cooling_load"]["envelope_surfaces"] if surface["kind"] == "opaque_wall"]
-        check("unknown wall edges are itemised as assumed neighbours (one note) and only the roof sun stays open",
-              not report["scope_summary"]["complete_scope"]
-              and len(walls) == 4 and all(wall["label"].endswith("to a neighbouring tenancy") for wall in walls)
+        check("unknown wall edges are itemised as assumed neighbours (one note) and the roof sun is no longer left open",
+              len(walls) == 4 and all(wall["label"].endswith("to a neighbouring tenancy") for wall in walls)
               and sum("walls 1, 2, 3, 4 of Shop" in str(row.get("reason")) for row in assembled["phase1_assumptions"]) == 1
               and not any(item.get("component_id") == "unclassified_wall_boundaries" for item in report["unresolved_room_inputs"])
-              and any(item.get("component_id") == "roof_solar"
-                      and item.get("component") == "Roof sun — not assessed"
-                      for item in report["unresolved_room_inputs"])
+              and not any(str(item.get("component_id", "")).startswith("roof_solar") for item in report["unresolved_room_inputs"])
               and not any(item.get("component") == "Envelope" for item in report["unresolved_room_inputs"]))
 
     with tempfile.TemporaryDirectory() as folder:
@@ -287,6 +289,7 @@ def main():
         check("external reviewer edge uses calibrated area and the disclosed west-facing solar fallback",
               abs(wall["area_m2"] - 0.3) < 1e-9 and wall["orientation"] == "W"
               and wall["u_value_w_m2k"] == ai_preliminary.load_pack()["profiles"]["retail"]["wall_u_w_m2k"]
+              and abs(wall["solar_gain_factor"] - wall["u_value_w_m2k"] * 0.052) < 1e-9 and wall["solar_gain_factor"] < 0.05
               and any(row.get("component") == "wall orientation" for row in assembled["phase1_assumptions"]))
         check("west-facing orientation estimate is disclosed and every other surface is itemised",
               not any(item.get("component") == "external walls — orientation not assessed (no façade solar)"
@@ -416,9 +419,10 @@ def main():
             "gross_area_m2": 25.0, "opening_coverage": "not_applicable", "confidence_score": 0.9,
         }]}}
         prepared = prepare(root, room_use, proposal, geometry=ledger)
-        check("same-type ledger roof prevents duplicate trace roof while leaving roof solar not assessed",
+        check("same-type ledger roof prevents a duplicate trace roof and leaves no roof-sun open item",
               not any(row.get("surface_key", "").endswith(":roof") for row in prepared["surfaces"])
-              and any(row.get("component_id") == "roof_solar" for row in prepared["envelope_assessments"][0]["not_assessed"]))
+              and not any(row.get("component_id") == "roof_solar" for assessment in prepared.get("envelope_assessments", [])
+                          for row in assessment.get("not_assessed", [])))
 
     with tempfile.TemporaryDirectory() as folder:
         root = Path(folder)

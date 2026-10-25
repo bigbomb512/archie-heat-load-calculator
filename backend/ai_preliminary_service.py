@@ -1522,12 +1522,6 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                                 "assumptions": ["flat_roof_over_traced_footprint"],
                                 **({"phase1_assumption": roof_note} if roof_note else {}),
                             })
-                        if area:
-                            assessment["not_assessed"].append({
-                                "component_id": f"roof_solar{part_component_suffix}", "component": "Roof sun — not assessed",
-                                "reason": "Roof solar gain not assessed — no cited horizontal solar profile; conduction only.",
-                                "page": part.get("page"),
-                            })
                     elif roof == "not_exposed" and area:
                         # A floor or other conditioned space above: itemised at the room's temperature (0 kW).
                         proposal["surfaces"].append({

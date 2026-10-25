@@ -176,7 +176,10 @@
         "layers": []
       }
     },
-    "opaque_solar_gain_factor": 0.25,
+    "opaque_solar_absorptance_over_ho_m2k_w": 0.052,
+    "opaque_solar_basis": "Sol-air method (ASHRAE Handbook - Fundamentals, nonresidential cooling loads): sun on a wall or roof adds U x (absorptance / outside surface coefficient) x incident solar. 0.052 m2K/W is the dark-surface value (0.026 light), used because the colour is not known.",
+    "horizontal_solar_profile_w_m2": [0, 0, 0, 0, 0, 0, 10, 100, 280, 490, 690, 850, 960, 1000, 960, 850, 690, 490, 280, 100, 10, 0, 0, 0],
+    "horizontal_solar_basis": "Product-owned clear-sky summer profile for a flat roof: about 1,000 W/m2 at solar noon (13:00 daylight time), matching the timing of the cardinal profiles.",
     "glazing_frame_fraction": 0.15,
     "glazing_glass_area_correction": 1.0,
     "glazing_internal_shading_factor": 1.0,

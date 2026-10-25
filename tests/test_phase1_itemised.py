@@ -52,9 +52,10 @@ class ItemisedPhaseOneTests(unittest.TestCase):
         self.assertTrue(any("slab on the ground or over another conditioned space" in note for note in notes))
         # The exposed roof is the room's load; nothing is left unresolved.
         self.assertGreater(report["included_scope_peak"]["components"]["envelope"]["sensible_kw"], 0)
-        # Only the sun on the roof stays open: the method has no cited horizontal solar profile yet (conduction only).
+        # The sun on the roof is calculated (horizontal profile, sol-air factor), so no envelope item stays open.
         self.assertEqual([row["component_id"] for row in report.get("unresolved_room_inputs", [])
-                          if row.get("component_type") == "envelope"], ["roof_solar"])
+                          if row.get("component_type") == "envelope"], [])
+        self.assertGreater(report["included_scope_peak"]["components"]["solar"]["sensible_kw"], 0)
         self.assertEqual(len(report["phase1_surface_audit"]), 6)
 
     def test_a_slab_over_the_ceiling_gives_a_ceiling_under_a_floor_above_at_no_load(self):
@@ -93,6 +94,35 @@ class ItemisedPhaseOneTests(unittest.TestCase):
         kitchen = {"room_id": "kitchen", "page": 20, "points_image_px": [[1020, 0], [1520, 0], [1520, 500], [1020, 500], [1020, 0]]}
         self.assertEqual(ai_preliminary_service._edges_along_other_rooms(kitchen, [0, 1, 2, 3], {20: [("shop", shop)]}, 10), {3})
         self.assertEqual(ai_preliminary_service._edges_along_other_rooms(kitchen, [0, 1, 2, 3], {21: [("shop", shop)]}, 10), set())
+
+
+
+class OpaqueSolarPackTests(unittest.TestCase):
+    """Sun on walls and roofs: sol-air factor U × α/h_o (a few percent), and a horizontal profile for roofs."""
+
+    def test_pack_values_give_a_few_percent_through_an_insulated_wall(self):
+        pack = ai_preliminary.load_pack()
+        envelope = pack["preliminary_envelope"]
+        wall_u = pack["profiles"]["hospitality"]["wall_u_w_m2k"]
+        self.assertAlmostEqual(wall_u * envelope["opaque_solar_absorptance_over_ho_m2k_w"], 0.0312)
+        self.assertEqual(max(envelope["horizontal_solar_profile_w_m2"]), 1000)
+        self.assertNotIn("opaque_solar_gain_factor", envelope)
+
+    def test_pack_without_roof_profile_or_with_a_glass_like_factor_is_refused(self):
+        original = ai_preliminary.PACK_PATH
+        pack = json.loads(original.read_text(encoding="utf-8"))
+        for change in ({"horizontal_solar_profile_w_m2": None}, {"opaque_solar_absorptance_over_ho_m2k_w": 0.25}):
+            broken = json.loads(json.dumps(pack))
+            broken["preliminary_envelope"].update(change)
+            with tempfile.TemporaryDirectory() as folder:
+                path = Path(folder) / "pack.json"
+                path.write_text(json.dumps(broken), encoding="utf-8")
+                ai_preliminary.PACK_PATH = path
+                try:
+                    with self.assertRaises(ValueError):
+                        ai_preliminary.load_pack()
+                finally:
+                    ai_preliminary.PACK_PATH = original
 
 
 if __name__ == "__main__":

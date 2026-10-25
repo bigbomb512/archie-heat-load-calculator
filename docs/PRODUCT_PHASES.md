@@ -50,9 +50,14 @@ What the AI could not settle never removes a surface; it gets a labelled fallbac
 - a wall or floor to an unconditioned space with no answered temperature: outdoor temperature minus 3 K (ASHRAE
   buffer-space estimate).
 
-Known gaps: the sun on an exposed roof is not counted yet (no cited horizontal solar profile; conduction only), and
-wall and floor materials read by the skills are not yet applied to the traced surfaces, which use the assumption pack's
-U-values unless a construction is answered.
+Sun on walls and roofs (2026-10-25): an exposed wall or roof passes U × α/h_o of the incident sun into the room
+(the sol-air method, ASHRAE Handbook - Fundamentals), with α/h_o = 0.052 m²K/W, the dark-surface value, because the
+colour isn't known: about 3% for a U 0.6 wall, so 15 W/m² at 500 W/m² of sun. Exposed roofs use a horizontal profile
+peaking at 1,000 W/m² at 13:00. (Before this, walls used a fixed 25% of the sun, about ten times too high, and roofs
+got none.) The wall or roof's time lag is not modelled; the gain lands in the same hour as the sun.
+
+Known gap: wall and floor materials read by the skills are not yet applied to the traced surfaces, which use the
+assumption pack's U-values unless a construction is answered.
 
 ### Phase 1 defaults that keep it running without a person (user decisions 2026-10-15)
 
