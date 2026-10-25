@@ -220,7 +220,10 @@ def resolve(building, vision=None, proposal=None, room_use=None, pack=None,
         # Counts may be interpreted from a plan, but only cited watts/properties
         # are allowed to override the controlled physical-value profile.
         count, count_source = _find_number(sources, ("occupancy_count", "seat_count", "workstation_count", "desk_count", "bed_count"))
-        if count is not None:
+        if scope in {"refrigeration_process", "not_a_room", "unresolved_scope"}:
+            fields["occupancy_count"] = _field(None, "scope_exclusion", .85,
+                f"Outside comfort-HVAC scope ({scope}); no design occupancy assigned.", evidence)
+        elif count is not None:
             fields["occupancy_count"] = _field(round(count), "direct_project_evidence", .85,
                 "Counted seats/workstations/beds from source evidence.", _evidence(count_source),
                 "round(count)", {"count": count})
@@ -245,7 +248,11 @@ def resolve(building, vision=None, proposal=None, room_use=None, pack=None,
             if reasons:
                 fields["occupancy_count"]["rationale"] += " Seating unresolved: " + " ".join(dict.fromkeys(reasons))
         seat_input = (seating_evidence or {}).get("rooms", {}).get(room_id)
-        seat_applied = bool(seat_input and fields["occupancy_count"]["origin"] != "direct_project_evidence")
+        seat_applied = bool(seat_input and seat_input.get("seat_count") is not None
+                            and scope in {"comfort_hvac", "comfort_hvac_with_process_exception"}
+                            and fields["occupancy_count"]["origin"] != "direct_project_evidence")
+        if seat_input and not seat_applied and fields["occupancy_count"]["origin"] == "controlled_preliminary_profile":
+            fields["occupancy_count"]["rationale"] += " " + seat_input.get("warning", "")
         if seat_applied:
             staff = _nonnegative(profile.get("staff_allowance_people", profile.get("staff_allowance", 0))) or 0
             count = seat_input["seat_count"] + staff

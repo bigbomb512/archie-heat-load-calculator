@@ -71,6 +71,67 @@ class SeatingTests(unittest.TestCase):
             evidence=seating_service._gather(root,None,use)
             self.assertEqual(evidence['rooms']['shop']['seat_count'],140)
 
+    def test_furniture_labels_are_not_totals_but_explicit_total_still_wins(self):
+        for text in ("BANQUETTE SEATS 6", "BOOTH 4 SEATS", "BENCH SEAT 600",
+                     "SOFA SEATS 3", "COUCH 4 SEATS", "LOUNGE SEATS 4", "STOOL SEATS 1",
+                     "CHAIR 1 SEATS", "OTTOMAN 2 SEATS", "CHAIRS 4 SEATS", "BENCHES 6 SEATS", "COUCHES 4 SEATS"):
+            with self.subTest(text=text):
+                self.assertEqual(seating.printed_totals(text), [])
+                self.assertEqual(seating.printed_totals(text+"\nTOTAL SEATS 140"), [140])
+        self.assertEqual(seating.printed_totals("BANQUETTE QTY 35 SEATS 140"), [140])
+
+    def test_small_printed_total_is_rejected_with_vector_and_density_fallbacks(self):
+        evidence=seating.allocate(rooms(),{"shop":{"count":72}},[{"total":6,"page":1,"level":"Ground"}])
+        self.assertEqual(evidence['shop']['seat_count'],72)
+        self.assertEqual(evidence['shop']['origin'],'project_evidence')
+        self.assertIsNone(evidence['bar']['seat_count'])
+        for row in evidence.values():
+            self.assertIn('6',row['warning'])
+            self.assertIn('72',row['warning'])
+            self.assertIn('not applied',row['warning'])
+        building={"spaces":[{"name":"Shop","level_name":"Ground","area_m2":100},
+                            {"name":"Bar","level_name":"Ground","area_m2":20}]}
+        uses=room_use_resolution.resolve(building)
+        mapped={room_use_resolution.room_identity(room['name'],'Ground'):evidence[room['id']] for room in rooms()}
+        result=gains.resolve(building,room_use=uses,pack=ai_preliminary.load_pack(),seating_evidence={"rooms":mapped})
+        bar=next(row for row in result['records'] if row['original_label']=='Bar')
+        self.assertEqual(bar['occupancy_count'],6)
+        self.assertIn('72',bar['fields']['occupancy_count']['rationale'])
+        self.assertFalse(bar['seating']['applied'])
+
+    def test_service_rejected_low_total_does_not_cancel_valid_total_as_conflict(self):
+        from backend import seating_service
+        class Page:
+            width=100; height=100; lines=[1]; curves=[]; rects=[]; images=[]
+        class Doc:
+            pages=[Page()]
+            def __enter__(self):return self
+            def __exit__(self,*args):pass
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);(root/'source.pdf').write_bytes(b'fake')
+            (root/'reviewer_room_geometry.json').write_text(json.dumps({"records":[{"room_id":"shop","page":1,
+                "points_image_px":[[0,0],[100,0],[100,100],[0,100],[0,0]],"ai_measured_area_m2":100,"calibration":{"status":"agreed","mm_per_px":10}}]}))
+            (root/'vector_geometry.json').write_text(json.dumps({"geometry_key_points":{"pages":[{"page":1,"coordinate_systems":{"image_px":{"image_width":100,"image_height":100}}}]}}))
+            (root/'page_inventory.json').write_text(json.dumps({"pages":{
+                "1":{"page_type":"floor_plan","information":[{"kind":"people_occupancy","what":"TOTAL SEATS 6"}]},
+                "2":{"page_type":"schedule","information":[{"kind":"people_occupancy","what":"TOTAL SEATS 140"}]}}}))
+            use={"records":[{"room_id":"shop","original_label":"Shop","taxonomy_id":"dining","space_scope":"comfort_hvac","level_name":"Ground"}]}
+            with patch('pdfplumber.open',return_value=Doc()), patch.object(seating_service,'_objects',return_value=[]), \
+                 patch.object(seating,'count_symbols',return_value={'counts':{'shop':72},'excluded':0,'seats':[],'reason':'Test vectors'}):
+                result=seating_service._gather(root,str(root/'source.pdf'),use)
+            self.assertEqual(result['rooms']['shop']['seat_count'],140)
+            self.assertIn('6',result['rooms']['shop']['warning'])
+            self.assertFalse(any('Conflicting printed' in row['reason'] for row in result['warnings']))
+
+    def test_large_printed_total_and_exact_half_threshold(self):
+        for total in (140,36):
+            result=seating.allocate(rooms(),{"shop":{"count":72}},[{"total":total,"page":19,"level":"Ground"}])
+            self.assertEqual(result['shop']['seat_count'],total)
+            self.assertEqual(result['shop']['origin'],'direct_project_evidence')
+        result=seating.allocate(rooms(),{"shop":{"count":72}},[{"total":6,"page":1,"level":"Ground","room":"shop"}])
+        self.assertEqual(result['shop']['seat_count'],72)
+        self.assertIn('not applied',result['shop']['warning'])
+
     def test_printed_total_shared_by_count_and_disagreement_recorded(self):
         drawn={"shop":{"count":60},"bar":{"count":10}}
         result=seating.allocate(rooms(),drawn,[{"total":140,"page":19,"level":"Ground"}])
@@ -203,6 +264,59 @@ class OccupancyIntegrationTests(unittest.TestCase):
         fixed=airflow_resolution.resolve(building,{}, {"rooms":[{"label":"Dining","level_name":"Ground","outside_air_fixed_lps":2000}]},
             uses,{},pack,{},occupancy_counts=counts,room_areas={flow_id:areas[rid]})
         self.assertEqual(next(r for r in fixed['records'] if r['air_path_type']=='outside_air')['value'],2000)
+
+    def test_excluded_scopes_do_not_get_density_occupants_or_comfort_airflows(self):
+        pack=ai_preliminary.load_pack()
+        building={"spaces":[{"name":"Dining","level_name":"Ground","area_m2":0.5},
+                            {"name":"Freezer","level_name":"Ground","area_m2":10.75},
+                            {"name":"Note","level_name":"Ground","area_m2":20},
+                            {"name":"Unknown","level_name":"Ground","area_m2":20}]}
+        uses=room_use_resolution.resolve(building)
+        excluded={'Freezer':'refrigeration_process','Note':'not_a_room','Unknown':'unresolved_scope'}
+        for row in uses['records']:
+            if row['original_label'] in excluded:
+                row['space_scope']=excluded[row['original_label']]
+        areas={row['room_id']:{'value':next(s['area_m2'] for s in building['spaces'] if s['name']==row['original_label'])} for row in uses['records']}
+        internal=gains.resolve(building,room_use=uses,pack=pack,room_areas=areas)
+        for row in internal['records']:
+            if row['original_label'] in excluded:
+                self.assertIsNone(row['occupancy_count'])
+                self.assertEqual(row['status'],'excluded')
+            else:
+                self.assertEqual(row['occupancy_count'],1)
+        flowareas={airflow_resolution.room_id(row['original_label'],'Ground'):areas[row['room_id']] for row in uses['records']}
+        counts={airflow_resolution.room_id(row['original_label'],'Ground'):row['fields']['occupancy_count'] for row in internal['records']}
+        flow=airflow_resolution.resolve(building,{}, {},uses,{},pack,{},room_areas=flowareas,occupancy_counts=counts)
+        cold=airflow_resolution.room_id('Freezer','Ground')
+        prior=airflow_resolution.apply_override(flow,cold,'outside_air',999,'Operator','Retained old decision')
+        flow=airflow_resolution.resolve(building,{}, {'airflows':[{'room_id':cold,'air_path_type':'infiltration','value':888,
+             'source':'Mechanical schedule','evidence':[{'page':1}]}]},uses,{},pack,{},existing=prior,room_areas=flowareas,occupancy_counts=counts)
+        excluded_ids={airflow_resolution.room_id(name,'Ground') for name in excluded}
+        for row in flow['records']:
+            if row['owner_room_id'] in excluded_ids and row['air_path_type'] in {'outside_air','infiltration'}:
+                self.assertEqual(row['status'],'excluded')
+                self.assertIsNone(row['value'])
+                self.assertIn('Outside comfort-HVAC scope',row['rationale'])
+        dining=next(r for r in flow['records'] if r['owner_room_id']==airflow_resolution.room_id('Dining','Ground') and r['air_path_type']=='outside_air')
+        self.assertEqual(dining['value'],7.65)
+
+    def test_fixed_outside_air_survives_unknown_people_area_sum(self):
+        building={'spaces':[{'name':'Dining','level_name':'Ground'}]}
+        uses=room_use_resolution.resolve(building)
+        pack=ai_preliminary.load_pack()
+        for key in ('outside_air_lps','fixed_minimum_lps'):
+            proposal={'rooms':[{'label':'Dining','level_name':'Ground',key:500,'evidence':[{'page':1}]}]}
+            flow=airflow_resolution.resolve(building,{},proposal,uses,{},pack,{})
+            row=next(r for r in flow['records'] if r['air_path_type']=='outside_air')
+            self.assertEqual(row['value'],500)
+            self.assertEqual(row['status'],'provisional')
+            self.assertTrue(row['people_area_unknown'])
+            self.assertIn('unknown',row['rationale'])
+            self.assertIn('people/area ventilation contribution is unknown',row['unresolved_fields'])
+        flow=airflow_resolution.resolve(building,{}, {},uses,{},pack,{})
+        row=next(r for r in flow['records'] if r['air_path_type']=='outside_air')
+        self.assertIsNone(row['value'])
+        self.assertEqual(row['status'],'excluded')
 
     def test_outside_air_uses_exact_same_occupancy_and_zero_override(self):
         building,uses,rid,seats=self.fixture()

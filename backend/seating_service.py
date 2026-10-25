@@ -199,7 +199,10 @@ def _gather(root, source, room_use):
         warnings.append({"reason":"PDF unavailable; vector seats not counted."})
     totals=sorted({json.dumps(row,sort_keys=True):row for row in totals}.values(),key=lambda row:(row["level"],row["page"],row["total"]))
     for level in levels:
-        values=sorted({row["total"] for row in totals if row["level"]==level and not row["room"]})
+        measured=sum(drawings.get(room["id"], {}).get("count", 0) for room in rooms.values()
+                     if room["level"]==level and room["use"] in {"dining", "retail"})
+        values=sorted({row["total"] for row in totals if row["level"]==level and not row["room"]
+                       and (not measured or row["total"] >= measured / 2)})
         if len(values)>1:
             warnings.append({"level":level,"reason":f"Conflicting printed seat totals {values}; printed total not applied."})
     return {"policy":seating.POLICY,"room_inputs":list(rooms.values()),"rooms":seating.allocate(list(rooms.values()),drawings,totals),"drawn":drawings,

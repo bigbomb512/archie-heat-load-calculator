@@ -7,7 +7,7 @@ from copy import deepcopy
 import math
 import re
 
-POLICY = "seating-v2-reviewed"
+POLICY = "seating-v3-furniture-guard"
 BASIS = "Assumption: one design occupant per seat; no reviewed seated-occupancy rule is available in the repository."
 
 
@@ -23,14 +23,14 @@ def printed_seating(text):
     if re.search(r"\b(OUTDOOR|TERRACE|EXTERNAL|APPROX(?:IMATELY)?)\b", text):
         return result
     number = r"(\d{1,4})(?![\d.])"
-    invalid_after = r"^\s*(?:MM\b|H\b|HIGH\b|HEIGHT\b|PER\b|SEATER\b)"
+    invalid_after = r"^[ \t]*(?:MM\b|H\b|HIGH\b|HEIGHT\b|PER\b|SEATER\b)"
     def valid(match, nearby=True):
         return (0 < int(match.group(1)) <= 5000
                 and not re.search(invalid_after, text[match.end():])
                 and (not nearby or not re.search(r"\b(?:PER|SEATER)\b", text[max(0, match.start()-20):match.end()+20])))
-    explicit_patterns = (r"\bTOTAL\s+SEATS\s*[:=]?\s*"+number,
-                         r"\bSEATING\s+CAPACITY\s*[:=]?\s*"+number,
-                         r"\b"+number+r"\s+SEATS\s+TOTAL\b", r"\bPAX\s*[:=]?\s*"+number)
+    explicit_patterns = (r"\bTOTAL[ \t]+SEATS[ \t]*[:=]?[ \t]*"+number,
+                         r"\bSEATING[ \t]+CAPACITY[ \t]*[:=]?[ \t]*"+number,
+                         r"\b"+number+r"[ \t]+SEATS[ \t]+TOTAL\b", r"\bPAX[ \t]*[:=]?[ \t]*"+number)
     explicit = {int(m.group(1)) for pattern in explicit_patterns for m in re.finditer(pattern,text) if valid(m, nearby=False)}
     if explicit:
         return {**result, "totals": sorted(explicit), "kind": "explicit_total"}
@@ -60,7 +60,7 @@ def printed_seating(text):
     patterns = (r"\bSEATS\s*[:=]?\s*"+number, r"\b"+number+r"\s+SEATS\b")
     bare = set()
     for line in text.splitlines():
-        if re.search(r"\b(TABLE|PER|SEATER)\b",line):
+        if re.search(r"\b(TABLE|PER|SEATER|BANQUETTE|BOOTH|BENCH|SOFA|COUCH|LOUNGE|STOOL|CHAIR|OTTOMAN)(?:ES|S)?\b",line):
             continue
         for pattern in patterns:
             for match in re.finditer(pattern,line):
@@ -142,16 +142,36 @@ def allocate(rooms, drawings, totals):
     for level in sorted({room.get("level", "") for room in rooms}):
         candidates = [room for room in rooms if room.get("level", "") == level and room.get("use") in {"dining","retail"}
                       and room.get("scope") in {"comfort_hvac","comfort_hvac_with_process_exception"}]
-        counts = {room["id"]:drawings.get(room["id"],{}).get("count",0) for room in candidates}
-        printed = [row for row in totals if row.get("level", "") == level and not row.get("room")]
+        counts = {room["id"]: drawings.get(room["id"], {}).get("count", 0) for room in candidates}
+        counts = {key: count if count >= 3 else 0 for key, count in counts.items()}
+        measured = sum(counts.values())
+        rejected = []
+        printed = []
+        for row in totals:
+            if row.get("level", "") != level or row.get("room"):
+                continue
+            if measured and row["total"] < measured / 2:
+                rejected.append(f"Printed total {row['total']} is less than half the {measured} counted seats on {level or 'this level'}; not applied.")
+            else:
+                printed.append(row)
         unique = sorted({row["total"] for row in printed})
-        room_totals = {room["id"]: [row for row in totals if row.get("room") == room["id"] and row.get("level", "") == level] for room in candidates}
+        room_totals, room_warnings = {}, {}
+        for room in candidates:
+            key = room["id"]
+            room_totals[key] = []
+            room_warnings[key] = []
+            for row in totals:
+                if row.get("room") != key or row.get("level", "") != level:
+                    continue
+                if counts[key] and row["total"] < counts[key] / 2:
+                    room_warnings[key].append(f"Printed room total {row['total']} is less than half the {counts[key]} counted seats; not applied.")
+                else:
+                    room_totals[key].append(row)
         explicit_counts = {key: next(iter(values)) for key, rows in room_totals.items()
                            if len(values := {row["total"] for row in rows}) == 1}
         unreserved = [room for room in candidates if room["id"] not in explicit_counts]
         active = [room for room in unreserved if counts[room["id"]] > 0] or unreserved
         eligible = [room for room in active if room.get("area_m2",0)>0 and room["id"] not in explicit_counts]
-        measured = sum(counts.values())
         warning = f"Conflicting printed totals {unique}; no printed total applied." if len(unique)>1 else ""
         if len(unique)==1 and measured and abs(measured-unique[0])/unique[0]>.15:
             warning = f"Printed total {unique[0]} and counted seats {measured} disagree by more than 15%; printed total takes precedence."
@@ -186,7 +206,12 @@ def allocate(rooms, drawings, totals):
             elif counts.get(key,0)>0:
                 row = {"seat_count":counts[key],"origin":"project_evidence","evidence":deepcopy(drawings[key].get("evidence",[])),
                        "rationale":f"{counts[key]} drawn seats counted inside this room; vector/bench estimate."}
+            rejection = " ".join(dict.fromkeys(rejected + room_warnings[key]))
+            if row is None and rejection:
+                # Retain a reason for density fallback without inventing a seat count.
+                row = {"seat_count": None, "origin": "unresolved", "evidence": [],
+                       "rationale": "Printed total rejected; no qualifying vector count for this room."}
             if row:
-                row.update(warning=warning,basis=BASIS,drawn_count=counts.get(key,0))
+                row.update(warning=" ".join(part for part in (rejection, warning) if part),basis=BASIS,drawn_count=counts.get(key,0))
                 output[key]=row
     return output

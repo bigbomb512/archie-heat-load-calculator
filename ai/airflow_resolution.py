@@ -256,6 +256,7 @@ def resolve(building, vision, proposal, room_use, ceiling_volume, pack, source_f
     source_fingerprints = deepcopy(source_fingerprints or {})
     source_fingerprints["preliminary_pack"] = fingerprint(pack)
     records, issues = [], []
+    excluded_rooms = {}
     overrides = _existing_overrides(existing)
     previous_records = {
         (_text(row.get("owner_room_id")), _text(row.get("air_path_type"))): row
@@ -263,6 +264,8 @@ def resolve(building, vision, proposal, room_use, ceiling_volume, pack, source_f
     }
     for room in _room_rows(building, proposal, room_use):
         rid, sources, use, ceiling, area, volume, profile_id, profile, area_source = _room_context(building, proposal, room, room_use, ceiling_volume, pack)
+        if use.get("space_scope") in {"refrigeration_process", "not_a_room", "unresolved_scope"}:
+            excluded_rooms[rid] = use["space_scope"]
         if room_areas is not None:
             area_source = room_areas.get(rid, {})
             area = _number(area_source.get("value"), positive=True)
@@ -291,13 +294,16 @@ def resolve(building, vision, proposal, room_use, ceiling_volume, pack, source_f
         area_flow = area * area_rate if area is not None and area_rate is not None else None
         # Both contributions are required. A missing operand is unknown, not zero.
         combined = people_flow + area_flow if people_flow is not None and area_flow is not None else None
-        outside = round(max(combined, fixed or 0), 3) if combined is not None else None
+        outside = round(max(combined, fixed or 0), 3) if combined is not None else round(fixed, 3) if fixed is not None else None
         outside_origin = "project_evidence" if any(_origin(source) == "project_evidence" for source in (people_rate_source, area_rate_source, fixed_source)) else "controlled_fallback"
-        outside_status = "resolved" if outside is not None and outside_origin == "project_evidence" else "provisional" if outside is not None else "excluded"
+        outside_status = "resolved" if combined is not None and outside_origin == "project_evidence" else "provisional" if outside is not None else "excluded"
         outside_record = _make_record("outside_air", rid, "room ventilation", value=outside, origin=outside_origin, confidence=confidence if outside_origin != "controlled_fallback" else .35,
-            evidence=evidence, rationale="Sum of people and area ventilation, subject to a fixed minimum.", schedule=schedule,
+            evidence=evidence, rationale=("Fixed project outside-air value used; the people/area contribution is unknown."
+                if combined is None and fixed is not None else "Sum of people and area ventilation, subject to a fixed minimum."), schedule=schedule,
             formula="max(occupancy × L/s/person + area × L/s/m², fixed minimum)",
             operands={"occupancy": people, "people_rate_lps_per_person": people_rate, "area_m2": area, "area_rate_lps_per_m2": area_rate, "fixed_minimum_lps": fixed, "people_flow_lps": people_flow, "area_flow_lps": area_flow}, status=outside_status,
+            unresolved=["people/area ventilation contribution is unknown"] if combined is None else [],
+            extra={"people_area_unknown": combined is None},
             assumptions=["controlled room-use ventilation profile"] if outside_origin == "controlled_fallback" else [])
         outside_record["field_resolution"] = {"area": _field_record(area, "m²", _origin(area_source, "controlled_fallback"), confidence, "draft room area", _evidence(area_source), "Same resolved area as the preliminary draft."), "occupancy": _field_record(people, "people", _origin(people_source, "controlled_fallback"), confidence, "room evidence", _evidence(people_source), "Resolved occupancy for outside-air calculation."),
                                                "people_rate": _field_record(people_rate, "L/s/person", _origin(people_rate_source, "controlled_fallback"), confidence, "ventilation profile", _evidence(people_rate_source), "Selected people rate."),
@@ -397,6 +403,21 @@ def resolve(building, vision, proposal, room_use, ceiling_volume, pack, source_f
                 row["status"] = "blocked"
                 row["conflicts"] = sorted(set(row.get("conflicts", []) + ids))
                 row["unresolved_fields"] = sorted(set(row.get("unresolved_fields", []) + reasons))
+
+    # Scope wins over generated paths, explicit candidates and retained overrides.
+    # Keep the evidence for audit, but do not present comfort air paths as applicable.
+    for row in records:
+        scope = excluded_rooms.get(row.get("owner_room_id"))
+        if scope and row.get("air_path_type") in {"outside_air", "infiltration"}:
+            row.update(status="excluded", value=None, unresolved_fields=[],
+                       rationale=f"Outside comfort-HVAC scope ({scope}); this air path is excluded.")
+            if row["air_path_type"] == "outside_air":
+                row.get("operands", {})["occupancy"] = None
+                if "occupancy" in row.get("field_resolution", {}):
+                    row["field_resolution"]["occupancy"]["value"] = None
+            else:
+                row.get("operands", {})["resolved_flow_lps"] = None
+            row["resolution_fingerprint"] = fingerprint({key: value for key, value in row.items() if key != "resolution_fingerprint"})
 
     result = {"schema_version": SCHEMA_VERSION, "records": sorted(records, key=lambda row: row["airflow_id"]), "issues": issues,
               "overrides": [deepcopy(row) for _, row in sorted(overrides.items())],
