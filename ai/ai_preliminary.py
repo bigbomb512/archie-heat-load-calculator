@@ -17,6 +17,7 @@ import re
 from ai.design_requirements import validate_design_requirements
 from ai.hourly_loads import build_hourly_load_model, calculate_hourly_load_report
 from ai import design_weather
+from ai import sun as site_sun_model
 from ai import value_resolution as value_resolver
 from ai import model_input_resolution as shared_resolution
 from ai import room_use_resolution as room_use_resolver
@@ -670,8 +671,8 @@ def design_conditions_basis(resolution_artifact, site_location=None, pack_versio
                    "label": f"Generic Australian cooling design day (assumption pack {pack_version}) — not site-specific"})
     sun = {"site_specific": False, "source": f"AI preliminary assumption pack {pack_version}",
            "directions": ["N", "E", "S", "W"],
-           "label": (f"Generic preliminary sun values by façade direction (assumption pack {pack_version}, N/E/S/W) — "
-                     "not site-specific; no flat-roof sun")}
+           "label": (f"Generic preliminary sun values by façade direction and for flat roofs (assumption pack {pack_version}, "
+                     "N/E/S/W and horizontal) — not site-specific: no site or weather location to work out the sun's angle")}
     location = (site_location or {}).get("location", {}) if isinstance(site_location, dict) else {}
     address = str((site_location or {}).get("confirmed_address", "")).strip() if isinstance(site_location, dict) else ""
     if address and location.get("latitude_deg") is not None:
@@ -683,16 +684,85 @@ def design_conditions_basis(resolution_artifact, site_location=None, pack_versio
     return {"design_day": design_day, "sun": sun, "site": site}
 
 
+MONTH_SCENARIO = "ai_preliminary_month_{:02d}"
+SHADE_KINDS = {"awning", "verandah", "canopy", "eave", "balcony"}
+DEFAULT_SHADE_GAP_M = 0.3
+
+
+def _site_sun(site_location, site_days=None):
+    """{"days", "latitude", "longitude", "timezone", "place"} for the sun at the site, or None. The confirmed site's
+    position first; else the listed weather location's (its design days are used, so its sun is close enough)."""
+    location = (site_location or {}).get("location", {}) if isinstance(site_location, dict) else {}
+    address = str((site_location or {}).get("confirmed_address", "") if isinstance(site_location, dict) else "").strip()
+    latitude, longitude = _number(location.get("latitude_deg")), _number(location.get("longitude_deg"))
+    timezone_name = str(location.get("timezone") or "") or site_sun_model.timezone_for(location.get("state"), location.get("locality"))
+    place = address
+    if not (address and latitude is not None and longitude is not None) and site_days and site_days.get("location") in design_weather.LOCATIONS:
+        latitude, longitude, state = design_weather.LOCATIONS[site_days["location"]]
+        timezone_name, place = site_sun_model.timezone_for(state, site_days["location"]), site_days["location"]
+    elif not timezone_name and site_days:
+        timezone_name = site_sun_model.timezone_for(site_days.get("state"), site_days.get("location"))
+    if latitude is None or longitude is None or not timezone_name:
+        return None
+    try:
+        days = site_sun_model.design_days(latitude, longitude, timezone_name)
+    except (ValueError, ImportError):
+        return None
+    return {"days": days, "latitude": latitude, "longitude": longitude, "timezone": timezone_name, "place": place}
+
+
+def _surface_sun(site_sun, scenarios, tilt_deg, azimuth_deg, shade=None, height_m=None):
+    """{scenario_id: 24 hourly W/m² on the surface} for every design day, from its month's sun."""
+    result = {}
+    for row in scenarios.get("scenarios", []):
+        month = int(row.get("sun_month") or 1)
+        result[row["scenario_id"]] = site_sun_model.surface_totals(site_sun, month, tilt_deg, azimuth_deg or 0.0,
+                                                                   shade, height_m)
+    return result
+
+
+def _shade_values(raw):
+    """An awning/verandah over glass or a wall as {"kind", "depth_m", "gap_m", "gap_assumed", "wall_height_m"}, or
+    None when it has no usable depth (an unmeasured shade is left out, which errs on the side of more load)."""
+    if not isinstance(raw, dict) or str(raw.get("kind", "")).casefold() not in SHADE_KINDS:
+        return None
+    depth = _number(raw.get("depth_m"))
+    if not depth or not 0.1 <= depth <= 10:
+        return None
+    gap = _number(raw.get("gap_m"))
+    result = {"kind": str(raw["kind"]).casefold(), "depth_m": round(depth, 3),
+              "gap_m": round(gap, 3) if gap is not None and 0 <= gap <= 5 else DEFAULT_SHADE_GAP_M,
+              "gap_assumed": not (gap is not None and 0 <= gap <= 5)}
+    wall_height = _number(raw.get("wall_height_m"))
+    if wall_height and 0 < wall_height <= 20:
+        result["wall_height_m"] = round(wall_height, 3)
+    return result
+
+
 def _scenario(pack, resolved=None, basis=None, site_days=None):
     """The design days to calculate: the resolved (or preliminary) day, and with a site's design days both of them:
-    the dry-bulb day sizes the load, the humid day is a dehumidification check (see calculate)."""
+    the dry-bulb day sizes the load, the humid day is a dehumidification check (see calculate). With the site's monthly
+    climate, the 21st of every other month too (the hottest month is the summer day); the largest of them sizes the load.
+    Each day carries the month whose sun it uses (sun_month)."""
     if site_days:
         days = []
+        monthly = (site_days.get("monthly") or {}).get("days") or []
+        hottest = next((day for day in monthly if day.get("hottest")), None)
+        sun_month = hottest["month"] if hottest else 1
         for index, day in enumerate(site_days["days"]):
             single = _scenario(pack, {**(resolved or {}), "weather_profile": {**((resolved or {}).get("weather_profile") or {}), "hours": day["hours"]}}, basis)
             row = single["scenarios"][0]
             row.update({"scenario_id": "ai_preliminary_cooling_day" if index == 0 else f"ai_preliminary_{day['day']}_day",
-                        "title": f"{site_days['location']} — {day['title']}"})
+                        "title": f"{site_days['location']} — {day['title']}", "sun_month": sun_month,
+                        "representative_month": design_weather.MONTH_NAMES[sun_month - 1]})
+            days.append(row)
+        for day in monthly:
+            if hottest and day["month"] == hottest["month"]:
+                continue
+            single = _scenario(pack, {**(resolved or {}), "weather_profile": {**((resolved or {}).get("weather_profile") or {}), "hours": day["hours"]}}, basis)
+            row = single["scenarios"][0]
+            row.update({"scenario_id": MONTH_SCENARIO.format(day["month"]), "title": f"{site_days['location']} — {day['title']}",
+                        "representative_month": day["month_name"], "sun_month": day["month"]})
             days.append(row)
         return {"scenarios": days}
     scenario = deepcopy(pack["scenario"])
@@ -708,7 +778,7 @@ def _scenario(pack, resolved=None, basis=None, site_days=None):
              else "AI preliminary generic Australian cooling day (not site-specific)")
     return {"scenarios": [{
         "scenario_id": "ai_preliminary_cooling_day", "title": title, "mode": "cooling",
-        "representative_month": "January", "day_type": "weekday", "status": "provisional",
+        "representative_month": "January", "sun_month": 1, "day_type": "weekday", "status": "provisional",
         "source": design_day.get("source") or f"AI preliminary assumption pack {pack['version']}", "citations": [],
         "atmospheric_pressure_kpa": {"value": scenario["pressure_kpa"], "status": "provisional", "source": _source("scenario"), "citations": []},
         "hours": [{"hour": hour, "outdoor_dry_bulb_c": {"value": point["db"], "status": "provisional", "source": _source("scenario"), "citations": []},
@@ -871,12 +941,15 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
              preliminary_proposal=None, value_resolution=None, research_cache=None, source_pack_releases=None,
              site_location=None, site_design_weather=None, room_use_resolution=None, geometry_resolution=None, weather_location="", weather_note="",
              ceiling_volume_resolution=None, internal_gains_resolution=None, airflow_resolution=None, ahu_resolution=None,
-             plant_resolution=None, allow_area_fallbacks=True, process_exhaust=None, design_weather_table=None):
+             plant_resolution=None, allow_area_fallbacks=True, process_exhaust=None, design_weather_table=None,
+             monthly_climate_table=None):
     """Return a materialized preliminary payload plus its transparent ledger.
 
     process_exhaust: answered kitchen exhaust per room name (lower case): {"lps", "method", "method_assumed"}.
     design_weather_table: an imported design-temperature table (ai.design_weather.load_table()); with a confirmed
     site and no cited site design day, the site's two summer design days come from its nearest listed location.
+    monthly_climate_table: the imported BoM monthly table (ai.design_weather.load_monthly_table()); with it, the 21st
+    of every month is calculated too (user decision 2026-10-25), each month's design day lowered from the summer day.
     """
     pack = load_pack()
     overrides = contractor_overrides or {}
@@ -947,8 +1020,9 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
         # No cited site design day (e.g. an approved DA09 pack): the nearest listed location's two summer design days.
         # The operators' choice of listed location (Project tab) first; else the nearest to a confirmed site position.
         base_hours = scenario_values["weather_profile"]["hours"]
-        site_days = (design_weather.for_location(weather_location, base_hours, design_weather_table) if weather_location else None) \
-            or design_weather.for_site(site_location, base_hours, table=design_weather_table)
+        site_days = (design_weather.for_location(weather_location, base_hours, design_weather_table, monthly_climate_table)
+                     if weather_location else None) \
+            or design_weather.for_site(site_location, base_hours, table=design_weather_table, monthly_table=monthly_climate_table)
     if site_days:
         scenario_values = {**scenario_values, "weather_profile": {**scenario_values["weather_profile"], "hours": site_days["days"][0]["hours"]}}
         # weather_note: the location was picked by the AI from the site details, not chosen by the operators.
@@ -965,6 +1039,28 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                       f"{site_days['values']['db']:g} °C dry bulb with {site_days['values']['cwb']:g} °C wet bulb, and "
                       f"{site_days['values']['wb']:g} °C wet bulb with {site_days['values']['cdb']:g} °C dry bulb as a dehumidification check. "
                       f"Source: {site_days['source']}.")}
+        monthly = site_days.get("monthly")
+        conditions_basis["design_day"]["months"] = (
+            {"calculated": True, "kind": monthly["kind"], "source": monthly["source"], "station": monthly["station"],
+             "station_name": monthly["station_name"], "warning": monthly.get("warning", ""),
+             "offsets_c": {day["month_name"]: day["offset_c"] for day in monthly["days"]},
+             "label": (f"The 21st of every month is calculated: each month's design day is the summer design day lowered by "
+                       f"{site_days['location']}'s hottest-month mean maximum minus that month's ("
+                       + (f"BoM station {monthly['station']} {monthly['station_name']}, imported by the operators"
+                          if monthly["kind"] == "bom_station" else monthly["source"])
+                       + "). A derived estimate." + (f" {monthly['warning']}" if monthly.get("warning") else ""))}
+            if monthly else
+            {"calculated": False, "label": ("Only the summer design day is calculated: no monthly temperatures are available "
+                                            f"for {site_days['location']}.")})
+    site_sun = _site_sun(site_location, site_days)
+    if site_sun:
+        conditions_basis["sun"] = {
+            "site_specific": True, "source": site_sun_model.METHOD, "latitude_deg": site_sun["latitude"],
+            "longitude_deg": site_sun["longitude"], "timezone": site_sun["timezone"], "place": site_sun["place"],
+            "label": (f"Sun position and clear-sky sunlight every hour at {site_sun['place']} "
+                      f"({abs(site_sun['latitude']):.2f}°S, {site_sun['longitude']:.2f}°E) on the 21st of each month calculated, "
+                      "on each wall's own bearing and on flat roofs; awnings and verandahs read from the drawings shade the "
+                      f"direct sun. Method: {site_sun_model.METHOD}.")}
     active_rows, excluded_spaces = [], []
     excluded_spaces.extend({"room_name": issue.get("label", ""), "level": issue.get("level", ""),
                             "scope": issue.get("scope", "unresolved_scope"),
@@ -1438,6 +1534,7 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
         openings_by_host.setdefault(candidate["host_surface_key"], []).append(candidate)
 
     envelope = pack["preliminary_envelope"]
+    scenario_set = _scenario(pack, scenario_values, conditions_basis, site_days)
     for host_key, candidate in surface_index.items():
         target = next(value for value in room_rows.values() if value["room"]["room_id"] == candidate["owner_room_id"])
         room, row, profile, profile_id = target["room"], target["row"], target["profile"], target["profile_id"]
@@ -1468,9 +1565,19 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                          else envelope["cardinal_solar_profiles_w_m2"].get(orientation, [0] * 24))
         solar_peak = max(solar_profile)
         solar_schedule_id = f"prelim-solar-{candidate['candidate_id']}"
+        # With the site's sun: each design day's own 24 hours on this surface's bearing (or the flat roof), with a
+        # verandah or canopy along the wall shading it; the schedule is then only the room's operating hours.
+        hourly_sun = None
+        if site_sun and solar_peak:
+            tilt = 0.0 if orientation == "horizontal" else 90.0
+            bearing = 0.0 if tilt == 0 else site_sun_model.surface_azimuth(orientation, candidate.get("azimuth_deg"))
+            wall_shade = _shade_values(candidate.get("shade")) if tilt else None
+            hourly_sun = _surface_sun(site_sun, scenario_set, tilt, bearing, wall_shade, (wall_shade or {}).get("wall_height_m"))
+            solar_peak = max((value for hours in hourly_sun.values() for value in hours), default=0.0)
         if solar_peak:
             operating = _profile_schedule(profile_id)
-            schedules.append(_schedule_with_values(solar_schedule_id, f"Preliminary {orientation} façade solar profile", [round(operating[hour] * solar_profile[hour] / solar_peak, 6) for hour in range(24)], _source(f"solar-{orientation}")))
+            values = (operating if hourly_sun else [round(operating[hour] * solar_profile[hour] / solar_peak, 6) for hour in range(24)])
+            schedules.append(_schedule_with_values(solar_schedule_id, f"Preliminary {orientation} façade solar profile", values, _source(f"solar-{orientation}")))
             room["schedule_assignments"]["solar"][candidate["candidate_id"]] = solar_schedule_id
         floor_u = envelope["opaque_constructions"]["floor"]["u_value_w_m2k"]
         partition_u = envelope["opaque_constructions"]["partition"]["u_value_w_m2k"]
@@ -1490,8 +1597,15 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                   "preliminary_assumption": True, "source_pages": candidate["evidence"], "evidence": deepcopy(candidate.get("evidence", [])),
                   "confidence": candidate.get("confidence"), "calculation_method": "surface area × U-value × boundary-to-room temperature difference",
                   "supported_uncertainty_ranges": deepcopy(candidate.get("supported_uncertainty_ranges", [])),
-                  "solar_method": "area × directional solar × solar-gain factor × shading",
+                  "solar_method": ("area × the site's hourly sun on this surface × solar-gain factor" if hourly_sun
+                                   else "area × directional solar × solar-gain factor × shading"),
                   "orientation": orientation}
+        if hourly_sun:
+            opaque["preliminary_hourly_solar_w_m2"] = hourly_sun
+            if candidate.get("azimuth_deg") is not None:
+                opaque["azimuth_deg"] = round(float(candidate["azimuth_deg"]), 1)
+            if wall_shade:
+                opaque["shade"] = wall_shade
         if candidate.get("reviewer_trace_id"):
             opaque.update({"reviewer_trace_id": candidate.get("reviewer_trace_id"),
                            "reviewer": candidate.get("reviewer", ""),
@@ -1564,9 +1678,17 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
             glazing_profile = envelope["cardinal_solar_profiles_w_m2"].get(opening_orientation, [0] * 24)
             glazing_peak = max(glazing_profile)
             solar_schedule_id = f"prelim-solar-{opening['candidate_id']}"
+            glass_sun, glass_shade = None, _shade_values(opening.get("shade"))
+            if site_sun and glazing_peak:
+                bearing = site_sun_model.surface_azimuth(opening_orientation, opening.get("azimuth_deg", candidate.get("azimuth_deg")))
+                glass_sun = _surface_sun(site_sun, scenario_set, 90.0, bearing, glass_shade, _number(opening.get("height_m")))
+                glazing_peak = max((value for hours in glass_sun.values() for value in hours), default=0.0)
+                if glass_shade:
+                    shade = 1.0          # the awning's geometry replaces the shading category
             if glazing_peak:
                 operating = _profile_schedule(profile_id)
-                schedules.append(_schedule_with_values(solar_schedule_id, f"Preliminary {opening_orientation} glazing solar profile", [round(operating[hour] * glazing_profile[hour] / glazing_peak, 6) for hour in range(24)], _source(f"solar-{opening_orientation}")))
+                values = (operating if glass_sun else [round(operating[hour] * glazing_profile[hour] / glazing_peak, 6) for hour in range(24)])
+                schedules.append(_schedule_with_values(solar_schedule_id, f"Preliminary {opening_orientation} glazing solar profile", values, _source(f"solar-{opening_orientation}")))
                 room["schedule_assignments"]["solar"][opening["candidate_id"]] = solar_schedule_id
             # Glass performance answered by the operators replaces the preliminary pack values (bounded, else ignored).
             answered_u = _number(opening.get("u_value_w_m2k")) if 0.5 <= (_number(opening.get("u_value_w_m2k")) or 0) <= 7 else None
@@ -1579,7 +1701,10 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                                   "frame_fraction": envelope["glazing_frame_fraction"], "glass_area_correction": envelope["glazing_glass_area_correction"],
                                   "internal_shading_factor": envelope["glazing_internal_shading_factor"]},
                        "manual_solar": {"enabled": bool(glazing_peak), "incident_solar_w_m2": glazing_peak, "external_shading_factor": shade},
-                       "solar_basis": "ai_preliminary_cardinal_profile", "preliminary_solar_profile_w_m2": glazing_profile,
+                       "solar_basis": "site_sun_hourly" if glass_sun else "ai_preliminary_cardinal_profile",
+                       "preliminary_solar_profile_w_m2": glazing_profile,
+                       **({"preliminary_hourly_solar_w_m2": glass_sun} if glass_sun else {}),
+                       **({"shade": glass_shade} if glass_shade else {}),
                        "orientation": opening_orientation, "shading_category": opening["shading_category"], "preliminary_assumption": True,
                        "source": (opening.get("glazing_source") if answered_u and answered_shgc else
                                   _source(opening.get("glazing_choice") or profile_id) + "; preliminary assumption-pack glazing U-value and SHGC"),
@@ -1594,7 +1719,16 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
             exclusions[:] = [item for item in exclusions if not (item.get("room_id") == room["room_id"] and item.get("component") == "glazing and façade solar" and "No resolved" in item.get("reason", ""))]
             if not opening_orientation:
                 exclusions.append({"room_id": room["room_id"], "component": "Glazing sun — orientation not assessed", "candidate_id": opening["candidate_id"], "reason": "Glazing conduction is included; glazing solar gain is omitted because page north is not declared."})
-            if opening["shading_category"] == "unshaded":
+            if glass_shade and glass_sun:
+                phase1_assumptions.append({"room_id": room["room_id"], "component": "glazing shade",
+                    "reason": (f"{glass_shade['kind'].capitalize()} {glass_shade['depth_m']:g} m deep, its underside "
+                               f"{glass_shade['gap_m']:g} m above the glass{' (assumed)' if glass_shade.get('gap_assumed') else ''}: "
+                               "the shaded part of the glass gets only diffuse sun, hour by hour.")})
+            elif isinstance(opening.get("shade"), dict) and str(opening["shade"].get("kind", "")).casefold() in SHADE_KINDS:
+                phase1_assumptions.append({"room_id": room["room_id"], "component": "glazing shade",
+                    "reason": (f"A {opening['shade']['kind']} is drawn over the glass but its depth isn't printed, so it "
+                               "isn't counted as shade (errs on the side of more load).")})
+            elif opening["shading_category"] == "unshaded":
                 exclusions.append({"room_id": room["room_id"], "component": "shading review", "candidate_id": opening["candidate_id"], "reason": "Unknown façade shading uses the explicit conservative unshaded preliminary assumption."})
             ledger.append({"room_id": room["room_id"], "field": "glazing_opening", "value": opening["opening_area_m2"], "origin": "ai_geometry", "profile_id": profile_id,
                            "confidence": opening["confidence"], "confidence_band": opening["confidence_band"], "rationale": "AI preliminary glazing with controlled U-value, SHGC, directional solar, and shading category.", "evidence": opening["evidence"], "surface_id": opening["candidate_id"]})
@@ -1634,7 +1768,7 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
     surface_summary["excluded"] = surface_summary["discovered"] - surface_summary["included"] - surface_summary["blocked"]
     model["updated_at"] = now()
     model["source_requirements_updated_at"] = requirements["updated_at"]
-    material = {"requirements": requirements, "schedule_library": {"schema_version": 1, "updated_at": now(), "schedules": schedules}, "design_day_scenarios": _scenario(pack, scenario_values, conditions_basis, site_days), "hourly_load_model": model,
+    material = {"requirements": requirements, "schedule_library": {"schema_version": 1, "updated_at": now(), "schedules": schedules}, "design_day_scenarios": scenario_set, "hourly_load_model": model,
                 "preliminary_policy": {"pack_version": pack["version"], "mode": "ai_preliminary", "surface_ids": sorted(accepted_surface_ids), "opening_ids": sorted(accepted_opening_ids)}}
     dependency_fingerprints = dict(source_fingerprints or {})
     dependency_fingerprints.update({"preliminary_pack": fingerprint(pack), "room_use_taxonomy": room_use_artifact["taxonomy_fingerprint"], "room_use_resolution": room_use_artifact["fingerprint"], "ceiling_volume_resolution": ceiling_artifact["fingerprint"], "internal_gains_resolution": internal_artifact.get("fingerprint", ""), "airflow_resolution": airflow_artifact.get("fingerprint", ""), "ahu_resolution": ahu_artifact.get("fingerprint", ""), "plant_resolution": plant_artifact.get("fingerprint", ""), "geometry_resolution": fingerprint(geometry_resolution or {}), "thermal_surface_ledger": opaque_resolution.get("fingerprint", ""), "vision_response": fingerprint(vision or {}), "building_evidence": fingerprint(building or {}), "contractor_overrides": fingerprint(overrides), "process_exhaust": fingerprint(process_exhaust),
@@ -1670,6 +1804,35 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
             "surface_summary": surface_summary, "phase1_assumptions": phase1_assumptions,
             "design_conditions_basis": conditions_basis, "proposal": effective_proposal, "opaque_envelope_resolution": opaque_resolution, "room_use_resolution": room_use_artifact, "ceiling_volume_resolution": ceiling_artifact, "internal_gains_resolution": internal_artifact, "airflow_resolution": airflow_artifact, "ahu_resolution": ahu_artifact, "plant_resolution": plant_artifact, "geometry_resolution": deepcopy(geometry_resolution or {}), "value_resolution": resolution_artifact,
             "review_queue": sorted(review_queue, key=lambda item: (item["confidence"], item["room_id"], item["field"]))}
+
+
+def _seasonal_summary(report, fan=None):
+    """Every calculated design day's 24 hourly loads (kW, fan heat included like the design total) and its peak, in
+    calendar order, with the month and hour that size the system (the report's governing peak)."""
+    months = []
+    order = {name: index for index, name in enumerate(design_weather.MONTH_NAMES)}
+    for scenario in report.get("scenario_results", []) or []:
+        hours = scenario.get("included_scope_hours") or []
+        if len(hours) != 24:
+            continue
+        totals, solar = [], []
+        for row in hours:
+            components = row.get("components") or {}
+            sensible = row.get("subtotal_sensible_kw") or 0.0
+            outside = (components.get("outside_air") or {}).get("sensible_kw") or 0.0
+            fan_kw = max(0.0, sensible - outside) * fan["percent_of_room_sensible"] / 100 if fan else 0.0
+            totals.append(round((row.get("subtotal_kw") or 0.0) + fan_kw, 2))
+            solar.append(round(sum((components.get(name) or {}).get("total_kw") or 0.0 for name in ("solar", "glazing_solar")), 2))
+        peak_hour = max(range(24), key=lambda hour: (totals[hour], -hour))
+        months.append({"scenario_id": scenario.get("scenario_id", ""), "month": scenario.get("representative_month", ""),
+                       "title": scenario.get("title", ""), "hourly_kw": totals, "hourly_sun_kw": solar,
+                       "peak_kw": totals[peak_hour], "peak_hour": peak_hour})
+    months.sort(key=lambda row: order.get(row["month"], 99))
+    governing = (report.get("included_scope_peak") or {}).get("scenario_id")
+    design = next((row for row in months if row["scenario_id"] == governing), None) or (max(months, key=lambda row: row["peak_kw"]) if months else None)
+    return {"months": months, "monthly": len(months) > 1,
+            "design_month": design["month"] if design else "", "design_hour": design["peak_hour"] if design else None,
+            "design_kw": design["peak_kw"] if design else None}
 
 
 def _with_fan_heat(peak, fan, safety_factor):
@@ -1885,7 +2048,12 @@ def calculate(input_set, safety_factor_policy=None, scope="full"):
     # coincident dry bulb) is calculated alongside as a dehumidification check and reported, not used for the size: on
     # Butcher Buffet the dry-bulb day gave 38.8 kW before the safety factor against the engineer's 39.6 kW, the humid
     # day 56.4 kW, nearly all of the difference outside-air moisture.
-    report = calculate_hourly_load_report(material["requirements"], material["schedule_library"], material["design_day_scenarios"], material["hourly_load_model"], ["ai_preliminary_cooling_day"], preliminary_policy=material.get("preliminary_policy"), safety_factor_policy=safety_factor_policy)
+    # With the site's monthly climate the 21st of every month is a design day too (user decision 2026-10-25): the
+    # largest coincident load over all of them sizes the system, and every month's 24 hours are reported.
+    cooling_days = [row["scenario_id"] for row in material["design_day_scenarios"].get("scenarios", [])
+                    if row.get("scenario_id") == "ai_preliminary_cooling_day"
+                    or str(row.get("scenario_id", "")).startswith("ai_preliminary_month_")] or ["ai_preliminary_cooling_day"]
+    report = calculate_hourly_load_report(material["requirements"], material["schedule_library"], material["design_day_scenarios"], material["hourly_load_model"], cooling_days, preliminary_policy=material.get("preliminary_policy"), safety_factor_policy=safety_factor_policy)
     fan = load_pack().get("fan_heat") if scope == "full" else None
     report["included_scope_peak"], fan_kw = _with_fan_heat(report.get("included_scope_peak") or {}, fan, report.get("safety_factor"))
     if fan_kw:
@@ -1897,6 +2065,7 @@ def calculate(input_set, safety_factor_policy=None, scope="full"):
             "room_id": "", "component_id": "duct_heat_gain", "component_type": "duct_heat",
             "component": "Supply duct heat gain (matters where supply ducts run through an unconditioned roof space)",
             "reason": "Not calculated: it depends on the duct route and insulation."}]
+    report["seasonal"] = _seasonal_summary(report, fan)
     humid = next((row for row in material["design_day_scenarios"].get("scenarios", []) if row.get("scenario_id") == "ai_preliminary_humid_day"), None) if scope == "full" else None
     if humid:
         check = calculate_hourly_load_report(material["requirements"], material["schedule_library"], material["design_day_scenarios"], material["hourly_load_model"], ["ai_preliminary_humid_day"], preliminary_policy=material.get("preliminary_policy"), safety_factor_policy=safety_factor_policy)

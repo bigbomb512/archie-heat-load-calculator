@@ -154,6 +154,50 @@ function assumptionsList(items, projectId) {
     : `<p>No remaining assumptions were reported.</p>`;
 }
 
+const YEAR_SHADES = ["#f4f8fa", "#e3eef4", "#c9dde9", "#a9c9dc", "#86b3ce", "#5f93b6"];
+
+// The load through the year (user decision 2026-10-25): the 21st of every month, all 24 hours, each with its own sun.
+function yearSection(seasonal, stale) {
+  const months = (seasonal?.months || []).filter(
+    (row) => Array.isArray(row.hourly_kw) && row.hourly_kw.length === 24,
+  );
+  if (!months.length) return "";
+  const top = Math.max(0.001, ...months.flatMap((row) => row.hourly_kw));
+  const hourLabel = (hour) => `${String(hour).padStart(2, "0")}:00`;
+  const lead = seasonal.monthly
+    ? `Each month's 21st is calculated hour by hour with that day's sun angle and design temperature. The largest, ${fmt(seasonal.design_kw)} kW in ${escapeHtml(seasonal.design_month)} at ${hourLabel(seasonal.design_hour)}, sizes the system.`
+    : `Only the summer design day is calculated: no monthly temperatures are available for this location, so the other months aren't shown.`;
+  const head = Array.from(
+    { length: 24 },
+    (_value, hour) =>
+      `<th scope="col" class="job-year-hour">${hour % 3 === 0 ? String(hour).padStart(2, "0") : ""}</th>`,
+  ).join("");
+  const rows = months
+    .map((row) => {
+      const cells = row.hourly_kw
+        .map((kw, hour) => {
+          const shade =
+            YEAR_SHADES[Math.min(5, Math.max(0, Math.round((kw / top) * 5)))];
+          const peak = hour === row.peak_hour ? " peak" : "";
+          return `<td class="job-year-cell${peak}" style="background:${shade}" title="${escapeHtml(row.month)} ${hourLabel(hour)}: ${fmt(kw)} kW"><span class="job-sr-only">${fmt(kw)} kW</span></td>`;
+        })
+        .join("");
+      const design = row.month === seasonal.design_month ? " job-year-design" : "";
+      return `<tr class="${design.trim()}"><th scope="row">${escapeHtml(row.month)}</th>${cells}<td class="job-year-peak">${fmt(row.peak_kw)} kW at ${hourLabel(row.peak_hour)}</td></tr>`;
+    })
+    .join("");
+  return `<section class="job-panel ${stale ? "stale" : ""}" aria-labelledby="year-title">
+      <h2 id="year-title">Load through the year</h2>
+      <p>${lead}</p>
+      <div class="job-table-wrap"><table class="job-year-grid">
+        <thead><tr><th scope="col">Month</th>${head}<th scope="col">Peak</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+      <div class="job-load-scale"><span>Lower load</span><i><b></b><b></b><b></b><b></b><b></b></i><span>Higher load</span></div>
+      <p class="job-caption">Hours are local clock time on the 21st of each month; the outlined cell is that month's peak.</p>
+    </section>`;
+}
+
 function resultsContent({ plan, report, gaps, projectId, stale, canUpdate }) {
   const peak = report.included_scope_peak || {};
   const total = peak.final_design_total_kw ?? peak.design_total_kw;
@@ -228,6 +272,7 @@ function resultsContent({ plan, report, gaps, projectId, stale, canUpdate }) {
         </table></div>
       </section>
     </div>
+    ${yearSection(report.seasonal, stale)}
     <section class="job-panel ${stale ? "stale" : ""}"><h2>Still assumed</h2>${assumptionsList(assumptions, projectId)}</section>`;
 }
 

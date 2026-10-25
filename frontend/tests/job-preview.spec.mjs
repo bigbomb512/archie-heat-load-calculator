@@ -958,6 +958,55 @@ test("current Results show the total, room bars and assumptions", async ({
   await expect(page.getByText("Safety allowance, 10%")).toBeVisible();
 });
 
+test("Results show the load through the year, month by hour, with the sizing month", async ({
+  page,
+}) => {
+  const months = ["January", "February", "March", "April", "May", "June", "July", "August",
+    "September", "October", "November", "December"];
+  const seasonal = {
+    monthly: true, design_month: "March", design_hour: 15, design_kw: 5.4,
+    months: months.map((month, index) => ({
+      scenario_id: `m${index + 1}`, month,
+      hourly_kw: Array.from({ length: 24 }, (_v, hour) =>
+        hour >= 9 && hour <= 21 ? Number((3 + (month === "March" ? 2.4 : 1) * Math.sin(((hour - 9) / 12) * Math.PI)).toFixed(2)) : 0.4),
+      peak_kw: month === "March" ? 5.4 : 4.0, peak_hour: 15,
+    })),
+  };
+  await preview(page, {
+    status: { phase1_complete: true, phase2_complete: true, results_ready: true, result_stale: false },
+    final_report: {
+      included_scope_peak: { final_design_total_kw: 5.4, design_total_kw: 5.4, safety_factor: 1.0, safety_allowance_kw: 0 },
+      room_peaks: [{ name: "Shop", design_total_kw: 5.4 }],
+      seasonal,
+    },
+    rooms: [{ ...plan.rooms[0], state: "done", phase1_kw: 2.5, final_kw: 5.4, final_w_m2: 84 }],
+  });
+  await page.route("**/api/projects", (route) =>
+    route.fulfill({ json: [{ ...project, phase2_complete: true, results_ready: true }] }),
+  );
+  await page.route("**/api/job-status**", (route) =>
+    route.fulfill({ json: { ...plan.status, phase1_complete: true, phase2_complete: true, results_ready: true, result_stale: false } }),
+  );
+  await page.goto("/?preview=1#/job/job-1/results");
+  const section = page.getByRole("region", { name: "Load through the year" });
+  await expect(section).toBeVisible();
+  await expect(section).toContainText("5.4 kW in March at 15:00, sizes the system");
+  await expect(section.locator("tbody tr")).toHaveCount(12);
+  await expect(section.locator("tbody tr").first().locator(".job-year-cell")).toHaveCount(24);
+  await expect(section.locator(".job-year-design th")).toHaveText("March");
+  await expect(section.locator(".job-year-cell.peak")).toHaveCount(12);
+  if (process.env.ARCHIE_YEAR_SCREENSHOT) {
+    await section.screenshot({ path: process.env.ARCHIE_YEAR_SCREENSHOT });
+  }
+  await page.setViewportSize({ width: 390, height: 800 });
+  // At phone width the grid scrolls inside its own box; the page itself doesn't scroll sideways.
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
+    .toBeLessThanOrEqual(390);
+  const wrap = section.locator(".job-table-wrap");
+  expect(await wrap.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+});
+
 test("Results with no safety allowance show no allowance line", async ({
   page,
 }) => {

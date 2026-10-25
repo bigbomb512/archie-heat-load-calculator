@@ -486,12 +486,13 @@ def validate_opening_reply(packet, reply):
             head_assumption = ""
         if type(sill) not in (int, float) or type(head) not in (int, float) or head <= sill or head <= 0:
             raise ValueError("Glazing head height must be above its sill height.")
+        head_read = float(head)
         capped = head > ceiling > 0
         if capped:
             head = ceiling
             head_assumption = "Head above ceiling; capped at ceiling height"
         result.append({"panel_index": index + 1, "width_mm": float(width), "sill_mm": float(sill),
-                       "head_mm": float(head), "source": source, "printed_text": printed,
+                       "head_mm": float(head), "head_read_mm": head_read, "source": source, "printed_text": printed,
                        "sill_assumption": sill_assumption, "head_assumption": head_assumption})
         width_sum += float(width)
     if width_sum > total + 1e-6:
@@ -505,7 +506,29 @@ def validate_opening_reply(packet, reply):
                              f"5% (they add up to {width_sum + excluded_width_sum:g} mm of {total:g} mm). List every part "
                              "of the front, glazed or not.")
     return {"total_width_mm": float(total), "total_width_text": total_text, "panels": result,
-            "excluded": excluded, "notes": notes, "read_from_image": image_read}
+            "excluded": excluded, "notes": notes, "read_from_image": image_read, "shade": _opening_shade_reply(value.get("shade"))}
+
+
+SHADE_KINDS = ("awning", "verandah", "canopy", "eave", "balcony")
+
+
+def _opening_shade_reply(raw):
+    """The awning/verandah/canopy over the shopfront, from the same reply (user decision 2026-10-25: read in this
+    step, no extra call). None when the reply has none or says "none"; an unprinted depth or height stays null."""
+    if raw is None or (isinstance(raw, dict) and str(raw.get("kind", "")).casefold() in {"", "none"}):
+        return None
+    if not isinstance(raw, dict) or str(raw.get("kind", "")).casefold() not in SHADE_KINDS:
+        raise ValueError(f"shade.kind must be one of {', '.join(SHADE_KINDS)} or none.")
+    def millimetres(key):
+        value = raw.get(key)
+        if value is None:
+            return None
+        if type(value) not in (int, float) or not math.isfinite(value) or not 0 < value <= 10000:
+            raise ValueError(f"shade.{key} must be a positive number of millimetres (at most 10,000), or null when not printed.")
+        return float(value)
+    printed = raw.get("printed_text") if isinstance(raw.get("printed_text"), list) else []
+    return {"kind": str(raw["kind"]).casefold(), "depth_mm": millimetres("depth_mm"), "underside_mm": millimetres("underside_mm"),
+            "full_width": bool(raw.get("full_width", True)), "printed_text": [str(item)[:120] for item in printed][:4]}
 
 
 def fingerprint(value):

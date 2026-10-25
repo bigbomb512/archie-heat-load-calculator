@@ -1367,3 +1367,51 @@ body.job-preview {
 .job-activity-task p { margin: 4px 0 0; font-size: 13px; color: var(--ink-2); }
 .job-activity summary { cursor: pointer; padding: 12px 0; min-height: 44px; }
 .job-activity summary:focus-visible { outline: 2px solid var(--action); outline-offset: 2px; }
+
+/* Load through the year: a month × hour grid, shaded by load. */
+.job-year-grid {
+  border-collapse: separate;
+  border-spacing: 2px;
+  font-size: 13px;
+  width: 100%;
+  min-width: 640px;
+}
+.job-year-grid thead th {
+  text-align: left;
+  padding-left: 0;
+}
+.job-year-grid thead th:last-child {
+  padding-left: 8px;
+}
+.job-year-grid th[scope="row"] {
+  text-align: left;
+  font-weight: 400;
+  color: var(--ink-2);
+  padding-right: 8px;
+  white-space: nowrap;
+}
+.job-year-hour {
+  font-weight: 400;
+  color: var(--ink-3);
+  font-size: 12px;
+  text-align: left;
+}
+.job-year-cell {
+  position: relative; /* keeps its hidden screen-reader label inside the scrolling grid */
+  height: 18px;
+  min-width: 14px;
+}
+.job-year-cell.peak {
+  outline: 2px solid var(--ink);
+  outline-offset: -2px;
+}
+.job-year-peak {
+  white-space: nowrap;
+  padding-left: 8px;
+  color: var(--ink-2);
+}
+.job-year-design th[scope="row"],
+.job-year-design .job-year-peak {
+  color: var(--ink);
+  font-weight: 700;
+}

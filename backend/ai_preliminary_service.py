@@ -1649,16 +1649,21 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                             })
                             continue
                         surface_key = f"reviewer-trace:{part['trace_id']}:wall:{index}"
-                        orientation = ""
+                        orientation, azimuth = "", None
                         if plan_up_bearing is not None:
-                            orientation, _azimuth = reviewer_room_geometry.oriented_edge_cardinal(points, index, plan_up_bearing)
+                            orientation, azimuth = reviewer_room_geometry.oriented_edge_cardinal(points, index, plan_up_bearing)
                         wall_openings = [row for row in part.get("openings", []) if row.get("edge_index") == index]
+                        # A verandah or canopy running along the wall (read with its glazing) shades the wall as well.
+                        wall_shade = next((dict(row["shade"], wall_height_m=height_mm / 1000.0) for row in wall_openings
+                                           if isinstance(row.get("shade"), dict) and row["shade"].get("full_width")), None)
                         proposal["surfaces"].append({
                             "surface_key": surface_key,
                             "label": f"{room.get('label', 'Room')} traced external wall edge {index + 1}",
                             "owner_room_label": room.get("label", ""), "owner_level_name": room.get("level_name", ""),
                             "physical_type": "wall", "thermal_role": "external", "external_exposure": "external",
                             "orientation": orientation, "gross_area_m2": wall_area,
+                            **({"azimuth_deg": round(float(azimuth), 1)} if orientation and azimuth is not None else {}),
+                            **({"shade": wall_shade} if wall_shade else {}),
                             "opening_coverage": "reviewer_entered" if wall_openings else "not_applicable", "confidence": 0.65,
                             "page": part.get("page"), "evidence": [citation],
                             "reviewer_trace_id": part.get("trace_id", ""), "reviewer": declaration_reviewer,
@@ -1675,6 +1680,8 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                                 "host_surface_key": surface_key, "width_m": opening["width_m"], "height_m": height,
                                 "quantity": 1, "opening_area_m2": opening["width_m"] * height,
                                 "external_exposure": "external", "orientation": orientation,
+                                **({"azimuth_deg": round(float(azimuth), 1)} if orientation and azimuth is not None else {}),
+                                **({"shade": dict(opening["shade"])} if isinstance(opening.get("shade"), dict) else {}),
                                 "shading_category": opening["shading_category"], "glazing_choice": opening["glazing_choice"],
                                 "preliminary_profile_id": opening["glazing_choice"], "page": opening["elevation_page"],
                                 "evidence": [{"page": opening["elevation_page"], "reference": "Reviewer-cited shopfront elevation",
@@ -1913,6 +1920,7 @@ def _workspace_report(report):
         "phase1_assumptions": [{**item, "room_name": names.get(str(item.get("room_id", "")), "")}
                                 for item in (report.get("phase1_assumptions", []) or [])[:200] if isinstance(item, dict)],
         "design_conditions_basis": report.get("design_conditions_basis", {}),
+        "seasonal": report.get("seasonal") if isinstance(report.get("seasonal"), dict) else {},
         "refrigeration_process_exclusions": [{key: item.get(key) for key in ("room_name", "reason") if item.get(key) is not None}
                                               for item in report.get("refrigeration_process_exclusions", [])
                                               if isinstance(item, dict)],
@@ -1927,9 +1935,13 @@ def _workspace_report(report):
 
 
 def _room_peaks(report):
-    """Per-room design peak (kW) for the compact view: the contractor result lists cooling by room."""
+    """Per-room design peak (kW) for the compact view: the contractor result lists cooling by room, from the design
+    day that sizes the system (with monthly design days, the governing month)."""
     peaks = []
-    for scenario in report.get("scenario_results", []) if isinstance(report.get("scenario_results"), list) else []:
+    scenarios = report.get("scenario_results", []) if isinstance(report.get("scenario_results"), list) else []
+    governing = (report.get("included_scope_peak") or {}).get("scenario_id")
+    scenarios = sorted(scenarios, key=lambda row: not (isinstance(row, dict) and row.get("scenario_id") == governing))
+    for scenario in scenarios:
         for room in scenario.get("rooms", []) if isinstance(scenario, dict) and isinstance(scenario.get("rooms"), list) else []:
             peak = room.get("peak") if isinstance(room, dict) else None
             if isinstance(peak, dict) and room.get("room_id") and isinstance(peak.get("design_total_kw"), (int, float)):
@@ -1941,7 +1953,7 @@ def _room_peaks(report):
                 if isinstance(peak.get("components"), dict):
                     item["components"] = peak["components"]
                 peaks.append(item)
-        break  # the included-scope peak comes from the first (design) scenario
+        break  # only the design day's rooms
     return peaks
 
 
@@ -2207,7 +2219,7 @@ def _assemble(web, project, source="manual_placeholder"):
         plant_resolution=plant_artifact,
         process_exhaust=need_answers_service.process_exhaust(paths["root"]),
         # The operators' imported design-temperature table (kept outside the repo): a confirmed site's design days.
-        design_weather_table=design_weather.load_table(),
+        design_weather_table=design_weather.load_table(), monthly_climate_table=design_weather.load_monthly_table(),
         # The consolidated real-PDF workflow must not turn a missing measured
         # room area into an 80/100 m2 profile assumption.  Older direct
         # preview callers retain their explicit legacy fallback behavior.

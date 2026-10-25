@@ -60,6 +60,13 @@ def gather(web, project):
                                                  f"({day.get('distance_km', 0):g} km), from the AIRAH Technical Handbook (2007)"
                                                  + ("; it is far from the site, so check it suits." if day.get("far_from_site") else "."),
                            "project", day.get("label", "")))
+    months = (basis.get("design_day") or {}).get("months") or {}
+    if months and not months.get("calculated"):
+        items.append(_item("assumed", "Seasons", "Only the summer design day is calculated: no monthly temperatures are "
+                                                 "available for this location, so the other months' loads aren't checked.",
+                           "project", months.get("label", "")))
+    elif months.get("warning"):
+        items.append(_item("assumed", "Seasons", months["warning"], "project", months.get("label", "")))
     if basis.get("sun") and not basis["sun"].get("site_specific"):
         items.append(_item("placeholder", "Sun", "Generic sun values by façade direction, not specific to this site.", "project"))
     if basis.get("site") and not basis["site"].get("confirmed"):

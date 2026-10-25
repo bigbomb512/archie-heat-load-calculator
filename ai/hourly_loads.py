@@ -1376,8 +1376,13 @@ def room_contributions(room, zone, infiltration_gate, profiles, hour, weather, p
                     gain = absorbed_solar_gain_kw(radiation_source, hour, surface["area_m2"], surface.get("solar_absorptance", 0.0))
                 solar.append(contribution("solar_radiation", gain, inputs={"surface_id": surface["surface_id"], "source_id": radiation_source["source_id"], "source_fingerprint": radiation_source.get("fingerprint", ""), "hour": hour}, formula="cited surface irradiance × area × absorptance ÷ 1000"))
                 continue
-        timed_surface = deepcopy(surface)
-        timed_surface["solar_design_w_m2"] *= schedule_factor(profiles, f"solar:{surface['surface_id']}", hour) if solar_is_timed(surface) else 0
+        timed_surface = deepcopy({key: value for key, value in surface.items() if key != "preliminary_hourly_solar_w_m2"})
+        if solar_is_timed(surface):
+            # The preliminary draft's site sun: this design day's own sunlight on the surface at this hour.
+            timed_surface["solar_design_w_m2"] = (preliminary_hourly_solar(surface, scenario_id, hour, surface["solar_design_w_m2"])
+                                                  * schedule_factor(profiles, f"solar:{surface['surface_id']}", hour))
+        else:
+            timed_surface["solar_design_w_m2"] = 0
         solar.append(solar_load([timed_surface]))
     for resolved in coupling_results.values():
         if resolved.get("status") == "calculated" and resolved.get("room_role") == "adjacent":
@@ -1517,7 +1522,8 @@ def hourly_envelope_surfaces(surfaces, hour):
     """Resolve an optional cited 24-hour boundary profile for this hour."""
     result = []
     for surface in surfaces:
-        item = deepcopy(surface)
+        # Shallow: only the boundary temperature is replaced (the hourly sun lists on preliminary surfaces are large).
+        item = dict(surface)
         profile = item.get("boundary_temperature_profile") or {}
         values = profile.get("values") if isinstance(profile, dict) else None
         if isinstance(values, list) and len(values) == 24:
@@ -1568,7 +1574,7 @@ def glazing_contributions(room, profiles, hour, weather, glazing_gate, shading_g
                 boundary = weather["outdoor_dry_bulb_c"]["value"]
                 conduction = glazing_conduction(window["u_value_w_m2k"], opening, boundary, room["indoor_cooling_setpoint_c"])
                 factor = schedule_factor(profiles, f"solar:{surface['surface_id']}", hour) if glazing_solar_is_timed(surface) else 0.0
-                incident = float(manual.get("incident_solar_w_m2", 0) or 0) * factor
+                incident = preliminary_hourly_solar(surface, scenario_id, hour, float(manual.get("incident_solar_w_m2", 0) or 0)) * factor
                 property_name = "shgc" if window.get("shgc") not in (None, "") else "solar_transmission_factor"
                 solar = manual_solar_transmission(incident, corrected, window[property_name],
                                                   manual.get("external_shading_factor", 1), window["internal_shading_factor"])
@@ -1650,6 +1656,15 @@ def glazing_contributions(room, profiles, hour, weather, glazing_gate, shading_g
         result.append(contribution("glazing_solar", calculated["solar_gain_kw"], inputs=inputs,
                                    formula=calculated["formulas"]["solar"]))
     return result
+
+
+def preliminary_hourly_solar(surface, scenario_id, hour, default):
+    """The sunlight (W/m²) on a preliminary surface at this hour of this design day when the draft gave the site's
+    hourly sun (ai/sun.py), else the surface's single design value (shaped by its schedule)."""
+    hours = (surface.get("preliminary_hourly_solar_w_m2") or {}).get(scenario_id) if isinstance(surface.get("preliminary_hourly_solar_w_m2"), dict) else None
+    if isinstance(hours, list) and len(hours) == 24:
+        return float(hours[hour] or 0.0)
+    return float(default or 0.0)
 
 
 def requirements_wet_bulb(room, key):

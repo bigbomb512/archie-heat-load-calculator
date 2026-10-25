@@ -417,6 +417,16 @@ and is listed.
 **Answer key caseA:** 2,025 mm panel, sill 1,100, head 2,700 (capped); the
 3,250 roller-shutter doorway and signage/menu panels are not glazing.
 
+**Awnings and verandahs (2026-10-25, same call):** the reply also gives
+`"shade": {"kind": "awning|verandah|canopy|eave|balcony|none", "depth_mm": n|null, "underside_mm": n|null,
+"full_width": bool, "printed_text": []}`: how far it projects from the wall (printed, or on a section or side
+view on the sheet) and its underside above floor level. The shade's height above each panel's glass head is
+underside − the read head. In the calculation the shaded part of the glass (and, for a full-width verandah or
+canopy, of the wall) gets no direct sun, hour by hour from the sun angle (`ai/sun.py`); diffuse sun is kept. An
+unprinted depth is reported but gives no shade; an unprinted underside takes a labelled 0.3 m above the glass. The
+shade wording shortened the room left for the elevation's text layer from about 725 to about 570 characters within
+the 2,000-character budget.
+
 ## P5 `roof_exposure` (≤ 3,000 characters, optional 1 crop)
 
 Inputs:

@@ -903,13 +903,30 @@ def _validated_trace_openings(data, trace, paths, room, calibration_record):
         else:
             opening_source = "reviewer"
         ai_run_id = (opening.get("ai_run_id") or prior.get("ai_run_id") or data.get("ai_run_id"))
+        shade = _opening_shade(opening.get("shade"))
         result.append({"opening_id": opening_id, "edge_index": edge_index, "width_m": float(width),
                        "head_height_m": float(head), "sill_height_m": float(sill),
                        "elevation_page": elevation_page, "glazing_choice": glazing_choice,
                        "shading_category": shading, "declaration_source": opening_source,
+                       **({"shade": shade} if shade else {}),
                        **({"ai_run_id": ai_run_id}
                           if opening_source in {"ai_determined", "ai_fallback"} and ai_run_id else {})})
     return result
+
+
+def _opening_shade(raw):
+    """An awning, verandah, canopy, eave or balcony over the opening, as read from the drawings: {"kind", "depth_m",
+    "gap_m" (its underside above the glass head), "full_width", "evidence"}; None when absent or not recognised.
+    An unmeasured depth is kept (it is reported) but gives no shade in the calculation."""
+    if not isinstance(raw, dict) or str(raw.get("kind", "")).casefold() not in ai_preliminary.SHADE_KINDS:
+        return None
+    def length(key, upper):
+        value = raw.get(key)
+        return round(float(value), 3) if type(value) in (int, float) and math.isfinite(value) and 0 <= value <= upper else None
+    evidence = raw.get("evidence", [])
+    evidence = [str(item)[:120] for item in evidence][:4] if isinstance(evidence, list) else ([str(evidence)[:200]] if evidence else [])
+    return {"kind": str(raw["kind"]).casefold(), "depth_m": length("depth_m", 10), "gap_m": length("gap_m", 5),
+            "full_width": bool(raw.get("full_width")), "evidence": evidence}
 
 
 def _matched_trace_edges(previous, current, midpoint_tolerance_mm=300.0, direction_tolerance_deg=5.0):

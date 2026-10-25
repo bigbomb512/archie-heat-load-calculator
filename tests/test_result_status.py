@@ -86,6 +86,25 @@ class GatherTests(unittest.TestCase):
         self.assertEqual([row["kind"] for row in weather], ["assumed"])
         self.assertIn("Sydney, the nearest listed location (14.4 km)", weather[0]["text"])
 
+    def test_a_summer_only_job_says_the_other_months_are_not_checked(self):
+        for calculated, expected in ((False, ["assumed"]), (True, [])):
+            with tempfile.TemporaryDirectory() as folder, patch.object(skill_workflow_service, "get", return_value={}), \
+                    patch.object(job_service, "job_setup", return_value={"above": "roof"}):
+                write(folder, "hourly_ai_preliminary_load_report.json", {"design_conditions_basis": {
+                    "design_day": {"site_specific": True, "origin": "design_temperature_table_chosen_location",
+                                   "months": {"calculated": calculated, "label": "Only the summer design day"}},
+                    "sun": {"site_specific": True}}})
+                result = status.gather(None, {"id": "j", "review_dir": folder})
+            seasons = [row for row in result["items"] if row["topic"] == "Seasons"]
+            self.assertEqual([row["kind"] for row in seasons], expected)
+            self.assertFalse([row for row in result["items"] if row["topic"] == "Sun"])
+        with tempfile.TemporaryDirectory() as folder, patch.object(skill_workflow_service, "get", return_value={}), \
+                patch.object(job_service, "job_setup", return_value={"above": "roof"}):
+            write(folder, "hourly_ai_preliminary_load_report.json", {"design_conditions_basis": {"design_day": {
+                "site_specific": True, "months": {"calculated": True, "warning": "NASA POWER's grid square likely runs hotter"}}}})
+            result = status.gather(None, {"id": "j", "review_dir": folder})
+        self.assertIn("grid square", next(row for row in result["items"] if row["topic"] == "Seasons")["text"])
+
     def test_a_job_with_nothing_calculated_or_answered_gives_only_what_it_can(self):
         with tempfile.TemporaryDirectory() as folder, patch.object(skill_workflow_service, "get", return_value={}), \
                 patch.object(job_service, "job_setup", return_value={"above": "roof"}):

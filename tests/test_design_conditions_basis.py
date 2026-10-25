@@ -41,7 +41,7 @@ def generic_checks():
           not basis["design_day"]["site_specific"] and "not site-specific" in basis["design_day"]["label"]
           and ai_preliminary.PACK_VERSION in basis["design_day"]["label"])
     check("sun values are always labelled generic until a cited site solar source exists",
-          not basis["sun"]["site_specific"] and "no flat-roof sun" in basis["sun"]["label"])
+          not basis["sun"]["site_specific"] and "not site-specific" in basis["sun"]["label"] and "flat roofs" in basis["sun"]["label"])
     check("an unconfirmed site says so", basis["site"]["label"] == "Site location not confirmed")
     scenario = ai_preliminary._scenario(ai_preliminary.load_pack(), values["scenario"], basis)["scenarios"][0]
     check("the scenario title no longer reads as a real Australian design day", "not site-specific" in scenario["title"])

@@ -580,6 +580,16 @@ def validate_envelope_surfaces(surfaces):
                 raise ValueError(f"Envelope surface {index} construction revision must be positive.")
         else:
             surface["construction_revision"] = None
+        # The preliminary draft's site sun (ai/sun.py): per design day, 24 hourly W/m² on this surface. Kept only when
+        # given, so surfaces without it (every reviewed model) keep their exact shape and fingerprint.
+        hourly_sun = raw_surface.get("preliminary_hourly_solar_w_m2")
+        if hourly_sun is not None:
+            if not isinstance(hourly_sun, dict) or any(
+                    not isinstance(values, list) or len(values) != 24
+                    or any(isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= 2000 for value in values)
+                    for values in hourly_sun.values()):
+                raise ValueError(f"Envelope surface {index} hourly sun needs 24 values from 0 to 2,000 W/m² per design day.")
+            surface["preliminary_hourly_solar_w_m2"] = {str(key): [float(value) for value in values] for key, values in hourly_sun.items()}
         result.append(surface)
     return result
 

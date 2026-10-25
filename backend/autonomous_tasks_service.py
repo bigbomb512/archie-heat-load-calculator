@@ -2088,8 +2088,10 @@ def _p4_packets(root, only_room_id=None):
             def opening_prompt(texts):
               return ("The image is a shopfront/external elevation for the selected outside wall run. List each glazed panel, excluding signage, solid panels and open doorways. "
                 "Use printed dimensions only; quote exact text. Return null for unprinted sill/head/width. Missing sill is assumed 0 (glass to floor); missing head is assumed ceiling height. "
-                "For vector-outline text, list each glazed panel and each excluded solid part (roller shutter, signage, or door), with width_mm when readable. Glazed widths must not exceed the total. Glazed plus stated excluded widths must sum to the read total within 5%; if any excluded width is unreadable, leave it null and the sum check will be skipped with a note. Outlines use inside faces; elevations give overall widths. Accept 0 <= total_mm - span_mm <= 600 (two wall thicknesses) OR |total-span|/span <= 2%. "
-                "JSON only: {\"total_width_mm\":number,\"total_width_text\":string,\"panels\":[{\"label\":string,\"width_mm\":number|null,\"sill_mm\":number|null,\"head_mm\":number|null,\"printed_text\":[string],\"source\":\"printed_text|read_from_image\"}],\"excluded\":[{\"label\":string,\"width_mm\":number|null,\"why\":string}]}\n\n"
+                "For vector-outline text, list each glazed panel and each excluded solid part (roller shutter, signage, or door), with width_mm when readable. Glazed widths must not exceed the total; glazed plus stated excluded widths must sum to the total within 5% (unreadable excluded width: null). Elevation total vs plan span: 0 to +600 mm (wall thicknesses) or within 2%. "
+                "shade: any awning/verandah/canopy/eave/balcony over this wall; depth_mm = projection from wall (printed or on a section), underside_mm = above floor; null if unprinted. "
+                "JSON only: {\"total_width_mm\":number,\"total_width_text\":string,\"panels\":[{\"label\":string,\"width_mm\":number|null,\"sill_mm\":number|null,\"head_mm\":number|null,\"printed_text\":[string],\"source\":\"printed_text|read_from_image\"}],\"excluded\":[{\"label\":string,\"width_mm\":number|null,\"why\":string}],"
+                "\"shade\":{\"kind\":\"awning|verandah|canopy|eave|balcony|none\",\"depth_mm\":n|null,\"underside_mm\":n|null,\"full_width\":bool,\"printed_text\":[]}}\n\n"
                 +json.dumps({"page":page,"room":trace.get("room_label"),"perimeter_run_numbers":[index+1 for index in run_indices],
                     "room_length_on_run_m":round(sum(float(row["length_m"]) for row in part_edges),2),
                     "perimeter_run_span_m":run_span,"ceiling_height_mm":ceiling,
@@ -2544,6 +2546,18 @@ def _apply_p4_wall(web, project, root, record, validated):
     return record
 
 
+def _p4_panel_shade(validated, panel):
+    """{"shade": …} for one applied panel from the reply's awning/verandah: depth in metres and its underside's height
+    above this panel's glass head (the read head, before any ceiling cap); {} when the reply has none."""
+    shade=validated.get("shade")
+    if not shade: return {}
+    head=float(panel.get("head_read_mm",panel["head_mm"]))
+    gap=(shade["underside_mm"]-head)/1000 if shade.get("underside_mm") else None
+    return {"shade":{"kind":shade["kind"],"depth_m":shade["depth_mm"]/1000 if shade.get("depth_mm") else None,
+                     "gap_m":max(gap,0.0) if gap is not None else None,"full_width":shade.get("full_width",True),
+                     "evidence":shade.get("printed_text",[])}}
+
+
 def _apply_p4(web, project, root, record, validated):
     packet=record["packet"]
     trace=_current_trace(root,packet.get("trace_id"))
@@ -2582,6 +2596,7 @@ def _apply_p4(web, project, root, record, validated):
                     "edge_index":edge_index,"width_m":share,"sill_height_m":panel["sill_mm"]/1000,
                     "head_height_m":panel["head_mm"]/1000,"elevation_page":packet["page"],
                     "glazing_choice":choice,"shading_category":shade,"declaration_source":"ai_determined",
+                    **_p4_panel_shade(validated,panel),
                     "ai_run_id":record["run_id"],"evidence":panel.get("printed_text",[]),
                     "assumptions":[item for item in (panel.get("sill_assumption"),panel.get("head_assumption")) if item]}
                 openings_by_trace[part["trace_id"]].append(opening)
@@ -2620,6 +2635,7 @@ def _apply_p4(web, project, root, record, validated):
             openings.append({"opening_id":f"ai-{record['run_id']}-{panel['panel_index']}-{fragment}","edge_index":index,
                 "width_m":take,"sill_height_m":panel["sill_mm"]/1000,"head_height_m":panel["head_mm"]/1000,
                 "elevation_page":packet["page"],"glazing_choice":choice,"shading_category":shade,
+                **_p4_panel_shade(validated,panel),
                 "declaration_source":"ai_determined","ai_run_id":record["run_id"],"evidence":panel.get("printed_text",[]),
                 "assumptions":[item for item in (panel.get("sill_assumption"),panel.get("head_assumption")) if item]})
             panel_edges.append(index)

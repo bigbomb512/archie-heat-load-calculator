@@ -20,6 +20,21 @@ from pathlib import Path
 
 DEFAULT_TABLE_PATH = Path.home() / ".archie" / "airah_handbook_2007_design_temperatures.json"
 TABLE_ENV = "ARCHIE_DESIGN_WEATHER_TABLE"
+# Monthly mean maximum temperatures per listed location. User decisions 2026-10-25: the other months' design days are
+# the summer design day lowered by (the location's hottest-month mean maximum − that month's mean maximum); the monthly
+# means come from NASA POWER (config/nasa_power_monthly_max.json, built by tools/build_nasa_power_monthly.py; checked
+# against BoM's Sydney statistics: offsets within 0.5 K). Where the operators have imported Bureau of Meteorology
+# station pages (tools/import_bom_monthly_stats.py; BoM's terms: in-house use, so kept outside the repository), the
+# station's values replace NASA's for that location.
+NASA_MONTHLY_PATH = Path(__file__).resolve().parents[1] / "config" / "nasa_power_monthly_max.json"
+MONTHLY_TABLE_PATH = Path.home() / ".archie" / "bom_monthly_climate.json"
+MONTHLY_TABLE_ENV = "ARCHIE_MONTHLY_CLIMATE_TABLE"
+MONTHLY_SOURCE = "Bureau of Meteorology climate statistics (mean maximum temperature by month), imported by the operators"
+# NASA's grid squares are about 50 km across: on a hot coast next to desert (Broome, Port Hedland) the square runs
+# hotter than the town. A hottest-month mean maximum within this of the location's design dry bulb is flagged.
+NASA_SUSPECT_MARGIN_K = 1.5
+MONTH_NAMES = ("January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
+               "November", "December")
 DESIGN_HOUR = 15          # the handbook's comfort design temperatures are 3.00 pm values
 FAR_KM = 50               # a site further than this from its listed location is flagged
 SOURCE = "AIRAH Technical Handbook, 4th edition (2007), Design temperature data, p. 37 (from AIRAH DA9, 1998)"
@@ -102,6 +117,83 @@ def _shifted(base_hours, db_at_design, wb_at_design):
     return hours
 
 
+def monthly_table_path():
+    return Path(os.environ.get(MONTHLY_TABLE_ENV, "").strip() or MONTHLY_TABLE_PATH)
+
+
+def _monthly_rows(path):
+    try:
+        table = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None, {}
+    rows = table.get("locations") if isinstance(table, dict) else None
+    clean = {}
+    for name, row in (rows or {}).items() if isinstance(rows, dict) else ():
+        values = row.get("mean_max") if isinstance(row, dict) else None
+        if canonical(name) and isinstance(values, list) and len(values) == 12 and all(
+                isinstance(value, (int, float)) and not isinstance(value, bool) and -10 < value < 50 for value in values):
+            clean[canonical(name)] = {**row, "mean_max": [float(value) for value in values]}
+    return table, clean
+
+
+def load_monthly_table(path=None, nasa_path=None):
+    """The monthly table ({"source", "locations": {name: {"kind", "source", "station", "station_name", "mean_max"}}}):
+    NASA POWER's values for every listed location, replaced by the operators' imported BoM station values where they
+    have them; None when neither is usable. Rows without 12 plausible values are dropped."""
+    nasa, nasa_rows = _monthly_rows(nasa_path or NASA_MONTHLY_PATH)
+    bom, bom_rows = _monthly_rows(path or monthly_table_path())
+    locations = {}
+    for name, row in nasa_rows.items():
+        locations[name] = {"kind": "nasa_power", "source": str(nasa.get("source", "NASA POWER")),
+                           "reference": str(nasa.get("reference", "")), "station": "",
+                           "station_name": f"NASA POWER grid cell at {row.get('latitude')}, {row.get('longitude')}",
+                           "mean_max": row["mean_max"]}
+    for name, row in bom_rows.items():
+        locations[name] = {"kind": "bom_station", "source": str(bom.get("source") or MONTHLY_SOURCE),
+                           "station": str(row.get("station", "")), "station_name": str(row.get("station_name", "")),
+                           "mean_max": row["mean_max"]}
+    if not locations:
+        return None
+    sources = sorted({row["source"] for row in locations.values()})
+    return {"source": "; ".join(sources), "locations": locations}
+
+
+def monthly_days(values, base_hours, monthly_row):
+    """The 12 monthly design days (the 21st of each month) of one location: the summer design day lowered, dry and wet
+    bulb alike, by (hottest-month mean maximum − that month's mean maximum). The hottest month is the summer day."""
+    if len(base_hours) != 24:
+        raise ValueError("The base design day needs 24 hours.")
+    mean_max = monthly_row["mean_max"]
+    hottest = max(mean_max)
+    days = []
+    for index, month_max in enumerate(mean_max):
+        offset = round(hottest - month_max, 2)
+        db, wb = round(values["db"] - offset, 2), round(values["cwb"] - offset, 2)
+        days.append({"month": index + 1, "month_name": MONTH_NAMES[index], "offset_c": offset,
+                     "hottest": month_max == hottest and index == mean_max.index(hottest),
+                     "title": (f"{MONTH_NAMES[index]} design day: summer design dry bulb"
+                               + (f" lowered {offset:g} K (BoM monthly mean maximum)" if offset else "")),
+                     "design_point": {"db": db, "wb": wb}, "hours": _shifted(base_hours, db, wb)})
+    return days
+
+
+def _with_months(result, monthly_table, base_hours):
+    row = ((monthly_table or {}).get("locations") or {}).get(result["location"]) if result else None
+    if result and row:
+        warning = ""
+        if row.get("kind", "nasa_power") == "nasa_power" and max(row["mean_max"]) > result["values"]["db"] - NASA_SUSPECT_MARGIN_K:
+            warning = (f"NASA POWER's hottest-month mean maximum ({max(row['mean_max']):g} °C) is close to or above "
+                       f"{result['location']}'s design dry bulb ({result['values']['db']:g} °C), so the month-to-month "
+                       "differences may be off: NASA's grid square can run hotter than a coastal town (in the tropics the "
+                       "two are naturally close, so this may be a false alarm). Importing the BoM station page for this "
+                       "location replaces them.")
+        result["monthly"] = {"kind": row.get("kind", ""), "source": row.get("source") or monthly_table.get("source", ""),
+                             "station": row.get("station", ""), "station_name": row.get("station_name", ""),
+                             "mean_max": row["mean_max"], "warning": warning,
+                             "days": monthly_days(result["values"], base_hours, row)}
+    return result
+
+
 def design_days(values, base_hours):
     """The site's two summer design days, each 24 hours, from one location's design values."""
     if len(base_hours) != 24:
@@ -114,7 +206,7 @@ def design_days(values, base_hours):
     ]
 
 
-def for_site(site_location, base_hours, table):
+def for_site(site_location, base_hours, table, monthly_table=None):
     """The site's design days, or None when the site isn't confirmed with a position or no table is given.
 
     site_location is the job's site-location resolution ({"confirmed_address", "location": {"latitude_deg", ...}});
@@ -124,18 +216,20 @@ def for_site(site_location, base_hours, table):
     if not table or not address or location.get("latitude_deg") is None or location.get("longitude_deg") is None:
         return None
     name, values, km = nearest(location["latitude_deg"], location["longitude_deg"], table)
-    return {"location": name, "state": LOCATIONS[name][2], "distance_km": round(km, 1), "far": km > FAR_KM,
-            "values": values, "source": table["source"], "days": design_days(values, base_hours)}
+    return _with_months({"location": name, "state": LOCATIONS[name][2], "distance_km": round(km, 1), "far": km > FAR_KM,
+                         "values": values, "source": table["source"], "days": design_days(values, base_hours)},
+                        monthly_table, base_hours)
 
 
-def for_location(name, base_hours, table):
+def for_location(name, base_hours, table, monthly_table=None):
     """The design days of a listed location chosen by the operators (Project tab), or None when it isn't in the table."""
     name = canonical(name)
     values = ((table or {}).get("locations") or {}).get(name)
     if not values:
         return None
-    return {"location": name, "state": LOCATIONS[name][2], "distance_km": None, "far": False, "chosen": True,
-            "values": values, "source": table["source"], "days": design_days(values, base_hours)}
+    return _with_months({"location": name, "state": LOCATIONS[name][2], "distance_km": None, "far": False, "chosen": True,
+                         "values": values, "source": table["source"], "days": design_days(values, base_hours)},
+                        monthly_table, base_hours)
 
 
 STATE_CAPITALS = {"NSW": "Sydney", "VIC": "Melbourne", "QLD": "Brisbane", "SA": "Adelaide", "WA": "Perth", "TAS": "Hobart",

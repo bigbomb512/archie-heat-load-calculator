@@ -52,9 +52,31 @@ What the AI could not settle never removes a surface; it gets a labelled fallbac
 
 Sun on walls and roofs (2026-10-25): an exposed wall or roof passes U × α/h_o of the incident sun into the room
 (the sol-air method, ASHRAE Handbook - Fundamentals), with α/h_o = 0.052 m²K/W, the dark-surface value, because the
-colour isn't known: about 3% for a U 0.6 wall, so 15 W/m² at 500 W/m² of sun. Exposed roofs use a horizontal profile
-peaking at 1,000 W/m² at 13:00. (Before this, walls used a fixed 25% of the sun, about ten times too high, and roofs
-got none.) The wall or roof's time lag is not modelled; the gain lands in the same hour as the sun.
+colour isn't known: about 3% for a U 0.6 wall, so 15 W/m² at 500 W/m² of sun. (Before this, walls used a fixed 25%
+of the sun, about ten times too high, and roofs got none.) The wall or roof's time lag is not modelled; the gain
+lands in the same hour as the sun.
+
+Sun angle, seasons and shade (user decisions 2026-10-25, `ai/sun.py`):
+- **The sun is worked out for the site**, every hour of the 21st of each month: its position (NREL SPA) and a
+  clear day's sunlight (Ineichen–Perez with the site's monthly Linke turbidity), from the confirmed site's latitude
+  and longitude, else the listed weather location's. Each wall and window uses its own outward bearing from the
+  page north (not just N/E/S/W); flat roofs take the sun on the horizontal. Times are local clock time, daylight
+  saving included. With no site and no weather location, the old generic N/E/S/W table (and the horizontal one for
+  roofs) is still used and labelled.
+- **Every month is calculated.** Each month's design day is the AIRAH summer design day lowered, dry and wet bulb
+  alike, by the location's hottest-month mean maximum minus that month's (a derived estimate). The monthly means
+  come from NASA POWER for all 40 listed locations (`config/nasa_power_monthly_max.json`, daily maximums 2001–2025
+  averaged by month, built by `tools/build_nasa_power_monthly.py`; openly usable with the citation kept in the
+  file). Checked against BoM's Sydney station: month-to-month differences within 0.5 K. A location whose NASA
+  hottest-month mean is within 1.5 K of its design dry bulb is flagged in "Still assumed" (8 of 40 on 2026-10-25:
+  Broome, Bunbury, Darwin, Griffith, Katherine, Port Hedland, Toowoomba, Townsville; the tropical ones may be false
+  alarms). BoM station pages the operators import (`tools/import_bom_monthly_stats.py`, kept outside the repo: BoM's
+  terms are in-house use) replace NASA's values for their location. The largest coincident load over all months
+  sizes the system; the Results tab shows every month's 24 hours. This is design days, not an 8,760-hour energy
+  simulation.
+- **Awnings, verandahs, canopies, eaves and balconies** over the storefront are read by the openings step (no extra
+  call). Their shadow drops depth × tan(profile angle) below them each hour; the shaded glass (and wall, for a
+  full-width one) gets only diffuse sun. Shades over other walls aren't read yet (only the storefront elevation is).
 
 Known gap: wall and floor materials read by the skills are not yet applied to the traced surfaces, which use the
 assumption pack's U-values unless a construction is answered.

@@ -747,7 +747,10 @@ class AutonomousTaskTests(unittest.TestCase):
             self.assertEqual(opening_tasks[0][2]["room_label"], "Shop")
             self.assertAlmostEqual(opening_tasks[0][2]["edge_length_mm"], 11450)
 
-            self.assertIn("0 <= total_mm - span_mm <= 600", opening_tasks[0][3])
+            self.assertIn("0 to +600 mm (wall thicknesses) or within 2%", opening_tasks[0][3])
+            # Awnings and verandahs are read in the same question (no extra call), within its 2,000-character budget.
+            self.assertIn('"shade":{"kind":"awning|verandah|canopy|eave|balcony|none"', opening_tasks[0][3])
+            self.assertLessEqual(len(opening_tasks[0][3]), 2000)
             self.assertIn("Unique run", opening_tasks[0][2]["storefront_match_reason"])
 
     def test_p4_matches_storefront_elevation_to_a_multi_edge_wall_run(self):
