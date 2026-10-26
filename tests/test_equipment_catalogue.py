@@ -483,5 +483,42 @@ class FreshnessTests(unittest.TestCase):
             self.assertEqual(paths["report"].read_bytes(), previous)
 
 
+class BuffetPlacementTests(unittest.TestCase):
+    """Customer-facing buffet stations belong to the dining or shop area customers use (user rule; Butcher Buffet
+    2026-10-26: the plan-location check put the buffet's food stations in the Bar)."""
+
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        root = Path(self.folder.name)
+        (root / "room_use_resolution.json").write_text(json.dumps({"records": [
+            {"original_label": "Shop", "taxonomy_id": "dining"}, {"original_label": "Bar", "taxonomy_id": "dining"},
+            {"original_label": "Kitchen", "taxonomy_id": "kitchen"}]}))
+        (root / "reviewer_room_geometry.json").write_text(json.dumps({"records": [
+            {"room_label": "Shop", "ai_measured_area_m2": 203.5}, {"room_label": "Bar", "ai_measured_area_m2": 32.5},
+            {"room_label": "Kitchen", "ai_measured_area_m2": 117.9}]}))
+        self.root, self.rooms = root, ["Shop", "Bar", "Kitchen"]
+
+    def tearDown(self):
+        self.folder.cleanup()
+
+    def test_the_dining_room_customers_use_is_the_largest_dining_or_retail_room(self):
+        self.assertEqual(service._buffet_room(self.root, self.rooms), "Shop")
+        self.assertEqual(service._buffet_room(self.root, ["Kitchen"]), "")
+
+    def test_buffet_locations_move_to_that_room_and_others_stay(self):
+        zones = {"buffet hot food": {"room": "Bar"}, "front bar counter": {"room": "Bar"}, "cooking line": {"room": "Kitchen"}}
+        def place(location):
+            notes = []
+            return service._place({"location": location}, {}, {}, {}, self.rooms, notes, zones, "Shop"), notes
+        room, notes = place("BUFFET, HOT FOOD")
+        self.assertEqual(room, "Shop")
+        self.assertIn("customer-facing buffet", notes[-1])
+        self.assertEqual(place("FRONT BAR / COUNTER")[0], "Bar")
+        self.assertEqual(place("COOKING LINE")[0], "Kitchen")
+        # A location that names a room itself keeps it (e.g. a servery inside a room called Bar).
+        self.assertEqual(service._place({"location": "Bar buffet"}, {}, {}, {}, self.rooms, [], {}, "Shop"), "Bar")
+        self.assertIn("customer-facing buffet", service.ZONE_PROMPT)
+
+
 if __name__ == "__main__":
     unittest.main()

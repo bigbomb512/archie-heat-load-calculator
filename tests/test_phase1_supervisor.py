@@ -502,5 +502,26 @@ class RecoveryTests(unittest.TestCase):
 
 
 
+
+class SurroundingsAuditTests(unittest.TestCase):
+    def test_a_wall_the_site_plan_shows_inside_the_building_is_not_an_exposure(self):
+        # Butcher Buffet 2026-10-26: its Kitchen's only "outside" wall faces more of the shopping centre, so its 0 kW
+        # empty-room load is right and mustn't keep Phase 1 incomplete.
+        from backend import phase1_supervisor_service as supervisor
+        traces = [{"trace_id": "t1", "edges": [{"index": 0, "boundary": "external"}, {"index": 1, "boundary": "external"},
+                                               {"index": 2, "boundary": "adjacent_tenancy"}], "roof": "not_exposed"}]
+        corrected = supervisor._with_surroundings(traces, {("t1", 0): {"inside": True}, ("t1", 1): {"distance_m": 10, "height_m": 6}})
+        self.assertEqual([edge["boundary"] for edge in corrected[0]["edges"]], ["mall", "external", "adjacent_tenancy"])
+        self.assertEqual(traces[0]["edges"][0]["boundary"], "external")          # the saved traces aren't changed
+        self.assertFalse(supervisor._exposed({"traces": supervisor._with_surroundings(traces[:1], {("t1", 0): {"inside": True}, ("t1", 1): {"inside": True}})}))
+
+    def test_shopfront_glass_facing_a_mall_does_not_make_a_zero_room_suspicious(self):
+        from backend import phase1_supervisor_service as supervisor
+        mall = {"traces": [{"edges": [{"index": 3, "boundary": "mall"}], "roof": "not_exposed", "openings": [{"edge_index": 3}]}],
+                "model": {"cooling_load": {}}, "model_current": True}
+        self.assertFalse(supervisor._exposed(mall))
+        street = {**mall, "traces": [{"edges": [{"index": 3, "boundary": "external"}], "roof": "not_exposed", "openings": [{"edge_index": 3}]}]}
+        self.assertTrue(supervisor._exposed(street))
+
 if __name__ == "__main__":
     unittest.main()

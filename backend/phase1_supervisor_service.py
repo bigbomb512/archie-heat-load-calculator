@@ -50,12 +50,26 @@ def _task_current(record):
     return record.get("input_fingerprint") == expected
 
 
+def _with_surroundings(traces, surroundings):
+    """The traces as the calculation sees them: an "outside" wall the site plan shows faces more of the same building
+    is a wall to the mall (2026-10-26), so a room whose zero load comes from that isn't flagged as a gap."""
+    result = []
+    for trace in traces:
+        trace = deepcopy(trace)
+        for edge in trace.get("edges", []) if isinstance(trace.get("edges"), list) else []:
+            if (isinstance(edge, dict) and edge.get("boundary") == "external"
+                    and (surroundings.get((str(trace.get("trace_id")), edge.get("index"))) or {}).get("inside")):
+                edge["boundary"] = "mall"
+        result.append(trace)
+    return result
+
+
 def load_snapshot(project, report=None):
     """Read/recompute current evidence without writing job data or calling a provider."""
     from backend import ai_preliminary_service as model, reviewer_room_geometry_service as geometry
     root = Path(project["review_dir"])
     paths = model._paths(project)
-    traces = geometry.current_records(geometry._paths(project))
+    traces = _with_surroundings(geometry.current_records(geometry._paths(project)), tasks.surroundings_by_edge(root))
     areas = geometry.current_traced_areas(root)
     uses = model._resolve_room_uses(paths, persist=False)
     heights = model._resolve_ceiling_volumes(paths, persist=False)
@@ -153,7 +167,22 @@ def _exposed(room):
     """The room has an outside wall, an exposed roof or glass: its empty-room load can't be zero."""
     traces = room.get("traces", [])
     return (any(side == "external" for side in _boundaries(traces))
-            or any(trace.get("roof") == "exposed" for trace in traces) or _has_glass(room))
+            or any(trace.get("roof") == "exposed" for trace in traces) or _has_outside_glass(room))
+
+
+def _has_outside_glass(room):
+    """Glass that loads the room: in the model, or placed on a wall that isn't to a mall, room or tenancy. Shopfront
+    glass facing a mall adds nothing by rule (2026-10-15), so it doesn't make a 0 kW room suspicious (Butcher Buffet's
+    Kitchen, 2026-10-26)."""
+    cooling = (room.get("model") or {}).get("cooling_load") or {}
+    if cooling.get("glazing_surfaces"):
+        return True
+    for trace in room.get("traces", []):
+        sides = {row.get("index"): row.get("boundary", "unknown") for row in trace.get("edges", []) if isinstance(row, dict)}
+        if any(sides.get(opening.get("edge_index")) not in {"mall", "internal", "adjacent_tenancy"}
+               for opening in trace.get("openings", []) or []):
+            return True
+    return False
 
 
 def audit(snapshot):

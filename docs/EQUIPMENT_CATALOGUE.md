@@ -32,6 +32,8 @@ Otherwise the item has **no value yet**. An item whose room isn't known is **roo
 
 Room and quantity come from the AI's quoted answer, else the equipment reading (room, or a room named in the printed location), else the room the plan shows the printed location in, else the AI's unquoted room (labelled); quantity one is assumed and labelled when nothing shows it. Possible duplicates are counted and flagged for the operator.
 
+**Buffet and servery stations** (user rule; applied to equipment 2026-10-26): an item whose printed location names a customer-facing buffet, servery, salad bar, food station, hot food, bain-marie or carvery goes to the dining or shop room customers use (the largest room used for dining or retail), unless the location names a room itself, and the reason is listed. Butcher Buffet: the plan-location check had put the buffet's nine items in the Bar; the Bar now keeps its own fridges and ice maker. Because each room takes the larger of its listed items and its typical allowance, where items sit also changes the total (BB equipment 13.6 → 11.5 kW).
+
 **Printed locations (added 2026-10-23).** Schedules usually print a zone or fitting ("COOKING LINE", "BUFFET AREA", "WASH UP"), not a room name. On Butcher Buffet this left 32 of 45 items, including the whole cooking line and buffet, with no room. Before the item checks, one AI call (`equipment_locations`) is given:
 - the traced plan, with every room outlined and named (each name at the point deepest inside its outline, so an L- or U-shaped room isn't named over its neighbour);
 - up to two consented layout pages that show the most items at those locations (the drawing packet's screenshot, else the render that page reading made; image-only layout sheets have no packet screenshot).
