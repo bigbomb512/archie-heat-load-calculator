@@ -1583,6 +1583,7 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                                         f"{room.get('label', 'this room')} {'faces' if len(unknown) == 1 else 'face'} wasn't found "
                                         "on the drawings: a wall along another traced room is counted as a wall to that room, "
                                         "the others as walls to a neighbouring tenancy, all at the room's temperature.")
+                    part_boundaries = []
                     for edge in edges:
                         index, boundary = edge.get("index"), edge.get("boundary", "unknown")
                         wall_note = ""
@@ -1590,6 +1591,17 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                             part_unknown_edges.append(index)
                             boundary = "internal" if index in along_rooms else "adjacent_tenancy"
                             wall_note, unknown_note = unknown_note, ""      # said once per room
+                        inside = surroundings.get((str(part.get("trace_id")), index)) or {}
+                        if boundary == "external" and inside.get("inside"):
+                            # The site plan shows more of the same building outside this "outside" wall (Butcher
+                            # Buffet, 2026-10-26: the shopping centre west of the shop): it is a wall to the mall,
+                            # at the room's temperature, and any glass on it faces the mall (no sun or conduction).
+                            boundary = "mall"
+                            wall_note = " ".join(filter(None, [wall_note, (
+                                f"The site plan shows more of the same building outside the wall numbered "
+                                f"{inside.get('wall_number') or index + 1} on the outside-walls check ({inside.get('evidence', '')}): "
+                                "counted as a wall to the mall at the room's temperature, not an outside wall.")]))
+                        part_boundaries.append(boundary)
                         if boundary in {"adjacent_tenancy", "internal", "mall"}:
                             boundary_label = str(edge_evidence.get(index, {}).get("label") or declaration_reviewer)
                             if mm_per_px and isinstance(points, list) and index < len(points) - 1:
@@ -1759,7 +1771,7 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                     if part_unknown_edges:
                         pass  # each such wall is itemised as an assumed neighbouring tenancy, with its own note
                     fully_internal_parts.append(bool(edges) and roof == "not_exposed"
-                        and all(edge.get("boundary") in {"internal", "adjacent_tenancy", "mall", "unknown"} for edge in edges))
+                        and all(boundary in {"internal", "adjacent_tenancy", "mall", "unknown"} for boundary in part_boundaries))
                 fully_internal = bool(fully_internal_parts) and all(fully_internal_parts)
                 if fully_internal:
                     # Every wall and the ceiling face conditioned space: the room keeps its itemised 0 kW surfaces; the

@@ -2188,6 +2188,25 @@ def _context_page_image(root, page_number):
     return image
 
 
+def _tenancy_closeup(image):
+    """A close-up of a site/location plan around the tenancy, which these sheets mark in red (an outline or hatch):
+    on the whole sheet it is only a couple of hundred pixels across (Butcher Buffet, 2026-10-26: its south side was
+    misread). None when no red marking is found."""
+    import numpy
+    pixels = numpy.asarray(image.convert("RGB")).astype(int)
+    red = (pixels[:, :, 0] > 170) & (pixels[:, :, 1] < 100) & (pixels[:, :, 2] < 100)
+    if red.sum() < 150:
+        return None
+    rows, cols = numpy.nonzero(red)
+    top, bottom = numpy.percentile(rows, [1, 99]).astype(int)
+    left, right = numpy.percentile(cols, [1, 99]).astype(int)
+    pad = int(max(bottom - top, right - left) * 0.8) + 40
+    box = (max(0, left - pad), max(0, top - pad), min(image.width, right + pad), min(image.height, bottom + pad))
+    crop = image.crop(box)
+    scale = 1400 / max(crop.size)
+    return crop.resize((max(1, int(crop.width * scale)), max(1, int(crop.height * scale)))) if scale > 1 else crop
+
+
 def _run_outward_azimuth(union, run, plan_up_bearing):
     """The compass bearing a perimeter wall run faces outwards: the side of its midpoint outside the rooms' union."""
     from ai import site_orientation
@@ -2248,14 +2267,23 @@ def _p3_surroundings_packets(root):
         target = f"page-{plan_page}"
         packet = {"task": "P3_surroundings", "page": plan_page, "walls": walls, "wall_edges": wall_edges,
                   "context_pages": [row["page"] for row in context], "evidence": {"page": plan_page}}
-        prompt = autonomous_tasks.surroundings_prompt(walls, [f"page {row['page']}: {row['title']}" for row in context])
         try:
             plan_image, packet["image_transform"] = _perimeter_task_image(root, page_traces, perimeter,
                                                                           [{"index": int(number) - 1} for number in walls])
-            images = [_png_bytes(plan_image), *[_png_bytes(_context_page_image(root, row["page"])) for row in context]]
+            images, titles = [_png_bytes(plan_image)], []
+            for row in context:
+                sheet = _context_page_image(root, row["page"])
+                images.append(_png_bytes(sheet))
+                titles.append(f"page {row['page']}: {row['title']}")
+                closeup = _tenancy_closeup(sheet) if not re.search(r"elevation|streetscape", row["title"], re.I) else None
+                if closeup is not None and len(images) < 4:
+                    images.append(_png_bytes(closeup))
+                    titles.append(f"a close-up of page {row['page']} around the tenancy (marked in red)")
         except (OSError, ValueError, IndexError) as error:
             result.append(("P3_surroundings", target, packet, "", [], str(error)))
             continue
+        packet["context_images"] = titles
+        prompt = autonomous_tasks.surroundings_prompt(walls, titles)
         result.append(("P3_surroundings", target, packet, prompt, images, ""))
     return result
 

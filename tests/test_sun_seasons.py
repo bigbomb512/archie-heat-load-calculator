@@ -331,8 +331,9 @@ class SurroundingsTests(unittest.TestCase):
                 model = ai_preliminary.assemble({"spaces": []}, preliminary_proposal=prepared, allow_area_fallbacks=False,
                                                 site_location=SYDNEY, design_weather_table=DESIGN_TABLE,
                                                 monthly_climate_table=MONTHLY_TABLE)
-                wall = next(item for item in room_of(model)["cooling_load"]["envelope_surfaces"]
-                            if item["kind"] == "opaque_wall" and item.get("boundary_method") == "external")
+                walls = room_of(model)["cooling_load"]["envelope_surfaces"]
+                wall = (next((item for item in walls if item["kind"] == "opaque_wall" and item.get("boundary_method") == "external"), None)
+                        or next(item for item in walls if item["kind"] == "opaque_wall" and item["label"].startswith("Shop wall 1 ")))
                 return wall, model["phase1_assumptions"]
 
         open_wall, open_notes = build(False)
@@ -348,6 +349,22 @@ class SurroundingsTests(unittest.TestCase):
         # The site plan shows more of the same building outside the wall (e.g. a shopping centre): no sun on it.
         inside_wall, inside_notes = build(True, {"opposite": "inside_building", "distance_m": None, "height_m": None,
                                                  "height_basis": "", "full_length": True, "evidence": "retail tenancies west of the shop"})
+        # It becomes a wall to the mall at the room's temperature: no sun and no heat through it.
+        self.assertEqual(inside_wall["label"], "Shop wall 1 to the mall")
+        self.assertEqual(inside_wall["boundary_method"], "fixed_adjacent_temperature")
         self.assertEqual(inside_wall["solar_gain_factor"], 0)
-        self.assertTrue(all(value == 0 for hours in inside_wall.get("preliminary_hourly_solar_w_m2", {}).values() for value in hours))
-        self.assertTrue(any("check whether it is really an outside wall" in row["reason"] for row in inside_notes))
+        self.assertTrue(any("counted as a wall to the mall" in row["reason"] for row in inside_notes))
+
+
+class TenancyCloseupTests(unittest.TestCase):
+    def test_closeup_finds_the_red_tenancy_marking_and_enlarges_it(self):
+        from PIL import Image, ImageDraw
+        from backend import autonomous_tasks_service
+        sheet = Image.new("RGB", (2000, 1400), "white")
+        draw = ImageDraw.Draw(sheet)
+        draw.rectangle((300, 200, 1700, 1200), outline="black", width=3)        # the centre's floor plate
+        draw.rectangle((620, 900, 800, 1090), outline=(230, 20, 20), width=6)   # the tenancy, outlined in red
+        closeup = autonomous_tasks_service._tenancy_closeup(sheet)
+        self.assertEqual(max(closeup.size), 1400)                               # enlarged from a small crop
+        self.assertLess(closeup.width / closeup.height, 2)
+        self.assertIsNone(autonomous_tasks_service._tenancy_closeup(Image.new("RGB", (800, 600), "white")))

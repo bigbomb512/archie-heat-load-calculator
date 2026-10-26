@@ -381,8 +381,12 @@ not_shown`), `distance_m`, `height_m` or `storeys`, `full_length` and evidence.
   between the two shadows is sunlit; part-length buildings count as shading half the wall. The floor's height above
   the ground comes from the level name (3.5 m per level, labelled).
 - **inside_building:** the site plan shows the "outside" wall faces more of the same building (Butcher Buffet's site
-  plan shows the shopping centre around the tenancy): no sun on that wall or its glass, and a note to recheck the
-  wall's classification.
+  plan shows the shopping centre around the tenancy): the wall is counted as a wall to the mall (room temperature, no
+  heat flows; its glass gets the mall-glazing exclusion), with a note naming the plan's wall number.
+- **Close-up (2026-10-26):** a site/location plan is also sent as a close-up around the tenancy, which these sheets mark
+  in red; on the whole sheet the tenancy is only ~200 px across. The question says to judge directions by the site
+  plan's own north arrow. Butcher Buffet, one call each: whole sheet only → west inside (right), south inside (wrong);
+  with the close-up → west inside, south open, reading "SETBACK BOUNDARY" (both right). $0.003–0.0035 per call.
 - Open ground and unshown sides keep full sun; "Still assumed" says when nothing around the building was read.
 
 ## P4 `storefront_wall`: which outside wall is the storefront (plan + elevation images, ≤ 1,500 characters)
