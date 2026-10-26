@@ -26,6 +26,7 @@ TASKS = {
     "S1_printed_areas": {"id": "scanned_printed_room_areas", "inputs": ["scanned_plan_tiles", "raster_room_outlines"], "budget_chars": 3000, "media": "image", "prompt_builder": "scan_reading.area_prompt", "reply_validator": "scan_reading.validate_area_reply", "apply_function": "_apply_s1_areas", "fallback": None},
     "S3_title_transcription": {"id": "scanned_title_transcription", "inputs": ["scanned_title_block"], "budget_chars": 1000, "media": "image", "prompt_builder": "scan_reading.transcription_prompt", "reply_validator": "scan_reading.validate_transcription", "apply_function": "_apply_s3_transcription", "fallback": None},
     "P3_boundaries": {"id": "boundary_classification", "inputs": ["current_room_trace", "boundary_evidence"], "budget_chars": 1500, "media": "image", "prompt_builder": "build_boundary_packets", "reply_validator": "validate_boundary_reply", "apply_function": "_apply_p3", "fallback": "tenancy_boundary"},
+    "P3_surroundings": {"id": "surroundings", "inputs": ["numbered_outside_walls", "site_or_context_plan", "street_elevation"], "budget_chars": 2000, "media": "image", "prompt_builder": "_p3_surroundings_packets", "reply_validator": "validate_surroundings_reply", "apply_function": "_apply_p3_surroundings", "fallback": None},
     "P7_ceiling_heights": {"id": "ceiling_heights", "inputs": ["ceiling_plan_or_elevation", "printed_height_labels", "room_names"], "budget_chars": 2000, "media": "image", "prompt_builder": "_p7_packets", "reply_validator": "validate_ceiling_height_reply", "apply_function": "_apply_p7", "fallback": "preliminary_ceiling_height"},
     "P4_storefront_wall": {"id": "storefront_wall", "inputs": ["numbered_outside_walls", "storefront_elevation"], "budget_chars": 1500, "media": "image", "prompt_builder": "_storefront_runs", "reply_validator": "validate_storefront_wall_reply", "apply_function": "_apply_p4_wall", "fallback": None},
     "P4_openings": {"id": "storefront_openings", "inputs": ["storefront_elevation", "current_room_trace"], "budget_chars": 2000, "media": "image", "prompt_builder": "build_opening_packets", "reply_validator": "validate_opening_reply", "apply_function": "_apply_p4", "fallback": "opening_dimensions"},
@@ -385,6 +386,69 @@ def validate_ceiling_height_reply(packet, reply):
     return {"heights": heights, "not_shown": not_shown}
 
 
+STOREY_HEIGHT_M = 3.3          # a building drawn with no height is taken as one storey (user decision 2026-10-26)
+OPPOSITE_KINDS = ("building", "open", "inside_building", "not_shown")
+
+
+def surroundings_prompt(walls, context_titles):
+    """What stands outside each numbered outside wall (user decision 2026-10-26: one call per plan with outside walls)."""
+    return ("Image 1 is the tenancy plan with its outside walls numbered in red. The other images are "
+            + ", ".join(context_titles) + ". For each numbered wall (the direction it faces is given), say what stands "
+            "opposite it outside, in that direction: a building, open ground (street, car park, park, open space), "
+            "inside_building when the site plan shows the wall isn't really outside (another tenancy, a mall or another part "
+            "of the same building is there), or not_shown when these drawings don't show it. For a building: distance_m from the wall to the building's "
+            "face (printed, or measured with the drawing's scale bar or printed scale), height_m if printed or shown on "
+            "an elevation (to its roof or parapet), else storeys if labelled (e.g. \"2 STOREY\"), else null; full_length "
+            "= true when it runs along the whole wall. Don't guess a value that isn't shown: use null. Quote what you used "
+            "as evidence. JSON only: {\"walls\":[{\"wall_number\":int,\"opposite\":\"building|open|not_shown\","
+            "\"distance_m\":number|null,\"height_m\":number|null,\"storeys\":int|null,\"full_length\":bool,"
+            "\"evidence\":string}]}\n\n"
+            + json.dumps({"walls": walls}, ensure_ascii=False, separators=(",", ":")))
+
+
+def validate_surroundings_reply(packet, reply):
+    """Every asked wall answered; numbers within plain bounds. A building with no height is one storey; with no
+    distance it can't shade anything and is kept as unmeasured."""
+    value = parse_json_reply(reply)
+    rows = value.get("walls")
+    asked = {int(number) for number in packet.get("walls", {})}
+    if not isinstance(rows, list):
+        raise ValueError("Reply must contain a walls list.")
+    result = {}
+    for row in rows:
+        if not isinstance(row, dict) or type(row.get("wall_number")) is not int or row["wall_number"] not in asked:
+            raise ValueError(f"wall_number must be one of the numbered outside walls: {sorted(asked)}.")
+        opposite = str(row.get("opposite") or "").casefold()
+        if opposite not in OPPOSITE_KINDS:
+            raise ValueError("opposite must be building, open, inside_building or not_shown.")
+        evidence = " ".join(str(row.get("evidence") or "").split())[:300]
+        if opposite != "not_shown" and len(evidence) < 10:
+            raise ValueError(f"Wall {row['wall_number']}: give the drawing evidence for what is opposite.")
+        def number(key, low, high):
+            item = row.get(key)
+            if item is None or opposite != "building":
+                return None
+            if isinstance(item, bool) or not isinstance(item, (int, float)) or not math.isfinite(item) or not low <= item <= high:
+                raise ValueError(f"Wall {row['wall_number']}: {key} must be between {low:g} and {high:g}, or null.")
+            return float(item)
+        distance, height, storeys = number("distance_m", 0.5, 300), number("height_m", 2, 300), number("storeys", 1, 80)
+        if height is not None:
+            height_basis = "printed or shown on an elevation"
+        elif storeys is not None:
+            height, height_basis = round(storeys * STOREY_HEIGHT_M, 2), f"{int(storeys)} storeys × {STOREY_HEIGHT_M:g} m"
+        elif opposite == "building":
+            height, height_basis = STOREY_HEIGHT_M, f"height not shown: one storey assumed ({STOREY_HEIGHT_M:g} m)"
+        else:
+            height_basis = ""
+        result[row["wall_number"]] = {"opposite": opposite, "distance_m": distance, "height_m": height,
+                                      "height_basis": height_basis, "full_length": bool(row.get("full_length", True)),
+                                      "evidence": evidence}
+    missing = sorted(asked - set(result))
+    if missing:
+        raise ValueError(f"Answer for wall(s) {missing} too (not_shown when the drawings don't show it).")
+    return {"walls": result}
+
+
 def validate_storefront_wall_reply(packet, reply):
     """Which numbered outside wall(s) each storefront elevation shows. A shopfront elevation always shows at least one
     (user decision 2026-10-20: the AI always places the storefront); an overall width it reads must match the walls."""
@@ -704,11 +768,32 @@ def north_prompt(packet):
         "These images are crops of one architectural plan page. Find the north arrow (an arrow, a needle in a circle, "
         "or an N with a pointer). Give the pixel position of its tail and tip in the crop where you see it. If there is "
         "no north arrow, or you cannot tell which end is the tip, return \"found\": false. Do not use the sheet orientation, "
-        "text direction or building shape. Coordinates are pixels in the attached crop; choose only a listed crop_index.\n"
+        "text direction or building shape. Coordinates are pixels in the attached crop; choose only a listed crop_index. "
+        "label: what the arrow is marked as: true (TN, True North), project (PN, Project North), magnetic (MN, Magnetic "
+        "North), grid (GN, MGA/Grid North) or unlabelled (just N or no mark). When a sheet shows more than one north arrow, "
+        "give the true-north one. declination_deg: a magnetic declination printed beside the arrow (e.g. MN 12°30'E = "
+        "12.5; west negative), else null.\n"
         'JSON only: {"found": bool, "crop_index": int|null, "tail_px": [x,y]|null, "tip_px": [x,y]|null, '
-        '"labelled_north": bool, "description": string}\n\n'
+        '"labelled_north": bool, "label": "true|project|magnetic|grid|unlabelled", "declination_deg": number|null, '
+        '"description": string}\n\n'
         + json.dumps({"page": packet["page"], "crops": [{key: crop[key] for key in ("crop_index", "width_px", "height_px")} for crop in packet["crops"]]}, separators=(",", ":"))
     )
+
+
+NORTH_LABELS = ("true", "project", "magnetic", "grid", "unlabelled")
+
+
+def _north_label(value):
+    """The arrow's label and any printed declination (user decision 2026-10-26: an unlabelled arrow is true north; a
+    project-north arrow isn't used; a magnetic one is corrected to true north)."""
+    label = str(value.get("label") or "unlabelled").casefold()
+    if label not in NORTH_LABELS:
+        raise ValueError(f"label must be one of {', '.join(NORTH_LABELS)}.")
+    declination = value.get("declination_deg")
+    if declination is not None and (isinstance(declination, bool) or not isinstance(declination, (int, float))
+                                    or not math.isfinite(declination) or abs(declination) > 30):
+        raise ValueError("declination_deg must be a number of degrees between -30 and 30 (east positive), or null.")
+    return {"label": label, "declination_deg": float(declination) if declination is not None and label == "magnetic" else None}
 
 
 def validate_north_reply(packet, reply):
@@ -719,6 +804,7 @@ def validate_north_reply(packet, reply):
         if any(value.get(field) is not None for field in ("crop_index", "tail_px", "tip_px")):
             raise ValueError("When found is false, crop_index, tail_px and tip_px must be null.")
         return {"found": False, "description": str(value.get("description", ""))[:300], "labelled_north": bool(value.get("labelled_north"))}
+    labelled = _north_label(value)
     index = value.get("crop_index")
     crop = next((row for row in packet.get("crops", []) if row.get("crop_index") == index), None)
     if crop is None:
@@ -738,7 +824,33 @@ def validate_north_reply(packet, reply):
     bearing = reviewer_room_geometry.page_up_bearing_from_north_arrow(page_points)
     return {"found": True, "crop_index": index, "tail_px": points[0], "tip_px": points[1],
             "tail_page_px": page_points[0], "tip_page_px": page_points[1], "plan_up_azimuth_deg": bearing,
-            "labelled_north": bool(value.get("labelled_north")), "description": str(value.get("description", ""))[:300]}
+            "labelled_north": bool(value.get("labelled_north")), **labelled,
+            "description": str(value.get("description", ""))[:300]}
+
+
+def true_north(validated, site_declination_deg=None):
+    """(page-up bearing from true north, basis) for a validated north answer, or (None, basis) when it can't be used:
+    no arrow, or only a project-north arrow. A magnetic arrow is corrected by its printed declination, else the site's
+    (ai/magnetic.py); with neither it is used as drawn and the basis says so."""
+    if not isinstance(validated, dict) or not validated.get("found"):
+        return None, {"label": "", "reason": "No north arrow on this sheet."}
+    label = validated.get("label") or "unlabelled"
+    bearing = float(validated["plan_up_azimuth_deg"])
+    if label == "project":
+        return None, {"label": label, "reason": "Only a project-north arrow: not used for the sun (a true-north arrow is looked for on other sheets)."}
+    if label == "magnetic":
+        printed = validated.get("declination_deg")
+        declination = printed if printed is not None else site_declination_deg
+        if declination is None:
+            return bearing, {"label": label, "declination_deg": None, "declination_source": "",
+                             "reason": "Magnetic north arrow; the site's declination isn't known, so it is used as drawn."}
+        source = "printed on the drawing" if printed is not None else "World Magnetic Model 2025 at the site"
+        return round((bearing + declination) % 360, 3), {
+            "label": label, "declination_deg": round(float(declination), 2), "declination_source": source,
+            "reason": f"Magnetic north arrow corrected to true north by {declination:+.1f}° ({source})."}
+    reason = {"true": "True-north arrow.", "grid": "Grid (MGA) north arrow, within about 2° of true north; used as true north.",
+              "unlabelled": "North arrow with no label; taken as true north (the usual Australian convention)."}[label]
+    return bearing, {"label": label, "reason": reason}
 
 
 def angular_difference(a, b):

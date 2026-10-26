@@ -323,6 +323,14 @@ items reading "N", "NORTH" or "TN".
 **Fallback:** none (façade sun not assessed).
 **Answer key caseA:** p. 20 → 0° (unlabelled needle, title block).
 
+**Arrow labels (2026-10-26, same question):** the reply also gives `label` (`true | project | magnetic | grid |
+unlabelled`) and any printed `declination_deg` (east positive); with two arrows on a sheet the true-north one is
+given. Used as follows (user decisions): true, grid (within about 2°) and unlabelled (the usual Australian convention,
+noted) are taken as true north; a magnetic arrow is corrected by its printed declination, else the World Magnetic
+Model 2025 at the site (`ai/magnetic.py`, pygeomag); a project-north arrow is not used: it is left out of the
+cross-page agreement and the staged search goes on to the other sheets for a true one. The basis is kept on each page's
+north and noted once per room in Phase 1.
+
 ## P3 `boundary_classification` (one room per prompt, 1 crop ≤ 1,536 px, ≤ 1,500 characters)
 
 Inputs:
@@ -357,6 +365,25 @@ the user 2026-10-05: it faces an enclosed mall/walkway).
 Note: `mall` is a new boundary class. The envelope method treats it like
 `adjacent_tenancy` (no conduction in the preliminary method) until a mall
 temperature method exists.
+
+## P3 `surroundings`: what stands outside each outside wall (plan + up to 2 site/context sheets, ≤ 2,000 characters)
+
+User decisions 2026-10-26: one call per traced plan page that has walls classed outside (P3) and a north, and only
+when a site/location/context plan or a streetscape elevation is in the set (mall tenancies and sets without one aren't
+asked). Image 1 is the plan with its outside walls numbered; each wall is given with the direction it faces (8-point and
+degrees, from the page north). For each wall the reply gives `opposite` (`building | open | inside_building |
+not_shown`), `distance_m`, `height_m` or `storeys`, `full_length` and evidence.
+
+- **Heights:** printed or from an elevation; else storeys × 3.3 m; a building drawn with no height is one storey
+  (3.3 m), labelled.
+- **Shading:** a building with a distance shades the wall and its glass from the bottom up whenever the sun is below
+  its top edge seen from that height (`ai/sun.py obstruction_shaded_fraction`); with an awning too, only the strip
+  between the two shadows is sunlit; part-length buildings count as shading half the wall. The floor's height above
+  the ground comes from the level name (3.5 m per level, labelled).
+- **inside_building:** the site plan shows the "outside" wall faces more of the same building (Butcher Buffet's site
+  plan shows the shopping centre around the tenancy): no sun on that wall or its glass, and a note to recheck the
+  wall's classification.
+- Open ground and unshown sides keep full sun; "Still assumed" says when nothing around the building was read.
 
 ## P4 `storefront_wall`: which outside wall is the storefront (plan + elevation images, ≤ 1,500 characters)
 

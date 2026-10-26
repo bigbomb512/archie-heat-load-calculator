@@ -77,6 +77,13 @@ Sun angle, seasons and shade (user decisions 2026-10-25, `ai/sun.py`):
 - **Awnings, verandahs, canopies, eaves and balconies** over the storefront are read by the openings step (no extra
   call). Their shadow drops depth × tan(profile angle) below them each hour; the shaded glass (and wall, for a
   full-width one) gets only diffuse sun. Shades over other walls aren't read yet (only the storefront elevation is).
+- **North arrows** (2026-10-26): the arrow's label is read. Unlabelled, true and grid arrows are true north; a magnetic
+  one is corrected by the printed declination or the World Magnetic Model at the site; a project-north arrow isn't
+  used (another sheet's true north is looked for).
+- **Buildings in the way** (2026-10-26): one more drawing question per job with outside walls reads what stands
+  opposite each outside wall from the site or context sheets (distance, height or storeys; one storey when no height is
+  shown). Its shadow is worked out hour by hour; a wall the site plan shows faces more of the same building gets no
+  sun. Nothing read means full sun, noted.
 
 Known gap: wall and floor materials read by the skills are not yet applied to the traced surfaces, which use the
 assumption pack's U-values unless a construction is answered.

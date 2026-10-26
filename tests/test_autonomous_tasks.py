@@ -1839,6 +1839,94 @@ class AutonomousTaskTests(unittest.TestCase):
             self.assertEqual(rejected["status"], "blocked")
             self.assertIn("could not be applied", rejected["block_reason"])
 
+    def _north_records(self, root, answers):
+        pages = [{"page": number, "type": "floor_plan"} for number in answers]
+        (root / "ai_input.json").write_text(json.dumps({"drawing_set": {"pages": pages}}))
+        records = {}
+        for number, answer in answers.items():
+            record = autonomous_tasks_service._create_run(root, "P2_north", f"page-{number}",
+                {"task": "P2_north", "page": number}, "north")
+            record.update({"status": "waiting_for_reply", "validation": answer, "accuracy": {"auto_apply": True}})
+            autonomous_tasks_service._update_record(root, record)
+            records[number] = record
+        return records
+
+    def test_north_reply_reads_the_arrow_label_and_printed_declination(self):
+        packet = {"crops": [{"crop_index": 0, "width_px": 100, "height_px": 100, "page_bbox": [0, 0, 100, 100]}]}
+        base = {"found": True, "crop_index": 0, "tail_px": [50, 80], "tip_px": [50, 20], "labelled_north": True}
+        self.assertEqual(autonomous_tasks.validate_north_reply(packet, json.dumps(base))["label"], "unlabelled")
+        magnetic = autonomous_tasks.validate_north_reply(packet, json.dumps({**base, "label": "magnetic", "declination_deg": 12.5}))
+        self.assertEqual((magnetic["label"], magnetic["declination_deg"]), ("magnetic", 12.5))
+        # A declination only means something on a magnetic arrow.
+        self.assertIsNone(autonomous_tasks.validate_north_reply(packet, json.dumps({**base, "label": "true", "declination_deg": 3}))["declination_deg"])
+        for bad in ({"label": "compass"}, {"label": "magnetic", "declination_deg": 45}):
+            with self.assertRaises(ValueError):
+                autonomous_tasks.validate_north_reply(packet, json.dumps({**base, **bad}))
+        self.assertIn("project (PN, Project North)", autonomous_tasks.north_prompt({"page": 3, "crops": packet["crops"]}))
+
+    def test_true_north_from_each_kind_of_arrow(self):
+        answer = {"found": True, "plan_up_azimuth_deg": 350.0}
+        self.assertEqual(autonomous_tasks.true_north({**answer, "label": "true"})[0], 350.0)
+        bearing, basis = autonomous_tasks.true_north({**answer, "label": "unlabelled"})
+        self.assertEqual(bearing, 350.0)
+        self.assertIn("taken as true north", basis["reason"])
+        # Magnetic north lies east of true north by the declination: true bearing = magnetic bearing + declination.
+        self.assertEqual(autonomous_tasks.true_north({**answer, "label": "magnetic", "declination_deg": 12.5})[0], 2.5)
+        bearing, basis = autonomous_tasks.true_north({**answer, "label": "magnetic", "declination_deg": None}, 12.83)
+        self.assertEqual((bearing, basis["declination_source"]), (2.83, "World Magnetic Model 2025 at the site"))
+        self.assertEqual(autonomous_tasks.true_north({**answer, "label": "magnetic", "declination_deg": None})[0], 350.0)
+        self.assertIsNone(autonomous_tasks.true_north({**answer, "label": "project"})[0])
+        self.assertIsNone(autonomous_tasks.true_north({"found": False})[0])
+
+    def test_site_declination_matches_the_published_value(self):
+        from ai import magnetic
+        # Geoscience Australia / NOAA calculators give about 12.8° E for Sydney and 1.5° W for Perth in 2026.
+        self.assertAlmostEqual(magnetic.declination_deg(-33.87, 151.21, 2026.8), 12.8, delta=0.3)
+        self.assertAlmostEqual(magnetic.declination_deg(-31.95, 115.86, 2026.8), -1.5, delta=0.3)
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "site_location_resolution.json").write_text(json.dumps({"location": {"latitude_deg": -33.87, "longitude_deg": 151.21}}))
+            self.assertAlmostEqual(autonomous_tasks_service._site_declination(root), 12.8, delta=0.4)
+
+    def test_magnetic_arrow_is_applied_as_true_north_with_its_basis(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            answer = {"found": True, "plan_up_azimuth_deg": 0.0, "label": "magnetic", "declination_deg": 12.5}
+            records = self._north_records(root, {20: answer})
+            declared = []
+            with patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "post",
+                              side_effect=lambda _w, _p, body, **_k: declared.append(body)):
+                result = autonomous_tasks_service._apply_p2(None, {"id": "x", "review_dir": str(root)}, root, records[20], answer)
+            self.assertEqual(result["applied_value"]["plan_up_azimuth_deg"], 12.5)
+            self.assertEqual(declared[0]["north_basis"]["declination_source"], "printed on the drawing")
+
+    def test_project_north_arrow_is_left_out_of_the_agreement_and_the_search_goes_on(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project_arrow = {"found": True, "plan_up_azimuth_deg": 40.0, "label": "project"}
+            true_arrow = {"found": True, "plan_up_azimuth_deg": 0.0, "label": "true"}
+            records = self._north_records(root, {20: project_arrow, 21: true_arrow})
+            declared = []
+            with patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "post",
+                              side_effect=lambda _w, _p, body, **_k: declared.append(body)):
+                only_project = autonomous_tasks_service._apply_p2(None, {"id": "x", "review_dir": str(root)}, root, records[20], project_arrow)
+                self.assertIsNone(only_project["applied_value"]["plan_up_azimuth_deg"])
+                self.assertIn("project-north", only_project["applied_value"]["north_basis"]["reason"])
+                autonomous_tasks_service._update_record(root, only_project)
+                result = autonomous_tasks_service._apply_p2(None, {"id": "x", "review_dir": str(root)}, root, records[21], true_arrow)
+            self.assertEqual(result["applied_value"]["plan_up_azimuth_deg"], 0.0)      # not pulled towards 40°
+            # Every sheet of the set takes the agreed true north, including the one that only had a project arrow.
+            self.assertEqual({body["page"]: body["plan_up_azimuth_deg"] for body in declared}, {20: 0.0, 21: 0.0})
+        # A sheet with only a project arrow counts as "no arrow": the staged search widens to the other sheets.
+        plans = [{"page": number, "type": "floor_plan"} for number in (20, 21)]
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "ai_input.json").write_text(json.dumps({"drawing_set": {"pages": plans}}))
+            answered = {"page-20": {"status": "applied", "validation": project_arrow}}
+            with patch.object(autonomous_tasks_service, "_p0_main_geometry_pages", return_value=[{"page": 20}]), \
+                    patch.object(autonomous_tasks_service, "_current_task", side_effect=lambda r, t, g: answered.get(g)):
+                self.assertEqual([row["page"] for row in autonomous_tasks_service._north_pages(root)], [20, 21])
+
     def test_north_is_asked_only_on_the_main_plan_unless_it_has_no_arrow(self):
         # Casa Nova (2026-10-24): all 22 plan-like pages were asked (66 images) for the one traced plan's north.
         plans = [{"page": number, "type": "floor_plan"} for number in (20, 21, 22)]

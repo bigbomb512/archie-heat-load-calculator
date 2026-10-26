@@ -108,6 +108,30 @@ def _site_packet(root):
     return packet, prompt, {"ai_input": ai_input, "spatial_ocr": spatial, "building_evidence": building}
 
 
+def _site_declination(root):
+    """East-positive magnetic declination at the site (confirmed site position, else the weather location's), or None."""
+    from ai import design_weather, magnetic
+    from backend import weather_pick_service
+    location = (_read(root / "site_location_resolution.json", {}) or {}).get("location") or {}
+    latitude, longitude = location.get("latitude_deg"), location.get("longitude_deg")
+    if latitude is None or longitude is None:
+        try:
+            place = weather_pick_service.effective(root)[0]
+        except (OSError, ValueError, TypeError):
+            place = ""
+        if place in design_weather.LOCATIONS:
+            latitude, longitude, _state = design_weather.LOCATIONS[place]
+    try:
+        return magnetic.declination_deg(latitude, longitude) if latitude is not None and longitude is not None else None
+    except (ValueError, ImportError, OSError):
+        return None
+
+
+def _north_answer(record):
+    value = (record or {}).get("validation", {})
+    return value.get("result", value) if isinstance(value, dict) else {}
+
+
 def _north_pages(root):
     """The pages asked for their north arrow, in stages: the main traced plan(s), as only their north is used; when
     all of those were answered without an arrow, the other floor plans and the site or location plan; only when those
@@ -131,9 +155,9 @@ def _north_pages(root):
               plans]
 
     def found(record):
-        value = (record or {}).get("validation", {})
-        value = value.get("result", value) if isinstance(value, dict) else {}
-        return isinstance(value, dict) and value.get("found")
+        # A project-north arrow doesn't count: keep looking for a true one (user decision 2026-10-26).
+        value = _north_answer(record)
+        return isinstance(value, dict) and value.get("found") and value.get("label") != "project"
     asked = []
     for stage in stages:
         new = [row for row in stage if row["page"] not in {done["page"] for done in asked}]
@@ -2119,6 +2143,167 @@ def _p4_packets(root, only_room_id=None):
     return result
 
 
+CONTEXT_TITLE = re.compile(r"\b(?:site|location|locality|context|streetscape|street\s+elevation|neighbour|surrounding)", re.I)
+
+
+def _context_pages(root, plan_page):
+    """Up to two sheets that can show what stands around the building: site/location/context plans first, then
+    streetscape or context elevations (pass 1 page reading and the sheet titles)."""
+    ai_input = _read(root / "ai_input.json", {})
+    inventory = _read(root / "page_inventory.json", {}).get("pages") or {}
+    plans, elevations = [], []
+    for row in (ai_input.get("drawing_set", {}) or {}).get("pages", []):
+        if not isinstance(row, dict) or type(row.get("page")) is not int or row["page"] == plan_page:
+            continue
+        reading = inventory.get(str(row["page"])) or {}
+        title = " ".join(str(value or "") for value in (row.get("title"), reading.get("title"), row.get("type")))
+        if reading.get("page_type") in {"render_or_photo", "existing_or_demolition"}:
+            continue
+        if (reading.get("page_type") == "site_or_location_plan" or reading.get("floor_plan_kind") == "outdoor_or_context"
+                or (reading.get("page_type") in {"floor_plan", ""} and CONTEXT_TITLE.search(title))):
+            plans.append({"page": row["page"], "title": str(reading.get("title") or row.get("title") or "site plan")})
+        elif reading.get("page_type") == "elevation" and CONTEXT_TITLE.search(title):
+            elevations.append({"page": row["page"], "title": str(reading.get("title") or row.get("title") or "street elevation")})
+    return (plans + elevations)[:2]
+
+
+def _context_page_image(root, page_number):
+    """One whole sheet, at most 2,048 px, for reading what surrounds the building."""
+    from PIL import Image
+    source = autonomous_tasks._page_screenshot(root, page_number)
+    if source:
+        with Image.open(source) as opened:
+            image = opened.convert("RGB")
+    else:
+        import pdfplumber
+        ai_input, _spatial, _building = _load_inputs(root)
+        pdf_path = Path(str(ai_input.get("source_pdf", "")))
+        if not pdf_path.is_file():
+            raise ValueError(f"No rendered image or source PDF is available for page {page_number}.")
+        with pdfplumber.open(pdf_path) as pdf:
+            if page_number < 1 or page_number > len(pdf.pages):
+                raise ValueError(f"Page {page_number} is outside the source PDF.")
+            image = pdf.pages[page_number - 1].to_image(resolution=150).original.convert("RGB")
+    image.thumbnail((2048, 2048))
+    return image
+
+
+def _run_outward_azimuth(union, run, plan_up_bearing):
+    """The compass bearing a perimeter wall run faces outwards: the side of its midpoint outside the rooms' union."""
+    from ai import site_orientation
+    from shapely.geometry import Point
+    (x0, y0), (x1, y1) = run["start_px"], run["end_px"]
+    length = math.hypot(x1 - x0, y1 - y0)
+    if length <= 0:
+        return None
+    mid, normal = ((x0 + x1) / 2, (y0 + y1) / 2), ((y1 - y0) / length, -(x1 - x0) / length)   # "left" of start→end
+    step = max(2.0, length * 0.02)
+    left_outside = not union.buffer(0).contains(Point(mid[0] + normal[0] * step, mid[1] + normal[1] * step))
+    return site_orientation.outward_azimuth([run["start_px"], run["end_px"]], "left" if left_outside else "right", plan_up_bearing)
+
+
+def _p3_surroundings_packets(root):
+    """What stands opposite each outside wall (user decision 2026-10-26): one question per traced plan page that has
+    walls to the outside and a site/context sheet to read them from. A plan with no outside wall (a mall tenancy) or
+    no such sheet is not asked: its walls get full sun, and the result says the surroundings weren't shown."""
+    from shapely.geometry import Polygon
+    from shapely.ops import unary_union
+    result = []
+    try:
+        traces = reviewer_room_geometry_service.current_records(reviewer_room_geometry_service._paths({"review_dir": str(root)}))
+    except (OSError, ValueError, TypeError, KeyError):
+        return result
+    comfort = _comfort_room_ids(root)
+    north = _read(root / "reviewer_room_geometry.json", {}).get("page_north", {})
+    by_page = {}
+    for trace in traces:
+        if trace.get("room_id") in comfort and trace.get("calibration", {}).get("status") in {"agreed", "declared_scale_rejected", "declared_scale_only"}:
+            by_page.setdefault(trace.get("page"), []).append(trace)
+    for plan_page, page_traces in sorted(by_page.items()):
+        p3 = _current_task(root, "P3_boundaries", f"page-{plan_page}")
+        bearing = (north.get(str(plan_page)) or {}).get("plan_up_azimuth_deg")
+        if not p3 or p3.get("status") not in {"applied", "below_accuracy_bar"} or bearing is None:
+            continue
+        perimeter = _page_perimeter_data(page_traces)
+        if perimeter["error"]:
+            continue
+        boundaries = {row.get("index"): row.get("boundary") for row in (p3.get("applied_value") or {}).get("runs", [])}
+        outside = [row for row in perimeter["runs"] if boundaries.get(row["run_index"]) == "external" and float(row["span_m"]) >= 1.0]
+        context = _context_pages(root, plan_page)
+        if not outside or not context:
+            continue
+        union = unary_union([Polygon(trace["points_image_px"]) for trace in page_traces])
+        walls, wall_edges = {}, {}
+        for row in outside:
+            azimuth = _run_outward_azimuth(union, row, float(bearing))
+            if azimuth is None:
+                continue
+            number = row["run_index"] + 1
+            walls[str(number)] = {"faces": f"{_compass8(azimuth)} ({azimuth:.0f}°)", "length_m": round(float(row["span_m"]), 2)}
+            wall_edges[str(number)] = {"run_index": row["run_index"], "azimuth_deg": round(azimuth, 1),
+                                       "edges": [[trace_id, edge["edge_index"]] for trace_id, edges in perimeter["trace_edges"].items()
+                                                 for edge in edges if edge.get("perimeter_run_index") == row["run_index"]]}
+        if not walls:
+            continue
+        target = f"page-{plan_page}"
+        packet = {"task": "P3_surroundings", "page": plan_page, "walls": walls, "wall_edges": wall_edges,
+                  "context_pages": [row["page"] for row in context], "evidence": {"page": plan_page}}
+        prompt = autonomous_tasks.surroundings_prompt(walls, [f"page {row['page']}: {row['title']}" for row in context])
+        try:
+            plan_image, packet["image_transform"] = _perimeter_task_image(root, page_traces, perimeter,
+                                                                          [{"index": int(number) - 1} for number in walls])
+            images = [_png_bytes(plan_image), *[_png_bytes(_context_page_image(root, row["page"])) for row in context]]
+        except (OSError, ValueError, IndexError) as error:
+            result.append(("P3_surroundings", target, packet, "", [], str(error)))
+            continue
+        result.append(("P3_surroundings", target, packet, prompt, images, ""))
+    return result
+
+
+def _compass8(azimuth):
+    return ("N", "NE", "E", "SE", "S", "SW", "W", "NW")[int(((azimuth % 360) + 22.5) // 45) % 8]
+
+
+def _apply_p3_surroundings(record, validated):
+    """Keep each wall's answer with the room edges it covers; the calculation reads it from this record."""
+    packet = record["packet"]
+    walls = []
+    for number, answer in sorted(validated["walls"].items()):
+        mapping = packet["wall_edges"].get(str(number), {})
+        walls.append({"wall_number": number, "run_index": mapping.get("run_index"), "azimuth_deg": mapping.get("azimuth_deg"),
+                      "edges": mapping.get("edges", []), **answer})
+    record.update({"status": _status_for_accuracy("ai_determined", record.get("accuracy", {})), "source": "ai_determined",
+                   "applied_value": {"page": packet["page"], "walls": walls}, "validation": validated, "block_reason": ""})
+    return record
+
+
+def surroundings_by_edge(root):
+    """{(trace_id, edge_index): the building opposite that wall edge} from the current surroundings answers: buildings
+    with a distance, and walls the site plan shows face more of the same building ({"inside": True}); open ground and
+    unshown sides give full sun."""
+    result = {}
+    for pointer in (Path(root) / "ai_tasks" / "P3_surroundings").glob("*/current.json"):
+        current = _read(pointer, {})
+        record = _read(pointer.parent / current.get("run_path", "") / "record.json", {})
+        if record.get("status") not in {"applied", "below_accuracy_bar"}:
+            continue
+        for wall in (record.get("applied_value") or {}).get("walls", []):
+            if wall.get("opposite") == "inside_building":
+                # The site plan shows this "outside" wall faces more of the same building: no sun on it.
+                for trace_id, edge_index in wall.get("edges", []):
+                    result[(str(trace_id), int(edge_index))] = {"inside": True, "evidence": wall.get("evidence", ""),
+                                                                "wall_number": wall.get("wall_number")}
+                continue
+            if wall.get("opposite") != "building" or not wall.get("distance_m") or not wall.get("height_m"):
+                continue
+            for trace_id, edge_index in wall.get("edges", []):
+                result[(str(trace_id), int(edge_index))] = {
+                    "distance_m": wall["distance_m"], "height_m": wall["height_m"], "height_basis": wall.get("height_basis", ""),
+                    "full_length": wall.get("full_length", True), "evidence": wall.get("evidence", ""),
+                    "wall_number": wall.get("wall_number"), "page": (record.get("applied_value") or {}).get("page")}
+    return result
+
+
 def _p0_trace_rows(root, record, polygons):
     page = int(record["packet"]["page"])
     calibration = deepcopy(record["packet"]["calibration"])
@@ -2684,7 +2869,7 @@ def _refresh_geometry_tasks(root, room_id=None, page_number=None):
             _create_run(root,task,target,packet,prompt,images,reason or
                         (f"Prompt exceeds the {budget:,}-character limit; evidence was not shortened." if len(prompt)>budget else ""))
     _refresh_roof_tasks(root)
-    for packet_builder in (_p3_packets,_p7_packets,_p4_packets,_p6_kitchen_packets):
+    for packet_builder in (_p3_packets,_p3_surroundings_packets,_p7_packets,_p4_packets,_p6_kitchen_packets):
         for task,target,packet,prompt,images,reason in packet_builder(root):
             budget=autonomous_tasks.TASKS[task]["budget_chars"]
             _create_run(root,task,target,packet,prompt,images,reason or
@@ -2977,10 +3162,13 @@ def _apply_p2(web, project, root, record, validated):
     if existing_source == "reviewer":
         record.update({"status": "applied", "source": "reviewer", "applied_value": {"page": page, "plan_up_azimuth_deg": existing_declaration.get("plan_up_azimuth_deg"), "overrode_by": "reviewer"}, "validation": validated})
         return record
-    if not validated.get("found"):
+    declination = _site_declination(root) if validated.get("label") == "magnetic" else None
+    own_bearing, own_basis = autonomous_tasks.true_north(validated, declination)
+    if own_bearing is None:
         record.update({"status": _status_for_accuracy("ai_determined", record.get("accuracy", {})),
                        "source": "ai_determined",
-                       "applied_value": {"page": page, "plan_up_azimuth_deg": None},
+                       "applied_value": {"page": page, "plan_up_azimuth_deg": None,
+                                         **({"north_basis": own_basis} if validated.get("found") else {})},
                        "block_reason": "", "validation": validated})
         return record
     candidates_by_page = {}
@@ -3001,11 +3189,13 @@ def _apply_p2(web, project, root, record, validated):
             other_validation = other_validation["result"]
         if other_validation.get("found") is not None:
             completed_pages.add(int(other.get("packet", {}).get("page", 0)))
-        if other_validation.get("found"):
+        other_bearing, _other_basis = autonomous_tasks.true_north(
+            other_validation, _site_declination(root) if other_validation.get("label") == "magnetic" else None)
+        if other_bearing is not None:          # project-north arrows don't take part in the agreement
             other_page = int(other.get("packet", {}).get("page", 0))
-            candidates_by_page[other_page] = float(other_validation["plan_up_azimuth_deg"])
+            candidates_by_page[other_page] = other_bearing
             other_records[other_page] = other
-    candidates_by_page[page] = float(validated["plan_up_azimuth_deg"])
+    candidates_by_page[page] = own_bearing
     completed_pages.add(page)
     # Use the same complete plan-view list as the north packet builder and declare_north.
     plan_page_numbers = [row["page"] for row in _north_pages(root)]   # the pages asked, as the packet builder
@@ -3038,10 +3228,13 @@ def _apply_p2(web, project, root, record, validated):
         if not north_record:
             continue
         try:
+            page_answer = _north_answer(north_record) if north_record is not record else validated
+            page_basis = autonomous_tasks.true_north(
+                page_answer, _site_declination(root) if page_answer.get("label") == "magnetic" else None)[1]
             reviewer_room_geometry_service.post(web, project, {
                 "action": "declare_north", "page": north_page, "reviewer": reviewer,
                 "plan_up_azimuth_deg": applied_angle, "declaration_source": declaration_source,
-                "ai_run_id": north_record["run_id"],
+                "ai_run_id": north_record["run_id"], "north_basis": page_basis,
             }, _defer_evidence_rebuild=True)
         except (ValueError, OSError, KeyError) as error:
             north_record.update({"status": "blocked", "source": "", "applied_value": {},
@@ -3079,7 +3272,7 @@ def _apply_p2(web, project, root, record, validated):
             reviewer_room_geometry_service.post(web, project, {
                 "action": "declare_north", "page": main_page, "reviewer": f"{reviewer} (north of page {page}; no arrow on this sheet)",
                 "plan_up_azimuth_deg": applied_angle, "declaration_source": declaration_source,
-                "ai_run_id": record["run_id"],
+                "ai_run_id": record["run_id"], "north_basis": own_basis,
             }, _defer_evidence_rebuild=True)
             task_records.setdefault(main_page, record)
         except (ValueError, OSError, KeyError):
@@ -3272,6 +3465,9 @@ def _post(web, project, data, *, defer_evidence_rebuild=False):
         elif task == "P3_boundaries":
             validated = autonomous_tasks.validate_boundary_reply(record["packet"], reply)
             record = _apply_p3(web, project, root, record, validated)
+        elif task == "P3_surroundings":
+            validated = autonomous_tasks.validate_surroundings_reply(record["packet"], reply)
+            record = _apply_p3_surroundings(record, validated)
         elif task == "P7_ceiling_heights":
             validated = autonomous_tasks.validate_ceiling_height_reply(record["packet"], reply)
             record = _apply_p7(record, validated)
@@ -3348,6 +3544,7 @@ def prepare_investigation(project, investigation):
         "P0_tenancy_outline": lambda: _p0_tenancy_packets(root, force=True),
         "P0_outline_corners": lambda: _p0_corner_packets(root, force=True),
         "P3_boundaries": lambda: _p3_packets(root, page_number=investigation.get("plan_page"), force=True),
+        "P3_surroundings": lambda: _p3_surroundings_packets(root),
         "P4_storefront_wall": lambda: _p4_packets(root),
         "P4_openings": lambda: _p4_packets(root, only_room_id=investigation.get("room_id") or None),
         "P5_roof": lambda: [("P5_roof", target, packet, prompt, images, "")

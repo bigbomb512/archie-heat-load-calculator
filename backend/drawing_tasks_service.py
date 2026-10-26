@@ -58,6 +58,7 @@ TASK_LABELS = {
     "P2_north": "Finding north",
     "P3_boundaries": "Working out what each wall faces",
     "P7_ceiling_heights": "Reading the ceiling heights",
+    "P3_surroundings": "Reading what stands outside each outside wall",
     "P4_storefront_wall": "Finding which wall is the shopfront",
     "P4_openings": "Finding the shopfront openings",
     "P5_roof": "Working out what is above",

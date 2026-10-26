@@ -711,14 +711,31 @@ def _site_sun(site_location, site_days=None):
     return {"days": days, "latitude": latitude, "longitude": longitude, "timezone": timezone_name, "place": place}
 
 
-def _surface_sun(site_sun, scenarios, tilt_deg, azimuth_deg, shade=None, height_m=None):
+def _surface_sun(site_sun, scenarios, tilt_deg, azimuth_deg, shade=None, height_m=None, obstruction=None):
     """{scenario_id: 24 hourly W/m² on the surface} for every design day, from its month's sun."""
     result = {}
     for row in scenarios.get("scenarios", []):
         month = int(row.get("sun_month") or 1)
-        result[row["scenario_id"]] = site_sun_model.surface_totals(site_sun, month, tilt_deg, azimuth_deg or 0.0,
-                                                                   shade, height_m)
+        result[row["scenario_id"]] = ([0.0] * 24 if (obstruction or {}).get("inside") else
+                                      site_sun_model.surface_totals(site_sun, month, tilt_deg, azimuth_deg or 0.0,
+                                                                    shade, height_m, obstruction))
     return result
+
+
+def _obstruction_values(raw):
+    """A building opposite a wall or its glass as {"distance_m", "height_m", "base_m", "coverage"}, or None when it
+    can't shade anything (no distance or height)."""
+    if not isinstance(raw, dict):
+        return None
+    if raw.get("inside"):
+        return {"inside": True}                 # the wall faces more of the same building: no sun at all
+    distance, height = _number(raw.get("distance_m")), _number(raw.get("height_m"))
+    if not distance or not height or distance <= 0 or height <= 0:
+        return None
+    coverage = _number(raw.get("coverage"))
+    return {"distance_m": distance, "height_m": height, "base_m": max(_number(raw.get("base_m")) or 0.0, 0.0),
+            "coverage": coverage if coverage is not None and 0 < coverage <= 1 else 1.0,
+            "wall_height_m": _number(raw.get("wall_height_m"))}
 
 
 def _shade_values(raw):
@@ -1572,7 +1589,10 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
             tilt = 0.0 if orientation == "horizontal" else 90.0
             bearing = 0.0 if tilt == 0 else site_sun_model.surface_azimuth(orientation, candidate.get("azimuth_deg"))
             wall_shade = _shade_values(candidate.get("shade")) if tilt else None
-            hourly_sun = _surface_sun(site_sun, scenario_set, tilt, bearing, wall_shade, (wall_shade or {}).get("wall_height_m"))
+            wall_obstruction = _obstruction_values(candidate.get("obstruction")) if tilt else None
+            hourly_sun = _surface_sun(site_sun, scenario_set, tilt, bearing, wall_shade,
+                                      (wall_shade or {}).get("wall_height_m") or (wall_obstruction or {}).get("wall_height_m"),
+                                      wall_obstruction)
             solar_peak = max((value for hours in hourly_sun.values() for value in hours), default=0.0)
         if solar_peak:
             operating = _profile_schedule(profile_id)
@@ -1606,6 +1626,8 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                 opaque["azimuth_deg"] = round(float(candidate["azimuth_deg"]), 1)
             if wall_shade:
                 opaque["shade"] = wall_shade
+            if wall_obstruction:
+                opaque["obstruction"] = wall_obstruction
         if candidate.get("reviewer_trace_id"):
             opaque.update({"reviewer_trace_id": candidate.get("reviewer_trace_id"),
                            "reviewer": candidate.get("reviewer", ""),
@@ -1681,7 +1703,9 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
             glass_sun, glass_shade = None, _shade_values(opening.get("shade"))
             if site_sun and glazing_peak:
                 bearing = site_sun_model.surface_azimuth(opening_orientation, opening.get("azimuth_deg", candidate.get("azimuth_deg")))
-                glass_sun = _surface_sun(site_sun, scenario_set, 90.0, bearing, glass_shade, _number(opening.get("height_m")))
+                glass_obstruction = _obstruction_values(opening.get("obstruction"))
+                glass_sun = _surface_sun(site_sun, scenario_set, 90.0, bearing, glass_shade, _number(opening.get("height_m")),
+                                         glass_obstruction)
                 glazing_peak = max((value for hours in glass_sun.values() for value in hours), default=0.0)
                 if glass_shade:
                     shade = 1.0          # the awning's geometry replaces the shading category
@@ -1705,6 +1729,8 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                        "preliminary_solar_profile_w_m2": glazing_profile,
                        **({"preliminary_hourly_solar_w_m2": glass_sun} if glass_sun else {}),
                        **({"shade": glass_shade} if glass_shade else {}),
+                       **({"obstruction": _obstruction_values(opening.get("obstruction"))}
+                          if glass_sun and _obstruction_values(opening.get("obstruction")) else {}),
                        "orientation": opening_orientation, "shading_category": opening["shading_category"], "preliminary_assumption": True,
                        "source": (opening.get("glazing_source") if answered_u and answered_shgc else
                                   _source(opening.get("glazing_choice") or profile_id) + "; preliminary assumption-pack glazing U-value and SHGC"),

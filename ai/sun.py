@@ -97,10 +97,28 @@ def overhang_sunlit_fraction(altitude_deg, sun_azimuth_deg, surface_azimuth_deg,
     return round(1 - shaded / height_m, 6)
 
 
-def surface_hours(day, tilt_deg, azimuth_deg, shade=None, height_m=None):
+def obstruction_shaded_fraction(altitude_deg, sun_azimuth_deg, surface_azimuth_deg, bottom_m, top_m, distance_m, height_m):
+    """Share of a vertical surface from bottom_m to top_m above the ground in the shadow of a building height_m tall
+    whose face stands distance_m in front of it (user decision 2026-10-26). A point at height z is in shadow when the
+    sun's ray from it, travelling distance / cos(azimuth difference) horizontally, is still below the building's top:
+    z + distance × tan(altitude) / cos(difference) < height. The shadow fills from the bottom up."""
+    if not distance_m or distance_m <= 0 or not height_m or height_m <= 0 or top_m <= bottom_m or altitude_deg <= 0:
+        return 0.0
+    relative = ((sun_azimuth_deg - surface_azimuth_deg + 180) % 360) - 180
+    facing = cos(radians(relative))
+    if facing <= 0:
+        return 0.0                                    # sun behind the surface: no direct beam to block
+    edge = height_m - distance_m * tan(radians(altitude_deg)) / facing   # shadow's top edge on the surface
+    return round(min(max(edge - bottom_m, 0.0), top_m - bottom_m) / (top_m - bottom_m), 6)
+
+
+def surface_hours(day, tilt_deg, azimuth_deg, shade=None, height_m=None, obstruction=None):
     """24 hours of sunlight on one surface on one design day: [{"direct_w_m2", "diffuse_w_m2", "sunlit_fraction",
     "total_w_m2"}]. tilt 0 = flat roof, 90 = wall or window. shade = {"depth_m", "gap_m"} for a projection above a
-    vertical surface of height_m; the shaded part gets no direct beam."""
+    vertical surface of height_m; the shaded part gets no direct beam. obstruction = {"distance_m", "height_m",
+    "base_m" (the surface's bottom above the ground), "coverage" (1 for a building along the whole wall, less for
+    part of it)}: a building opposite shades it from the bottom up; with an awning too, the sunlit share is what is
+    left between the two shadows."""
     import numpy as np
     from pvlib.irradiance import get_total_irradiance
     up = np.array([row["altitude_deg"] > 0 for row in day])
@@ -117,23 +135,32 @@ def surface_hours(day, tilt_deg, azimuth_deg, shade=None, height_m=None):
         if shade and tilt_deg >= 89 and height_m and up[index]:
             sunlit = overhang_sunlit_fraction(row["altitude_deg"], row["azimuth_deg"], azimuth_deg, height_m,
                                               shade.get("depth_m"), shade.get("gap_m", 0.0))
+        if obstruction and tilt_deg >= 89 and height_m and up[index]:
+            base = float(obstruction.get("base_m") or 0.0)
+            blocked = obstruction_shaded_fraction(row["altitude_deg"], row["azimuth_deg"], azimuth_deg, base, base + height_m,
+                                                  obstruction.get("distance_m"), obstruction.get("height_m"))
+            sunlit = round(max(0.0, sunlit - blocked * float(obstruction.get("coverage", 1.0))), 6)
         result.append({"direct_w_m2": round(float(direct[index]), 2), "diffuse_w_m2": round(float(diffuse[index]), 2),
                        "sunlit_fraction": sunlit, "total_w_m2": round(float(direct[index]) * sunlit + float(diffuse[index]), 2)})
     return result
 
 
-@lru_cache(maxsize=2048)
-def _surface_totals(latitude, longitude, timezone, month, tilt_deg, azimuth_deg, depth_m, gap_m, height_m):
+@lru_cache(maxsize=4096)
+def _surface_totals(latitude, longitude, timezone, month, tilt_deg, azimuth_deg, depth_m, gap_m, height_m, obstruction):
     day = design_days(latitude, longitude, timezone)[month]
     shade = {"depth_m": depth_m, "gap_m": gap_m} if depth_m else None
-    return tuple(row["total_w_m2"] for row in surface_hours(day, tilt_deg, azimuth_deg, shade, height_m))
+    blocking = dict(zip(("distance_m", "height_m", "base_m", "coverage"), obstruction)) if obstruction else None
+    return tuple(row["total_w_m2"] for row in surface_hours(day, tilt_deg, azimuth_deg, shade, height_m, blocking))
 
 
-def surface_totals(site, month, tilt_deg, azimuth_deg, shade=None, height_m=None):
+def surface_totals(site, month, tilt_deg, azimuth_deg, shade=None, height_m=None, obstruction=None):
     """The 24 hourly totals (W/m², direct in the sun + diffuse) on one surface on the 21st of a month, cached.
     site = {"latitude", "longitude", "timezone"}."""
     shade = shade or {}
+    blocking = (tuple(round(float(obstruction.get(key) or default), 3) for key, default in
+                      (("distance_m", 0.0), ("height_m", 0.0), ("base_m", 0.0), ("coverage", 1.0)))
+                if obstruction and obstruction.get("distance_m") and obstruction.get("height_m") else None)
     return list(_surface_totals(round(float(site["latitude"]), 4), round(float(site["longitude"]), 4), str(site["timezone"]),
                                 int(month), float(tilt_deg), round(float(azimuth_deg or 0.0) % 360, 1),
                                 float(shade.get("depth_m") or 0.0), float(shade.get("gap_m") or 0.0),
-                                float(height_m or 0.0)))
+                                float(height_m or 0.0), blocking))

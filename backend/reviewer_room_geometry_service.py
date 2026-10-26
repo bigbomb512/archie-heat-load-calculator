@@ -1045,6 +1045,11 @@ def post(web, project, data, _validated_current_records=None, _defer_evidence_re
             declaration["ai_run_id"] = ai_run_id
         if points is not None:
             declaration["north_arrow_points_image_px"] = points
+        basis = data.get("north_basis")
+        if isinstance(basis, dict) and basis.get("label"):
+            # What the arrow was (true/project/magnetic/grid/unlabelled) and any declination applied (2026-10-26).
+            declaration["north_basis"] = {key: basis[key] for key in ("label", "declination_deg", "declination_source", "reason")
+                                          if key in basis}
         north[str(page)] = declaration
         artifact = reviewer_room_geometry.validate_artifact({"records": artifact["records"], "rooms": artifact.get("rooms", []), "page_north": north})
     elif action == "classify_envelope":

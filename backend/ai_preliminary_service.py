@@ -437,6 +437,23 @@ def _resolve_airflow(paths, persist=False):
     return artifact
 
 
+LEVEL_HEIGHT_M = 3.5
+_LEVEL_WORDS = {"ground": 0, "first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5}
+
+
+def _floor_level_m(level_name):
+    """(height of the floor above the ground in m, note) from the level's name: ground/unassigned 0; "Level 2", "L2",
+    "Second floor" → 2 × 3.5 m (labelled). Used for how much of a wall a building opposite shades."""
+    text = str(level_name or "").casefold()
+    number = next((value for word, value in _LEVEL_WORDS.items() if re.search(rf"\b{word}\b", text)), None)
+    if number is None:
+        match = re.search(r"\b(?:level|lvl|l)\s*-?\s*(\d{1,2})\b", text)
+        number = int(match.group(1)) if match else 0
+    if number <= 0:
+        return 0.0, ""
+    return number * LEVEL_HEIGHT_M, f"The floor is taken as {number * LEVEL_HEIGHT_M:g} m above the ground ({level_name}, {LEVEL_HEIGHT_M:g} m per level)."
+
+
 def _proposal_for_resolution(paths, equipment=True):
     """The room proposal the resolvers read: room-use findings, then each valued equipment item. Only internal gains
     read the equipment; room uses, ceiling heights and airflow take the proposal without it (equipment=False), so an
@@ -1343,6 +1360,14 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
             "reason": "Reviewer trace artifact could not be read; trace-derived areas were ignored.",
             "remediation": "Repair reviewer_room_geometry.json, then resolve room areas from current calibrated traces.",
         }
+    # What stands outside each outside wall (P3_surroundings, 2026-10-26); full sun where nothing was read.
+    from backend import autonomous_tasks_service
+    try:
+        surroundings = autonomous_tasks_service.surroundings_by_edge(paths["root"])
+        surroundings_read = any((Path(paths["root"]) / "ai_tasks" / "P3_surroundings").glob("*/current.json"))
+    except (OSError, ValueError, TypeError):
+        surroundings, surroundings_read = {}, False
+    surroundings_note_said = False
     try:
         ceiling_values = ceiling_volume_resolution.values_by_room(
             _read(paths["root"] / "ceiling_volume_resolution.json", {})
@@ -1486,6 +1511,7 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                                    for part in trace_parts
                                    if (part.get("calibration") or {}).get("status") == "declared_scale_only"), "")
                 for part in trace_parts:
+                    floor_level_m, floor_note = _floor_level_m(room.get("level_name", ""))
                     part_component_suffix = f"_{part.get('trace_id')}" if len(trace_parts) > 1 else ""
                     declaration_reviewer = str(part.get("envelope_reviewer", ""))
                     citation = {"page": part.get("page"), "reference": f"Room trace {part.get('trace_id', '')}",
@@ -1505,6 +1531,9 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                     points = part.get("points_image_px", [])
                     north = (trace_registry.get("page_north", {}) or {}).get(str(part.get("page")), {})
                     plan_up_bearing = north.get("plan_up_azimuth_deg")
+                    north_basis = north.get("north_basis") if isinstance(north.get("north_basis"), dict) else {}
+                    # Said once per room part, on its first outside wall: how the arrow was read (2026-10-26).
+                    north_note = north_basis.get("reason", "") if north_basis.get("label") in {"unlabelled", "magnetic", "grid"} else ""
                     part_unknown_edges = []
                     if roof == "exposed":
                         if area and not skip_roof:
@@ -1652,6 +1681,32 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                         orientation, azimuth = "", None
                         if plan_up_bearing is not None:
                             orientation, azimuth = reviewer_room_geometry.oriented_edge_cardinal(points, index, plan_up_bearing)
+                        # The building opposite this wall, read from the site or context sheet (2026-10-26).
+                        opposite = surroundings.get((str(part.get("trace_id")), index)) if orientation else None
+                        wall_obstruction = ({"inside": True, "evidence": opposite.get("evidence", ""),
+                                             "wall_number": opposite.get("wall_number")}
+                                            if opposite and opposite.get("inside") else
+                                            {"distance_m": opposite["distance_m"], "height_m": opposite["height_m"],
+                                             "base_m": floor_level_m, "coverage": 1.0 if opposite.get("full_length", True) else 0.5,
+                                             "wall_height_m": height_mm / 1000.0, "height_basis": opposite.get("height_basis", ""),
+                                             "wall_number": opposite.get("wall_number"), "evidence": opposite.get("evidence", "")}
+                                            if opposite else None)
+                        surroundings_note = ""
+                        if orientation and not surroundings_read and not surroundings_note_said:
+                            surroundings_note = ("What stands outside the building wasn't read from the drawings (no site or "
+                                                 "context sheet, or not checked yet), so its outside walls and glass get "
+                                                 "full sun (errs on the side of more load).")
+                            surroundings_note_said = True
+                        elif wall_obstruction and wall_obstruction.get("inside"):
+                            surroundings_note = ("The site plan shows more of the same building outside this wall "
+                                                 f"({wall_obstruction['evidence']}), so no sun is counted on it or its glass; "
+                                                 "check whether it is really an outside wall.")
+                        elif wall_obstruction:
+                            surroundings_note = (f"A building {wall_obstruction['height_m']:g} m tall ({wall_obstruction['height_basis']}) "
+                                                 f"stands {wall_obstruction['distance_m']:g} m from this wall"
+                                                 + ("" if opposite.get("full_length", True) else ", along part of it (half the wall counted as shaded)")
+                                                 + ": it blocks the direct sun when the sun is lower than its top."
+                                                 + (f" {floor_note}" if floor_note else ""))
                         wall_openings = [row for row in part.get("openings", []) if row.get("edge_index") == index]
                         # A verandah or canopy running along the wall (read with its glazing) shades the wall as well.
                         wall_shade = next((dict(row["shade"], wall_height_m=height_mm / 1000.0) for row in wall_openings
@@ -1671,7 +1726,14 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                             "rationale": ("Reviewer-declared external boundary edge; outward orientation derived from the calibrated polygon winding and page north."
                                           if orientation else "Reviewer-declared external boundary edge; no north reference is available, so the documented west-facing preliminary solar profile is used."),
                             "assumptions": ([] if orientation else ["unknown_orientation_west_facing_solar_estimate"]),
+                            **({"obstruction": wall_obstruction} if wall_obstruction else {}),
+                            **({"phase1_assumptions": [row for row in (
+                                {"component": "north", "reason": north_note} if orientation and north_note else None,
+                                {"component": "surroundings", "reason": surroundings_note} if surroundings_note else None) if row]}
+                               if (orientation and north_note) or surroundings_note else {}),
                         })
+                        if orientation:
+                            north_note = ""
                         for opening in wall_openings:
                             height = opening["head_height_m"] - opening["sill_height_m"]
                             proposal.setdefault("openings", []).append({
@@ -1682,6 +1744,9 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                                 "external_exposure": "external", "orientation": orientation,
                                 **({"azimuth_deg": round(float(azimuth), 1)} if orientation and azimuth is not None else {}),
                                 **({"shade": dict(opening["shade"])} if isinstance(opening.get("shade"), dict) else {}),
+                                **({"obstruction": ({**wall_obstruction} if wall_obstruction.get("inside") else
+                                                    {**wall_obstruction, "base_m": floor_level_m + opening["sill_height_m"]})}
+                                   if wall_obstruction else {}),
                                 "shading_category": opening["shading_category"], "glazing_choice": opening["glazing_choice"],
                                 "preliminary_profile_id": opening["glazing_choice"], "page": opening["elevation_page"],
                                 "evidence": [{"page": opening["elevation_page"], "reference": "Reviewer-cited shopfront elevation",

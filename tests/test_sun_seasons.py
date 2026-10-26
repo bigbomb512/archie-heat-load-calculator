@@ -248,3 +248,106 @@ class OpeningShadeReplyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SurroundingsTests(unittest.TestCase):
+    """Buildings in the way (user decisions 2026-10-26): what stands opposite each outside wall shades it."""
+
+    def test_shadow_of_a_building_opposite_matches_the_hand_calculation(self):
+        # A 10 m building 12 m away, sun straight in front: the shadow's top edge is at 10 − 12 × tan(altitude).
+        self.assertAlmostEqual(sun.obstruction_shaded_fraction(35, 270, 270, 0, 3, 12, 10), (10 - 12 * tan(radians(35))) / 3, places=5)
+        self.assertEqual(sun.obstruction_shaded_fraction(20, 270, 270, 0, 3, 12, 10), 1.0)
+        self.assertEqual(sun.obstruction_shaded_fraction(45, 270, 270, 0, 3, 12, 10), 0.0)   # above atan(10/12) = 39.8°
+        # 60° off the wall's bearing the ray travels twice as far to reach the building.
+        self.assertAlmostEqual(sun.obstruction_shaded_fraction(20, 330, 270, 0, 3, 12, 10), (10 - 24 * tan(radians(20))) / 3, places=5)
+        self.assertEqual(sun.obstruction_shaded_fraction(30, 90, 270, 0, 3, 12, 10), 0.0)    # sun behind the wall
+        # Glass on an upper floor 7 m up sees over the same building sooner.
+        self.assertLess(sun.obstruction_shaded_fraction(30, 270, 270, 7, 10, 12, 10), sun.obstruction_shaded_fraction(30, 270, 270, 0, 3, 12, 10))
+
+    def test_building_and_awning_together_leave_the_strip_between_their_shadows(self):
+        day = [{"hour": 0, "altitude_deg": 30.0, "azimuth_deg": 270.0, "zenith_deg": 60.0,
+                "dni_w_m2": 800.0, "dhi_w_m2": 100.0, "ghi_w_m2": 500.0}]
+        bare = sun.surface_hours(day, 90, 270, height_m=3.0)[0]
+        awning = {"depth_m": 1.0, "gap_m": 0.0}
+        building = {"distance_m": 12.0, "height_m": 7.0, "base_m": 0.0}
+        both = sun.surface_hours(day, 90, 270, shade=awning, height_m=3.0, obstruction=building)[0]
+        top = 1 - sun.overhang_sunlit_fraction(30, 270, 270, 3.0, 1.0)
+        bottom = sun.obstruction_shaded_fraction(30, 270, 270, 0, 3, 12, 7)
+        self.assertAlmostEqual(both["sunlit_fraction"], max(0.0, 1 - top - bottom), places=5)
+        self.assertAlmostEqual(both["total_w_m2"], round(bare["direct_w_m2"] * both["sunlit_fraction"] + bare["diffuse_w_m2"], 2), delta=0.02)
+        half = sun.surface_hours(day, 90, 270, height_m=3.0, obstruction={**building, "coverage": 0.5})[0]
+        self.assertAlmostEqual(half["sunlit_fraction"], 1 - 0.5 * bottom, places=5)
+
+    def test_reply_heights_from_print_storeys_or_one_storey(self):
+        from ai import autonomous_tasks
+        packet = {"walls": {"1": {}, "2": {}, "3": {}, "4": {}}}
+        reply = {"walls": [
+            {"wall_number": 1, "opposite": "building", "distance_m": 12, "height_m": 9.5, "full_length": True, "evidence": "RL 9.5 on the streetscape"},
+            {"wall_number": 2, "opposite": "building", "distance_m": 8, "storeys": 3, "full_length": False, "evidence": "EXISTING 3 STOREY"},
+            {"wall_number": 3, "opposite": "building", "distance_m": 15, "full_length": True, "evidence": "existing building outline"},
+            {"wall_number": 4, "opposite": "open", "distance_m": 30, "evidence": "street and car park opposite"}]}
+        walls = autonomous_tasks.validate_surroundings_reply(packet, json.dumps(reply))["walls"]
+        self.assertEqual((walls[1]["height_m"], walls[2]["height_m"], walls[3]["height_m"]), (9.5, 9.9, 3.3))
+        self.assertIn("one storey assumed", walls[3]["height_basis"])
+        self.assertIsNone(walls[4]["distance_m"])                      # open ground shades nothing
+        with self.assertRaises(ValueError):                             # every wall must be answered
+            autonomous_tasks.validate_surroundings_reply(packet, json.dumps({"walls": reply["walls"][:3]}))
+        with self.assertRaises(ValueError):
+            autonomous_tasks.validate_surroundings_reply({"walls": {"1": {}}}, json.dumps({"walls": [{**reply["walls"][0], "distance_m": -2}]}))
+        prompt = autonomous_tasks.surroundings_prompt({str(n): {"faces": "NW (315°)", "length_m": 12.34} for n in range(1, 9)},
+                                                      ["page 2: SITE PLAN", "page 9: STREETSCAPE ELEVATION"])
+        self.assertLessEqual(len(prompt), 2000)
+
+    def test_floor_level_from_the_level_name(self):
+        from backend import ai_preliminary_service as service
+        self.assertEqual(service._floor_level_m("Ground floor")[0], 0.0)
+        self.assertEqual(service._floor_level_m("Unassigned level")[0], 0.0)
+        self.assertEqual(service._floor_level_m("Level 2")[0], 7.0)
+        self.assertEqual(service._floor_level_m("First floor")[0], 3.5)
+        self.assertIn("3.5 m per level", service._floor_level_m("L1")[1])
+
+    def test_a_building_opposite_reaches_the_wall_and_cuts_its_sun(self):
+        from backend import autonomous_tasks_service
+        from tests import test_reviewer_traced_preliminary as traced
+
+        def build(with_building, answer=None):
+            with tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                room_use, prop, _room_id, trace = traced.write_fixture(root)
+                traced.set_envelope_trace(root, trace, [{"index": 0, "boundary": "external"}], "not_exposed")
+                registry = json.loads((root / "reviewer_room_geometry.json").read_text())
+                registry["page_north"] = {"1": {"page": 1, "plan_up_azimuth_deg": 0, "source": "reviewer_typed_page_up_bearing",
+                                                "reviewer": "QA", "declared_at": "now",
+                                                "north_basis": {"label": "unlabelled", "reason": "North arrow with no label; taken as true north."}}}
+                (root / "reviewer_room_geometry.json").write_text(json.dumps(registry))
+                if with_building:
+                    packet = {"task": "P3_surroundings", "page": 1, "walls": {"1": {"faces": "N (0°)", "length_m": 0.1}},
+                              "wall_edges": {"1": {"run_index": 0, "azimuth_deg": 0.0, "edges": [[trace["trace_id"], 0]]}}}
+                    record = autonomous_tasks_service._create_run(root, "P3_surroundings", "page-1", packet, "surroundings")
+                    validated = {"walls": {1: answer or {"opposite": "building", "distance_m": 6.0, "height_m": 9.9,
+                                               "height_basis": "3 storeys × 3.3 m", "full_length": True, "evidence": "EXISTING 3 STOREY"}}}
+                    autonomous_tasks_service._update_record(root, autonomous_tasks_service._apply_p3_surroundings(record, validated))
+                prepared = traced.prepare(root, room_use, prop)
+                model = ai_preliminary.assemble({"spaces": []}, preliminary_proposal=prepared, allow_area_fallbacks=False,
+                                                site_location=SYDNEY, design_weather_table=DESIGN_TABLE,
+                                                monthly_climate_table=MONTHLY_TABLE)
+                wall = next(item for item in room_of(model)["cooling_load"]["envelope_surfaces"]
+                            if item["kind"] == "opaque_wall" and item.get("boundary_method") == "external")
+                return wall, model["phase1_assumptions"]
+
+        open_wall, open_notes = build(False)
+        shaded_wall, shaded_notes = build(True)
+        self.assertEqual(open_wall["orientation"], "N")
+        self.assertNotIn("obstruction", open_wall)
+        self.assertTrue(any("wasn't read from the drawings" in row["reason"] for row in open_notes))
+        self.assertTrue(any("taken as true north" in row["reason"] for row in open_notes))
+        self.assertEqual(shaded_wall["obstruction"]["height_m"], 9.9)
+        june = "ai_preliminary_month_06"           # low winter sun from the north: well inside the building's shadow
+        self.assertLess(sum(shaded_wall["preliminary_hourly_solar_w_m2"][june]), 0.6 * sum(open_wall["preliminary_hourly_solar_w_m2"][june]))
+        self.assertTrue(any("9.9 m tall (3 storeys × 3.3 m)" in row["reason"] for row in shaded_notes))
+        # The site plan shows more of the same building outside the wall (e.g. a shopping centre): no sun on it.
+        inside_wall, inside_notes = build(True, {"opposite": "inside_building", "distance_m": None, "height_m": None,
+                                                 "height_basis": "", "full_length": True, "evidence": "retail tenancies west of the shop"})
+        self.assertEqual(inside_wall["solar_gain_factor"], 0)
+        self.assertTrue(all(value == 0 for hours in inside_wall.get("preliminary_hourly_solar_w_m2", {}).values() for value in hours))
+        self.assertTrue(any("check whether it is really an outside wall" in row["reason"] for row in inside_notes))

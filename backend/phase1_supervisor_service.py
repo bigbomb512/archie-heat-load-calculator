@@ -21,7 +21,7 @@ _JOB = BackgroundJob(JOB_FILE, [("audit", "Checking the empty-room model"),
     "archie-phase1-supervisor", "Checking the empty-room model was interrupted. Resume to keep the saved drawing answers.")
 COMFORT = {"comfort_hvac", "comfort_hvac_with_process_exception"}
 SUCCESS = {"applied", "applied_fallback", "below_accuracy_bar"}
-PHASE1_TASKS = {"P0_room_outlines", "P0_room_sizes", "P3_boundaries", "P4_storefront_wall", "P4_openings", "P5_roof", "P7_ceiling_heights"}
+PHASE1_TASKS = {"P0_room_outlines", "P0_room_sizes", "P3_boundaries", "P3_surroundings", "P4_storefront_wall", "P4_openings", "P5_roof", "P7_ceiling_heights"}
 
 
 def _fingerprint(value):
@@ -209,7 +209,7 @@ def audit(snapshot):
                 continue
             packet = record.get("packet") or {}
             related = (record in room.get("tasks", []) or packet.get("room_id") == room.get("id")
-                       or (packet.get("page") in related_pages and record.get("task") in {"P3_boundaries", "P4_storefront_wall"})
+                       or (packet.get("page") in related_pages and record.get("task") in {"P3_boundaries", "P3_surroundings", "P4_storefront_wall"})
                        or any(_key(label) == _key(value) for value in packet.get("rooms", []) if isinstance(value, str)))
             if related and (not record.get("current", True) or record.get("status") in {"failed", "blocked", "waiting_for_reply"}):
                 add(2, "unanswered", room, record["task"], f"Finish the unanswered drawing check for {label}: {drawings.TASK_LABELS.get(record['task'], 'checking the room').lower()}.",
