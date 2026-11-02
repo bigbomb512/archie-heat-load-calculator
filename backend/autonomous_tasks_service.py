@@ -882,12 +882,26 @@ def _p0_calibration(root, page, context=None):
 
 
 def _inferred_room_data(root):
+    # Share inference across packet builders and refreshes until one of its four inputs changes.
+    root = Path(root).resolve()
+    signature = []
+    for name in ("ai_input.json", "drawing_coverage.json", "spatial_ocr.json", "vector_geometry.json"):
+        try:
+            stat = (root / name).stat()
+            signature.append((stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size, stat.st_ino))
+        except FileNotFoundError:
+            signature.append(None)
+    return deepcopy(_cached_inferred_room_data(root, tuple(signature)))
+
+
+@lru_cache(maxsize=8)
+def _cached_inferred_room_data(root, input_signature):
+    """Bounded, in-memory cache; the signature identifies the files read below."""
     from ai import room_inference
     ai_input, spatial, _building = _load_inputs(root)
     inferred = room_inference.infer(ai_input, _read(root / "drawing_coverage.json", {}), spatial,
                                     _read(root / "vector_geometry.json", {}))
-    rows = [row for row in inferred.get("rooms", []) if row.get("label")]
-    return rows
+    return [row for row in inferred.get("rooms", []) if row.get("label")]
 
 
 def _p0_followup_packets(root):
@@ -985,6 +999,73 @@ def _p0_wall_style_records(root, page):
 OUTLINE_ATTEMPTS_BEFORE_PARTIAL = 2
 
 
+def _p0_outline_room_names(root, names_record, area_count, requested_rooms=None, *, inferred_rooms=None):
+    """The existing naming/printed-area decision shared by outline and tenancy packets."""
+    if inferred_rooms is None:
+        inferred_rooms = _inferred_room_data(root)
+    if names_record and area_count:
+        names, splits = room_outline.validate_naming_reply(json.loads(names_record["reply"]), area_count,
+            names_record["packet"]["room_names"], names_record["packet"]["transform"])
+        placed = {name for name in names.values() if name != room_outline.NOT_A_ROOM}
+        placed.update(item["room"] for split in splits for item in split["rooms"])
+        room_names = names_record["packet"]["room_names"]
+    else:
+        placed = set()
+        room_names = sorted({row["label"] for row in inferred_rooms})
+    printed = {row["label"] for row in inferred_rooms if row.get("area_m2")}
+    missing = sorted(set(requested_rooms)) if requested_rooms else sorted(set(room_names) - placed - printed)
+    return room_names, missing
+
+
+def _tenancy_rooms_needing_outline(root, page):
+    """Rooms that still use, or would need, the AI outline/corner route. None means unknown coverage."""
+    inferred_rooms = _inferred_room_data(root)
+    plans = _p0_main_geometry_pages(root)
+    if len(plans) > 1:
+        plan = next((row for row in plans if row["page"] == page), {})
+
+        def level_name(row):
+            value = " ".join(str(row.get("level_name") or row.get("floor_label") or "").casefold().split())
+            return "" if value in {"unknown", "unknown level", "unassigned", "unassigned level"} else value
+
+        level = level_name(plan)
+        inferred_rooms = [row for row in inferred_rooms if page in (row.get("source_pages") or [])
+                          or level_name(row) == level]
+    names = _current_task(root, "P0_room_names", f"page-{page}")
+    traces = [row for row in reviewer_room_geometry_service.current_records(
+        reviewer_room_geometry_service._paths({"review_dir": str(root)})) if row.get("page") == page]
+    labels = {row.get("room_label") for row in traces if row.get("room_label")}
+    packet = (names or {}).get("packet", {})
+    labels.update(packet.get("room_names", []))
+    try:
+        _, missing = _p0_outline_room_names(root, names if names and names.get("status") in {"applied", "below_accuracy_bar"} else None,
+            packet.get("area_count", len(packet.get("areas_px", []))), inferred_rooms=inferred_rooms)
+        labels.update(missing)
+    except (OSError, ValueError, KeyError, TypeError):
+        if not labels:
+            return None
+    # Include names discovered after the naming answer and pending room/corner/size work.
+    labels.update(row["label"] for row in inferred_rooms)
+    for record in _all_current(root):
+        detail = record.get("packet", {})
+        if detail.get("page") != page or record.get("task") not in {"P0_room_outlines", "P0_room_sizes", "P0_outline_corners"}:
+            continue
+        if record.get("status") not in {"waiting_for_reply", "blocked"}:
+            continue
+        labels.update(value for value in detail.get("room_names", detail.get("rooms", [])) if isinstance(value, str))
+        if isinstance(detail.get("room"), str):
+            labels.add(detail["room"])
+    protected = {str(row.get("room_label", "")).casefold() for row in traces
+                 if row.get("declaration_source") == "reviewer" or row.get("method") in {
+                     "enclosed_walls", "printed_area", "printed_read_from_image"}
+                 or str(row.get("method", "")).startswith("room_size_")}
+    return sorted(label for label in labels if label.casefold() not in protected) if labels else None
+
+
+TENANCY_NOT_NEEDED = ("Every room on this plan already has an outline from the walls the drawing encloses (or the operators), "
+                      "so the tenancy outline isn't needed to trim AI-drawn rooms.")
+
+
 def _p0_outline_packets(root, requested_rooms=None):
     result = []
     for page in _p0_main_geometry_pages(root):
@@ -1013,17 +1094,7 @@ def _p0_outline_packets(root, requested_rooms=None):
                 wall_style_ids, _added = _completed_wall_styles(root, context, calibration, wall_style_ids)
             _walls, areas, _segments = _p0_walls_areas(root, number, context, calibration,
                                                         wall_style_ids, raster_mode)
-            if names_record and areas:
-                names, splits = room_outline.validate_naming_reply(json.loads(names_record["reply"]), len(areas),
-                    names_record["packet"]["room_names"], names_record["packet"]["transform"])
-                placed = {name for name in names.values() if name != room_outline.NOT_A_ROOM}
-                placed.update(item["room"] for split in splits for item in split["rooms"])
-                room_names = names_record["packet"]["room_names"]
-            else:
-                placed, splits = set(), []
-                room_names = sorted({row["label"] for row in _inferred_room_data(root)})
-            printed = {row["label"] for row in _inferred_room_data(root) if row.get("area_m2")}
-            missing = sorted(set(requested_rooms)) if requested_rooms else sorted(set(room_names) - placed - printed)
+            _room_names, missing = _p0_outline_room_names(root, names_record, len(areas), requested_rooms)
             if not missing:
                 continue
             image, transform = room_outline.render_candidate_areas(context["image"], [], context["viewport"])
@@ -1049,7 +1120,7 @@ OUTLINE_STEPS = {"P0_dimensions", "P0_wall_styles", "P0_room_names", "P0_tenancy
 
 def _settled(record):
     """Answered, or given up on (refused twice, or blocked)."""
-    return (not record or record.get("status") in {"applied", "below_accuracy_bar", "blocked", "failed"}
+    return (not record or record.get("status") in {"applied", "below_accuracy_bar", "blocked", "failed", "not_needed"}
             or len(record.get("reply_attempts") or []) >= 2)
 
 
@@ -1058,7 +1129,7 @@ def _corner_subjects(root, page):
     [sketch pieces as point lists])]. The tenancy comes first; rooms only once its corners are settled."""
     subjects = []
     tenancy = _current_task(root, "P0_tenancy_outline", f"page-{page}")
-    if tenancy and tenancy.get("status") in {"applied", "below_accuracy_bar"} and tenancy.get("applied_value", {}).get("points"):
+    if tenancy and tenancy.get("status") in {"applied", "below_accuracy_bar"} and tenancy.get("applied_value", {}).get("points") and _tenancy_rooms_needing_outline(root, page) != []:
         subjects.append((f"tenancy-page-{page}", None, "P0_tenancy_outline", [tenancy["applied_value"]["points"]]))
     if subjects:
         corner = _current_task(root, "P0_outline_corners", f"tenancy-page-{page}")
@@ -1143,12 +1214,21 @@ def _p0_corner_packets(root, force=False):
 
 
 def _p0_tenancy_packets(root, force=False):
-    """The tenancy's floor outline (2026-10-24), asked once per main plan as soon as its scale is known: AI-drawn room
-    outlines are clipped to it, so a room can't spill onto the paving, a mall or a neighbour."""
+    """Ask after naming, only when current rooms need the AI-drawn outline route."""
     result = []
     for page in _p0_main_geometry_pages(root):
         number = page["page"]
         current = _current_task(root, "P0_tenancy_outline", f"page-{number}")
+        needed = _tenancy_rooms_needing_outline(root, number)
+        if needed == []:
+            if current and current.get("status") in {"waiting_for_reply", "blocked"}:
+                current.update(status="not_needed", block_reason=TENANCY_NOT_NEEDED,
+                               applied_value={"note": TENANCY_NOT_NEEDED}, finished_at=_now())
+                _write(_record_file(root, current), current)
+            continue
+        names = _current_task(root, "P0_room_names", f"page-{number}")
+        if not needed or not names or names.get("status") not in {"applied", "below_accuracy_bar"}:
+            continue
         if not force and current and current.get("status") in {"applied", "below_accuracy_bar", "waiting_for_reply"}:
             continue
         try:
@@ -2911,7 +2991,7 @@ def _create_run(root, task, target, packet, prompt, image_bytes=None, blocked_re
     input_fingerprint = autonomous_tasks.fingerprint({"packet": packet, "images": image_hashes})
     parent = _task_dir(root, task, target)
     current = _current_task(root, task, target)
-    if current and (current.get("input_fingerprint") == input_fingerprint or (
+    if current and current.get("status") != "not_needed" and (current.get("input_fingerprint") == input_fingerprint or (
             not packet.get("supervisor_note") and current.get("base_input_fingerprint") == input_fingerprint)):
         return current
     run_id = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex[:8]}"
@@ -3006,6 +3086,7 @@ def _task_progress(root):
     return {"total": len(records),
             "waiting": sum(1 for record in records if record.get("status") == "waiting_for_reply"),
             "blocked": sum(1 for record in records if record.get("status") == "blocked"),
+            "not_needed": sum(1 for record in records if record.get("status") == "not_needed"),
             "marker": marker}
 
 

@@ -32,6 +32,12 @@ class AuditTests(unittest.TestCase):
             gap = supervisor.audit(snapshot(value))[0]
             self.assertEqual((gap["rank"], gap["task"], gap["kind"]), (1, "P0_room_outlines", "room_area"))
 
+    def test_withdrawn_task_is_not_an_unanswered_or_stale_investigation(self):
+        records = [{"task": task, "target": "page-20", "packet": {"page": 20, "room_id": "shop"},
+                    "status": "not_needed", "current": False}
+                   for task in ("P0_tenancy_outline", "P0_unnamed_space")]
+        self.assertEqual(supervisor.audit(snapshot(tasks=records)), [])
+
     def test_unanswered_drawing_task_is_routed_to_its_original_packet(self):
         record = {"task": "P5_roof", "target": "shop", "packet": {"room_id": "shop", "page": 20}, "status": "blocked"}
         gap = supervisor.audit(snapshot(tasks=[record]))[0]

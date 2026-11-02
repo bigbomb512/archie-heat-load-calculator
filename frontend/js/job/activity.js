@@ -3,13 +3,13 @@ import { escapeHtml } from "./api.js";
 const expanded = new Map();
 const skillLabel = (row) => row.label || String(row.id || "Evidence review").replaceAll("_", " ");
 const running = (value) => value?.step_state === "active";
-const finished = new Set(["resolved", "provisional", "needs_review", "completed", "done", "excluded", "not_applicable"]);
+const finished = new Set(["resolved", "provisional", "needs_review", "completed", "done", "excluded", "not_applicable", "not_needed"]);
 const hidden = new Set(["not_in_scope", "not_enabled"]);
 const labels = {
   running: "Working", queued: "Waiting", not_started: "Waiting", blocked: "Waiting for evidence",
   resolved: "Checked", provisional: "Finished with assumptions", needs_review: "Finished with exceptions",
   completed: "Finished", done: "Finished", failed: "Stopped", interrupted: "Interrupted", stale: "Out of date",
-  excluded: "Excluded", not_applicable: "Not needed", applied: "Answer applied", applied_fallback: "Estimate applied",
+  excluded: "Excluded", not_applicable: "Not needed", not_needed: "Not needed", applied: "Answer applied", applied_fallback: "Estimate applied",
   below_accuracy_bar: "Estimate applied", waiting_for_reply: "Answer rejected; correction needed",
   rejected: "Answer rejected", provider_failed: "AI request failed", unavailable: "Evidence unavailable",
 };

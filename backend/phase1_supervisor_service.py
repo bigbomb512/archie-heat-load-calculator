@@ -215,6 +215,8 @@ def audit(snapshot):
     # Floor no traced room covers: the check for it is per plan page, not per room (2026-10-24: Casa Nova's Dining
     # answer was refused and nothing reported the untraced dining area).
     for record in records:
+        if record.get("status") == "not_needed":
+            continue
         if record.get("task") == "P0_unnamed_space" and (not record.get("current", True)
                                                           or record.get("status") in {"failed", "blocked", "waiting_for_reply"}):
             page = (record.get("packet") or {}).get("page")
@@ -234,7 +236,7 @@ def audit(snapshot):
             add(1, "room_use", room, "room_identity_use", f"Check how {label} is used so its empty-room calculation includes the right space.")
         related_pages = {trace.get("page") for trace in traces}
         for record in records:
-            if record.get("task") not in PHASE1_TASKS:
+            if record.get("status") == "not_needed" or record.get("task") not in PHASE1_TASKS:
                 continue
             packet = record.get("packet") or {}
             related = (record in room.get("tasks", []) or packet.get("room_id") == room.get("id")

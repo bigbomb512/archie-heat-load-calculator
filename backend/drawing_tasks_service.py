@@ -77,12 +77,16 @@ def status(web, project):
     job = _JOB.status(project)
     # A supervisor or manual reply may have repaired a task since this job finished.
     # Reconcile the response only; retain the original run's failure history on disk.
+    from backend import autonomous_tasks_service as task_records
+    job["not_needed_tasks"] = [{"task": row["task"], "target": row["target"], "status": "not_needed",
+                                "label": TASK_LABELS.get(row["task"], "Drawing check"), "reason": row.get("block_reason", "")}
+                               for row in task_records._all_current(Path(project["review_dir"])) if row.get("status") == "not_needed"]
     if job.get("status") == "done" and job.get("unresolved"):
         from backend import autonomous_tasks_service as tasks
         unresolved = []
         for failure in job["unresolved"]:
             current = tasks._current_task(Path(project["review_dir"]), failure["task"], failure["target"]) or {}
-            if current.get("status") in {"applied", "applied_fallback", "below_accuracy_bar"} and current.get("applied_value"):
+            if current.get("status") == "not_needed" or (current.get("status") in {"applied", "applied_fallback", "below_accuracy_bar"} and current.get("applied_value")):
                 continue
             last = (current.get("reply_attempts") or [{}])[-1]
             if last.get("outcome") == "rejected":
@@ -237,6 +241,9 @@ def answer_all(web, project, step=lambda *args: None, provider_for=None):
         step("answer", f"The AI is answering {len(waiting)} drawing task{'s' if len(waiting) != 1 else ''} (round {rounds})")
         for number, record in enumerate(waiting, start=1):
             checkpoint()
+            current = autonomous_tasks_service._current_task(root, record["task"], record["target"])
+            if current and (current.get("run_id") != record["run_id"] or current.get("status") != "waiting_for_reply"):
+                continue
             tried[record["run_id"]] = tried.get(record["run_id"], 0) + 1
             images = _images(root, record)
             sizes = _sizes(images)

@@ -611,6 +611,190 @@ class AutonomousTaskTests(unittest.TestCase):
             self.assertEqual(saved["kwargs"]["replace_room_labels"], ["Dining"])
             self.assertEqual(saved["rows"][0]["method"], "ai_corner_outline")
 
+    def test_tenancy_only_includes_inferred_rooms_from_its_plan_level(self):
+        from PIL import Image
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            plans = [{"page": 1, "level_name": "Level 1"}, {"page": 2, "level_name": "Level 2"}]
+            inferred = [{"label": "Shop", "level_name": "Level 1", "source_pages": [1]},
+                        {"label": "Kitchen", "level_name": "Level 2", "source_pages": [2]},
+                        {"label": "Store", "level_name": "Level 2", "source_pages": [2]}]
+            traces = [{"page": 1, "room_label": "Shop", "method": "enclosed_walls"},
+                      {"page": 2, "room_label": "Kitchen", "method": "enclosed_walls"}]
+            for page, label in [(1, "Shop"), (2, "Kitchen")]:
+                record = autonomous_tasks_service._create_run(root, "P0_room_names", f"page-{page}",
+                    {"page": page, "room_names": [label]}, "name")
+                record["status"] = "applied"
+                autonomous_tasks_service._write(autonomous_tasks_service._record_file(root, record), record)
+            autonomous_tasks_service._create_run(root, "P0_tenancy_outline", "page-1", {"page": 1}, "outline")
+            with patch("backend.ai_provider.get", side_effect=AssertionError("No provider calls")), \
+                    patch.object(autonomous_tasks_service, "_p0_main_geometry_pages", return_value=plans), \
+                    patch.object(autonomous_tasks_service, "_inferred_room_data", return_value=inferred) as inference, \
+                    patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "current_records", return_value=traces), \
+                    patch.object(autonomous_tasks_service, "_p0_context", return_value={
+                        "image": Image.new("RGB", (100, 100)), "viewport": (0, 0, 100, 100)}), \
+                    patch.object(autonomous_tasks_service, "_p0_calibration_ready", return_value=({"mm_per_px": 50}, "")):
+                packets = autonomous_tasks_service._p0_tenancy_packets(root)
+                self.assertEqual([(row[0], row[1]) for row in packets], [("P0_tenancy_outline", "page-2")])
+                self.assertEqual(inference.call_count, 2)  # one read per page, shared with the naming helper
+                self.assertEqual(autonomous_tasks_service._current_task(root, "P0_tenancy_outline", "page-1")["status"], "not_needed")
+                record = autonomous_tasks_service._current_task(root, "P0_room_names", "page-2")
+                record["status"] = "waiting_for_reply"
+                autonomous_tasks_service._write(autonomous_tasks_service._record_file(root, record), record)
+                self.assertEqual(autonomous_tasks_service._p0_tenancy_packets(root), [])
+
+    def test_inferred_room_page_level_and_unknown_fallbacks(self):
+        plans = [{"page": 1, "level_name": "Level 1"}, {"page": 2, "level_name": "Level 2"}]
+        inferred = [{"label": "Same page", "source_pages": [1], "level_name": "Level 2"},
+                    {"label": "Same level", "source_pages": [99], "level_name": " LEVEL  1 "},
+                    {"label": "Other level", "source_pages": [2], "level_name": "Level 2"},
+                    {"label": "Unknown", "source_pages": [], "level_name": "Unassigned level"}]
+        with patch("backend.ai_provider.get", side_effect=AssertionError("No provider calls")), \
+                patch.object(autonomous_tasks_service, "_p0_main_geometry_pages", return_value=plans), \
+                patch.object(autonomous_tasks_service, "_current_task", return_value=None), \
+                patch.object(autonomous_tasks_service, "_all_current", return_value=[]), \
+                patch.object(autonomous_tasks_service, "_inferred_room_data", return_value=inferred), \
+                patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "current_records", return_value=[]):
+            self.assertEqual(autonomous_tasks_service._tenancy_rooms_needing_outline(Path("/x"), 1), ["Same level", "Same page"])
+            plans[0]["level_name"] = ""
+            self.assertEqual(autonomous_tasks_service._tenancy_rooms_needing_outline(Path("/x"), 1), ["Same page", "Unknown"])
+            plans.pop()
+            self.assertEqual(autonomous_tasks_service._tenancy_rooms_needing_outline(Path("/x"), 1), sorted(row["label"] for row in inferred))
+
+    def test_room_inference_cache_invalidates_each_input_and_protects_cached_rows(self):
+        from ai import room_inference
+        with TemporaryDirectory() as temporary, \
+                patch("backend.ai_provider.get", side_effect=AssertionError("No provider calls")), \
+                patch.object(room_inference, "infer", return_value={"rooms": [{"label": "Shop"}]}) as infer:
+            root = Path(temporary)
+            autonomous_tasks_service._cached_inferred_room_data.cache_clear()
+            first = autonomous_tasks_service._inferred_room_data(root)
+            self.assertEqual(first, autonomous_tasks_service._inferred_room_data(root))
+            first[0]["label"] = "Edited by caller"
+            self.assertEqual(autonomous_tasks_service._inferred_room_data(root), [{"label": "Shop"}])
+            self.assertEqual(infer.call_count, 1)
+            for index, name in enumerate(("ai_input.json", "drawing_coverage.json", "spatial_ocr.json", "vector_geometry.json"), 2):
+                (root / name).write_text('{}')
+                self.assertEqual(autonomous_tasks_service._inferred_room_data(root), [{"label": "Shop"}])
+                self.assertEqual(infer.call_count, index)
+            (root / "ai_input.json").write_text('{"changed": true}')
+            autonomous_tasks_service._inferred_room_data(root)
+            self.assertEqual(infer.call_count, 6)
+            (root / "ai_input.json").unlink()
+            autonomous_tasks_service._inferred_room_data(root)
+            self.assertEqual(infer.call_count, 7)
+
+    def test_geometry_refresh_runs_room_inference_at_most_once(self):
+        from ai import room_inference
+        from contextlib import ExitStack
+        with TemporaryDirectory() as temporary, ExitStack() as stack:
+            root = Path(temporary)
+            autonomous_tasks_service._cached_inferred_room_data.cache_clear()
+            stack.enter_context(patch("backend.ai_provider.get", side_effect=AssertionError("No provider calls")))
+            infer = stack.enter_context(patch.object(room_inference, "infer", return_value={"rooms": [{"label": "Shop"}]}))
+            builders = ("_p0_initial_packets", "_p0_followup_packets", "_p0_tenancy_packets", "_p0_outline_packets",
+                        "_p0_unnamed_space_packets", "_p0_corner_packets", "_s1_packets", "_p0_size_packets",
+                        "_p3_packets", "_p3_surroundings_packets", "_p7_packets", "_p4_packets", "_p6_kitchen_packets")
+            calls = []
+            def builder(root):
+                calls.append(autonomous_tasks_service._inferred_room_data(root))
+                return []
+            for name in builders:
+                stack.enter_context(patch.object(autonomous_tasks_service, name, side_effect=builder))
+            for name in ("_refresh_site_tasks", "_refresh_roof_tasks"):
+                stack.enter_context(patch.object(autonomous_tasks_service, name))
+            autonomous_tasks_service._refresh_geometry_tasks(root)
+            self.assertEqual(len(calls), len(builders))
+            self.assertTrue(all(rows == [{"label": "Shop"}] for rows in calls))
+            self.assertEqual(infer.call_count, 1)
+
+    def test_tenancy_withdraws_only_when_every_room_has_a_safe_trace(self):
+        from backend import drawing_tasks_service
+        for method, source in [("enclosed_walls", "ai_determined"), ("printed_area", "ai_determined"),
+                               ("printed_read_from_image", "ai_determined"), ("room_size_dimensions", "ai_determined"),
+                               ("corners", "reviewer")]:
+            for status in ("waiting_for_reply", "blocked"):
+                with self.subTest(method=method, status=status), TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    record = autonomous_tasks_service._create_run(root, "P0_tenancy_outline", "page-20",
+                        {"page": 20}, "outline", blocked_reason="blocked" if status == "blocked" else "")
+                    naming = {"status": "applied", "packet": {"room_names": ["Shop"]}}
+                    current = autonomous_tasks_service._current_task
+                    with patch.object(autonomous_tasks_service, "_p0_main_geometry_pages", return_value=[{"page": 20}]), \
+                            patch.object(autonomous_tasks_service, "_current_task", side_effect=lambda r, t, target:
+                                naming if t == "P0_room_names" else current(r, t, target)), \
+                            patch.object(autonomous_tasks_service, "_inferred_room_data", return_value=[{"label": "Shop"}]), \
+                            patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "current_records",
+                                return_value=[{"page": 20, "room_label": "Shop", "method": method, "declaration_source": source}]):
+                        self.assertEqual(autonomous_tasks_service._p0_tenancy_packets(root), [])
+                    saved = current(root, "P0_tenancy_outline", "page-20")
+                    self.assertEqual(saved["status"], "not_needed")
+                    self.assertEqual(saved["block_reason"], autonomous_tasks_service.TENANCY_NOT_NEEDED)
+                    self.assertEqual(saved["applied_value"]["note"], saved["block_reason"])
+                    self.assertFalse(autonomous_tasks_service._tenancy_waiting(root, 20))
+                    self.assertEqual(autonomous_tasks_service._task_progress(root)["waiting"], 0)
+                    self.assertEqual(autonomous_tasks_service._task_progress(root)["blocked"], 0)
+                    self.assertTrue(autonomous_tasks_service._settled(saved))
+                    self.assertEqual(drawing_tasks_service._waiting(root), [])
+                    # The same fingerprint must not prevent a later necessary question.
+                    replacement = autonomous_tasks_service._create_run(root, "P0_tenancy_outline", "page-20", {"page": 20}, "outline")
+                    self.assertNotEqual(record["run_id"], replacement["run_id"])
+                    self.assertEqual(replacement["status"], "waiting_for_reply")
+
+    def test_drawing_status_removes_withdrawn_failure_and_exposes_reason(self):
+        from backend import drawing_tasks_service as drawings
+        record = {"task": "P0_tenancy_outline", "target": "page-20", "status": "not_needed",
+                  "block_reason": autonomous_tasks_service.TENANCY_NOT_NEEDED}
+        with patch.object(drawings._JOB, "status", return_value={"status": "done", "unresolved": [
+                    {"task": record["task"], "target": record["target"]}]}), \
+                patch.object(autonomous_tasks_service, "_all_current", return_value=[record]), \
+                patch.object(autonomous_tasks_service, "_current_task", return_value=record):
+            status = drawings.status(None, {"review_dir": "/nonexistent"})
+        self.assertEqual(status["unresolved"], [])
+        self.assertEqual(status["not_needed_tasks"][0]["reason"], record["block_reason"])
+
+    def test_worker_rechecks_status_before_sending_a_captured_task(self):
+        from backend import drawing_tasks_service as drawings
+        record = {"run_id": "old", "task": "P0_tenancy_outline", "target": "page-20", "status": "waiting_for_reply"}
+        with TemporaryDirectory() as temporary, \
+                patch.object(autonomous_tasks_service, "post"), \
+                patch.object(drawings, "_waiting", side_effect=[[record], [], []]), \
+                patch.object(autonomous_tasks_service, "_current_task", return_value={**record, "status": "not_needed"}), \
+                patch("backend.ai_provider.get", side_effect=AssertionError("No provider call")) as provider:
+            result = drawings.answer_all(None, {"id": "test", "review_dir": temporary})
+        self.assertEqual(result["calls"], 0)
+        provider.assert_not_called()
+
+    def test_tenancy_waits_for_naming_and_reopens_for_an_unoutlined_room(self):
+        from PIL import Image
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            traces = [{"page": 33, "room_label": "Kitchen", "method": "enclosed_walls"}]
+            naming = {"status": "waiting_for_reply", "packet": {"room_names": ["Kitchen"]}}
+            tenancy = {"status": "not_needed"}
+            context = {"image": Image.new("RGB", (100, 100)), "viewport": (0, 0, 100, 100)}
+            inferred = [{"label": "Kitchen"}, {"label": "Dining"}]
+            with patch.object(autonomous_tasks_service, "_p0_main_geometry_pages", return_value=[{"page": 33}]), \
+                    patch.object(autonomous_tasks_service, "_current_task", side_effect=lambda r,t,target:
+                        naming if t == "P0_room_names" else tenancy if t == "P0_tenancy_outline" else None), \
+                    patch.object(autonomous_tasks_service, "_all_current", return_value=[]), \
+                    patch.object(autonomous_tasks_service, "_inferred_room_data", return_value=inferred), \
+                    patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "current_records", return_value=traces), \
+                    patch.object(autonomous_tasks_service, "_p0_context", return_value=context), \
+                    patch.object(autonomous_tasks_service, "_p0_calibration_ready", return_value=({"mm_per_px": 50}, "")):
+                self.assertEqual(autonomous_tasks_service._p0_tenancy_packets(root), [])
+                naming["status"] = "below_accuracy_bar"
+                packets = autonomous_tasks_service._p0_tenancy_packets(root)
+                self.assertEqual([(row[0], row[1]) for row in packets], [("P0_tenancy_outline", "page-33")])
+                tenancy["status"] = "waiting_for_reply"
+                self.assertEqual(autonomous_tasks_service._p0_outline_packets(root), [])
+                self.assertEqual(autonomous_tasks_service._p0_unnamed_space_packets(root), [])
+                tenancy["status"] = "not_needed"
+                traces.append({"page": 33, "room_label": "Dining", "method": "ai_corner_outline"})
+                self.assertEqual(len(autonomous_tasks_service._p0_tenancy_packets(root)), 1)
+                traces[-1]["method"] = "enclosed_walls"
+                self.assertEqual(autonomous_tasks_service._p0_tenancy_packets(root), [])
+
     def test_room_outlines_wait_for_the_tenancy_outline_of_their_page(self):
         with patch.object(autonomous_tasks_service, "_p0_main_geometry_pages", return_value=[{"page": 33}]), \
                 patch.object(autonomous_tasks_service, "_current_task",

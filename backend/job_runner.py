@@ -47,7 +47,7 @@ def guarded_write(function):
 # Every step's file uses its own status words ("needs_review", "interrupted", "queued"...); step_state turns any of them
 # into one of five, so the screens, the recovery buttons and the prerequisite checks agree on what a word means.
 _ACTIVE = frozenset({"queued", "running", "working", "reading", "in_progress", "pending"})
-_DONE = frozenset({"done", "complete", "completed", "confirmed", "ready", "needs_review", "provisional"})
+_DONE = frozenset({"done", "complete", "completed", "confirmed", "ready", "needs_review", "provisional", "not_needed"})
 _FAILED = frozenset({"failed", "error", "blocked", "interrupted"})
 
 

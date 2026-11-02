@@ -10,6 +10,7 @@ const working = (data) => ["active", "stopping"].includes(stepOf(data));
 const stopped = (data) => stepOf(data) === "failed";
 
 function stateOf(data) {
+  if (data?.status === "not_needed") return "done";
   if (stepOf(data) === "done") return "done";
   if (data?.enabled === false) return "waiting";
   return working(data) ? "active" : "waiting";
@@ -212,7 +213,9 @@ function stage(title, data, kind, status, plan, retryEndpoint = "") {
     kind === "rooms" && data?.last_problem && stateOf(data) === "active"
       ? `<p class="job-caption" data-stage-problem>${escapeHtml(data.last_problem)}</p>`
       : "";
-  return `<li class="job-stage ${state}" data-stage="${kind}"><span class="job-stage-icon" aria-hidden="true">${state === "done" ? "✓" : ""}</span><span><strong>${title}</strong><p>${escapeHtml(copy)}</p>${problem}${exceptions}${retry}${startNow}</span></li>`;
+  const notNeeded = kind === "rooms" ? (data?.not_needed_tasks || []).map((row) =>
+    `<p class="job-caption" data-task-not-needed><strong>${escapeHtml(row.label)}: Not needed.</strong> ${escapeHtml(row.reason || "")}</p>`).join("") : "";
+  return `<li class="job-stage ${state}" data-stage="${kind}"><span class="job-stage-icon" aria-hidden="true">${state === "done" ? "✓" : ""}</span><span><strong>${title}</strong><p>${escapeHtml(copy)}</p>${problem}${notNeeded}${exceptions}${retry}${startNow}</span></li>`;
 }
 
 const recoveryNotes = new Map();
@@ -375,7 +378,7 @@ function sentenceFor(data, status, plan) {
 // Which stages are finished and which one is working; when this changes, the plan and facts are re-read too.
 function stageShape(data) {
   const kinds = ["reading", "equipment", "rooms", "envelope", "supervisor", "calculation"];
-  const shape = kinds.map((kind) => `${kind}:${data[kind]?.status || ""}:${JSON.stringify(data[kind]?.recovery || {})}:${JSON.stringify(data[kind]?.readiness || {})}:${JSON.stringify([data[kind]?.cycle, data[kind]?.gaps_fixed, data[kind]?.exceptions, data[kind]?.spend])}:${data[kind]?.offerStart || false}`);
+  const shape = kinds.map((kind) => `${kind}:${data[kind]?.status || ""}:${JSON.stringify(data[kind]?.recovery || {})}:${JSON.stringify(data[kind]?.readiness || {})}:${JSON.stringify([data[kind]?.cycle, data[kind]?.gaps_fixed, data[kind]?.exceptions, data[kind]?.spend, data[kind]?.not_needed_tasks])}:${data[kind]?.offerStart || false}`);
   shape.push(`prep:${stepOf(data.newJob)}`);
   return shape.join("|");
 }

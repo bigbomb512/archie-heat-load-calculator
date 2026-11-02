@@ -322,6 +322,28 @@ test("preview renders the Drawings frame and current room outline", async ({
   await expect(page.locator(".shell")).toBeHidden();
 });
 
+test("withdrawn tenancy questions show as not needed without a retry", async ({ page }) => {
+  const errors = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await preview(page);
+  await page.route("**/api/drawing-tasks**", route => route.fulfill({ json: {
+    status: "done", step_state: "done", answered: 40,
+    not_needed_tasks: [{ task: "P0_tenancy_outline", target: "page-20", label: "Outlining the tenancy",
+      reason: "Every room on this plan already has an outline from the walls the drawing encloses (or the operators), so the tenancy outline isn't needed to trim AI-drawn rooms." }],
+  } }));
+  await page.goto("/?preview=1#/job/job-1/drawings");
+  const stage = page.locator('[data-stage="rooms"]');
+  await expect(stage).toHaveClass(/done/);
+  await expect(stage.locator("[data-task-not-needed]")).toContainText("Outlining the tenancy: Not needed.");
+  await expect(stage.locator("[data-task-not-needed]")).toContainText("isn't needed to trim AI-drawn rooms");
+  await expect(stage.getByRole("button")).toHaveCount(0);
+  await page.screenshot({ path: "test-results/tenancy-not-needed-desktop.png", fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(stage.locator("[data-task-not-needed]")).toBeVisible();
+  await page.screenshot({ path: "test-results/tenancy-not-needed-mobile.png", fullPage: true });
+  expect(errors).toEqual([]);
+});
+
 // Drawing tasks running after every page was read: the progress the server saves before and after each AI call.
 function runningDrawingTasks(overrides = {}) {
   return {
