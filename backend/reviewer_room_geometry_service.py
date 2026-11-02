@@ -525,11 +525,11 @@ def _page_context(paths, web):
 TRACE_FLOOR_PLAN_ROLES = {"main_floor_plan", "primary_geometry_plan", "supporting_geometry_plan", "floor_plan"}
 TRACE_SERVICES_PLAN_ROLES = {"existing_hvac_plan", "services_or_lighting_plan"}
 FALLBACK_TRACE_REASON = "No architectural floor plan in this set; tracing on a services plan."
-# Calibration always needs a printed dimension that agrees with the declared
-# scale (decided 2026-10-04: no scale-only calibration on services plans).
-ARCHITECTURAL_SET_ADVICE = "Upload the architectural drawings for this tenancy to trace its rooms."
-NO_DIMENSION_WARNING = ("No printed building dimensions were found on this services plan, so a room trace here cannot be "
-                        "calibrated and saved. " + ARCHITECTURAL_SET_ADVICE)
+# A hand trace is calibrated on a printed dimension the operator picks. With none printed, the AI traces the rooms at
+# the sheet's printed scale, labelled unchecked (user decisions 2026-10-16 and, for services-only sets, 2026-11-02).
+ARCHITECTURAL_SET_ADVICE = "Toki traces the rooms on this plan at the sheet's printed scale, labelled unchecked."
+NO_DIMENSION_WARNING = ("No printed building dimensions were found on this services plan, so a hand trace here can't be "
+                        "checked against one. " + ARCHITECTURAL_SET_ADVICE)
 
 
 def _printed_dimension_pages(paths):
@@ -1229,7 +1229,7 @@ def post(web, project, data, _validated_current_records=None, _defer_evidence_re
         dimension_points = data.get("dimension_points_image_px")
         if not isinstance(dimension_points, list) or len(dimension_points) != 2:
             raise ValueError("Choose both ends of one printed dimension before saving."
-                             + (" Services plans often have none; " + ARCHITECTURAL_SET_ADVICE[0].lower() + ARCHITECTURAL_SET_ADVICE[1:]
+                             + (" Services plans often have none. " + ARCHITECTURAL_SET_ADVICE
                                 if page_context.get("fallback_plan") else ""))
         dimension_value = data.get("dimension_value_mm")
         if not isinstance(dimension_value, (int, float)) or not math.isfinite(dimension_value) or dimension_value <= 0:

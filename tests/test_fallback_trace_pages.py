@@ -85,9 +85,9 @@ def page_context_integration():
               [(page["page"], page["fallback_plan"]) for page in pages] == [(5, True)]
               and "No architectural floor plan" in pages[0]["fallback_reason"]
               and pages[0]["scale_denominator"] == 50)
-        check("a services plan without printed dimensions warns that tracing cannot be calibrated",
+        check("a services plan without printed dimensions says the AI traces it at the sheet scale, unchecked",
               pages[0]["printed_dimensions_found"] is False
-              and "Upload the architectural drawings" in pages[0]["calibration_warning"])
+              and "printed scale, labelled unchecked" in pages[0]["calibration_warning"])
         (root / "spatial_ocr.json").write_text(json.dumps({"pages": [
             {"page": 5, "dimension_candidates": [{"text": "4200", "bbox": [10, 10, 40, 20]}]}]}), encoding="utf-8")
         pages = service._page_context(service._paths({"review_dir": str(root)}), Web())

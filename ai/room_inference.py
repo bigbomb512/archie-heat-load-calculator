@@ -16,7 +16,7 @@ from ai.room_use_resolution import room_identity
 from ai.drawing_coverage import has_current_level_classification
 
 
-VERSION = "local-room-inference-v6"
+VERSION = "local-room-inference-v7"
 PLAN_ROLES = {
     "main_floor_plan", "primary_geometry_plan", "supporting_geometry_plan",
     "uncertain_top_down_context", "reflected_ceiling_plan", "reflected_ceiling",
@@ -170,7 +170,35 @@ def _names_a_fixture(text, context):
                                          context, re.I))
 
 
-def _spatial_label_items(spatial_page):
+def _label_evidence_kind(context):
+    """"note" when the room word sits in a line of four or more words (a general note or a finish legend: "ALL NEW WALLS
+    IN DRINK BAR AREA TO BE OF SOLID MASONRY", "SHOP FLOOR TILE FLOOR TILING"), else "plan_label". Numbers on the line
+    (dimensions, areas) don't count as words. Notes stay evidence that a room exists (Butcher Buffet's Kitchen and Shop are
+    only in its finish legend); the kind lets the AI steps check them against the plan (Happy Cap 2026-11-02: a copied
+    note made a Bar)."""
+    if len(re.findall(r"[A-Za-z][A-Za-z'’]*", context or "")) >= 4 and parse_room_label_item(context)[0] is None:
+        return "note"
+    return "plan_label"
+
+
+def _note_kind(kinds, label, kind, context):
+    if kinds is None:
+        return
+    key = label.casefold()
+    if kinds.get(key, {}).get("kind") == "plan_label":
+        return
+    kinds[key] = {"kind": kind, **({"context": " ".join(context.split())[:200]} if kind == "note" and context else {})}
+
+
+def room_label_evidence(spatial_page):
+    """{label (casefolded): {"kind": "plan_label" | "note", "context": the note line}} for the room labels on a page; a
+    label printed anywhere on the page as a label counts as printed."""
+    kinds = {}
+    _spatial_label_items(spatial_page, kinds)
+    return kinds
+
+
+def _spatial_label_items(spatial_page, kinds=None):
     standalone = (spatial_page or {}).get("standalone_text_items")
     if isinstance(standalone, list) and standalone:
         candidates = list(standalone)
@@ -205,6 +233,7 @@ def _spatial_label_items(spatial_page):
         label, _, area = parse_room_label_item(text)
         if label:
             parsed.append((label, area))
+            _note_kind(kinds, label, _label_evidence_kind(context), context)
             continue
         # A compact legacy item may combine adjacent standalone room names
         # (for example COOLROOM FREEZER). Split only when every token is itself
@@ -214,6 +243,8 @@ def _spatial_label_items(spatial_page):
             parts = [parse_room_label_item(word) for word in words]
             if all(part[0] and part[2] is None for part in parts):
                 parsed.extend((part[0], None) for part in parts)
+                for part in parts:
+                    _note_kind(kinds, part[0], _label_evidence_kind(context), context)
 
     # Recover multiword labels from adjacent text-layer tokens on the same
     # baseline, such as SERVICE COUNTER. Reject a whole line with extra note
@@ -225,6 +256,7 @@ def _spatial_label_items(spatial_page):
             label, _, area = parse_room_label_item(line)
             if label:
                 parsed.append((label, area))
+                _note_kind(kinds, label, "plan_label", line)
     return filter_room_label_fragments(parsed)
 
 
@@ -446,6 +478,7 @@ def infer(ai_input, coverage=None, spatial_ocr=None, vector_geometry=None, visio
     for page in candidate_pages:
         number = page.get("page")
         spatial_page = spatial_by_page.get(number, {})
+        kinds = room_label_evidence(spatial_page)
         for label, area in room_label_items(spatial_page):
             level = _level(page)
             # Treat spelling variants such as "cool room" and "coolroom" as
@@ -464,6 +497,8 @@ def infer(ai_input, coverage=None, spatial_ocr=None, vector_geometry=None, visio
                 "title": page.get("title", ""),
                 "excerpt": label,
                 "view_type": page.get("detected_type", page.get("plan_role", "")),
+                "label_evidence": kinds.get(label.casefold(), {}).get("kind", "plan_label"),
+                **({"note_text": kinds[label.casefold()]["context"]} if kinds.get(label.casefold(), {}).get("context") else {}),
             }
             row = add_candidate(label, level, number, evidence, confidence)
             if area is not None:
@@ -502,6 +537,13 @@ def infer(ai_input, coverage=None, spatial_ocr=None, vector_geometry=None, visio
     rows = []
     for row in sorted(candidates.values(), key=lambda item: item["room_id"]):
         row["source_pages"] = sorted(row["source_pages"])
+        # Known only from notes or legends (no printed label, no drawn geometry): the AI steps are told it may not be
+        # on the plan, and a tiny or undrawn outline removes it (user decision 2026-11-02).
+        evidence_kinds = [item.get("label_evidence") for item in row["evidence"] if isinstance(item, dict)]
+        row["label_evidence"] = ("note" if evidence_kinds and all(kind == "note" for kind in evidence_kinds)
+                                 and not row.get("geometry") else "plan")
+        if row["label_evidence"] == "note":
+            row["note_text"] = next(item["note_text"] for item in row["evidence"] if isinstance(item, dict) and item.get("note_text"))
         row["confidence_score"] = round(row.pop("confidence"), 4)
         row["confidence_band"] = "high" if row["confidence_score"] >= 0.8 else "medium" if row["confidence_score"] >= 0.5 else "low"
         rows.append(row)

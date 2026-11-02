@@ -42,6 +42,14 @@ TENANCY_PATTERN = re.compile(
     r"([A-Z][A-Z'&. -]{1,60}?\b(?:CENTRAL|CENTRE|CENTER|PLAZA|MALL|SQUARE|VILLAGE|MARKETPLACE|QUARTER|EXCHANGE|ARCADE))\b",
     re.I,
 )
+# A tenancy named by its place, level and venue on one title-block line: "International Kiosk, Level 2, Western Sydney
+# Airport" (Global Exchange 2026-11-02: no street address and no "tenancy" word, so nothing was found).
+VENUE_LINE_PATTERN = re.compile(
+    r"([A-Z][\w&'./-]*(?:[ \t]+[\w&'./-]+){0,5}),[ \t]*(LEVEL[ \t]+[A-Z0-9]{1,3}),[ \t]*"
+    r"([A-Z][\w&'.-]*(?:[ \t]+[\w&'.-]+){0,6}?[ \t]+(?:AIRPORT|CENTRE|CENTER|MALL|PLAZA|STATION|HOSPITAL|CAMPUS|"
+    r"TOWER|BUILDING|VILLAGE|EXCHANGE|ARCADE|SQUARE|MARKETPLACE|QUARTER|TERMINAL))\b",
+    re.I,
+)
 EMAIL_PATTERN = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.]+\b")
 PHONE_PATTERN = re.compile(r"(?<!\d)(?:\(0\d\)\s?\d{4}\s?\d{4}|0\d{3}\s?\d{3}\s?\d{3}|0\d\s?\d{4}\s?\d{4}|1[38]00\s?\d{3}\s?\d{3})(?!\d)")
 # Standard sheet notes that mention "site" or "construction" without saying
@@ -214,6 +222,15 @@ def infer_pdf_context(ai_input, spatial_ocr=None, building_evidence=None):
             names.append({"candidate_id": _candidate_id("site-name", value, source), "site_name": value,
                           "tenancy": tenancy, "confidence": 0.75, "source": source, "status": "proposed",
                           "basis": "tenancy_line"})
+        for match in VENUE_LINE_PATTERN.finditer(text):
+            value = re.sub(r"\s+", " ", match.group(3)).strip(" .,-")
+            tenancy = re.sub(r"\s+", " ", f"{match.group(1)}, {match.group(2)}").strip(" ,")
+            if DATE_PATTERN.search(match.group(0)) or SITE_NAME_REJECT.search(match.group(1)):
+                continue
+            source = _source(page, re.sub(r"\s+", " ", match.group(0)))
+            names.append({"candidate_id": _candidate_id("site-name", value, source), "site_name": value,
+                          "tenancy": tenancy, "confidence": 0.7, "source": source, "status": "proposed",
+                          "basis": "venue_line"})
     def dedupe(rows, key):
         selected = {}
         for row in rows:

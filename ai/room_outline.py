@@ -31,6 +31,10 @@ from shapely.ops import unary_union
 
 
 MIN_ROOM_M2 = 1.0
+# A room known only from a note or finish legend (no printed label) whose outline stays under this is taken as not on the
+# plan and removed, labelled (user decision 2026-11-02; Happy Cap's copied "DRINK BAR AREA" note gave a 0.58 m² Bar).
+# Rooms with a printed label are never removed for size.
+NOTE_ONLY_MIN_M2 = 2.0
 DEFAULT_DOOR_GAP_MM = 1000.0
 DEFAULT_NOTCH_MM = 250.0  # partitions jutting into a room leave notches thinner than this
 HATCH_MIN_LINES = 20
@@ -667,10 +671,22 @@ def validate_unnamed_space_reply(reply, traced_names, transform):
     return spaces
 
 
-def room_naming_prompt(room_names, area_count):
+def note_only_text(notes, then):
+    """The sentence telling the AI which listed rooms are only mentioned in a note or legend (they may be copied
+    boilerplate). notes: {room: the note line}."""
+    if not notes:
+        return ""
+    quoted = "; ".join(f'{room} ("{text}")' for room, text in sorted(notes.items()))
+    return (f"Only mentioned in a general note or finish legend, not labelled on the plan: {quoted}. Such a room may not "
+            f"be in this tenancy at all; {then} ")
+
+
+def room_naming_prompt(room_names, area_count, notes=None):
     rooms = ", ".join(room_names)
     return ("The image is one architectural floor plan. Enclosed areas are tinted and numbered 1 to "
-            f"{area_count}. This tenancy's rooms are: {rooms}. Name each numbered area using that list, judging from "
+            f"{area_count}. This tenancy's rooms are: {rooms}. "
+            + note_only_text(notes, "give an area that name only if what is drawn in it shows that use.")
+            + "Name each numbered area using that list, judging from "
             "what is drawn in it (equipment, furniture, doors, signage, text). A room can sit inside another one (a bar "
             "walled off in the middle of a dining area): name it as that room. Buffet, servery and self-serve stations "
             "that customers walk up to belong to the dining or shop area they face, even when walls enclose them on "
@@ -928,13 +944,14 @@ def calibration_from_dimension(value_mm, length_px, declared_mm_per_px, toleranc
 
 # --- Full-room AI outlines (open plans with no enclosing walls) ---------------------
 
-def outline_prompt(room_names, references=()):
+def outline_prompt(room_names, references=(), notes=None):
     """The outline request. references: the other sheets sent after the plan (image 2, 3, ...) that mention the room
     names, as {"page", "rooms"}: the plan to draw on often has no room names, so without them the AI guesses which
     space is which and draws only the obvious ones. A sheet may mention a name only in a note with an arrow to the area
     (Butcher Buffet: "ceiling in bar area"), so the prompt doesn't promise labels."""
     rooms = ", ".join(room_names)
-    shape = ("Give each outline as the corner points of the room's floor, in order around the room, following the inside "
+    caution = note_only_text(notes, "if you can't see it on the plan, put it under not_drawn rather than drawing a guess.")
+    shape = (caution + "Give each outline as the corner points of the room's floor, in order around the room, following the inside "
              "face of walls where there are walls, and the drawn boundary (tenancy line, counter edge, floor-finish "
              "change) where there is no wall. A room inside another room (e.g. a bar in a dining area) is drawn on its "
              "own, and the larger room is drawn around its whole space; the inner room's area is taken off it. Name the "

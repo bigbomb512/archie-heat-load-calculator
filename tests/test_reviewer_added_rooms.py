@@ -108,8 +108,8 @@ def end_to_end_checks():
                         "reviewer": "QA", "source_pdf_fingerprint": "pdf-fixture",
                         "vector_page_fingerprint": service._page_fp(VECTOR_PAGE)}
         with patch.object(service, "_page_context", return_value=[PAGE_CONTEXT]):
-            expect_error("a services-plan trace without a printed dimension points to the architectural drawings",
-                         lambda: service.post(web, project, no_dimension), "upload the architectural drawings")
+            expect_error("a services-plan hand trace without a printed dimension says the AI traces at the sheet scale",
+                         lambda: service.post(web, project, no_dimension), "at the sheet's printed scale, labelled unchecked")
         saved = trace(web, project, kiosk_id)
         check("a trace on a services plan is saved and flagged",
               saved["reviewer_room_geometry"]["records"][0].get("fallback_plan") is True)

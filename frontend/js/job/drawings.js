@@ -214,7 +214,9 @@ function stage(title, data, kind, status, plan, retryEndpoint = "") {
       ? `<p class="job-caption" data-stage-problem>${escapeHtml(data.last_problem)}</p>`
       : "";
   const notNeeded = kind === "rooms" ? (data?.not_needed_tasks || []).map((row) =>
-    `<p class="job-caption" data-task-not-needed><strong>${escapeHtml(row.label)}: Not needed.</strong> ${escapeHtml(row.reason || "")}</p>`).join("") : "";
+    `<p class="job-caption" data-task-not-needed><strong>${escapeHtml(row.label)}: Not needed.</strong> ${escapeHtml(row.reason || "")}</p>`).join("")
+    + (data?.not_answered_tasks || []).map((row) =>
+      `<p class="job-caption" data-task-not-answered><strong>${escapeHtml(row.label)}: Not answered.</strong> The checker refused the AI's reply twice${row.reason ? ` (${escapeHtml(row.reason)})` : ""}; the room keeps the area its other steps found.</p>`).join("") : "";
   return `<li class="job-stage ${state}" data-stage="${kind}"><span class="job-stage-icon" aria-hidden="true">${state === "done" ? "✓" : ""}</span><span><strong>${title}</strong><p>${escapeHtml(copy)}</p>${problem}${notNeeded}${exceptions}${retry}${startNow}</span></li>`;
 }
 
@@ -378,7 +380,7 @@ function sentenceFor(data, status, plan) {
 // Which stages are finished and which one is working; when this changes, the plan and facts are re-read too.
 function stageShape(data) {
   const kinds = ["reading", "equipment", "rooms", "envelope", "supervisor", "calculation"];
-  const shape = kinds.map((kind) => `${kind}:${data[kind]?.status || ""}:${JSON.stringify(data[kind]?.recovery || {})}:${JSON.stringify(data[kind]?.readiness || {})}:${JSON.stringify([data[kind]?.cycle, data[kind]?.gaps_fixed, data[kind]?.exceptions, data[kind]?.spend, data[kind]?.not_needed_tasks])}:${data[kind]?.offerStart || false}`);
+  const shape = kinds.map((kind) => `${kind}:${data[kind]?.status || ""}:${JSON.stringify(data[kind]?.recovery || {})}:${JSON.stringify(data[kind]?.readiness || {})}:${JSON.stringify([data[kind]?.cycle, data[kind]?.gaps_fixed, data[kind]?.exceptions, data[kind]?.spend, data[kind]?.not_needed_tasks, data[kind]?.not_answered_tasks])}:${data[kind]?.offerStart || false}`);
   shape.push(`prep:${stepOf(data.newJob)}`);
   return shape.join("|");
 }

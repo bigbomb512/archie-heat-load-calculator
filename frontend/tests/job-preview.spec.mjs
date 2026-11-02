@@ -322,6 +322,27 @@ test("preview renders the Drawings frame and current room outline", async ({
   await expect(page.locator(".shell")).toBeHidden();
 });
 
+test("questions refused twice show as not answered without holding the stage", async ({ page }) => {
+  const errors = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await preview(page);
+  await page.route("**/api/drawing-tasks**", route => route.fulfill({ json: {
+    status: "done", step_state: "done", answered: 30,
+    not_answered_tasks: [{ task: "P0_outline_corners", target: "room-bar-page-7", label: "Snapping a room to the drawn corners",
+      reason: "The listed corners leave no floor for Bar inside the tenancy and outside the other rooms." }],
+  } }));
+  await page.goto("/?preview=1#/job/job-1/drawings");
+  const stage = page.locator('[data-stage="rooms"]');
+  await expect(stage).toHaveClass(/done/);
+  await expect(stage.locator("[data-task-not-answered]")).toContainText("Not answered.");
+  await expect(stage.locator("[data-task-not-answered]")).toContainText("leave no floor for Bar");
+  await expect(stage.locator("[data-task-not-answered]")).toContainText("keeps the area its other steps found");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(stage.locator("[data-task-not-answered]")).toBeVisible();
+  await page.screenshot({ path: "test-results/not-answered-mobile.png", fullPage: true });
+  expect(errors).toEqual([]);
+});
+
 test("withdrawn tenancy questions show as not needed without a retry", async ({ page }) => {
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));

@@ -81,6 +81,10 @@ def status(web, project):
     job["not_needed_tasks"] = [{"task": row["task"], "target": row["target"], "status": "not_needed",
                                 "label": TASK_LABELS.get(row["task"], "Drawing check"), "reason": row.get("block_reason", "")}
                                for row in task_records._all_current(Path(project["review_dir"])) if row.get("status") == "not_needed"]
+    job["not_answered_tasks"] = [{"task": row["task"], "target": row["target"], "status": "not_answered",
+                                  "label": TASK_LABELS.get(row["task"], "Drawing check"),
+                                  "reason": ((row.get("reply_attempts") or [{}])[-1].get("reason") or row.get("block_reason") or "")[:300]}
+                                 for row in task_records._all_current(Path(project["review_dir"])) if task_records._not_answered(row)]
     if job.get("status") == "done" and job.get("unresolved"):
         from backend import autonomous_tasks_service as tasks
         unresolved = []
@@ -99,6 +103,16 @@ def status(web, project):
     if job.get("status") == "done" and (job.get("unresolved") or job.get("provider_limited")):
         from backend.job_runner import recovery
         job["recovery"] = recovery("failed", job.get("warning") or "Some drawing tasks could not be resolved. Retry unfinished tasks; completed drawing tasks are kept.")
+    elif job.get("status") in {"done", "failed", "interrupted", "none"} and _waiting(Path(project["review_dir"])):
+        # A question added after the last run (a later step or a program update made it) has nothing to send it:
+        # offer to resume rather than leave the job at the drawings stage (Butcher Buffet 2026-10-26). No AI call is
+        # started from here.
+        from backend.job_runner import recovery
+        count = len(_waiting(Path(project["review_dir"])))
+        job["waiting_tasks"] = count
+        job["recovery"] = {**recovery("failed"), "action": "resume", "label": "Check and resume",
+                           "reason": f"{count} drawing question{'s' if count != 1 else ''} added after the last run "
+                                     f"{'are' if count != 1 else 'is'} waiting to be sent."}
     # Ages worked out here, so the screen doesn't depend on the browser's clock.
     if job.get("status") in {"queued", "running"}:
         job["request_seconds"] = _seconds_since(job.get("request_started_at")) if job.get("request_started_at") else None
@@ -115,7 +129,7 @@ def start(web, project, then_skills=True, action="start", expected_run_id=None):
     def work(web, project_id, step):
         current = web.project_by_id(project_id) if web is not None else project
         try:
-            result = answer_all(web, current, step)
+            result = answer_all(web, current, step, retry_not_answered=action == "retry")
         except ai_provider.UsageLimitReached as error:
             # Stop further provider calls, but let the independent skill review
             # continue from page readings, vectors, and saved drawing evidence.
@@ -144,10 +158,13 @@ def start(web, project, then_skills=True, action="start", expected_run_id=None):
                                      "request_limit_s": ai_provider.drawing_timeout_s()}, work, action=action, expected_run_id=expected_run_id)
 
 
-def _waiting(root):
+def _waiting(root, retry_not_answered=False):
+    """Questions still to send. One the checker refused twice is settled as not answered and isn't resent by a run or a
+    resume, only when the operator deliberately retries (action "retry")."""
     from backend import autonomous_tasks_service
     return [record for record in autonomous_tasks_service._all_current(root)
-            if record.get("status") == "waiting_for_reply" and record.get("prompt")]
+            if record.get("status") == "waiting_for_reply" and record.get("prompt")
+            and (retry_not_answered or not autonomous_tasks_service._not_answered(record))]
 
 
 def _images(root, record):
@@ -217,10 +234,11 @@ def _prompt(record, grid=False):
     return prompt
 
 
-def answer_all(web, project, step=lambda *args: None, provider_for=None):
+def answer_all(web, project, step=lambda *args: None, provider_for=None, retry_not_answered=False):
     """Answer the waiting drawing tasks in rounds. Returns {"answered", "refused", "rounds", "calls"}.
 
-    provider_for(task) gives the provider for a task (tests pass a fake); by default ai_provider.get("drawing:<task>")."""
+    provider_for(task) gives the provider for a task (tests pass a fake); by default ai_provider.get("drawing:<task>").
+    retry_not_answered: the operator's deliberate retry also asks again the questions refused twice before."""
     from backend import autonomous_tasks_service
     root = Path(project["review_dir"])
     provider_for = provider_for or (lambda task: ai_provider.get(f"drawing:{task}"))
@@ -235,7 +253,7 @@ def answer_all(web, project, step=lambda *args: None, provider_for=None):
             break
         step("build")
         autonomous_tasks_service.post(web, project, {"action": "run_all"})
-        waiting = [record for record in _waiting(root) if tried.get(record["run_id"], 0) < MAX_ATTEMPTS]
+        waiting = [record for record in _waiting(root, retry_not_answered) if tried.get(record["run_id"], 0) < MAX_ATTEMPTS]
         if not waiting:
             break
         step("answer", f"The AI is answering {len(waiting)} drawing task{'s' if len(waiting) != 1 else ''} (round {rounds})")

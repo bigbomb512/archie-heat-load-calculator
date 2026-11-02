@@ -43,7 +43,28 @@ def _inputs(paths):
         "spatial": _read(paths["spatial"], {}),
         "vector": _read(paths.get("vector"), {}) if paths.get("vector") else {},
         "vision": _read(paths.get("vision"), {}) if paths.get("vision") else {},
+        "not_on_plan": _rooms_not_on_plan(paths),
     }
+
+
+def _rooms_not_on_plan(paths):
+    """Note-only rooms the plan doesn't show (autonomous_tasks_service.rooms_not_on_plan); part of the inputs, so the
+    room list is rebuilt when the drawing answers remove or bring back one."""
+    if not paths.get("root") or not Path(paths["root"]).is_dir():
+        return {}
+    from backend import autonomous_tasks_service
+    try:
+        return autonomous_tasks_service.rooms_not_on_plan(paths["root"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}
+
+
+def _without_rooms_not_on_plan(proposal, removed):
+    """The proposal without the removed rooms, which are listed (with why) under rooms_not_on_plan."""
+    if not removed:
+        return proposal
+    kept = [row for row in proposal.get("rooms", []) if str(row.get("label", "")).casefold() not in removed]
+    return {**proposal, "rooms": kept, "rooms_not_on_plan": sorted(removed.values(), key=lambda row: row["label"])}
 
 
 def _source_fingerprint(paths):
@@ -127,9 +148,9 @@ def _run_job(web, project, job_id, source_fp):
             _atomic_json(paths["job"], current)
         job = _read(paths["job"], {})
         inputs = _inputs(paths)
-        proposal = room_inference.infer(
+        proposal = _without_rooms_not_on_plan(room_inference.infer(
             inputs["ai_input"], inputs["coverage"], inputs["spatial"], inputs["vector"], inputs["vision"]
-        )
+        ), inputs["not_on_plan"])
         if _current_job(paths, job_id) is None:
             return
         _write_run(paths, proposal)

@@ -226,8 +226,18 @@ def get(web, project):
             "room_use_options": {key: row["label"] for key, row in load_taxonomy()["categories"].items()},
             "outlines": outlines, "pages": pages,
             "rooms_without_outline": [row for row in rooms if row["room_id"] not in outlined],
+            "rooms_not_on_plan": _rooms_not_on_plan(project),
             "area_basis_labels": {key: {"label": label, "line_style": style}
                                   for key, (label, style) in AREA_BASIS.items()},
             "phase1_current": phase1_current,
             "phase1_report": base,
             "final_report": final}
+
+
+def _rooms_not_on_plan(project):
+    """Rooms named only in a note or legend that the plan doesn't show, with why they aren't counted."""
+    from backend import autonomous_tasks_service
+    try:
+        return sorted(autonomous_tasks_service.rooms_not_on_plan(Path(project["review_dir"])).values(), key=lambda row: row["label"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return []

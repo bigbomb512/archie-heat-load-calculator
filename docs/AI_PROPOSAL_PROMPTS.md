@@ -32,6 +32,22 @@ become optional overrides and an audit view.
    pastes, never the contractor); a hosted model later, changing only the
    transport.
 
+7. **Rooms named only in a note** (2026-11-02). A room word found only in a
+   general note or finish legend stays a clue and is flagged to the AI steps
+   ("may not be in this tenancy"). If the outline step finds no floor for it,
+   or less than 2 m², it is left out of the room list, labelled. Rooms printed
+   on the plan are never removed for size. See
+   `docs/NOTE_ROOMS_AND_SERVICES_SETS_2026-11-02.md`.
+8. **A question refused twice is settled as not answered** (2026-11-02). It
+   no longer holds the job at the drawings stage. The room keeps the area its
+   other steps found. Only a deliberate retry, or changed drawings, asks it
+   again.
+9. **Services-only sets** (2026-11-02). With no floor plan in the set, rooms
+   are traced on a scaled services plan, at the sheet's printed scale
+   (labelled unchecked) when no printed dimension or area can set it. This
+   supersedes the 2026-10-04 "upload the architectural drawings" rule for the
+   AI path; a hand trace still needs a printed dimension.
+
 Answer keys: `evaluations/autonomous/<case>.json` (anonymised; identifying
 facts such as the site live in ignored `output/evaluations/private/`).
 

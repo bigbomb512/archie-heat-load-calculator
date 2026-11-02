@@ -165,7 +165,7 @@ def _north_pages(root):
             continue
         asked += new
         records = [_current_task(root, "P2_north", f"page-{row['page']}") for row in asked]
-        settled = all(record and record.get("status") in {"applied", "below_accuracy_bar", "blocked"} for record in records)
+        settled = all(record and record.get("status") in {"applied", "below_accuracy_bar", "blocked", "not_needed"} for record in records)
         if not settled or any(found(record) for record in records):
             break        # waiting for answers, or an arrow was found: no need to ask further pages
     return sorted(asked, key=lambda row: row["page"])
@@ -184,7 +184,9 @@ def _north_packets(root):
                 prompt = autonomous_tasks.north_prompt(packet)
                 rows.append((target, packet, prompt, [path.read_bytes() for path in paths]))
         except (OSError, ValueError) as error:
-            rows.append((target, {"task": "P2_north", "page": number, "crops": []}, "", [], str(error)))
+            reason = (NotNeeded("This page has no plan image to check for a north arrow; the other plan pages are checked.")
+                      if "render" in str(error).casefold() else str(error))
+            rows.append((target, {"task": "P2_north", "page": number, "crops": []}, "", [], reason))
     return rows
 
 
@@ -262,6 +264,24 @@ def _p0_page_selection(root):
         priority = {"main_floor_plan": 0, "primary_geometry_plan": 1, "floor_plan": 2,
                     "supporting_geometry_plan": 3, "uncertain_top_down_context": 4}.get(role, 4)
         grouped.setdefault(level_key, []).append((dimension_count, priority, number, page, role))
+    if not grouped:
+        # No floor plan in the set (a mechanical engineer's set): trace on its scaled services plans, which are drawn
+        # over the tenancy (user decision 2026-11-02, Global Exchange). The scale comes from printed areas or
+        # dimensions when they can be read, else from the sheet scale alone, labelled unchecked (_p0_calibration_ready).
+        from ai import vector_geometry
+        for page in vector_geometry.fallback_services_plan_pages(ai_input):
+            number = page["page"]
+            if read_types.get(str(number)) in NOT_PLAN_PAGE_TYPES:
+                continue
+            role_row = coverage_by_page.get(number, {})
+            level = str(role_row.get("level_name") or page.get("level_name") or page.get("floor_label") or "").strip()
+            level_key = " ".join(level.casefold().split()) or "unassigned level"
+            dimension_count = max(len(vector_by_page.get(number, {}).get("dimension_candidates", []) or []),
+                                  len(spatial_by_page.get(number, {}).get("dimension_candidates", []) or []),
+                                  len(page.get("dimension_candidates", []) or []))
+            grouped.setdefault(level_key, []).append((dimension_count, 5, number, page, "fallback_services_plan"))
+            notes.append({"page": number, "status": "services_plan_fallback",
+                          "reason": "No architectural floor plan in this set; rooms are traced on a scaled services plan."})
     selected = []
     for level_key, rows in grouped.items():
         rows.sort(key=lambda row: (-row[0], row[1], row[2]))
@@ -498,6 +518,9 @@ def _p6_kitchen_packets(root, room_id=None):
     if room_id is not None and str(room_id) not in {str(row.get("room_id")) for row in kitchen_traces}:
         return []
     if not kitchen_traces:
+        if _p0_settled(root) and not any("kitchen" in str(row.get("label", "")).casefold() for row in _inferred_room_data(root)):
+            return [("P6_kitchen", "kitchen", {"task": "P6_kitchen"}, "", [],
+                     NotNeeded("No kitchen in this tenancy: the room outlines are finished and none is a kitchen."))]
         return [("P6_kitchen", "kitchen", {"task": "P6_kitchen"}, "", [],
                  "Waiting for room outlines (P0).")]
     trace = kitchen_traces[0]
@@ -845,7 +868,8 @@ def _p0_initial_packets(root):
             if not lines:
                 result.append(("P0_dimensions", f"page-{number}-dimension-1",
                                {"task":"P0_dimensions", "page":number, "line":{}}, "", [],
-                               "No eligible dimension line with two tick centres was found on this plan page."))
+                               NotNeeded("No printed dimension line on this plan; its scale comes from printed room "
+                                         "areas, else the sheet's printed scale (labelled unchecked).")))
         except (OSError, ValueError, IndexError, KeyError, TypeError) as error:
             result.append(("P0_dimensions", f"page-{number}-dimension-1", {"task":"P0_dimensions", "page":number}, "", [],
                            f"P0 page packet could not be built: {error}"))
@@ -932,12 +956,14 @@ def _p0_followup_packets(root):
                 continue
             image, transform = room_outline.render_candidate_areas(context["image"], areas, context["viewport"])
             room_names = sorted({row["label"] for row in _inferred_room_data(root)})
+            notes = _note_only_rooms(root, room_names)
             naming_packet = {"task":"P0_room_names", "page":number, "area_count":len(areas), "room_names":room_names,
+                             **({"note_only_rooms": notes} if notes else {}),
                              "transform":transform, "calibration":calibration, "areas_px": [list(poly.exterior.coords) for poly in areas],
                              "wall_style_ids":wall_style_ids, "raster_mode":raster_mode,
                              **({"wall_styles_added": added_styles} if not raster_mode and added_styles else {})}
             result.append(("P0_room_names", f"page-{number}", naming_packet,
-                           room_outline.room_naming_prompt(room_names, len(areas)), [_png_bytes(image)], ""))
+                           room_outline.room_naming_prompt(room_names, len(areas), notes), [_png_bytes(image)], ""))
         except (OSError, ValueError, IndexError, KeyError, TypeError) as error:
             result.append(("P0_room_names", f"page-{number}", {"task":"P0_room_names", "page":number}, "", [],
                            f"P0 enclosed-area packet is blocked: {error}"))
@@ -1099,10 +1125,11 @@ def _p0_outline_packets(root, requested_rooms=None):
                 continue
             image, transform = room_outline.render_candidate_areas(context["image"], [], context["viewport"])
             references, reference_images = _p0_name_sheets(root, number, missing)
-            prompt = room_outline.outline_prompt(missing, references)
+            notes = _note_only_rooms(root, missing)
+            prompt = room_outline.outline_prompt(missing, references, notes)
             packet = {"task":"P0_room_outlines", "page":number, "room_names":missing, "transform":transform,
                       "calibration":calibration, "wall_style_ids":wall_style_ids, "raster_mode":raster_mode,
-                      "name_sheets":references}
+                      "name_sheets":references, **({"note_only_rooms": notes} if notes else {})}
             result.append(("P0_room_outlines", f"page-{number}", packet, prompt,
                            [_png_bytes(image), *reference_images], ""))
         except (OSError, ValueError, IndexError, KeyError, TypeError) as error:
@@ -1116,6 +1143,64 @@ ROOM_SIZE_SOURCES = {"printed_area": "printed (read from image)", "printed_dimen
                      "estimated": "AI estimate from the plan", "remainder": "tenancy area remainder"}
 OUTLINE_STEPS = {"P0_dimensions", "P0_wall_styles", "P0_room_names", "P0_tenancy_outline", "P0_room_outlines", "P0_unnamed_space",
                  "P0_outline_corners", "S1_printed_areas"}
+
+
+def _p0_settled(root):
+    """The room-outline steps have answered (or given up): traced rooms exist and no outline question is still to send."""
+    try:
+        traced = reviewer_room_geometry_service.current_records(reviewer_room_geometry_service._paths({"review_dir": str(root)}))
+    except (OSError, ValueError, TypeError, KeyError):
+        return False
+    return bool(traced) and not any(record.get("task") in OUTLINE_STEPS and record.get("status") == "waiting_for_reply"
+                                    and not _not_answered(record) for record in _all_current(root))
+
+
+def _note_only_rooms(root, names):
+    """{name: the note line} for the listed rooms known only from a note or finish legend (every inferred row with that
+    name is note-only); the AI steps are told they may not be in the tenancy."""
+    rows = {}
+    for row in _inferred_room_data(root):
+        rows.setdefault(str(row.get("label", "")).casefold(), []).append(row)
+    wanted = {str(name).casefold(): name for name in names}
+    return {wanted[key]: next((row.get("note_text") for row in group if row.get("note_text")), "")
+            for key, group in rows.items() if key in wanted and all(row.get("label_evidence") == "note" for row in group)}
+
+
+def rooms_not_on_plan(root):
+    """Rooms known only from a note or legend that the plan doesn't show: the outline step was asked to draw them (and
+    has answered or given up), and no answer gives them NOTE_ONLY_MIN_M2 or more of floor. They are left out of the room
+    list, labelled (user decision 2026-11-02). Worked out from the current answers each time, so a later answer that
+    finds the room (the floor with no room step naming a real Shop or Kitchen) brings it back.
+    Returns {name (casefolded): {"label", "note", "pages", "largest_area_m2", "reason"}}."""
+    root = Path(root)
+    inferred = _inferred_room_data(root)
+    candidates = _note_only_rooms(root, [row["label"] for row in inferred if row.get("label")])
+    if not candidates:
+        return {}
+    asked, areas = set(), {}
+    for record in _all_current(root):
+        if record.get("task") not in OUTLINE_STEPS:
+            continue
+        status = record.get("status")
+        answered = status in {"applied", "below_accuracy_bar"} or _not_answered(record)
+        if record.get("task") == "P0_room_outlines" and answered:
+            asked.update(str(name).casefold() for name in (record.get("packet") or {}).get("room_names", []))
+        for row in (record.get("applied_value") or {}).get("rooms", []) if status in {"applied", "below_accuracy_bar"} else []:
+            if isinstance(row, dict) and isinstance(row.get("area_m2"), (int, float)):
+                key = str(row.get("label", "")).casefold()
+                areas[key] = max(areas.get(key, 0.0), float(row["area_m2"]))
+    result = {}
+    for name, note in candidates.items():
+        key = name.casefold()
+        largest = areas.get(key, 0.0)
+        if key not in asked or largest >= room_outline.NOTE_ONLY_MIN_M2:
+            continue
+        pages = sorted({page for row in inferred if str(row.get("label", "")).casefold() == key for page in row.get("source_pages", [])})
+        found = f"only {largest:.2f} m² of floor was found for it" if largest else "the plan shows no such room"
+        result[key] = {"label": name, "note": note, "pages": pages, "largest_area_m2": round(largest, 2),
+                       "reason": f"{name}: mentioned only in a general note or legend (page{'s' if len(pages) != 1 else ''} "
+                                 f"{', '.join(map(str, pages))}: \"{note}\"), and {found}; not counted as a room."}
+    return result
 
 
 def _settled(record):
@@ -1146,7 +1231,10 @@ def _corner_subjects(root, page):
         for row in value if isinstance(value, list) else []:
             if isinstance(row, dict) and row.get("room") and len(row.get("points") or []) >= 3:
                 pieces.setdefault(row["room"], []).append(row["points"])
+        removed = rooms_not_on_plan(root)
         for room, sketches in sorted(pieces.items()):
+            if room.casefold() in removed:
+                continue        # a note-only room the plan doesn't show gets no corner question
             subjects.append((f"room-{re.sub(r'[^a-z0-9]+', '-', room.casefold()).strip('-')}-page-{page}", room, task, sketches))
     return subjects
 
@@ -2984,6 +3072,12 @@ def _refresh_geometry_tasks(root, room_id=None, page_number=None):
                         (f"Prompt exceeds the {budget:,}-character limit; evidence was not shortened." if len(prompt)>budget else ""))
 
 
+class NotNeeded(str):
+    """A builder's reason that there is nothing to ask and nothing is missing (no dimension line to read, a page with no
+    plan image, no kitchen): the task is saved as not needed instead of blocked, so it doesn't count as needing a person
+    (Global Exchange and Happy Cap 2026-11-02)."""
+
+
 def _create_run(root, task, target, packet, prompt, image_bytes=None, blocked_reason=""):
     accuracy = _accuracy(task)
     packet_bytes = json.dumps(packet, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -2991,7 +3085,11 @@ def _create_run(root, task, target, packet, prompt, image_bytes=None, blocked_re
     input_fingerprint = autonomous_tasks.fingerprint({"packet": packet, "images": image_hashes})
     parent = _task_dir(root, task, target)
     current = _current_task(root, task, target)
-    if current and current.get("status") != "not_needed" and (current.get("input_fingerprint") == input_fingerprint or (
+    not_needed = isinstance(blocked_reason, NotNeeded)
+    # The current record is kept for the same question only when both or neither are "not needed": a task now known
+    # to be not needed replaces an older blocked one, and a withdrawn (not needed) question is asked again when needed.
+    reusable = bool(current) and (current.get("status") == "not_needed") == not_needed
+    if reusable and (current.get("input_fingerprint") == input_fingerprint or (
             not packet.get("supervisor_note") and current.get("base_input_fingerprint") == input_fingerprint)):
         return current
     run_id = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex[:8]}"
@@ -2999,7 +3097,8 @@ def _create_run(root, task, target, packet, prompt, image_bytes=None, blocked_re
     run_dir.mkdir(parents=True, exist_ok=False)
     packet["prompt_fingerprint"] = hashlib.sha256(prompt.encode("utf-8")).hexdigest() if prompt else ""
     record = {
-        "schema_version": 1, "run_id": run_id, "task": task, "target": target, "status": "blocked" if blocked_reason else "waiting_for_reply",
+        "schema_version": 1, "run_id": run_id, "task": task, "target": target,
+        "status": "not_needed" if not_needed else "blocked" if blocked_reason else "waiting_for_reply",
         "created_at": _now(), "input_fingerprint": input_fingerprint,
         "base_input_fingerprint": autonomous_tasks.fingerprint({"packet": {key: value for key, value in packet.items()
             if key not in {"supervisor_note", "prompt_fingerprint"}}, "images": image_hashes}),
@@ -3007,8 +3106,9 @@ def _create_run(root, task, target, packet, prompt, image_bytes=None, blocked_re
         "prompt_fingerprint": packet["prompt_fingerprint"], "budget": autonomous_tasks.TASKS[task],
         "packet": packet, "prompt": prompt, "image_hashes": image_hashes,
         "accuracy": accuracy, "quality_label": "AI-determined" if accuracy["auto_apply"] else "AI-determined (below accuracy bar)",
-        "reply": "", "reply_hash": "", "reply_attempts": [], "validation": {}, "applied_value": {}, "source": "",
-        "retry_count": 0, "block_reason": blocked_reason, "cross_check": {},
+        "reply": "", "reply_hash": "", "reply_attempts": [], "validation": {},
+        "applied_value": {"note": str(blocked_reason)} if not_needed else {}, "source": "",
+        "retry_count": 0, "block_reason": str(blocked_reason), "cross_check": {},
     }
     for index, content in enumerate(image_bytes or []):
         (run_dir / f"image-{index + 1}.png").write_bytes(content)
@@ -3078,13 +3178,26 @@ def get_labels(project):
             "progress": _task_progress(root)}
 
 
+REFUSED_ATTEMPTS_BEFORE_GIVING_UP = 2
+
+
+def _not_answered(record):
+    """A question the checker refused twice: settled as not answered, so it no longer holds the job at the drawings
+    stage (Happy Cap 2026-11-02: two corner questions stayed "waiting" for ever). The record keeps its status, so the
+    Phase 1 supervisor can still try one targeted check, and a changed drawing input asks again (a new run)."""
+    return bool(record and record.get("status") == "waiting_for_reply"
+                and sum(1 for attempt in record.get("reply_attempts") or [] if attempt.get("outcome") == "rejected")
+                >= REFUSED_ATTEMPTS_BEFORE_GIVING_UP)
+
+
 def _task_progress(root):
     """Counts over every current task (not only the ones with results), for the contractor progress screen."""
     records = [record for record in _all_current(root) if record.get("task")]
-    marker = hashlib.sha256("|".join(sorted(f"{record.get('task')}:{record.get('target')}:{record.get('status')}"
+    marker = hashlib.sha256("|".join(sorted(f"{record.get('task')}:{record.get('target')}:{record.get('status')}:{_not_answered(record)}"
                                             for record in records)).encode("utf-8")).hexdigest()[:16]
     return {"total": len(records),
-            "waiting": sum(1 for record in records if record.get("status") == "waiting_for_reply"),
+            "waiting": sum(1 for record in records if record.get("status") == "waiting_for_reply" and not _not_answered(record)),
+            "not_answered": sum(1 for record in records if _not_answered(record)),
             "blocked": sum(1 for record in records if record.get("status") == "blocked"),
             "not_needed": sum(1 for record in records if record.get("status") == "not_needed"),
             "marker": marker}

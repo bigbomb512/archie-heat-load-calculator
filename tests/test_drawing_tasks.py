@@ -105,7 +105,14 @@ class DrawingTaskTests(unittest.TestCase):
             with patch.object(tasks_service, "post", fake.post), patch.object(tasks_service, "_all_current", fake.all_current), \
                     patch.object(tasks_service, "_current_task", fake.current), patch.object(tasks_service, "_task_dir", fake.task_dir):
                 drawing.answer_all(None, {"id": "j", "review_dir": folder}, provider_for=lambda task: FakeProvider(prompts))
-                again = drawing.answer_all(None, {"id": "j", "review_dir": folder}, provider_for=lambda task: FakeProvider(prompts))
+                resumed = drawing.answer_all(None, {"id": "j", "review_dir": folder}, provider_for=lambda task: FakeProvider(prompts))
+                state = tasks_service._task_progress(Path(folder))
+                again = drawing.answer_all(None, {"id": "j", "review_dir": folder}, provider_for=lambda task: FakeProvider(prompts),
+                                           retry_not_answered=True)
+            # Refused twice: settled as not answered, so a run or resume doesn't send it again and it doesn't hold the
+            # job at the drawings stage (Happy Cap 2026-11-02); only a deliberate retry asks again.
+            self.assertEqual(resumed["calls"], 0)
+            self.assertEqual((state["waiting"], state["not_answered"]), (0, 1))
             self.assertEqual(again["calls"], 2)
             self.assertEqual(again["answered"], 0)
             self.assertEqual(again["refused"], 2)
