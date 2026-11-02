@@ -512,6 +512,11 @@ def validate_zone_cooling_load(raw):
     from ai.heat_loads import AIRFLOW_REFERENCE_BASES
     if result["outside_air_flow_reference_basis"] not in AIRFLOW_REFERENCE_BASES:
         raise ValueError("Zone outside-air flow reference basis must be legacy_unverified, outdoor_design_condition, or standard_air_1_2kg_da_m3.")
+    # The AI draft's outside-air sensible basis (2026-10-26); kept only when given, so reviewed models keep their shape.
+    if raw.get("outside_air_sensible_basis") is not None:
+        if raw["outside_air_sensible_basis"] not in {"dry_air", "moist_air"}:
+            raise ValueError("Zone outside-air sensible basis must be dry_air or moist_air.")
+        result["outside_air_sensible_basis"] = raw["outside_air_sensible_basis"]
     if not isinstance(result["envelope_not_applicable"], bool):
         raise ValueError("Zone internal-envelope declaration must be true or false.")
     result["envelope_surfaces"] = validate_envelope_surfaces(result["envelope_surfaces"])

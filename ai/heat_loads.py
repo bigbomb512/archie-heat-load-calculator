@@ -213,7 +213,11 @@ def specific_volume_m3_kg(dry_bulb_c, humidity_ratio, pressure_kpa):
 
 def outside_air_load(flow_lps, indoor_db_c, indoor_wb_c, outdoor_db_c, outdoor_wb_c, pressure_kpa,
                      *, indoor_wet_bulb_basis="legacy_unverified", outdoor_wet_bulb_basis="legacy_unverified",
-                     airflow_reference_basis="legacy_unverified", flow_source="", flow_verification_status=""):
+                     airflow_reference_basis="legacy_unverified", flow_source="", flow_verification_status="",
+                     moist_air_sensible=False):
+    """moist_air_sensible: sensible heat on the moist air's specific heat (1.006 + 1.86 W kJ/kg·K, ASHRAE Fundamentals
+    Ch. 1/18) rather than dry air's 1.006 alone; latent is the rest of the enthalpy difference either way. The AI draft
+    uses it with the standard-air basis (user decision 2026-10-26, the AIRAH/ASHRAE simplified method)."""
     if airflow_reference_basis not in AIRFLOW_REFERENCE_BASES:
         raise ValueError("Outside-air airflow reference basis must be legacy_unverified, outdoor_design_condition, or standard_air_1_2kg_da_m3.")
     indoor_ratio = humidity_ratio_from_db_wb(indoor_db_c, indoor_wb_c, pressure_kpa, indoor_wet_bulb_basis)
@@ -224,7 +228,8 @@ def outside_air_load(flow_lps, indoor_db_c, indoor_wb_c, outdoor_db_c, outdoor_w
     else:
         mass_flow_kg_s = flow_lps / 1000 / specific_volume_m3_kg(outdoor_db_c, outdoor_ratio, pressure_kpa)
         flow_reference_state = {"dry_bulb_c": outdoor_db_c, "humidity_ratio": round(outdoor_ratio, 9), "pressure_kpa": pressure_kpa}
-    sensible_kw = mass_flow_kg_s * 1.006 * (outdoor_db_c - indoor_db_c)
+    specific_heat = 1.006 + 1.86 * outdoor_ratio if moist_air_sensible else 1.006
+    sensible_kw = mass_flow_kg_s * specific_heat * (outdoor_db_c - indoor_db_c)
     total_kw = mass_flow_kg_s * (
         moist_air_enthalpy_kj_kg(outdoor_db_c, outdoor_ratio)
         - moist_air_enthalpy_kj_kg(indoor_db_c, indoor_ratio)
@@ -250,6 +255,7 @@ def outside_air_load(flow_lps, indoor_db_c, indoor_wb_c, outdoor_db_c, outdoor_w
             "outdoor_wet_bulb_method": wet_bulb_method_id(outdoor_wet_bulb_basis),
             "atmospheric_pressure_kpa": pressure_kpa,
             "mass_flow_kg_s": round(mass_flow_kg_s, 6),
+            **({"sensible_specific_heat": "moist air (1.006 + 1.86 W)"} if moist_air_sensible else {}),
         },
         "outside-air mass flow × moist-air enthalpy difference; latent = total − sensible",
     )

@@ -23,6 +23,12 @@ outlet. Its infiltration section likewise relates volumetric rate to a known
 dry-/wet-bulb condition. These are psychrometric calculation references, not
 Australian ventilation rules or project-specific design instructions.
 
+**AI draft (user decision 2026-10-26):** the AI preliminary draft converts its room outside air on ASHRAE's 1.2 kg
+dry-air/m³ standard-air basis with moist-air sensible heat (1.006 + 1.86 W kJ/kg·K), the AIRAH/ASHRAE simplified
+method, and computes the indoor design condition's moisture with the same thermodynamic equations as outdoors. The
+hand-worked reference rooms (`docs/draft_reference_rooms.md`) showed the earlier outdoor-state basis about 5% lower in
+total and 8% lower in sensible. The reviewed calculator's default described below is unchanged.
+
 For room outside-air rates, the editor now lets the user declare either the
 outdoor design-air state or ASHRAE's 1.2 kg dry-air/m³ standard-air basis. The
 selected basis is used for both cooling and heating mass-flow conversion and is

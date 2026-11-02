@@ -1,0 +1,617 @@
+{
+ "schema_version": 1,
+ "suite_id": "draft_reference_rooms_v1",
+ "purpose": "Hand-worked reference rooms for the AI draft path (assemble → calculate); arithmetic and physics QA, not engineering validation.",
+ "worksheet": "tests/reference/draft_reference_rooms.py",
+ "declared_inputs": {
+  "site": {
+   "latitude": -33.87,
+   "longitude": 151.21,
+   "timezone": "Australia/Sydney"
+  },
+  "design_point": {
+   "db": 32.0,
+   "cwb": 23.0
+  },
+  "monthly_mean_max": [
+   26.0,
+   25.8,
+   24.8,
+   22.5,
+   19.5,
+   17.0,
+   16.4,
+   17.9,
+   20.1,
+   22.2,
+   23.7,
+   25.3
+  ],
+  "indoor": {
+   "db": 24.0,
+   "wb": 18.0,
+   "pressure_kpa": 101.325
+  },
+  "pack": {
+   "wall_u": 0.6,
+   "roof_u": 0.5,
+   "glass_u": 5.8,
+   "shgc": 0.45,
+   "frame_fraction": 0.15,
+   "oa_per_person": 7.5,
+   "oa_per_m2": 0.3,
+   "fan_percent": 3.2,
+   "profiles": {
+    "retail": {
+     "density": 0.15,
+     "people_diversity": 0.85,
+     "lighting_w_m2": 12,
+     "lighting_diversity": 0.9,
+     "equipment_w_m2": 8,
+     "equipment_diversity": 0.75,
+     "equipment_space_gain": 0.8,
+     "open": [
+      9,
+      18
+     ]
+    },
+    "office": {
+     "density": 0.1,
+     "people_diversity": 0.85,
+     "lighting_w_m2": 10,
+     "lighting_diversity": 0.9,
+     "equipment_w_m2": 15,
+     "equipment_diversity": 0.8,
+     "equipment_space_gain": 0.9,
+     "open": [
+      8,
+      18
+     ]
+    },
+    "hospitality": {
+     "density": 0.3,
+     "people_diversity": 0.9,
+     "lighting_w_m2": 14,
+     "lighting_diversity": 0.9,
+     "equipment_w_m2": 25,
+     "equipment_diversity": 0.8,
+     "equipment_space_gain": 0.8,
+     "open": [
+      10,
+      23
+     ]
+    }
+   },
+   "activity": {
+    "retail": [
+     76,
+     74
+    ],
+    "office": [
+     70,
+     50
+    ],
+    "dining": [
+     70,
+     50
+    ],
+    "kitchen": [
+     85,
+     135
+    ]
+   }
+  },
+  "clear_sky": "tests/reference/sydney_clear_sky_2025.json"
+ },
+ "physics": {
+  "alpha_over_ho_m2k_w": 0.052,
+  "albedo": 0.2,
+  "standard_air_kg_m3": 1.2,
+  "sun_position": "Spencer (1971) / Iqbal (1983)",
+  "psychrometrics": "ASHRAE Fundamentals 2017 Ch. 1 Eq. 6, 22, 32, 33"
+ },
+ "tolerances": {
+  "component_relative": 0.02,
+  "component_absolute_kw": 0.02,
+  "latent_relative": 0.03,
+  "total_relative": 0.01,
+  "sun_position_deg": 1.0
+ },
+ "sun_position_check_deg": 0.394,
+ "cases": [
+  {
+   "case_id": "A_west_shop",
+   "title": "80 m² shop, west shopfront, 2-storey building 15 m opposite (Sydney)",
+   "rooms": [
+    {
+     "name": "Shop",
+     "profile": "retail",
+     "activity": "retail",
+     "area_m2": 80.0,
+     "surfaces": [
+      {
+       "label": "West wall",
+       "kind": "wall",
+       "tilt": 90,
+       "azimuth": 270.0,
+       "area_m2": 15.6,
+       "gross_m2": 30.0,
+       "u": 0.6,
+       "height_m": 3.0,
+       "building": {
+        "distance_m": 15.0,
+        "height_m": 6.6,
+        "base_m": 0.0
+       }
+      }
+     ],
+     "glass": [
+      {
+       "label": "Shopfront",
+       "azimuth": 270.0,
+       "area_m2": 14.399999999999999,
+       "width_m": 6.0,
+       "height_m": 2.4,
+       "sill_m": 0.3,
+       "building": {
+        "distance_m": 15.0,
+        "height_m": 6.6,
+        "base_m": 0.3
+       }
+      }
+     ]
+    }
+   ],
+   "checks": [
+    {
+     "month": 1,
+     "hour": 10,
+     "rooms": {
+      "Shop": {
+       "envelope": 0.0281,
+       "solar": 0.0613,
+       "glazing_conduction": 0.2506,
+       "glazing_solar": 0.6939,
+       "people_s": 0.7752,
+       "people_l": 0.7548,
+       "lighting": 0.864,
+       "equipment": 0.384,
+       "outside_air_s": 0.4229,
+       "outside_air_l": 0.9403,
+       "people": 12,
+       "outside_air_lps": 114.0
+      }
+     },
+     "fan_heat_kw": 0.0978,
+     "total_kw": 5.2729
+    },
+    {
+     "month": 1,
+     "hour": 14,
+     "rooms": {
+      "Shop": {
+       "envelope": 0.0655,
+       "solar": 0.1809,
+       "glazing_conduction": 0.5846,
+       "glazing_solar": 2.0469,
+       "people_s": 0.7752,
+       "people_l": 0.7548,
+       "lighting": 0.864,
+       "equipment": 0.384,
+       "outside_air_s": 0.9889,
+       "outside_air_l": 1.3703,
+       "people": 12,
+       "outside_air_lps": 114.0
+      }
+     },
+     "fan_heat_kw": 0.1568,
+     "total_kw": 8.172
+    },
+    {
+     "month": 1,
+     "hour": 16,
+     "rooms": {
+      "Shop": {
+       "envelope": 0.0749,
+       "solar": 0.3503,
+       "glazing_conduction": 0.6682,
+       "glazing_solar": 3.9643,
+       "people_s": 0.7752,
+       "people_l": 0.7548,
+       "lighting": 0.864,
+       "equipment": 0.384,
+       "outside_air_s": 1.1294,
+       "outside_air_l": 1.2243,
+       "people": 12,
+       "outside_air_lps": 114.0
+      }
+     },
+     "fan_heat_kw": 0.2266,
+     "total_kw": 10.416
+    },
+    {
+     "month": 1,
+     "hour": 17,
+     "rooms": {
+      "Shop": {
+       "envelope": 0.0655,
+       "solar": 0.3838,
+       "glazing_conduction": 0.5846,
+       "glazing_solar": 4.343,
+       "people_s": 0.7752,
+       "people_l": 0.7548,
+       "lighting": 0.864,
+       "equipment": 0.384,
+       "outside_air_s": 0.9889,
+       "outside_air_l": 1.3703,
+       "people": 12,
+       "outside_air_lps": 114.0
+      }
+     },
+     "fan_heat_kw": 0.2368,
+     "total_kw": 10.7509
+    },
+    {
+     "month": 1,
+     "hour": 18,
+     "rooms": {
+      "Shop": {
+       "envelope": 0.0562,
+       "solar": 0.0,
+       "glazing_conduction": 0.5011,
+       "glazing_solar": 0.0,
+       "people_s": 0.0,
+       "people_l": 0.0,
+       "lighting": 0.0,
+       "equipment": 0.0,
+       "outside_air_s": 0.0,
+       "outside_air_l": 0.0,
+       "people": 12,
+       "outside_air_lps": 0.0
+      }
+     },
+     "fan_heat_kw": 0.0178,
+     "total_kw": 0.5751
+    },
+    {
+     "month": 6,
+     "hour": 14,
+     "rooms": {
+      "Shop": {
+       "envelope": -0.0187,
+       "solar": 0.2166,
+       "glazing_conduction": -0.167,
+       "glazing_solar": 2.4514,
+       "people_s": 0.7752,
+       "people_l": 0.7548,
+       "lighting": 0.864,
+       "equipment": 0.384,
+       "outside_air_s": -0.2786,
+       "outside_air_l": -1.3104,
+       "people": 12,
+       "outside_air_lps": 114.0
+      }
+     },
+     "fan_heat_kw": 0.1442,
+     "total_kw": 3.8154
+    }
+   ],
+   "peak": {
+    "month": 1,
+    "hour": 17,
+    "total_kw": 10.7509
+   }
+  },
+  {
+   "case_id": "B_roof_office",
+   "title": "120 m² single-storey office, exposed roof, north window with a 1.5 m awning (Sydney)",
+   "rooms": [
+    {
+     "name": "Office",
+     "profile": "office",
+     "activity": "office",
+     "area_m2": 120.0,
+     "surfaces": [
+      {
+       "label": "Roof",
+       "kind": "roof",
+       "tilt": 0,
+       "azimuth": 0.0,
+       "area_m2": 120.0,
+       "gross_m2": 120.0,
+       "u": 0.5
+      },
+      {
+       "label": "North wall",
+       "kind": "wall",
+       "tilt": 90,
+       "azimuth": 0.0,
+       "area_m2": 30.0,
+       "gross_m2": 36.0,
+       "u": 0.6,
+       "height_m": 3.0
+      }
+     ],
+     "glass": [
+      {
+       "label": "North window",
+       "azimuth": 0.0,
+       "area_m2": 6.0,
+       "width_m": 4.0,
+       "height_m": 1.5,
+       "sill_m": 0.9,
+       "awning": {
+        "depth_m": 1.5,
+        "gap_m": 0.3
+       }
+      }
+     ]
+    }
+   ],
+   "checks": [
+    {
+     "month": 1,
+     "hour": 12,
+     "rooms": {
+      "Office": {
+       "envelope": 0.39,
+       "solar": 3.5029,
+       "glazing_conduction": 0.174,
+       "glazing_solar": 0.3651,
+       "people_s": 0.714,
+       "people_l": 0.51,
+       "lighting": 1.08,
+       "equipment": 1.296,
+       "outside_air_s": 0.7798,
+       "outside_air_l": 1.2659,
+       "people": 12,
+       "outside_air_lps": 126.0
+      }
+     },
+     "fan_heat_kw": 0.2407,
+     "total_kw": 10.3184
+    },
+    {
+     "month": 1,
+     "hour": 15,
+     "rooms": {
+      "Office": {
+       "envelope": 0.624,
+       "solar": 3.2162,
+       "glazing_conduction": 0.2784,
+       "glazing_solar": 0.343,
+       "people_s": 0.714,
+       "people_l": 0.51,
+       "lighting": 1.08,
+       "equipment": 1.296,
+       "outside_air_s": 1.2482,
+       "outside_air_l": 1.3532,
+       "people": 12,
+       "outside_air_lps": 126.0
+      }
+     },
+     "fan_heat_kw": 0.2417,
+     "total_kw": 10.9047
+    },
+    {
+     "month": 6,
+     "hour": 12,
+     "rooms": {
+      "Office": {
+       "envelope": -0.312,
+       "solar": 2.3717,
+       "glazing_conduction": -0.1392,
+       "glazing_solar": 1.1096,
+       "people_s": 0.714,
+       "people_l": 0.51,
+       "lighting": 1.08,
+       "equipment": 1.296,
+       "outside_air_s": -0.6157,
+       "outside_air_l": -1.5338,
+       "people": 12,
+       "outside_air_lps": 126.0
+      }
+     },
+     "fan_heat_kw": 0.1958,
+     "total_kw": 4.6764
+    },
+    {
+     "month": 6,
+     "hour": 15,
+     "rooms": {
+      "Office": {
+       "envelope": -0.078,
+       "solar": 1.3207,
+       "glazing_conduction": -0.0348,
+       "glazing_solar": 0.9556,
+       "people_s": 0.714,
+       "people_l": 0.51,
+       "lighting": 1.08,
+       "equipment": 1.296,
+       "outside_air_s": -0.1539,
+       "outside_air_l": -1.6061,
+       "people": 12,
+       "outside_air_lps": 126.0
+      }
+     },
+     "fan_heat_kw": 0.1681,
+     "total_kw": 4.1716
+    },
+    {
+     "month": 3,
+     "hour": 13,
+     "rooms": {
+      "Office": {
+       "envelope": 0.3744,
+       "solar": 3.3337,
+       "glazing_conduction": 0.167,
+       "glazing_solar": 0.3047,
+       "people_s": 0.714,
+       "people_l": 0.51,
+       "lighting": 1.08,
+       "equipment": 1.296,
+       "outside_air_s": 0.7465,
+       "outside_air_l": 0.6429,
+       "people": 12,
+       "outside_air_lps": 126.0
+      }
+     },
+     "fan_heat_kw": 0.2326,
+     "total_kw": 9.4018
+    }
+   ],
+   "peak": {
+    "month": 1,
+    "hour": 14,
+    "total_kw": 11.1663
+   }
+  },
+  {
+   "case_id": "C_mall_dining",
+   "title": "Mall restaurant: 150 m² dining with 100 printed seats and a 40 m² kitchen with 600 L/s exhaust",
+   "rooms": [
+    {
+     "name": "Dining",
+     "profile": "hospitality",
+     "activity": "dining",
+     "area_m2": 150.0,
+     "seats": 100,
+     "surfaces": [
+      {
+       "label": "Shopfront to the mall",
+       "kind": "wall",
+       "tilt": 90,
+       "azimuth": 180.0,
+       "area_m2": 36.0,
+       "gross_m2": 36.0,
+       "u": 0.6,
+       "adjacent": "mall"
+      }
+     ]
+    },
+    {
+     "name": "Kitchen",
+     "profile": "hospitality",
+     "activity": "kitchen",
+     "area_m2": 40.0,
+     "exhaust_lps": 600.0
+    }
+   ],
+   "checks": [
+    {
+     "month": 1,
+     "hour": 15,
+     "rooms": {
+      "Dining": {
+       "envelope": 0.0,
+       "solar": 0.0,
+       "glazing_conduction": 0.0,
+       "glazing_solar": 0.0,
+       "people_s": 6.3,
+       "people_l": 4.5,
+       "lighting": 1.89,
+       "equipment": 2.4,
+       "outside_air_s": 7.8758,
+       "outside_air_l": 8.5382,
+       "people": 100,
+       "outside_air_lps": 795.0
+      },
+      "Kitchen": {
+       "envelope": 0.0,
+       "solar": 0.0,
+       "glazing_conduction": 0.0,
+       "glazing_solar": 0.0,
+       "people_s": 0.918,
+       "people_l": 1.458,
+       "lighting": 0.504,
+       "equipment": 0.64,
+       "outside_air_s": 5.944,
+       "outside_air_l": 6.4439,
+       "people": 12,
+       "outside_air_lps": 600.0
+      }
+     },
+     "fan_heat_kw": 0.4049,
+     "total_kw": 47.8168
+    },
+    {
+     "month": 1,
+     "hour": 9,
+     "rooms": {
+      "Dining": {
+       "envelope": 0.0,
+       "solar": 0.0,
+       "glazing_conduction": 0.0,
+       "glazing_solar": 0.0,
+       "people_s": 0.0,
+       "people_l": 0.0,
+       "lighting": 0.0,
+       "equipment": 0.0,
+       "outside_air_s": 0.0,
+       "outside_air_l": 0.0,
+       "people": 100,
+       "outside_air_lps": 0.0
+      },
+      "Kitchen": {
+       "envelope": 0.0,
+       "solar": 0.0,
+       "glazing_conduction": 0.0,
+       "glazing_solar": 0.0,
+       "people_s": 0.0,
+       "people_l": 0.0,
+       "lighting": 0.0,
+       "equipment": 0.0,
+       "outside_air_s": 0.0,
+       "outside_air_l": 0.0,
+       "people": 12,
+       "outside_air_lps": 0.0
+      }
+     },
+     "fan_heat_kw": 0.0,
+     "total_kw": 0.0
+    },
+    {
+     "month": 7,
+     "hour": 15,
+     "rooms": {
+      "Dining": {
+       "envelope": 0.0,
+       "solar": 0.0,
+       "glazing_conduction": 0.0,
+       "glazing_solar": 0.0,
+       "people_s": 6.3,
+       "people_l": 4.5,
+       "lighting": 1.89,
+       "equipment": 2.4,
+       "outside_air_s": -1.5522,
+       "outside_air_l": -11.0636,
+       "people": 100,
+       "outside_air_lps": 795.0
+      },
+      "Kitchen": {
+       "envelope": 0.0,
+       "solar": 0.0,
+       "glazing_conduction": 0.0,
+       "glazing_solar": 0.0,
+       "people_s": 0.918,
+       "people_l": 1.458,
+       "lighting": 0.504,
+       "equipment": 0.64,
+       "outside_air_s": -1.1715,
+       "outside_air_l": -8.3499,
+       "people": 12,
+       "outside_air_lps": 600.0
+      }
+     },
+     "fan_heat_kw": 0.4049,
+     "total_kw": -3.1224
+    }
+   ],
+   "peak": {
+    "month": 1,
+    "hour": 14,
+    "total_kw": 47.8843
+   }
+  }
+ ]
+}

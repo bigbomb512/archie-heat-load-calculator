@@ -1397,6 +1397,7 @@ def room_contributions(room, zone, infiltration_gate, profiles, hour, weather, p
         flow_source=load.get("outside_air_source", ""),
         flow_verification_status=load.get("outside_air_verification_status", "missing"),
         airflow_reference_basis=load.get("outside_air_flow_reference_basis", "legacy_unverified"),
+        moist_air_sensible=load.get("outside_air_sensible_basis") == "moist_air",
     )
     outdoor_weather_provenance = {
         "scenario_id": scenario_id,

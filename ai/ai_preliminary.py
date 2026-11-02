@@ -1188,6 +1188,9 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                    "people_diversity_factor": people_diversity, "lighting_w_m2": lighting_w_m2,
                    "lighting_diversity_factor": lighting_diversity,
                    "outside_air_lps": outside_air,
+                   # Standard air (1.2 kg dry air/m³) with moist-air sensible heat, the AIRAH/ASHRAE simplified method
+                   # (user decision 2026-10-26, after the reference rooms showed the outdoor-state basis ~5% lower).
+                   "outside_air_flow_reference_basis": "standard_air_1_2kg_da_m3", "outside_air_sensible_basis": "moist_air",
                    "safety_factor": scenario_values["safety_factor"],
                    "envelope_not_applicable": row.get("envelope_not_applicable") is True,
                    "verification_status": "provisional", "source": _source(profile_id), "envelope_surfaces": [], "glazing_surfaces": []}
@@ -1263,7 +1266,7 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                                    "reason": "Kitchen process exhaust remains a project-specific preliminary exclusion."})
     weather_values = scenario_values["weather_profile"]
     requirements_raw = {"space_usage": "AI preliminary multi-room project", "occupancy": None, "operating_hours": "Controlled preliminary profiles", "indoor_cooling_setpoint_c": scenario_values["indoor_dry_bulb_c"], "outdoor_summer_db_c": max(point["db"] for point in weather_values["hours"]),
-                        "cooling_load_conditions": {"indoor_cooling_wet_bulb_c": scenario_values["indoor_wet_bulb_c"], "indoor_wet_bulb_basis": "legacy_unverified", "outdoor_summer_wet_bulb_c": max(point["wb"] for point in weather_values["hours"]), "outdoor_wet_bulb_basis": max(weather_values["hours"], key=lambda point: point["wb"]).get("wet_bulb_basis", "legacy_unverified"), "atmospheric_pressure_kpa": weather_values["pressure_kpa"], "verification_status": "provisional", "source": _source("scenario")},
+                        "cooling_load_conditions": {"indoor_cooling_wet_bulb_c": scenario_values["indoor_wet_bulb_c"], "indoor_wet_bulb_basis": "thermodynamic", "outdoor_summer_wet_bulb_c": max(point["wb"] for point in weather_values["hours"]), "outdoor_wet_bulb_basis": max(weather_values["hours"], key=lambda point: point["wb"]).get("wet_bulb_basis", "legacy_unverified"), "atmospheric_pressure_kpa": weather_values["pressure_kpa"], "verification_status": "provisional", "source": _source("scenario")},
                         "zones": requirements_zones,
                         "verification": {key: {"status": "provisional", "source": _source("scenario")} for key in ("occupancy", "design_conditions", "outside_air", "exhaust", "heat_sources", "ceiling", "existing_services")}}
     requirements = validate_design_requirements(requirements_raw)
