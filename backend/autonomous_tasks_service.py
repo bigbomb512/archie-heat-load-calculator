@@ -1561,8 +1561,10 @@ def _p0_corner_packets(root, force=False):
             corners, kinds = room_outline.corner_candidates(context["objects"], wall_style_ids, region, mm_per_px, with_kinds=True)
             subject = room or "the tenancy"
             if len(corners) < 3:
+                # Nothing to snap to: the AI's sketch stays as the outline, labelled (it is never left blocked).
                 result.append(("P0_outline_corners", target, {"task": "P0_outline_corners", "page": number, "room": room},
-                               "", [], "Fewer than three drawn corners near the sketch."))
+                               "", [], NotNeeded(f"Fewer than three drawn corners near the sketch of {subject}; the AI's "
+                                                 "sketch is kept as its outline, not snapped to drawn corners.")))
                 continue
             image, transform = room_outline.render_numbered_corners(context["image"], corners, region,
                                                                     list(main.exterior.coords)[:-1], kinds=kinds)
@@ -2289,18 +2291,33 @@ def _p3_packets(root, room_id=None, page_number=None, force=False):
             "storefront_match_reason":"House boundary classification." if dwelling else storefront_match["reason"],
             "nearby_text":cue_text}
         shop_prompt_prefix = "Classify each numbered run on the outside perimeter of the union of the traced tenancy rooms: external, mall, adjacent_tenancy, internal or unknown. "
-        prompt=(autonomous_tasks.house_boundaries_prompt(prompt_packet) if dwelling else shop_prompt_prefix +
+
+        def boundary_prompt(room_parts, nearby, digits):
+            evidence = {**prompt_packet, "room_parts": room_parts, "nearby_text": nearby,
+                        "perimeter_runs": [[row["index"]+1, round(row["length_m"], digits)] for row in asked]}
+            if dwelling:
+                return autonomous_tasks.house_boundaries_prompt(evidence)
+            return (shop_prompt_prefix +
                 "Do not classify interior partition edges; unmapped room edges become internal automatically. Quote drawing evidence for each non-unknown answer. "
                 "Runs under 1 m inherit the nearest numbered run's classification. "
                 "Storefront totals may exceed inside-face spans by 0–600 mm or differ by <=2%; never classify a matched run internal/adjacent_tenancy. "
                 "JSON only: {\"runs\":[{\"run_number\":int,\"boundary\":\"external|mall|adjacent_tenancy|internal|unknown\",\"evidence\":string}]}\n\n"
-                +json.dumps({"page":page,"room_parts":[row.get("room_label") for row in traces_on_page],
-                    "perimeter_runs":[[row["index"]+1,round(row["length_m"],2)] for row in asked],
+                +json.dumps({"page":page,"room_parts":room_parts,"perimeter_runs":evidence["perimeter_runs"],
                     "short_run_inheritance":{str(int(key)+1):value+1 for key,value in short_inheritance.items()},
                     "storefront_run_number":storefront_match["run_index"]+1 if storefront_match["run_index"] is not None else None,
                     "storefront_elevation_total_width_mm":storefront_match["total_mm"],
-                    "storefront_match_reason":storefront_match["reason"],"nearby_text":cue_text},
+                    "storefront_match_reason":storefront_match["reason"],"nearby_text":nearby},
                     ensure_ascii=False,separators=(",",":")))
+
+        # A large plan (house set 15: 26 room parts, 63 runs) is shortened, never blocked: room names once each, then
+        # less of the nearby text, then lengths to 0.1 m. Still over the limit, it is asked anyway (recorded).
+        all_parts = [row.get("room_label") for row in traces_on_page]
+        unique_parts = list(dict.fromkeys(all_parts))
+        for room_parts, nearby, digits in ((all_parts, cue_text, 2), (unique_parts, cue_text, 2),
+                                           (unique_parts, cue_text[:300], 2), (unique_parts, "", 2), (unique_parts, "", 1)):
+            prompt = boundary_prompt(room_parts, nearby, digits)
+            if len(prompt) <= 1500:
+                break
         packet={"task":"P3_boundaries","page":page,**({"dwelling":True} if dwelling else {}),"trace_ids":[row["trace_id"] for row in comfort_traces],
             "trace_id":comfort_traces[0]["trace_id"] if len(comfort_traces)==1 else None,
             "room_id":comfort_traces[0].get("room_id"),"room_label":comfort_traces[0].get("room_label"),
@@ -2309,9 +2326,6 @@ def _p3_packets(root, room_id=None, page_number=None, force=False):
             "storefront_run_index":storefront_match["run_index"],"storefront_run_indices":placed_runs,
             "storefront_total_width_mm":storefront_match["total_mm"],
             "storefront_match_reason":storefront_match["reason"],"nearby_text":cue_text}
-        if len(prompt)>1500:
-            result.append(("P3_boundaries",target,packet,"",[],"Boundary prompt exceeds 1,500 characters; evidence was not shortened."))
-            continue
         try:
             image,packet["image_transform"]=_perimeter_task_image(root,traces_on_page,perimeter,asked)
         except (OSError,ValueError) as error:
@@ -2608,9 +2622,6 @@ def _p4_packets(root, only_room_id=None):
             while len(prompt)>2000 and kept>0:
                 kept-=1
                 prompt=opening_prompt(text_layer[:kept])
-            if len(prompt)>2000:
-                result.append(("P4_openings",target,{"task":"P4_openings","room":trace.get("room_label"),"page":page},"",[],
-                    "Opening prompt exceeds 2,000 characters; evidence was not shortened.")); continue
             packet={"task":"P4_openings","room_id":room_id,"room_label":trace.get("room_label"),
                 "trace_id":trace["trace_id"],"trace_ids":[t["trace_id"] for t in room_traces],
                 "part_edges":part_edges,"edge_index":part_edges[0]["edge_index"],
@@ -3448,6 +3459,13 @@ class NotNeeded(str):
 
 
 def _create_run(root, task, target, packet, prompt, image_bytes=None, blocked_reason=""):
+    # A size limit keeps questions small and cheap; it never blocks one (user rule 2026-11-03: Phase 1 always
+    # completes). The builders shorten their evidence first; what is still over is asked and the overrun recorded.
+    if (prompt and blocked_reason and not isinstance(blocked_reason, NotNeeded)
+            and re.search(r"\bexceeds\b.*\b(?:limit|characters)\b", str(blocked_reason), re.I)):
+        packet = {**packet, "prompt_over_budget": {"chars": len(prompt),
+                                                   "budget": autonomous_tasks.TASKS.get(task, {}).get("budget_chars")}}
+        blocked_reason = ""
     accuracy = _accuracy(task)
     packet_bytes = json.dumps(packet, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     image_hashes = [hashlib.sha256(data).hexdigest() for data in (image_bytes or [])]
@@ -3563,7 +3581,8 @@ def _not_answered(record):
     stage (Happy Cap 2026-11-02: two corner questions stayed "waiting" for ever). The record keeps its status, so the
     Phase 1 supervisor can still try one targeted check, and a changed drawing input asks again (a new run)."""
     return bool(record and record.get("status") == "waiting_for_reply"
-                and sum(1 for attempt in record.get("reply_attempts") or [] if attempt.get("outcome") == "rejected")
+                and sum(1 for attempt in record.get("reply_attempts") or []
+                        if attempt.get("outcome") in {"rejected", "provider_failed"})
                 >= REFUSED_ATTEMPTS_BEFORE_GIVING_UP)
 
 
@@ -3586,7 +3605,29 @@ def run_all(web, project):
         return _run_all(web, project, root)
 
 
+PLAN_PAGE_TASKS = {"P0_dimensions", "P0_scale_read", "P0_scale_objects", "P0_wall_styles", "P0_room_names",
+                   "P0_tenancy_outline", "P0_room_outlines", "P0_unnamed_space", "P0_outline_corners", "P0_room_sizes",
+                   "S1_printed_areas", "P3_boundaries", "P3_surroundings"}
+
+
+def _settle_unselected_pages(root):
+    """Questions about a plan page that is no longer one of the traced plans (the plan choice improved, or the drawings
+    changed) aren't needed: they would otherwise wait for ever (house set 15, 2026-11-03: questions on its GFA and
+    shadow diagrams after the proposed plans were chosen)."""
+    selected = {row["page"] for row in _p0_main_geometry_pages(root)}
+    if not selected:
+        return
+    for record in _all_current(root):
+        page = (record.get("packet") or {}).get("page")
+        if (record.get("task") in PLAN_PAGE_TASKS and type(page) is int and page not in selected
+                and record.get("status") in {"waiting_for_reply", "blocked"}):
+            reason = f"Page {page} is no longer one of the plans the rooms are traced on."
+            record.update(status="not_needed", block_reason=reason, applied_value={"note": reason}, finished_at=_now())
+            _write(_record_file(root, record), record)
+
+
 def _run_all(web, project, root):
+    _settle_unselected_pages(root)
     _refresh_site_tasks(root)
     for target, packet, prompt, images, *error in _north_packets(root):
         reason = error[0] if error else ""

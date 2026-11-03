@@ -2176,6 +2176,8 @@ def _workspace_report(report):
         "equipment_coverage": report.get("equipment_coverage", {}),
         "phase1_coverage": report.get("phase1_coverage") if isinstance(report.get("phase1_coverage"), dict) else {},
         "supervisor_exceptions": report.get("supervisor_exceptions", []),
+        "supervisor_assumptions": report.get("supervisor_assumptions", []),
+        "phase1_result_assumptions": report.get("phase1_result_assumptions", []),
         "supervisor_spend": report.get("supervisor_spend", {}),
         "room_scope_confirmation": {key: confirmation.get(key) for key in ("reviewer", "confirmed_at")
                                      if isinstance(confirmation, dict) and confirmation.get(key)},
@@ -2630,12 +2632,17 @@ def _calculate_load(web, project, scope, persist):
     if scope == "phase1_base_room":
         from backend.job_runner import read_json
         saved_checks = read_json(paths["root"] / "phase1_supervisor_job.json")
-        report["supervisor_exceptions"] = [{key: row.get(key) for key in ("message", "room", "pages", "attempts")}
-                                            for row in saved_checks.get("exceptions", [])]
+        checks = [{key: row.get(key) for key in ("message", "room", "pages", "attempts", "blocking")}
+                  for row in saved_checks.get("exceptions", [])]
+        # Only a check with no value behind it holds Phase 1 back (no cooled room has a result at all); the others are
+        # labelled assumptions of the result: a fallback was used or a drawing check wasn't answered (2026-11-03).
+        report["supervisor_exceptions"] = [row for row in checks if row.get("blocking")]
+        report["supervisor_assumptions"] = [row for row in checks if not row.get("blocking")]
         report["supervisor_spend"] = saved_checks.get("spend", {})
         report["supervisor_fingerprint"] = saved_checks.get("result_fingerprint", "")
+        if checks:
+            report.setdefault("warnings", []).extend(row["message"] for row in checks)
         if report["supervisor_exceptions"]:
-            report.setdefault("warnings", []).extend(row["message"] for row in report["supervisor_exceptions"])
             report.setdefault("phase1_coverage", {})["complete"] = False
     if persist:
         _write(paths["base_report"] if scope == "phase1_base_room" else paths["report"], report)
@@ -2992,9 +2999,14 @@ def _phase1_coverage(report, candidates, input_set=None):
     surfaces = int(summary.get("included") or 0) + int(summary.get("openings_included") or 0)
     internal = [name for name in included if name in all_internal]
     resolved = surfaces > 0 or (bool(included) and len(internal) == len(included))
+    # Complete when the included rooms have an envelope result (user rule 2026-11-03: Phase 1 always gives a number);
+    # rooms left out are listed with why, as assumptions of the result, rather than holding it back.
     report["phase1_coverage"] = {"rooms_found": len(candidates), "rooms_included": included, "rooms_left_out": left_out,
                                  "surfaces_included": surfaces, "rooms_fully_internal": internal,
-                                 "complete": bool(included) and not left_out and resolved}
+                                 "complete": bool(included) and resolved}
+    if left_out:
+        report.setdefault("phase1_result_assumptions", []).extend(
+            f"{row['label']} is not counted: {row['reason']}." for row in left_out)
     if internal:
         report["phase1_automation_note"] = " ".join(filter(None, [
             str(report.get("phase1_automation_note") or ""),

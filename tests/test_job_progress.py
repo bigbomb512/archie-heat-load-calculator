@@ -41,7 +41,9 @@ class MilestoneTests(unittest.TestCase):
     def test_the_stage_follows_the_pipeline_order(self):
         self.assertEqual(milestones(drawings_confirmed=False)["stage"], "drawings")
         self.assertEqual(milestones(checks={"waiting": 2})["stage"], "drawings")       # the AI is still on the drawings
-        self.assertEqual(milestones(checks={"blocked": 1})["stage"], "drawings")
+        # A blocked question shows as needing a person but doesn't hold the job: its value is a labelled fallback.
+        self.assertEqual(milestones(checks={"blocked": 1})["stage"], "results")
+        self.assertEqual(milestones(checks={"blocked": 1})["needs_you"]["drawings"], 1)
         self.assertEqual(milestones(phase1_complete=False)["stage"], "phase1")
         self.assertEqual(milestones(result_exists=False)["stage"], "phase2")
         self.assertEqual(milestones()["stage"], "results")

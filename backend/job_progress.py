@@ -60,7 +60,9 @@ def milestones(*, drawings_confirmed, checks, phase1_complete, result_exists, re
     rooms: (has no area, needs a use) per listed room. A missing area isn't asked for while the AI is still finding
     areas. A result that is out of date keeps the job in Phase 2 until it is recalculated."""
     phase2_complete = bool(phase1_complete and result_exists and not result_stale)
-    working = bool(checks.get("waiting") or checks.get("blocked"))
+    # Questions still to be sent hold the drawings stage; a blocked one is shown as needing a person but doesn't hold
+    # the job (its value comes from a labelled fallback, 2026-11-03).
+    working = bool(checks.get("waiting"))
     stage = ("drawings" if not drawings_confirmed or working
              else "phase1" if not phase1_complete
              else "phase2" if not phase2_complete

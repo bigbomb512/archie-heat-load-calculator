@@ -343,6 +343,10 @@ def answer_all(web, project, step=lambda *args: None, provider_for=None, retry_n
                         "message": "The reply did not pass the drawing checks; completed tasks are kept."}
                     continue
                 kind = failure_kind(error)
+                if kind != "connection":
+                    # A call that failed (timeout, service error) counts as an attempt: one that fails twice settles as
+                    # not answered rather than waiting for ever. A broken connection concludes nothing and isn't counted.
+                    archive_investigation_failure(project, record, error, model_note="Drawing task")
                 failure = {"task": record["task"], "target": str(record.get("target") or ""),
                            "label": TASK_LABELS.get(record["task"], "A drawing task"), "kind": kind,
                            "message": failure_message(record, kind, error, again=tried[record["run_id"]] < MAX_ATTEMPTS)}

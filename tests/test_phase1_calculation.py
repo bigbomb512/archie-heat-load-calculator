@@ -115,7 +115,10 @@ class PhaseOneCalculationTests(unittest.TestCase):
         partial = {"status": "draft", "preliminary_surface_summary": {"included": 4, "openings_included": 1}}
         ai_preliminary_service._phase1_coverage(partial, candidates)
         self.assertEqual((partial["status"], partial["phase1_coverage"]["surfaces_included"]), ("draft", 5))
-        self.assertFalse(partial["phase1_coverage"]["complete"])
+        # Rooms with no area are listed with why and don't hold the result back (Phase 1 always gives a number).
+        self.assertTrue(partial["phase1_coverage"]["complete"])
+        self.assertEqual(partial["phase1_result_assumptions"], ["Kitchen is not counted: no area yet.",
+                                                                "Shop is not counted: no area yet."])
         inside = {"status": "draft", "preliminary_surface_summary": {"included": 0}}
         ai_preliminary_service._phase1_coverage(inside, candidates[:1], {"material": {"hourly_load_model": {"rooms": [
             {"name": "Bar", "cooling_load": {"envelope_not_applicable": True}}]}}})

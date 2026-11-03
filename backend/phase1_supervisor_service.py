@@ -603,6 +603,10 @@ def run(web, project, step=lambda *args: None):
     if not has_supported_room and not exceptions:
         exceptions.append({"id": "no_cooled_scope", "room": "the rooms", "pages": [], "attempts": 0,
             "message": "No cooled room has usable inputs for an empty-room result. Refrigeration and excluded spaces remain separate.", "tried": []})
+    # What is left after the attempts: with no cooled room that has an area there is no number at all (blocking);
+    # otherwise each is a labelled assumption of the result (a fallback was used or a check wasn't answered).
+    for row in exceptions:
+        row["blocking"] = not has_supported_room
     outcome = "needs_information" if not has_supported_room else "partial_draft" if exceptions else "draft_ready"
     result_fp = _fingerprint({"model": model_fingerprint(snapshot), "exceptions": exceptions})
     progress(exceptions=exceptions, active_investigations=[], model_fingerprint=model_fingerprint(snapshot), result_fingerprint=result_fp,
