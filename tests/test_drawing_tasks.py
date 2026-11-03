@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import time
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -60,7 +61,77 @@ class FakeProvider:
         return {"answer": "ok"}, {"provider": "fake", "model": self.model, "usage": {"cost_usd": 0.001}, "seconds": 0.1}
 
 
+class BatchTasks(FakeTasks):
+    def __init__(self, root, count=4):
+        self.root, self.records, self.unlocked, self.applied, self.builds = Path(root), {}, False, [], 0
+        for index in range(count):
+            self.add("P6_kitchen", f"kitchen-{index}")
+
+    def add(self, task, target):
+        record = {"task": task, "target": target, "run_id": f"{target}-run", "status": "waiting_for_reply",
+                  "prompt": f"Answer {target}.", "reply_attempts": []}
+        self.records[(task, target)] = record
+        task_dir = self.task_dir(self.root, task, target) / "runs" / record["run_id"]
+        task_dir.mkdir(parents=True, exist_ok=True)
+        from PIL import Image
+        Image.new("RGB", (10, 10), "white").save(task_dir / "image-1.png")
+
+    def post(self, web, project, data):
+        if data["action"] == "run_all":
+            self.builds += 1
+            return {}
+        record = self.records[(data["task"], data["target"])]
+        record.update(status="applied", applied_value={"answer": json.loads(data["reply"])})
+        self.applied.append(data["target"])
+        return {}
+
+    def all_current(self, root, web=None, project=None):
+        return list(self.records.values())
+
+    def current(self, root, task, target):
+        return self.records.get((task, target))
+
+
 class DrawingTaskTests(unittest.TestCase):
+    def test_round_fetches_in_parallel_applies_in_order_and_rebuilds_once(self):
+        with tempfile.TemporaryDirectory() as folder:
+            fake = BatchTasks(folder)
+            lock, active, maximum = threading.Lock(), 0, 0
+            class ParallelProvider:
+                model = "fake"
+                def propose(self, prompt, image_paths=()):
+                    nonlocal active, maximum
+                    with lock:
+                        active += 1
+                        maximum = max(maximum, active)
+                    time.sleep(.03)
+                    with lock:
+                        active -= 1
+                    return {"ok": True}, {}
+            with patch.object(tasks_service, "post", fake.post), patch.object(tasks_service, "_all_current", fake.all_current), \
+                    patch.object(tasks_service, "_current_task", fake.current), patch.object(tasks_service, "_task_dir", fake.task_dir), \
+                    patch.object(drawing.ai_provider, "parallel_calls", return_value=4), patch.object(drawing, "MAX_ROUNDS", 1):
+                drawing.answer_all(None, {"id": "j", "review_dir": folder}, provider_for=lambda task: ParallelProvider())
+            self.assertGreater(maximum, 1)
+            self.assertEqual(fake.applied, [f"kitchen-{index}" for index in range(4)])
+            # One rebuild before the round and one after it (the round limit ran out), none per answer.
+            self.assertEqual(fake.builds, 2)
+
+    def test_parallel_usage_limit_stops_round_without_applying_partial_answers(self):
+        with tempfile.TemporaryDirectory() as folder:
+            fake = BatchTasks(folder)
+            class Limited:
+                model = "fake"
+                def propose(self, prompt, image_paths=()):
+                    raise ai_provider.UsageLimitReached("limit")
+            with patch.object(tasks_service, "post", fake.post), patch.object(tasks_service, "_all_current", fake.all_current), \
+                    patch.object(tasks_service, "_current_task", fake.current), patch.object(tasks_service, "_task_dir", fake.task_dir), \
+                    patch.object(drawing.ai_provider, "parallel_calls", return_value=4), \
+                    patch.object(drawing, "_progress"):
+                with self.assertRaises(ai_provider.UsageLimitReached):
+                    drawing.answer_all(None, {"id": "j", "review_dir": folder}, provider_for=lambda task: Limited())
+            self.assertEqual(fake.applied, [])
+            self.assertEqual(fake.builds, 1)
     def test_provider_limit_keeps_the_drawing_job_reviewable_and_starts_independent_skills(self):
         class App:
             def __init__(self, project): self.project = project

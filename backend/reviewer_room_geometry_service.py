@@ -71,7 +71,7 @@ def current_records(paths, artifact=None):
     return [resolved for row in active if (resolved := _trace_with_current_room(row, paths, rooms))]
 
 
-def persist_ai_determined_traces(web, project, rows, ai_run_id, quality_label, replace_pages=None, replace_room_labels=None):
+def persist_ai_determined_traces(web, project, rows, ai_run_id, quality_label, replace_pages=None, replace_room_labels=None, defer=False):
     """Replace AI geometry for the rerun plan pages, keeping reviewer traces authoritative.
 
     replace_room_labels limits the replacement to those rooms: the open-plan outline task draws only the rooms the
@@ -125,7 +125,8 @@ def persist_ai_determined_traces(web, project, rows, ai_run_id, quality_label, r
     _atomic_json(paths["artifact"], validated)
     if prepared:
         from backend import calculation_extraction_service, productization
-        calculation_extraction_service.post(web, project, {"action": "build"})
+        if not defer:
+            calculation_extraction_service.post(web, project, {"action": "build"})
         productization.record_change_if_fingerprint_changed(paths["root"], action="autonomous_p0_traces_applied",
             target=paths["artifact"].name, previous_fingerprint=previous, new_fingerprint=validated.get("fingerprint", ""),
             affected_ids=[row["room_id"] for row in prepared])

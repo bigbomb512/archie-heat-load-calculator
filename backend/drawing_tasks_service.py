@@ -24,6 +24,7 @@ import hashlib
 import re
 from datetime import datetime
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from PIL import Image
 
@@ -257,65 +258,123 @@ def answer_all(web, project, step=lambda *args: None, provider_for=None, retry_n
         if not waiting:
             break
         step("answer", f"The AI is answering {len(waiting)} drawing task{'s' if len(waiting) != 1 else ''} (round {rounds})")
-        for number, record in enumerate(waiting, start=1):
+        # All prompts in a round describe the same saved drawing state. Fetch them concurrently,
+        # then publish in the stable task order below on this job thread.
+        from backend.job_runner import _context, current_check
+        check = current_check()
+        def fetch(number, record):
             checkpoint()
             current = autonomous_tasks_service._current_task(root, record["task"], record["target"])
             if current and (current.get("run_id") != record["run_id"] or current.get("status") != "waiting_for_reply"):
-                continue
+                return {"record": record, "skipped": True}
             tried[record["run_id"]] = tried.get(record["run_id"], 0) + 1
             images = _images(root, record)
             sizes = _sizes(images)
             grid = uses_grid(record["task"], sizes)
+            provider = ai_provider.recorded(provider_for(record["task"]), root, f"drawing:{record['task']}")
+            prompt = _prompt(record, grid)
+            key = hashlib.sha256(json.dumps([prompt, getattr(provider, "model", ""),
+                [hashlib.sha256(Path(image).read_bytes()).hexdigest() for image in images]]).encode()).hexdigest()
+            cached_path = root / "drawing_reply_cache" / f"{key}.json"
+            cached = read_json(cached_path)
+            if "reply" in cached:
+                return {"record": record, "reply": cached["reply"], "raw": cached.get("raw", {}),
+                        "provider": provider, "images": images, "sizes": sizes, "key": key, "cached": True}
+            previous = getattr(_context, "check", None)
+            _context.check = check
+            try:
+                checkpoint()
+                reply, raw = provider.propose(prompt, image_paths=images)
+                _write_json(cached_path, {"reply": reply, "raw": raw})
+                return {"record": record, "reply": reply, "raw": raw, "provider": provider,
+                        "images": images, "sizes": sizes, "key": key, "cached": False}
+            finally:
+                _context.check = previous
+
+        fetched = {}
+        provider_limited = None
+        # Saved before the calls, so the screen can say what the AI is answering and for how long.
+        single = waiting[0] if len(waiting) == 1 else None
+        _progress(root, answered=answered, refused=refused, rounds=rounds, calls=calls,
+                  current_task=single["task"] if single else None,
+                  current_task_label=(TASK_LABELS.get(single["task"], "A drawing task") if single
+                                      else f"{len(waiting)} drawing questions at once"),
+                  current_target=str(single.get("target") or "") if single else None, task_number=1,
+                  tasks_in_round=len(waiting), tasks_done=0, tasks_remaining=len(waiting),
+                  request_started_at=now(), last_progress_at=now(), last_problem=problem)
+        with ThreadPoolExecutor(max_workers=ai_provider.parallel_calls()) as pool:
+            futures = {pool.submit(fetch, number, record): (number, record)
+                       for number, record in enumerate(waiting, start=1)}
+            for future in as_completed(futures):
+                checkpoint()
+                number, record = futures[future]
+                try:
+                    fetched[record["run_id"]] = future.result()
+                except ai_provider.UsageLimitReached as error:
+                    provider_limited = error
+                    for pending in futures:
+                        pending.cancel()
+                    break
+                except Exception as error:
+                    fetched[record["run_id"]] = {"record": record, "error": error, "number": number}
+        if provider_limited is None:
+            limited_results = [item["error"] for item in fetched.values()
+                              if isinstance(item.get("error"), ai_provider.UsageLimitReached)]
+            if limited_results:
+                provider_limited = limited_results[0]
+        if provider_limited:
+            raise provider_limited
+        if not fetched:
+            break
+
+        for number, record in enumerate(waiting, start=1):
+            checkpoint()
+            result = fetched.get(record["run_id"], {"record": record, "skipped": True})
+            if result.get("skipped"):
+                continue
+            if result.get("error"):
+                error = result["error"]
+                calls += 1
+                if isinstance(error, ai_provider.InvalidProviderReply):
+                    archive_investigation_failure(project, record, error, model_note="Drawing task")
+                    refused += 1
+                    failures[record["run_id"]] = {"task": record["task"], "target": str(record.get("target") or ""),
+                        "label": TASK_LABELS.get(record["task"], "A drawing task"), "kind": "answer_rejected",
+                        "message": "The reply did not pass the drawing checks; completed tasks are kept."}
+                    continue
+                kind = failure_kind(error)
+                failure = {"task": record["task"], "target": str(record.get("target") or ""),
+                           "label": TASK_LABELS.get(record["task"], "A drawing task"), "kind": kind,
+                           "message": failure_message(record, kind, error, again=tried[record["run_id"]] < MAX_ATTEMPTS)}
+                failures[record["run_id"]] = failure
+                problem = failure["message"]
+                # Count connection failures in deterministic completion order (apply order).
+                connection_failures_in_a_row = connection_failures_in_a_row + 1 if kind == "connection" else 0
+                connection_stopped = connection_failures_in_a_row >= MAX_CONNECTION_FAILURES_IN_A_ROW
+                if connection_stopped:
+                    problem = (f"The connection to the AI service failed on {connection_failures_in_a_row} calls in a "
+                               "row, so the drawing tasks stopped calling it. Nothing was concluded about the drawings; "
+                               "try again when the connection works.")
+                _progress(root, answered=answered, refused=refused, rounds=rounds, calls=calls,
+                          tasks_done=number, tasks_remaining=len(waiting) - number,
+                          request_started_at=None, last_progress_at=now(), last_problem=problem)
+                if connection_stopped:
+                    break
+                continue
+            images, sizes = result["images"], result["sizes"]
+            grid = uses_grid(record["task"], sizes)
+            provider, reply = result["provider"], result["reply"]
+            if result["cached"]:
+                reused_replies += 1
+            else:
+                calls += 1
+            cache_path = root / "drawing_reply_cache" / f"{result['key']}.json"
             # Saved before the call, so the screen can say which task the AI is on and for how long.
             _progress(root, answered=answered, refused=refused, rounds=rounds, calls=calls,
                       current_task=record["task"], current_task_label=TASK_LABELS.get(record["task"], "A drawing task"),
                       current_target=str(record.get("target") or ""), task_number=number,
                       tasks_in_round=len(waiting), tasks_done=number - 1, tasks_remaining=len(waiting) - number + 1,
                       request_started_at=now(), last_progress_at=now(), last_problem=problem)
-            unreadable = None
-            try:
-                provider = ai_provider.recorded(provider_for(record["task"]), root, f"drawing:{record['task']}")
-                prompt = _prompt(record, grid)
-                key = hashlib.sha256(json.dumps([prompt, getattr(provider, "model", ""),
-                    [hashlib.sha256(Path(image).read_bytes()).hexdigest() for image in images]]).encode()).hexdigest()
-                cached_path = root / "drawing_reply_cache" / f"{key}.json"
-                cached = read_json(cached_path)
-                if "reply" in cached:
-                    reply, _raw = cached["reply"], cached.get("raw", {})
-                    reused_replies += 1
-                else:
-                    checkpoint()
-                    reply, _raw = provider.propose(prompt, image_paths=images)
-                    _write_json(cached_path, {"reply": reply, "raw": _raw})
-                    calls += 1
-                checkpoint()
-            except ai_provider.UsageLimitReached:
-                raise
-            except Exception as error:  # a failed call or an unreadable reply: tried again next round, up to MAX_ATTEMPTS
-                calls += 1
-                if isinstance(error, ai_provider.InvalidProviderReply):
-                    archive_investigation_failure(project, record, error, model_note="Drawing task")
-                    unreadable = True
-                    reply = None
-                else:
-                    kind = failure_kind(error)
-                    failure = {"task": record["task"], "target": str(record.get("target") or ""),
-                               "label": TASK_LABELS.get(record["task"], "A drawing task"), "kind": kind,
-                               "message": failure_message(record, kind, error, again=tried[record["run_id"]] < MAX_ATTEMPTS)}
-                    failures[record["run_id"]] = failure
-                    problem = failure["message"]
-                    connection_failures_in_a_row = connection_failures_in_a_row + 1 if kind == "connection" else 0
-                    connection_stopped = connection_failures_in_a_row >= MAX_CONNECTION_FAILURES_IN_A_ROW
-                    if connection_stopped:
-                        problem = (f"The connection to the AI service failed on {connection_failures_in_a_row} calls in a "
-                                   "row, so the drawing tasks stopped calling it. Nothing was concluded about the drawings; "
-                                   "try again when the connection works.")
-                    _progress(root, answered=answered, refused=refused, rounds=rounds, calls=calls,
-                              tasks_done=number, tasks_remaining=len(waiting) - number,
-                              request_started_at=None, last_progress_at=now(), last_problem=problem)
-                    if connection_stopped:
-                        break
-                    continue
             connection_failures_in_a_row = 0
             failures.pop(record["run_id"], None)
             if reply is not None:
@@ -323,25 +382,43 @@ def answer_all(web, project, step=lambda *args: None, provider_for=None, retry_n
                 if size:
                     reply = to_pixels(reply, size)
             try:
-                if not unreadable:
-                    autonomous_tasks_service.post(web, project, {"action": "validate_apply", "task": record["task"],
+                autonomous_tasks_service.post(web, project, {"action": "validate_apply", "task": record["task"],
                                                                  "target": record["target"], "reply": json.dumps(reply),
-                                                                 "model_note": f"AI provider ({getattr(provider, 'model', '') or 'default'})"})
+                                                                 "model_note": f"AI provider ({getattr(provider, 'model', '') or 'default'})",
+                                                                 "defer": True})
             except Exception:
-                cached_path.unlink(missing_ok=True)
+                cache_path.unlink(missing_ok=True)
                 raise
             after = autonomous_tasks_service._current_task(root, record["task"], record["target"]) or {}
             if after.get("run_id") == record["run_id"] and after.get("status") == "waiting_for_reply":
                 refused += 1
-                cached_path.unlink(missing_ok=True)
+                cache_path.unlink(missing_ok=True)
                 failures[record["run_id"]] = {"task": record["task"], "target": str(record.get("target") or ""),
                     "label": TASK_LABELS.get(record["task"], "A drawing task"), "kind": "answer_rejected",
                     "message": "The reply did not pass the drawing checks; completed tasks are kept."}
-            else:
+            elif after.get("status") != "waiting_for_reply":
                 answered += 1
             _progress(root, answered=answered, refused=refused, rounds=rounds, calls=calls,
                       tasks_done=number, tasks_remaining=len(waiting) - number,
                       request_started_at=None, last_progress_at=now())
+        if any((autonomous_tasks_service._current_task(root, row["task"], row["target"]) or {}).get("status")
+               in {"applied", "applied_fallback", "below_accuracy_bar"} for row in waiting):
+            autonomous_tasks_service._export_determinations(root)
+            if web is not None and any(row["task"] == "S1_printed_areas" for row in waiting):
+                from backend import room_use_resolution_service
+                room_use_resolution_service.post(web, project, {"action": "resolve"})
+            if web is not None:
+                from backend.phase1_supervisor_service import _build_calculation_evidence
+                _build_calculation_evidence(web, project)
+            # The questions are rebuilt once, by the next round's run_all (or after the last round, below).
+            from backend import productization
+            productization.record_change_if_fingerprint_changed(root, action="autonomous_drawing_round_applied",
+                target=f"round-{rounds}", previous_fingerprint="",
+                new_fingerprint=hashlib.sha256("|".join(sorted(row["run_id"] for row in waiting)).encode()).hexdigest(),
+                affected_ids=[record["run_id"] for record in waiting])
+    else:
+        # The round limit ran out: the last round's answers still unlock their next questions (rebuilt once).
+        autonomous_tasks_service.post(web, project, {"action": "run_all"})
     # Tasks whose calls failed and that are still unanswered: listed with why, never read as a finding.
     unresolved = [failure for run_id, failure in failures.items()
                   if (autonomous_tasks_service._current_task(root, failure["task"], failure["target"]) or {}).get("run_id") == run_id

@@ -179,9 +179,11 @@ class DrawingConnectionFailureTests(unittest.TestCase):
                     raise ai_provider.ProviderTransportError("openrouter", OSError(9, "Bad file descriptor"))
 
             fake, result, job = self.run_tasks(folder, Broken(), fake)
-        self.assertEqual(len(calls), drawing.MAX_CONNECTION_FAILURES_IN_A_ROW)   # stopped, not one call per task
+        # A round's questions go out together (2026-11-03), so each was asked once; the broken connection then stops
+        # the run: no second round, no retries.
+        self.assertEqual(len(calls), len(fake.records))
+        self.assertGreaterEqual(len(calls), drawing.MAX_CONNECTION_FAILURES_IN_A_ROW)
         self.assertTrue(result["connection_stopped"])
-        self.assertEqual(result["not_tried"], 1)
         self.assertEqual({row["kind"] for row in result["unresolved"]}, {"connection"})
         # Nothing was recorded as a reply or a finding: every task is still waiting, with no attempts.
         for record in fake.records.values():

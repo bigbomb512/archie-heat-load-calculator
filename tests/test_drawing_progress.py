@@ -123,14 +123,12 @@ class DrawingProgressTests(unittest.TestCase):
                     return {"answer": "ok"}, {"usage": {}}
 
             _fake, result, job = self.run_tasks(folder, Watching())
+        # A round's questions go out together (2026-11-03): saved before the calls, with how many and since when.
         first = snapshots[0]
-        self.assertEqual((first["current_task"], first["current_task_label"], first["task_number"],
-                          first["tasks_in_round"], first["tasks_done"], first["tasks_remaining"], first["rounds"]),
-                         ("P0_dimensions", "Reading the scale from a printed dimension", 1, 2, 0, 2, 1))
+        self.assertEqual((first["current_task_label"], first["tasks_in_round"], first["tasks_done"],
+                          first["tasks_remaining"], first["rounds"]),
+                         ("2 drawing questions at once", 2, 0, 2, 1))
         self.assertTrue(first["request_started_at"])
-        second = snapshots[1]
-        self.assertEqual((second["current_task"], second["tasks_done"], second["answered"], second["calls"]),
-                         ("P0_room_outlines", 1, 1, 1))
         # Finished: counts kept, nothing shown as in progress.
         self.assertEqual((job["answered"], job["refused"], job["calls"]), (result["answered"], result["refused"], result["calls"]))
         self.assertIsNone(job["current_task"])

@@ -201,16 +201,22 @@ def append_audit_event(root, *, action, target, actor="local_user", result="succ
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
     path = root / "audit_log.jsonl"
-    previous_hash = ""
-    if path.exists():
-        for line in reversed(path.read_text(encoding="utf-8").splitlines()):
-            if line.strip():
+    head_path = root / "audit_log_head.json"
+    try:
+        head = json.loads(head_path.read_text(encoding="utf-8"))
+        sequence, previous_hash = int(head.get("event_count", 0)) + 1, str(head.get("event_hash", ""))
+    except (OSError, ValueError, TypeError):
+        # Migrate older projects or recover a missing/stale head once.
+        previous_hash, sequence = "", 1
+        if path.exists():
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
                 try:
                     previous_hash = json.loads(line).get("event_hash", "")
                 except ValueError:
                     previous_hash = ""
-                break
-    sequence = sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip()) + 1 if path.exists() else 1
+                sequence += 1
     event = {
         "schema_version": AUDIT_VERSION,
         "event_id": "evt_" + hashlib.sha256(f"{time.time_ns()}:{action}:{target}".encode()).hexdigest()[:16],

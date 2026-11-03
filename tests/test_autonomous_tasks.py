@@ -2728,6 +2728,32 @@ class AutonomousTaskTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(len(first), 64)
 
+    def test_p0_walls_areas_cache_keys_generation_styles_calibration_and_raster_mode(self):
+        with TemporaryDirectory() as temporary:
+            from PIL import Image
+            root = Path(temporary)
+            source = root / "source.pdf"
+            source.write_bytes(b"pdf")
+            (root / "ai_input.json").write_text(json.dumps({"source_pdf": str(source)}), encoding="utf-8")
+            context = {"image": Image.new("RGB", (2, 2)), "objects": [], "viewport": (0, 0, 2, 2)}
+            calibration = {"mm_per_px": 1.0}
+            calls = []
+            def geometry(objects, styles, viewport):
+                calls.append(tuple(styles))
+                return None
+            with patch("ai.room_outline.wall_geometry", side_effect=geometry), \
+                    patch("ai.room_outline.enclosed_rooms", return_value=[]), \
+                    patch("ai.room_outline.drawn_segments", return_value=[]):
+                autonomous_tasks_service._WALLS_AREAS_CACHE.clear()
+                autonomous_tasks_service._p0_walls_areas(root, 1, context, calibration, ["b", "a"])
+                autonomous_tasks_service._p0_walls_areas(root, 1, context, calibration, ["a", "b"])
+                self.assertEqual(len(calls), 1)
+                autonomous_tasks_service._p0_walls_areas(root, 1, context, {"mm_per_px": 1.1}, ["a", "b"])
+                autonomous_tasks_service._p0_walls_areas(root, 1, context, calibration, ["a", "b"], True)
+                source.write_bytes(b"pdf-changed")
+                autonomous_tasks_service._p0_walls_areas(root, 1, context, calibration, ["a", "b"])
+            self.assertEqual(len(calls), 3)
+
     def test_page_analysis_cache_keeps_scanned_task_packet_identical(self):
         from contextlib import nullcontext
         from PIL import Image

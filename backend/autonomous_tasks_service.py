@@ -8,6 +8,7 @@ import json
 import math
 import re
 from functools import lru_cache
+from collections import OrderedDict
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib.parse import quote
@@ -71,11 +72,27 @@ def _current_task(run_root, task, target):
     return _read(path / "record.json", None)
 
 
+_INPUT_MEMO = OrderedDict()
+_INPUT_MEMO_LIMIT = 8
+
+
+def _memoized_json(root, names, builder):
+    from backend.job_files import signature
+    key = (str(Path(root).resolve()), tuple(names), signature(root, [Path(root) / name for name in names]))
+    cached = _INPUT_MEMO.get(key)
+    if cached is not None:
+        _INPUT_MEMO.move_to_end(key)
+        return deepcopy(cached)
+    value = builder()
+    _INPUT_MEMO[key] = deepcopy(value)
+    while len(_INPUT_MEMO) > _INPUT_MEMO_LIMIT:
+        _INPUT_MEMO.popitem(last=False)
+    return value
+
+
 def _load_inputs(root):
-    ai_input = _read(root / "ai_input.json", {})
-    spatial = _read(root / "spatial_ocr.json", {})
-    building = _read(root / "building_evidence.json", {})
-    return ai_input, spatial, building
+    names = ("ai_input.json", "spatial_ocr.json", "building_evidence.json")
+    return _memoized_json(root, names, lambda: tuple(_read(Path(root) / name, {}) for name in names))
 
 
 def _latest_site(root):
@@ -532,8 +549,20 @@ def _p0_is_raster(root, page_number, context, calibration):
                                        objects=context["objects"])
 
 
+_WALLS_AREAS_CACHE = OrderedDict()
+_WALLS_AREAS_CACHE_LIMIT = 64
+
+
 def _p0_walls_areas(root, page_number, context, calibration, wall_style_ids=None, raster_mode=False):
     mm_per_px = context.get("declared_mm_per_px") or calibration["mm_per_px"]
+    active = page_analysis_cache._ACTIVE.get()
+    generation = active.generation if active else page_analysis_cache.PageAnalysisCache(
+        root, _page_analysis_code_fingerprint()).generation
+    key = (generation, int(page_number), bool(raster_mode), tuple(sorted(wall_style_ids or [])), round(float(mm_per_px), 6))
+    cached = _WALLS_AREAS_CACHE.get(key)
+    if cached is not None:
+        _WALLS_AREAS_CACHE.move_to_end(key)
+        return cached
     if raster_mode:
         walls = room_outline.raster_wall_geometry(context["image"], context["viewport"], mm_per_px)
     else:
@@ -555,7 +584,11 @@ def _p0_walls_areas(root, page_number, context, calibration, wall_style_ids=None
         objects = context["objects"]
         selected_styles = wall_style_ids or []
         segments = room_outline.drawn_segments(objects, selected_styles)
-    return walls, areas, segments
+    result = walls, areas, segments
+    _WALLS_AREAS_CACHE[key] = result
+    while len(_WALLS_AREAS_CACHE) > _WALLS_AREAS_CACHE_LIMIT:
+        _WALLS_AREAS_CACHE.popitem(last=False)
+    return result
 
 
 def _roof_packets(root, room_id=None):
@@ -862,8 +895,15 @@ def _image_only_pages(root):
                          for row in page_rows):
         return sorted({row["page"] for row in page_rows
                        if type(row.get("page")) is int and row["structured_content"]["word_count"] == 0})
+    stat = source.stat()
+    return _cached_image_only_pages(str(source), stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+
+
+@lru_cache(maxsize=8)
+def _cached_image_only_pages(source, inode, size, mtime_ns, ctime_ns):
+    import pdfplumber
     with pdfplumber.open(source) as pdf:
-        return [index + 1 for index, page in enumerate(pdf.pages) if not page.chars]
+        return tuple(index + 1 for index, page in enumerate(pdf.pages) if not page.chars)
 
 
 def _s3_packets(root, image_pages=None):
@@ -2944,7 +2984,7 @@ def _page_level(root, page):
                  if isinstance(row, dict) and row.get("page") == page and row.get("level_name")), "") or read_level
 
 
-def _apply_p0_outlines(web, project, root, record, validated):
+def _apply_p0_outlines(web, project, root, record, validated, *, defer=False):
     from shapely.geometry import Polygon
     from backend import room_proposal
     asked_names = {str(name).casefold() for name in record["packet"].get("room_names", [])}
@@ -2982,16 +3022,17 @@ def _apply_p0_outlines(web, project, root, record, validated):
             row["net_polygon"] = net
             row["conflict"] = f"Area excludes {', '.join(taken)}, drawn inside it."
     rows = _p0_trace_rows(root, record, polygons)
+    trace_kwargs = {"defer": True} if defer else {}
     prepared = reviewer_room_geometry_service.persist_ai_determined_traces(web, project, rows,
         record["run_id"], record["quality_label"], replace_pages=[record["packet"]["page"]],
-        replace_room_labels=[*record["packet"].get("room_names", []), *use_named])
+        replace_room_labels=[*record["packet"].get("room_names", []), *use_named], **trace_kwargs)
     record.update({"status":_status_for_accuracy("ai_determined",record["accuracy"]),"source":"ai_determined",
         "applied_value":{"rooms":_p0_result_rooms(prepared),"label":record["quality_label"]},
         "validation":validated,"block_reason":""})
     return record
 
 
-def _apply_p0_unnamed_space(web, project, root, record, validated):
+def _apply_p0_unnamed_space(web, project, root, record, validated, *, defer=False):
     """Save the untinted spaces as rooms named by their use: snapped to the drawn lines, less any traced room they
     overlap, and only when what is left is room-sized."""
     from shapely.geometry import Polygon
@@ -3036,8 +3077,9 @@ def _apply_p0_unnamed_space(web, project, root, record, validated):
     prepared = []
     if polygons:
         rows = _p0_trace_rows(root, record, polygons)
+        trace_kwargs = {"defer": True} if defer else {}
         prepared = reviewer_room_geometry_service.persist_ai_determined_traces(web, project, rows,
-            record["run_id"], record["quality_label"], replace_pages=[page], replace_room_labels=names)
+            record["run_id"], record["quality_label"], replace_pages=[page], replace_room_labels=names, **trace_kwargs)
     record.update({"status": _status_for_accuracy("ai_determined", record["accuracy"]), "source": "ai_determined",
                    "applied_value": {"rooms": _p0_result_rooms(prepared) if prepared else [], "dropped": dropped,
                                      "label": record["quality_label"]},
@@ -3079,7 +3121,13 @@ def _current_trace(root, trace_id):
     return next((row for row in reviewer_room_geometry_service.current_records(paths) if row.get("trace_id")==trace_id),None)
 
 
-def _apply_p3(web, project, root, record, validated):
+def _classify_envelope(web, project, data, *, defer=False, **kwargs):
+    if defer:
+        kwargs["_defer_evidence_rebuild"] = True
+    return reviewer_room_geometry_service.post(web, project, data, **kwargs)
+
+
+def _apply_p3(web, project, root, record, validated, *, defer=False):
     packet=record["packet"]
     if packet.get("room_edges"):
         trace_ids=packet.get("trace_ids",[])
@@ -3125,18 +3173,18 @@ def _apply_p3(web, project, root, record, validated):
                     boundary=current[index]; source="reviewer"; reason="Reviewer-declared boundary."
                 values[index]=boundary; sources[index]=source; evidence[index]=reason
             request_edges=[{"index":index,"boundary":boundary} for index,boundary in sorted(values.items())]
-            reviewer_room_geometry_service.post(web,project,{"action":"classify_envelope","trace_id":trace_id,
+            _classify_envelope(web,project,{"action":"classify_envelope","trace_id":trace_id,
                 "reviewer":"Archie AI (P3)","edges":request_edges,"roof":trace.get("roof","unknown"),
                 "openings":trace.get("openings",[]),"declaration_source":"ai_determined","ai_run_id":record["run_id"],
                 "edge_sources":{str(index):source for index,source in sources.items()},
                 "boundary_evidence":[{"index":index,"text":evidence[index],"source":sources[index],"label":p3_label}
-                                     for index in values]}, _validated_current_records=tuple(traces.values()),
-                _defer_evidence_rebuild=True)
+                                     for index in values]}, defer=True,
+                _validated_current_records=tuple(traces.values()))
             results.append({"trace_id":trace_id,"room_id":trace.get("room_id"),"room":trace.get("room_label"),
                 "edges":[{"index":index,"edge_length_m":mapping.get(index,{}).get("length_m"),
                     "boundary":values[index],"source":sources[index],"evidence":evidence[index],"label":p3_label}
                     for index in sorted(values)]})
-        if web is not None and project:
+        if web is not None and project and not defer:
             calculation_extraction_service.post(web, project, {"action": "build"})
         record.update({"status":_status_for_accuracy("ai_determined",record["accuracy"]),"source":"ai_determined",
             "applied_value":{"page":packet.get("page"),"rooms":results,
@@ -3190,11 +3238,12 @@ def _apply_p3(web, project, root, record, validated):
         if current.get(index)!="unknown" and trace.get("edge_sources",{}).get(str(index),trace.get("declaration_source","reviewer"))=="reviewer":
             values[index]=current[index]; sources[index]="reviewer"
     request_edges=[{"index":index,"boundary":boundary} for index,boundary in sorted(values.items())]
-    reviewer_room_geometry_service.post(web,project,{"action":"classify_envelope","trace_id":trace["trace_id"],
+    _classify_envelope(web,project,{"action":"classify_envelope","trace_id":trace["trace_id"],
         "reviewer":"Archie AI (P3)","edges":request_edges,"roof":trace.get("roof","unknown"),
         "openings":trace.get("openings",[]),"declaration_source":"ai_determined","ai_run_id":record["run_id"],
         "edge_sources":{str(index):source for index,source in sources.items()},
-        "boundary_evidence":[{"index":index,"text":evidence.get(index,""),"source":sources.get(index)} for index in values]})
+        "boundary_evidence":[{"index":index,"text":evidence.get(index,""),"source":sources.get(index)} for index in values]},
+        defer=defer)
     edges=[{"index":index,"edge_length_m":lengths.get(index),"boundary":values[index],"source":sources[index],
             "evidence":evidence.get(index,""),"label":"Assumed (typical for a tenancy in a centre)" if sources[index]=="ai_fallback" else "AI-determined"}
            for index in sorted(values)]
@@ -3204,7 +3253,7 @@ def _apply_p3(web, project, root, record, validated):
     return record
 
 
-def _apply_p4_wall(web, project, root, record, validated):
+def _apply_p4_wall(web, project, root, record, validated, *, defer=False):
     """Keep the answer and make the chosen walls face what the storefront faces: a storefront wall is outside (street)
     or mall, whatever the wall-facing step said. A reviewer's own classification is never overwritten."""
     faces={}
@@ -3233,10 +3282,10 @@ def _apply_p4_wall(web, project, root, record, validated):
                 edges[index]=faces[run]; sources[str(index)]="ai_determined"; changed=True
                 corrected.append({"room":trace.get("room_label"),"edge_index":index,"boundary":faces[run]})
             if changed:
-                reviewer_room_geometry_service.post(web,project,{"action":"classify_envelope","trace_id":trace["trace_id"],
+                _classify_envelope(web,project,{"action":"classify_envelope","trace_id":trace["trace_id"],
                     "reviewer":"Archie AI (P4 storefront)","edges":[{"index":index,"boundary":value} for index,value in sorted(edges.items())],
                     "roof":trace.get("roof","unknown"),"openings":trace.get("openings",[]),"declaration_source":"ai_determined",
-                    "ai_run_id":record["run_id"],"edge_sources":sources})
+                    "ai_run_id":record["run_id"],"edge_sources":sources}, defer=defer)
     record.update({"status":_status_for_accuracy("ai_determined",record["accuracy"]),"source":"ai_determined",
         "applied_value":{"elevations":{str(page):row for page,row in validated["elevations"].items()},
                          "corrected_walls":corrected,"label":record["quality_label"]},
@@ -3256,7 +3305,7 @@ def _p4_panel_shade(validated, panel):
                      "evidence":shade.get("printed_text",[])}}
 
 
-def _apply_p4(web, project, root, record, validated):
+def _apply_p4(web, project, root, record, validated, *, defer=False):
     packet=record["packet"]
     trace=_current_trace(root,packet.get("trace_id"))
     if not trace: raise ValueError("The traced shopfront edge is stale; rebuild the opening task.")
@@ -3303,16 +3352,18 @@ def _apply_p4(web, project, root, record, validated):
                 "source":"ai_determined","parts":fragments,
                 "sill_assumption":panel.get("sill_assumption"),"head_assumption":panel.get("head_assumption")})
         for trace_id,part_trace in trace_by_id.items():
-            reviewer_room_geometry_service.post(web,project,{"action":"classify_envelope","trace_id":trace_id,
+            _classify_envelope(web,project,{"action":"classify_envelope","trace_id":trace_id,
                 "reviewer":"Archie AI (P4)","edges":part_trace.get("edges",[]),"roof":part_trace.get("roof","unknown"),
                 "openings":[*existing[trace_id],*openings_by_trace[trace_id]],
-                "declaration_source":"ai_determined","ai_run_id":record["run_id"]})
+                "declaration_source":"ai_determined","ai_run_id":record["run_id"]}, defer=defer)
         record.update({"status":_status_for_accuracy("ai_determined",record["accuracy"]),"source":"ai_determined",
             "applied_value":{"room":trace.get("room_label",packet.get("room_label")),"page":packet["page"],
                 "total_width_mm":validated["total_width_mm"],"glazed_panels":applied_panels,
                 "trace_ids":list(trace_by_id),"excluded":validated.get("excluded",[]),
                 "glazing_option":packet.get("glazing_option"),"label":record["quality_label"]},
             "validation":validated,"block_reason":""})
+        if web is not None and project and not defer:
+            calculation_extraction_service.post(web, project, {"action": "build"})
         return record
     existing=[row for row in trace.get("openings",[]) if row.get("declaration_source","reviewer")=="reviewer"]
     openings=[]
@@ -3346,9 +3397,10 @@ def _apply_p4(web, project, root, record, validated):
         applied_panels.append({"width_mm":panel["width_mm"],"sill_mm":panel["sill_mm"],"head_mm":panel["head_mm"],
             "source":"ai_determined","edge_indices":panel_edges,
             "sill_assumption":panel.get("sill_assumption"),"head_assumption":panel.get("head_assumption")})
-    reviewer_room_geometry_service.post(web,project,{"action":"classify_envelope","trace_id":trace["trace_id"],
+    _classify_envelope(web,project,{"action":"classify_envelope","trace_id":trace["trace_id"],
         "reviewer":"Archie AI (P4)","edges":trace.get("edges",[]),"roof":trace.get("roof","unknown"),
-        "openings":[*existing,*openings],"declaration_source":"ai_determined","ai_run_id":record["run_id"]})
+        "openings":[*existing,*openings],"declaration_source":"ai_determined","ai_run_id":record["run_id"]},
+        defer=defer)
     record.update({"status":_status_for_accuracy("ai_determined",record["accuracy"]),"source":"ai_determined",
         "applied_value":{"room":trace.get("room_label",packet.get("room_label")),"page":packet["page"],
           "total_width_mm":validated["total_width_mm"],"glazed_panels":applied_panels,"excluded":validated.get("excluded",[]),
@@ -3408,6 +3460,10 @@ def _create_run(root, task, target, packet, prompt, image_bytes=None, blocked_re
     reusable = bool(current) and (current.get("status") == "not_needed") == not_needed
     if reusable and (current.get("input_fingerprint") == input_fingerprint or (
             not packet.get("supervisor_note") and current.get("base_input_fingerprint") == input_fingerprint)):
+        return current
+    if reusable and current.get("packet_fingerprint") == hashlib.sha256(packet_bytes).hexdigest() and \
+            current.get("prompt_fingerprint") == hashlib.sha256(prompt.encode("utf-8")).hexdigest() and \
+            current.get("image_hashes") == image_hashes:
         return current
     run_id = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex[:8]}"
     run_dir = parent / "runs" / run_id
@@ -3546,7 +3602,7 @@ def _run_all(web, project, root):
                      if task == "P0_dimensions" and len(prompt) > 1500 else
                      "Prompt exceeds the 3,000-character limit; evidence was not shortened."
                      if task == "P0_wall_styles" and len(prompt) > 3000 else ""))
-    for packet_builder in (_p0_followup_packets, _p0_tenancy_packets, _p0_outline_packets, _p0_unnamed_space_packets, _p0_corner_packets, _s1_packets, _p0_size_packets, _p3_packets, _p7_packets, _p4_packets, _p6_kitchen_packets):
+    for packet_builder in (_p0_followup_packets, _p0_tenancy_packets, _p0_outline_packets, _p0_unnamed_space_packets, _p0_corner_packets, _s1_packets, _p0_size_packets, _p3_packets, _p3_surroundings_packets, _p7_packets, _p4_packets, _p6_kitchen_packets):
         for task, target, packet, prompt, images, reason in packet_builder(root):
             budget = autonomous_tasks.TASKS[task]["budget_chars"]
             _create_run(root, task, target, packet, prompt, images,
@@ -3700,7 +3756,7 @@ def _apply_p1(root, project, record, validated):
     return record
 
 
-def _apply_p2(web, project, root, record, validated):
+def _apply_p2(web, project, root, record, validated, *, defer=False):
     page = record["packet"]["page"]
     north_artifact = _read(root / "reviewer_room_geometry.json", {})
     existing_declaration = north_artifact.get("page_north", {}).get(str(page), {})
@@ -3828,7 +3884,7 @@ def _apply_p2(web, project, root, record, validated):
             task_records.setdefault(main_page, record)
         except (ValueError, OSError, KeyError):
             pass
-    if task_records and web is not None:
+    if task_records and web is not None and not defer:
         calculation_extraction_service.post(web, project, {"action": "build"})
     record.update({"status": _status_for_accuracy("ai_determined", record["accuracy"]), "source": "ai_determined",
                    "applied_value": {"page": page, "plan_up_azimuth_deg": applied_angle, "source": declaration_source,
@@ -3837,7 +3893,7 @@ def _apply_p2(web, project, root, record, validated):
     return record
 
 
-def _apply_p5(web, project, root, record, validated):
+def _apply_p5(web, project, root, record, validated, *, defer=False):
     room_id = record["target"]
     paths = reviewer_room_geometry_service._paths(project)
     artifact = _read(paths["artifact"], reviewer_room_geometry.empty_artifact())
@@ -3865,7 +3921,7 @@ def _apply_p5(web, project, root, record, validated):
             "action": "classify_envelope", "trace_id": trace["trace_id"], "reviewer": "Archie AI (P5)",
             "edges": deepcopy(trace.get("edges", [])), "roof": selected, "openings": deepcopy(trace.get("openings", [])),
             "declaration_source": source, "ai_run_id": record["run_id"],
-        })
+        }, _defer_evidence_rebuild=True)
         applied.append(trace)
     representative=reviewer_kept[0] if reviewer_kept and not applied else traces[0]
     if not applied and reviewer_kept:
@@ -3879,6 +3935,8 @@ def _apply_p5(web, project, root, record, validated):
                                      "source": source, "ai_run_id": record["run_id"], "evidence": evidence,
                                      "label": "Assumed (most likely case)" if source == "ai_fallback" else record["quality_label"]},
                    "validation": validated, "block_reason": ""})
+    if applied and web is not None and project and not defer:
+        calculation_extraction_service.post(web, project, {"action": "build"})   # in a batch, once per round instead
     return record
 
 
@@ -3944,6 +4002,8 @@ def post(web, project, data, *, defer_evidence_rebuild=False):
 
 
 def _post(web, project, data, *, defer_evidence_rebuild=False):
+    if defer_evidence_rebuild and not data.get("defer"):
+        data = {**data, "defer": True}
     root = _root(project)
     action = data.get("action", "")
     if action in {"run_all", "build"}:
@@ -3957,10 +4017,11 @@ def _post(web, project, data, *, defer_evidence_rebuild=False):
     if not record:
         raise ValueError("Build the task packet before validating a reply.")
     if record.get("status") == "blocked" and record.get("block_reason") and not data.get("reply"):
-        return get(web, project)
+        return {"applied": False, "status": record.get("status")} if defer else get(web, project)
     if action != "validate_apply":
         raise ValueError("Action must be run_all or validate_apply.")
     reply = str(data.get("reply", ""))
+    defer = bool(data.get("defer"))
     if len(reply.encode("utf-8")) > 64_000:
         raise ValueError("Reply exceeds the 64 KB task limit.")
     model_note = str(data.get("model_note", ""))[:160]
@@ -3999,7 +4060,8 @@ def _post(web, project, data, *, defer_evidence_rebuild=False):
                 raise ValueError(f"The reply leaves out {', '.join(omitted)}. Every room in the list is on this plan "
                                  "(the other images show where each is named): draw each one, or put it under "
                                  "not_drawn with the reason.")
-            record = _apply_p0_outlines(web, project, root, record, validated)
+            record = (_apply_p0_outlines(web, project, root, record, validated, defer=True) if defer
+                      else _apply_p0_outlines(web, project, root, record, validated))
             record["applied_value"]["not_drawn"] = ([{"room": name, "reason": "The AI left it out."} for name in omitted]
                                                     + [{"room": name, "reason": reason} for name, reason in not_drawn.items()])
         elif task == "P0_outline_corners":
@@ -4010,7 +4072,8 @@ def _post(web, project, data, *, defer_evidence_rebuild=False):
             record = _apply_p0_tenancy_outline(root, record, validated)
         elif task == "P0_unnamed_space":
             validated = autonomous_tasks.validate_p0_unnamed_space(record["packet"], reply)
-            record = _apply_p0_unnamed_space(web, project, root, record, validated)
+            record = (_apply_p0_unnamed_space(web, project, root, record, validated, defer=True) if defer
+                      else _apply_p0_unnamed_space(web, project, root, record, validated))
         elif task == "P0_room_sizes":
             validated = autonomous_tasks.validate_room_size_reply(record["packet"], reply)
             record = _apply_p0_sizes(web, project, root, record, validated)
@@ -4021,7 +4084,7 @@ def _post(web, project, data, *, defer_evidence_rebuild=False):
             record = _apply_s3_transcription(record, lines)
         elif task == "P3_boundaries":
             validated = autonomous_tasks.validate_boundary_reply(record["packet"], reply)
-            record = _apply_p3(web, project, root, record, validated)
+            record = _apply_p3(web, project, root, record, validated, defer=True) if defer else _apply_p3(web, project, root, record, validated)
         elif task == "P3_surroundings":
             validated = autonomous_tasks.validate_surroundings_reply(record["packet"], reply)
             record = _apply_p3_surroundings(record, validated)
@@ -4030,22 +4093,22 @@ def _post(web, project, data, *, defer_evidence_rebuild=False):
             record = _apply_p7(record, validated)
         elif task == "P4_storefront_wall":
             validated = autonomous_tasks.validate_storefront_wall_reply(record["packet"], reply)
-            record = _apply_p4_wall(web, project, root, record, validated)
+            record = _apply_p4_wall(web, project, root, record, validated, defer=True) if defer else _apply_p4_wall(web, project, root, record, validated)
         elif task == "P4_openings":
             validated = autonomous_tasks.validate_opening_reply(record["packet"], reply)
-            record = _apply_p4(web, project, root, record, validated)
+            record = _apply_p4(web, project, root, record, validated, defer=True) if defer else _apply_p4(web, project, root, record, validated)
         elif task == "P1_site":
             validated = autonomous_tasks.validate_site_reply(record["packet"], reply)
             record = _apply_p1(root, project, record, validated)
         elif task == "P2_north":
             validated = autonomous_tasks.validate_north_reply(record["packet"], reply)
-            record = _apply_p2(web, project, root, record, validated)
+            record = _apply_p2(web, project, root, record, validated, defer=True) if defer else _apply_p2(web, project, root, record, validated)
         elif task == "P6_kitchen":
             validated = kitchen_equipment.validate_reply(json.loads(reply), record["packet"])
             record = _apply_p6(record, validated)
         else:
             validated = autonomous_tasks.validate_roof_reply(record["packet"], reply)
-            record = _apply_p5(web, project, root, record, validated)
+            record = _apply_p5(web, project, root, record, validated, defer=True) if defer else _apply_p5(web, project, root, record, validated)
     except (ValueError, KeyError, TypeError) as error:
         if task in {"P0_dimensions", "P0_scale_read", "P0_scale_objects"}:
             # The next way of finding the scale takes over (another dimension line, the printed scale, standard
@@ -4075,17 +4138,20 @@ def _post(web, project, data, *, defer_evidence_rebuild=False):
     record["reply_attempts"][-1].update({"outcome": archived["outcome"], "reason": archived["reason"]})
     record["validation"] = {"valid": True, "result": record.get("validation", {})}
     _update_record(root, record)
-    if task == "S1_printed_areas" and record.get("applied_value") and web is not None:
+    if task == "S1_printed_areas" and record.get("applied_value") and web is not None and not defer:
         from backend import room_use_resolution_service
         room_use_resolution_service.post(web, project, {"action": "resolve"})
-    _export_determinations(root)
-    productization.record_change_if_fingerprint_changed(
-        root, action="autonomous_task_applied", target=f"{task}/{target}",
-        previous_fingerprint="", new_fingerprint=record["input_fingerprint"], affected_ids=[record["run_id"]])
+    if not defer:
+        _export_determinations(root)
+        productization.record_change_if_fingerprint_changed(
+            root, action="autonomous_task_applied", target=f"{task}/{target}",
+            previous_fingerprint="", new_fingerprint=record["input_fingerprint"], affected_ids=[record["run_id"]])
     # A completed stage may unlock the next bounded packet. This only creates
     # local task records; the ChatGPT transport remains manual.
-    _refresh_geometry_tasks(root)
-    return get(web, project)
+    if not defer:
+        _refresh_geometry_tasks(root)
+        return get(web, project)
+    return {"applied": True, "status": record.get("status")}
 
 
 def image(web, project, data):

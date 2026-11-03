@@ -452,6 +452,17 @@ def _room_use_investigation(web, project, gap):
     return {"status": "applied"}
 
 
+def _build_calculation_evidence(web, project):
+    """Rebuild the calculation inputs once after a batch of applied answers (each answer used to rebuild them itself).
+    Before the PDF has been analysed there is nothing to build."""
+    from backend import calculation_extraction_service
+    try:
+        calculation_extraction_service.post(web, project, {"action": "build"})
+    except ValueError as error:
+        if "Analyse the architect PDF" not in str(error):
+            raise
+
+
 def run(web, project, step=lambda *args: None):
     root = Path(project["review_dir"])
     saved = read_json(root / JOB_FILE)
@@ -568,6 +579,8 @@ def run(web, project, step=lambda *args: None):
             if not changed:
                 continue                 # nothing was applied: the model and its audit are unchanged (a rebuild takes 30-55 s)
             step("rebuild")
+            tasks._export_determinations(root)
+            _build_calculation_evidence(web, project)
             tasks._refresh_geometry_tasks(root)
             snapshot = _rebuild(web, project)
             gaps = audit(snapshot)
