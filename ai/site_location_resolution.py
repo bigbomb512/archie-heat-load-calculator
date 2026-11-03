@@ -29,10 +29,19 @@ STATE_PATTERN = r"(?:NSW|VIC|QLD|SA|WA|TAS|ACT|NT)"
 # abbreviation after a separator; otherwise "PLAN ... current" reads as a
 # "PL" street in the "NT".
 STREET_PATTERN = re.compile(
-    rf"\b(?:[A-Z]{{1,2}}\d{{1,4}}[A-Z]?/)?\d{{1,5}}(?:[A-Z]?[-/]\d{{1,5}})?\s+[A-Z0-9][A-Z0-9 .'-]{{1,70}}?\s"
+    rf"\b(?:[A-Z]{{1,2}}\d{{1,4}}[A-Z]?/|\d{{1,4}}[A-Z]?/)?\d{{1,5}}[A-Z]?(?:[-/]\d{{1,5}}[A-Z]?)?\s+[A-Z0-9][A-Z0-9 .'-]{{1,70}}?\s"
     rf"(?:STREET|ST|ROAD|RD|AVENUE|AVE|AV|DRIVE|DR|PLACE|PL|PARADE|PDE|HIGHWAY|HWY|LANE|LN|COURT|CT|"
     rf"BOULEVARD|BLVD|CRESCENT|CRES|TERRACE|TCE|CIRCUIT|CCT|WAY)\b"
     rf"(?:[\s,]+[A-Z][A-Z .'-]{{1,45}}?)?[\s,]+(?-i:{STATE_PATTERN})(?:\s+\d{{4}})?\b",
+    re.I,
+)
+# A street address printed after an address label, with or without the state ("PROJECT ADDRESS: 139a Burns Rd
+# Turramurra"); house numbers may carry a letter ("8A", house set 15 2026-11-03).
+LABELLED_ADDRESS_PATTERN = re.compile(
+    r"\b(?:PROJECT\s+|SITE\s+|PROPERTY\s+)?ADDRESS\s*:?\s*"
+    r"((?:\d{1,4}[A-Z]?/)?\d{1,5}[A-Z]?(?:[-/]\d{1,5}[A-Z]?)?\s+[A-Z0-9][A-Z0-9 .'-]{1,50}?\s"
+    r"(?:STREET|ST|ROAD|RD|AVENUE|AVE|AV|DRIVE|DR|PLACE|PL|PARADE|PDE|HIGHWAY|HWY|LANE|LN|COURT|CT|BOULEVARD|BLVD|"
+    r"CRESCENT|CRES|TERRACE|TCE|CIRCUIT|CCT|WAY|CLOSE|CL|GROVE|GR)\b(?:[ \t,]+[A-Z][A-Za-z .'-]{1,40})?)",
     re.I,
 )
 # A tenancy line names the centre or development the tenancy is in, e.g.
@@ -194,6 +203,15 @@ def infer_pdf_context(ai_input, spatial_ocr=None, building_evidence=None):
                 "confidence": _address_score(text, match.start(), match.end(), page["title"]), "source": source,
                 "status": "proposed",
             })
+        found = {row["address"].casefold() for row in addresses}
+        for match in LABELLED_ADDRESS_PATTERN.finditer(text):
+            value = re.sub(r"\s+", " ", match.group(1)).strip(" ,.;")
+            if DATE_PATTERN.search(value) or any(value.casefold() in known or known in value.casefold() for known in found):
+                continue
+            source = _source(page, value)
+            addresses.append({"candidate_id": _candidate_id("address", value, source), "address": value,
+                              "confidence": 0.6, "source": source, "status": "proposed", "basis": "address_label"})
+            found.add(value.casefold())
         for match in COORDINATE_PATTERN.finditer(text):
             latitude, longitude = _number(match.group(1)), _number(match.group(2))
             if latitude is None or longitude is None or not (-44 <= latitude <= -9 and 110 <= longitude <= 155):

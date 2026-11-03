@@ -128,7 +128,9 @@ def _level_candidates(page, ocr):
     pattern = re.compile(
         r"\b(?:FL|CL|WL|PT|LEVEL|LVL|L)\s*0*(\d{1,2})\b"
         r"|\b(\d{1,2})\s*(FL|LEVEL|LVL)\b"
-        r"|\b(GROUND\s+FLOOR|LOWER\s+GROUND|GROUND|BASEMENT)\b", re.I)
+        r"|\b((?:LOWER|UPPER)\s+GROUND(?:\s+FLOOR)?|GROUND\s+FLOOR"
+        r"|(?:FIRST|SECOND|THIRD|FOURTH|FIFTH|UPPER|TOP|ATTIC|LOFT|ROOF)\s+(?:FLOOR|LEVEL)|MEZZANINE|GROUND|BASEMENT)\b",
+        re.I)
     finish_code = re.compile(r"\b(?:FL|CL|WL|PT)\s*0*\d{1,2}\b|\b\d{1,2}\s*FL\b", re.I)
     finish_words = re.compile(r"\b(?:tile|tiling|epoxy|grout|vinyl|carpet|paint|laminate|melamine|veneer|powder\s*coat(?:ed)?|concrete|timber|stainless|finish(?:es)?|\d+\s*[x×]\s*\d+\s*mm)\b", re.I)
     title_context = " ".join(str(page.get(key, "")) for key in ("title", "detected_type", "sheet_classification"))

@@ -540,6 +540,24 @@ def infer(ai_input, coverage=None, spatial_ocr=None, vector_geometry=None, visio
                             "whole connected tenant zone; counters, kiosks and work functions are not separate rooms "
                             "without physical partitions or an explicit HVAC boundary.")
         row["zone_role"] = "whole_tenancy_candidate"
+    # A room found on a page with no level is the same room as the one of that name on a named level, when exactly one
+    # level has it (house set 15, 2026-11-03: Dining, Kitchen and Living on the Ground Floor and again on a level-less
+    # diagram page, the copies with no area). With the name on several levels it stays apart.
+    for key, row in list(candidates.items()):
+        if row["level_name"] != "Unassigned level":
+            continue
+        named = [other for other in candidates.values() if other is not row and other["level_name"] != "Unassigned level"
+                 and room_identity(other["label"], "") == room_identity(row["label"], "")]
+        if len(named) == 1:
+            target = named[0]
+            target["source_pages"] = sorted(set(target["source_pages"]) | set(row["source_pages"]))
+            target["evidence"] += [item for item in row["evidence"] if item not in target["evidence"]]
+            target["confidence"] = max(target["confidence"], row["confidence"])
+            if row.get("geometry") and not target.get("geometry"):
+                for field in ("geometry", "area_m2", "geometry_source", "page", "room_label_bbox", "rationale"):
+                    if field in row:
+                        target[field] = row[field]
+            del candidates[key]
     rows = []
     for row in sorted(candidates.values(), key=lambda item: item["room_id"]):
         row["source_pages"] = sorted(row["source_pages"])

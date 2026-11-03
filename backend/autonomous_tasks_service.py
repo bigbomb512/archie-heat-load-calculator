@@ -305,6 +305,21 @@ def _p0_page_selection(root):
             grouped.setdefault(level_key, []).append((dimension_count, 5, number, page, "fallback_services_plan"))
             notes.append({"page": number, "status": "services_plan_fallback",
                           "reason": "No architectural floor plan in this set; rooms are traced on a scaled services plan."})
+    if not grouped:
+        # Still nothing to trace on: use the drawing with the most linework that isn't an elevation, section or detail,
+        # so Phase 1 always has a plan (labelled; the scale ladder then gives it a scale).
+        def linework(number):
+            counts = vector_by_page.get(number, {}).get("raw_counts") or {}
+            return int(counts.get("lines", 0) or 0) + int(counts.get("curves", 0) or 0)
+        pages = [page for page in (ai_input.get("drawing_set", {}) or {}).get("pages", [])
+                 if isinstance(page, dict) and type(page.get("page")) is int
+                 and read_types.get(str(page["page"])) not in NOT_PLAN_PAGE_TYPES and linework(page["page"])]
+        if pages:
+            page = max(pages, key=lambda row: (linework(row["page"]), -row["page"]))
+            grouped["unassigned level"] = [(0, 6, page["page"], page, "fallback_any_plan")]
+            notes.append({"page": page["page"], "status": "any_plan_fallback",
+                          "reason": "No floor plan or services plan was found; rooms are traced on the drawing with the most "
+                                    "linework (labelled)."})
     selected = []
     for level_key, rows in grouped.items():
         rows.sort(key=lambda row: (-row[0], row[1], row[2]))
@@ -322,6 +337,8 @@ def _p0_page_selection(root):
             note={"page": page["page"], "status": "skipped", "reason": f"Skipped second view of {level_key}; page {winner[2]} was selected as the main geometry plan."}
             skipped.append(note)
             notes.append(note)
+    # Each chosen plan carries the level its rooms are filed under (_page_level), so every step agrees on it.
+    selected = [{**page, "level_name": _page_level(root, page["page"]) or page.get("level_name") or ""} for page in selected]
     return {"selected": sorted(selected, key=lambda row: row["page"]),
             "skipped": sorted(skipped, key=lambda row: row["page"]),
             "notes": sorted(notes, key=lambda row: row["page"])}
@@ -2748,10 +2765,17 @@ def _apply_p0_room_names(web, project, root, record, validated):
 
 
 def _page_level(root, page):
-    """The page's level: drawing coverage's, else the page reading's (a house's First Floor plan had none in coverage)."""
+    """The page's level. On a plan the page reading chose as a level's main plan, the page reading's level (it read the
+    plan's title: house set 15's "FIRST FLOOR PLAN" was "Ground Floor" in drawing coverage, from "Natural ground level"
+    in its legend, 2026-11-03); else drawing coverage's; else the page reading's."""
+    from ai import page_inventory
+    readings = {int(number): row for number, row in (_read(root / "page_inventory.json", {}).get("pages") or {}).items()
+                if str(number).isdigit() and isinstance(row, dict)}
+    read_level = str((readings.get(int(page)) or {}).get("level") or "")
+    if read_level and any(int(page) in pages for pages in page_inventory.main_plan_pages(readings).values()):
+        return read_level
     return next((row.get("level_name") for row in _read(root / "drawing_coverage.json", {}).get("page_roles", [])
-                 if isinstance(row, dict) and row.get("page") == page and row.get("level_name")), "") or \
-        str(((_read(root / "page_inventory.json", {}).get("pages") or {}).get(str(page)) or {}).get("level") or "")
+                 if isinstance(row, dict) and row.get("page") == page and row.get("level_name")), "") or read_level
 
 
 def _apply_p0_outlines(web, project, root, record, validated):

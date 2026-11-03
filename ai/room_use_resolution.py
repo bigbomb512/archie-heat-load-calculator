@@ -46,8 +46,14 @@ def _slug(value):
     return re.sub(r"[^a-z0-9]+", "-", _text(value).casefold()).strip("-") or "unassigned"
 
 
+UNKNOWN_LEVELS = {"", "unassigned", "unassigned-level", "unknown", "unknown-level", "none", "n-a"}
+
+
 def room_identity(label, level):
-    return f"room-use:{_slug(level)}:{_slug(label)}"
+    # One unknown level: "" (a level-less text reading) and "Unassigned level" are the same floor, or one room becomes
+    # two (house set 15, 2026-11-03: Dining, Kitchen and Living twice, the copies with no area).
+    level_slug = _slug(level)
+    return f"room-use:{'unassigned-level' if level_slug in UNKNOWN_LEVELS else level_slug}:{_slug(label)}"
 
 
 def _confidence(value, fallback=0.4):
