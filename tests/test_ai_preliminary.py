@@ -239,9 +239,13 @@ def main():
     no_orientation_model = assemble({"spaces": []}, preliminary_proposal=no_orientation)
     no_orientation_report = calculate(no_orientation_model)
     no_orientation_components = no_orientation_report["included_scope_peak"]["components"]
-    check("unknown façade orientation uses a visible west-facing solar assumption",
+    check("unknown façade orientation averages the sun over four directions, disclosed",
           "glazing_conduction" in no_orientation_components and "glazing_solar" in no_orientation_components
-          and any(row.get("component") == "wall orientation" for row in no_orientation_model["phase1_assumptions"]))
+          and any(row.get("component") == "wall orientation" and "average of the four directions" in row.get("reason", "")
+                  for row in no_orientation_model["phase1_assumptions"])
+          and any(row.get("component") == "glazing orientation" for row in no_orientation_model["phase1_assumptions"])
+          and not any(item.get("component") == "Glazing sun — orientation not assessed"
+                      for item in no_orientation_report.get("unresolved_room_inputs", [])))
     invalid = validate_placeholder_proposal({"rooms": [placeholder[0]], "surfaces": [{"label": "Unowned wall", "gross_area_m2": 10}]})
     check("malformed surface remains a proposed exclusion instead of crashing assembly", invalid["surfaces"][0]["validation_errors"])
     geometry_only = {

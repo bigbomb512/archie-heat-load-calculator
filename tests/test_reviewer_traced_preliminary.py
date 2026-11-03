@@ -286,12 +286,13 @@ def main():
         wall = next(surface for surface in room["cooling_load"]["envelope_surfaces"]
                     if surface["kind"] == "opaque_wall" and surface.get("boundary_method") == "external")
         report = ai_preliminary.calculate(assembled)
-        check("external reviewer edge uses calibrated area and the disclosed west-facing solar fallback",
-              abs(wall["area_m2"] - 0.3) < 1e-9 and wall["orientation"] == "W"
+        check("external reviewer edge uses calibrated area and the disclosed four-direction average sun (no north)",
+              abs(wall["area_m2"] - 0.3) < 1e-9 and wall["orientation"] == ""
+              and wall["solar_design_w_m2"] > 0
               and wall["u_value_w_m2k"] == ai_preliminary.load_pack()["profiles"]["retail"]["wall_u_w_m2k"]
               and abs(wall["solar_gain_factor"] - wall["u_value_w_m2k"] * 0.052) < 1e-9 and wall["solar_gain_factor"] < 0.05
               and any(row.get("component") == "wall orientation" for row in assembled["phase1_assumptions"]))
-        check("west-facing orientation estimate is disclosed and every other surface is itemised",
+        check("the averaged-sun assumption is disclosed and every other surface is itemised",
               not any(item.get("component") == "external walls — orientation not assessed (no façade solar)"
                       for item in assembled["exclusions"])
               and any(item.get("component") == "wall orientation" for item in assembled["phase1_assumptions"])
@@ -453,9 +454,10 @@ def main():
         opaque = next(surface for surface in room["cooling_load"]["envelope_surfaces"] if surface["kind"] == "opaque_wall" and surface.get("boundary_method") == "external")
         glazing = room["cooling_load"]["glazing_surfaces"]
         report = ai_preliminary.calculate(assembled)
-        check("shopfront opening reduces its host wall and uses the disclosed west-facing solar estimate",
+        check("shopfront opening reduces its host wall and its glass sun is averaged over four directions (no north)",
               abs(opaque["area_m2"] - (4.0 * 3.75 - 2.025 * 2.65)) < 1e-8
-              and len(glazing) == 1 and glazing[0]["orientation"] == "W"
+              and len(glazing) == 1 and glazing[0]["orientation"] == "" and glazing[0]["manual_solar"]["enabled"]
+              and any(item.get("component") == "glazing orientation" for item in assembled["phase1_assumptions"])
               and any(item.get("component") == "wall orientation" for item in assembled["phase1_assumptions"])
               and not any(item.get("component") == "Glazing sun — orientation not assessed"
                           for item in report["unresolved_room_inputs"]))

@@ -3589,11 +3589,16 @@ def _apply_p2(web, project, root, record, validated):
         if record.get("retry_count", 0) < 1:
             record["retry_count"] = record.get("retry_count", 0) + 1
             record["status"] = "waiting_for_reply"
-            record["block_reason"] = "Plan pages disagree by more than 5°. Retry this page once; after that Archie will apply a strict-majority direction or block if there is no majority."
+            record["block_reason"] = "Plan pages disagree by more than 5°. Retry this page once; after that Archie will apply a strict-majority direction, else treat north as unknown."
             record["validation"] = validated
             record["cross_check"] = consensus
             return record
-        record.update({"status": "blocked", "block_reason": "The plan pages have no strict-majority north direction after one retry; façade sun remains not assessed.", "validation": validated, "cross_check": consensus})
+        # No majority after the retry: north is unknown, so the sun on each outside wall and window is averaged over
+        # the four directions it could face (user decision 2026-11-03), rather than leaving the drawings stage blocked.
+        record.update({"status": _status_for_accuracy("ai_determined", record.get("accuracy", {})), "source": "ai_determined",
+                       "applied_value": {"page": page, "plan_up_azimuth_deg": None, "north_basis": "no_majority",
+                                         "note": "The plan pages disagree on north; the sun is averaged over the four directions."},
+                       "block_reason": "", "validation": validated, "cross_check": consensus})
         return record
     applied_angle = consensus["winner"]
     declaration_source = "ai_determined"

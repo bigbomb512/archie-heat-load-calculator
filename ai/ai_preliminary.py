@@ -716,12 +716,23 @@ SHADE_KINDS = {"awning", "verandah", "canopy", "eave", "balcony"}
 DEFAULT_SHADE_GAP_M = 0.3
 
 
+def _coordinate(value, limit):
+    """A latitude or longitude in degrees, or None. Southern latitudes are negative, so _number (positive values only)
+    can't read them: before 2026-11-03 an Australian site's own position was never used and the sun came from the
+    weather location's instead."""
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) and -limit <= value <= limit else None
+
+
 def _site_sun(site_location, site_days=None):
     """{"days", "latitude", "longitude", "timezone", "place"} for the sun at the site, or None. The confirmed site's
     position first; else the listed weather location's (its design days are used, so its sun is close enough)."""
     location = (site_location or {}).get("location", {}) if isinstance(site_location, dict) else {}
     address = str((site_location or {}).get("confirmed_address", "") if isinstance(site_location, dict) else "").strip()
-    latitude, longitude = _number(location.get("latitude_deg")), _number(location.get("longitude_deg"))
+    latitude, longitude = _coordinate(location.get("latitude_deg"), 90), _coordinate(location.get("longitude_deg"), 180)
     timezone_name = str(location.get("timezone") or "") or site_sun_model.timezone_for(location.get("state"), location.get("locality"))
     place = address
     if not (address and latitude is not None and longitude is not None) and site_days and site_days.get("location") in design_weather.LOCATIONS:
@@ -747,6 +758,25 @@ def _surface_sun(site_sun, scenarios, tilt_deg, azimuth_deg, shade=None, height_
                                       site_sun_model.surface_totals(site_sun, month, tilt_deg, azimuth_deg or 0.0,
                                                                     shade, height_m, obstruction))
     return result
+
+
+FOUR_BEARINGS = (0.0, 90.0, 180.0, 270.0)
+NORTH_UNKNOWN_NOTE = ("No true north was found on the drawings, so the sun on this surface is the average of the four "
+                      "directions it could face (user decision 2026-11-03).")
+
+
+def _averaged_surface_sun(site_sun, scenarios, tilt_deg, shade=None, height_m=None, obstruction=None):
+    """A wall or window whose facing is unknown (no north): each hour's sun averaged over the four directions it could
+    face. Its direction on the page is known, so the true one is that plus 0, 90, 180 or 270 degrees: the average is the
+    same as over north, east, south and west."""
+    each = [_surface_sun(site_sun, scenarios, tilt_deg, bearing, shade, height_m, obstruction) for bearing in FOUR_BEARINGS]
+    return {scenario: [round(sum(hours[scenario][hour] for hours in each) / len(each), 4) for hour in range(24)]
+            for scenario in each[0]}
+
+
+def _averaged_cardinal_profile(envelope):
+    profiles = [envelope["cardinal_solar_profiles_w_m2"].get(direction, [0] * 24) for direction in ("N", "E", "S", "W")]
+    return [round(sum(values[hour] for values in profiles) / len(profiles), 4) for hour in range(24)]
 
 
 def _obstruction_values(raw):
@@ -1618,11 +1648,12 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
             "ground_contact", "internal_floor", "room_to_room", "unresolved"
         })
         orientation = ("" if fixed_adjacent or physical == "floor" else candidate.get("orientation", "") if candidate.get("orientation", "") in CARDINALS
-                       else "horizontal" if physical in {"roof", "ceiling"} else "W" if physical == "wall" else "")
-        if physical == "wall" and not fixed_adjacent and candidate.get("orientation") not in CARDINALS:
-            phase1_assumptions.append({"room_id": room["room_id"], "component": "wall orientation",
-                "reason": "No north reference was resolved; the west-facing solar profile is used as the conservative preliminary orientation."})
+                       else "horizontal" if physical in {"roof", "ceiling"} else "")
+        facing_unknown = physical == "wall" and not fixed_adjacent and candidate.get("orientation") not in CARDINALS
+        if facing_unknown:
+            phase1_assumptions.append({"room_id": room["room_id"], "component": "wall orientation", "reason": NORTH_UNKNOWN_NOTE})
         solar_profile = (envelope["horizontal_solar_profile_w_m2"] if orientation == "horizontal"
+                         else _averaged_cardinal_profile(envelope) if facing_unknown
                          else envelope["cardinal_solar_profiles_w_m2"].get(orientation, [0] * 24))
         solar_peak = max(solar_profile)
         solar_schedule_id = f"prelim-solar-{candidate['candidate_id']}"
@@ -1634,14 +1665,15 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
             bearing = 0.0 if tilt == 0 else site_sun_model.surface_azimuth(orientation, candidate.get("azimuth_deg"))
             wall_shade = _shade_values(candidate.get("shade")) if tilt else None
             wall_obstruction = _obstruction_values(candidate.get("obstruction")) if tilt else None
-            hourly_sun = _surface_sun(site_sun, scenario_set, tilt, bearing, wall_shade,
-                                      (wall_shade or {}).get("wall_height_m") or (wall_obstruction or {}).get("wall_height_m"),
-                                      wall_obstruction)
+            wall_height = (wall_shade or {}).get("wall_height_m") or (wall_obstruction or {}).get("wall_height_m")
+            hourly_sun = (_averaged_surface_sun(site_sun, scenario_set, tilt, wall_shade, wall_height, wall_obstruction)
+                          if facing_unknown else
+                          _surface_sun(site_sun, scenario_set, tilt, bearing, wall_shade, wall_height, wall_obstruction))
             solar_peak = max((value for hours in hourly_sun.values() for value in hours), default=0.0)
         if solar_peak:
             operating = _profile_schedule(profile_id)
             values = (operating if hourly_sun else [round(operating[hour] * solar_profile[hour] / solar_peak, 6) for hour in range(24)])
-            schedules.append(_schedule_with_values(solar_schedule_id, f"Preliminary {orientation} façade solar profile", values, _source(f"solar-{orientation}")))
+            schedules.append(_schedule_with_values(solar_schedule_id, f"Preliminary {orientation or 'averaged'} façade solar profile", values, _source(f"solar-{orientation or 'averaged'}")))
             room["schedule_assignments"]["solar"][candidate["candidate_id"]] = solar_schedule_id
         floor_u = envelope["opaque_constructions"]["floor"]["u_value_w_m2k"]
         partition_u = envelope["opaque_constructions"]["partition"]["u_value_w_m2k"]
@@ -1741,22 +1773,26 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
         for opening in openings:
             shade = envelope["shading_categories"][opening["shading_category"]]
             opening_orientation = opening.get("orientation") if opening.get("orientation") in CARDINALS else orientation if orientation in CARDINALS else ""
-            glazing_profile = envelope["cardinal_solar_profiles_w_m2"].get(opening_orientation, [0] * 24)
+            glass_facing_unknown = not opening_orientation
+            glazing_profile = (_averaged_cardinal_profile(envelope) if glass_facing_unknown
+                               else envelope["cardinal_solar_profiles_w_m2"].get(opening_orientation, [0] * 24))
             glazing_peak = max(glazing_profile)
             solar_schedule_id = f"prelim-solar-{opening['candidate_id']}"
             glass_sun, glass_shade = None, _shade_values(opening.get("shade"))
             if site_sun and glazing_peak:
                 bearing = site_sun_model.surface_azimuth(opening_orientation, opening.get("azimuth_deg", candidate.get("azimuth_deg")))
                 glass_obstruction = _obstruction_values(opening.get("obstruction"))
-                glass_sun = _surface_sun(site_sun, scenario_set, 90.0, bearing, glass_shade, _number(opening.get("height_m")),
-                                         glass_obstruction)
+                glass_sun = (_averaged_surface_sun(site_sun, scenario_set, 90.0, glass_shade, _number(opening.get("height_m")),
+                                                   glass_obstruction) if glass_facing_unknown else
+                             _surface_sun(site_sun, scenario_set, 90.0, bearing, glass_shade, _number(opening.get("height_m")),
+                                          glass_obstruction))
                 glazing_peak = max((value for hours in glass_sun.values() for value in hours), default=0.0)
                 if glass_shade:
                     shade = 1.0          # the awning's geometry replaces the shading category
             if glazing_peak:
                 operating = _profile_schedule(profile_id)
                 values = (operating if glass_sun else [round(operating[hour] * glazing_profile[hour] / glazing_peak, 6) for hour in range(24)])
-                schedules.append(_schedule_with_values(solar_schedule_id, f"Preliminary {opening_orientation} glazing solar profile", values, _source(f"solar-{opening_orientation}")))
+                schedules.append(_schedule_with_values(solar_schedule_id, f"Preliminary {opening_orientation or 'averaged'} glazing solar profile", values, _source(f"solar-{opening_orientation or 'averaged'}")))
                 room["schedule_assignments"]["solar"][opening["candidate_id"]] = solar_schedule_id
             # Glass performance answered by the operators replaces the preliminary pack values (bounded, else ignored).
             answered_u = _number(opening.get("u_value_w_m2k")) if 0.5 <= (_number(opening.get("u_value_w_m2k")) or 0) <= 7 else None
@@ -1787,8 +1823,8 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
             accepted_opening_ids.add(opening["candidate_id"])
             surface_summary["openings_included"] += 1
             exclusions[:] = [item for item in exclusions if not (item.get("room_id") == room["room_id"] and item.get("component") == "glazing and façade solar" and "No resolved" in item.get("reason", ""))]
-            if not opening_orientation:
-                exclusions.append({"room_id": room["room_id"], "component": "Glazing sun — orientation not assessed", "candidate_id": opening["candidate_id"], "reason": "Glazing conduction is included; glazing solar gain is omitted because page north is not declared."})
+            if glass_facing_unknown:
+                phase1_assumptions.append({"room_id": room["room_id"], "component": "glazing orientation", "reason": NORTH_UNKNOWN_NOTE})
             if glass_shade and glass_sun:
                 phase1_assumptions.append({"room_id": room["room_id"], "component": "glazing shade",
                     "reason": (f"{glass_shade['kind'].capitalize()} {glass_shade['depth_m']:g} m deep, its underside "

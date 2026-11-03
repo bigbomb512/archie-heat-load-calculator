@@ -1895,8 +1895,8 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                             "reviewer_trace_id": part.get("trace_id", ""), "reviewer": declaration_reviewer,
                             "verification_status": "provisional",
                             "rationale": ("Reviewer-declared external boundary edge; outward orientation derived from the calibrated polygon winding and page north."
-                                          if orientation else "Reviewer-declared external boundary edge; no north reference is available, so the documented west-facing preliminary solar profile is used."),
-                            "assumptions": ([] if orientation else ["unknown_orientation_west_facing_solar_estimate"]),
+                                          if orientation else "Reviewer-declared external boundary edge; no north reference is available, so its sun is averaged over the four directions it could face."),
+                            "assumptions": ([] if orientation else ["unknown_orientation_sun_averaged_four_directions"]),
                             **({"obstruction": wall_obstruction} if wall_obstruction else {}),
                             **({"phase1_assumptions": [row for row in (
                                 {"component": "wall", "reason": wall_note} if wall_note else None,
