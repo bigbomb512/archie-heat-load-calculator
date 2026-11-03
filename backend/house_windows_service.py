@@ -80,8 +80,9 @@ def apply(web, project, root, read_page=None):
         return None
     from backend.autonomous_tasks_service import room_ceiling_height
     paths = reviewer_room_geometry_service._paths({"review_dir": str(root)})
+    from ai.autonomous_tasks import usable_calibration
     records = [row for row in reviewer_room_geometry_service.current_records(paths)
-               if row.get("calibration", {}).get("status") in {"agreed", "declared_scale_rejected", "declared_scale_only"}
+               if usable_calibration(row.get("calibration", {}).get("status"))
                and float(row.get("calibration", {}).get("mm_per_px") or 0) > 0]
     scopes = {row.get("room_id"): row.get("space_scope") for row in read_json(root / "room_use_resolution.json").get("records", [])
               if isinstance(row, dict)}

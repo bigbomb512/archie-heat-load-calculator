@@ -377,7 +377,7 @@ def build_calculator_draft(thermal_model, building_evidence, drawing_coverage, p
         calibration = value.get("calibration") if isinstance(value.get("calibration"), dict) else {}
         area = value.get("area_m2")
         if (not trace or not proof.get("entity_id") or proof.get("geometry_status") != "geometry_proposed"
-                or calibration.get("status") not in {"agreed", "declared_scale_rejected", "declared_scale_only"}
+                or not __import__("ai.autonomous_tasks", fromlist=["usable_calibration"]).usable_calibration(calibration.get("status"))
                 or not isinstance(area, (int, float)) or not math.isfinite(area) or area <= 0
                 or value.get("source_fingerprints") != trace.get("source_fingerprints")):
             continue
@@ -386,9 +386,9 @@ def build_calculator_draft(thermal_model, building_evidence, drawing_coverage, p
         difference = calibration.get("difference_percent")
         difference_text = f"; difference {difference:.2f}%" if isinstance(difference, (int, float)) else ""
         reason = ("Declared-scale calibration agrees" if calibration.get("status") == "agreed" else
-                  "Scaled from the sheet's printed scale; no printed dimension could be read to check it"
-                  if calibration.get("status") == "declared_scale_only" else
-                  "Two reviewer dimensions agree; declared scale rejected")
+                  "Two reviewer dimensions agree; declared scale rejected" if calibration.get("status") == "declared_scale_rejected"
+                  else str(calibration.get("label") or "Scaled from the sheet's printed scale; no printed dimension "
+                                                        "could be read to check it").rstrip("."))
         citation = {"reference": page.get("drawing_number") or f"Page {proof.get('source', {}).get('page')}",
                     "page": proof.get("source", {}).get("page"),
                     "excerpt": f"Reviewer {trace.get('reviewer')}; trace {trace_id}; "
@@ -688,7 +688,7 @@ def apply_calculator_draft(draft, decisions=None, hourly_model=None, schedule_li
             proof_current = bool(
                 proof and proof.get("proof_id") == value.get("geometry_reference")
                 and isinstance(proof.get("area_m2"), (int, float)) and math.isfinite(proof["area_m2"]) and proof["area_m2"] > 0
-                and calibration.get("status") in {"agreed", "declared_scale_rejected", "declared_scale_only"}
+                and __import__("ai.autonomous_tasks", fromlist=["usable_calibration"]).usable_calibration(calibration.get("status"))
                 and isinstance(calibration.get("mm_per_px"), (int, float)) and calibration["mm_per_px"] > 0
                 and proof.get("source_fingerprints", {}).get("source_pdf")
                 and proof.get("source_fingerprints", {}).get("vector_page")

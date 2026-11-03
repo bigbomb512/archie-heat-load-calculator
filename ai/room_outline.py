@@ -943,7 +943,7 @@ def dimension_line_candidates(objects, walls, viewport, limit=3, min_length_px=3
 def dimension_prompt():
     return ("The image is a crop of an architectural plan. One dimension line is highlighted in red. What number is "
             "printed for that dimension line (the dimension text that sits on or beside it, in millimetres)? Read only "
-            "what is printed; if you cannot read it, return null. Reply with JSON only: {\"value_mm\": int|null, "
+            "what is printed; if unreadable return {\"value_mm\": null, \"printed_text\": \"\"} so another line can be checked. Reply with JSON only: {\"value_mm\": int|null, "
             "\"printed_text\": string}")
 
 

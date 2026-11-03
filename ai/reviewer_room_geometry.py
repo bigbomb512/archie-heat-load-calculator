@@ -125,9 +125,12 @@ def validate_artifact(raw):
         declaration_source = row.get("declaration_source", "reviewer")
         # An AI outline on a sheet where no printed dimension could be read is scaled from the sheet's printed scale
         # alone (user decision 2026-10-16), labelled as unchecked; it has no dimension span to mark.
+        # Likewise a scale read from the printed notation or scale bar, estimated from standard objects, or assumed
+        # (the scale ladder's later steps, 2026-11-03): labelled, with no dimension span.
         sheet_scale_only = (declaration_source in {"ai_determined", "ai_fallback"}
-                            and calibration.get("source") == "sheet_printed_scale"
-                            and calibration.get("status") == "declared_scale_only")
+                            and (calibration.get("source") in {"sheet_printed_scale", "ai_read_printed_scale"}
+                                 and calibration.get("status") in {"declared_scale_only", "scale_bar"}
+                                 or calibration.get("status") in {"standard_objects", "assumed_scale"}))
         if sheet_scale_only:
             scale = calibration.get("mm_per_px")
             if not isinstance(scale, (int, float)) or isinstance(scale, bool) or not math.isfinite(scale) or scale <= 0:
@@ -139,10 +142,12 @@ def validate_artifact(raw):
         dim_value = calibration.get("dimension_value_mm")
         if not sheet_scale_only and (not isinstance(dim_value, (int, float)) or not math.isfinite(dim_value) or dim_value <= 0):
             raise ValueError("Printed calibration dimension must be positive millimetres.")
-        allowed_calibration_sources = {"reviewer": "reviewer_read_printed_dimension",
-                                       "ai_determined": "ai_read_printed_dimension",
-                                       "ai_fallback": "ai_read_printed_dimension"}
-        if not sheet_scale_only and calibration.get("source") != allowed_calibration_sources.get(declaration_source):
+        # An AI trace's printed dimension may come from the AI reading it or straight from the drawing's text layer
+        # (2026-11-03: a number printed beside a dimension line calibrates without asking the AI).
+        allowed_calibration_sources = {"reviewer": {"reviewer_read_printed_dimension"},
+                                       "ai_determined": {"ai_read_printed_dimension", "drawing_text"},
+                                       "ai_fallback": {"ai_read_printed_dimension", "drawing_text"}}
+        if not sheet_scale_only and calibration.get("source") not in allowed_calibration_sources.get(declaration_source, set()):
             raise ValueError("Calibration source must match the trace declaration source.")
         ai_measured_area = row.get("ai_measured_area_m2")
         if ai_measured_area is not None:

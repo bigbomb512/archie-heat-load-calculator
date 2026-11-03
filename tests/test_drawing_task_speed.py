@@ -57,28 +57,79 @@ class InferredRoomsTests(unittest.TestCase):
 
 
 class UnreadableDimensionTests(unittest.TestCase):
-    def test_a_null_reading_closes_the_task_and_a_wrong_reading_is_asked_again(self):
-        self.assertTrue(autonomous_tasks.dimension_unreadable('{"value_mm": null, "printed_text": ""}'))
-        self.assertFalse(autonomous_tasks.dimension_unreadable('{"value_mm": 3600, "printed_text": "3600"}'))
-        self.assertFalse(autonomous_tasks.dimension_unreadable('{"printed_text": ""}'))
-        self.assertFalse(autonomous_tasks.dimension_unreadable("not json"))
+    def test_null_or_unusable_reply_is_rejected_and_keeps_the_next_candidate_available(self):
+        packet = {"line": {"tick_centres_image_px": [[0, 0], [100, 0]]}}
+        for reply in ('{"value_mm": null, "printed_text": ""}', '{"value_mm": 3600, "printed_text": "2400"}'):
+            with self.assertRaises(ValueError):
+                autonomous_tasks.validate_dimension_reply(packet, reply)
+        self.assertIn("another line", __import__("ai.room_outline", fromlist=["dimension_prompt"]).dimension_prompt())
+
+    def test_null_dimension_reply_is_exhausted_and_does_not_block_the_next_line(self):
         root = Path(tempfile.mkdtemp())
         project = {"id": "t", "review_dir": str(root)}
-        packet = {"task": "P0_dimensions", "page": 1, "line": {"tick_centres_image_px": [[0, 0], [100, 0]]}}
-        for target in ("page-1-dimension-1", "page-1-dimension-2"):
-            autonomous_tasks_service._create_run(root, "P0_dimensions", target, packet, "Read it.", [])
-        autonomous_tasks_service.post(None, project, {"action": "validate_apply", "task": "P0_dimensions",
-                                                      "target": "page-1-dimension-1", "reply": '{"value_mm": null, "printed_text": ""}'})
-        autonomous_tasks_service.post(None, project, {"action": "validate_apply", "task": "P0_dimensions",
-                                                      "target": "page-1-dimension-2", "reply": '{"value_mm": 3600, "printed_text": "2400"}'})
-        closed = autonomous_tasks_service._current_task(root, "P0_dimensions", "page-1-dimension-1")
-        self.assertEqual(closed["status"], "blocked")
-        self.assertIn("could not read", closed["block_reason"])
-        self.assertEqual(autonomous_tasks_service._current_task(root, "P0_dimensions", "page-1-dimension-2")["status"],
-                         "waiting_for_reply")
-        self.assertEqual(autonomous_tasks_service._p0_dimensions(root, 1), [])
-        self.assertTrue(autonomous_tasks_service._p0_dimensions_settled(root, 1) is False)   # the wrong one: asked again
+        packet = {"task": "P0_dimensions", "page": 1, "line": {"tick_centres_image_px": [[0,0],[100,0]]}}
+        for index in (1, 2):
+            autonomous_tasks_service._create_run(root, "P0_dimensions", f"page-1-dimension-{index}", packet, "Read it.", [])
+        with mock.patch.object(autonomous_tasks_service, "_refresh_geometry_tasks"):
+            autonomous_tasks_service.post(None, project, {"action":"validate_apply", "task":"P0_dimensions",
+                "target":"page-1-dimension-1", "reply":'{"value_mm":null,"printed_text":""}'})
+        first = autonomous_tasks_service._current_task(root, "P0_dimensions", "page-1-dimension-1")
+        second = autonomous_tasks_service._current_task(root, "P0_dimensions", "page-1-dimension-2")
+        # Not needed (the next line or scale method takes over), so it never holds the job as "needs you".
+        self.assertEqual(first["status"], "not_needed")
+        self.assertEqual(first["applied_value"], {"fallback_required": True})
+        self.assertEqual(second["status"], "waiting_for_reply")
+        self.assertEqual(autonomous_tasks_service._task_progress(root)["blocked"], 0)
 
+
+class ScaleLadderEndTests(unittest.TestCase):
+    """Every page ends with a scale (user rule 2026-11-03): after the standard-object estimate, a labelled 1:100."""
+
+    def context(self):
+        return {"declared_mm_per_px": None, "render_dpi": 180.0, "viewport": (0, 0, 2000, 1400), "page_bbox": (0, 0, 1190, 842)}
+
+    def test_assumed_scale_after_every_other_step(self):
+        root = Path(tempfile.mkdtemp())
+        for task in ("P0_scale_read", "P0_scale_objects"):
+            autonomous_tasks_service._create_run(root, task, "page-1", {"task": task, "page": 1}, "", [],
+                                                 autonomous_tasks_service.NotNeeded("Not usable."))
+        with mock.patch.object(autonomous_tasks_service, "_s1_calibration", return_value=None), \
+                mock.patch.object(autonomous_tasks_service, "_p0_dimensions", return_value=[]):
+            calibration, _reason = autonomous_tasks_service._p0_calibration_ready(root, 1, self.context())
+        self.assertEqual(calibration["status"], "assumed_scale")
+        self.assertAlmostEqual(calibration["mm_per_px"], 25.4 * 100 / 180.0)
+        self.assertIn("1:100 is assumed", calibration["label"])
+        self.assertTrue(autonomous_tasks.usable_calibration("assumed_scale"))
+
+    def test_no_assumption_while_a_better_step_is_still_open(self):
+        root = Path(tempfile.mkdtemp())
+        autonomous_tasks_service._create_run(root, "P0_scale_read", "page-1", {"task": "P0_scale_read", "page": 1}, "Read it.", [])
+        with mock.patch.object(autonomous_tasks_service, "_s1_calibration", return_value=None), \
+                mock.patch.object(autonomous_tasks_service, "_p0_dimensions", return_value=[]):
+            calibration, _reason = autonomous_tasks_service._p0_calibration_ready(root, 1, self.context())
+        self.assertIsNone(calibration)
+
+    def test_the_object_question_names_the_kinds_the_checker_accepts(self):
+        prompt = autonomous_tasks.scale_objects_prompt()
+        for kind in autonomous_tasks.STANDARD_OBJECTS_MM:
+            self.assertIn(kind, prompt)
+
+    def test_ai_traces_on_any_ladder_scale_are_valid(self):
+        from ai import reviewer_room_geometry
+        text_layer = {"source": "drawing_text", "status": "agreed", "mm_per_px": 2.0,
+                      "dimension_points_image_px": [[0, 0], [100, 0]], "dimension_value_mm": 200.0}
+        for calibration in (text_layer,
+                            {"source": "standard_objects", "status": "standard_objects", "mm_per_px": 2.0},
+                            {"source": "assumed_scale", "status": "assumed_scale", "mm_per_px": 14.1},
+                            {"source": "ai_read_printed_scale", "status": "scale_bar", "mm_per_px": 3.0}):
+            row = {"trace_id": "t", "room_id": "room-use:ground:shop", "page": 1, "declaration_source": "ai_determined",
+                   "points_image_px": [[0, 0], [100, 0], [100, 100], [0, 100], [0, 0]], "snapped_line_ids": [None] * 5,
+                   "calibration": calibration, "reviewer": "Archie AI", "source_fingerprints": {}}
+            with self.subTest(calibration=calibration["status"]):
+                reviewer_room_geometry.validate_artifact({"records": [row]})
+        reviewer = {**row, "declaration_source": "reviewer", "calibration": text_layer}
+        with self.assertRaises(ValueError):          # a person's trace still needs the dimension they read
+            reviewer_room_geometry.validate_artifact({"records": [reviewer]})
 
 if __name__ == "__main__":
     unittest.main()

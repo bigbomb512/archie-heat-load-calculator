@@ -367,7 +367,66 @@ def _p0_calibration_ready(root, page, context):
         sheet = _sheet_scale_calibration(root, page, context, reason)
         if sheet:
             return sheet, ""
+    if _scale_read_settled(root, page):
+        scale_record = _current_task(root, "P0_scale_read", f"page-{page}")
+        scale = (scale_record or {}).get("applied_value") or {}
+        if scale:
+            calibration = _scale_read_calibration(scale, context, reason)
+            if calibration:
+                return calibration, ""
+        objects_record = _current_task(root, "P0_scale_objects", f"page-{page}")
+        objects = (objects_record or {}).get("applied_value") or {}
+        if autonomous_tasks.usable_calibration(objects.get("status")):
+            return objects, ""
+        if _settled_step(root, "P0_scale_objects", page):
+            return _assumed_scale_calibration(context, reason), ""
     return None, reason
+
+
+def _settled_step(root, task, page):
+    record = _current_task(root, task, f"page-{page}")
+    return bool(record and (record.get("status") in {"applied", "below_accuracy_bar", "blocked", "not_needed"}
+                            or record.get("status") == "waiting_for_reply" and _not_answered(record)))
+
+
+def _scale_read_settled(root, page):
+    return _settled_step(root, "P0_scale_read", page)
+
+
+ASSUMED_SCALE_DENOMINATOR = 100
+
+
+def _assumed_scale_calibration(context, reason=""):
+    """The last step of the scale ladder: nothing printed or drawn gave a scale, so a typical 1:100 is assumed, labelled
+    (the user's rule 2026-11-03: every page ends with a scale)."""
+    mm_per_px = 25.4 * ASSUMED_SCALE_DENOMINATOR / float(context.get("render_dpi") or 72)
+    return {"source": "assumed_scale", "status": "assumed_scale", "mm_per_px": mm_per_px,
+            "label": (f"No scale could be read or estimated from this drawing; a typical 1:{ASSUMED_SCALE_DENOMINATOR} "
+                      "is assumed. Check a known length to confirm the areas."), "reason": reason[:300]}
+
+
+def _scale_read_calibration(value, context, reason=""):
+    mm_per_px = value.get("mm_per_px")
+    if value.get("kind") == "notation":
+        denominator = value.get("denominator")
+        mm_per_px = context.get("render_dpi") and 25.4 * denominator / context["render_dpi"]
+        text = value.get("scale_text", "")
+        paper = re.search(r"@\s*(A[0-4])\b", text, re.I)
+        bbox = context.get("page_bbox") or (0, 0, 0, 0)
+        pdf_long = max(float(bbox[2])-float(bbox[0]), float(bbox[3])-float(bbox[1])) * 25.4 / 72
+        if paper and pdf_long:
+            mm_per_px *= PAPER_LONG_SIDE_MM[paper.group(1).upper()] / pdf_long
+    else:
+        text = "scale bar"
+    if not mm_per_px or not math.isfinite(mm_per_px):
+        return None
+    left, top, right, bottom = context.get("viewport") or (0, 0, 0, 0)
+    length_m = max(right-left, bottom-top) * mm_per_px / 1000
+    if not 2 <= length_m <= 400:
+        return None
+    status = "declared_scale_only" if value.get("kind") == "notation" else "scale_bar"
+    return {"source": "ai_read_printed_scale", "status": status, "mm_per_px": mm_per_px,
+            "scale_text": text, "label": f"Scale read from drawing: {text}.", "reason": reason[:300]}
 
 
 def _p0_dimensions_settled(root, page):
@@ -375,11 +434,12 @@ def _p0_dimensions_settled(root, page):
     refused twice)."""
     for pointer in (root / "ai_tasks" / "P0_dimensions").glob(f"page-{page}-dimension-*/current.json"):
         record = _read(pointer.parent / _read(pointer, {}).get("run_path", "") / "record.json", {})
-        if record.get("status") == "waiting_for_reply" and len(record.get("reply_attempts") or []) < 2:
+        if record.get("status") == "waiting_for_reply" and not _not_answered(record):
             return False
     return True
 
 
+MAX_DIMENSION_QUESTIONS = 8
 PAPER_LONG_SIDE_MM = {"A0": 1189, "A1": 841, "A2": 594, "A3": 420, "A4": 297}
 
 
@@ -515,7 +575,7 @@ def _roof_packets(root, room_id=None):
     selected = {}
     for trace in traces:
         if (trace.get("room_id") in comfort_ids and (room_id is None or trace.get("room_id") == room_id)
-                and trace.get("calibration", {}).get("status") in {"agreed", "declared_scale_rejected", "declared_scale_only"}):
+                and autonomous_tasks.usable_calibration(trace.get("calibration", {}).get("status"))):
             selected.setdefault(trace["room_id"], []).append(trace)
     result = []
     for room_id, parts in selected.items():
@@ -559,7 +619,7 @@ def _p6_kitchen_packets(root, room_id=None):
         traces = []
     kitchen_traces = [row for row in traces if str(row.get("room_id")) in comfort_ids
                       and "kitchen" in str(row.get("room_label", "")).casefold()
-                      and row.get("calibration", {}).get("status") in {"agreed", "declared_scale_rejected", "declared_scale_only"}
+                      and autonomous_tasks.usable_calibration(row.get("calibration", {}).get("status"))
                       and isinstance(row.get("points_image_px"), list) and len(row["points_image_px"]) >= 4]
     if room_id is not None and str(room_id) not in {str(row.get("room_id")) for row in kitchen_traces}:
         return []
@@ -660,7 +720,12 @@ def _build_p0_context(root, page_number):
     viewport = tuple((page_meta.get("plan_viewport") or {}).get("bbox_px") or (0, 0, image.size[0], image.size[1]))
     page_ocr = next((row for row in spatial.get("pages", []) if row.get("page") == page_number), {})
     from ai.dimension_wall_matcher import page_mm_per_px
-    declared_scale = page_mm_per_px(page_ocr.get("scale_candidates", []), render_dpi=72 * scale)
+    declared_candidates = page_ocr.get("scale_candidates", [])
+    if not declared_candidates:
+        meta = next((row for row in (ai_input.get("drawing_set", {}) or {}).get("pages", []) if row.get("page") == page_number), {})
+        title_scale = meta.get("main_scale") or meta.get("scale")
+        declared_candidates = [{"text": title_scale}] if title_scale else []
+    declared_scale = page_mm_per_px(declared_candidates, render_dpi=72 * scale)
     # Room finding needs the whole floor: grow the window over lines that run past it (lines of 1 m or more).
     viewport = room_outline.grow_plan_viewport(viewport, objects, image.size,
                                                (1000.0 / declared_scale) if declared_scale else 100.0)
@@ -677,6 +742,7 @@ def _build_p0_context(root, page_number):
             "page_origin": tuple(page_bbox[:2]), "page_bbox": page_bbox, "pdf_images": pdf_images,
             "pdf_chars_in_viewport": chars_in_viewport,
             "render_dpi": 72 * scale,
+            "declared_scale_candidates": declared_candidates,
             "declared_mm_per_px": declared_scale,
             "summary": summary, "page_meta": page_meta}
 
@@ -872,9 +938,59 @@ def _p0_initial_packets(root):
         number = page["page"]
         try:
             context = _p0_context(root, number)
-            lines = room_outline.dimension_line_candidates(context["objects"], None,
-                        (0, 0, *context["image"].size), limit=2 if not context["declared_mm_per_px"] else 3)
+            calibration, calibration_error = _p0_calibration_ready(root, number, context)
+            page_dimensions = _page_dimension_candidates(root, number, context)
+            vector = _read(root / "vector_geometry.json", {})
+            vector_page = next((row for row in (vector.get("geometry_key_points") or {}).get("pages", []) if row.get("page") == number), {})
+            candidate_texts = [row for row in page_dimensions if isinstance(row, dict) and (row.get("bbox_px") or row.get("bbox")) and row.get("value_mm")]
+            candidate_texts = [{**row, "bbox_px": row.get("bbox_px") or row.get("bbox")} for row in candidate_texts]
+            if not calibration:
+                try:
+                    text_calibration = _p0_calibration(root, number, context)
+                    if text_calibration.get("source") == "drawing_text":
+                        calibration = text_calibration
+                except (ValueError, KeyError, TypeError):
+                    pass
+            vector_texts = [{**row, "bbox_px": row.get("bbox_px") or row.get("bbox")} for row in vector_page.get("dimension_candidates", [])
+                            if isinstance(row, dict) and row.get("value_mm") and (row.get("bbox_px") or row.get("bbox"))]
+            candidate_texts.extend(row for row in vector_texts if row.get("candidate_id") not in {item.get("candidate_id") for item in candidate_texts})
+            lines = []
+            if not calibration:
+                from ai.dimension_wall_matcher import ranked_dimension_lines, classify_dimension_lines
+                vector_lines = classify_dimension_lines(vector_page.get("line_candidates", []), candidate_texts)
+                # Prefer explicitly paired vector dimension lines; only ask about geometric candidates when text
+                # evidence exists somewhere on the page and can be spatially paired.
+                paired = []
+                for text_row in candidate_texts:
+                    for vector_line in ranked_dimension_lines(text_row, vector_lines)[:1]:
+                        start, end = vector_line.get("start_px"), vector_line.get("end_px")
+                        if start and end:
+                            paired.append({"points": [start, end], "tick_centres_image_px": [start, end],
+                                           "span_px": math.dist(start, end)})
+                lines = paired or []
+                if not lines and candidate_texts:
+                    geometric = room_outline.dimension_line_candidates(context["objects"], None,
+                                (0, 0, *context["image"].size), limit=140, min_length_px=80)
+                    lines = []
+                    for text_row in candidate_texts:
+                        nearest = sorted(geometric, key=lambda line: __import__("ai.dimension_wall_matcher", fromlist=["text_line_score"]).text_line_score(
+                            text_row, {"start_px": line["points"][0], "end_px": line["points"][1]}), reverse=True)
+                        if nearest:
+                            line = nearest[0]
+                            lines.append({**line, "text_candidate": text_row})
+                if not candidate_texts:
+                    lines = []
+            asked_dimension_indices = {int(match.group(1)) for pointer in (root / "ai_tasks" / "P0_dimensions").glob(f"page-{number}-dimension-*/current.json")
+                                       if (match := re.search(r"dimension-(\d+)$", pointer.parent.name))}
+            asked_count = len(asked_dimension_indices)
+            # One line at a time with a sheet scale to check against, two without; the next ones only after those are
+            # answered, and at most MAX_DIMENSION_QUESTIONS per page (a detailed plan has dozens of dimension texts).
+            wanted = 1 if context["declared_mm_per_px"] else 2
+            ask_upto = (min(asked_count + wanted, MAX_DIMENSION_QUESTIONS)
+                        if _p0_dimensions_settled(root, number) and len(_p0_dimensions(root, number)) < wanted + 1 else asked_count)
             for index, line in enumerate(lines, start=1):
+                if index <= asked_count or index > ask_upto or calibration:
+                    continue
                 points = line.get("tick_centres_image_px") or line["points"]
                 (x1, y1), (x2, y2) = line["points"]
                 source = context["image"].convert("RGB")
@@ -890,12 +1006,18 @@ def _p0_initial_packets(root):
                                room_outline.dimension_prompt(), [
                                    _png_bytes(crop)
                                ], ""))
-            calibration, calibration_error = _p0_calibration_ready(root, number, context)
             if not calibration:
-                if len(_p0_dimensions(root, number)) >= (1 if context["declared_mm_per_px"] else 2):
-                    result.append(("P0_room_names", f"page-{number}",
-                        {"task":"P0_room_names", "page":number}, "", [],
-                        f"Room outlining is blocked until scale calibration is valid: {calibration_error}"))
+                scale_record = _current_task(root, "P0_scale_read", f"page-{number}")
+                if not scale_record:
+                    result.append(("P0_scale_read", f"page-{number}", {"task": "P0_scale_read", "page": number,
+                        "viewport": list(context["viewport"]), "render_dpi": context["render_dpi"], "page_bbox": list(context["page_bbox"])},
+                        autonomous_tasks.scale_read_prompt(), [_png_bytes(context["image"])], ""))
+                elif _scale_read_settled(root, number):
+                    objects_record = _current_task(root, "P0_scale_objects", f"page-{number}")
+                    if not objects_record:
+                        packet = {"task": "P0_scale_objects", "page": number, "viewport": list(context["viewport"])}
+                        result.append(("P0_scale_objects", f"page-{number}", packet, autonomous_tasks.scale_objects_prompt(),
+                                       [_png_bytes(context["image"])], ""))
                 continue
             if _p0_is_raster(root, number, context, calibration):
                 # Raster sheets use the detected wall mask and never require a wall-style judgement task.
@@ -911,11 +1033,6 @@ def _p0_initial_packets(root):
                           "declared_mm_per_px": context["declared_mm_per_px"]}
                 result.append(("P0_wall_styles", target, packet,
                                room_outline.wall_style_prompt(numbered), [_png_bytes(style_image)], ""))
-            if not lines:
-                result.append(("P0_dimensions", f"page-{number}-dimension-1",
-                               {"task":"P0_dimensions", "page":number, "line":{}}, "", [],
-                               NotNeeded("No printed dimension line on this plan; its scale comes from printed room "
-                                         "areas, else the sheet's printed scale (labelled unchecked).")))
         except (OSError, ValueError, IndexError, KeyError, TypeError) as error:
             result.append(("P0_dimensions", f"page-{number}-dimension-1", {"task":"P0_dimensions", "page":number}, "", [],
                            f"P0 page packet could not be built: {error}"))
@@ -945,10 +1062,42 @@ def _p0_calibration(root, page, context=None):
     dimensions = _p0_dimensions(root, page)
     if context is None:
         context = _p0_context(root, page)
+    dimensions = dimensions + _text_layer_dimension_lines(root, page, context)
     calibration = autonomous_tasks.calibration_from_dimensions(dimensions, context.get("declared_mm_per_px"))
     calibration["dimension_count"] = len(dimensions)
     calibration["dimension_evidence"] = deepcopy(dimensions)
     return calibration
+
+
+def _text_layer_dimension_lines(root, page, context):
+    from ai.dimension_wall_matcher import ranked_dimension_lines, classify_dimension_lines, match_page_dimensions
+    dimensions = _page_dimension_candidates(root, page, context)
+    dimensions = [{**row, "bbox_px": row.get("bbox_px") or row.get("bbox")} for row in dimensions
+                  if isinstance(row, dict) and row.get("value_mm") and (row.get("bbox_px") or row.get("bbox"))]
+    vector = _read(root / "vector_geometry.json", {})
+    vector_page = next((row for row in (vector.get("geometry_key_points") or {}).get("pages", []) if row.get("page") == page), {})
+    lines = classify_dimension_lines(vector_page.get("line_candidates", []), dimensions)
+    result = []
+    for text in dimensions:
+        ranked = ranked_dimension_lines(text, lines)
+        if not ranked:
+            continue
+        line = ranked[0]
+        points = [line.get("start_px"), line.get("end_px")]
+        if all(isinstance(point, list) and len(point) == 2 for point in points):
+            result.append({"points_image_px": points, "value_mm": float(text["value_mm"]),
+                           "printed_text": str(text.get("text_seen") or text.get("text") or text["value_mm"]),
+                           "source": "drawing_text"})
+    matched = match_page_dimensions({**vector_page, "dimension_candidates": dimensions})
+    seen = {(tuple(map(tuple, row["points_image_px"])), row["value_mm"]) for row in result}
+    for span in matched.get("dimension_span_candidates", []):
+        points = [span.get("measured_span_start_px"), span.get("measured_span_end_px")]
+        if all(isinstance(point, list) and len(point) == 2 for point in points):
+            key = (tuple(map(tuple, points)), span.get("value_mm"))
+            if key not in seen:
+                result.append({"points_image_px": points, "value_mm": float(span["value_mm"]),
+                               "printed_text": str(span.get("text_seen") or span["value_mm"]), "source": "drawing_text"})
+    return result
 
 
 _INFERRED_ROOM_INPUTS = ("ai_input.json", "drawing_coverage.json", "spatial_ocr.json", "vector_geometry.json")
@@ -2039,7 +2188,7 @@ def _p3_packets(root, room_id=None, page_number=None, force=False):
     try: traces=reviewer_room_geometry_service.current_records(reviewer_room_geometry_service._paths({"review_dir":str(root)}))
     except (OSError,ValueError,TypeError,KeyError): traces=[]
     comfort=_comfort_room_ids(root)
-    selected=[row for row in traces if row.get("calibration",{}).get("status") in {"agreed","declared_scale_rejected","declared_scale_only"}]
+    selected=[row for row in traces if autonomous_tasks.usable_calibration(row.get("calibration",{}).get("status"))]
     affected_pages = ({page_number} if page_number is not None else
                       {row.get("page") for row in selected if row.get("room_id") == room_id}
                       if room_id is not None else None)
@@ -2336,7 +2485,7 @@ def _p4_packets(root, only_room_id=None):
     comfort=_comfort_room_ids(root)
     assumption=__import__("ai.ai_preliminary",fromlist=["load_pack"]).load_pack()
     glazing="retail"; shading="unshaded"
-    selected=[trace for trace in traces if trace.get("calibration",{}).get("status") in {"agreed","declared_scale_rejected","declared_scale_only"}]
+    selected=[trace for trace in traces if autonomous_tasks.usable_calibration(trace.get("calibration",{}).get("status"))]
     by_page={}
     for trace in selected: by_page.setdefault(trace.get("page"),[]).append(trace)
     for plan_page,page_traces in sorted(by_page.items()):
@@ -2530,7 +2679,7 @@ def _p3_surroundings_packets(root):
     north = _read(root / "reviewer_room_geometry.json", {}).get("page_north", {})
     by_page = {}
     for trace in traces:
-        if trace.get("room_id") in comfort and trace.get("calibration", {}).get("status") in {"agreed", "declared_scale_rejected", "declared_scale_only"}:
+        if trace.get("room_id") in comfort and autonomous_tasks.usable_calibration(trace.get("calibration", {}).get("status")):
             by_page.setdefault(trace.get("page"), []).append(trace)
     for plan_page, page_traces in sorted(by_page.items()):
         p3 = _current_task(root, "P3_boundaries", f"page-{plan_page}")
@@ -2629,7 +2778,7 @@ def surroundings_by_edge(root):
 def _p0_trace_rows(root, record, polygons):
     page = int(record["packet"]["page"])
     calibration = deepcopy(record["packet"]["calibration"])
-    if calibration.get("status") not in {"agreed", "declared_scale_rejected", "declared_scale_only"}:
+    if not autonomous_tasks.usable_calibration(calibration.get("status")):
         raise ValueError("P0 cannot apply room areas until printed dimensions calibrate within 2%.")
     rooms = reviewer_room_geometry_service._rooms(reviewer_room_geometry_service._paths({"review_dir": str(root)}))
     room_ids = {}
@@ -2712,6 +2861,23 @@ def _apply_p0_dimensions(root, record, validated):
     except (OSError, ValueError, KeyError, TypeError) as error:
         record["calibration_status"] = "pending_more_dimensions"
         record["calibration_note"] = str(error)
+    return record
+
+
+def _apply_p0_scale_read(root, record, validated):
+    page = record["packet"].get("page")
+    context = _p0_context(root, page)
+    calibration = _scale_read_calibration(validated, context)
+    if not calibration:
+        raise ValueError("The printed scale implies a plan outside 2-400 m; continue to the next scale method.")
+    record.update({"status": "applied", "source": "ai_determined", "applied_value": calibration,
+                   "validation": validated, "calibration_status": calibration["status"], "block_reason": ""})
+    return record
+
+
+def _apply_p0_scale_objects(root, record, validated):
+    record.update({"status": "applied", "source": "ai_determined", "applied_value": validated,
+                   "validation": validated, "calibration_status": "standard_objects", "block_reason": ""})
     return record
 
 
@@ -3810,13 +3976,15 @@ def _post(web, project, data, *, defer_evidence_rebuild=False):
     record["reply_hash"] = hashlib.sha256(reply.encode("utf-8")).hexdigest()
     record["model_note"] = model_note
     try:
-        if task == "P0_dimensions" and autonomous_tasks.dimension_unreadable(reply):
-            # Asking again gets the same null (house set 18: the same reply 3-5 times per dimension, every round).
-            record.update({"status": "blocked", "source": "ai_determined", "applied_value": {}, "validation": {},
-                           "block_reason": "The AI could not read this printed dimension; it is not used for the scale."})
-        elif task == "P0_dimensions":
+        if task == "P0_dimensions":
             validated = autonomous_tasks.validate_dimension_reply(record["packet"], reply)
             record = _apply_p0_dimensions(root, record, validated)
+        elif task == "P0_scale_read":
+            validated = autonomous_tasks.validate_scale_read_reply(record["packet"], reply)
+            record = _apply_p0_scale_read(root, record, validated)
+        elif task == "P0_scale_objects":
+            validated = autonomous_tasks.validate_scale_objects_reply(record["packet"], reply)
+            record = _apply_p0_scale_objects(root, record, validated)
         elif task == "P0_wall_styles":
             validated = autonomous_tasks.validate_wall_style_batch_reply(record["packet"], reply)
             record = _apply_p0_wall_styles(record, validated)
@@ -3879,6 +4047,18 @@ def _post(web, project, data, *, defer_evidence_rebuild=False):
             validated = autonomous_tasks.validate_roof_reply(record["packet"], reply)
             record = _apply_p5(web, project, root, record, validated)
     except (ValueError, KeyError, TypeError) as error:
+        if task in {"P0_dimensions", "P0_scale_read", "P0_scale_objects"}:
+            # The next way of finding the scale takes over (another dimension line, the printed scale, standard
+            # objects, then an assumed 1:100): this reading is no longer needed and doesn't hold the job.
+            record.update({"status": "not_needed", "block_reason": f"Not usable ({error}); the next way of finding the scale is used.",
+                           "validation": {"valid": False, "error": str(error)}, "applied_value": {"fallback_required": True}})
+            archived = _read(reply_path, {})
+            archived.update({"outcome": "rejected_fallback", "reason": str(error)})
+            _write(reply_path, archived)
+            record["reply_attempts"][-1].update({"outcome": "rejected_fallback", "reason": str(error)})
+            _update_record(root, record)
+            _refresh_geometry_tasks(root)
+            return get(web, project)
         record["status"] = "waiting_for_reply"
         record["block_reason"] = str(error)
         record["validation"] = {"valid": False, "error": str(error)}

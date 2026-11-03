@@ -1647,7 +1647,8 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                 scale_note = next((str((part.get("calibration") or {}).get("label") or
                                        "Scaled from the sheet's printed scale; no printed dimension could be read to check it.")
                                    for part in trace_parts
-                                   if (part.get("calibration") or {}).get("status") == "declared_scale_only"), "")
+                                   if (part.get("calibration") or {}).get("status") in {"declared_scale_only", "scale_bar",
+                                                                                         "standard_objects", "assumed_scale"}), "")
                 for part in trace_parts:
                     floor_level_m, floor_note = _floor_level_m(room.get("level_name", ""))
                     part_component_suffix = f"_{part.get('trace_id')}" if len(trace_parts) > 1 else ""

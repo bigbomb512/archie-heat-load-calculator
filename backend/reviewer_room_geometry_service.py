@@ -92,7 +92,8 @@ def persist_ai_determined_traces(web, project, rows, ai_run_id, quality_label, r
         if page not in vectors or not isinstance(points, list) or len(points) < 4:
             raise ValueError("AI room outline does not reference a current room and plan page.")
         calibration = deepcopy(row.get("calibration") or {})
-        if calibration.get("status") not in {"agreed", "declared_scale_rejected", "declared_scale_only"} or not calibration.get("mm_per_px"):
+        from ai.autonomous_tasks import usable_calibration
+        if not usable_calibration(calibration.get("status")) or not calibration.get("mm_per_px"):
             raise ValueError("AI room outline needs a calibrated printed dimension.")
         prepared.append({"trace_id": str(row.get("trace_id") or "ai_room_trace_" + fingerprint([ai_run_id, room_id, page, row.get("part_index")])[:18]),
             "room_id": room_id, "room_label": room.get("label"), "level_name": room.get("level_name", ""),
@@ -227,7 +228,7 @@ def current_traced_areas(root):
             continue
         status = calibration.get("status")
         if (not math.isfinite(area) or area <= 0 or not math.isfinite(mm_per_px) or mm_per_px <= 0
-                or status not in {"agreed", "declared_scale_rejected", "declared_scale_only"}):
+                or not __import__("ai.autonomous_tasks", fromlist=["usable_calibration"]).usable_calibration(status)):
             continue
         room_id = str(trace["room_id"])
         room = rooms.get(room_id, {})
@@ -1067,7 +1068,8 @@ def post(web, project, data, _validated_current_records=None, _defer_evidence_re
         if not current:
             raise ValueError("Envelope can only be classified on a current room trace.")
         calibration = current.get("calibration", {})
-        if calibration.get("status") not in {"agreed", "declared_scale_rejected", "declared_scale_only"} or not calibration.get("mm_per_px"):
+        from ai.autonomous_tasks import usable_calibration
+        if not usable_calibration(calibration.get("status")) or not calibration.get("mm_per_px"):
             raise ValueError("Envelope can only be classified on a calibrated room trace.")
         reviewer = str(data.get("reviewer", "")).strip()
         if not reviewer:

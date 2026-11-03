@@ -16,6 +16,8 @@ from ai import reviewer_room_geometry, site_location_resolution, room_outline, k
 
 TASKS = {
     "P0_dimensions": {"id": "room_geometry_dimensions", "inputs": ["plan_page", "dimension_line_candidates"], "budget_chars": 1500, "media": "image", "prompt_builder": "build_p0_packets", "reply_validator": "validate_dimension_reply", "apply_function": "_apply_p0_dimension", "fallback": None},
+    "P0_scale_read": {"id": "printed_plan_scale", "inputs": ["plan_page", "scale_bar"], "budget_chars": 1200, "media": "image", "prompt_builder": "scale_read_prompt", "reply_validator": "validate_scale_read_reply", "apply_function": "_apply_p0_scale_read", "fallback": None},
+    "P0_scale_objects": {"id": "standard_object_scale", "inputs": ["plan_page", "standard_size_objects"], "budget_chars": 1500, "media": "image", "prompt_builder": "scale_objects_prompt", "reply_validator": "validate_scale_objects_reply", "apply_function": "_apply_p0_scale_objects", "fallback": None},
     "P0_wall_styles": {"id": "room_geometry_wall_styles", "inputs": ["plan_page_styles"], "budget_chars": 3000, "media": "image", "prompt_builder": "build_p0_packets", "reply_validator": "validate_wall_style_batch_reply", "apply_function": "_apply_p0_wall_styles", "fallback": None},
     "P0_room_names": {"id": "room_geometry_room_names", "inputs": ["calibrated_enclosed_areas", "room_registry"], "budget_chars": 4000, "media": "image", "prompt_builder": "build_p0_packets", "reply_validator": "validate_p0_room_names", "apply_function": "_apply_p0_room_names", "fallback": None},
     "P0_room_outlines": {"id": "room_geometry_outlines", "inputs": ["rooms_without_area", "plan_page"], "budget_chars": 3000, "media": "image", "prompt_builder": "build_p0_packets", "reply_validator": "validate_p0_outlines", "apply_function": "_apply_p0_outlines", "fallback": None},
@@ -46,6 +48,12 @@ TASKS = {
 }
 
 
+def usable_calibration(status):
+    """Every scale a page can end with (best first): printed areas or dimensions agreeing, the sheet scale, a printed
+    scale or scale bar the AI read, standard-size objects, and last an assumed 1:100 (all but the first labelled)."""
+    return status in {"agreed", "declared_scale_rejected", "declared_scale_only", "scale_bar", "standard_objects", "assumed_scale"}
+
+
 def calibration_from_dimensions(dimensions, declared_mm_per_px=None, tolerance=0.02):
     """Build P0 calibration from printed dimensions, requiring independent agreement."""
     valid = []
@@ -60,7 +68,14 @@ def calibration_from_dimensions(dimensions, declared_mm_per_px=None, tolerance=0
         span = math.dist(points[0], points[1])
         if span > 0:
             valid.append({"points_image_px": points, "value_mm": float(value), "mm_per_px": float(value) / span,
-                          "printed_text": str(row.get("printed_text", ""))})
+                          "printed_text": str(row.get("printed_text", "")), "source": row.get("source", "ai_read_printed_dimension")})
+    text_layer = [row for row in valid if row.get("source") == "drawing_text"]
+    if text_layer:
+        selected = text_layer[0]
+        return {"source": "drawing_text", "status": "agreed", "mm_per_px": selected["mm_per_px"],
+                "dimension_points_image_px": deepcopy(selected["points_image_px"]),
+                "dimension_value_mm": selected["value_mm"], "printed_text": selected["printed_text"],
+                "label": "Scale calibrated from a dimension read from the drawing's text."}
     selected = []
     if declared_mm_per_px and valid:
         # Use the same scale check as the standalone room-outline workflow.
@@ -110,20 +125,11 @@ def _agree_dimensions(rows, tolerance):
     return "agreed", (first["mm_per_px"] + second["mm_per_px"]) / 2
 
 
-def dimension_unreadable(reply):
-    """The AI said it can't read the dimension (value_mm null, as the question allows): an answer, not a failed reply."""
-    try:
-        value = parse_json_reply(reply)
-    except ValueError:
-        return False
-    return isinstance(value, dict) and "value_mm" in value and value["value_mm"] is None
-
-
 def validate_dimension_reply(packet, reply):
     value = parse_json_reply(reply)
     number = value.get("value_mm")
     if type(number) not in (int, float) or not math.isfinite(number) or number <= 0:
-        raise ValueError("value_mm must be a positive printed dimension in millimetres, or the reply is unreadable.")
+        raise ValueError("value_mm must be a positive printed dimension in millimetres; try the next dimension line if unreadable.")
     printed = str(value.get("printed_text", "")).strip()
     if not printed:
         raise ValueError("Quote the printed dimension text used to read the value.")
@@ -133,6 +139,67 @@ def validate_dimension_reply(packet, reply):
         raise ValueError("The quoted printed text does not contain the returned dimension value.")
     return {"value_mm": float(number), "printed_text": printed[:120],
             "points_image_px": deepcopy(packet["line"]["tick_centres_image_px"])}
+
+
+def scale_read_prompt():
+    return ("Read the plan's printed scale notation, or the scale bar. Return JSON with scale_text (for example "
+            "1:100 @ A3), or scale_bar containing two endpoint pixel coordinates and the printed real length in mm. "
+            "Use null when unreadable. Reply with JSON only.")
+
+
+def validate_scale_read_reply(packet, reply):
+    value = parse_json_reply(reply)
+    from ai.scan_reading import parse_scale
+    text = str(value.get("scale_text") or "").strip()[:120]
+    if text and parse_scale(text):
+        return {"kind": "notation", "scale_text": text, "denominator": float(parse_scale(text))}
+    bar = value.get("scale_bar")
+    if isinstance(bar, dict):
+        points, length = bar.get("points_image_px"), bar.get("length_mm")
+        if (isinstance(points, list) and len(points) == 2 and all(isinstance(p, list) and len(p) == 2 for p in points)
+                and all(type(n) in (int, float) and math.isfinite(n) for p in points for n in p)
+                and type(length) in (int, float) and math.isfinite(length) and length > 0):
+            span = math.dist(*points)
+            if span:
+                return {"kind": "bar", "points_image_px": points, "length_mm": float(length), "mm_per_px": float(length) / span}
+    raise ValueError("Return a readable scale notation or scale bar, or null so the standard-object estimate can be used.")
+
+
+STANDARD_OBJECTS_MM = {"door_820": 820, "door_870": 870, "door_920": 920, "wc_pan_depth": 700,
+                       "kitchen_bench_depth": 600, "parking_bay_width": 2400}
+
+
+def scale_objects_prompt():
+    return ("Mark at least two standard-size objects on this plan, preferably of different kinds. object_kind must be "
+            "one of: door_820 (an internal door leaf, the usual one), door_870, door_920 (an entry door), wc_pan_depth "
+            "(front to back of a toilet pan, about 700 mm), kitchen_bench_depth (600 mm), parking_bay_width (2400 mm). "
+            "For each give two pixel points spanning that dimension on the plan. "
+            "Reply JSON only: {\"objects\":[{\"object_kind\":string,\"points_image_px\":[[x,y],[x,y]]}]}.")
+
+
+def validate_scale_objects_reply(packet, reply):
+    value = parse_json_reply(reply)
+    known = STANDARD_OBJECTS_MM
+    rates = []
+    for row in value.get("objects", []) if isinstance(value.get("objects"), list) else []:
+        kind, points = row.get("object_kind"), row.get("points_image_px")
+        if kind not in known or not isinstance(points, list) or len(points) != 2:
+            continue
+        if not all(isinstance(p, list) and len(p) == 2 and all(type(n) in (int, float) and math.isfinite(n) for n in p) for p in points):
+            continue
+        span = math.dist(*points)
+        if span:
+            rates.append(known[kind] / span)
+    if len(rates) < 2:
+        raise ValueError("At least two valid standard objects are required.")
+    rate = sorted(rates)[len(rates) // 2] if len(rates) % 2 else sum(sorted(rates)[len(rates)//2-1:len(rates)//2+1]) / 2
+    if max(abs(item - rate) / rate for item in rates) > 0.15:
+        raise ValueError("Standard-object scale estimates must agree within 15%.")
+    viewport = packet.get("viewport") or [0, 0, 0, 0]
+    plan_length = max(viewport[2] - viewport[0], viewport[3] - viewport[1]) * rate / 1000
+    if not 2 <= plan_length <= 400:
+        raise ValueError("The implied plan length must be between 2 and 400 m.")
+    return {"mm_per_px": rate, "status": "standard_objects", "source": "standard_objects", "label": "Estimated from standard objects."}
 
 
 def validate_p0_room_names(packet, reply):

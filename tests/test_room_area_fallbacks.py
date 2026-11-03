@@ -58,6 +58,38 @@ class SheetScaleTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "two finite points"):
             reviewer_room_geometry.validate_artifact({"records": [{**trace, "declaration_source": "reviewer"}]})
 
+    def test_scale_read_bar_notation_and_standard_object_agreement(self):
+        bar = autonomous_tasks.validate_scale_read_reply({}, json.dumps({"scale_bar": {"points_image_px": [[0, 0], [100, 0]], "length_mm": 10000}}))
+        self.assertEqual(bar["kind"], "bar")
+        notation = autonomous_tasks.validate_scale_read_reply({}, '{"scale_text":"1:100 @ A3"}')
+        self.assertEqual(notation["denominator"], 100)
+        packet = {"viewport": [0, 0, 1000, 800]}
+        objects = {"objects": [{"object_kind":"door_820", "points_image_px":[[0,0],[82,0]]},
+                               {"object_kind":"kitchen_bench_depth", "points_image_px":[[0,0],[60,0]]}]}
+        estimate = autonomous_tasks.validate_scale_objects_reply(packet, json.dumps(objects))
+        self.assertEqual(estimate["status"], "standard_objects")
+        self.assertEqual(estimate["label"], "Estimated from standard objects.")
+        objects["objects"][1]["points_image_px"] = [[0,0],[20,0]]
+        with self.assertRaisesRegex(ValueError, "agree within 15%"):
+            autonomous_tasks.validate_scale_objects_reply(packet, json.dumps(objects))
+        with self.assertRaisesRegex(ValueError, "2 and 400 m"):
+            autonomous_tasks.validate_scale_objects_reply({"viewport":[0,0,100000,800]},
+                json.dumps({"objects":[{"object_kind":"door_820","points_image_px":[[0,0],[82,0]]},
+                            {"object_kind":"door_870","points_image_px":[[0,0],[87,0]]}]}))
+
+    def test_new_calibration_statuses_are_usable(self):
+        for status in ("agreed", "declared_scale_rejected", "declared_scale_only", "scale_bar", "standard_objects"):
+            self.assertTrue(autonomous_tasks.usable_calibration(status))
+        self.assertFalse(autonomous_tasks.usable_calibration("pending"))
+
+    def test_scale_read_paper_conversion_and_implausible_length_guard(self):
+        value = {"kind": "notation", "denominator": 100, "scale_text": "1:100 @ A1"}
+        calibrated = tasks._scale_read_calibration(value, {"render_dpi": 180, "page_bbox": A3, "viewport": (0,0,1000,700)})
+        self.assertEqual(calibrated["status"], "declared_scale_only")
+        self.assertAlmostEqual(calibrated["mm_per_px"], (25.4 * 100 / 180) * 841 / (1190.55 * 25.4 / 72), places=3)
+        self.assertIsNone(tasks._scale_read_calibration({"kind":"bar", "mm_per_px":500},
+            {"viewport":(0,0,1000,1000)}))
+
 
 class RoomSizeStepTests(unittest.TestCase):
     packet = {"room_names": ["Bar", "Office", "Store", "Shop"], "page": 20, "level_name": "Ground"}

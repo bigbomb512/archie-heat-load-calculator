@@ -272,7 +272,8 @@ def traced_rooms(root):
         calibration = row.get("calibration") if isinstance(row.get("calibration"), dict) else {}
         points = row.get("points_image_px") or []
         scale = calibration.get("mm_per_px")
-        if calibration.get("status") not in {"agreed", "declared_scale_rejected", "declared_scale_only"} or not isinstance(scale, (int, float)) or len(points) < 4:
+        from ai.autonomous_tasks import usable_calibration
+        if not usable_calibration(calibration.get("status")) or not isinstance(scale, (int, float)) or len(points) < 4:
             continue
         try:
             twice = sum(a[0] * b[1] - b[0] * a[1] for a, b in zip(points, points[1:]))

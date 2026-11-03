@@ -57,7 +57,7 @@ def _area_basis(area_source, calibration_status="", declaration_source=""):
         return "ai_outline"
     if calibration_status in MEASURED_CALIBRATIONS or (declaration_source == "reviewer" and not calibration_status):
         return "measured"
-    if calibration_status == "declared_scale_only":
+    if calibration_status in {"declared_scale_only", "scale_bar"}:
         return "sheet_scale"
     return "estimate"
 

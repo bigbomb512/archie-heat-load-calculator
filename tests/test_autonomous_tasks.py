@@ -567,6 +567,30 @@ class AutonomousTaskTests(unittest.TestCase):
             autonomous_tasks.calibration_from_dimensions(dimensions + [
                 {"points_image_px": [[0, 0], [500, 0]], "value_mm": 9000, "printed_text": "9,000"}])
 
+    def test_text_layer_dimension_calibrates_directly(self):
+        dimension = {"points_image_px": [[0,0],[100,0]], "value_mm": 4000,
+                     "printed_text": "4000", "source": "drawing_text"}
+        result = autonomous_tasks.calibration_from_dimensions([dimension])
+        self.assertEqual((result["status"], result["source"], result["mm_per_px"]), ("agreed", "drawing_text", 40))
+
+    def test_page_without_numbered_dimension_text_asks_no_dimension_line(self):
+        from PIL import Image
+        with patch.object(autonomous_tasks_service, "_p0_main_geometry_pages", return_value=[{"page": 90}]), \
+             patch.object(autonomous_tasks_service, "_p0_context", return_value={"image": Image.new("RGB", (100,100)),
+                 "objects": [], "viewport": (0,0,100,100), "declared_mm_per_px": None, "summary": [],
+                 "page_bbox": (0,0,100,100), "render_dpi": 180}), \
+             patch.object(autonomous_tasks_service, "_p0_calibration_ready", return_value=(None, "no calibration")), \
+             patch.object(autonomous_tasks_service, "_p0_calibration", side_effect=ValueError("pending")), \
+             patch.object(autonomous_tasks_service, "_page_dimension_candidates", return_value=[]), \
+             patch.object(autonomous_tasks_service, "_load_inputs", return_value=({}, {"pages": []}, {})), \
+             patch.object(autonomous_tasks_service.room_outline, "dimension_line_candidates", return_value=[
+                 {"points":[[0,50],[90,50]], "tick_centres_image_px":[[0,50],[90,50]], "span_px":90}]), \
+             patch.object(autonomous_tasks_service, "_current_task", return_value=None), \
+             patch.object(autonomous_tasks_service, "_png_bytes", return_value=b"png"):
+            packets = autonomous_tasks_service._p0_initial_packets(Path("/tmp"))
+        self.assertFalse(any(row[0] == "P0_dimensions" for row in packets))
+        self.assertTrue(any(row[0] == "P0_scale_read" for row in packets))
+
     def test_p0_wall_style_reply_and_outline_naming_are_strict(self):
         summary = [{"hatch": False, "style_id": "wall"}, {"hatch": True, "style_id": "tile"}]
         self.assertEqual(room_outline.validate_wall_style_reply({"wall_styles": [1]}, summary), ["wall"])
