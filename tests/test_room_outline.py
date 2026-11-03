@@ -383,6 +383,8 @@ def unnamed_space_and_window_checks():
           and image.getpixel((60, 60)) != (255, 255, 255))
     check("the prompt lists the use names and the tinted rooms",
           all(name in ro.unnamed_space_prompt(["Bar"]) for name in (*ro.USE_ROOM_NAMES, "Bar")))
+    check("a shop's prompt doesn't offer house names; a dwelling's does",
+          "Bedroom" not in ro.unnamed_space_prompt(["Bar"]) and "Bedroom" in ro.unnamed_space_prompt(["Bar"], dwelling=True))
 
 
 def tenancy_checks():

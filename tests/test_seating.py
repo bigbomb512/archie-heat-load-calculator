@@ -198,6 +198,55 @@ class SeatingTests(unittest.TestCase):
         self.assertEqual(page_inventory.PROMPT_VERSION,"page-inventory-v2-seating")
 
 
+class SeatingPageCacheTests(unittest.TestCase):
+    """A page is parsed once per saved PDF version; what _gather reads from it is unchanged."""
+
+    @staticmethod
+    def _doc(counter):
+        class Page:
+            width = 100; height = 100
+            def __getattr__(self, name):
+                counter[name] = counter.get(name, 0) + 1
+                if name == "rects":
+                    return [{"object_type": "rect", "x0": 1, "top": 1, "x1": 1.45, "bottom": 1.45, "path": [], "pts": [(1, 1)],
+                             "stroking_color": (0, 0, 0)}]
+                if name == "curves":
+                    return [{"object_type": "curve", "x0": 2, "top": 1, "x1": 2.45, "bottom": 1.45,
+                             "path": [("m", (2, 1)), ("l", (2.45, 1)), ("h",)], "pts": [(2, 1), (2.45, 1), (2, 1)], "fill": True}]
+                if name == "lines":
+                    return [{"x0": 0, "top": 0, "x1": 5, "bottom": 0, "width": 5, "height": 0, "linewidth": 1}]
+                if name == "images":
+                    return []
+                raise AttributeError(name)
+            def extract_words(self):
+                counter["words"] = counter.get("words", 0) + 1
+                return [{"text": "BENCH", "x0": 1, "top": 1, "x1": 2, "bottom": 1.5}]
+        class Doc:
+            pages = [Page()]
+        return Doc()
+
+    def test_page_reads_match_the_pdf_page_and_are_parsed_once_per_pdf_version(self):
+        from backend import seating_service
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "source.pdf"
+            source.write_bytes(b"fake")
+            counter = {}
+            doc = self._doc(counter)
+            version = seating_service._pdf_version(source)
+            cached = seating_service._Page(doc, 1, version)
+            self.assertEqual(seating_service._objects(cached, 3, 4), seating_service._objects(doc.pages[0], 3, 4))
+            self.assertEqual(seating_service._words(cached), seating_service._words(doc.pages[0]))
+            self.assertTrue(cached.has_vectors)
+            self.assertFalse(cached.images)
+            before = dict(counter)
+            again = seating_service._Page(doc, 1, version)
+            again.has_vectors, again.images, again.extract_words(), seating_service._objects(again)
+            self.assertEqual(counter, before)            # nothing read from the PDF page a second time
+            source.write_bytes(b"changed pdf")           # a new saved version is read again
+            seating_service._Page(doc, 1, seating_service._pdf_version(source)).extract_words()
+            self.assertEqual(counter["words"], before["words"] + 1)
+
+
 class OccupancyIntegrationTests(unittest.TestCase):
     def fixture(self):
         building={"spaces":[{"name":"Dining","level_name":"Ground","area_m2":100},{"name":"Kitchen","level_name":"Ground","area_m2":20}]}

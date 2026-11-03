@@ -29,8 +29,9 @@ ROOT = Path(__file__).resolve().parents[1]
 PACK_PATH = ROOT / "config" / "ai_preliminary_assumption_pack.json"
 PACK_VERSION = "au-preliminary-v3"
 LEGACY_PACK_VERSIONS = {"au-preliminary-v2"}
-PROFILE_IDS = {"retail", "office", "hospitality", "storage", "residential", "generic_conditioned_room"}
-SPACE_SCOPES = {"comfort_hvac", "comfort_hvac_with_process_exception", "refrigeration_process", "unresolved_scope", "not_a_room"}
+HOUSE_PROFILE_IDS = {"house_bedroom", "house_living", "house_wet", "house_service", "garage", "outdoor", "lift_shaft", "circulation"}
+PROFILE_IDS = {"retail", "office", "hospitality", "storage", "residential", "generic_conditioned_room"} | HOUSE_PROFILE_IDS
+SPACE_SCOPES = {"comfort_hvac", "comfort_hvac_with_process_exception", "refrigeration_process", "unresolved_scope", "not_a_room", "not_cooled"}
 # The proposal/ledger contract retains every opaque boundary. Phase 1 applies
 # a controlled preliminary rule to floors and adjacent spaces, while the
 # reviewed calculator keeps its engineer-approved boundary gates.
@@ -69,7 +70,7 @@ def content_fingerprint(value):
 
 def load_pack():
     pack = json.loads(PACK_PATH.read_text(encoding="utf-8"))
-    if pack.get("version") != PACK_VERSION or not PROFILE_IDS <= set(pack.get("profiles", {})):
+    if pack.get("version") != PACK_VERSION or not {"retail", "office", "hospitality", "storage", "residential", "generic_conditioned_room"} <= set(pack.get("profiles", {})):
         raise ValueError("The AI preliminary assumption pack is incomplete or has an unsupported version.")
     if len(pack.get("scenario", {}).get("hours", [])) != 24:
         raise ValueError("The AI preliminary assumption pack needs a 24-hour cooling scenario.")
@@ -196,8 +197,8 @@ def build_local_codex_handoff(project, building, vision=None, fusion=None, sourc
         },
         "assumption_pack": {
             "version": pack["version"],
-            "profile_names": {profile_id: pack["profiles"][profile_id].get("label", profile_id)
-                              for profile_id in sorted(PROFILE_IDS)},
+            "profile_names": {profile_id: pack["profiles"].get(profile_id, {}).get("label", profile_id)
+                              for profile_id in sorted(PROFILE_IDS - HOUSE_PROFILE_IDS)},
         },
     }
     payload["handoff_fingerprint"] = fingerprint(payload)
@@ -238,7 +239,13 @@ def confidence_band(score):
     return "high" if score >= 0.8 else "medium" if score >= 0.5 else "low"
 
 
-def _profile_from_label(label):
+def _profile_from_label(label, dwelling=False, room_use_category=""):
+    if dwelling and room_use_category in HOUSE_PROFILE_IDS:
+        return room_use_category
+    if dwelling:
+        house_matches = room_use_resolver._house_label_matches(label)
+        if house_matches:
+            return house_matches[0]
     text = str(label).casefold()
     if any(word in text for word in ("office", "meeting", "admin", "reception")):
         return "office"
@@ -251,6 +258,19 @@ def _profile_from_label(label):
     if any(word in text for word in ("retail", "shop", "showroom", "tenancy")):
         return "retail"
     return "generic_conditioned_room"
+
+
+def _profiles_for_dwelling(profile_id, dwelling):
+    """House profiles are isolated from the shop assumption pack and applied only with the persisted dwelling flag."""
+    base = deepcopy(load_pack()["profiles"]["residential"])
+    if not dwelling or profile_id not in HOUSE_PROFILE_IDS:
+        return base
+    house = json.loads((ROOT / "config" / "house_profiles.json").read_text(encoding="utf-8"))
+    item = house["profiles"][profile_id]
+    base.update({key: value for key, value in item.items() if key != "schedule_hours"})
+    base["basis_label"] = house["basis_label"]
+    base["schedule_hours"] = item["schedule_hours"]
+    return base
 
 
 def _scope_from_label(label):
@@ -632,6 +652,13 @@ def validate_manual_placeholder_entities(raw):
 
 
 def _profile_schedule(profile_id):
+    if profile_id in HOUSE_PROFILE_IDS:
+        try:
+            house = json.loads((ROOT / "config" / "house_profiles.json").read_text(encoding="utf-8"))
+            active = {hour for start, end in house["profiles"][profile_id]["schedule_hours"] for hour in range(start, end)}
+            return [1.0 if hour in active else 0.0 for hour in range(24)]
+        except (OSError, ValueError, KeyError):
+            pass
     active = {"retail": range(9, 18), "office": range(8, 18), "hospitality": range(10, 23), "storage": range(7, 18), "residential": range(6, 23), "generic_conditioned_room": range(8, 18)}[profile_id]
     return [1.0 if hour in active else 0.0 for hour in range(24)]
 
@@ -1086,11 +1113,13 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                            for issue in proposal.get("issues", []) if isinstance(issue, dict) and issue.get("component") == "room area")
     for row in space_rows:
         row["scope"] = row["scope"] if row["scope"] in SPACE_SCOPES else "unresolved_scope"
-        if row["scope"] in {"refrigeration_process", "unresolved_scope", "not_a_room"}:
+        if row["scope"] in {"refrigeration_process", "unresolved_scope", "not_a_room", "not_cooled"}:
             reason = ("Refrigeration load required; this room is excluded from the comfort-HVAC subtotal."
                       if row["scope"] == "refrigeration_process" else
+                      ("Default house scope: this room is not cooled; geometry is retained for adjacent-space context." if row["scope"] == "not_cooled" else
                       "A reviewer marked this detection as not a room." if row["scope"] == "not_a_room" else
                       "AI could not resolve whether this room belongs in comfort-HVAC scope.")
+                      )
             excluded_spaces.append({"room_name": row["name"], "level": row["level"], "scope": row["scope"], "reason": reason,
                                     "evidence": row["evidence"]})
             exclusions.append({"room_id": f"room-{row['key']}", "component": "room scope", "reason": reason})
@@ -1105,8 +1134,11 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                                "remediation": "Complete the cited room boundary and dimension chain, or provide an explicit project area override."})
             continue
         active_rows.append(row)
-        profile_id = row["profile_id"] if row["profile_id"] in PROFILE_IDS else _profile_from_label(row["name"])
-        profile = deepcopy(pack["profiles"][profile_id])
+        dwelling = room_use_artifact.get("dwelling_context", {}).get("is_dwelling") is True
+        profile_id = row["profile_id"] if row["profile_id"] in PROFILE_IDS and (dwelling or row["profile_id"] not in HOUSE_PROFILE_IDS) else _profile_from_label(row["name"], dwelling, (row.get("room_use_resolution") or {}).get("taxonomy_id", ""))
+        profile = (deepcopy(pack["profiles"].get(profile_id)) if profile_id in pack["profiles"] else _profiles_for_dwelling(profile_id, dwelling))
+        if dwelling and profile_id in HOUSE_PROFILE_IDS:
+            profile.update(_profiles_for_dwelling(profile_id, True))
         room_resolution = resolved_values["rooms"].get(value_resolver.room_target_id(row["name"], row["level"]), {})
         profile.update({key: value for key, value in room_resolution.items() if key in profile and value is not None})
         internal_record = internal_records.get(room_use_resolver.room_identity(row["name"], row["level"]), {})
@@ -1128,9 +1160,9 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
             # A controlled profile is already represented by the value
             # resolver/profile below.  Only evidence/override/AI-specific
             # fields replace a newer released value.
-            return internal_record.get(record_key) if origin in {"direct_project_evidence", "contractor_override", "project_evidence", "ai_interpretation", "ai_estimated"} else None
+            return internal_record.get(record_key) if origin in {"direct_project_evidence", "contractor_override", "project_evidence", "ai_interpretation", "ai_estimated", "household_rule"} else None
         occupancy = _resolved_internal_value("occupancy_count", "occupancy_count") if internal_record else None
-        occupancy = int(occupancy) if isinstance(occupancy, (int, float)) and occupancy >= 0 else max(1, round(area * profile["occupancy_density_people_m2"]))
+        occupancy = int(occupancy) if isinstance(occupancy, (int, float)) and occupancy >= 0 else (0 if profile_id == "circulation" else max(1, round(area * profile["occupancy_density_people_m2"])))
         schedule_id = internal_record.get("schedule_id") if internal_record else f"prelim-{profile_id}"
         internal_schedule = next((item for item in internal_artifact.get("schedules", []) if item.get("schedule_id") == schedule_id), None)
         if internal_schedule and not any(item["schedule_id"] == schedule_id for item in schedules):
@@ -1176,6 +1208,8 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
         # value from the drawings or an operator's answer replaces it.
         room_use = row.get("room_use_category") or (row.get("room_use_resolution") or {}).get("taxonomy_id") or row.get("taxonomy_id") or ""
         activity = (pack.get("people_activity", {}).get("by_room_use", {}) or {}).get(room_use)
+        if dwelling and profile_id in HOUSE_PROFILE_IDS and profile.get("people_sensible_w") is not None:
+            activity = {"activity": "Typical home activity", "sensible_w": profile["people_sensible_w"], "latent_w": profile["people_latent_w"]}
         if activity and not (people_sensible and people_latent):
             ledger.append({"room_id": room_id, "field": "people_activity", "value": activity["activity"],
                            "origin": "controlled_preliminary_profile", "profile_id": profile_id, "confidence": 0.5,
@@ -1184,7 +1218,12 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                                         f"({activity['activity']}): {pack['people_activity']['source']}.", "evidence": []})
         default_sensible = activity["sensible_w"] if activity else profile["people_sensible_w"]
         default_latent = activity["latent_w"] if activity else profile["people_latent_w"]
-        cooling = {"people_sensible_w_per_person": people_sensible or default_sensible, "people_latent_w_per_person": people_latent or default_latent,
+        # A house room sharing one household: the whole-house total counts that household once per hour.
+        occupancy_origin = ((internal_fields.get("occupancy_count") or {}).get("origin") if isinstance(internal_fields, dict) else "")
+        occupancy_group = (deepcopy(internal_record.get("occupancy_group"))
+                           if internal_record and occupancy_origin == "household_rule" and internal_record.get("occupancy_group") else None)
+        cooling = {**({"occupancy_group": occupancy_group} if occupancy_group else {}),
+                   "people_sensible_w_per_person": people_sensible or default_sensible, "people_latent_w_per_person": people_latent or default_latent,
                    "people_diversity_factor": people_diversity, "lighting_w_m2": lighting_w_m2,
                    "lighting_diversity_factor": lighting_diversity,
                    "outside_air_lps": outside_air,
@@ -1194,7 +1233,7 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                    "safety_factor": scenario_values["safety_factor"],
                    "envelope_not_applicable": row.get("envelope_not_applicable") is True,
                    "verification_status": "provisional", "source": _source(profile_id), "envelope_surfaces": [], "glazing_surfaces": []}
-        equipment_rows = internal_record.get("equipment", []) if internal_record and internal_record.get("fields", {}).get("equipment", {}).get("origin") in {"direct_project_evidence", "contractor_override", "project_evidence", "ai_interpretation", "ai_estimated"} else []
+        equipment_rows = internal_record.get("equipment", []) if internal_record and internal_record.get("fields", {}).get("equipment", {}).get("origin") in {"direct_project_evidence", "contractor_override", "project_evidence", "ai_interpretation", "ai_estimated", "typical_home_value"} else []
         allowance_w = area * profile["equipment_w_m2"] * profile["equipment_space_gain"] * profile["equipment_diversity"]
         # Catalogue-valued items count like any listed item: the room still takes the larger of its listed items and
         # its typical allowance, so items with no value or no room (equipment_catalogue_service) never leave it at zero.
@@ -1287,13 +1326,14 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
 
     for room, row in zip(model["rooms"], active_rows):
         profile_id = next(item["profile_id"] for item in ledger if item["room_id"] == f"room-{row['key']}" and item["field"] == "room_profile")
-        profile = deepcopy(pack["profiles"][profile_id])
+        profile = (deepcopy(pack["profiles"].get(profile_id)) if profile_id in pack["profiles"] else _profiles_for_dwelling(profile_id, room_use_artifact.get("dwelling_context", {}).get("is_dwelling") is True))
         profile.update({key: value for key, value in resolved_values["rooms"].get(value_resolver.room_target_id(row["name"], row["level"]), {}).items() if key in profile and value is not None})
         room.update({"room_id": f"room-{row['key']}", "name": row["name"], "zone_id": f"zone-{row['key']}", "source_zone_id": f"zone-{row['key']}",
                      "mapping_status": "confirmed", "verification_status": "provisional", "source": _source("topology"), "citations": [], "source_room_labels": [row["name"]], "ceiling_height_mm": resolved_values["rooms"].get(value_resolver.room_target_id(row["name"], row["level"]), {}).get("ceiling_height_mm")})
         resolved_internal = internal_records.get(room_use_resolver.room_identity(row["name"], row["level"]), {})
         internal_schedule_id = resolved_internal.get("schedule_id") or f"prelim-{profile_id}"
         room["schedule_assignments"] = {"people": internal_schedule_id, "lighting": internal_schedule_id, "outside_air": internal_schedule_id, "infiltration": "", "equipment": {source["source_id"]: internal_schedule_id for source in room["heat_sources"]}, "solar": {}}
+        room_airflows = airflow_by_room.get(ceiling_volume_resolver.room_identity(row["name"], row["level"]), {})
         for source, item in zip(room["heat_sources"], resolved_internal.get("equipment", [])):
             day_profiles = item.get("equipment_schedule")
             for key in ("equipment_id", "catalogue_hash", "catalogue_id"):
@@ -1312,6 +1352,7 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                                                                 ("sunday_holiday", "sunday"))}})
             room["schedule_assignments"]["equipment"][source["source_id"]] = schedule_id
         infiltration_record = room_airflows.get("infiltration", {})
+        house_infiltration = room_use_artifact.get("dwelling_context", {}).get("is_dwelling") is True and infiltration_record.get("origin") == "controlled_fallback"
         if infiltration_record.get("air_path_type") == "infiltration" and infiltration_record.get("status") not in {"blocked", "excluded"} and infiltration_record.get("value") is not None:
             infiltration_schedule_id = f"airflow-infiltration-{room['room_id']}"
             day_profiles = infiltration_record.get("schedule", {})
@@ -1320,8 +1361,8 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
             room["schedule_assignments"]["infiltration"] = infiltration_schedule_id
         for component in room["unapproved_components"]:
             component.update({"value": None, "unit": "", "source_room_id": "", "source": "Excluded from AI preliminary model pending a project-specific method.", "citations": [], "verification_status": "provisional", "calculation_status": "not_assessed"})
-            if component.get("component_type") == "infiltration" and infiltration_record.get("value") is not None and infiltration_record.get("status") not in {"blocked", "excluded"}:
-                component.update({"value": infiltration_record.get("value"), "unit": infiltration_record.get("unit", "ACH"), "source": infiltration_record.get("source", "airflow resolution"), "citations": airflow_citations(infiltration_record), "verification_status": "provisional", "calculation_status": "calculated", "method_id": "infiltration_psychrometric_v1", "air_path": "uncontrolled_infiltration", "flow_reference": "outdoor_design_condition", "preliminary_assumption": infiltration_record.get("origin") == "controlled_fallback"})
+            if component.get("component_type") == "infiltration" and infiltration_record.get("value") is not None and (infiltration_record.get("status") not in {"blocked", "excluded"} or house_infiltration):
+                component.update({"value": infiltration_record.get("value"), "unit": infiltration_record.get("unit", "ACH"), "source": ("House profile: " + str(infiltration_record.get("assumptions", ["preliminary infiltration"])[0])) if house_infiltration else infiltration_record.get("source", "airflow resolution"), "citations": airflow_citations(infiltration_record), "verification_status": "provisional", "calculation_status": "calculated", "method_id": "infiltration_psychrometric_v1", "air_path": "uncontrolled_infiltration", "flow_reference": "outdoor_design_condition", "preliminary_assumption": infiltration_record.get("origin") == "controlled_fallback"})
         room_rows[_room_identity(row["name"], row["level"])] = {"room": room, "row": row, "profile": profile, "profile_id": profile_id}
 
     # A legacy vision surface remains useful as a backwards-compatible

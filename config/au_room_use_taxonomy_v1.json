@@ -13,6 +13,14 @@
     "plant_or_unconditioned": {"label": "Plant / service / unconditioned", "profile_id": "", "space_scope": "unresolved_scope", "aliases": ["plant", "electrical", "switchboard", "service", "unconditioned", "external"]},
     "refrigeration_process": {"label": "Cool room / freezer", "profile_id": "", "space_scope": "refrigeration_process", "aliases": ["cool room", "coolroom", "freezer", "refrigerated"]},
     "residential": {"label": "Residential", "profile_id": "residential", "space_scope": "comfort_hvac", "aliases": ["bedroom", "apartment", "residential", "living", "lounge", "dwelling"]},
+    "house_bedroom": {"label": "House bedroom", "profile_id": "house_bedroom", "space_scope": "comfort_hvac", "aliases": ["bedroom", "bed", "br", "mbr", "master bedroom", "main bedroom"]},
+    "house_living": {"label": "House living area", "profile_id": "house_living", "space_scope": "comfort_hvac", "aliases": ["living", "lounge", "family", "rumpus", "media", "cinema", "theatre", "games", "study", "gym", "kitchen", "dining", "meals", "pantry", "scullery"]},
+    "house_wet": {"label": "House wet area", "profile_id": "house_wet", "space_scope": "not_cooled", "aliases": ["bath", "bathroom", "ens", "ensuite", "powder", "pdr", "wc"]},
+    "house_service": {"label": "House service area", "profile_id": "house_service", "space_scope": "not_cooled", "aliases": ["laundry", "l'dry", "ldry", "wir", "w.i.r.", "robe", "linen"]},
+    "garage": {"label": "Garage / carport", "profile_id": "garage", "space_scope": "not_cooled", "aliases": ["garage", "carport"]},
+    "outdoor": {"label": "Outdoor area", "profile_id": "outdoor", "space_scope": "not_cooled", "aliases": ["balcony", "alfresco", "deck", "terrace", "patio", "pool"]},
+    "lift_shaft": {"label": "Lift shaft", "profile_id": "lift_shaft", "space_scope": "not_cooled", "aliases": ["lift", "lift shaft"]},
+    "circulation": {"label": "House circulation", "profile_id": "circulation", "space_scope": "comfort_hvac", "aliases": ["entry", "hall", "stair", "lobby"]},
     "generic_conditioned": {"label": "Generic conditioned room", "profile_id": "generic_conditioned_room", "space_scope": "comfort_hvac", "aliases": []},
     "not_a_room": {"label": "Not a room (false detection)", "profile_id": "", "space_scope": "not_a_room", "aliases": []}
   }

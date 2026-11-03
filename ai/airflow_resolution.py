@@ -80,6 +80,15 @@ def _evidence(item):
 
 def _profile(pack, profile_id):
     profiles = (pack or {}).get("profiles", {}) if isinstance(pack, dict) else {}
+    if profile_id.startswith("house_") or profile_id in {"garage", "outdoor", "lift_shaft", "circulation"}:
+        try:
+            from pathlib import Path
+            house = json.loads(Path(__file__).resolve().parents[1].joinpath("config", "house_profiles.json").read_text(encoding="utf-8"))
+            result = deepcopy(profiles.get("residential", {}))
+            result.update({key: value for key, value in house["profiles"][profile_id].items() if key != "schedule_hours"})
+            return result
+        except (OSError, ValueError, KeyError):
+            pass
     return profiles.get(profile_id) or profiles.get("generic_conditioned_room", {})
 
 
@@ -131,9 +140,18 @@ def _record_id(path_type, owner, source, anchor=""):
 
 
 def _schedule(profile_id, supplied=None):
-    active = {"retail": range(9, 18), "office": range(8, 18), "hospitality": range(10, 23),
-              "storage": range(7, 18), "residential": range(6, 23)}.get(profile_id, range(8, 18))
-    default = [1.0 if hour in active else 0.0 for hour in range(24)]
+    if profile_id.startswith("house_") or profile_id in {"garage", "outdoor", "lift_shaft", "circulation"}:
+        try:
+            from pathlib import Path
+            house = json.loads(Path(__file__).resolve().parents[1].joinpath("config", "house_profiles.json").read_text(encoding="utf-8"))
+            active_hours = {hour for start, end in house["profiles"][profile_id]["schedule_hours"] for hour in range(start, end)}
+            default = [1.0 if hour in active_hours else 0.0 for hour in range(24)]
+        except (OSError, ValueError, KeyError):
+            default = [0.0] * 24
+    else:
+        active = {"retail": range(9, 18), "office": range(8, 18), "hospitality": range(10, 23),
+                  "storage": range(7, 18), "residential": range(6, 23)}.get(profile_id, range(8, 18))
+        default = [1.0 if hour in active else 0.0 for hour in range(24)]
     result = {}
     for day in DAY_TYPES:
         values = supplied.get(day) if isinstance(supplied, dict) else None
@@ -199,6 +217,8 @@ def _room_context(building, proposal, room, room_use, ceiling, pack):
         if height is not None:
             volume = area * height / 1000
     profile_id = _text(use.get("preliminary_profile_id", use.get("profile_id", "generic_conditioned_room"))) or "generic_conditioned_room"
+    if profile_id in {"house_bedroom", "house_living", "house_wet", "house_service", "garage", "outdoor", "lift_shaft", "circulation"} and use.get("dwelling") is not True:
+        profile_id = "generic_conditioned_room"
     profile = _profile(pack, profile_id)
     return rid, sources, use, record, area, volume, profile_id, profile, area_source
 
@@ -264,7 +284,14 @@ def resolve(building, vision, proposal, room_use, ceiling_volume, pack, source_f
     }
     for room in _room_rows(building, proposal, room_use):
         rid, sources, use, ceiling, area, volume, profile_id, profile, area_source = _room_context(building, proposal, room, room_use, ceiling_volume, pack)
-        if use.get("space_scope") in {"refrigeration_process", "not_a_room", "unresolved_scope"}:
+        dwelling = use.get("dwelling") is True
+        outside_wall = any(isinstance(surface, dict)
+            and _text(surface.get("physical_type", surface.get("surface_kind", "wall"))).casefold() == "wall"
+            and _text(surface.get("owner_room_label", surface.get("room_label", ""))).casefold() == room["label"].casefold()
+            and _text(surface.get("owner_level_name", surface.get("level_name", ""))).casefold() == room["level"].casefold()
+            and _text(surface.get("thermal_role", surface.get("boundary_reference", ""))).casefold() in {"external", "outside", "outdoors"}
+            for surface in (proposal.get("surfaces", []) if isinstance(proposal, dict) else []))
+        if use.get("space_scope") in {"refrigeration_process", "not_a_room", "unresolved_scope", "not_cooled"}:
             excluded_rooms[rid] = use["space_scope"]
         if room_areas is not None:
             area_source = room_areas.get(rid, {})
@@ -285,20 +312,21 @@ def resolve(building, vision, proposal, room_use, ceiling_volume, pack, source_f
             people = area * float(profile["occupancy_density_people_m2"])
             people_source = {"origin": "controlled_fallback"}
         people_rate, people_rate_source = _first(sources, ("outside_air_lps_per_person", "people_rate_lps_per_person"))
-        people_rate = _number(people_rate, positive=True) or _number(profile.get("outside_air_lps_person"), positive=True)
+        people_rate = 0.0 if dwelling else _number(people_rate, positive=True) or _number(profile.get("outside_air_lps_person"), positive=True)
         area_rate, area_rate_source = _first(sources, ("outside_air_lps_per_m2", "area_rate_lps_per_m2"))
-        area_rate = _number(area_rate, positive=True) or _number(profile.get("outside_air_lps_m2"), positive=True)
+        area_rate = 0.0 if dwelling else _number(area_rate, positive=True) or _number(profile.get("outside_air_lps_m2"), positive=True)
         fixed, fixed_source = _first(sources, ("outside_air_lps", "fixed_minimum_lps", "outside_air_fixed_lps"))
         fixed = _number(fixed, positive=True)
         people_flow = people * people_rate if people is not None and people_rate is not None else None
         area_flow = area * area_rate if area is not None and area_rate is not None else None
         # Both contributions are required. A missing operand is unknown, not zero.
         combined = people_flow + area_flow if people_flow is not None and area_flow is not None else None
-        outside = round(max(combined, fixed or 0), 3) if combined is not None else round(fixed, 3) if fixed is not None else None
+        outside = 0.0 if dwelling else round(max(combined, fixed or 0), 3) if combined is not None else round(fixed, 3) if fixed is not None else None
         outside_origin = "project_evidence" if any(_origin(source) == "project_evidence" for source in (people_rate_source, area_rate_source, fixed_source)) else "controlled_fallback"
         outside_status = "resolved" if combined is not None and outside_origin == "project_evidence" else "provisional" if outside is not None else "excluded"
         outside_record = _make_record("outside_air", rid, "room ventilation", value=outside, origin=outside_origin, confidence=confidence if outside_origin != "controlled_fallback" else .35,
-            evidence=evidence, rationale=("Fixed project outside-air value used; the people/area contribution is unknown."
+            evidence=evidence, rationale=("Dwelling decision: 0 L/s per person and 0 L/s/m²; preliminary outside-air ventilation is not applied."
+                if dwelling else "Fixed project outside-air value used; the people/area contribution is unknown."
                 if combined is None and fixed is not None else "Sum of people and area ventilation, subject to a fixed minimum."), schedule=schedule,
             formula="max(occupancy × L/s/person + area × L/s/m², fixed minimum)",
             operands={"occupancy": people, "people_rate_lps_per_person": people_rate, "area_m2": area, "area_rate_lps_per_m2": area_rate, "fixed_minimum_lps": fixed, "people_flow_lps": people_flow, "area_flow_lps": area_flow}, status=outside_status,
@@ -327,11 +355,14 @@ def resolve(building, vision, proposal, room_use, ceiling_volume, pack, source_f
             unresolved.append("resolved room volume is required for ACH infiltration")
         infiltration = _make_record("infiltration", rid, "uncontrolled infiltration", value=infiltration_value, unit=infiltration_unit,
             origin=infiltration_origin, confidence=confidence if infiltration_origin != "controlled_fallback" else .35,
-            evidence=evidence, rationale="Door, exposure, cited leakage, or controlled preliminary infiltration basis.", schedule=_schedule(profile_id),
+            evidence=evidence, rationale="House ventilation decision: preliminary infiltration ACH; 0 outside air." if dwelling else "Door, exposure, cited leakage, or controlled preliminary infiltration basis.", schedule=_schedule(profile_id),
             formula="ACH × room volume × 1000 ÷ 3600" if infiltration_unit == "ACH" else "direct airflow",
             operands={"room_volume_m3": volume, "ach": infiltration_value if infiltration_unit == "ACH" else None, "resolved_flow_lps": volume * infiltration_value * 1000 / 3600 if volume is not None and infiltration_unit == "ACH" else infiltration_value},
-            status="blocked" if unresolved else "provisional" if infiltration_origin in {"controlled_fallback", "research_candidate"} else "resolved", unresolved=unresolved,
-            assumptions=["controlled preliminary infiltration ACH"] if infiltration_origin == "controlled_fallback" else [], extra={"room_volume_id": ceiling.get("room_id", rid) if isinstance(ceiling, dict) else rid, "air_path": "uncontrolled_infiltration"})
+            status="provisional" if dwelling and infiltration_value is not None else "blocked" if unresolved else "provisional" if infiltration_origin in {"controlled_fallback", "research_candidate"} else "resolved", unresolved=[] if dwelling else unresolved,
+            assumptions=["typical home ventilation decision: preliminary_defaults.infiltration_ach, uncited for review"] if dwelling and infiltration_origin == "controlled_fallback" else ["controlled preliminary infiltration ACH"] if infiltration_origin == "controlled_fallback" else [], extra={"room_volume_id": ceiling.get("room_id", rid) if isinstance(ceiling, dict) else rid, "air_path": "uncontrolled_infiltration"})
+        if dwelling and not outside_wall and use.get("space_scope") not in {"not_cooled", "refrigeration_process", "unresolved_scope", "not_a_room"}:
+            infiltration.update(status="excluded", value=None, rationale="Dwelling infiltration is applied only where an outside wall is resolved; this room has no outside-wall assignment.", unresolved_fields=[])
+            infiltration["resolution_fingerprint"] = fingerprint({key: value for key, value in infiltration.items() if key != "resolution_fingerprint"})
         records.append(infiltration)
 
         process_kind = _text(use.get("taxonomy_id", use.get("category", ""))).casefold() if isinstance(use, dict) else ""

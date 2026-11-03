@@ -1001,6 +1001,37 @@ test("current Results show the total, room bars and assumptions", async ({
   await expect(page.getByText("Safety allowance, 10%")).toBeVisible();
 });
 
+test("Results show household counted once only for a house report", async ({ page }) => {
+  const adjustment = {
+    people_in_rooms: 6, people_counted: 3, removed_sensible_kw: 0.45,
+    removed_latent_kw: 0, basis: "The household is counted once in the whole-house total.",
+  };
+  const finalReport = {
+    included_scope_peak: {
+      final_design_total_kw: 4.2, design_total_kw: 4.2, display_hour: 19,
+      household_counted_once: adjustment,
+    },
+    room_peaks: [{ name: "Shop", design_total_kw: 4.2, components: { people: 1.2 } }],
+  };
+  await preview(page, {
+    status: { phase1_complete: true, phase2_complete: true, results_ready: true, result_stale: false },
+    final_report: finalReport,
+    rooms: [{ ...plan.rooms[0], state: "done", phase1_kw: 2.5, final_kw: 4.2, final_w_m2: 84 }],
+  });
+  await page.goto("/?preview=1#/job/job-1/results");
+  await expect(page.getByText("Household counted once: the rooms hold 6 people at 19:00, the house has 3 — 0.5 kW of people heat not counted twice.")).toBeVisible();
+
+  const shopReport = structuredClone(finalReport);
+  delete shopReport.included_scope_peak.household_counted_once;
+  await preview(page, {
+    status: { phase1_complete: true, phase2_complete: true, results_ready: true, result_stale: false },
+    final_report: shopReport,
+    rooms: [{ ...plan.rooms[0], state: "done", phase1_kw: 2.5, final_kw: 4.2, final_w_m2: 84 }],
+  });
+  await page.goto("/?preview=1#/job/job-1/results");
+  await expect(page.getByText(/Household counted once:/)).toHaveCount(0);
+});
+
 test("Results show the load through the year, month by hour, with the sizing month", async ({
   page,
 }) => {

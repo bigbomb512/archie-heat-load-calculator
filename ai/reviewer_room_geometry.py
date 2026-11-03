@@ -16,7 +16,8 @@ SNAP_TOLERANCE_PX = 8.0
 EDGE_BOUNDARIES = {"external", "mall", "adjacent_tenancy", "internal", "unconditioned", "unknown"}
 ROOF_EXPOSURES = {"exposed", "not_exposed", "unknown"}
 NORTH_SOURCES = {"reviewer_read_north_arrow", "reviewer_typed_page_up_bearing"}
-DECLARATION_SOURCES = {"reviewer", "ai_determined", "ai_fallback"}
+# drawing_text: read from the drawings' text layer without AI (house windows, 2026-10-31).
+DECLARATION_SOURCES = {"reviewer", "ai_determined", "ai_fallback", "drawing_text"}
 
 
 def fingerprint(value):

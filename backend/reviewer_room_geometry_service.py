@@ -910,7 +910,11 @@ def _validated_trace_openings(data, trace, paths, room, calibration_record):
                        "shading_category": shading, "declaration_source": opening_source,
                        **({"shade": shade} if shade else {}),
                        **({"ai_run_id": ai_run_id}
-                          if opening_source in {"ai_determined", "ai_fallback"} and ai_run_id else {})})
+                          if opening_source in {"ai_determined", "ai_fallback", "drawing_text"} and ai_run_id else {}),
+                       **({"mark": str(opening.get("mark", ""))[:20],
+                           "evidence": [str(item)[:300] for item in opening.get("evidence", [])][:3],
+                           "assumptions": [str(item)[:300] for item in opening.get("assumptions", [])][:3]}
+                          if opening_source == "drawing_text" else {})})
     return result
 
 

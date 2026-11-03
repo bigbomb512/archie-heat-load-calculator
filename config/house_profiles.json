@@ -1,0 +1,185 @@
+{
+  "schema_version": 1,
+  "status": "draft_preliminary_only",
+  "basis_label": "typical home value, uncited, for review",
+  "basis": "Product-team preliminary placeholders; no external engineering source adopted. Confirm or replace during review.",
+  "profiles": {
+    "house_bedroom": {
+      "lighting_w_m2": 8,
+      "equipment_w_m2": 3,
+      "people_sensible_w": 67,
+      "people_latent_w": 33,
+      "occupancy_density_people_m2": 0.04,
+      "equipment_space_gain": 0.85,
+      "equipment_diversity": 0.75,
+      "outside_air_lps_person": 0,
+      "outside_air_lps_m2": 0,
+      "schedule_hours": [
+        [
+          22,
+          24
+        ],
+        [
+          0,
+          7
+        ]
+      ]
+    },
+    "house_living": {
+      "lighting_w_m2": 8,
+      "equipment_w_m2": 5,
+      "people_sensible_w": 67,
+      "people_latent_w": 33,
+      "occupancy_density_people_m2": 0.04,
+      "equipment_space_gain": 0.85,
+      "equipment_diversity": 0.75,
+      "outside_air_lps_person": 0,
+      "outside_air_lps_m2": 0,
+      "schedule_hours": [
+        [
+          7,
+          8
+        ],
+        [
+          15,
+          22
+        ]
+      ]
+    },
+    "house_wet": {
+      "lighting_w_m2": 6,
+      "equipment_w_m2": 0,
+      "occupancy_density_people_m2": 0,
+      "equipment_space_gain": 0.85,
+      "equipment_diversity": 0.75,
+      "outside_air_lps_person": 0,
+      "outside_air_lps_m2": 0,
+      "schedule_hours": []
+    },
+    "house_service": {
+      "lighting_w_m2": 6,
+      "equipment_w_m2": 0,
+      "occupancy_density_people_m2": 0,
+      "equipment_space_gain": 0.85,
+      "equipment_diversity": 0.75,
+      "outside_air_lps_person": 0,
+      "outside_air_lps_m2": 0,
+      "schedule_hours": []
+    },
+    "garage": {
+      "lighting_w_m2": 3,
+      "equipment_w_m2": 0,
+      "occupancy_density_people_m2": 0,
+      "equipment_space_gain": 0.85,
+      "equipment_diversity": 0.75,
+      "outside_air_lps_person": 0,
+      "outside_air_lps_m2": 0,
+      "schedule_hours": []
+    },
+    "outdoor": {
+      "lighting_w_m2": 0,
+      "equipment_w_m2": 0,
+      "occupancy_density_people_m2": 0,
+      "equipment_space_gain": 0.85,
+      "equipment_diversity": 0.75,
+      "outside_air_lps_person": 0,
+      "outside_air_lps_m2": 0,
+      "schedule_hours": []
+    },
+    "lift_shaft": {
+      "lighting_w_m2": 0,
+      "equipment_w_m2": 0,
+      "occupancy_density_people_m2": 0,
+      "equipment_space_gain": 0.85,
+      "equipment_diversity": 0.75,
+      "outside_air_lps_person": 0,
+      "outside_air_lps_m2": 0,
+      "schedule_hours": []
+    },
+    "circulation": {
+      "lighting_w_m2": 4,
+      "equipment_w_m2": 0,
+      "occupancy_density_people_m2": 0,
+      "equipment_space_gain": 0.85,
+      "equipment_diversity": 0.75,
+      "outside_air_lps_person": 0,
+      "outside_air_lps_m2": 0,
+      "schedule_hours": [
+        [
+          7,
+          22
+        ]
+      ]
+    }
+  },
+  "kitchen_appliances": {
+    "basis_label": "typical home value, uncited, for review",
+    "basis": "Used in a house kitchen only when the drawings list no kitchen appliances (user decision 2026-10-30: labelled typical home values). Placeholders for the operators to confirm or replace.",
+    "items": [
+      {
+        "name": "Refrigerator (typical home value)",
+        "rated_input_w": 60,
+        "heat_to_space_factor": 1.0,
+        "note": "Average running heat of a household fridge, all day.",
+        "schedule": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      {
+        "name": "Cooking: cooktop and oven (typical home value)",
+        "rated_input_w": 2000,
+        "heat_to_space_factor": 0.5,
+        "note": "Evening meal: half the input reaches the room (the rest goes to the food and the rangehood), 5\u20137 pm.",
+        "schedule": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.5,
+          0.5,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      }
+    ]
+  }
+}

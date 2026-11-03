@@ -110,6 +110,15 @@ def _agree_dimensions(rows, tolerance):
     return "agreed", (first["mm_per_px"] + second["mm_per_px"]) / 2
 
 
+def dimension_unreadable(reply):
+    """The AI said it can't read the dimension (value_mm null, as the question allows): an answer, not a failed reply."""
+    try:
+        value = parse_json_reply(reply)
+    except ValueError:
+        return False
+    return isinstance(value, dict) and "value_mm" in value and value["value_mm"] is None
+
+
 def validate_dimension_reply(packet, reply):
     value = parse_json_reply(reply)
     number = value.get("value_mm")
@@ -130,7 +139,7 @@ def validate_p0_room_names(packet, reply):
     value = parse_json_reply(reply)
     from ai import room_outline as ro
     names, splits = ro.validate_naming_reply(value, packet["area_count"], packet["room_names"], packet["transform"],
-                                             require_all=True)
+                                             require_all=True, dwelling=packet.get("dwelling") is True)
     listed = {str(name).casefold() for name in packet["room_names"]}
     used = set(names.values()) | {item["room"] for split in splits for item in split["rooms"]}
     return {"names": names, "splits": splits,
@@ -150,12 +159,12 @@ def validate_p0_outline_corners(packet, reply):
 
 
 def validate_p0_unnamed_space(packet, reply):
-    return room_outline.validate_unnamed_space_reply(parse_json_reply(reply), packet["traced_names"], packet["transform"])
+    return room_outline.validate_unnamed_space_reply(parse_json_reply(reply), packet["traced_names"], packet["transform"], dwelling=packet.get("dwelling") is True)
 
 
 def validate_p0_outlines(packet, reply):
     value = parse_json_reply(reply)
-    return room_outline.validate_outline_reply(value, packet["room_names"], packet["transform"])
+    return room_outline.validate_outline_reply(value, packet["room_names"], packet["transform"], dwelling=packet.get("dwelling") is True)
 
 
 ROOM_SIZE_BASES = {"printed_area", "printed_dimensions", "estimated"}
@@ -250,7 +259,9 @@ def validate_boundary_reply(packet, reply):
     edges = value.get("runs", value.get("edges"))
     if not isinstance(edges, list):
         raise ValueError("Boundary reply must contain a runs list.")
-    allowed = room_outline_boundary_values()
+    dwelling = packet.get("dwelling") is True
+    allowed = ({"external", "adjacent_tenancy", "internal", "unknown"} if dwelling
+               else room_outline_boundary_values())
     expected = {int(row["index"]): row for row in packet.get("edges", [])}
     result, seen = [], set()
     for row in edges:
@@ -265,7 +276,8 @@ def validate_boundary_reply(packet, reply):
             raise ValueError("Boundary reply contains an invalid or repeated run number.")
         boundary = row.get("boundary")
         if boundary not in allowed:
-            raise ValueError("Boundary must be external, mall, adjacent_tenancy, internal or unknown.")
+            raise ValueError("Boundary must be external, adjacent_tenancy (party wall), internal or unknown." if dwelling
+                             else "Boundary must be external, mall, adjacent_tenancy, internal or unknown.")
         evidence = str(row.get("evidence", "")).strip()
         shared_question_runs = packet.get("shared_run_indices", packet.get("shared_edges", []))
         if boundary != "unknown" and index not in shared_question_runs and not evidence:
@@ -294,7 +306,7 @@ def storefront_width_matches(total_mm, span_mm):
 
 # Printed ceiling heights. Ceiling plans: "CH:2600MM", "C.H. 2700", "CLG HT 2400", "CEILING 3000"; elevations and
 # sections: "2600AFFL", "2700 MM AFFL". Rotated labels come out of the text layer backwards ("MM0062:HC").
-_CEILING_LABEL = re.compile(r"^\s*(?:C\.?\s?H\.?|CLG\.?(?:\s*(?:HT|HEIGHT))?|CEILING(?:\s*(?:HT|HEIGHT))?)\s*[:=@\-]?\s*(\d{4})\s*(?:MM)?\s*$", re.I)
+_CEILING_LABEL = re.compile(r"^\s*(?:(?:C\.?\s?H\.?|CLG\.?|C\.\s?L\.)(?:\s*(?:HT|HEIGHT))?\s*[:=@\-]?\s*(\d{4})\s*(?:MM)?|(?:FTC|F\.T\.C\.)\s*[:=@\-]?\s*(\d{4})\s*(?:MM)?|(\d{4})\s*(?:MM)?\s*(?:FTC|F\.T\.C\.)|(?:CEILING(?:\s*(?:HT|HEIGHT))?\s*[:=@\-]?\s*(\d{4})\s*(?:MM)?))\s*$", re.I)
 # An open ceiling: "U/S OF SLAB 3750MM", "U/S SOFFIT 3600".
 _SOFFIT_LABEL = re.compile(r"^\s*U\s*/\s*S\.?\s*(?:OF\s+)?(?:SLAB|SOFFIT|ROOF|DECK)\s*[:=@\-]?\s*(\d{4})\s*(?:MM)?\s*$", re.I)
 _LEVEL_LABEL = re.compile(r"^\s*(\d{4})\s*(?:MM)?\s*(?:AFFL|A\.F\.F\.L\.?|ABOVE\s+FFL)\s*$", re.I)
@@ -312,7 +324,7 @@ def height_labels(items, kind):
             match = next((m for m in (pattern.match(candidate) for pattern in patterns) if m), None)
             if not match:
                 continue
-            height = int(match.group(1))
+            height = int(next(group for group in match.groups() if group is not None))
             box = item.get("bbox") if isinstance(item, dict) else None
             center = [round((box[0] + box[2]) / 2, 1), round((box[1] + box[3]) / 2, 1)] if isinstance(box, list) and len(box) == 4 else None
             key = (height, tuple(round(value / 5) for value in center) if center else text)
@@ -406,6 +418,17 @@ def surroundings_prompt(walls, context_titles):
             "\"distance_m\":number|null,\"height_m\":number|null,\"storeys\":int|null,\"full_length\":bool,"
             "\"evidence\":string}]}\n\n"
             + json.dumps({"walls": walls}, ensure_ascii=False, separators=(",", ":")))
+
+
+def house_boundaries_prompt(packet):
+    return ("For each numbered outside wall of this house, choose outside, adjacent_tenancy (a wall shared with the "
+            "neighbouring dwelling, also called a party wall), inside the house, or unknown. A party wall has zero "
+            "temperature difference, as it does now. Quote drawing evidence for each answer. "
+            "Return the shared-wall choice as adjacent_tenancy internally. JSON only: "
+            "{\"runs\":[{\"run_number\":int,\"boundary\":"
+            "\"external|adjacent_tenancy|internal|unknown\",\"evidence\":string}]}\n\n"
+            + json.dumps({key: value for key, value in packet.items() if key != "dwelling"},
+                         ensure_ascii=False, separators=(",", ":")))
 
 
 def validate_surroundings_reply(packet, reply):

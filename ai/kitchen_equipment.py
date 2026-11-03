@@ -42,14 +42,15 @@ def find_kitchen_elevation_pages(ai_input, spatial_ocr):
 
 def _page_items(spatial_ocr, page_number, region_pt=None):
     """Text items on a page, outside its title block (sheet title, consultants, revisions)."""
-    from ai.room_inference import _inside_title_block
+    from ai.room_inference import title_block_test
     for page in (spatial_ocr or {}).get("pages", []):
         if page.get("page") != page_number:
             continue
         items = page.get("standalone_text_items", []) or []
+        in_title_block = title_block_test(page, items)
         for item in items:
             bbox = item.get("bbox")
-            if not isinstance(bbox, list) or len(bbox) != 4 or _inside_title_block(item, page, items):
+            if not isinstance(bbox, list) or len(bbox) != 4 or in_title_block(item):
                 continue
             if region_pt:
                 left, top, right, bottom = region_pt

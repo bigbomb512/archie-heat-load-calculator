@@ -16,11 +16,12 @@ ROOT = Path(__file__).resolve().parents[1]
 PACK_PATH = ROOT / "config" / "au_room_use_taxonomy_v1.json"
 PACK_ID = "au-room-use-v1"
 STATUSES = {"resolved", "needs_review", "excluded", "stale"}
-SCOPES = {"comfort_hvac", "comfort_hvac_with_process_exception", "refrigeration_process", "unresolved_scope", "not_a_room"}
+SCOPES = {"comfort_hvac", "comfort_hvac_with_process_exception", "refrigeration_process", "unresolved_scope", "not_a_room", "not_cooled"}
 # Scopes that never enter comfort-HVAC totals. "not_a_room" is a reviewer
 # decision that a detected label is not a real space at all.
-EXCLUDED_SCOPES = {"refrigeration_process", "unresolved_scope", "not_a_room"}
-PROFILES = {"retail", "office", "hospitality", "storage", "residential", "generic_conditioned_room"}
+EXCLUDED_SCOPES = {"refrigeration_process", "unresolved_scope", "not_a_room", "not_cooled"}
+PROFILES = {"retail", "office", "hospitality", "storage", "residential", "generic_conditioned_room", "house_bedroom", "house_living", "house_wet", "house_service", "garage", "outdoor", "lift_shaft", "circulation"}
+HOUSE_USES = {"house_bedroom", "house_living", "house_wet", "house_service", "garage", "outdoor", "lift_shaft", "circulation"}
 
 
 def now():
@@ -84,6 +85,14 @@ def empty_room_use_resolution():
     return result
 
 
+def _taxonomy_fingerprint(taxonomy, dwelling):
+    if dwelling:
+        return fingerprint(taxonomy)
+    legacy = deepcopy(taxonomy)
+    legacy["categories"] = {key: value for key, value in legacy["categories"].items() if key not in HOUSE_USES}
+    return fingerprint(legacy)
+
+
 def _evidence(row):
     evidence = row.get("evidence", []) if isinstance(row, dict) else []
     result = [deepcopy(item) for item in evidence if isinstance(item, dict) and item.get("page")]
@@ -116,6 +125,8 @@ def _label_matches(label, taxonomy):
     text = _text(label).casefold()
     matches = []
     for category_id, category in taxonomy["categories"].items():
+        if category_id in HOUSE_USES:
+            continue                    # a dwelling's rooms are matched by _house_label_matches, never a shop's
         # Use word boundaries so a short alias such as "bar" does not classify
         # unrelated labels such as "barrier".  The original PDF label remains
         # the evidence; this is only controlled-taxonomy matching.
@@ -183,7 +194,7 @@ def plan_text_translation(source_words, target_words):
     return {"dx_pt": dx, "dy_pt": dy, "anchors": [row["text"] for row in best],
             "max_residual_pt": max(math.hypot(row["dx"]-dx, row["dy"]-dy) for row in best)}
 
-def score_use_evidence(label, selected, context):
+def score_use_evidence(label, selected, context, dwelling=False):
     """Rank use clues, never equipment heat. Family caps prevent repeated schedule rows winning by volume."""
     from ai.equipment_heat import equipment_type, normalise
     scores, factors = {}, []
@@ -192,6 +203,13 @@ def score_use_evidence(label, selected, context):
         factors.append({"category": category, "weight": weight, "factor": kind, "reason": reason,
                         "evidence": deepcopy(evidence or [])})
     add(selected, 3, "label", f'Existing label/use selection for "{label}": {selected}.')
+    if dwelling:
+        factors.append({"factor": "tenancy", "weight": 0, "reason": "Residential drawing context; dwelling room-use categories apply.",
+                        "evidence": deepcopy(context.get("dwelling_evidence", []))})
+        if selected in HOUSE_USES:
+            return {"taxonomy_id": selected, "confidence": .9, "rationale": f"House room label retained as {selected.replace('_', ' ')} in the evidenced dwelling context.",
+                    "factors": factors, "scores": {selected: 3}, "label_disagrees": False,
+                    "alternatives": [], "decisive": True}
     if context.get("tenancy"):
         factors.append({"factor": "tenancy", "weight": 0, "reason": f'Tenancy context: {context["tenancy"]}.',
                         "evidence": context.get("tenancy_evidence", [])})
@@ -259,7 +277,45 @@ def score_use_evidence(label, selected, context):
             "factors": factors, "scores": dict(sorted(scores.items())), "label_disagrees": chosen != selected,
             "alternatives": [key for key in ranked if key != chosen], "decisive": decisive}
 
-def _record(room, taxonomy, source_fingerprints, existing=None, use_evidence=None):
+def _house_label_matches(label):
+    text = re.sub(r"\s+", " ", _text(label).casefold()).strip()
+    # Combined open-plan labels are a single house living area.
+    if re.search(r"\b(living\s*/\s*dining|kitchen\s*/\s*dining|living\s+dining)\b", text):
+        return ["house_living"]
+    # This scan's compound label denotes a bar/dining zone; "powder" is part
+    # of the name rather than a sanitary-room instruction.
+    if re.search(r"\bpowder\s+bar\b", text):
+        return ["house_living"]
+    if re.search(r"\b(master bedroom|main bedroom|bedroom)\b", text):
+        return ["house_bedroom"]
+    if re.match(r"^(?:dining|kitchen)\b.*\bbed(?:\s*\d+)?\b", text):
+        return ["house_living"]
+    patterns = {
+        "house_bedroom": r"\b(master bedroom|main bedroom|mbr|bed(?:room)?(?:\s*\d+)?|br\s*\d*)\b",
+        "house_wet": r"\b(bath(?:room)?|ens(?:uite)?|powder|pdr|wc|toilet)\b",
+        "house_service": r"\b(laundry|l['’]?dry|ldry|w\.?i\.?r\.?|walk.?in robe|robe|linen)\b",
+        "garage": r"\b(garage|carport)\b",
+        "outdoor": r"\b(balcony|alfresco|deck|terrace|patio|pool|porch|verandah?|courtyard)\b",
+        "lift_shaft": r"\b(lift(?: shaft)?)\b",
+        "circulation": r"\b(entry|hall(?:way)?|stairs?|staircase|lobby|corridor|passage)\b",
+        "house_living": r"\b(living|lounge|family|rumpus|media|cinema|theatre|games|study|office|gym|entertainment|kitchen|kitch|dining|meals|pantry|wip|walk.?in pantry|scullery|bar)\b",
+    }
+    priority = ("house_wet", "house_service", "garage", "outdoor", "lift_shaft", "house_bedroom", "house_living", "circulation")
+    leading = {
+        "house_wet": r"^(bath(?:room)?|ens(?:uite)?|powder|pdr|wc|toilet)\b",
+        "house_service": r"^(laundry|l['’]?dry|ldry|w\.?i\.?r\.?|walk.?in robe|robe|linen)\b",
+        "garage": r"^(garage|carport)\b", "outdoor": r"^(balcony|alfresco|deck|terrace|patio|pool|porch|verandah?|courtyard)\b",
+        "lift_shaft": r"^lift\b", "house_bedroom": r"^(mbr|bed(?:room)?(?:\s*\d+)?|br\s*\d*)\b",
+        "house_living": r"^(living|lounge|family|rumpus|media|cinema|theatre|games|study|office|gym|entertainment|kitchen|kitch|dining|meals|pantry|wip|walk.?in pantry|scullery|bar)\b",
+        "circulation": r"^(entry|hall(?:way)?|stairs?|staircase|lobby|corridor|passage)\b",
+    }
+    for category in priority:
+        if re.search(leading[category], text):
+            return [category]
+    return [category for category in priority if re.search(patterns[category], text)][:1]
+
+
+def _record(room, taxonomy, source_fingerprints, existing=None, use_evidence=None, dwelling=False):
     label, level = room["label"], room["level_name"]
     room_id = room_identity(label, level)
     skill_context = next((row for row in reversed(room.get("ai", [])) if isinstance(row, dict) and (
@@ -269,7 +325,9 @@ def _record(room, taxonomy, source_fingerprints, existing=None, use_evidence=Non
     # is not actually printed in the drawing (for example, a source-system
     # placeholder). In that case it is context, not direct label evidence, and
     # must not outrank the cited visual interpretation.
-    direct = [] if skill_context.get("direct_label_verified") is False else _label_matches(label, taxonomy)
+    direct = [] if skill_context.get("direct_label_verified") is False else (_house_label_matches(label) if dwelling else _label_matches(label, taxonomy))
+    if not dwelling:
+        direct = [item for item in direct if item not in HOUSE_USES]
     ai, ai_candidates = _ai_candidate(room["ai"], taxonomy)
     override = deepcopy((existing or {}).get("override")) if isinstance(existing, dict) else None
     alternatives, conflicts = [], []
@@ -298,12 +356,26 @@ def _record(room, taxonomy, source_fingerprints, existing=None, use_evidence=Non
         selected, origin, score = (existing or {})["taxonomy_id"], "preserved_refrigeration_scope", .9
         rationale = "Existing refrigeration scope is preserved; contents scoring cannot change it."
     elif not override and not protected and use_evidence is not None:
-        assessment = score_use_evidence(label, selected, use_evidence)
+        assessment = score_use_evidence(label, selected, use_evidence, dwelling=dwelling)
         selected, score, rationale = assessment["taxonomy_id"], assessment["confidence"], assessment["rationale"]
         origin = "multi_factor_evidence"
         alternatives = assessment["alternatives"]
     category = taxonomy["categories"][selected]
     scope, profile = category["space_scope"], category.get("profile_id", "")
+    ac_evidence = (use_evidence or {}).get("air_conditioning_evidence") or []
+    cooled_by_drawings = dwelling and scope == "not_cooled" and selected != "outdoor" and bool(ac_evidence)
+    if cooled_by_drawings:
+        # Not cooled in a house unless the drawings show air-conditioning in it (user decision 2026-10-30).
+        scope = "comfort_hvac"
+        rationale = ("Normally not air-conditioned in a house, but the drawings show air-conditioning in it ("
+                     + "; ".join(f"p{row.get('page')}: {row.get('excerpt')}" for row in ac_evidence) + "): cooled, with no occupants.")
+        category = deepcopy(category)
+        category["space_scope"] = scope
+    if dwelling and re.search(r"\bvoid\b", label, re.I):
+        scope = "not_cooled"
+        rationale = "Void could not be associated with the room it opens into from current evidence; excluded as not cooled pending a geometry decision."
+        category = deepcopy(category)
+        category["space_scope"] = scope
     scope_override = skill_context.get("calculation_scope_override")
     if scope_override in SCOPES and not override:
         scope = scope_override
@@ -321,6 +393,9 @@ def _record(room, taxonomy, source_fingerprints, existing=None, use_evidence=Non
             for reference in factor.get("evidence", []):
                 if reference not in evidence:
                     evidence.append(reference)
+    if cooled_by_drawings:
+        evidence.extend({"page": row.get("page"), "excerpt": row.get("excerpt"), "method": "air_conditioning_text"}
+                        for row in ac_evidence)
     geometry_reference = {"room_identity": room_id, "source_pages": sorted({item.get("page") for item in evidence if item.get("page")})}
     result = {
         "room_id": room_id, "component_id": room_id, "original_label": label, "level_name": level,
@@ -347,16 +422,26 @@ def _record(room, taxonomy, source_fingerprints, existing=None, use_evidence=Non
     return result
 
 
-def resolve(building, vision=None, proposal=None, source_fingerprints=None, existing=None, use_evidence=None):
+def resolve(building, vision=None, proposal=None, source_fingerprints=None, existing=None, use_evidence=None, dwelling_context=None):
     taxonomy = load_taxonomy()
     previous = {row.get("room_id"): row for row in (existing or {}).get("records", []) if isinstance(row, dict)}
+    dwelling_context = deepcopy(dwelling_context or (existing or {}).get("dwelling_context") or {"is_dwelling": False, "evidence": []})
+    evidence_by_room = deepcopy(use_evidence or {})
+    if dwelling_context.get("is_dwelling") is True:
+        for room_context in evidence_by_room.values():
+            room_context["dwelling_evidence"] = deepcopy(dwelling_context.get("evidence", []))
     records = [_record(room, taxonomy, source_fingerprints or {}, previous.get(room_identity(room["label"], room["level_name"])),
-                       (use_evidence or {}).get(room_identity(room["label"], room["level_name"])))
+                       evidence_by_room.get(room_identity(room["label"], room["level_name"])), dwelling_context.get("is_dwelling") is True)
                for room in _room_rows(building, vision or {}, proposal or {})]
-    result = {"schema_version": 1, "taxonomy_pack_id": PACK_ID, "taxonomy_fingerprint": fingerprint(taxonomy),
+    result = {"schema_version": 1, "taxonomy_pack_id": PACK_ID, "taxonomy_fingerprint": _taxonomy_fingerprint(taxonomy, dwelling_context.get("is_dwelling") is True),
               "records": records, "source_fingerprints": deepcopy(source_fingerprints or {}),
               "status": "needs_review" if any(row["status"] == "needs_review" for row in records) else "draft_ready" if records else "needs_review",
               "updated_at": now()}
+    if dwelling_context.get("is_dwelling") is True:
+        result["dwelling_context"] = dwelling_context
+        for row in records:
+            row["dwelling"] = True
+            row["record_fingerprint"] = fingerprint({key: value for key, value in row.items() if key != "record_fingerprint"})
     result["fingerprint"] = fingerprint(result)
     return result
 
@@ -370,16 +455,19 @@ def validate(raw):
     if not isinstance(records, list):
         raise ValueError("Room-use resolution records must be a list.")
     ids = []
+    is_dwelling = raw.get("dwelling_context", {}).get("is_dwelling") is True
     for row in records:
         if not isinstance(row, dict) or not _text(row.get("room_id")) or row.get("taxonomy_id") not in taxonomy["categories"]:
             raise ValueError("Room-use resolution record is invalid.")
         if row.get("space_scope") not in SCOPES or row.get("preliminary_profile_id", "") not in PROFILES | {""} or row.get("status") not in STATUSES - {"stale"}:
             raise ValueError("Room-use resolution record has an invalid profile, scope, or status.")
+        if row.get("taxonomy_id") in HOUSE_USES and not is_dwelling:
+            raise ValueError("House room-use categories require a persisted dwelling flag.")
         ids.append(row["room_id"])
     if len(ids) != len(set(ids)):
         raise ValueError("Room-use resolution room IDs must be unique.")
     result = deepcopy(raw)
-    result["taxonomy_fingerprint"] = fingerprint(taxonomy)
+    result["taxonomy_fingerprint"] = _taxonomy_fingerprint(taxonomy, result.get("dwelling_context", {}).get("is_dwelling") is True)
     result["fingerprint"] = fingerprint({key: value for key, value in result.items() if key != "fingerprint"})
     return result
 
@@ -426,7 +514,7 @@ def resolve_from_existing(artifact):
 
 
 def is_current(artifact, source_fingerprints):
-    return bool(artifact) and artifact.get("source_fingerprints") == (source_fingerprints or {}) and artifact.get("taxonomy_fingerprint") == fingerprint(load_taxonomy())
+    return bool(artifact) and artifact.get("source_fingerprints") == (source_fingerprints or {}) and artifact.get("taxonomy_fingerprint") == _taxonomy_fingerprint(load_taxonomy(), artifact.get("dwelling_context", {}).get("is_dwelling") is True)
 
 
 def effective_proposal(proposal, artifact):

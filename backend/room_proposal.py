@@ -43,7 +43,7 @@ def reviewer_rooms(root):
 USE_NAMED_ROOMS_FILE = "ai_named_rooms.json"
 
 
-def save_use_named_rooms(root, task, page, level_name, labels, run_id):
+def save_use_named_rooms(root, task, page, level_name, labels, run_id, named_on_plan=False):
     """Record the rooms one drawing step named by their use on one plan page (replacing that step's earlier answer for
     the page; the enclosed-area naming and the open-plan outlines keep theirs separately)."""
     path = Path(root) / USE_NAMED_ROOMS_FILE
@@ -52,7 +52,8 @@ def save_use_named_rooms(root, task, page, level_name, labels, run_id):
     except (OSError, json.JSONDecodeError):
         saved = {}
     pages = saved.get("pages") if isinstance(saved.get("pages"), dict) else {}
-    pages[f"{task}:page-{int(page)}"] = [{"label": label, "level_name": level_name or "Unassigned level", "page": int(page), "run_id": run_id}
+    pages[f"{task}:page-{int(page)}"] = [{"label": label, "level_name": level_name or "Unassigned level", "page": int(page), "run_id": run_id,
+                                          **({"named_on_plan": True} if named_on_plan else {})}
                         for label in labels]
     path.write_text(json.dumps({"schema_version": 1, "pages": {key: rows for key, rows in pages.items() if rows}}, indent=2),
                     encoding="utf-8")
@@ -91,9 +92,12 @@ def room_proposal(run, root):
         identity = room_identity(row["label"], row["level_name"])
         if identity in existing:
             continue
+        on_plan = row.get("named_on_plan") is True
         proposal["rooms"].append({"kind": "room", "room_id": identity, "label": row["label"], "level_name": row["level_name"],
-            "page": row["page"], "source_pages": [row["page"]], "source": "named_by_use", "confidence": 0.6,
-            "evidence": [{"page": row["page"], "reference": "Room named by its use: the drawings print no name for this space",
+            "page": row["page"], "source_pages": [row["page"]], "source": "named_on_plan" if on_plan else "named_by_use",
+            "confidence": 0.6,
+            "evidence": [{"page": row["page"], "reference": ("Room name drawn on the plan, read by the page reading" if on_plan else
+                                                             "Room named by its use: the drawings print no name for this space"),
                           "excerpt": row["label"]}]})
         existing.add(identity)
     tasks = Path(root) / "ai_tasks" / "S1_printed_areas"

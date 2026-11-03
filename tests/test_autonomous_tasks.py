@@ -17,6 +17,63 @@ from backend import page_analysis_cache
 
 
 class AutonomousTaskTests(unittest.TestCase):
+    def test_house_disables_shop_only_packets_and_shop_retains_them(self):
+        from backend import house_windows_service
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            use = root / "room_use_resolution.json"
+            use.write_text(json.dumps({"dwelling_context": {"is_dwelling": True}, "records": []}))
+            with patch.object(autonomous_tasks_service, "_p0_main_geometry_pages", return_value=[]):
+                self.assertEqual(autonomous_tasks_service._p4_packets(root), [])
+                self.assertEqual(autonomous_tasks_service._p6_kitchen_packets(root), [])
+                self.assertEqual(autonomous_tasks_service._roof_packets(root), [])
+            # A sheet called External Elevation cannot enter P4 in a dwelling, while shops retain it.
+            use.write_text(json.dumps({"dwelling_context": {"is_dwelling": True}}))
+            with patch.object(autonomous_tasks_service, "_storefront_elevation_pages", wraps=autonomous_tasks_service._storefront_elevation_pages) as pages:
+                self.assertEqual(autonomous_tasks_service._p4_packets(root), [])
+                pages.assert_not_called()
+            self.assertEqual(autonomous_tasks_service._storefront_elevation_pages({"drawing_set": {"pages": [
+                {"page": 2, "type": "elevation", "title": "External Elevation"}]}}), [{"page": 2, "type": "elevation", "title": "External Elevation"}])
+            use.write_text(json.dumps({"dwelling_context": {"is_dwelling": False}, "records": []}))
+            with patch.object(autonomous_tasks_service, "_p0_main_geometry_pages", return_value=[]):
+                self.assertEqual(autonomous_tasks_service._roof_packets(root), [])
+                self.assertEqual(autonomous_tasks_service._p6_kitchen_packets(root)[0][0], "P6_kitchen")
+            self.assertIn({"page": 2, "type": "elevation", "title": "External Elevation"},
+                          autonomous_tasks_service._storefront_elevation_pages({"drawing_set": {"pages": [
+                              {"page": 2, "type": "elevation", "title": "External Elevation"}]}}))
+
+    def test_house_p3_prompt_and_validator_use_house_terms_only(self):
+        prompt = autonomous_tasks.house_boundaries_prompt({"page": 1, "perimeter_runs": [[1, 4.0]], "room_parts": ["Bed 1"]})
+        for phrase in ("outside", "wall shared with the neighbouring dwelling", "party wall", "inside the house"):
+            self.assertIn(phrase, prompt)
+        for phrase in ("mall", "shopping centre", "neighbouring tenancy", "shop tenancy"):
+            self.assertNotIn(phrase, prompt)
+        packet = {"dwelling": True, "edges": [{"index": 0}]}
+        self.assertEqual(autonomous_tasks.validate_boundary_reply(packet,
+            '{"runs":[{"run_number":1,"boundary":"adjacent_tenancy","evidence":"party wall"}]}')["edges"][0]["boundary"],
+            "adjacent_tenancy")
+        with self.assertRaises(ValueError):
+            autonomous_tasks.validate_boundary_reply(packet,
+                '{"runs":[{"run_number":1,"boundary":"mall","evidence":"mall"}]}')
+        shop_prefix = "Classify each numbered run on the outside perimeter of the union of the traced tenancy rooms: external, mall, adjacent_tenancy, internal or unknown. "
+        self.assertEqual(shop_prefix, "Classify each numbered run on the outside perimeter of the union of the traced tenancy rooms: external, mall, adjacent_tenancy, internal or unknown. ")
+        self.assertEqual(autonomous_tasks.validate_boundary_reply({"edges": [{"index": 0}]},
+            '{"runs":[{"run_number":1,"boundary":"mall","evidence":"enclosed mall"}]}')["edges"][0]["boundary"], "mall")
+
+    def test_house_task_list_hides_stale_roof_records_shop_keeps_them(self):
+        from backend import house_windows_service
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            d = root / "ai_tasks" / "P5_roof" / "room"
+            d.mkdir(parents=True)
+            (root / "room_use_resolution.json").write_text(json.dumps({"dwelling_context": {"is_dwelling": True}}))
+            (d / "current.json").write_text(json.dumps({"run_path": "runs/current"}))
+            (d / "runs" / "current").mkdir(parents=True)
+            (d / "runs" / "current" / "record.json").write_text(json.dumps({"task": "P5_roof", "target": "room", "status": "failed"}))
+            self.assertNotIn("P5_roof", [row["task"] for row in autonomous_tasks_service._all_current(root)])
+            (root / "room_use_resolution.json").write_text(json.dumps({"dwelling_context": {"is_dwelling": False}}))
+            self.assertIn("P5_roof", [row["task"] for row in autonomous_tasks_service._all_current(root)])
+
     def test_storefront_inside_face_width_allowance(self):
         pages = [{"page": 26}]
         runs = [{"run_index": 3, "span_m": 11.45}]
@@ -33,6 +90,26 @@ class AutonomousTaskTests(unittest.TestCase):
                 else:
                     with self.assertRaisesRegex(ValueError, "match the traced storefront"):
                         autonomous_tasks.validate_opening_reply(packet, reply)
+
+    def test_storefront_is_not_placed_by_numbers_the_text_layer_does_not_read_as_dimensions(self):
+        # Casa Nova's shopfront elevation (page 40): sign width 2370, sign height 765, the sign's level marker 2940 and
+        # the title block's postcode 2250, all "unknown_numeric" / "vision_review". 2940 is within 600 mm of a 2.545 m
+        # wall and used to put the storefront on that one wall of a ~30 m glazed front.
+        pages = [{"page": 40}]
+        runs = [{"run_index": 0, "span_m": 24.767}, {"run_index": 2, "span_m": 2.545}, {"run_index": 3, "span_m": 4.181}]
+        unread = {"annotation_kind": "unknown_numeric", "dimension_eligibility": "vision_review"}
+        spatial = {"pages": [{"page": 40, "dimension_candidates": [
+            {"value_mm": value, **unread} for value in (2370, 567, 2940, 2250)]}]}
+        match = autonomous_tasks_service._match_storefront_run(runs, pages, spatial)
+        self.assertIsNone(match["run_index"])
+        for excluded in ({"annotation_kind": "detail_or_sheet_reference"}, {"dimension_eligibility": "ineligible"}):
+            with self.subTest(excluded=excluded):
+                spatial = {"pages": [{"page": 40, "dimension_candidates": [{"value_mm": 2940, **excluded}]}]}
+                self.assertIsNone(autonomous_tasks_service._match_storefront_run(runs, pages, spatial)["run_index"])
+        # A number the text layer reads as a written dimension still settles it, as before.
+        spatial = {"pages": [{"page": 40, "dimension_candidates": [
+            {"value_mm": 2940, "annotation_kind": "written_dimension", "dimension_eligibility": "eligible"}]}]}
+        self.assertEqual(autonomous_tasks_service._match_storefront_run(runs, pages, spatial)["run_index"], 2)
 
     def test_north_includes_floor_rcp_and_services_plan_views(self):
         pages = [{"page": 1, "type": "floor_plan"},
@@ -1101,6 +1178,16 @@ class AutonomousTaskTests(unittest.TestCase):
                          [("H1", 2600, "CH:2600MM"), ("H2", 2600, "CH:2600MM"), ("H3", 3150, "C.H. 3150"),
                           ("H4", 3750, "U/S SLAB 3750MM")])   # its words are stored separately   # 900 is out of range; a services zone isn't a ceiling
         self.assertEqual([row["height_mm"] for row in autonomous_tasks.height_labels(items, "elevation")], [2600])
+
+    def test_ceiling_height_text_forms_include_house_ftc_and_reject_bare_dimensions(self):
+        for text in ("2700 FTC", "FTC 2700", "2700 F.T.C.", "C.L. 2700", "CLG 2700",
+                     "CH:2600MM", "C.H. 2700", "CLG HT 2400", "CEILING 3000"):
+            with self.subTest(text=text):
+                rows = autonomous_tasks.height_labels([text], "ceiling_plan")
+                self.assertEqual([row["height_mm"] for row in rows], [int(__import__("re").search(r"\d{4}", text).group())])
+        for text in ("2700", "W2700"):
+            with self.subTest(text=text):
+                self.assertEqual(autonomous_tasks.height_labels([text], "ceiling_plan"), [])
 
     def test_the_ceiling_height_answer_names_labels_and_the_height_comes_from_the_label(self):
         packet = {"rooms": ["Shop", "Bar", "Coolroom"], "labels": [

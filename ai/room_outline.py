@@ -340,6 +340,19 @@ NOT_A_ROOM = "not_a_room"
 # Names for a room the drawings don't name (2026-10-23: Casa Nova's main dining space has no printed label, so it never
 # became a room). Each maps onto a room-use category (config/au_room_use_taxonomy_v1.json) by its alias.
 USE_ROOM_NAMES = ("Dining", "Shop", "Kitchen", "Bar", "Office", "Store", "Toilet", "Corridor")
+# A house's rooms besides those (offered only when the drawings show a dwelling; 2026-10-30).
+HOUSE_ROOM_NAMES = ("Bedroom", "Living", "Family", "Bathroom", "Ensuite", "Laundry", "Garage", "Study", "Entry")
+
+
+# Shop-only names a house never has (house set 18, 2026-11-01: a whole lower-ground floor was named "Shop").
+SHOP_ONLY_ROOM_NAMES = ("Shop", "Bar")
+
+
+def _room_names_for_context(dwelling=False):
+    if not dwelling:
+        return USE_ROOM_NAMES
+    return tuple(name for name in USE_ROOM_NAMES if name not in SHOP_ONLY_ROOM_NAMES) + HOUSE_ROOM_NAMES
+
 COLOURS = [(230, 25, 75), (60, 180, 75), (0, 130, 200), (245, 130, 48), (145, 30, 180),
            (70, 240, 240), (240, 50, 230), (160, 160, 0), (250, 150, 190), (0, 128, 128),
            (170, 110, 40), (128, 0, 0), (0, 0, 128), (128, 128, 128)]
@@ -388,14 +401,14 @@ def render_traced_rooms(page_image, rooms, viewport, max_side=1536):
     return crop, {"offset_px": [left, top], "factor": factor}
 
 
-def unnamed_space_prompt(traced_names):
+def unnamed_space_prompt(traced_names, dwelling=False):
     shown = ", ".join(traced_names) if traced_names else "none yet"
     return ("The image is one architectural floor plan. The tinted, named areas are the rooms found so far ("
             f"{shown}). Look for floor inside this tenancy that is not tinted and is big enough to be a room (about "
             f"{UNNAMED_SPACE_MIN_M2:g} m² or more): drawings often leave the main dining or sales area, a corridor or "
             "a store unlabelled. Outline each such space as the corner points of its floor, in order, following the "
             "inside face of walls and the drawn boundary (shopfront glazing, tenancy line, counter edge) where there "
-            f"is no wall, and name it by its use with one of: {', '.join(USE_ROOM_NAMES)}. Don't outline tinted "
+            f"is no wall, and name it by its use with one of: {', '.join(_room_names_for_context(dwelling))}. Don't outline tinted "
             "rooms, the footpath, mall or outdoor seating outside the shopfront, voids, shafts or joinery. If there "
             "is no such space, return an empty list. Give coordinates in image pixels. Reply with JSON only:\n"
             "{\"spaces\": [{\"room\": string, \"points_px\": [[x, y], ...], \"reason\": string}]}")
@@ -429,7 +442,12 @@ TENANCY_MIN_M2 = 5.0
 TENANCY_CLIP_TOLERANCE_MM = 300.0
 
 
-def tenancy_outline_prompt():
+def tenancy_outline_prompt(dwelling=False):
+    if dwelling:
+        return ("The image is one architectural floor plan. Outline the house on this level (the building footprint). "
+                "Give the corner points in order around it, following the outside face of the external walls. Leave out "
+                "everything outside the house. Give coordinates in image pixels. Reply with JSON only:\n"
+                "{\"points_px\": [[x, y], ...], \"evidence\": string}")
     return ("The image is one architectural floor plan. Outline this tenancy: the floor that belongs to the shop or "
             "restaurant, inside its shopfront glazing and its outer walls. Give the corner points in order around it, "
             "following the inside face of the outer walls and the shopfront glazing line; around a curved shopfront, use "
@@ -647,18 +665,18 @@ def validate_corner_outline_reply(reply, corners, sketch_points, subject, sketch
             "missing_sides": str(reply.get("missing_sides", ""))[:300]}
 
 
-def validate_unnamed_space_reply(reply, traced_names, transform):
+def validate_unnamed_space_reply(reply, traced_names, transform, dwelling=False):
     """The untinted spaces the AI outlined, named by their use; none is a valid answer. A name already traced on the
     plan is refused (that room is tinted; its floor isn't missing)."""
     if not isinstance(reply, dict) or not isinstance(reply.get("spaces"), list):
         raise ValueError("The reply must contain a spaces list (empty when every room is tinted).")
-    allowed = {name.casefold(): name for name in USE_ROOM_NAMES}
+    allowed = {name.casefold(): name for name in _room_names_for_context(dwelling)}
     traced = {str(name).casefold() for name in traced_names}
     spaces = []
     for row in reply["spaces"]:
         room = str((row or {}).get("room", "")).strip()
         if room.casefold() not in allowed:
-            raise ValueError(f"Name each space with one of: {', '.join(USE_ROOM_NAMES)} (got {room!r}).")
+            raise ValueError(f"Name each space with one of: {', '.join(_room_names_for_context(dwelling))} (got {room!r}).")
         if room.casefold() in traced:
             raise ValueError(f"{room} is already a tinted room; outline only floor that isn't tinted, with a use "
                              "name no tinted room has.")
@@ -681,7 +699,7 @@ def note_only_text(notes, then):
             f"be in this tenancy at all; {then} ")
 
 
-def room_naming_prompt(room_names, area_count, notes=None):
+def room_naming_prompt(room_names, area_count, notes=None, dwelling=False):
     rooms = ", ".join(room_names)
     return ("The image is one architectural floor plan. Enclosed areas are tinted and numbered 1 to "
             f"{area_count}. This tenancy's rooms are: {rooms}. "
@@ -696,7 +714,7 @@ def room_naming_prompt(room_names, area_count, notes=None):
             "separates them (counter edge, floor-finish change, bulkhead), and one point inside each room. "
             "A room may cover more than one numbered area; give each of them the same name. "
             "If an area is a room but none of those names fits (drawings often leave the main dining or sales space "
-            f"unlabelled), name it by its use with one of: {', '.join(USE_ROOM_NAMES)}. Answer every numbered area. "
+            f"unlabelled), name it by its use with one of: {', '.join(_room_names_for_context(dwelling))}. Answer every numbered area. "
             "Use only these names. Reply with JSON only:\n"
             "{\"areas\": [{\"number\": int, \"room\": string}],\n"
             " \"splits\": [{\"number\": int, \"line_px\": [[x, y], ...], \"rooms\": [{\"room\": string, \"point_px\": [x, y]}],"
@@ -708,13 +726,13 @@ def _to_page(point, transform):
     return (point[0] / factor + transform["offset_px"][0], point[1] / factor + transform["offset_px"][1])
 
 
-def validate_naming_reply(reply, area_count, room_names, transform, require_all=False):
+def validate_naming_reply(reply, area_count, room_names, transform, require_all=False, dwelling=False):
     """Check the AI's naming/split reply and convert image points back to page pixels. A room the drawings don't name
     may be named by its use (USE_ROOM_NAMES). With require_all, every numbered area must be answered, so a room-sized
     space can't be left out silently (replies saved before 2026-10-23 didn't have to)."""
     if not isinstance(reply, dict) or not isinstance(reply.get("areas"), list):
         raise ValueError("Naming reply must contain an areas list.")
-    allowed = {name.casefold(): name for name in USE_ROOM_NAMES}
+    allowed = {name.casefold(): name for name in _room_names_for_context(dwelling)}
     allowed.update({name.casefold(): name for name in room_names})
     names, used = {}, Counter()
     for row in reply["areas"]:
@@ -944,7 +962,7 @@ def calibration_from_dimension(value_mm, length_px, declared_mm_per_px, toleranc
 
 # --- Full-room AI outlines (open plans with no enclosing walls) ---------------------
 
-def outline_prompt(room_names, references=(), notes=None):
+def outline_prompt(room_names, references=(), notes=None, dwelling=False):
     """The outline request. references: the other sheets sent after the plan (image 2, 3, ...) that mention the room
     names, as {"page", "rooms"}: the plan to draw on often has no room names, so without them the AI guesses which
     space is which and draws only the obvious ones. A sheet may mention a name only in a note with an arrow to the area
@@ -959,7 +977,7 @@ def outline_prompt(room_names, references=(), notes=None):
              "what is drawn in it: cooking equipment and benches for a kitchen, insulated panel rooms with shelving for "
              "a coolroom or freezer, tables and seats for a dining area or shop. Also draw any other room-sized space "
              "inside the tenancy that none of the listed names covers (drawings often leave the main dining or sales "
-             f"area unlabelled), naming it by its use with one of: {', '.join(USE_ROOM_NAMES)}. Draw every room in the "
+             f"area unlabelled), naming it by its use with one of: {', '.join(_room_names_for_context(dwelling))}. Draw every room in the "
              "list; if a room really is not on ")
     if not references:
         return ("The image is one architectural floor plan. Draw the outline of each of these rooms: " + rooms + ". "
@@ -1061,12 +1079,12 @@ def wall_coverage(edge, segments, mm_per_px, max_offset_mm=400, max_angle_deg=8)
     return min(1.0, covered / length)
 
 
-def validate_outline_reply(reply, room_names, transform):
+def validate_outline_reply(reply, room_names, transform, dwelling=False):
     """The drawn outlines, for the listed rooms and for spaces no listed name covers, named by their use
     (USE_ROOM_NAMES)."""
     if not isinstance(reply, dict) or not isinstance(reply.get("rooms"), list):
         raise ValueError("Outline reply must contain a rooms list.")
-    allowed = {name.casefold(): name for name in USE_ROOM_NAMES}
+    allowed = {name.casefold(): name for name in _room_names_for_context(dwelling)}
     allowed.update({name.casefold(): name for name in room_names})
     outlines, seen = [], set()
     for row in reply["rooms"]:

@@ -204,8 +204,16 @@ def _p0_page_selection(root):
     spatial_by_page = {row.get("page"): row for row in spatial.get("pages", []) if isinstance(row, dict)}
     # Page reading (pass 1) looks at each whole sheet; when it says elevation or section, a small plan inset on that
     # sheet is not the floor plan (Casa Nova 2026-10-23: a toilet inset on an interior-elevation sheet was traced).
-    read_types = {str(number): str((row or {}).get("page_type") or "")
-                  for number, row in (_read(root / "page_inventory.json", {}).get("pages") or {}).items()}
+    readings = {str(number): row for number, row in (_read(root / "page_inventory.json", {}).get("pages") or {}).items()
+                if isinstance(row, dict)}
+    read_types = {number: str(row.get("page_type") or "") for number, row in readings.items()}
+    # The page reading's main plans per level (proposed whole-floor plans; an existing plan only when no proposed one
+    # exists), when it found any: a house set has existing, demolition, proposed and set-out plans for each level, and
+    # the sheet metadata can't tell them apart or name their levels (house set 18, 2026-11-01: the existing ground
+    # floor and the roof plan were traced, the proposed lower ground floor wasn't).
+    from ai import page_inventory
+    read_main = {str(page): level for level, pages in page_inventory.main_plan_pages(
+        {int(number): row for number, row in readings.items() if number.isdigit()}).items() for page in pages}
     grouped = {}
     skipped = []
     notes = []
@@ -223,6 +231,19 @@ def _p0_page_selection(root):
         role_row = coverage_by_page.get(number, {})
         role = str(role_row.get("proposed_role") or page.get("plan_role") or "").casefold()
         kind = str(page.get("type") or page.get("sheet_classification") or "").casefold()
+        if read_main and str(number) not in read_main:
+            if read_types.get(str(number)) == "floor_plan" or role in {"main_floor_plan", "primary_geometry_plan", "floor_plan"}:
+                reading = readings.get(str(number), {})
+                what = str(reading.get("floor_plan_kind") or reading.get("page_type") or "not a floor plan").replace("_", " ")
+                note = {"page": number, "status": "skipped",
+                        "reason": f"Skipped: page reading shows this sheet is not a main floor plan ({what}); the proposed plan of its level is used."}
+                skipped.append(note)
+                notes.append(note)
+            continue
+        if str(number) in read_main and role not in {"main_floor_plan", "primary_geometry_plan", "floor_plan",
+                                                     "supporting_geometry_plan", "uncertain_top_down_context"}:
+            role = "floor_plan"
+            kind = kind or "floor_plan"
         if "floor_plan" not in kind and role not in {"main_floor_plan", "primary_geometry_plan", "supporting_geometry_plan", "uncertain_top_down_context", "enlarged_plan", "floor_plan"}:
             continue
         classification = " ".join(str(page.get(key) or "") for key in
@@ -257,6 +278,8 @@ def _p0_page_selection(root):
             role = "floor_plan"
         level = str(role_row.get("level_name") or page.get("level_name") or page.get("floor_label") or "").strip()
         level_key = " ".join(level.casefold().split()) or "unassigned level"
+        if read_main.get(str(number)):
+            level_key = read_main[str(number)]
         vector_dims = vector_by_page.get(number, {}).get("dimension_candidates", []) or []
         spatial_dims = spatial_by_page.get(number, {}).get("dimension_candidates", []) or []
         page_dims = page.get("dimension_candidates", []) or []
@@ -459,6 +482,9 @@ def _p0_walls_areas(root, page_number, context, calibration, wall_style_ids=None
 
 
 def _roof_packets(root, room_id=None):
+    from backend import house_windows_service
+    if house_windows_service.is_dwelling(root):
+        return []
     ai_input, _spatial, _building = _load_inputs(root)
     site = _latest_site(root)
     try:
@@ -500,6 +526,9 @@ def _refresh_roof_tasks(root, room_id=None):
 
 def _p6_kitchen_packets(root, room_id=None):
     """Build a bounded kitchen-equipment packet from current room traces and drawing pages."""
+    from backend import house_windows_service
+    if house_windows_service.is_dwelling(root):
+        return []
     import pdfplumber
     ai_input, spatial, _building = _load_inputs(root)
     room_use = _read(root / "room_use_resolution.json", {})
@@ -905,11 +934,41 @@ def _p0_calibration(root, page, context=None):
     return calibration
 
 
+_INFERRED_ROOM_INPUTS = ("ai_input.json", "drawing_coverage.json", "spatial_ocr.json", "vector_geometry.json")
+
+
+# "Basement floor plan includes Garage, Lift, Bar and Bath." or "Ground floor rooms: Alfresco, Dining, Bed 2": some
+# readings list a plan's rooms in one sentence (house set 15, 2026-11-02).
+_READ_ROOM_LIST = re.compile(r"\b(?:includes?|rooms?(?:/services)?(?: shown)?:)\s+(.+)$", re.I)
+_READ_ROOM = re.compile(r"^([A-Za-z][A-Za-z'/& -]{1,40}?(?: \d{1,2})?)(?:\s+\d{3,5}\s*[x×]\s*\d{3,5}(?:\s*mm)?)?$")
+
+
+def _reading_room_names(root, page):
+    """The room names the page reading listed for a plan ("Bedroom 2 3500x3940" gives "Bedroom 2"). A house's plans
+    print most room names as drawn lettering, not text, so the text layer alone gave one "Bedroom" for four bedrooms
+    (house set 18, 2026-11-01)."""
+    reading = ((_read(root / "page_inventory.json", {}).get("pages") or {}).get(str(page))) or {}
+    names = set()
+    for item in reading.get("information") or []:
+        if not isinstance(item, dict) or item.get("kind") != "room_geometry":
+            continue
+        what = " ".join(str(item.get("what") or "").split())
+        listed = _READ_ROOM_LIST.search(what)
+        parts = re.split(r",\s*(?:and\s+)?|\s+and\s+", re.sub(r"\s*\(.*?\)|\.$", "", listed.group(1))) if listed else [what]
+        for part in parts:
+            match = _READ_ROOM.match(part.strip())
+            name = match.group(1).strip() if match else ""
+            if name and len(name.split()) <= 4 and not re.search(r"\b(?:dimensions?|area|total|site|mm)\b", name, re.I):
+                names.add(name[0].upper() + name[1:])
+    return sorted(names)
+
+
 def _inferred_room_data(root):
-    # Share inference across packet builders and refreshes until one of its four inputs changes.
+    """The rooms named on the drawings. Read from four files only, so it is worked out again only when one of them
+    changes: a round of drawing tasks asked for it about 30 times (2026-11-01, house set 18: minutes per round)."""
     root = Path(root).resolve()
     signature = []
-    for name in ("ai_input.json", "drawing_coverage.json", "spatial_ocr.json", "vector_geometry.json"):
+    for name in _INFERRED_ROOM_INPUTS:
         try:
             stat = (root / name).stat()
             signature.append((stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size, stat.st_ino))
@@ -956,14 +1015,20 @@ def _p0_followup_packets(root):
                 continue
             image, transform = room_outline.render_candidate_areas(context["image"], areas, context["viewport"])
             room_names = sorted({row["label"] for row in _inferred_room_data(root)})
+            from backend import house_windows_service
+            dwelling = house_windows_service.is_dwelling(root)
+            read_names = _reading_room_names(root, number) if dwelling else []
+            if read_names:
+                room_names = sorted({*room_names, *read_names})
             notes = _note_only_rooms(root, room_names)
-            naming_packet = {"task":"P0_room_names", "page":number, "area_count":len(areas), "room_names":room_names,
+            naming_packet = {"task":"P0_room_names", "page":number, **({"dwelling":True} if dwelling else {}),
+                             **({"read_room_names":read_names} if read_names else {}), "area_count":len(areas), "room_names":room_names,
                              **({"note_only_rooms": notes} if notes else {}),
                              "transform":transform, "calibration":calibration, "areas_px": [list(poly.exterior.coords) for poly in areas],
                              "wall_style_ids":wall_style_ids, "raster_mode":raster_mode,
                              **({"wall_styles_added": added_styles} if not raster_mode and added_styles else {})}
             result.append(("P0_room_names", f"page-{number}", naming_packet,
-                           room_outline.room_naming_prompt(room_names, len(areas), notes), [_png_bytes(image)], ""))
+                           room_outline.room_naming_prompt(room_names, len(areas), notes, dwelling=dwelling), [_png_bytes(image)], ""))
         except (OSError, ValueError, IndexError, KeyError, TypeError) as error:
             result.append(("P0_room_names", f"page-{number}", {"task":"P0_room_names", "page":number}, "", [],
                            f"P0 enclosed-area packet is blocked: {error}"))
@@ -1025,13 +1090,15 @@ def _p0_wall_style_records(root, page):
 OUTLINE_ATTEMPTS_BEFORE_PARTIAL = 2
 
 
-def _p0_outline_room_names(root, names_record, area_count, requested_rooms=None, *, inferred_rooms=None):
+def _p0_outline_room_names(root, names_record, area_count, requested_rooms=None, *, inferred_rooms=None, dwelling=None):
     """The existing naming/printed-area decision shared by outline and tenancy packets."""
     if inferred_rooms is None:
         inferred_rooms = _inferred_room_data(root)
+    if dwelling is None:
+        dwelling = bool((names_record or {}).get("packet", {}).get("dwelling"))
     if names_record and area_count:
         names, splits = room_outline.validate_naming_reply(json.loads(names_record["reply"]), area_count,
-            names_record["packet"]["room_names"], names_record["packet"]["transform"])
+            names_record["packet"]["room_names"], names_record["packet"]["transform"], dwelling=dwelling)
         placed = {name for name in names.values() if name != room_outline.NOT_A_ROOM}
         placed.update(item["room"] for split in splits for item in split["rooms"])
         room_names = names_record["packet"]["room_names"]
@@ -1094,6 +1161,8 @@ TENANCY_NOT_NEEDED = ("Every room on this plan already has an outline from the w
 
 def _p0_outline_packets(root, requested_rooms=None):
     result = []
+    from backend import house_windows_service
+    dwelling = house_windows_service.is_dwelling(root)
     for page in _p0_main_geometry_pages(root):
         number = page["page"]
         if not requested_rooms and _tenancy_waiting(root, number):
@@ -1120,14 +1189,14 @@ def _p0_outline_packets(root, requested_rooms=None):
                 wall_style_ids, _added = _completed_wall_styles(root, context, calibration, wall_style_ids)
             _walls, areas, _segments = _p0_walls_areas(root, number, context, calibration,
                                                         wall_style_ids, raster_mode)
-            _room_names, missing = _p0_outline_room_names(root, names_record, len(areas), requested_rooms)
+            _room_names, missing = _p0_outline_room_names(root, names_record, len(areas), requested_rooms, dwelling=dwelling)
             if not missing:
                 continue
             image, transform = room_outline.render_candidate_areas(context["image"], [], context["viewport"])
             references, reference_images = _p0_name_sheets(root, number, missing)
             notes = _note_only_rooms(root, missing)
-            prompt = room_outline.outline_prompt(missing, references, notes)
-            packet = {"task":"P0_room_outlines", "page":number, "room_names":missing, "transform":transform,
+            prompt = room_outline.outline_prompt(missing, references, notes, dwelling=dwelling)
+            packet = {"task":"P0_room_outlines", "page":number, **({"dwelling":True} if dwelling else {}), "room_names":missing, "transform":transform,
                       "calibration":calibration, "wall_style_ids":wall_style_ids, "raster_mode":raster_mode,
                       "name_sheets":references, **({"note_only_rooms": notes} if notes else {})}
             result.append(("P0_room_outlines", f"page-{number}", packet, prompt,
@@ -1304,6 +1373,8 @@ def _p0_corner_packets(root, force=False):
 def _p0_tenancy_packets(root, force=False):
     """Ask after naming, only when current rooms need the AI-drawn outline route."""
     result = []
+    from backend import house_windows_service
+    dwelling = house_windows_service.is_dwelling(root)
     for page in _p0_main_geometry_pages(root):
         number = page["page"]
         current = _current_task(root, "P0_tenancy_outline", f"page-{number}")
@@ -1326,7 +1397,7 @@ def _p0_tenancy_packets(root, force=False):
                 continue
             image, transform = room_outline.render_candidate_areas(context["image"], [], context["viewport"])
             packet = {"task": "P0_tenancy_outline", "page": number, "transform": transform, "calibration": calibration}
-            result.append(("P0_tenancy_outline", f"page-{number}", packet, room_outline.tenancy_outline_prompt(),
+            result.append(("P0_tenancy_outline", f"page-{number}", packet, room_outline.tenancy_outline_prompt(dwelling=dwelling),
                            [_png_bytes(image)], ""))
         except (OSError, ValueError, IndexError, KeyError, TypeError) as error:
             result.append(("P0_tenancy_outline", f"page-{number}", {"task": "P0_tenancy_outline", "page": number}, "", [],
@@ -1437,6 +1508,8 @@ def _p0_unnamed_space_packets(root, force=False):
         return []
     from shapely.geometry import Polygon
     result = []
+    from backend import house_windows_service
+    dwelling = house_windows_service.is_dwelling(root)
     for page in _p0_main_geometry_pages(root):
         number = page["page"]
         if not force and _tenancy_waiting(root, number):
@@ -1457,9 +1530,9 @@ def _p0_unnamed_space_packets(root, force=False):
                                                                                    if polygon.geom_type == "Polygon"],
                                                                 context["viewport"])
             names = sorted({label for label, _polygon in rooms})
-            packet = {"task": "P0_unnamed_space", "page": number, "traced_names": names, "transform": transform,
+            packet = {"task": "P0_unnamed_space", "page": number, **({"dwelling": True} if dwelling else {}), "traced_names": names, "transform": transform,
                       "calibration": calibration}
-            result.append(("P0_unnamed_space", f"page-{number}", packet, room_outline.unnamed_space_prompt(names),
+            result.append(("P0_unnamed_space", f"page-{number}", packet, room_outline.unnamed_space_prompt(names, dwelling=dwelling),
                            [_png_bytes(image)], ""))
         except (OSError, ValueError, IndexError, KeyError, TypeError) as error:
             result.append(("P0_unnamed_space", f"page-{number}", {"task": "P0_unnamed_space", "page": number}, "", [],
@@ -1852,6 +1925,12 @@ def _match_storefront_run(runs, elevation_pages, spatial):
         ocr=page_rows.get(page.get("page"),{})
         for item in ocr.get("dimension_candidates",[]) or []:
             value=item.get("value_mm") if isinstance(item,dict) else None
+            # Only numbers the text layer reads as dimensions, as the dimension-to-wall matcher does: a level marker
+            # or a title-block postcode is no width (Casa Nova, 2026-10-28: a sign's "2940" level put the storefront
+            # on one 2.5 m wall of a ~30 m glazed front).
+            if (item.get("annotation_kind","written_dimension") in {"unknown_numeric","detail_or_sheet_reference"}
+                    or item.get("dimension_eligibility","eligible") in {"vision_review","ineligible"}):
+                continue
             if isinstance(value,(int,float)) and value>0:
                 dimensions.append({"page":page["page"],"value_mm":float(value)})
     if not dimensions:
@@ -1920,8 +1999,26 @@ def _edge_wall_coverage(root, page, traces):
     return result
 
 
+_SHARED_WALL = re.compile(r"\b(?:party|common|shared)\s+walls?\b|\bdual\s+occupancy\b|\bsemi[- ]?detached\b|\bduplex\b|"
+                          r"\battached\s+(?:dwelling|house)\b|\bterraced?\s+house\b|\bdwelling\s+[ab]\b", re.I)
+
+
+def _house_without_shared_walls(root):
+    """A house whose drawings never mention a wall shared with another dwelling: its outline faces outside, so the
+    outside-walls question isn't asked (user decision 2026-10-30: AI kept to a minimum; ai/house_envelope.py)."""
+    from backend import house_windows_service
+    if not house_windows_service.is_dwelling(root):
+        return False
+    pages = list(_read(Path(root) / "page_inventory.json", {}).get("pages", {}).values())
+    pages += [row for row in _read(Path(root) / "ai_input.json", {}).get("drawing_set", {}).get("pages", []) if isinstance(row, dict)]
+    text = json.dumps([{key: page.get(key) for key in ("title", "information", "structured_content")} for page in pages], ensure_ascii=False)
+    return not _SHARED_WALL.search(text)
+
+
 def _p3_packets(root, room_id=None, page_number=None, force=False):
     result=[]
+    if _house_without_shared_walls(root):
+        return result
     try: traces=reviewer_room_geometry_service.current_records(reviewer_room_geometry_service._paths({"review_dir":str(root)}))
     except (OSError,ValueError,TypeError,KeyError): traces=[]
     comfort=_comfort_room_ids(root)
@@ -1932,7 +2029,8 @@ def _p3_packets(root, room_id=None, page_number=None, force=False):
     grouped={}
     for trace in selected: grouped.setdefault(trace.get("page"),[]).append(trace)
     ai_input,spatial,_building=_load_inputs(root)
-    elevation_rows=_storefront_elevation_pages(ai_input)
+    dwelling = __import__("backend.house_windows_service", fromlist=["is_dwelling"]).is_dwelling(root)
+    elevation_rows=[] if dwelling else _storefront_elevation_pages(ai_input)
     for page,traces_on_page in sorted(grouped.items()):
         if affected_pages is not None and page not in affected_pages: continue
         comfort_traces=[row for row in traces_on_page if row.get("room_id") in comfort]
@@ -1955,7 +2053,7 @@ def _p3_packets(root, room_id=None, page_number=None, force=False):
                 side=coverage.get(trace["trace_id"],{}).get(mapping["edge_index"])
                 if side: edge.update({"wall_coverage":round(side["wall_coverage"],2),"faces_wall":side["faces_wall"]})
                 room_edges.append(edge)
-        storefront_match=_match_storefront_run(runs,elevation_rows,spatial)
+        storefront_match=_match_storefront_run(runs,elevation_rows,spatial) if not dwelling else {"run_index":None,"total_mm":None,"pages":[],"reason":"House boundary task; shopfront matching disabled."}
         placed=_current_task(root,"P4_storefront_wall",f"page-{page}")
         placed_runs=sorted({index for row in ((placed or {}).get("applied_value") or {}).get("elevations",{}).values()
                             for index in row.get("run_indices",[])}) if placed and placed.get("status") in {"applied","below_accuracy_bar"} else []
@@ -1977,7 +2075,15 @@ def _p3_packets(root, room_id=None, page_number=None, force=False):
             result.append(("P3_boundaries",target,{"task":"P3_boundaries","page":page},"",[],
                 "No perimeter wall run is at least 1 m; short runs cannot inherit a boundary answer."))
             continue
-        prompt=("Classify each numbered run on the outside perimeter of the union of the traced tenancy rooms: external, mall, adjacent_tenancy, internal or unknown. "
+        packet={"task":"P3_boundaries","page":page,**({"dwelling":True} if dwelling else {}),"edges":asked}
+        prompt_packet={"page":page,"room_parts":[row.get("room_label") for row in traces_on_page],
+            "perimeter_runs":[[row["index"]+1,round(row["length_m"],2)] for row in asked],
+            "short_run_inheritance":{str(int(key)+1):value+1 for key,value in short_inheritance.items()},
+            "storefront_run_number":None,"storefront_elevation_total_width_mm":None,
+            "storefront_match_reason":"House boundary classification." if dwelling else storefront_match["reason"],
+            "nearby_text":cue_text}
+        shop_prompt_prefix = "Classify each numbered run on the outside perimeter of the union of the traced tenancy rooms: external, mall, adjacent_tenancy, internal or unknown. "
+        prompt=(autonomous_tasks.house_boundaries_prompt(prompt_packet) if dwelling else shop_prompt_prefix +
                 "Do not classify interior partition edges; unmapped room edges become internal automatically. Quote drawing evidence for each non-unknown answer. "
                 "Runs under 1 m inherit the nearest numbered run's classification. "
                 "Storefront totals may exceed inside-face spans by 0–600 mm or differ by <=2%; never classify a matched run internal/adjacent_tenancy. "
@@ -1989,7 +2095,7 @@ def _p3_packets(root, room_id=None, page_number=None, force=False):
                     "storefront_elevation_total_width_mm":storefront_match["total_mm"],
                     "storefront_match_reason":storefront_match["reason"],"nearby_text":cue_text},
                     ensure_ascii=False,separators=(",",":")))
-        packet={"task":"P3_boundaries","page":page,"trace_ids":[row["trace_id"] for row in comfort_traces],
+        packet={"task":"P3_boundaries","page":page,**({"dwelling":True} if dwelling else {}),"trace_ids":[row["trace_id"] for row in comfort_traces],
             "trace_id":comfort_traces[0]["trace_id"] if len(comfort_traces)==1 else None,
             "room_id":comfort_traces[0].get("room_id"),"room_label":comfort_traces[0].get("room_label"),
             "mm_per_px":perimeter["mm_per_px"],"edges":asked,"runs":runs,"room_edges":room_edges,
@@ -2202,6 +2308,9 @@ def _storefront_runs(root, plan_page, eligible, run_geometry, elevation_pages, s
 
 def _p4_packets(root, only_room_id=None):
     result=[]
+    from backend import house_windows_service
+    if house_windows_service.is_dwelling(root):
+        return result
     try: traces=reviewer_room_geometry_service.current_records(reviewer_room_geometry_service._paths({"review_dir":str(root)}))
     except (OSError,ValueError,TypeError,KeyError): traces=[]
     ai_input,spatial,_building=_load_inputs(root)
@@ -2509,6 +2618,15 @@ def _p0_trace_rows(root, record, polygons):
     room_ids = {}
     for room in rooms:
         room_ids.setdefault(room["label"].casefold(), room["room_id"])
+    # A name on more than one level (a house's Bathroom, Corridor, Ensuite) is this page's level's room.
+    from ai.page_inventory import level_key
+    page_level = level_key(_page_level(root, page))
+    levels = {}
+    for room in rooms:
+        levels.setdefault(room["label"].casefold(), {}).setdefault(level_key(room.get("level_name")), room["room_id"])
+    for label, by_level in levels.items():
+        if len(by_level) > 1 and page_level in by_level:
+            room_ids[label] = by_level[page_level]
     printed = {row["label"].casefold(): float(row["area_m2"]) for row in _inferred_room_data(root)
                if isinstance(row.get("area_m2"), (int, float)) and row["area_m2"] > 0}
     counts = {}
@@ -2598,8 +2716,15 @@ def _apply_p0_room_names(web, project, root, record, validated):
     # Rooms named by their use must be in the room list before their outlines are saved.
     from backend import room_proposal
     level = _page_level(root, packet["page"])
+    # A house's room names from the page reading become rooms when the AI gives one to an area.
+    read_names = {str(name).casefold(): str(name) for name in packet.get("read_room_names", [])}
+    named = sorted({read_names[str(name).casefold()] for name in names.values() if str(name).casefold() in read_names}
+                   | {read_names[str(item["room"]).casefold()] for split in splits for item in split["rooms"]
+                      if str(item["room"]).casefold() in read_names})
     room_proposal.save_use_named_rooms(root, "P0_room_names", packet["page"], level, validated.get("use_named_rooms", []),
                                        record["run_id"])
+    room_proposal.save_use_named_rooms(root, "P0_room_names_read", packet["page"], level, named, record["run_id"],
+                                       named_on_plan=True)
     snap_px = 250 / packet["calibration"]["mm_per_px"]
     by_room = {}
     for index, name in names.items():
@@ -2623,8 +2748,10 @@ def _apply_p0_room_names(web, project, root, record, validated):
 
 
 def _page_level(root, page):
+    """The page's level: drawing coverage's, else the page reading's (a house's First Floor plan had none in coverage)."""
     return next((row.get("level_name") for row in _read(root / "drawing_coverage.json", {}).get("page_roles", [])
-                 if isinstance(row, dict) and row.get("page") == page and row.get("level_name")), "")
+                 if isinstance(row, dict) and row.get("page") == page and row.get("level_name")), "") or \
+        str(((_read(root / "page_inventory.json", {}).get("pages") or {}).get(str(page)) or {}).get("level") or "")
 
 
 def _apply_p0_outlines(web, project, root, record, validated):
@@ -3136,7 +3263,11 @@ def _public_record(web, project, record):
 
 def _all_current(root, web=None, project=None):
     records = []
+    from backend import house_windows_service
+    dwelling = house_windows_service.is_dwelling(root)
     for task in autonomous_tasks.TASKS:
+        if dwelling and task == "P5_roof":
+            continue
         for pointer in sorted((root / "ai_tasks" / task).glob("*/current.json")):
             current = _read(pointer, {})
             record = _read(pointer.parent / current.get("run_path", "") / "record.json", None)
@@ -3231,6 +3362,9 @@ def _run_all(web, project, root):
             _create_run(root, task, target, packet, prompt, images,
                         reason or (f"Prompt exceeds the {budget:,}-character limit; evidence was not shortened."
                                    if len(prompt) > budget else ""))
+    # A house's windows come from its window schedule and the tags on its plans, without AI (house_windows_service).
+    from backend import house_windows_service
+    house_windows_service.apply(web, project, root)
     return get(web, project)
 
 
@@ -3647,7 +3781,11 @@ def _post(web, project, data, *, defer_evidence_rebuild=False):
     record["reply_hash"] = hashlib.sha256(reply.encode("utf-8")).hexdigest()
     record["model_note"] = model_note
     try:
-        if task == "P0_dimensions":
+        if task == "P0_dimensions" and autonomous_tasks.dimension_unreadable(reply):
+            # Asking again gets the same null (house set 18: the same reply 3-5 times per dimension, every round).
+            record.update({"status": "blocked", "source": "ai_determined", "applied_value": {}, "validation": {},
+                           "block_reason": "The AI could not read this printed dimension; it is not used for the scale."})
+        elif task == "P0_dimensions":
             validated = autonomous_tasks.validate_dimension_reply(record["packet"], reply)
             record = _apply_p0_dimensions(root, record, validated)
         elif task == "P0_wall_styles":

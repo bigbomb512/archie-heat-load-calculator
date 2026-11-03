@@ -213,6 +213,10 @@ function resultsContent({ plan, report, gaps, projectId, stale, canUpdate }) {
     allowance > 0
       ? `<tr><th colspan="3">Safety allowance, ${Math.round((safetyFactor - 1) * 100)}%</th><td>${fmt(allowance)} kW</td></tr>`
       : "";
+  const household = peak.household_counted_once;
+  const householdLine = household
+    ? `<p>Household counted once: the rooms hold ${escapeHtml(household.people_in_rooms)} people at ${escapeHtml(peak.display_hour ?? peak.hour)}:00, the house has ${escapeHtml(household.people_counted)} — ${fmt(Number(household.removed_sensible_kw || 0) + Number(household.removed_latent_kw || 0))} kW of people heat not counted twice.</p>`
+    : "";
   const rooms = (plan.rooms || []).filter(
     (room) => room.kind === "comfort" && room.included,
   );
@@ -244,6 +248,7 @@ function resultsContent({ plan, report, gaps, projectId, stale, canUpdate }) {
       <div><h1>Design cooling load for the tenancy</h1>
         <strong class="job-total">${fmt(total)} <span>kW</span></strong>
         <p>${statusSentence}</p>
+        ${householdLine}
         ${stale
           ? `<p class="job-muted">Update the final load before creating the report.</p>`
           : `<div class="job-report" data-report>

@@ -215,11 +215,12 @@ def _spatial_label_items(spatial_page, kinds=None):
     candidates.extend((spatial_page or {}).get("room_label_candidates", []))
 
     parsed = []
+    in_title_block = title_block_test(spatial_page or {}, standalone)
     context_lines = _text_item_lines(standalone if isinstance(standalone, list) and standalone else (spatial_page or {}).get("word_samples", []))
     for item in candidates:
         if not isinstance(item, dict):
             continue
-        if _inside_title_block(item, spatial_page or {}, standalone):
+        if in_title_block(item):
             continue
         text = item.get("text", "")
         context = ""
@@ -251,7 +252,7 @@ def _spatial_label_items(spatial_page, kinds=None):
     # text rather than mining valid-looking words out of it.
     if isinstance(standalone, list) and standalone:
         for line, line_bbox in context_lines:
-            if _inside_title_block({"bbox": line_bbox}, spatial_page or {}, standalone):
+            if in_title_block({"bbox": line_bbox}):
                 continue
             label, _, area = parse_room_label_item(line)
             if label:
@@ -267,32 +268,37 @@ def _inside_title_block(item, spatial_page, text_items=None):
     while the title-block detector uses the displayed page dimensions. Scale
     such text bboxes back to the spatial page dimensions before comparing.
     """
-    bbox = item.get("bbox") if isinstance(item, dict) else None
-    if not isinstance(bbox, list) or len(bbox) != 4:
-        return False
+    return title_block_test(spatial_page, text_items)(item)
+
+
+def title_block_test(spatial_page, text_items=None):
+    """_inside_title_block for many items on one page: the page's text extent is measured once, not per item
+    (per item it was quadratic: a 22-page house set spent minutes here on every drawing-task round)."""
     width, height = spatial_page.get("width"), spatial_page.get("height")
     if not isinstance(width, (int, float)) or not isinstance(height, (int, float)):
-        return False
+        return lambda item: False
     rows = text_items if isinstance(text_items, list) and text_items else spatial_page.get("standalone_text_items", [])
-    max_x = max((row.get("bbox", [0, 0, 0, 0])[2] for row in rows if isinstance(row, dict)
-                 and isinstance(row.get("bbox"), list) and len(row["bbox"]) == 4), default=width)
-    max_y = max((row.get("bbox", [0, 0, 0, 0])[3] for row in rows if isinstance(row, dict)
-                 and isinstance(row.get("bbox"), list) and len(row["bbox"]) == 4), default=height)
+    boxes = [row["bbox"] for row in rows if isinstance(row, dict) and isinstance(row.get("bbox"), list) and len(row["bbox"]) == 4]
+    max_x = max((box[2] for box in boxes), default=width)
+    max_y = max((box[3] for box in boxes), default=height)
     scale_x = width / max_x if max_x > width * 1.05 else 1.0
     scale_y = height / max_y if max_y > height * 1.05 else 1.0
-    adjusted = [bbox[0] * scale_x, bbox[1] * scale_y, bbox[2] * scale_x, bbox[3] * scale_y]
-    for region in spatial_page.get("title_blocks", []):
-        region_bbox = region.get("bbox") if isinstance(region, dict) else None
-        # bottom_band is the actual sheet title/revision block. The detected
-        # bottom_right and right_band regions are broad context bands and on
-        # some plans overlap legitimate room labels (notably reflected ceiling
-        # plans), so they must not be treated as title-block exclusions.
-        if (isinstance(region, dict) and region.get("region") == "bottom_band"
-                and isinstance(region_bbox, list) and len(region_bbox) == 4
-                and max(adjusted[0], region_bbox[0]) <= min(adjusted[2], region_bbox[2])
-                and max(adjusted[1], region_bbox[1]) <= min(adjusted[3], region_bbox[3])):
-            return True
-    return False
+    # bottom_band is the actual sheet title/revision block. The detected
+    # bottom_right and right_band regions are broad context bands and on
+    # some plans overlap legitimate room labels (notably reflected ceiling
+    # plans), so they must not be treated as title-block exclusions.
+    regions = [region["bbox"] for region in spatial_page.get("title_blocks", [])
+               if isinstance(region, dict) and region.get("region") == "bottom_band"
+               and isinstance(region.get("bbox"), list) and len(region["bbox"]) == 4]
+
+    def inside(item):
+        bbox = item.get("bbox") if isinstance(item, dict) else None
+        if not isinstance(bbox, list) or len(bbox) != 4:
+            return False
+        adjusted = [bbox[0] * scale_x, bbox[1] * scale_y, bbox[2] * scale_x, bbox[3] * scale_y]
+        return any(max(adjusted[0], box[0]) <= min(adjusted[2], box[2]) and max(adjusted[1], box[1]) <= min(adjusted[3], box[3])
+                   for box in regions)
+    return inside
 
 
 def _text_item_lines(items):

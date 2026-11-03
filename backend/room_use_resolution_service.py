@@ -35,7 +35,7 @@ def gather_use_evidence(root):
     """Cache read-only evidence by every source file version; calorific values do not enter the evidence hash."""
     root = Path(root)
     names = ["reviewer_room_geometry.json", "ai_input.json", "spatial_ocr.json", "vector_geometry.json",
-             "page_inventory.json", "equipment_catalogue_resolution.json"]
+             "page_inventory.json", "equipment_catalogue_resolution.json", "building_evidence.json"]
     files = [root / name for name in names] + sorted((root / "ai_tasks").rglob("*.json"))
     # Include extraction files by their public constants rather than guessing their names.
     from backend import page_extraction_service, page_inventory_service
@@ -109,6 +109,11 @@ def _gather_use_evidence(root):
     spatial = {page.get("page"): page for page in read_json(root / "spatial_ocr.json").get("pages", [])}
     inputs = read_json(root / "ai_input.json")
     inventory = read_json(root / "page_inventory.json").get("pages", {})
+    # A house: a space that normally isn't cooled (garage, laundry, bathroom …) is cooled when the drawings show
+    # air-conditioning in it (user decision 2026-10-30); its ceiling and services plans are read for that too.
+    dwelling = _dwelling_context(root)["is_dwelling"] is True
+    registered_types = ({"proposed_layout"}, {"reflected_ceiling_plan", "services_plan"}) if dwelling else ({"proposed_layout"}, set())
+    room_words = {}
     doc = None
     pdf_path = inputs.get("source_pdf") or inputs.get("source_files", {}).get("pdf")
     if pdf_path and Path(pdf_path).is_file():
@@ -142,7 +147,8 @@ def _gather_use_evidence(root):
             if doc is not None:
                 for number, reading in sorted(inventory.items()):
                     number = int(number)
-                    if number == page or not 0 < number <= len(doc.pages) or reading.get("page_type") != "floor_plan" or reading.get("floor_plan_kind") != "proposed_layout":
+                    layout = reading.get("page_type") == "floor_plan" and reading.get("floor_plan_kind") in registered_types[0]
+                    if number == page or not 0 < number <= len(doc.pages) or not (layout or reading.get("page_type") in registered_types[1]):
                         continue
                     sheet = doc.pages[number - 1]
                     if abs(sheet.width - doc.pages[page - 1].width) > 1 or abs(sheet.height - doc.pages[page - 1].height) > 1:
@@ -167,6 +173,8 @@ def _gather_use_evidence(root):
                     continue
                 key = min(hits, key=lambda row: (row[1], row[0]))[0]
                 text = str(word.get("text", ""))
+                if dwelling:
+                    room_words.setdefault(key, []).append((word["source_page"], bounds[1], bounds[0], text))
                 for item in code_items.get(text.casefold(), []):
                     located.setdefault(item["id"], set()).add(key)
                 if re.search(r"\b(wc|toilet|urinal|basin|counter|seating|desk|workstation|prep|pizza|dishwash)\b", text, re.I):
@@ -177,6 +185,10 @@ def _gather_use_evidence(root):
     finally:
         if doc is not None:
             doc.close()
+    for key, words in room_words.items():
+        found = _air_conditioning_text(words)
+        if found and key in contexts:
+            contexts[key]["air_conditioning_evidence"] = found
     for row in records:
         physical = located.get(row["id"], set())
         key = next(iter(physical)) if len(physical) == 1 else place_name(row.get("room")) if not physical else None
@@ -212,8 +224,9 @@ def _gather_use_evidence(root):
     inventory = read_json(root / "page_inventory.json").get("pages", {})
     context_text = json.dumps([{key: value for key, value in page.items() if key in {"title", "information", "site"}}
                                for page in inventory.values()], ensure_ascii=False).casefold()
+    dwelling_context = _dwelling_context(root)
     # Tenancy type selects dining versus retail only; cooking evidence remains room-local.
-    tenancy = "hospitality" if re.search(r"\b(restaurant|cafe|café|buffet|bar fitout)\b", context_text) or any(
+    tenancy = "residential" if dwelling_context["is_dwelling"] else "hospitality" if re.search(r"\b(restaurant|cafe|café|buffet|bar fitout)\b", context_text) or any(
         equipment_heat.equipment_type(row.get("name")) == "cooking" for row in records) else "retail" if re.search(
         r"\b(retail|shop fitout|store fitout)\b", context_text) else "office" if re.search(r"\boffice\b", context_text) else "unknown"
     tenancy_evidence = [{"page": int(number), "excerpt": str(item.get("evidence") or item.get("what"))[:300]}
@@ -233,10 +246,55 @@ def _sources(paths):
     return _room_use_sources(paths)
 
 
+# Text that unambiguously shows air-conditioning in a room. "SA"/"RA" alone are left out: on an electrical plan "SA" is
+# usually a smoke alarm.
+_AIR_CONDITIONING = re.compile(r"\b(?:A/C(?:\s+UNIT)?|AIR\s*-?\s*CON(?:DITIONING|DITIONER|DITIONED)?|AIRCON|DUCTED|FCU|CASSETTE|"
+                               r"SPLIT\s+SYSTEM|WALL\s+SPLIT|SUPPLY\s+AIR|RETURN\s+AIR|AC\s+UNIT|(?:SA|RA)\s+GRILLE)\b", re.I)
+
+
+def _air_conditioning_text(words):
+    """[{"page", "excerpt"}] of air-conditioning text among a room's words [(page, top, left, text)], read in lines."""
+    lines = {}
+    for page, top, left, text in sorted(words):
+        lines.setdefault((page, round(top / 4)), []).append(text)
+    found = []
+    for (page, _row), texts in sorted(lines.items()):
+        match = _AIR_CONDITIONING.search(" ".join(texts))
+        if match:
+            found.append({"page": page, "excerpt": match.group(0)})
+    return found[:4]
+
+
+def _dwelling_context(root):
+    inventory = _read(Path(root) / "page_inventory.json", {}).get("pages", {})
+    building = _read(Path(root) / "building_evidence.json", {})
+    hits = []
+    bedroom_pages = []
+    for number, page in sorted(inventory.items()):
+        excerpt = json.dumps(page, ensure_ascii=False)
+        if re.search(r"\b(dwelling|residence|house|basix|nathers)\b", excerpt, re.I):
+            hits.append({"page": int(number), "excerpt": excerpt[:300], "basis": "dwelling/residential drawing term"})
+        if re.search(r"\b(bedroom|bed\s*\d*|br\s*\d*|mbr)\b", excerpt, re.I):
+            bedroom_pages.append((int(number), str(page.get("title", ""))))
+    if len(bedroom_pages) >= 2:
+        hits.extend({"page": page, "excerpt": f"Bedroom label in page inventory: {title}", "basis": "two or more bedroom labels"}
+                    for page, title in bedroom_pages[:8])
+    room_bedrooms = [row for row in building.get("spaces", []) if isinstance(row, dict)
+                     and re.search(r"\b(bedroom|bed\s*\d*|br\s*\d*|mbr)\b", str(row.get("name", "")), re.I)]
+    if len(room_bedrooms) >= 2:
+        hits.extend({"page": next((item.get("page") for item in row.get("evidence", []) if isinstance(item, dict) and item.get("page")), 1),
+                     "excerpt": f"Room inventory label: {row.get('name')}", "basis": "two or more bedroom labels"}
+                    for row in room_bedrooms[:8])
+    text = json.dumps({"inventory": inventory, "building": building}, ensure_ascii=False)
+    shop = bool(re.search(r"\b(restaurant|cafe|café|buffet|bar fitout|retail|shop fitout|store fitout)\b", text, re.I))
+    return {"is_dwelling": bool(hits) and not shop, "evidence": hits[:12] if hits and not shop else []}
+
+
 def _resolve(paths, existing=None):
     return room_use_resolution.resolve(
         _read(paths["building"], {}), _read(paths["vision"], {}), _proposal_for_resolution(paths, equipment=False), _sources(paths), existing,
         use_evidence=gather_use_evidence(paths["root"]),
+        dwelling_context=_dwelling_context(paths["root"]),
     )
 
 

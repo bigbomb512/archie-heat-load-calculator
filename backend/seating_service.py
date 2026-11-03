@@ -13,6 +13,81 @@ from backend.job_runner import read_json
 
 _CACHE = {}
 _LOCK = threading.Lock()
+_PAGES = {}
+_PAGES_LOCK = threading.Lock()
+_PAGES_LIMIT = 64
+
+
+class _Page:
+    """One PDF page as _gather reads it, parsed once per saved version of the PDF.
+
+    Parsing a page is nearly all of a gather (Casa Nova's equipment plan alone took ~12 s, only to show it can't be
+    registered), and it doesn't depend on the traces or room uses that make a gather run again. Keeps the page size,
+    whether it has vectors or images, its words, and the drawn primitives _objects reads (only for pages it reads).
+    """
+
+    def __init__(self, doc, number, version):
+        self._doc, self._number = doc, number
+        key = (*version, number)
+        with _PAGES_LOCK:
+            saved = _PAGES.pop(key, None)
+            _PAGES[key] = saved = saved if saved is not None else {}
+            while len(_PAGES) > _PAGES_LIMIT:
+                _PAGES.pop(next(iter(_PAGES)))
+        self._saved = saved
+
+    def _value(self, name, compute):
+        if name not in self._saved:
+            self._saved[name] = compute()
+        return self._saved[name]
+
+    def _page(self):
+        return self._doc.pages[self._number - 1]
+
+    @property
+    def width(self):
+        return self._value("width", lambda: self._page().width)
+
+    @property
+    def height(self):
+        return self._value("height", lambda: self._page().height)
+
+    @property
+    def has_vectors(self):
+        return self._value("has_vectors", lambda: bool(self._page().lines or self._page().curves or self._page().rects))
+
+    @property
+    def images(self):
+        return self._value("images", lambda: bool(self._page().images))
+
+    def extract_words(self):
+        return self._value("words", lambda: self._page().extract_words())
+
+    def _shapes(self):
+        def read():
+            page = self._page()
+            keep = ("object_type", "path", "pts", "x0", "top", "x1", "bottom")
+            return {"shapes": [{key: obj[key] for key in keep if key in obj} for obj in page.rects + page.curves],
+                    "lines": [{key: line[key] for key in ("x0", "top", "x1", "bottom", "width", "height")}
+                              for line in page.lines]}
+        return self._value("shapes", read)
+
+    @property
+    def rects(self):
+        return [obj for obj in self._shapes()["shapes"] if obj["object_type"] == "rect"]
+
+    @property
+    def curves(self):
+        return [obj for obj in self._shapes()["shapes"] if obj["object_type"] != "rect"]
+
+    @property
+    def lines(self):
+        return self._shapes()["lines"]
+
+
+def _pdf_version(source):
+    stat = Path(source).stat()
+    return (str(Path(source).resolve()), stat.st_size, stat.st_mtime_ns, getattr(stat, "st_ino", 0))
 
 
 def _words(page):
@@ -157,6 +232,7 @@ def _gather(root, source, room_use):
     drawings, page_counts = {}, []
     if source and Path(source).exists():
         import pdfplumber
+        version=_pdf_version(source)
         with pdfplumber.open(source) as doc:
             for target,traced in sorted(by_page.items()):
                 system=systems.get(target,{})
@@ -164,7 +240,7 @@ def _gather(root, source, room_use):
                 scales=[x for x in scales if isinstance(x,(int,float)) and x>0]
                 if not scales or not system.get("image_width") or not 0<target<=len(doc.pages):
                     warnings.append({"page":target,"reason":"No confirmed scale/image frame; seats not counted."});continue
-                target_page=doc.pages[target-1]
+                target_page=_Page(doc,target,version)
                 sx,sy=system["image_width"]/target_page.width,system["image_height"]/target_page.height
                 frame=[{"id":t["room_id"],"points":[[p[0]/sx,p[1]/sy] for p in t["points_image_px"]]} for t in traced if rooms[t["room_id"]]["use"] in {"dining","retail"}]
                 candidates=[target]+[int(number) for number,reading in sorted(inventory.items()) if reading.get("page_type")=="floor_plan"
@@ -173,8 +249,8 @@ def _gather(root, source, room_use):
                 best=None
                 for number in candidates:
                     if not 0<number<=len(doc.pages):continue
-                    sheet=doc.pages[number-1]
-                    if not sheet.lines and not sheet.curves and not sheet.rects:
+                    sheet=_Page(doc,number,version)
+                    if not sheet.has_vectors:
                         warnings.append({"page":number,"reason":"Image-only plan: seats not counted."});continue
                     registration=None
                     if number!=target:

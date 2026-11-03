@@ -14,6 +14,7 @@ import hashlib
 import json
 import math
 import re
+from pathlib import Path
 
 
 SCHEMA_VERSION = 1
@@ -117,6 +118,14 @@ def _valid_schedule(values):
 def _schedule_for(item, profile_id):
     supplied = item.get("schedules") if isinstance(item, dict) else None
     values = _schedule_values(profile_id)
+    if profile_id.startswith("house_") or profile_id in {"garage", "outdoor", "lift_shaft", "circulation"}:
+        try:
+            from pathlib import Path
+            house = json.loads(Path(__file__).resolve().parents[1].joinpath("config", "house_profiles.json").read_text(encoding="utf-8"))
+            active = {hour for start, end in house["profiles"][profile_id]["schedule_hours"] for hour in range(start, end)}
+            values = [1.0 if hour in active else 0.0 for hour in range(24)]
+        except (OSError, ValueError, KeyError):
+            pass
     profiles = {}
     if isinstance(supplied, dict):
         for day in DAY_TYPES:
@@ -130,6 +139,16 @@ def _schedule_for(item, profile_id):
 
 def _profile(pack, profile_id):
     profiles = (pack or {}).get("profiles", {}) if isinstance(pack, dict) else {}
+    if profile_id.startswith("house_") or profile_id in {"garage", "outdoor", "lift_shaft", "circulation"}:
+        try:
+            from pathlib import Path
+            house = json.loads(Path(__file__).resolve().parents[1].joinpath("config", "house_profiles.json").read_text(encoding="utf-8"))
+            item = house["profiles"][profile_id]
+            result = deepcopy(profiles.get("residential", {}))
+            result.update({key: value for key, value in item.items() if key != "schedule_hours"})
+            return result
+        except (OSError, ValueError, KeyError):
+            pass
     return profiles.get(profile_id) or profiles.get("generic_conditioned_room", {})
 
 
@@ -156,6 +175,8 @@ def _room_rows(building, vision, proposal, room_use):
     for key in sorted(grouped):
         row = grouped[key]
         use = room_use_rows.get(key, {})
+        if use.get("preliminary_profile_id") in {"house_bedroom", "house_living", "house_wet", "house_service", "garage", "outdoor", "lift_shaft", "circulation"} and use.get("dwelling") is not True:
+            use = {}
         row["room_use"] = use
         records.append(row)
     return records
@@ -200,7 +221,7 @@ def _equipment_sources(sources):
 
 
 def resolve(building, vision=None, proposal=None, room_use=None, pack=None,
-            source_fingerprints=None, existing=None, seating_evidence=None, room_areas=None):
+            source_fingerprints=None, existing=None, seating_evidence=None, room_areas=None, household=None):
     previous = {row.get("room_id"): row for row in (existing or {}).get("records", []) if isinstance(row, dict)}
     records, schedules = [], []
     for room in _room_rows(building, vision or {}, proposal or {}, room_use or {}):
@@ -220,7 +241,7 @@ def resolve(building, vision=None, proposal=None, room_use=None, pack=None,
         # Counts may be interpreted from a plan, but only cited watts/properties
         # are allowed to override the controlled physical-value profile.
         count, count_source = _find_number(sources, ("occupancy_count", "seat_count", "workstation_count", "desk_count", "bed_count"))
-        if scope in {"refrigeration_process", "not_a_room", "unresolved_scope"}:
+        if scope in {"refrigeration_process", "not_a_room", "unresolved_scope", "not_cooled"} or profile_id == "circulation":
             fields["occupancy_count"] = _field(None, "scope_exclusion", .85,
                 f"Outside comfort-HVAC scope ({scope}); no design occupancy assigned.", evidence)
         elif count is not None:
@@ -262,6 +283,13 @@ def resolve(building, vision=None, proposal=None, room_use=None, pack=None,
             fields["occupancy_count"] = _field(round(count), seat_input["origin"], .85 if seat_input["origin"] == "direct_project_evidence" else .6,
                 rationale, seat_input["evidence"], "allocated seats + explicit profile staff allowance",
                 {"seats": seat_input["seat_count"], "staff_allowance": staff})
+        # A house: the bedroom rule (2 in the main bedroom, 1 in each other; the household in each living area),
+        # which replaces any density count (user decision 2026-10-30; ai/house_household.py).
+        house_row = (household or {}).get(room_id)
+        if house_row and scope in {"comfort_hvac", "comfort_hvac_with_process_exception"}:
+            fields["occupancy_count"] = _field(house_row["count"], "household_rule", .7, house_row["rationale"], evidence,
+                "2 in the main bedroom + 1 in each other bedroom (the household, in a living area)",
+                {"role": house_row["role"], "household": house_row["household"], "group_id": house_row["group_id"]})
         explicit_people_s = None; explicit_people_l = None
         for source in sources:
             if _has_citation(source):
@@ -319,14 +347,26 @@ def resolve(building, vision=None, proposal=None, room_use=None, pack=None,
                     **{key: deepcopy(item[key]) for key in ("equipment_schedule", "equipment_id", "catalogue_id", "catalogue_hash", "source") if key in item},
                     "origin": "direct_project_evidence", "confidence": .85, "evidence": _evidence(item),
                     "formula": "quantity × rated_input_w × heat_to_space_factor"})
+        if (not equipment_records and profile_id == "house_living" and scope in {"comfort_hvac", "comfort_hvac_with_process_exception"}
+                and re.search(r"\b(?:kitchen|kitch|scullery|pantry)\b", label, re.I)):
+            # A house kitchen with no appliances on the drawings: labelled typical home appliances, each with its own
+            # hours (a fridge runs all day), not the living-area allowance (user decision 2026-10-30).
+            typical = json.loads(Path(__file__).resolve().parents[1].joinpath("config", "house_profiles.json").read_text(encoding="utf-8"))["kitchen_appliances"]
+            for item in typical["items"]:
+                equipment_records.append({"name": item["name"], "quantity": 1, "rated_input_w": item["rated_input_w"],
+                    "heat_to_space_factor": item["heat_to_space_factor"], "diversity": 1.0,
+                    "equipment_schedule": {day: list(item["schedule"]) for day in ("weekday", "saturday", "sunday")},
+                    "source": f"{typical['basis_label']}: {item['note']}", "origin": "typical_home_value", "confidence": .3,
+                    "evidence": [], "formula": "rated_input_w × heat_to_space_factor × hourly fraction"})
         if not equipment_records and scope not in {"refrigeration_process", "unresolved_scope", "not_a_room"} and area and _positive(profile.get("equipment_w_m2")):
             equipment_records.append({"name": "Controlled preliminary profile equipment", "quantity": 1,
                 "rated_input_w": area * profile["equipment_w_m2"], "heat_to_space_factor": _positive(profile.get("equipment_space_gain")) or 0,
                 "diversity": _positive(profile.get("equipment_diversity")) or 0, "origin": "controlled_preliminary_profile",
                 "confidence": .3, "evidence": _evidence(area_source), "formula": "area_m2 × equipment_w_m2 × heat_to_space_factor"})
-        fields["equipment"] = _field(equipment_records, "direct_project_evidence" if equipment_records and equipment_records[0]["origin"] == "direct_project_evidence" else "controlled_preliminary_profile" if equipment_records else "unresolved",
+        typical_home = bool(equipment_records) and equipment_records[0]["origin"] == "typical_home_value"
+        fields["equipment"] = _field(equipment_records, "typical_home_value" if typical_home else "direct_project_evidence" if equipment_records and equipment_records[0]["origin"] == "direct_project_evidence" else "controlled_preliminary_profile" if equipment_records else "unresolved",
                                       .85 if equipment_records and equipment_records[0]["origin"] == "direct_project_evidence" else .3 if equipment_records else 0,
-                                      "Cited equipment heat-to-space records." if equipment_records and equipment_records[0]["origin"] == "direct_project_evidence" else "Controlled equipment-density fallback." if equipment_records else "Equipment heat-to-space data is unresolved.",
+                                      "Typical home kitchen appliances (labelled, uncited, for review), each with its own hours." if typical_home else "Cited equipment heat-to-space records." if equipment_records and equipment_records[0]["origin"] == "direct_project_evidence" else "Controlled equipment-density fallback." if equipment_records else "Equipment heat-to-space data is unresolved.",
                                       sum((item.get("evidence", []) for item in equipment_records), []), "Σ(quantity × rated_input_w × heat_to_space_factor)")
         schedule_id = "internal-gains-" + re.sub(r"[^a-z0-9_-]+", "-", room_id.casefold()).strip("-")
         schedule_input = next((source.get("schedules") for source in sources if isinstance(source, dict) and isinstance(source.get("schedules"), dict)), {})
@@ -351,7 +391,7 @@ def resolve(building, vision=None, proposal=None, room_use=None, pack=None,
         lighting = fields["lighting_load_w"]
         if isinstance(fields.get("equipment", {}).get("value"), list) and fields["equipment"].get("origin") == "contractor_override":
             equipment_records = fields["equipment"]["value"]
-        status = "excluded" if scope in {"refrigeration_process", "unresolved_scope", "not_a_room"} else "needs_review" if invalid_schedule_days or any(field.get("origin") == "unresolved" for field in fields.values() if isinstance(field, dict)) else "provisional"
+        status = "excluded" if scope in {"refrigeration_process", "unresolved_scope", "not_a_room", "not_cooled"} else "needs_review" if invalid_schedule_days or any(field.get("origin") == "unresolved" for field in fields.values() if isinstance(field, dict)) else "provisional"
         record = {"room_id": room_id, "level": level, "zone_id": f"zone-{room_id}", "geometry_proof_id": next((s.get("geometry_proof_id", "") for s in sources if s.get("geometry_proof_id")), ""),
                   "original_label": label, "room_use_taxonomy": use.get("taxonomy_id", "generic_conditioned"), "preliminary_profile_id": profile_id,
                   "space_scope": scope, "fields": fields, "occupancy_count": fields["occupancy_count"]["value"],
@@ -363,6 +403,10 @@ def resolve(building, vision=None, proposal=None, room_use=None, pack=None,
                   "override": deepcopy(override) if override else None, "status": status, "source_fingerprints": deepcopy(source_fingerprints or {})}
         if seat_input:
             record["seating"] = {**deepcopy(seat_input), "applied": seat_applied and fields["occupancy_count"]["origin"] != "contractor_override"}
+        if house_row and fields["occupancy_count"]["origin"] == "household_rule":
+            # The rooms that share one household: the whole-house total counts it once per hour (ai/hourly_loads.py).
+            record["occupancy_group"] = {"group_id": house_row["group_id"], "people": house_row["household"],
+                                         "role": house_row["role"]}
         record["confidence_band"] = confidence_band(record["confidence_score"])
         record["equipment_catalogue_managed"] = catalogue_managed
         record["record_fingerprint"] = fingerprint(record)

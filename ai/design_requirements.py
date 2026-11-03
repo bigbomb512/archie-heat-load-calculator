@@ -272,8 +272,8 @@ def validate_zones(zones):
             zone[key] = numeric_value(zone[key], f"HVAC zone {index} {label}")
         if zone["area_m2"] is not None and zone["area_m2"] <= 0:
             raise ValueError(f"HVAC zone {index} area must be positive.")
-        if zone["occupancy"] is not None and (not zone["occupancy"].is_integer() or zone["occupancy"] < 1):
-            raise ValueError(f"HVAC zone {index} occupancy must be a positive whole number.")
+        if zone["occupancy"] is not None and (not zone["occupancy"].is_integer() or zone["occupancy"] < 0):
+            raise ValueError(f"HVAC zone {index} occupancy must be a non-negative whole number.")
         if zone["ceiling_height_mm"] is not None and (not zone["ceiling_height_mm"].is_integer() or zone["ceiling_height_mm"] < 1000):
             raise ValueError(f"HVAC zone {index} ceiling height must be a realistic whole-millimetre value.")
         zone["heat_sources"] = validate_heat_sources(zone["heat_sources"])
@@ -489,6 +489,13 @@ def validate_zone_cooling_load(raw):
     for key in result:
         if key in raw:
             result[key] = raw[key]
+    # Present only for a house room that shares one household (counted once in the whole-house total).
+    group = raw.get("occupancy_group")
+    if group is not None:
+        if (not isinstance(group, dict) or not str(group.get("group_id", "")).strip()
+                or type(group.get("people")) not in (int, float) or group["people"] <= 0 or group.get("role") not in {"bedroom", "living"}):
+            raise ValueError("A room's occupancy group needs a group ID, a positive household size and a bedroom or living role.")
+        result["occupancy_group"] = {"group_id": str(group["group_id"]), "people": group["people"], "role": group["role"]}
     # Older projects had one shared cooling-input source/status. Preserve that
     # provenance for existing airflow values while new entries record it directly.
     if "outside_air_source" not in raw and result["outside_air_lps"] is not None:

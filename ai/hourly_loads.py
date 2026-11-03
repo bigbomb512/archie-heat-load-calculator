@@ -927,6 +927,11 @@ def calculate_scenario(requirements, library, model, scenario, infiltration_gate
     result["zones"] = aggregate_zones(calculated_rooms, zones)
     result["floors"] = aggregate_floors(result["zones"], floors)
     result["included_scope_hours"] = aggregate_project(result["zones"])
+    # A house's household is counted once per hour in the total, however many living rooms are each sized for it.
+    result["included_scope_hours"], occupancy_groups = count_shared_occupants_once(
+        result["included_scope_hours"], calculated_rooms, {room["room_id"]: room for room in model["rooms"]})
+    if occupancy_groups:
+        result["occupancy_groups"] = occupancy_groups
     result["included_scope_peak"] = peak(result["included_scope_hours"])
     blocked_rooms = [{"room_id": room["room_id"], "reasons": room["blocked_reasons"]} for room in room_results if room["status"] == "blocked"]
     incomplete_component_rooms = [room["room_id"] for room in room_results if room.get("room_input_scope", {}).get("status") != "complete"]
@@ -1752,6 +1757,54 @@ def aggregate_floors(zones, floor_lookup):
             "hours": hours, "peak": peak(hours),
         })
     return sorted(result, key=lambda item: item["floor_id"])
+
+
+def count_shared_occupants_once(hours, room_results, rooms_by_id):
+    """(project hours, groups): for rooms sharing one household (cooling_load.occupancy_group), any hour their people
+    add up to more than the household has the excess people heat taken off the project total, as a labelled
+    adjustment. Room, zone and floor results are untouched (each room is still sized for its busiest hour)."""
+    groups = {}
+    for result in room_results:
+        room = rooms_by_id.get(result["room_id"]) or {}
+        group = (room.get("cooling_load") or {}).get("occupancy_group")
+        if group and room.get("occupancy") and len(result.get("hours", [])) == 24:
+            groups.setdefault(group["group_id"], {"people": group["people"], "members": []})["members"].append((room, result))
+    if not groups:
+        return hours, []
+    hours = deepcopy(hours)
+    summary = []
+    for group_id, group in sorted(groups.items()):
+        adjusted = []
+        for hour in range(24):
+            present = sensible = latent = 0.0
+            for room, result in group["members"]:
+                people = result["hours"][hour]["components"].get("people", {})
+                factors = people.get("schedule_factors") or [0]
+                present += room["occupancy"] * factors[0]
+                sensible += people.get("sensible_kw", 0.0)
+                latent += people.get("latent_kw", 0.0)
+            if present <= group["people"] + 1e-9:
+                continue
+            share = 1 - group["people"] / present
+            removed_s, removed_l = round(sensible * share, 4), round(latent * share, 4)
+            row = hours[hour]
+            item = row["components"].setdefault("people", {"sensible_kw": 0.0, "latent_kw": 0.0, "total_kw": 0.0})
+            item["sensible_kw"] = round(item["sensible_kw"] - removed_s, 4)
+            item["latent_kw"] = round(item["latent_kw"] - removed_l, 4)
+            item["total_kw"] = round(item["sensible_kw"] + item["latent_kw"], 4)
+            row["subtotal_sensible_kw"] = round(row["subtotal_sensible_kw"] - removed_s, 4)
+            row["subtotal_latent_kw"] = round(row["subtotal_latent_kw"] - removed_l, 4)
+            row["subtotal_kw"] = round(row["subtotal_sensible_kw"] + row["subtotal_latent_kw"], 4)
+            row["design_total_kw"] = round(row["subtotal_kw"] + row["safety_allowance_kw"], 4)
+            row.setdefault("occupancy_adjustments", []).append({
+                "group_id": group_id, "people_in_rooms": round(present, 3), "people_counted": group["people"],
+                "removed_sensible_kw": removed_s, "removed_latent_kw": removed_l})
+            adjusted.append({"hour": hour, "people_in_rooms": round(present, 3), "removed_kw": round(removed_s + removed_l, 4)})
+        summary.append({"group_id": group_id, "people": group["people"],
+                        "room_ids": [room["room_id"] for room, _result in group["members"]], "adjusted_hours": adjusted,
+                        "basis": (f"The household of {group['people']} is counted once per hour in the whole-house total; each "
+                                  "living room is still sized for all of them at its busiest hour (user decision 2026-10-30).")})
+    return hours, summary
 
 
 def aggregate_project(zones):
