@@ -2,7 +2,7 @@
 
 **User's rule:** Phase 1 gives a number on any PDF, every time. Each input uses the best evidence it can find and ends in a labelled value, and nothing waits or stays blocked for ever.
 
-**Status:** on branch `phase1-always`. Offline tests and a comparison on saved jobs only, until the live checks are done. A number from these rules is not validated: most of the fallbacks below are estimates, and no result here has been compared with an engineer's.
+**Status (7 November):** on branch `phase1-always`, not merged. Live runs on four jobs each gave a number with no crash: Happy Cap, Global Exchange and set 18 on OpenRouter; set 15's last two fixes are checked only by replaying a saved answer, and a Codex run of it didn't exercise them. Known gaps: Global Exchange's trace covers about half the lease, "complete" can't see rooms nobody listed, and house detection depends on what the page reading reports. A number from these rules is not validated: most of the fallbacks below are estimates, and no result here has been compared with an engineer's.
 
 ## Why
 House set 15 (2–3 November) took over two hours and gave a non-credible 2.0 kW, not complete. The wrong pages were traced, upper floors had no level, rooms were duplicated, a house's floor was named Store and Bar, walls facing outside got 0 kW, and most of the time went on local rebuilding rather than AI.
