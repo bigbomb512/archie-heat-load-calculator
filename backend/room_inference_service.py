@@ -44,7 +44,20 @@ def _inputs(paths):
         "vector": _read(paths.get("vector"), {}) if paths.get("vector") else {},
         "vision": _read(paths.get("vision"), {}) if paths.get("vision") else {},
         "not_on_plan": _rooms_not_on_plan(paths),
+        "page_levels": _page_levels(paths),
     }
+
+
+def _page_levels(paths):
+    from ai import page_inventory
+    root = paths.get("root")
+    if not root or not Path(root).is_dir():
+        return {}
+    readings = {int(number): row for number, row in (_read(Path(root) / "page_inventory.json", {}).get("pages") or {}).items()
+                if str(number).isdigit() and isinstance(row, dict)}
+    coverage = {row.get("page"): row.get("level_name") for row in _read(paths["coverage"], {}).get("page_roles", [])
+                if isinstance(row, dict)}
+    return page_inventory.main_plan_levels(readings, coverage)
 
 
 def _rooms_not_on_plan(paths):
@@ -57,6 +70,62 @@ def _rooms_not_on_plan(paths):
         return autonomous_tasks_service.rooms_not_on_plan(paths["root"])
     except (OSError, ValueError, KeyError, TypeError):
         return {}
+
+
+UNKNOWN_LEVEL_NAMES = {"", "unassigned", "unassigned level", "unknown", "unknown level"}
+
+
+def reconcile_spaces(spaces, set_aside, proposal_rooms, removed, page_levels):
+    """The rooms read from the text (building evidence) brought into line with the room list. Over a dozen steps read
+    these spaces directly, so a room removed or moved only in the proposal comes back as a duplicate (house set 15:
+    Dining, Kitchen and Living twice; Happy Cap's Bar).
+
+    - A room removed as not on the plan is set aside (and restored if a later answer brings it back).
+    - A space found only on main plans takes the level the page reading gave those plans.
+    - A space with no level joins the room of that name when exactly one level has it.
+    - Spaces that then repeat a name on a level are merged.
+    Returns (spaces, set_aside)."""
+    levels_by_name = {}
+    for row in proposal_rooms:
+        if isinstance(row, dict) and row.get("label"):
+            levels_by_name.setdefault(str(row["label"]).casefold(), set()).add(str(row.get("level_name") or ""))
+    kept, aside, merged = [], [], {}
+    for space in [*spaces, *set_aside]:
+        if not isinstance(space, dict):
+            continue
+        name = str(space.get("name") or "").casefold()
+        if name in removed:
+            aside.append(space)
+            continue
+        level = str(space.get("level_name") or "")
+        pages = {item.get("page") for item in space.get("evidence", []) if isinstance(item, dict) and item.get("page")}
+        page_level = {page_levels.get(page) for page in pages}
+        if pages and len(page_level) == 1 and None not in page_level:
+            level = next(iter(page_level))
+        elif level.casefold() in UNKNOWN_LEVEL_NAMES:
+            named = {value for value in levels_by_name.get(name, set()) if value.casefold() not in UNKNOWN_LEVEL_NAMES}
+            if len(named) == 1:
+                level = next(iter(named))
+        row = {**space, "level_name": level} if level != str(space.get("level_name") or "") else space
+        key = (name, " ".join(level.casefold().split()) if level.casefold() not in UNKNOWN_LEVEL_NAMES else "")
+        if key in merged:
+            target = merged[key]
+            target["evidence"] = [*target.get("evidence", []), *[item for item in row.get("evidence", []) if item not in target.get("evidence", [])]]
+            continue
+        row = dict(row)
+        merged[key] = row
+        kept.append(row)
+    return kept, aside
+
+
+def _reconcile_building_spaces(paths, proposal, removed, page_levels):
+    building = _read(paths["building"], {})
+    if not isinstance(building, dict) or not (building.get("spaces") or building.get("spaces_set_aside")):
+        return
+    spaces, aside = reconcile_spaces(building.get("spaces") or [], building.get("spaces_set_aside") or [],
+                                     proposal.get("rooms", []), removed, page_levels)
+    if spaces != (building.get("spaces") or []) or aside != (building.get("spaces_set_aside") or []):
+        _atomic_json(paths["building"], {**building, "spaces": spaces, "spaces_set_aside": aside})
 
 
 def _without_rooms_not_on_plan(proposal, removed):
@@ -149,11 +218,12 @@ def _run_job(web, project, job_id, source_fp):
         job = _read(paths["job"], {})
         inputs = _inputs(paths)
         proposal = _without_rooms_not_on_plan(room_inference.infer(
-            inputs["ai_input"], inputs["coverage"], inputs["spatial"], inputs["vector"], inputs["vision"]
-        ), inputs["not_on_plan"])
+            inputs["ai_input"], inputs["coverage"], inputs["spatial"], inputs["vector"], inputs["vision"],
+            page_levels=inputs["page_levels"]), inputs["not_on_plan"])
         if _current_job(paths, job_id) is None:
             return
         _write_run(paths, proposal)
+        _reconcile_building_spaces(paths, proposal, inputs["not_on_plan"], inputs["page_levels"])
         # The established room-use service consumes the normalized local
         # proposal, so no parallel room model is introduced.
         from backend import room_use_resolution_service, model_input_resolution_service, reviewer_room_geometry_service

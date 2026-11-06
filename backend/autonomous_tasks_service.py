@@ -72,27 +72,11 @@ def _current_task(run_root, task, target):
     return _read(path / "record.json", None)
 
 
-_INPUT_MEMO = OrderedDict()
-_INPUT_MEMO_LIMIT = 8
-
-
-def _memoized_json(root, names, builder):
-    from backend.job_files import signature
-    key = (str(Path(root).resolve()), tuple(names), signature(root, [Path(root) / name for name in names]))
-    cached = _INPUT_MEMO.get(key)
-    if cached is not None:
-        _INPUT_MEMO.move_to_end(key)
-        return deepcopy(cached)
-    value = builder()
-    _INPUT_MEMO[key] = deepcopy(value)
-    while len(_INPUT_MEMO) > _INPUT_MEMO_LIMIT:
-        _INPUT_MEMO.popitem(last=False)
-    return value
-
-
 def _load_inputs(root):
-    names = ("ai_input.json", "spatial_ocr.json", "building_evidence.json")
-    return _memoized_json(root, names, lambda: tuple(_read(Path(root) / name, {}) for name in names))
+    ai_input = _read(root / "ai_input.json", {})
+    spatial = _read(root / "spatial_ocr.json", {})
+    building = _read(root / "building_evidence.json", {})
+    return ai_input, spatial, building
 
 
 def _latest_site(root):
@@ -384,7 +368,7 @@ def _p0_calibration_ready(root, page, context):
         sheet = _sheet_scale_calibration(root, page, context, reason)
         if sheet:
             return sheet, ""
-    if _scale_read_settled(root, page):
+    if _p0_dimensions_settled(root, page) and _scale_read_settled(root, page):
         scale_record = _current_task(root, "P0_scale_read", f"page-{page}")
         scale = (scale_record or {}).get("applied_value") or {}
         if scale:
@@ -423,6 +407,8 @@ def _assumed_scale_calibration(context, reason=""):
 
 
 def _scale_read_calibration(value, context, reason=""):
+    if autonomous_tasks.usable_calibration(value.get("status")):
+        return value            # already worked out when the reply was applied
     mm_per_px = value.get("mm_per_px")
     if value.get("kind") == "notation":
         denominator = value.get("denominator")
@@ -457,6 +443,7 @@ def _p0_dimensions_settled(root, page):
 
 
 MAX_DIMENSION_QUESTIONS = 8
+MAX_DIMENSION_LINES = 40
 PAPER_LONG_SIDE_MM = {"A0": 1189, "A1": 841, "A2": 594, "A3": 420, "A4": 297}
 
 
@@ -979,55 +966,17 @@ def _p0_initial_packets(root):
         try:
             context = _p0_context(root, number)
             calibration, calibration_error = _p0_calibration_ready(root, number, context)
-            page_dimensions = _page_dimension_candidates(root, number, context)
-            vector = _read(root / "vector_geometry.json", {})
-            vector_page = next((row for row in (vector.get("geometry_key_points") or {}).get("pages", []) if row.get("page") == number), {})
-            candidate_texts = [row for row in page_dimensions if isinstance(row, dict) and (row.get("bbox_px") or row.get("bbox")) and row.get("value_mm")]
-            candidate_texts = [{**row, "bbox_px": row.get("bbox_px") or row.get("bbox")} for row in candidate_texts]
-            if not calibration:
-                try:
-                    text_calibration = _p0_calibration(root, number, context)
-                    if text_calibration.get("source") == "drawing_text":
-                        calibration = text_calibration
-                except (ValueError, KeyError, TypeError):
-                    pass
-            vector_texts = [{**row, "bbox_px": row.get("bbox_px") or row.get("bbox")} for row in vector_page.get("dimension_candidates", [])
-                            if isinstance(row, dict) and row.get("value_mm") and (row.get("bbox_px") or row.get("bbox"))]
-            candidate_texts.extend(row for row in vector_texts if row.get("candidate_id") not in {item.get("candidate_id") for item in candidate_texts})
-            lines = []
-            if not calibration:
-                from ai.dimension_wall_matcher import ranked_dimension_lines, classify_dimension_lines
-                vector_lines = classify_dimension_lines(vector_page.get("line_candidates", []), candidate_texts)
-                # Prefer explicitly paired vector dimension lines; only ask about geometric candidates when text
-                # evidence exists somewhere on the page and can be spatially paired.
-                paired = []
-                for text_row in candidate_texts:
-                    for vector_line in ranked_dimension_lines(text_row, vector_lines)[:1]:
-                        start, end = vector_line.get("start_px"), vector_line.get("end_px")
-                        if start and end:
-                            paired.append({"points": [start, end], "tick_centres_image_px": [start, end],
-                                           "span_px": math.dist(start, end)})
-                lines = paired or []
-                if not lines and candidate_texts:
-                    geometric = room_outline.dimension_line_candidates(context["objects"], None,
-                                (0, 0, *context["image"].size), limit=140, min_length_px=80)
-                    lines = []
-                    for text_row in candidate_texts:
-                        nearest = sorted(geometric, key=lambda line: __import__("ai.dimension_wall_matcher", fromlist=["text_line_score"]).text_line_score(
-                            text_row, {"start_px": line["points"][0], "end_px": line["points"][1]}), reverse=True)
-                        if nearest:
-                            line = nearest[0]
-                            lines.append({**line, "text_candidate": text_row})
-                if not candidate_texts:
-                    lines = []
+            lines = _dimension_lines_to_ask(root, number, context) if not calibration else []
             asked_dimension_indices = {int(match.group(1)) for pointer in (root / "ai_tasks" / "P0_dimensions").glob(f"page-{number}-dimension-*/current.json")
                                        if (match := re.search(r"dimension-(\d+)$", pointer.parent.name))}
             asked_count = len(asked_dimension_indices)
             # One line at a time with a sheet scale to check against, two without; the next ones only after those are
             # answered, and at most MAX_DIMENSION_QUESTIONS per page (a detailed plan has dozens of dimension texts).
             wanted = 1 if context["declared_mm_per_px"] else 2
+            dimensions_settled = _p0_dimensions_settled(root, number)
             ask_upto = (min(asked_count + wanted, MAX_DIMENSION_QUESTIONS)
-                        if _p0_dimensions_settled(root, number) and len(_p0_dimensions(root, number)) < wanted + 1 else asked_count)
+                        if dimensions_settled and len(_p0_dimensions(root, number)) < wanted + 1 else asked_count)
+            more_lines = len(lines) > asked_count and ask_upto > asked_count
             for index, line in enumerate(lines, start=1):
                 if index <= asked_count or index > ask_upto or calibration:
                     continue
@@ -1047,6 +996,8 @@ def _p0_initial_packets(root):
                                    _png_bytes(crop)
                                ], ""))
             if not calibration:
+                if more_lines or not dimensions_settled:
+                    continue            # printed dimensions come first; the printed scale is asked only after them
                 scale_record = _current_task(root, "P0_scale_read", f"page-{number}")
                 if not scale_record:
                     result.append(("P0_scale_read", f"page-{number}", {"task": "P0_scale_read", "page": number,
@@ -1109,38 +1060,77 @@ def _p0_calibration(root, page, context=None):
     return calibration
 
 
-def _text_layer_dimension_lines(root, page, context):
-    from ai.dimension_wall_matcher import ranked_dimension_lines, classify_dimension_lines, match_page_dimensions
-    dimensions = _page_dimension_candidates(root, page, context)
-    dimensions = [{**row, "bbox_px": row.get("bbox_px") or row.get("bbox")} for row in dimensions
-                  if isinstance(row, dict) and row.get("value_mm") and (row.get("bbox_px") or row.get("bbox"))]
+def _page_dimension_texts(root, page, context):
+    """The dimension numbers printed in the page's text layer, with their boxes in image pixels (the vector reading has
+    them; the spatial text reading's boxes are in PDF points)."""
+    _ai_input, spatial, _building = _load_inputs(root)
     vector = _read(root / "vector_geometry.json", {})
     vector_page = next((row for row in (vector.get("geometry_key_points") or {}).get("pages", []) if row.get("page") == page), {})
-    lines = classify_dimension_lines(vector_page.get("line_candidates", []), dimensions)
+    rows = [row for row in vector_page.get("dimension_candidates") or [] if isinstance(row, dict) and row.get("value_mm") and row.get("bbox_px")]
+    if rows:
+        return rows
+    page_ocr = next((row for row in spatial.get("pages", []) if row.get("page") == page), {})
+    factor = float(context.get("render_dpi") or 72) / 72
+    left, top = (context.get("page_origin") or (0, 0))[:2]
+    return [{**row, "bbox_px": [(row["bbox"][0] - left) * factor, (row["bbox"][1] - top) * factor,
+                                (row["bbox"][2] - left) * factor, (row["bbox"][3] - top) * factor]}
+            for row in page_ocr.get("dimension_candidates") or []
+            if isinstance(row, dict) and row.get("value_mm") and isinstance(row.get("bbox"), list) and len(row["bbox"]) == 4]
+
+
+def _tick_lines(context, limit=MAX_DIMENSION_LINES, min_length_px=300):
+    """Lines drawn with ticks at both ends, whatever is printed near them."""
+    return room_outline.dimension_line_candidates(context["objects"], None, (0, 0, *context["image"].size),
+                                                  limit=limit, min_length_px=min_length_px)
+
+
+DIMENSION_TEXT_MAX_DISTANCE_PX = 60     # about 8 mm on the sheet at the 180 dpi plan image
+
+
+def _nearest_dimension_text(line, texts):
+    """The number printed beside a line: nearest to it and alongside it, or None. (text_line_score isn't a distance
+    test: a long line scores above its threshold for any text level with it, however far away.)"""
+    from ai.dimension_wall_matcher import bbox_center, point_line_distance, projection_ratio
+    points = line.get("tick_centres_image_px") or line["points"]
+    start, end = list(points[0]), list(points[1])
+    best, best_distance = None, DIMENSION_TEXT_MAX_DISTANCE_PX
+    for text in texts:
+        center = bbox_center(text.get("bbox_px"))
+        if center and 0 <= projection_ratio(center, start, end) <= 1:
+            distance = point_line_distance(center, start, end)
+            if distance <= best_distance:
+                best, best_distance = text, distance
+    return best
+
+
+def _text_layer_dimension_lines(root, page, context):
+    """Each tick-ended line with the number printed beside it. calibration_from_dimensions uses these only when they
+    agree with the sheet's scale, so without one there is nothing to check them against."""
+    if not context.get("declared_mm_per_px"):
+        return []
+    texts = _page_dimension_texts(root, page, context)
+    if not texts:
+        return []
     result = []
-    for text in dimensions:
-        ranked = ranked_dimension_lines(text, lines)
-        if not ranked:
-            continue
-        line = ranked[0]
-        points = [line.get("start_px"), line.get("end_px")]
-        if all(isinstance(point, list) and len(point) == 2 for point in points):
-            result.append({"points_image_px": points, "value_mm": float(text["value_mm"]),
+    for line in _tick_lines(context, min_length_px=80):
+        text = _nearest_dimension_text(line, texts)
+        if text:
+            points = line.get("tick_centres_image_px") or line["points"]
+            result.append({"points_image_px": [list(points[0]), list(points[1])], "value_mm": float(text["value_mm"]),
                            "printed_text": str(text.get("text_seen") or text.get("text") or text["value_mm"]),
                            "source": "drawing_text"})
-    matched = match_page_dimensions({**vector_page, "dimension_candidates": dimensions})
-    seen = {(tuple(map(tuple, row["points_image_px"])), row["value_mm"]) for row in result}
-    for span in matched.get("dimension_span_candidates", []):
-        points = [span.get("measured_span_start_px"), span.get("measured_span_end_px")]
-        if all(isinstance(point, list) and len(point) == 2 for point in points):
-            key = (tuple(map(tuple, points)), span.get("value_mm"))
-            if key not in seen:
-                result.append({"points_image_px": points, "value_mm": float(span["value_mm"]),
-                               "printed_text": str(span.get("text_seen") or span["value_mm"]), "source": "drawing_text"})
     return result
 
 
-_INFERRED_ROOM_INPUTS = ("ai_input.json", "drawing_coverage.json", "spatial_ocr.json", "vector_geometry.json")
+def _dimension_lines_to_ask(root, page, context):
+    """Tick-ended lines to ask the AI to read: those with a number printed beside them first. With no number in the text
+    layer at all the others are still asked (CAD text is often drawn as lines, which the AI can read)."""
+    lines = _tick_lines(context) or _tick_lines(context, min_length_px=80)
+    texts = _page_dimension_texts(root, page, context)
+    return sorted(lines, key=lambda line: _nearest_dimension_text(line, texts) is None) if texts else lines
+
+
+_INFERRED_ROOM_INPUTS = ("ai_input.json", "drawing_coverage.json", "spatial_ocr.json", "vector_geometry.json", "page_inventory.json")
 
 
 # "Basement floor plan includes Garage, Lift, Bar and Bath." or "Ground floor rooms: Alfresco, Dining, Bed 2": some
@@ -1189,7 +1179,7 @@ def _cached_inferred_room_data(root, input_signature):
     from ai import room_inference
     ai_input, spatial, _building = _load_inputs(root)
     inferred = room_inference.infer(ai_input, _read(root / "drawing_coverage.json", {}), spatial,
-                                    _read(root / "vector_geometry.json", {}))
+                                    _read(root / "vector_geometry.json", {}), page_levels=_main_plan_levels(root))
     return [row for row in inferred.get("rooms", []) if row.get("label")]
 
 
@@ -1452,9 +1442,15 @@ def rooms_not_on_plan(root):
     candidates = _note_only_rooms(root, [row["label"] for row in inferred if row.get("label")])
     if not candidates:
         return {}
+    # An operator's trace or typed area always keeps the room.
+    kept = {str(row.get("room_label") or row.get("label") or "").casefold()
+            for row in _read(root / "reviewer_room_geometry.json", {}).get("records", [])
+            if isinstance(row, dict) and row.get("declaration_source", "reviewer") == "reviewer"}
+    kept |= {str(row.get("room_label") or row.get("label") or "").casefold()
+             for row in _read(root / "room_area_overrides.json", {}).get("overrides", []) if isinstance(row, dict)}
     asked, areas = set(), {}
     for record in _all_current(root):
-        if record.get("task") not in OUTLINE_STEPS:
+        if record.get("task") not in OUTLINE_STEPS | {"P0_room_sizes"}:
             continue
         status = record.get("status")
         answered = status in {"applied", "below_accuracy_bar"} or _not_answered(record)
@@ -1468,7 +1464,7 @@ def rooms_not_on_plan(root):
     for name, note in candidates.items():
         key = name.casefold()
         largest = areas.get(key, 0.0)
-        if key not in asked or largest >= room_outline.NOTE_ONLY_MIN_M2:
+        if key not in asked or key in kept or largest >= room_outline.NOTE_ONLY_MIN_M2:
             continue
         pages = sorted({page for row in inferred if str(row.get("label", "")).casefold() == key for page in row.get("source_pages", [])})
         found = f"only {largest:.2f} m² of floor was found for it" if largest else "the plan shows no such room"
@@ -1632,7 +1628,7 @@ def _tenancy_polygon(root, page):
     return polygon if polygon.geom_type == "Polygon" and not polygon.is_empty else None
 
 
-def _apply_p0_outline_corners(web, project, root, record, validated):
+def _apply_p0_outline_corners(web, project, root, record, validated, *, defer=False):
     """The outline built from the picked corners: the tenancy becomes the clipping outline; a room's AI-sketched trace
     is replaced, clipped to the tenancy, with rooms drawn inside it taken off (all traced rooms, for floor with no
     room)."""
@@ -1677,7 +1673,7 @@ def _apply_p0_outline_corners(web, project, root, record, validated):
         raise ValueError(f"The listed corners leave no floor for {room} inside the tenancy and outside the other rooms.")
     rows = _p0_trace_rows(root, record, polygons)
     prepared = reviewer_room_geometry_service.persist_ai_determined_traces(web, project, rows, record["run_id"],
-        record["quality_label"], replace_pages=[page], replace_room_labels=[room])
+        record["quality_label"], replace_pages=[page], replace_room_labels=[room], defer=defer)
     record.update({"status": _status_for_accuracy("ai_determined", record["accuracy"]), "source": "ai_determined",
                    "applied_value": {"rooms": _p0_result_rooms(prepared), "note": note, "label": record["quality_label"]},
                    "validation": validated, "block_reason": ""})
@@ -2940,7 +2936,7 @@ def _apply_p0_wall_styles(record, validated):
     return record
 
 
-def _apply_p0_room_names(web, project, root, record, validated):
+def _apply_p0_room_names(web, project, root, record, validated, *, defer=False):
     from shapely.geometry import Polygon
     packet = record["packet"]
     context = _p0_context(root, packet["page"])
@@ -2974,25 +2970,32 @@ def _apply_p0_room_names(web, project, root, record, validated):
                         for name,polygon in pieces.items())
     rows = _p0_trace_rows(root, record, polygons)
     prepared = reviewer_room_geometry_service.persist_ai_determined_traces(web, project, rows,
-        record["run_id"], record["quality_label"], replace_pages=[packet["page"]])
+        record["run_id"], record["quality_label"], replace_pages=[packet["page"]], defer=defer)
     record.update({"status":_status_for_accuracy("ai_determined",record["accuracy"]), "source":"ai_determined",
         "applied_value":{"rooms":_p0_result_rooms(prepared),
                         "label":record["quality_label"]}, "validation":validated, "block_reason":""})
     return record
 
 
+def _main_plan_levels(root):
+    from ai import page_inventory
+    readings = {int(number): row for number, row in (_read(Path(root) / "page_inventory.json", {}).get("pages") or {}).items()
+                if str(number).isdigit() and isinstance(row, dict)}
+    coverage = {row.get("page"): row.get("level_name") for row in _read(Path(root) / "drawing_coverage.json", {}).get("page_roles", [])
+                if isinstance(row, dict)}
+    return page_inventory.main_plan_levels(readings, coverage)
+
+
 def _page_level(root, page):
     """The page's level. On a plan the page reading chose as a level's main plan, the page reading's level (it read the
     plan's title: house set 15's "FIRST FLOOR PLAN" was "Ground Floor" in drawing coverage, from "Natural ground level"
     in its legend, 2026-11-03); else drawing coverage's; else the page reading's."""
-    from ai import page_inventory
-    readings = {int(number): row for number, row in (_read(root / "page_inventory.json", {}).get("pages") or {}).items()
-                if str(number).isdigit() and isinstance(row, dict)}
-    read_level = str((readings.get(int(page)) or {}).get("level") or "")
-    if read_level and any(int(page) in pages for pages in page_inventory.main_plan_pages(readings).values()):
-        return read_level
+    level = _main_plan_levels(root).get(int(page))
+    if level:
+        return level
     return next((row.get("level_name") for row in _read(root / "drawing_coverage.json", {}).get("page_roles", [])
-                 if isinstance(row, dict) and row.get("page") == page and row.get("level_name")), "") or read_level
+                 if isinstance(row, dict) and row.get("page") == page and row.get("level_name")), "") or \
+        str(((_read(root / "page_inventory.json", {}).get("pages") or {}).get(str(page)) or {}).get("level") or "")
 
 
 def _apply_p0_outlines(web, project, root, record, validated, *, defer=False):
@@ -3479,10 +3482,6 @@ def _create_run(root, task, target, packet, prompt, image_bytes=None, blocked_re
     if reusable and (current.get("input_fingerprint") == input_fingerprint or (
             not packet.get("supervisor_note") and current.get("base_input_fingerprint") == input_fingerprint)):
         return current
-    if reusable and current.get("packet_fingerprint") == hashlib.sha256(packet_bytes).hexdigest() and \
-            current.get("prompt_fingerprint") == hashlib.sha256(prompt.encode("utf-8")).hexdigest() and \
-            current.get("image_hashes") == image_hashes:
-        return current
     run_id = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex[:8]}"
     run_dir = parent / "runs" / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
@@ -3626,8 +3625,35 @@ def _settle_unselected_pages(root):
             _write(_record_file(root, record), record)
 
 
+NORTH_WAITING_NOTE = "Waiting for a north-arrow check on plan page"
+
+
+def north_waiting_on_others(record):
+    """A north page whose own answer is in, waiting only for the other pages' answers: not to be asked again."""
+    return (record.get("task") == "P2_north" and record.get("status") == "waiting_for_reply"
+            and str(record.get("block_reason") or "").startswith(NORTH_WAITING_NOTE))
+
+
+def _finish_north(web, project, root):
+    """Work out north from the pages that did answer, once no page is still to answer: the last page may have had no
+    arrow, or been refused or failed, and then nothing would ever settle the pages waiting for it."""
+    records = [row for row in _all_current(root) if row.get("task") == "P2_north"]
+    waiting = [row for row in records if north_waiting_on_others(row)]
+    pending = [row for row in records if row.get("status") == "waiting_for_reply"
+               and not north_waiting_on_others(row) and not _not_answered(row)]
+    if not waiting or pending:
+        return
+    record = waiting[-1]
+    validation = record.get("validation") or {}
+    validated = validation["result"] if validation.get("valid") and isinstance(validation.get("result"), dict) else validation
+    record = _apply_p2(web, project, root, record, validated)
+    record["validation"] = {"valid": True, "result": record.get("validation", {})}
+    _update_record(root, record)
+
+
 def _run_all(web, project, root):
     _settle_unselected_pages(root)
+    _finish_north(web, project, root)
     _refresh_site_tasks(root)
     for target, packet, prompt, images, *error in _north_packets(root):
         reason = error[0] if error else ""
@@ -3830,8 +3856,8 @@ def _apply_p2(web, project, root, record, validated, *, defer=False):
         other_validation = other.get("validation", {})
         if other_validation.get("valid") and isinstance(other_validation.get("result"), dict):
             other_validation = other_validation["result"]
-        if other_validation.get("found") is not None:
-            completed_pages.add(int(other.get("packet", {}).get("page", 0)))
+        if other_validation.get("found") is not None or other.get("status") in {"blocked", "not_needed"} or _not_answered(other):
+            completed_pages.add(int(other.get("packet", {}).get("page", 0)))     # a page that can't answer doesn't hold the rest
         other_bearing, _other_basis = autonomous_tasks.true_north(
             other_validation, _site_declination(root) if other_validation.get("label") == "magnetic" else None)
         if other_bearing is not None:          # project-north arrows don't take part in the agreement
@@ -4092,7 +4118,7 @@ def _post(web, project, data, *, defer_evidence_rebuild=False):
             record = _apply_p0_wall_styles(record, validated)
         elif task == "P0_room_names":
             validated = autonomous_tasks.validate_p0_room_names(record["packet"], reply)
-            record = _apply_p0_room_names(web, project, root, record, validated)
+            record = _apply_p0_room_names(web, project, root, record, validated, defer=defer)
         elif task == "P0_room_outlines":
             validated = autonomous_tasks.validate_p0_outlines(record["packet"], reply)
             omitted, not_drawn = room_outline.outline_omissions(autonomous_tasks.parse_json_reply(reply),
@@ -4107,7 +4133,7 @@ def _post(web, project, data, *, defer_evidence_rebuild=False):
                                                     + [{"room": name, "reason": reason} for name, reason in not_drawn.items()])
         elif task == "P0_outline_corners":
             validated = autonomous_tasks.validate_p0_outline_corners(record["packet"], reply)
-            record = _apply_p0_outline_corners(web, project, root, record, validated)
+            record = _apply_p0_outline_corners(web, project, root, record, validated, defer=defer)
         elif task == "P0_tenancy_outline":
             validated = autonomous_tasks.validate_p0_tenancy_outline(record["packet"], reply)
             record = _apply_p0_tenancy_outline(root, record, validated)

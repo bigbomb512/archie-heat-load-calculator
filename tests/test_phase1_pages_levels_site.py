@@ -44,7 +44,7 @@ class LevelTests(unittest.TestCase):
                 "16": {"page_type": "floor_plan", "whole_floor": False, "floor_plan_kind": "other", "level": "Ground Floor"}}}),
                 encoding="utf-8")
             self.assertEqual(tasks._page_level(root, 8), "First")       # legend said "Natural ground level"
-            self.assertEqual(tasks._page_level(root, 7), "Ground")
+            self.assertEqual(tasks._page_level(root, 7), "Ground Floor")  # the same level: coverage's spelling, so one floor
             self.assertEqual(tasks._page_level(root, 16), "Ground Floor")  # not a main plan: coverage as before
 
 

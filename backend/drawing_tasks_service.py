@@ -165,6 +165,7 @@ def _waiting(root, retry_not_answered=False):
     from backend import autonomous_tasks_service
     return [record for record in autonomous_tasks_service._all_current(root)
             if record.get("status") == "waiting_for_reply" and record.get("prompt")
+            and not autonomous_tasks_service.north_waiting_on_others(record)
             and (retry_not_answered or not autonomous_tasks_service._not_answered(record))]
 
 
@@ -394,7 +395,9 @@ def answer_all(web, project, step=lambda *args: None, provider_for=None, retry_n
                 cache_path.unlink(missing_ok=True)
                 raise
             after = autonomous_tasks_service._current_task(root, record["task"], record["target"]) or {}
-            if after.get("run_id") == record["run_id"] and after.get("status") == "waiting_for_reply":
+            if autonomous_tasks_service.north_waiting_on_others(after):
+                answered += 1           # its answer is in; north is worked out when the other pages have answered
+            elif after.get("run_id") == record["run_id"] and after.get("status") == "waiting_for_reply":
                 refused += 1
                 cache_path.unlink(missing_ok=True)
                 failures[record["run_id"]] = {"task": record["task"], "target": str(record.get("target") or ""),

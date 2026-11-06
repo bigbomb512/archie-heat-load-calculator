@@ -82,6 +82,35 @@ class UnreadableDimensionTests(unittest.TestCase):
         self.assertEqual(autonomous_tasks_service._task_progress(root)["blocked"], 0)
 
 
+class TextLayerPairingTests(unittest.TestCase):
+    """Numbers are paired with tick-ended lines by real distance and in image pixels (saved jobs 2026-11-06: with PDF-point
+    boxes and no distance limit, Butcher Buffet's first pairing gave 0.81 mm/px on a 14.1 mm/px sheet)."""
+    LINE = {"points": [(100.0, 200.0), (900.0, 200.0)], "tick_centres_image_px": [(100.0, 200.0), (900.0, 200.0)], "span_px": 800.0}
+
+    def test_only_a_number_beside_the_line_is_paired(self):
+        beside = {"value_mm": 4000, "bbox_px": [480, 170, 520, 185]}
+        level_but_far = {"value_mm": 300, "bbox_px": [480, 900, 520, 915]}
+        past_the_end = {"value_mm": 500, "bbox_px": [1000, 170, 1040, 185]}
+        self.assertIs(autonomous_tasks_service._nearest_dimension_text(self.LINE, [level_but_far, past_the_end, beside]), beside)
+        self.assertIsNone(autonomous_tasks_service._nearest_dimension_text(self.LINE, [level_but_far, past_the_end]))
+
+    def test_text_boxes_in_pdf_points_are_converted_to_image_pixels(self):
+        root = Path(tempfile.mkdtemp())
+        (root / "spatial_ocr.json").write_text(json.dumps({"pages": [{"page": 1, "dimension_candidates": [
+            {"value_mm": 4000, "bbox": [100, 50, 110, 55]}, {"value_mm": None, "bbox": [1, 1, 2, 2]}]}]}), encoding="utf-8")
+        rows = autonomous_tasks_service._page_dimension_texts(root, 1, {"render_dpi": 180.0, "page_origin": (0, 0)})
+        self.assertEqual([row["bbox_px"] for row in rows], [[250.0, 125.0, 275.0, 137.5]])
+
+    def test_the_vector_readings_pixel_boxes_come_first(self):
+        root = Path(tempfile.mkdtemp())
+        (root / "spatial_ocr.json").write_text(json.dumps({"pages": [{"page": 1, "dimension_candidates": [
+            {"value_mm": 430, "bbox": [1, 1, 2, 2]}]}]}), encoding="utf-8")
+        (root / "vector_geometry.json").write_text(json.dumps({"geometry_key_points": {"pages": [{"page": 1, "dimension_candidates": [
+            {"value_mm": 300, "bbox_px": [10, 10, 20, 20]}]}]}}), encoding="utf-8")
+        rows = autonomous_tasks_service._page_dimension_texts(root, 1, {"render_dpi": 180.0})
+        self.assertEqual([row["value_mm"] for row in rows], [300])
+
+
 class ScaleLadderEndTests(unittest.TestCase):
     """Every page ends with a scale (user rule 2026-11-03): after the standard-object estimate, a labelled 1:100."""
 

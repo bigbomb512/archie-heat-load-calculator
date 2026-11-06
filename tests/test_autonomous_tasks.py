@@ -567,29 +567,49 @@ class AutonomousTaskTests(unittest.TestCase):
             autonomous_tasks.calibration_from_dimensions(dimensions + [
                 {"points_image_px": [[0, 0], [500, 0]], "value_mm": 9000, "printed_text": "9,000"}])
 
-    def test_text_layer_dimension_calibrates_directly(self):
+    def test_a_text_layer_dimension_is_used_only_when_it_agrees_with_the_sheet_scale(self):
         dimension = {"points_image_px": [[0,0],[100,0]], "value_mm": 4000,
                      "printed_text": "4000", "source": "drawing_text"}
-        result = autonomous_tasks.calibration_from_dimensions([dimension])
+        result = autonomous_tasks.calibration_from_dimensions([dimension], 40.5)
         self.assertEqual((result["status"], result["source"], result["mm_per_px"]), ("agreed", "drawing_text", 40))
+        # The pairing alone can't be trusted (Butcher Buffet p20: sheet 14.1 mm/px, first pairing 0.81).
+        for declared in (14.1, None):
+            with self.assertRaises(ValueError):
+                autonomous_tasks.calibration_from_dimensions([dimension], declared)
+        # A wrong pairing doesn't get in the way of a dimension the AI read.
+        read = {"points_image_px": [[0,0],[100,0]], "value_mm": 1410, "printed_text": "1410"}
+        self.assertEqual(autonomous_tasks.calibration_from_dimensions([dimension, read], 14.1)["source"], "ai_read_printed_dimension")
 
-    def test_page_without_numbered_dimension_text_asks_no_dimension_line(self):
+    def _initial_packets(self, *, texts=(), settled=True):
         from PIL import Image
         with patch.object(autonomous_tasks_service, "_p0_main_geometry_pages", return_value=[{"page": 90}]), \
-             patch.object(autonomous_tasks_service, "_p0_context", return_value={"image": Image.new("RGB", (100,100)),
-                 "objects": [], "viewport": (0,0,100,100), "declared_mm_per_px": None, "summary": [],
-                 "page_bbox": (0,0,100,100), "render_dpi": 180}), \
+             patch.object(autonomous_tasks_service, "_p0_context", return_value={"image": Image.new("RGB", (600,600)),
+                 "objects": [], "viewport": (0,0,600,600), "declared_mm_per_px": None, "summary": [],
+                 "page_bbox": (0,0,600,600), "render_dpi": 180}), \
              patch.object(autonomous_tasks_service, "_p0_calibration_ready", return_value=(None, "no calibration")), \
-             patch.object(autonomous_tasks_service, "_p0_calibration", side_effect=ValueError("pending")), \
-             patch.object(autonomous_tasks_service, "_page_dimension_candidates", return_value=[]), \
-             patch.object(autonomous_tasks_service, "_load_inputs", return_value=({}, {"pages": []}, {})), \
+             patch.object(autonomous_tasks_service, "_page_dimension_texts", return_value=list(texts)), \
+             patch.object(autonomous_tasks_service, "_p0_dimensions_settled", return_value=settled), \
+             patch.object(autonomous_tasks_service, "_p0_dimensions", return_value=[]), \
              patch.object(autonomous_tasks_service.room_outline, "dimension_line_candidates", return_value=[
-                 {"points":[[0,50],[90,50]], "tick_centres_image_px":[[0,50],[90,50]], "span_px":90}]), \
+                 {"points":[[0,20],[90,20]], "tick_centres_image_px":[[0,20],[90,20]], "span_px":90},
+                 {"points":[[0,500],[90,500]], "tick_centres_image_px":[[0,500],[90,500]], "span_px":90}]), \
              patch.object(autonomous_tasks_service, "_current_task", return_value=None), \
              patch.object(autonomous_tasks_service, "_png_bytes", return_value=b"png"):
-            packets = autonomous_tasks_service._p0_initial_packets(Path("/tmp"))
-        self.assertFalse(any(row[0] == "P0_dimensions" for row in packets))
-        self.assertTrue(any(row[0] == "P0_scale_read" for row in packets))
+            return autonomous_tasks_service._p0_initial_packets(Path("/tmp/no-such-archie-job"))
+
+    def test_lines_with_a_printed_number_are_asked_first_and_the_printed_scale_only_after_them(self):
+        packets = self._initial_packets(texts=[{"value_mm": 3000, "bbox_px": [40, 494, 50, 499]}])
+        dimension = [row for row in packets if row[0] == "P0_dimensions"]
+        self.assertEqual(dimension[0][2]["line"]["tick_centres_image_px"], [[0,500],[90,500]])
+        self.assertFalse(any(row[0] == "P0_scale_read" for row in packets))
+
+    def test_no_number_in_the_text_layer_still_asks_the_ai_to_read_the_lines(self):
+        # CAD text is often drawn as lines: the AI can read a number the text layer doesn't have.
+        self.assertTrue(any(row[0] == "P0_dimensions" for row in self._initial_packets()))
+
+    def test_the_printed_scale_waits_while_a_dimension_question_is_open(self):
+        packets = self._initial_packets(settled=False)
+        self.assertFalse(any(row[0] in {"P0_dimensions", "P0_scale_read"} for row in packets))
 
     def test_p0_wall_style_reply_and_outline_naming_are_strict(self):
         summary = [{"hatch": False, "style_id": "wall"}, {"hatch": True, "style_id": "tile"}]

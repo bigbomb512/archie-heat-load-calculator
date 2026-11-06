@@ -69,13 +69,18 @@ def calibration_from_dimensions(dimensions, declared_mm_per_px=None, tolerance=0
         if span > 0:
             valid.append({"points_image_px": points, "value_mm": float(value), "mm_per_px": float(value) / span,
                           "printed_text": str(row.get("printed_text", "")), "source": row.get("source", "ai_read_printed_dimension")})
+    # A number paired with a line from the text layer is only used when it agrees with the sheet's printed scale: the
+    # pairing alone can't be trusted (saved jobs 2026-11-06: Butcher Buffet p20 sheet 14.1 mm/px, first pairing 0.81).
     text_layer = [row for row in valid if row.get("source") == "drawing_text"]
-    if text_layer:
-        selected = text_layer[0]
+    valid = [row for row in valid if row.get("source") != "drawing_text"]
+    agreeing = [row for row in text_layer if declared_mm_per_px
+                and abs(row["mm_per_px"] / float(declared_mm_per_px) - 1) <= tolerance]
+    if agreeing:
+        selected = agreeing[0]
         return {"source": "drawing_text", "status": "agreed", "mm_per_px": selected["mm_per_px"],
                 "dimension_points_image_px": deepcopy(selected["points_image_px"]),
                 "dimension_value_mm": selected["value_mm"], "printed_text": selected["printed_text"],
-                "label": "Scale calibrated from a dimension read from the drawing's text."}
+                "label": "Scale calibrated from a dimension read from the drawing's text, agreeing with the sheet's scale."}
     selected = []
     if declared_mm_per_px and valid:
         # Use the same scale check as the standalone room-outline workflow.
@@ -103,6 +108,8 @@ def calibration_from_dimensions(dimensions, declared_mm_per_px=None, tolerance=0
         status, rate = _agree_dimensions(valid, tolerance)
         if status == "agreed":
             selected = valid
+    elif declared_mm_per_px:
+        raise ValueError("No printed dimension has been read on this page yet.")
     else:
         raise ValueError("Without a declared scale, at least two printed dimensions agreeing within 2% are required.")
     if status != "agreed" and status != "declared_scale_rejected":

@@ -138,6 +138,21 @@ def main_plan_pages(readings):
     return levels
 
 
+def main_plan_levels(readings, coverage_levels=None):
+    """{page: level} for the page reading's main plans that name a level: it read the plan's title, where drawing
+    coverage can take "Natural ground level" in a legend for the floor. Coverage's spelling is kept when both mean the
+    same level, so "Ground" and "Ground Floor" don't become two floors."""
+    coverage_levels = coverage_levels or {}
+    result = {}
+    for pages in main_plan_pages(readings).values():
+        for page in pages:
+            level = str((readings.get(page) or {}).get("level") or "").strip()
+            if level:
+                known = str(coverage_levels.get(page) or "").strip()
+                result[page] = known if known and level_key(known) == level_key(level) else level
+    return result
+
+
 def packet_from_readings(readings, page_count):
     """Page roles in the analysis-packet shape the page-role scorecard reads.
 

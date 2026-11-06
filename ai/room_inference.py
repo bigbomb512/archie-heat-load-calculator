@@ -412,8 +412,14 @@ def _vision_geometry_pages(vision_response):
     return {row.get("page"): row for row in pages if isinstance(row, dict) and row.get("page") is not None}
 
 
-def infer(ai_input, coverage=None, spatial_ocr=None, vector_geometry=None, vision_response=None):
+def infer(ai_input, coverage=None, spatial_ocr=None, vector_geometry=None, vision_response=None, page_levels=None):
+    """page_levels: {page: level} overriding a page's level (page_inventory.main_plan_levels)."""
     pages = select_pages(ai_input, coverage)
+    page_levels = page_levels or {}
+
+    def level_of(page):
+        return page_levels.get(page.get("page")) or _level(page)
+
     candidates = {}
     spatial_by_page = {
         row.get("page"): row for row in (spatial_ocr or {}).get("pages", [])
@@ -471,7 +477,7 @@ def infer(ai_input, coverage=None, spatial_ocr=None, vector_geometry=None, visio
             _geometry_rows(vector_by_page.get(number, {}), number),
         ]
         for geometry_row in next((rows for rows in sources if rows), []):
-            level = _text(geometry_row.get("level_name")) or _level(page)
+            level = page_levels.get(number) or _text(geometry_row.get("level_name")) or _level(page)
             evidence = (geometry_row.get("evidence") or [{"page": number, "excerpt": geometry_row["label"]}])[0]
             score = geometry_row.get("confidence_score")
             confidence = score if isinstance(score, (int, float)) else {"high": 0.9, "medium": 0.7, "low": 0.4}.get(str(geometry_row.get("confidence", "medium")).casefold(), 0.6)
@@ -486,7 +492,7 @@ def infer(ai_input, coverage=None, spatial_ocr=None, vector_geometry=None, visio
         spatial_page = spatial_by_page.get(number, {})
         kinds = room_label_evidence(spatial_page)
         for label, area in room_label_items(spatial_page):
-            level = _level(page)
+            level = level_of(page)
             # Treat spelling variants such as "cool room" and "coolroom" as
             # one candidate while retaining the clearest display label.
             key = room_identity(label, level)
@@ -530,7 +536,7 @@ def infer(ai_input, coverage=None, spatial_ocr=None, vector_geometry=None, visio
         if not (re.search(r"\btenanc(?:y|ies)\b", page_text, re.I)
                 and re.search(r"\b(?:cafe|café|coffee)\b", page_text, re.I)):
             continue
-        level = _level(page)
+        level = level_of(page)
         evidence = {"page": page.get("page"), "drawing_number": page.get("drawing_number", ""),
                     "title": page.get("title", ""),
                     "excerpt": "Primary plan/title block identifies a coffee or cafe tenancy.",

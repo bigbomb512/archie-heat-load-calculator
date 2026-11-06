@@ -42,7 +42,7 @@ def main():
         (root / "calculator_draft.json").write_text("{}", encoding="utf-8")
         draft_service.post = lambda _web, _project, payload: draft_refreshes.append(payload["action"]) or {}
 
-        def slow_infer(*_args):
+        def slow_infer(*_args, **_kwargs):
             time.sleep(0.05)
             return {"rooms": [], "selected_pages": [1]}
 

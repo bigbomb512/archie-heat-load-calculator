@@ -123,6 +123,101 @@ class RoomsNotOnPlanTests(unittest.TestCase):
         self.assertIs(room_inference_service._without_rooms_not_on_plan(proposal, {}), proposal)
 
 
+class RoomsKeptTests(unittest.TestCase):
+    INFERRED = [{"label": "Kitchen", "label_evidence": "note", "note_text": "ALL WALLS IN KITCHEN", "source_pages": [33]}]
+    NOT_DRAWN = {"task": "P0_room_outlines", "status": "below_accuracy_bar", "packet": {"room_names": ["Kitchen"]},
+                 "applied_value": {"rooms": [], "not_drawn": [{"room": "Kitchen", "reason": "not seen"}]}}
+
+    def removed(self, records, files=()):
+        with TemporaryDirectory() as folder:
+            for name, content in files:
+                (Path(folder) / name).write_text(json.dumps(content), encoding="utf-8")
+            with patch.object(tasks, "_inferred_room_data", return_value=self.INFERRED), \
+                    patch.object(tasks, "_all_current", return_value=records):
+                return tasks.rooms_not_on_plan(Path(folder))
+
+    def test_an_area_from_the_room_size_step_keeps_a_note_only_room(self):
+        sizes = {"task": "P0_room_sizes", "status": "applied", "packet": {},
+                 "applied_value": {"rooms": [{"label": "Kitchen", "area_m2": 20.0}]}}
+        self.assertEqual(list(self.removed([self.NOT_DRAWN])), ["kitchen"])
+        self.assertEqual(self.removed([self.NOT_DRAWN, sizes]), {})
+
+    def test_an_operators_trace_or_typed_area_keeps_it(self):
+        trace = {"records": [{"room_label": "Kitchen", "declaration_source": "reviewer"}]}
+        ai_trace = {"records": [{"room_label": "Kitchen", "declaration_source": "ai_determined"}]}
+        typed = {"overrides": [{"room_id": "x", "room_label": "Kitchen", "area_m2": 9}]}
+        self.assertEqual(self.removed([self.NOT_DRAWN], [("reviewer_room_geometry.json", trace)]), {})
+        self.assertEqual(self.removed([self.NOT_DRAWN], [("room_area_overrides.json", typed)]), {})
+        self.assertEqual(list(self.removed([self.NOT_DRAWN], [("reviewer_room_geometry.json", ai_trace)])), ["kitchen"])
+
+
+class BuildingSpacesTests(unittest.TestCase):
+    """The rooms read from the text feed over a dozen steps directly, so they are brought into line with the room list."""
+
+    @staticmethod
+    def space(name, level, *pages):
+        return {"id": f"{name}-{level}", "name": name, "level_name": level, "evidence": [{"page": page} for page in pages]}
+
+    def reconcile(self, spaces, rooms=(), removed=(), page_levels=None, set_aside=()):
+        return room_inference_service.reconcile_spaces(list(spaces), list(set_aside), list(rooms), set(removed), page_levels or {})
+
+    def test_a_removed_room_is_set_aside_and_comes_back(self):
+        bar = self.space("Bar", "", 8)
+        kept, aside = self.reconcile([bar, self.space("Storage", "", 7)], removed={"bar"})
+        self.assertEqual(([row["name"] for row in kept], aside), (["Storage"], [bar]))
+        kept, aside = self.reconcile(kept, set_aside=aside)
+        self.assertEqual((sorted(row["name"] for row in kept), aside), (["Bar", "Storage"], []))
+
+    def test_a_level_less_copy_joins_the_one_named_level(self):
+        rooms = [{"label": "Dining", "level_name": "Ground Floor"}]
+        kept, _ = self.reconcile([self.space("Dining", "Ground Floor", 16), self.space("Dining", "", 22)], rooms)
+        self.assertEqual([(row["name"], row["level_name"]) for row in kept], [("Dining", "Ground Floor")])
+        self.assertEqual([item["page"] for item in kept[0]["evidence"]], [16, 22])
+
+    def test_a_main_plans_level_replaces_a_wrong_one(self):
+        kept, _ = self.reconcile([self.space("Bedroom", "Ground Floor", 8)], page_levels={8: "First"})
+        self.assertEqual(kept[0]["level_name"], "First")
+
+    def test_a_name_on_two_levels_stays_apart_and_a_shop_is_unchanged(self):
+        rooms = [{"label": "Bathroom", "level_name": "Ground Floor"}, {"label": "Bathroom", "level_name": "First"}]
+        spaces = [self.space("Bathroom", "Ground Floor", 7), self.space("Bathroom", "First", 8), self.space("Bathroom", "", 22)]
+        self.assertEqual(len(self.reconcile(spaces, rooms)[0]), 3)
+        shop = [self.space("Kitchen", "", 21), self.space("Bar", "", 21)]
+        self.assertEqual(self.reconcile(shop, [{"label": "Kitchen", "level_name": "Unassigned level"}]), (shop, []))
+
+
+class NorthPagesSettleTests(unittest.TestCase):
+    def test_pages_waiting_on_a_page_that_cant_answer_are_settled(self):
+        answered = {"task": "P2_north", "target": "page-5", "status": "waiting_for_reply", "packet": {"page": 5},
+                    "block_reason": tasks.NORTH_WAITING_NOTE + "(s) 4.",
+                    "validation": {"valid": True, "result": {"found": True, "label": "true", "plan_up_azimuth_deg": 90}}}
+        failed = {"task": "P2_north", "target": "page-4", "status": "waiting_for_reply", "packet": {"page": 4},
+                  "reply_attempts": [{"outcome": "provider_failed"}, {"outcome": "rejected"}]}
+        self.assertTrue(tasks.north_waiting_on_others(answered))
+        self.assertFalse(tasks.north_waiting_on_others(failed))
+        with patch.object(tasks, "_all_current", return_value=[failed, answered]), \
+                patch.object(tasks, "_apply_p2", side_effect=lambda web, project, root, record, validated: {**record, "status": "applied", "validation": validated}) as apply, \
+                patch.object(tasks, "_update_record") as update:
+            tasks._finish_north(None, {}, Path("."))
+        self.assertEqual(apply.call_args.args[4]["plan_up_azimuth_deg"], 90)
+        self.assertEqual(update.call_args.args[1]["status"], "applied")
+
+    def test_nothing_happens_while_a_page_is_still_to_answer(self):
+        answered = {"task": "P2_north", "status": "waiting_for_reply", "block_reason": tasks.NORTH_WAITING_NOTE + "(s) 4."}
+        open_page = {"task": "P2_north", "status": "waiting_for_reply", "reply_attempts": []}
+        with patch.object(tasks, "_all_current", return_value=[answered, open_page]), patch.object(tasks, "_apply_p2") as apply:
+            tasks._finish_north(None, {}, Path("."))
+        apply.assert_not_called()
+
+
+class ScaleReadTests(unittest.TestCase):
+    def test_a_printed_notation_keeps_its_label_when_read_back(self):
+        context = {"render_dpi": 180.0, "viewport": (0, 0, 2000, 1400), "page_bbox": (0, 0, 1190, 842)}
+        first = tasks._scale_read_calibration({"kind": "notation", "scale_text": "1:100", "denominator": 100.0}, context)
+        self.assertEqual(first["status"], "declared_scale_only")
+        self.assertEqual(tasks._scale_read_calibration(first, context), first)
+
+
 class NotAnsweredTests(unittest.TestCase):
     def test_a_question_refused_twice_doesnt_count_as_waiting(self):
         refused_twice = {"task": "P0_outline_corners", "target": "room-bar-page-7", "status": "waiting_for_reply",
