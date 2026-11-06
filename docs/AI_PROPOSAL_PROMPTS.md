@@ -20,10 +20,12 @@ become optional overrides and an audit view.
 3. **Most likely case when the drawings don't say.** If the evidence does not
    settle a value, apply the most likely case for the building type
    (fallback table below), and say so in the result. Do not use the
-   conservative case. The one exception is north: with no north arrow there is
-   no likely value, so façade sun stays "not assessed".
-4. **Small, targeted prompts** with a hard size budget per task; block with a
-   reason rather than trimming evidence silently (decision 2026-10-02).
+   conservative case. With no true north, the sun on each outside wall and
+   window is the average of the four directions it could face, labelled
+   (2026-11-03; before that, walls took a west-facing profile and glass none).
+4. **Small, targeted prompts** with a size budget per task. Over budget, the
+   evidence is shortened, and what is still over is asked with the overrun
+   recorded on the question (2026-11-03; it used to block, decision 2026-10-02).
 5. **Cross-check before applying.** Wherever the drawings allow, an AI answer
    is checked against an independent deterministic fact (vector geometry,
    printed dimensions, scale). Agreement → apply. Disagreement → one retry with
@@ -336,7 +338,7 @@ items reading "N", "NORTH" or "TN".
 - disagreement → retry once, then apply the majority and report it.
 
 **Applied as:** `declare_north` with source "AI-determined north arrow".
-**Fallback:** none (façade sun not assessed).
+**Fallback:** the sun is averaged over the four directions each wall or window could face, labelled.
 **Answer key caseA:** p. 20 → 0° (unlabelled needle, title block).
 
 **Arrow labels (2026-10-26, same question):** the reply also gives `label` (`true | project | magnetic | grid |
@@ -515,14 +517,14 @@ reach it through the slab rule even when the AI answers unknown.
 | Roof exposure | No decisive section, level or slab note | most likely case from P5 (user decision 2026-10-15) | "Assumed (most likely case)" |
 | Shopfront sill | Not printed | 0 mm | "Assumed glass to floor" |
 | Shopfront head | Not printed | ceiling height | "Assumed glass to ceiling" |
-| North | No north arrow | none (sun not assessed) | "North not found; façade sun not assessed" |
+| North | No true north, or the pages disagree | sun averaged over the four directions | "No true north was found on the drawings, so the sun on this surface is the average of the four directions it could face" |
 
 ## Plumbing (Codex)
 
 1. **Task runner:** P0–P5 in order (P0 → P3/P4 need geometry; P1 → P5), each
    with its budget. It re-runs a task only when its inputs change (fingerprint).
 2. **Packet builders:** crops from the full-resolution renders; numbered
-   outlines for P0/P3. Over budget → block with a reason.
+   outlines for P0/P3. Over budget → shorten the evidence, then ask with the overrun recorded.
 3. **Transport:** manual ChatGPT batch for development. One packet per task
    per target, a paste box per packet, and a "Run all" summary of what is
    still waiting for a reply.

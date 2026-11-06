@@ -106,6 +106,7 @@ def apply(web, project, root, read_page=None):
               "windows_in_schedule": 0, "skylights": [], "doors_not_counted": [], "unread_schedule_rows": [],
               "placed": [], "unplaced": [], "walls_taken_as_outside": []}
     close = None
+    any_saved = False
     if read_page is None:
         if not source or not Path(source).exists():
             result["blocked"] = "The source PDF isn't available; windows weren't read."
@@ -182,7 +183,8 @@ def apply(web, project, root, read_page=None):
                             for index, row in enumerate(kept)],
                         "declaration_source": "drawing_text", "ai_run_id": run_id}
                 try:
-                    reviewer_room_geometry_service.post(web, project, body)
+                    reviewer_room_geometry_service.post(web, project, body, _defer_evidence_rebuild=True)
+                    any_saved = True
                 except ValueError as error:
                     result["unplaced"] += [{"mark": row["mark"], "page": page, "reason": f"not saved on the room: {error}"} for row in kept]
                     continue
@@ -194,5 +196,8 @@ def apply(web, project, root, read_page=None):
     finally:
         if close:
             close()
+    if any_saved and web is not None:   # once, after every room's windows (a house has many rooms; each took a rebuild)
+        from backend.phase1_supervisor_service import _build_calculation_evidence
+        _build_calculation_evidence(web, project)
     reviewer_room_geometry_service._atomic_json(root / RESULT_FILE, result)
     return result

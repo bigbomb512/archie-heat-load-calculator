@@ -111,6 +111,39 @@ class TextLayerPairingTests(unittest.TestCase):
         self.assertEqual([row["value_mm"] for row in rows], [300])
 
 
+class TickLineTests(unittest.TestCase):
+    OBJECTS = [{"points": [(100.0, 200.0), (900.0, 200.0)], "filled": False, "style": (0.1,)},
+               {"points": [(97.0, 197.0), (103.0, 203.0)], "filled": False, "style": (0.1,)},
+               {"points": [(897.0, 197.0), (903.0, 203.0)], "filled": False, "style": (0.1,)},
+               {"points": [(495.0, 600.0), (505.0, 610.0)], "filled": False, "style": (0.1,)}]
+
+    def test_ticks_are_found_at_both_ends_and_a_far_shape_is_ignored(self):
+        from ai import room_outline
+        [line] = room_outline.dimension_line_candidates(self.OBJECTS, None, (0, 0, 1000, 1000))
+        self.assertEqual(line["tick_centres_image_px"], [[100.0, 200.0], [900.0, 200.0]])
+        self.assertEqual(room_outline.dimension_line_candidates(self.OBJECTS[:1], None, (0, 0, 1000, 1000)), [])
+
+    def test_the_search_runs_once_per_page_while_the_drawing_is_unchanged(self):
+        from PIL import Image
+        from backend import page_analysis_cache
+        context = {"objects": [], "image": Image.new("RGB", (10, 10)), "page_meta": {"page": 3}}
+
+        class Active:
+            generation = "first"
+        autonomous_tasks_service._TICK_LINES_CACHE.clear()
+        token = page_analysis_cache._ACTIVE.set(Active())
+        try:
+            with mock.patch.object(autonomous_tasks_service.room_outline, "dimension_line_candidates", return_value=[]) as search:
+                autonomous_tasks_service._tick_lines(context)
+                autonomous_tasks_service._tick_lines(context)
+                self.assertEqual(search.call_count, 1)
+                Active.generation = "changed"
+                autonomous_tasks_service._tick_lines(context)
+                self.assertEqual(search.call_count, 2)
+        finally:
+            page_analysis_cache._ACTIVE.reset(token)
+
+
 class ScaleLadderEndTests(unittest.TestCase):
     """Every page ends with a scale (user rule 2026-11-03): after the standard-object estimate, a labelled 1:100."""
 

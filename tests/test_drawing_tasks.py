@@ -117,6 +117,45 @@ class DrawingTaskTests(unittest.TestCase):
             # One rebuild before the round and one after it (the round limit ran out), none per answer.
             self.assertEqual(fake.builds, 2)
 
+    def test_north_pages_answered_in_one_round_are_answered_not_refused_and_not_asked_again(self):
+        with tempfile.TemporaryDirectory() as folder:
+            fake = BatchTasks(folder, count=0)
+            for page in (4, 5, 6):
+                fake.add("P2_north", f"page-{page}")
+            calls = []
+
+            def post(web, project, data):
+                if data["action"] == "run_all":
+                    return fake.post(web, project, data)
+                record = fake.records[(data["task"], data["target"])]
+                record["reply_attempts"].append({"outcome": "waiting_for_reply"})
+                if data["target"] == "page-6":          # the last page works out north and settles them all
+                    for row in fake.records.values():
+                        row["status"] = "applied"
+                else:
+                    record["block_reason"] = tasks_service.NORTH_WAITING_NOTE + "(s) 6."
+                return {}
+
+            class Provider:
+                model = "fake"
+                def propose(self, prompt, image_paths=()):
+                    calls.append(prompt)
+                    return {"found": False}, {}
+            with patch.object(tasks_service, "post", post), patch.object(tasks_service, "_all_current", fake.all_current), \
+                    patch.object(tasks_service, "_current_task", fake.current), patch.object(tasks_service, "_task_dir", fake.task_dir), \
+                    patch.object(tasks_service, "_export_determinations"), \
+                    patch.object(drawing.ai_provider, "parallel_calls", return_value=3):
+                result = drawing.answer_all(None, {"id": "j", "review_dir": folder}, provider_for=lambda task: Provider())
+            self.assertEqual((result["answered"], result["refused"], len(calls)), (3, 0, 3))
+
+    def test_a_north_page_waiting_on_others_is_not_sent_again(self):
+        with tempfile.TemporaryDirectory() as folder:
+            fake = BatchTasks(folder, count=0)
+            fake.add("P2_north", "page-4")
+            fake.records[("P2_north", "page-4")]["block_reason"] = tasks_service.NORTH_WAITING_NOTE + "(s) 6."
+            with patch.object(tasks_service, "_all_current", fake.all_current):
+                self.assertEqual(drawing._waiting(Path(folder)), [])
+
     def test_parallel_usage_limit_stops_round_without_applying_partial_answers(self):
         with tempfile.TemporaryDirectory() as folder:
             fake = BatchTasks(folder)

@@ -50,10 +50,21 @@ class HouseWindowsServiceTests(unittest.TestCase):
     def run_apply(self, root, ceiling=2700):
         writes = []
         with patch.object(reviewer_room_geometry_service, "current_records", return_value=[TRACE]), \
-             patch.object(reviewer_room_geometry_service, "post", side_effect=lambda _web, _project, body: writes.append(body)), \
+             patch.object(reviewer_room_geometry_service, "post", side_effect=lambda _web, _project, body, **_kwargs: writes.append(body)), \
              patch.object(autonomous_tasks_service, "room_ceiling_height", return_value=ceiling):
             result = house_windows_service.apply(None, {"id": "house"}, root, read_page=read_page)
         return result, writes
+
+    def test_the_calculation_inputs_are_rebuilt_once_after_all_the_rooms(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = job(folder)
+            with patch.object(reviewer_room_geometry_service, "current_records", return_value=[TRACE]), \
+                 patch.object(reviewer_room_geometry_service, "post") as post, \
+                 patch.object(autonomous_tasks_service, "room_ceiling_height", return_value=2700), \
+                 patch("backend.phase1_supervisor_service._build_calculation_evidence") as build:
+                house_windows_service.apply(object(), {"id": "house"}, root, read_page=read_page)
+            self.assertTrue(post.call_args.kwargs["_defer_evidence_rebuild"])
+            build.assert_called_once()
 
     def test_windows_go_on_the_walls_their_tags_stand_against_and_those_walls_become_outside(self):
         with tempfile.TemporaryDirectory() as folder:

@@ -26,6 +26,7 @@ import hashlib
 import json
 import math
 
+import numpy
 from shapely.geometry import LineString, Point, Polygon, box
 from shapely.ops import unary_union
 
@@ -901,6 +902,7 @@ def dimension_line_candidates(objects, walls, viewport, limit=3, min_length_px=3
         extent = max(max(xs) - min(xs), max(ys) - min(ys))
         if 3 <= extent <= 30:
             small.append(((min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2))
+    small_xy = numpy.array(small, dtype=float).reshape(-1, 2)
     candidates = []
     for item in objects:
         if item["filled"] or item["style"][0] > 0.3 or len(item["points"]) != 2:
@@ -915,7 +917,10 @@ def dimension_line_candidates(objects, walls, viewport, limit=3, min_length_px=3
             continue
         along = (lambda point: point[0]) if horizontal else (lambda point: point[1])
         low, high = sorted((along((x1, y1)), along((x2, y2))))
-        on_line = [point for point in small if line.distance(Point(point)) <= 6]
+        # Only points in the line's box (6 px around it) can be within 6 px: a plan has thousands of small shapes.
+        nearby = numpy.flatnonzero((small_xy[:, 0] >= min(x1, x2) - 6) & (small_xy[:, 0] <= max(x1, x2) + 6)
+                                   & (small_xy[:, 1] >= min(y1, y2) - 6) & (small_xy[:, 1] <= max(y1, y2) + 6))
+        on_line = [small[index] for index in nearby if line.distance(Point(small[index])) <= 6]
         start_ticks = [along(point) for point in on_line if abs(along(point) - low) <= 20]
         end_ticks = [along(point) for point in on_line if abs(along(point) - high) <= 20]
         if not start_ticks or not end_ticks:

@@ -24,7 +24,7 @@ import hashlib
 import re
 from datetime import datetime
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 
 from PIL import Image
 
@@ -306,18 +306,21 @@ def answer_all(web, project, step=lambda *args: None, provider_for=None, retry_n
         with ThreadPoolExecutor(max_workers=ai_provider.parallel_calls()) as pool:
             futures = {pool.submit(fetch, number, record): (number, record)
                        for number, record in enumerate(waiting, start=1)}
-            for future in as_completed(futures):
+            pending = set(futures)
+            while pending and provider_limited is None:
                 checkpoint()
-                number, record = futures[future]
-                try:
-                    fetched[record["run_id"]] = future.result()
-                except ai_provider.UsageLimitReached as error:
-                    provider_limited = error
-                    for pending in futures:
-                        pending.cancel()
-                    break
-                except Exception as error:
-                    fetched[record["run_id"]] = {"record": record, "error": error, "number": number}
+                done, pending = wait(pending, timeout=0.1, return_when=FIRST_COMPLETED)
+                for future in done:
+                    number, record = futures[future]
+                    try:
+                        fetched[record["run_id"]] = future.result()
+                    except ai_provider.UsageLimitReached as error:
+                        provider_limited = error
+                        for queued in pending:
+                            queued.cancel()
+                        break
+                    except Exception as error:
+                        fetched[record["run_id"]] = {"record": record, "error": error, "number": number}
         if provider_limited is None:
             limited_results = [item["error"] for item in fetched.values()
                               if isinstance(item.get("error"), ai_provider.UsageLimitReached)]

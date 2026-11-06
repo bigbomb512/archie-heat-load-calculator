@@ -1078,10 +1078,26 @@ def _page_dimension_texts(root, page, context):
             if isinstance(row, dict) and row.get("value_mm") and isinstance(row.get("bbox"), list) and len(row["bbox"]) == 4]
 
 
+_TICK_LINES_CACHE = OrderedDict()
+
+
 def _tick_lines(context, limit=MAX_DIMENSION_LINES, min_length_px=300):
-    """Lines drawn with ticks at both ends, whatever is printed near them."""
-    return room_outline.dimension_line_candidates(context["objects"], None, (0, 0, *context["image"].size),
-                                                  limit=limit, min_length_px=min_length_px)
+    """Lines drawn with ticks at both ends, whatever is printed near them. A question rebuild asks several times per
+    page, and on a detailed plan each search takes seconds, so they are kept per page's drawn objects."""
+    active = page_analysis_cache._ACTIVE.get()
+    key = None
+    if active is not None and context.get("page_meta", {}).get("page"):
+        key = (active.generation, context["page_meta"]["page"], limit, min_length_px)
+        if key in _TICK_LINES_CACHE:
+            _TICK_LINES_CACHE.move_to_end(key)
+            return _TICK_LINES_CACHE[key]
+    lines = room_outline.dimension_line_candidates(context["objects"], None, (0, 0, *context["image"].size),
+                                                   limit=limit, min_length_px=min_length_px)
+    if key:
+        _TICK_LINES_CACHE[key] = lines
+        while len(_TICK_LINES_CACHE) > 32:
+            _TICK_LINES_CACHE.popitem(last=False)
+    return lines
 
 
 DIMENSION_TEXT_MAX_DISTANCE_PX = 60     # about 8 mm on the sheet at the 180 dpi plan image
@@ -2442,7 +2458,9 @@ def room_ceiling_height(root, room_id, label, level):
     """A room's ceiling height in mm, the one rule every step uses: a height typed in the workspace, else the height
     printed on the drawings (P7), else the ceiling resolver's saved value (which may be the labelled preliminary
     fallback), else None. The saved value is only rebuilt with the model, so on a new job it still held the 2,700 mm
-    fallback while the drawings said 3,622 mm, and the Shop's storefront glass was refused (Butcher Buffet, 2026-10-22)."""
+    fallback while the drawings said 3,622 mm, and the Shop's storefront glass was refused (Butcher Buffet, 2026-10-22).
+    Before the resolver has run there is no saved value: the same labelled fallback, so glass is never refused for want
+    of a height (2026-11-06)."""
     from ai import ceiling_volume_resolution
     from backend import job_service
     root = Path(root)
@@ -2455,7 +2473,10 @@ def room_ceiling_height(root, room_id, label, level):
         return float(printed["height_mm"])
     saved = ceiling_volume_resolution.values_by_room(_read(root / "ceiling_volume_resolution.json", {}))
     value = (saved.get(room_id) or saved.get(identity) or {}).get("ceiling_height_mm")
-    return float(value) if isinstance(value, (int, float)) and value > 0 else None
+    if isinstance(value, (int, float)) and value > 0:
+        return float(value)
+    from ai import ai_preliminary
+    return float(ai_preliminary.load_pack()["preliminary_defaults"]["ceiling_height_mm"])
 
 
 def _apply_p7(record, validated):

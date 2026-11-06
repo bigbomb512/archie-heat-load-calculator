@@ -1,6 +1,8 @@
 # Houses: plan (30 October 2026)
 
-Status: **in progress (started 30 October).** Evaluation sets 15–20 (six multi-storey detached houses, vector PDFs,
+Status: **in progress (started 30 October); the work below reached branch `phase1-always` on 3 November** alongside
+`docs/PHASE1_ALWAYS_2026-11-03.md`. Where the two differ, for example a dimension the AI can't read, that document is
+current. Evaluation sets 15–20 (six multi-storey detached houses, vector PDFs,
 permitted on the same terms as sets 1–14) exercise a building type Archie has not run before. No engineer loads exist
 for them yet, so they test coverage, not accuracy. Claims below were checked against the code, and independently
 reviewed by Codex (read-only) on 30 October; its corrections are folded in.
