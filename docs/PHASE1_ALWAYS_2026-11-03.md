@@ -48,5 +48,8 @@ Each round's questions go out together (`ai_provider.parallel_calls()`, no PDF w
 ## Lessons from the review (6 November)
 The first text-layer scale passed its tests and would have made areas wrong by factors of hundreds on real jobs: text boxes were in PDF points against lines in pixels, the pairing score had no distance limit, and nothing compared the result with the sheet scale. A fixture can't catch this. Run new geometry on saved jobs before trusting it.
 
+## Linework for main plans (7 November)
+Linework is extracted before the AI reads the pages, from a shortlist by page text. A main plan that shortlist missed now gets its linework when the drawing step starts (`_add_main_plan_linework`). Before this, set 15's first floor had no walls to enclose and every outline drawn on it was refused.
+
 ## Lessons from the first live checks (6 November)
 All four jobs failed the first live run, for US$0.457, though 1,209 tests passed: a not-needed north record crashed the export (GE, set 18), a missing import crashed the supervisor on any house with an ensuite (set 15), diagrams were traced as floor plans, one floor was split into two levels (Happy Cap), and leftover questions held the job at "drawings". Run the fake-AI step on real job data before spending.

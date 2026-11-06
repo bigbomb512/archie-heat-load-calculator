@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 from ai import drawing_coverage, page_inventory, room_inference, site_location_resolution
 from ai.room_use_resolution import room_identity
@@ -146,6 +147,55 @@ class MainPlanTests(unittest.TestCase):
 
     def test_two_named_levels_are_two_floors(self):
         self.assertEqual(self.selected({7: self.plan("Ground Floor Plan"), 8: self.plan("First Floor Plan", "First Floor")}), [7, 8])
+
+
+class MainPlanLineworkTests(unittest.TestCase):
+    """Set 15 2026-11-06: the first floor plan had no linework, so every outline drawn on it was refused."""
+
+    def setUp(self):
+        temp = TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        plan = {"page_type": "floor_plan", "whole_floor": True, "floor_plan_kind": "proposed_layout"}
+        (self.root / "page_inventory.json").write_text(json.dumps({"pages": {
+            "7": {**plan, "title": "Ground Floor Plan", "level": "Ground"}, "8": {**plan, "title": "First Floor Plan", "level": "First"},
+            "16": {**plan, "title": "GFA Diagram", "level": "Ground"}}}), encoding="utf-8")
+        (self.root / "ai_input.json").write_text("{}", encoding="utf-8")
+
+    def vector(self, *pages):
+        (self.root / "vector_geometry.json").write_text(json.dumps({"note": "kept", "geometry_key_points": {
+            "pages": [{"page": page} for page in pages]}}), encoding="utf-8")
+
+    def stored(self):
+        return json.loads((self.root / "vector_geometry.json").read_text(encoding="utf-8"))
+
+    def test_a_main_plan_without_linework_gets_it_and_a_diagram_does_not(self):
+        self.vector(7, 16)
+        with patch("ai.vector_geometry.extract_pages", side_effect=lambda _a, _s, refs: [{"page": ref["page"]} for ref in refs]) as extract:
+            self.assertEqual(tasks._add_main_plan_linework(self.root), [8])
+        self.assertEqual([ref["page"] for ref in extract.call_args.args[2]], [8])
+        self.assertEqual(extract.call_args.args[2][0]["title"], "First Floor Plan")
+        stored = self.stored()
+        self.assertEqual([row["page"] for row in stored["geometry_key_points"]["pages"]], [7, 16, 8])
+        self.assertEqual(stored["note"], "kept")
+
+    def test_nothing_is_read_when_every_main_plan_has_linework(self):
+        self.vector(7, 8)
+        with patch("ai.vector_geometry.extract_pages") as extract:
+            self.assertEqual(tasks._add_main_plan_linework(self.root), [])
+        extract.assert_not_called()
+
+    def test_a_pdf_failure_leaves_the_job_as_it_was(self):
+        self.vector(7)
+        before = self.stored()
+        with patch("ai.vector_geometry.extract_pages", side_effect=ValueError("bad pdf")):
+            self.assertEqual(tasks._add_main_plan_linework(self.root), [])
+        self.assertEqual(self.stored(), before)
+
+    def test_a_job_with_no_extraction_is_left_alone(self):
+        with patch("ai.vector_geometry.extract_pages") as extract:
+            self.assertEqual(tasks._add_main_plan_linework(self.root), [])
+        extract.assert_not_called()
 
 
 class SiteTests(unittest.TestCase):

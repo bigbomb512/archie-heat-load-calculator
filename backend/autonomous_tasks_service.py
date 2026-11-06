@@ -3684,7 +3684,36 @@ def _finish_north(web, project, root):
     _update_record(root, record)
 
 
+def _add_main_plan_linework(root):
+    """Linework for the page reading's main plans that don't have it. It is extracted before the AI reads the pages, from a
+    shortlist by page text; set 15's first floor plan was sorted as a schedule, so its walls were never read and every
+    outline drawn on it was refused (live check 2026-11-06). Needs no AI. A failure leaves the job as it was."""
+    from ai import page_inventory, vector_geometry
+    readings = {int(number): row for number, row in (_read(root / "page_inventory.json", {}).get("pages") or {}).items()
+                if str(number).isdigit() and isinstance(row, dict)}
+    vector = _read(root / "vector_geometry.json", {})
+    rows = (vector.get("geometry_key_points") or {}).get("pages") if isinstance(vector, dict) else None
+    if not isinstance(rows, list):      # a job with no extraction at all has its own path (a scan, or preparation not run)
+        return []
+    have = {row.get("page") for row in rows if isinstance(row, dict)}
+    missing = sorted({page for pages in page_inventory.main_plan_pages(readings).values() for page in pages} - have)
+    if not missing:
+        return []
+    refs = [{"page": page, "title": str(readings[page].get("title") or ""), "plan_role": "main_floor_plan",
+             "evidence_bucket": "page_reading_main_plan"} for page in missing]
+    try:
+        added = vector_geometry.extract_pages(_read(root / "ai_input.json", {}), root / "chatgpt_packet" / "screenshots", refs)
+    except Exception as error:      # any PDF library failure: the plan is still traced from its image
+        print(f"Couldn't read the linework of main plans {missing}: {error}", flush=True)
+        return []
+    if added:
+        _write(root / "vector_geometry.json", {**vector, "geometry_key_points": {
+            **vector["geometry_key_points"], "pages": rows + added}})
+    return [row["page"] for row in added]
+
+
 def _run_all(web, project, root):
+    _add_main_plan_linework(root)
     _settle_unselected_pages(root)
     _finish_north(web, project, root)
     _refresh_site_tasks(root)

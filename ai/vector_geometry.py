@@ -55,6 +55,13 @@ def create_vector_geometry(ai_input_path, output_path=None, screenshots_dir=None
     return output_path
 
 
+def extract_pages(ai_input, screenshots_dir, page_refs):
+    """Vector rows for these pages: {"page", "title", "plan_role", "evidence_bucket"}. A page past the PDF's end is skipped."""
+    with pdfplumber.open(resolve_source_pdf(ai_input)) as pdf:
+        return [extract_page_vectors(pdf.pages[ref["page"] - 1], ref, Path(screenshots_dir))
+                for ref in page_refs if 1 <= ref["page"] <= len(pdf.pages)]
+
+
 def resolve_source_pdf(ai_input):
     for value in [
         ai_input.get("source_pdf"),
