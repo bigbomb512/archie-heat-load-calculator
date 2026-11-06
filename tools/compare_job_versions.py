@@ -248,8 +248,10 @@ def main():
         for job_id in args.jobs:
             files = {name: out / f"{job_id[:40]}.{name}.json" for name in ("base", "head")}
             with ThreadPoolExecutor(2) as pool:
-                for name, repo in (("base", args.base), ("head", args.head)):
-                    pool.submit(_run_version, tool, str(Path(repo).resolve()), job_id, output, work, files[name])
+                runs = [pool.submit(_run_version, tool, str(Path(repo).resolve()), job_id, output, work, files[name])
+                        for name, repo in (("base", args.base), ("head", args.head))]
+            for run in runs:
+                run.result()
             text = summarise(job_id, json.loads(files["base"].read_text(encoding="utf-8")),
                              json.loads(files["head"].read_text(encoding="utf-8")))
             print(text, flush=True)
