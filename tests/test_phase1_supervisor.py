@@ -283,6 +283,27 @@ class RunTests(unittest.TestCase):
             result = supervisor.run(None, self.project)
         return result, ask.call_count
 
+    def test_questions_the_fixes_unlocked_are_answered_once_and_used(self):
+        record = {"task": "P4_openings", "target": "20"}
+        with patch.object(drawings, "_waiting", side_effect=[[record], []]), \
+                patch.object(drawings, "answer_all") as answer:
+            result, _calls = self.execute([snapshot(), snapshot(room(name="After")), snapshot(room(name="After"))])
+        answer.assert_called_once()
+        self.assertEqual(result["outcome"], "draft_ready")
+
+    def test_a_usage_limit_on_the_last_pass_keeps_the_result(self):
+        with patch.object(drawings, "_waiting", return_value=[{"task": "P4_openings", "target": "20"}]), \
+                patch.object(drawings, "answer_all", side_effect=supervisor.ai_provider.UsageLimitReached("limit")):
+            result, _calls = self.execute([snapshot()])
+        self.assertEqual(result["outcome"], "draft_ready")
+
+    def test_no_last_pass_when_ai_is_unavailable(self):
+        with patch.object(supervisor, "ai_unavailable", return_value="No key"), \
+                patch.object(drawings, "_waiting", return_value=[{"task": "P4_openings", "target": "20"}]), \
+                patch.object(drawings, "answer_all") as answer:
+            self.execute([snapshot(), snapshot()])
+        answer.assert_not_called()
+
     def test_rebuild_and_reaudit_close_fixed_gap(self):
         result, calls = self.execute([snapshot(room(area_m2=None)), snapshot()])
         self.assertEqual(result["outcome"], "draft_ready")

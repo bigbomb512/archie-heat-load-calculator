@@ -301,7 +301,7 @@ def _house_label_matches(label):
         "house_wet": r"\b(bath(?:room)?|ens(?:uite)?|powder|pdr|wc|toilet)\b",
         "house_service": r"\b(laundry|l['’]?dry|ldry|w\.?i\.?r\.?|walk.?in robe|robe|linen)\b",
         "garage": r"\b(garage|carport)\b",
-        "outdoor": r"\b(balcony|alfresco|deck|terrace|patio|pool|porch|verandah?|courtyard)\b",
+        "outdoor": r"\b(balcony|alfresco|deck|terrace|patio|pool|porch|verandah?|courtyard|roof)\b",
         "lift_shaft": r"\b(lift(?: shaft)?)\b",
         "circulation": r"\b(entry|hall(?:way)?|stairs?|staircase|lobby|corridor|passage)\b",
         "house_living": r"\b(living|lounge|family|rumpus|media|cinema|theatre|games|study|office|gym|entertainment|kitchen|kitch|dining|meals|pantry|wip|walk.?in pantry|scullery|bar)\b",

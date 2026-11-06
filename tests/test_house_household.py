@@ -1,14 +1,27 @@
 """A house's occupants by the bedroom rule, and the household counted once in the whole-house total."""
 
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 
 from ai import (ai_preliminary, airflow_resolution, ceiling_volume_resolution, hourly_loads, house_household,
                 internal_gains_resolution, room_use_resolution)
-from backend.ai_preliminary_service import _workspace_report
+from backend.ai_preliminary_service import _household_plan, _workspace_report
 
 
 def room(room_id, label, category, area=12, scope="comfort_hvac", level="Ground Floor"):
     return {"room_id": room_id, "label": label, "level": level, "category": category, "scope": scope, "area_m2": area}
+
+
+class EnsuiteLookupTests(unittest.TestCase):
+    def test_a_house_with_an_ensuite_reads_the_traced_rooms(self):
+        # Set 15 2026-11-06: the name wasn't imported here, so every dwelling with an ensuite stopped the supervisor.
+        room_use = {"dwelling_context": {"is_dwelling": True}, "records": [
+            {"room_id": "bed", "original_label": "Bed 1", "taxonomy_id": "house_bedroom", "space_scope": "comfort_hvac"},
+            {"room_id": "ens", "original_label": "Ensuite", "taxonomy_id": "house_wet", "space_scope": "not_cooled"}]}
+        with TemporaryDirectory() as folder:
+            plan = _household_plan({"root": Path(folder)}, room_use, {"bed": {"value": 14}})
+        self.assertEqual(plan["bed"]["count"], 2)
 
 
 class PlanTests(unittest.TestCase):

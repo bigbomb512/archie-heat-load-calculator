@@ -412,9 +412,10 @@ def _vision_geometry_pages(vision_response):
     return {row.get("page"): row for row in pages if isinstance(row, dict) and row.get("page") is not None}
 
 
-def infer(ai_input, coverage=None, spatial_ocr=None, vector_geometry=None, vision_response=None, page_levels=None):
-    """page_levels: {page: level} overriding a page's level (page_inventory.main_plan_levels)."""
-    pages = select_pages(ai_input, coverage)
+def infer(ai_input, coverage=None, spatial_ocr=None, vector_geometry=None, vision_response=None, page_levels=None, skip_pages=()):
+    """page_levels: {page: level} overriding a page's level (page_inventory.main_plan_levels).
+    skip_pages: pages whose labels aren't rooms (page_inventory.diagram_pages)."""
+    pages = [page for page in select_pages(ai_input, coverage) if page.get("page") not in skip_pages]
     page_levels = page_levels or {}
 
     def level_of(page):

@@ -288,6 +288,12 @@ def _p0_page_selection(root):
         priority = {"main_floor_plan": 0, "primary_geometry_plan": 1, "floor_plan": 2,
                     "supporting_geometry_plan": 3, "uncertain_top_down_context": 4}.get(role, 4)
         grouped.setdefault(level_key, []).append((dimension_count, priority, number, page, role))
+    # A main plan with no level and one other named level are the same floor, not two (Happy Cap 2026-11-06: its dimension
+    # plan read as "Mezzanine" from "Tenancy MZ01", so the one floor was traced twice).
+    named = [key for key in grouped if key != "unassigned level"]
+    if ("unassigned level" in grouped and len(named) == 1
+            and all(str(row[2]) in read_main for rows in grouped.values() for row in rows)):
+        grouped[named[0]].extend(grouped.pop("unassigned level"))
     if not grouped:
         # No floor plan in the set (a mechanical engineer's set): trace on its scaled services plans, which are drawn
         # over the tenancy (user decision 2026-11-02, Global Exchange). The scale comes from printed areas or
@@ -3607,12 +3613,18 @@ def _not_answered(record):
 
 
 def _task_progress(root):
-    """Counts over every current task (not only the ones with results), for the contractor progress screen."""
+    """Counts over every current task (not only the ones with results), for the contractor progress screen. Once the
+    Phase 1 supervisor has finished, it has had its chance to send what was waiting: what's left is "left_waiting" (offered
+    as Check and resume) and doesn't hold the job (Happy Cap 2026-11-06)."""
     records = [record for record in _all_current(root) if record.get("task")]
+    supervisor = _read(Path(root) / "phase1_supervisor_job.json", {})
     marker = hashlib.sha256("|".join(sorted(f"{record.get('task')}:{record.get('target')}:{record.get('status')}:{_not_answered(record)}"
                                             for record in records)).encode("utf-8")).hexdigest()[:16]
+    waiting = sum(1 for record in records if record.get("status") == "waiting_for_reply" and not _not_answered(record))
+    finished = isinstance(supervisor, dict) and supervisor.get("status") == "done"
     return {"total": len(records),
-            "waiting": sum(1 for record in records if record.get("status") == "waiting_for_reply" and not _not_answered(record)),
+            "waiting": 0 if finished else waiting,
+            "left_waiting": waiting if finished else 0,
             "not_answered": sum(1 for record in records if _not_answered(record)),
             "blocked": sum(1 for record in records if record.get("status") == "blocked"),
             "not_needed": sum(1 for record in records if record.get("status") == "not_needed"),
@@ -3704,12 +3716,14 @@ def _run_all(web, project, root):
 
 def _export_determinations(root):
     result = {}
+    # A question that wasn't needed holds a note, not an answer.
+    answered = [record for record in _all_current(root) if record.get("status") != "not_needed"]
     p1 = _latest_site(root)
     if p1:
         result["P1_site"] = {"site_text": p1.get("site_text", ""),
                              "source": "fallback" if p1.get("source") == "ai_fallback" else "ai_determined"}
     north = {}
-    for record in _all_current(root):
+    for record in answered:
         if record.get("task") == "P2_north" and record.get("applied_value"):
             value = record["applied_value"]
             north[value["page"]] = {"page": value["page"], "plan_up_azimuth_deg": value["plan_up_azimuth_deg"],
@@ -3717,14 +3731,14 @@ def _export_determinations(root):
     if north:
         result["P2_north"] = [north[key] for key in sorted(north)]
     roof = {}
-    for record in _all_current(root):
+    for record in answered:
         if record.get("task") == "P5_roof" and record.get("applied_value"):
             value = record["applied_value"]
             roof[value["room"]] = {"room": value["room"], "roof": value["roof"],
                                     "source": {"ai_fallback": "fallback", "reviewer": "reviewer"}.get(record.get("source"), "ai_determined")}
     if roof:
         result["P5_roof"] = [roof[key] for key in sorted(roof)]
-    kitchen_record = next((record for record in _all_current(root)
+    kitchen_record = next((record for record in answered
                            if record.get("task") == "P6_kitchen" and record.get("applied_value")), None)
     if kitchen_record:
         source = "stand_in" if kitchen_record.get("stand_in") else "ai_determined"

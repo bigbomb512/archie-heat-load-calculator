@@ -161,6 +161,19 @@ class BuildingSpacesTests(unittest.TestCase):
     def reconcile(self, spaces, rooms=(), removed=(), page_levels=None, set_aside=()):
         return room_inference_service.reconcile_spaces(list(spaces), list(set_aside), list(rooms), set(removed), page_levels or {})
 
+    def test_a_label_only_off_the_main_plans_is_set_aside(self):
+        junk = self.space("ELEMENT m", "", 16)
+        known = self.space("Bedroom", "First", 16)
+        on_plan = self.space("Living", "", 7)
+        kept, aside = room_inference_service.reconcile_spaces(
+            [junk, known, on_plan], [], [{"label": "Bedroom", "level_name": "First"}], set(), {}, {7, 8})
+        self.assertEqual(sorted(row["name"] for row in kept), ["Bedroom", "Living"])
+        self.assertEqual(aside, [junk])
+
+    def test_with_no_main_plans_known_no_label_is_set_aside(self):
+        kept, aside = self.reconcile([self.space("Kiosk", "", 5)])
+        self.assertEqual(([row["name"] for row in kept], aside), (["Kiosk"], []))
+
     def test_a_removed_room_is_set_aside_and_comes_back(self):
         bar = self.space("Bar", "", 8)
         kept, aside = self.reconcile([bar, self.space("Storage", "", 7)], removed={"bar"})

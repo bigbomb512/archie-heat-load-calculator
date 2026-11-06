@@ -124,12 +124,36 @@ def level_key(level):
     return f"level {match.group(1)}" if match else text
 
 
+# Drawn over a whole floor but not the floor plan: the room labels and walls on these are diagrams (house sets 15, 16, 18:
+# a GFA diagram outranked the proposed plan and an area table became rooms).
+NOT_A_MAIN_PLAN_TITLE = re.compile(r"\b(?:gfa|gross floor|area (?:calc\w*|plan|diagram|schedule)|diagrams?|shadow|landscap\w*|"
+                                   r"backyard|roof plan|site plan|location plan|fill area|open space)\b", re.I)
+
+
+def _names_several_levels(level):
+    return bool(re.search(r",|&|\band\b", str(level or "")))
+
+
+def _diagram_sheet(row):
+    return bool(NOT_A_MAIN_PLAN_TITLE.search(str(row.get("title") or "")) or _names_several_levels(row.get("level")))
+
+
+def diagram_pages(readings):
+    """Pages read as whole-floor drawings that aren't floor plans: their labels aren't rooms (set 18's area table gave
+    "ELEMENT m" and "Behind Building Line:"). Nothing is excluded when they are all the set has."""
+    if not main_plan_pages(readings):
+        return set()
+    return {page for page, row in readings.items() if row and row.get("page_type") == "floor_plan" and _diagram_sheet(row)}
+
+
 def main_plan_pages(readings):
     """Main floor plans per level: proposed whole-floor plans; an existing plan only when no proposed one exists.
+    A diagram, or a sheet covering several levels, is never a level's main plan.
 
     readings = {page: validated reading}. Returns {level key: [pages]}.
     """
-    floors = {page: row for page, row in readings.items() if row and row.get("page_type") == "floor_plan" and row.get("whole_floor")}
+    floors = {page: row for page, row in readings.items() if row and row.get("page_type") == "floor_plan" and row.get("whole_floor")
+              and not _diagram_sheet(row)}
     proposed = {page: row for page, row in floors.items() if row.get("floor_plan_kind") in MAIN_PLAN_KINDS}
     chosen = proposed or {page: row for page, row in floors.items() if row.get("floor_plan_kind") == "existing_or_demolition"}
     levels = {}

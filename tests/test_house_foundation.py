@@ -17,7 +17,7 @@ class HouseFoundationTests(unittest.TestCase):
     def test_house_aliases_and_combined_labels(self):
         expected = {
             "BED": "house_bedroom", "BED 2": "house_bedroom", "BR": "house_bedroom", "MBR": "house_bedroom",
-            "LIVING/DINING": "house_living", "KITCHEN/DINING": "house_living", "LIVING DINING": "house_living",
+            "Non-trafficable roof": "outdoor", "ROOF": "outdoor", "LIVING/DINING": "house_living", "KITCHEN/DINING": "house_living", "LIVING DINING": "house_living",
             "KITCH": "house_living", "PANTRY": "house_living", "SCULLERY": "house_living",
             "ENS": "house_wet", "PDR": "house_wet", "L'DRY": "house_service", "W.I.R.": "house_service",
             "CARPORT": "garage", "ALFRESCO": "outdoor", "LIFT": "lift_shaft", "ENTRY": "circulation",

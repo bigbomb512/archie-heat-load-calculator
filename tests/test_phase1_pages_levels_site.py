@@ -11,7 +11,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from ai import drawing_coverage, room_inference, site_location_resolution
+from ai import drawing_coverage, page_inventory, room_inference, site_location_resolution
 from ai.room_use_resolution import room_identity
 from backend import autonomous_tasks_service as tasks
 
@@ -93,6 +93,59 @@ class AnyPlanFallbackTests(unittest.TestCase):
             selection = tasks._p0_page_selection(root)
         self.assertEqual([row["page"] for row in selection["selected"]], [2])
         self.assertTrue(any(note["status"] == "any_plan_fallback" for note in selection["notes"]))
+
+
+class MainPlanTests(unittest.TestCase):
+    @staticmethod
+    def plan(title, level="Ground Floor", kind="proposed_layout"):
+        return {"page_type": "floor_plan", "whole_floor": True, "floor_plan_kind": kind, "title": title, "level": level}
+
+    def test_a_diagram_is_not_a_main_plan(self):
+        for title in ("GFA Diagram", "Gross Floor Area Plan", "Area Calculations", "Shadow Diagram 9am", "Landscape Plan",
+                      "Backyard Plan", "Roof Plan", "Site Plan", "Location Plan", "Fill Area", "Open Space Plan"):
+            self.assertEqual(page_inventory.main_plan_pages({5: self.plan(title), 7: self.plan("Ground Floor Plan")}),
+                             {"ground": [7]}, title)
+
+    def test_a_sheet_covering_several_levels_is_not_a_main_plan(self):
+        for level in ("Ground, First", "Ground & First", "Ground and First"):
+            self.assertEqual(page_inventory.main_plan_pages({5: self.plan("Plans", level), 7: self.plan("Ground Floor Plan")}),
+                             {"ground": [7]}, level)
+
+    def test_a_diagrams_labels_are_not_rooms(self):
+        readings = {2: self.plan("Area Calculation", "First Floor, Ground Floor"), 9: self.plan("Ground Floor Plan")}
+        self.assertEqual(page_inventory.diagram_pages(readings), {2})
+        plan = {"title": "Plan", "detected_type": "floor_plan", "plan_role": "main_floor_plan", "scale": "1:100"}
+        rooms = room_inference.infer(
+            {"drawing_set": {"pages": [{**plan, "page": 2}, {**plan, "page": 9}]}}, {},
+            {"pages": [{"page": 2, "standalone_text_items": [{"text": "OFFICE", "bbox": [100, 100, 160, 110]}]},
+                       {"page": 9, "standalone_text_items": [{"text": "KITCHEN", "bbox": [100, 100, 160, 110]}]}]},
+            skip_pages={2})["rooms"]
+        self.assertEqual([row["label"] for row in rooms], ["Kitchen"])
+
+    def test_a_set_of_only_diagrams_keeps_them(self):
+        self.assertEqual(page_inventory.diagram_pages({2: self.plan("Area Calculation")}), set())
+
+    def test_ordinary_floor_plans_stay(self):
+        readings = {7: self.plan("Proposed Ground Floor Plan"), 8: self.plan("First Floor Plan", "First Floor"),
+                    9: self.plan("Dimension Plan", "Mezzanine")}
+        self.assertEqual(page_inventory.main_plan_pages(readings), {"ground": [7], "first": [8], "mezzanine": [9]})
+
+    def selected(self, readings):
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            pages = [{"page": page, "title": row["title"], "detected_type": "floor_plan", "plan_role": "main_floor_plan"}
+                     for page, row in readings.items()]
+            (root / "ai_input.json").write_text(json.dumps({"drawing_set": {"pages": pages}}), encoding="utf-8")
+            (root / "page_inventory.json").write_text(json.dumps({"pages": {str(page): row for page, row in readings.items()}}),
+                                                      encoding="utf-8")
+            return [row["page"] for row in tasks._p0_page_selection(root)["selected"]]
+
+    def test_a_main_plan_with_no_level_is_the_only_named_levels_floor(self):
+        # Happy Cap: "Tenancy MZ01" read as a Mezzanine, and the floor plan with no level: one floor, traced once.
+        self.assertEqual(len(self.selected({6: self.plan("Floor Plan", ""), 7: self.plan("Dimension Plan", "Mezzanine")})), 1)
+
+    def test_two_named_levels_are_two_floors(self):
+        self.assertEqual(self.selected({7: self.plan("Ground Floor Plan"), 8: self.plan("First Floor Plan", "First Floor")}), [7, 8])
 
 
 class SiteTests(unittest.TestCase):

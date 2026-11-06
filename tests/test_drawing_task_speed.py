@@ -193,5 +193,39 @@ class ScaleLadderEndTests(unittest.TestCase):
         with self.assertRaises(ValueError):          # a person's trace still needs the dimension they read
             reviewer_room_geometry.validate_artifact({"records": [reviewer]})
 
+class SettledRecordTests(unittest.TestCase):
+    """Found by the live checks of 2026-11-06, which no fixture had reached."""
+
+    def test_a_north_question_not_needed_holds_a_note_not_an_answer(self):
+        # Global Exchange and set 18 stopped here: a not-needed record's value has no "page".
+        records = [{"task": "P2_north", "status": "not_needed", "applied_value": {"reason": "Another page answered."}},
+                   {"task": "P5_roof", "status": "not_needed", "applied_value": {"reason": "No room."}},
+                   {"task": "P6_kitchen", "status": "not_needed", "applied_value": {"reason": "No kitchen."}},
+                   {"task": "P2_north", "status": "applied", "applied_value": {"page": 7, "plan_up_azimuth_deg": 10}}]
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(autonomous_tasks_service, "_all_current", return_value=records), \
+                mock.patch.object(autonomous_tasks_service, "_latest_site", return_value=None):
+            result = autonomous_tasks_service._export_determinations(Path(folder))
+        self.assertEqual([row["page"] for row in result["P2_north"]], [7])
+        self.assertNotIn("P5_roof", result)
+        self.assertNotIn("P6_kitchen", result)
+
+    def progress(self, supervisor):
+        records = [{"task": "P4_openings", "target": "1", "status": "waiting_for_reply"},
+                   {"task": "P2_north", "target": "1", "status": "applied"}]
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(autonomous_tasks_service, "_all_current", return_value=records):
+            if supervisor:
+                (Path(folder) / "phase1_supervisor_job.json").write_text(json.dumps({"status": supervisor}), encoding="utf-8")
+            return autonomous_tasks_service._task_progress(Path(folder))
+
+    def test_a_question_left_after_the_supervisor_finished_does_not_hold_the_job(self):
+        row = self.progress("done")
+        self.assertEqual((row["waiting"], row["left_waiting"]), (0, 1))
+
+    def test_a_question_waits_until_the_supervisor_has_finished(self):
+        for state in (None, "running", "failed"):
+            row = self.progress(state)
+            self.assertEqual((row["waiting"], row["left_waiting"]), (1, 0), state)
+
+
 if __name__ == "__main__":
     unittest.main()

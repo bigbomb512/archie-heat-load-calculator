@@ -506,6 +506,7 @@ def _household_plan(paths, room_use, room_areas):
     with_ensuite = set()
     if ensuites and bedrooms:
         try:
+            from backend import reviewer_room_geometry_service
             traces = reviewer_room_geometry_service.current_records(
                 reviewer_room_geometry_service._paths({"review_dir": str(paths["root"])}))
         except (OSError, ValueError, TypeError, KeyError):

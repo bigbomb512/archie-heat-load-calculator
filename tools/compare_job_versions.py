@@ -6,6 +6,8 @@
 Each job folder is copied, then each version, on its own copy, re-reads the rooms, rebuilds the model from the saved answers,
 calculates Phase 1 and the full result, and rebuilds the drawing questions. AI calls raise. Saved jobs aren't touched.
 Run this after any change that could reach a shop job; every difference it prints needs a reason.
+A last "smoke" step runs the real drawing and supervisor steps with a fake AI that answers little: it costs nothing and
+shows crashes only a job's real data reaches (each saved run's own steps never see these paths otherwise).
 """
 
 import argparse
@@ -29,10 +31,11 @@ def _sha(value):
 
 
 def _step(result, name, work):
+    from backend.job_runner import JobCancelled     # not an Exception; only the worker has the checkout on its path
     started = time.time()
     try:
         result[name] = work()
-    except Exception as error:      # a step that fails is itself a finding, and the later steps still run
+    except (Exception, JobCancelled) as error:      # a step that fails is itself a finding, and the later steps still run
         result[name] = {"error": f"{type(error).__name__}: {error}"[:400], "trace": traceback.format_exc(limit=4)[-600:]}
     result.setdefault("seconds", {})[name] = round(time.time() - started, 1)
 
@@ -129,6 +132,30 @@ def worker(repo, job_dir, project_file, out_file):
     _step(result, "phase1", phase1)
     _step(result, "full", full)
     _step(result, "questions", questions)
+
+    class FakeAI:
+        """Says there is no north arrow, and gives every other question an answer its checker refuses."""
+        model = "fake"
+
+        def propose(self, prompt, image_paths=()):
+            return ({"found": False, "north_arrow_found": False} if "north" in prompt.casefold() else {}), {"usage": {}}
+
+    def smoke():
+        from backend import drawing_tasks_service, phase1_supervisor_service
+        ai_provider.configured = lambda: True
+        ai_provider.get = lambda *_args, **_kwargs: FakeAI()
+        ai_provider.recorded = lambda provider, *_args, **_kwargs: provider
+        drawn = drawing_tasks_service.answer_all(web, project, provider_for=lambda _task: FakeAI())
+        # A real job always finishes this review before the supervisor; a saved job that stopped early hasn't, and the
+        # supervisor rightly stops. On this copy, mark it finished so the supervisor's own steps run.
+        review = root / "skill_workflow_run.json"
+        saved = json.loads(review.read_text(encoding="utf-8")) if review.exists() else {}
+        review.write_text(json.dumps({**saved, "scope": "phase1_envelope", "status": "completed"}), encoding="utf-8")
+        supervised = phase1_supervisor_service.run(web, project)
+        return {"drawing": {key: drawn.get(key) for key in ("answered", "refused", "rounds", "calls")},
+                "outcome": supervised.get("outcome"), "progress": {key: value for key, value in tasks._task_progress(root).items() if key != "marker"}}
+
+    _step(result, "smoke", smoke)
     Path(out_file).write_text(json.dumps(result, indent=1, default=str), encoding="utf-8")
 
 

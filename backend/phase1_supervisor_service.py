@@ -596,6 +596,16 @@ def run(web, project, step=lambda *args: None):
             if not correction_pending:
                 progress(stop_reason="no_progress")
                 break
+    # Questions the fixes above unlocked have no other way to be sent: answer them once (the drawing step's own limits
+    # apply), so the result uses them.
+    if not unavailable and drawings._waiting(root):
+        step("rebuild")
+        try:
+            drawings.answer_all(web, project)
+            snapshot = _rebuild(web, project)
+            gaps = audit(snapshot)
+        except ai_provider.UsageLimitReached:
+            pass
     exceptions = [{**gap, "attempts": attempts.get(gap["id"], 0),
                    "tried": [row for row in history if row.get("gap_id") == gap["id"]],
                    **({"message": gap["message"].rstrip(".") + ". " + unavailable} if unavailable else {})} for gap in gaps]
