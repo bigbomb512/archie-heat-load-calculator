@@ -3025,6 +3025,17 @@ def _page_level(root, page):
         str(((_read(root / "page_inventory.json", {}).get("pages") or {}).get(str(page)) or {}).get("level") or "")
 
 
+def _outlined_names_to_add(packet, validated, rooms):
+    """A house's names from the page reading that the AI drew, and which aren't rooms yet: saving an outline keeps only
+    listed rooms, so set 15's Bedrooms, Lounge and Bar were accepted and then lost (2026-11-07). As in the room-naming
+    step, a name becomes a room once the AI places it."""
+    if not packet.get("dwelling"):
+        return []
+    asked = {str(name).casefold() for name in packet.get("room_names", [])}
+    known = {str(room.get("label", "")).casefold() for room in rooms}
+    return sorted({row["room"] for row in validated if row["room"].casefold() in asked and row["room"].casefold() not in known})
+
+
 def _apply_p0_outlines(web, project, root, record, validated, *, defer=False):
     from shapely.geometry import Polygon
     from backend import room_proposal
@@ -3033,6 +3044,10 @@ def _apply_p0_outlines(web, project, root, record, validated, *, defer=False):
     # Rooms named by their use (a space no printed name covers) must be in the room list before their outlines are saved.
     room_proposal.save_use_named_rooms(root, "P0_room_outlines", record["packet"]["page"],
                                        _page_level(root, record["packet"]["page"]), use_named, record["run_id"])
+    room_proposal.save_use_named_rooms(
+        root, "P0_room_outlines_read", record["packet"]["page"], _page_level(root, record["packet"]["page"]),
+        _outlined_names_to_add(record["packet"], validated, reviewer_room_geometry_service._rooms(
+            reviewer_room_geometry_service._paths({"review_dir": str(root)}))), record["run_id"], named_on_plan=True)
     context = _p0_context(root, record["packet"]["page"])
     calibration = record["packet"]["calibration"]
     _walls, _areas, segments = _p0_walls_areas(root, record["packet"]["page"], context, calibration,

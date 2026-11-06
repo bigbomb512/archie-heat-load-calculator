@@ -1084,6 +1084,9 @@ def wall_coverage(edge, segments, mm_per_px, max_offset_mm=400, max_angle_deg=8)
     return min(1.0, covered / length)
 
 
+REPEATED_OUTLINE_OVERLAP = 0.5
+
+
 def validate_outline_reply(reply, room_names, transform, dwelling=False):
     """The drawn outlines, for the listed rooms and for spaces no listed name covers, named by their use
     (USE_ROOM_NAMES)."""
@@ -1091,20 +1094,25 @@ def validate_outline_reply(reply, room_names, transform, dwelling=False):
         raise ValueError("Outline reply must contain a rooms list.")
     allowed = {name.casefold(): name for name in _room_names_for_context(dwelling)}
     allowed.update({name.casefold(): name for name in room_names})
-    outlines, seen = [], set()
+    outlines, drawn = [], {}
     for row in reply["rooms"]:
         room = str((row or {}).get("room", "")).strip()
         if room.casefold() not in allowed:
             raise ValueError(f"Outline reply uses a room name that is not in the room list: {room!r}.")
-        if room.casefold() in seen:
-            raise ValueError(f"Outline reply gives {room!r} twice.")
-        seen.add(room.casefold())
         points = row.get("points_px")
         if not isinstance(points, list) or len(points) < 3:
             raise ValueError(f"The outline for {room} needs at least three corner points.")
         parts, repaired = outline_parts([_to_page(point, transform) for point in points], room)
-        outlines.extend({"room": allowed[room.casefold()], "points": part, "open_sides": str(row.get("open_sides", ""))[:300],
-                         **({"repaired": True} if repaired else {})} for part in parts)
+        for part in parts:
+            # A name given again is another part of that room ("Bedrooms" over four bedrooms, set 15 2026-11-07, where
+            # refusing it lost the whole ground floor); the same outline given again is dropped.
+            polygon = Polygon(part).buffer(0)
+            earlier = drawn.setdefault(room.casefold(), [])
+            if any(polygon.intersection(other).area > REPEATED_OUTLINE_OVERLAP * min(polygon.area, other.area) for other in earlier):
+                continue
+            earlier.append(polygon)
+            outlines.append({"room": allowed[room.casefold()], "points": part, "open_sides": str(row.get("open_sides", ""))[:300],
+                             **({"repaired": True} if repaired else {})})
     return outlines
 
 

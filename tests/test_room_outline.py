@@ -197,9 +197,14 @@ def outline_checks():
                                              ["Bar", "Kitchen"], {"offset_px": [0, 0], "factor": 1})
     areas = sorted((Polygon(row["points"]).area for row in dining), reverse=True)
     check("a self-crossing Dining outline becomes its two floor pieces", len(dining) == 2 and 1.6 < areas[0] / areas[1] < 2.0)
-    expect_error("a room outlined twice is refused",
-                 lambda: ro.validate_outline_reply({"rooms": [{"room": "Counter", "points_px": [[0, 0], [9, 0], [9, 9]]}] * 2},
-                                                   ["Counter"], transform), "twice")
+    same = ro.validate_outline_reply({"rooms": [{"room": "Counter", "points_px": [[0, 0], [9, 0], [9, 9]]}] * 2},
+                                     ["Counter"], transform)
+    check("the same outline given twice is kept once", len(same) == 1)
+    bedrooms = ro.validate_outline_reply({"rooms": [{"room": "Bedrooms", "points_px": [[x, 0], [x + 9, 0], [x + 9, 9], [x, 9]]}
+                                                    for x in (0, 20, 40, 60)] + [{"room": "Kitchen", "points_px": [[0, 20], [9, 20], [9, 29]]}]},
+                                         ["Bedrooms", "Kitchen"], transform, dwelling=True)
+    check("a name given over separate rooms keeps every outline and the rest of the reply",
+          [row["room"] for row in bedrooms] == ["Bedrooms"] * 4 + ["Kitchen"])
     # Every listed room is drawn or explained; a bare name under not_drawn is not an explanation.
     rooms = ["Bar", "Kitchen", "Shop", "Coolroom"]
     drawn_bar = [{"room": "Bar", "points": [(0, 0), (1, 0), (1, 1)]}]

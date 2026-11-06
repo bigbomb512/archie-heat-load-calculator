@@ -198,6 +198,18 @@ class MainPlanLineworkTests(unittest.TestCase):
         extract.assert_not_called()
 
 
+class OutlinedNamesTests(unittest.TestCase):
+    rooms = [{"label": "Kitchen"}]
+    drawn = [{"room": "Bedrooms"}, {"room": "Bedrooms"}, {"room": "Kitchen"}, {"room": "Lounge"}, {"room": "Laundry"}]
+
+    def test_a_house_keeps_the_names_it_was_asked_to_draw(self):
+        packet = {"dwelling": True, "room_names": ["Bedrooms", "Kitchen", "Lounge"]}
+        self.assertEqual(tasks._outlined_names_to_add(packet, self.drawn, self.rooms), ["Bedrooms", "Lounge"])
+
+    def test_a_shop_room_list_is_unchanged(self):
+        self.assertEqual(tasks._outlined_names_to_add({"room_names": ["Bedrooms"]}, self.drawn, self.rooms), [])
+
+
 class SiteTests(unittest.TestCase):
     def addresses(self, text):
         ai_input = {"drawing_set": {"pages": [{"page": 1, "title": "Title", "structured_content": {"markdown": text}}]}}
