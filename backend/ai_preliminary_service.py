@@ -2177,7 +2177,6 @@ def _workspace_report(report):
         "phase1_coverage": report.get("phase1_coverage") if isinstance(report.get("phase1_coverage"), dict) else {},
         "supervisor_exceptions": report.get("supervisor_exceptions", []),
         "supervisor_assumptions": report.get("supervisor_assumptions", []),
-        "phase1_result_assumptions": report.get("phase1_result_assumptions", []),
         "supervisor_spend": report.get("supervisor_spend", {}),
         "room_scope_confirmation": {key: confirmation.get(key) for key in ("reviewer", "confirmed_at")
                                      if isinstance(confirmation, dict) and confirmation.get(key)},
@@ -2983,11 +2982,12 @@ def _floor_basis(ai_input):
 def _phase1_coverage(report, candidates, input_set=None):
     """Say how much of the job a Phase 1 subtotal covers, so a partial or empty one is never read as the answer.
 
-    report["phase1_coverage"] lists the rooms included and the rooms left out (with why). When the included rooms
-    have no wall, roof or window resolved, there is no envelope load to report: the result is blocked with that
-    reason instead of showing 0 kW (an island bar with no outside walls once came out as a 0.0 kW "result"). A room
-    whose every boundary resolved to conditioned space (a floor above, neighbours, a mall) is different: its envelope
-    load really is zero, so it counts as resolved and the result says why."""
+    report["phase1_coverage"] lists the rooms included and the rooms left out (with why). The number is always given
+    and the job moves on (user rule 2026-11-03), but it is labelled partial when a room wasn't counted, or when the
+    included rooms have no wall, roof or window resolved, so that 0 kW is never read as an answer (an island bar with no
+    outside walls once came out as a 0.0 kW "result"). A room whose every boundary resolved to conditioned space (a
+    floor above, neighbours, a mall) is different: its envelope load really is zero, so it counts as resolved and the
+    result says why. Assumed values (a roof, a height, north) don't make a result partial."""
     rooms = (((input_set or {}).get("material") or {}).get("hourly_load_model") or {}).get("rooms", [])
     all_internal = sorted(str(room.get("name") or "") for room in rooms if isinstance(room, dict)
                           and (room.get("cooling_load") or {}).get("envelope_not_applicable") is True)
@@ -2999,24 +2999,30 @@ def _phase1_coverage(report, candidates, input_set=None):
     surfaces = int(summary.get("included") or 0) + int(summary.get("openings_included") or 0)
     internal = [name for name in included if name in all_internal]
     resolved = surfaces > 0 or (bool(included) and len(internal) == len(included))
-    # Complete when the included rooms have an envelope result (user rule 2026-11-03: Phase 1 always gives a number);
-    # rooms left out are listed with why, as assumptions of the result, rather than holding it back.
+    partial_reasons = [f"{row['label']} is not counted: {row['reason']}." for row in left_out]
+    if included and not resolved:
+        partial_reasons.append(f"No wall, roof or window of {_names(included)} could be resolved, so their envelope load "
+                               "isn't counted.")
     report["phase1_coverage"] = {"rooms_found": len(candidates), "rooms_included": included, "rooms_left_out": left_out,
                                  "surfaces_included": surfaces, "rooms_fully_internal": internal,
-                                 "complete": bool(included) and resolved}
-    if left_out:
-        report.setdefault("phase1_result_assumptions", []).extend(
-            f"{row['label']} is not counted: {row['reason']}." for row in left_out)
+                                 "complete": bool(included), "partial": bool(partial_reasons),
+                                 "partial_reasons": partial_reasons,
+                                 "partial_label": _partial_label(left_out, included and not resolved)}
     if internal:
         report["phase1_automation_note"] = " ".join(filter(None, [
             str(report.get("phase1_automation_note") or ""),
             f"{_names(internal)}: every wall and the ceiling face conditioned space (a floor above, neighbours or a "
             f"mall), so {'its' if len(internal) == 1 else 'their'} envelope load is 0 kW."]))
-    if included and not resolved:
-        missing = f" {_names(row['label'] for row in left_out)} {'has' if len(left_out) == 1 else 'have'} no area yet." if left_out else ""
-        report["status"] = "blocked"
-        report["blocked_reasons"] = [f"No wall, roof or window of {_names(included)} could be resolved, so there is no "
-                                     f"envelope load to report yet.{missing}"] + list(report.get("blocked_reasons") or [])
+
+
+def _partial_label(left_out, envelope_missing):
+    """"Partial: 2 rooms not counted", "Partial: walls not assessed", or "" for a whole result."""
+    parts = []
+    if left_out:
+        parts.append(f"{len(left_out)} room{'' if len(left_out) == 1 else 's'} not counted")
+    if envelope_missing:
+        parts.append("walls not assessed")
+    return f"Partial: {' and '.join(parts)}" if parts else ""
 
 
 def _names(names):

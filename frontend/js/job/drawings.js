@@ -162,7 +162,8 @@ function stageLine(data, kind, status, plan) {
     return `${copy}${cycle ? ` Investigation cycle ${cycle} of ${data.max_cycles || 3}. ${gaps}${spend}.` : spend}`;
   }
   if (kind === "calculation") {
-    if (status.phase1_complete) return "Saved empty-room loads are available.";
+    const partial = plan.phase1_report?.phase1_coverage?.partial_label;
+    if (status.phase1_complete) return partial ? `Saved empty-room loads are available. ${partial}.` : "Saved empty-room loads are available.";
     const reportReason = plan.phase1_report?.blocked_reasons?.[0];
     const leftOut = plan.phase1_report?.phase1_coverage?.rooms_left_out || [];
     if (reportReason) return String(reportReason);

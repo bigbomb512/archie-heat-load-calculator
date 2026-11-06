@@ -582,6 +582,36 @@ test("empty-room results display unresolved model checks", async ({ page }) => {
   await expect(page.locator("[data-model-exceptions]")).toContainText("roof exposure remains unresolved");
 });
 
+test("a result missing a room is labelled partial, and assumptions are listed separately", async ({ page }) => {
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await preview(page, { status: { stage: "phase2", phase1_complete: true }, phase1_report: {
+    phase1_coverage: { complete: true, partial: true, partial_label: "Partial: 1 room not counted",
+      partial_reasons: ["Storage is not counted: no area yet."] },
+    supervisor_assumptions: [{ message: "Check what is above Shop; its roof exposure is assumed." }],
+  } });
+  await page.goto("/?preview=1#/job/job-1/rooms/shop");
+  const partial = page.locator("[data-phase1-partial]");
+  await expect(partial.getByRole("heading", { name: "Partial: 1 room not counted" })).toBeVisible();
+  await expect(partial).toContainText("Storage is not counted: no area yet.");
+  await expect(page.locator("[data-result-assumptions]")).toContainText("its roof exposure is assumed");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(partial).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: "test-results/phase1-partial-mobile.png", fullPage: true });
+  expect(errors).toEqual([]);
+});
+
+test("assumed values alone don't label a result partial", async ({ page }) => {
+  await preview(page, { status: { stage: "phase2", phase1_complete: true }, phase1_report: {
+    phase1_coverage: { complete: true, partial: false, partial_label: "", partial_reasons: [] },
+    supervisor_assumptions: [{ message: "Its ceiling height is assumed." }],
+  } });
+  await page.goto("/?preview=1#/job/job-1/rooms/shop");
+  await expect(page.locator("[data-result-assumptions]")).toContainText("ceiling height is assumed");
+  await expect(page.locator("[data-phase1-partial]")).toHaveCount(0);
+});
+
 test("a failed envelope step is named with its reason, and Try again resumes it", async ({ page }) => {
   await preview(page, { status: { stage: "drawings" } });
   const posts = [];

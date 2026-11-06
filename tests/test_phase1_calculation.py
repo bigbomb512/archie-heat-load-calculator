@@ -67,10 +67,11 @@ class PhaseOneCalculationTests(unittest.TestCase):
                                 for warning in report["warnings"]))
             self.assertFalse(any("Envelope and listed air-side loads were not assessed" in warning
                                  for warning in report["warnings"]))
-            # The room has an area but no wall, roof or window resolved: no load to report, not "0 kW".
+            # The room has an area but no wall, roof or window resolved: the number stands, labelled, not a plain "0 kW".
             self.assertEqual(saved_report["phase1_coverage"]["rooms_included"], ["Retail tenancy"])
-            self.assertEqual(saved_report["status"], "blocked")
-            self.assertIn("No wall, roof or window of Retail tenancy could be resolved", saved_report["blocked_reasons"][0])
+            self.assertNotEqual(saved_report["status"], "blocked")
+            self.assertEqual(saved_report["phase1_coverage"]["partial_label"], "Partial: walls not assessed")
+            self.assertIn("No wall, roof or window of Retail tenancy could be resolved", saved_report["phase1_coverage"]["partial_reasons"][0])
 
     def test_floor_basis_reads_what_is_below_and_otherwise_assumes_a_ground_slab(self):
         page = lambda text: {"drawing_set": {"pages": [{"page": 4, "structured_content": {"markdown": text}}]}}
@@ -100,33 +101,37 @@ class PhaseOneCalculationTests(unittest.TestCase):
                          [("ground-contact floor", 0.0, "Assumed: a ground slab.")])
         self.assertFalse(any(row.get("component_id") == "phase1_floor_boundary" for row in report.get("unresolved_room_inputs", [])))
 
-    def test_phase1_coverage_lists_rooms_left_out_and_blocks_an_empty_envelope(self):
+    def test_phase1_coverage_lists_rooms_left_out_and_labels_a_partial_result(self):
         candidates = [{"label": "Bar", "status": "calculated", "area_m2": 36.6},
                       {"label": "Kitchen", "status": "no_area", "area_m2": None},
                       {"label": "Shop", "status": "no_area", "area_m2": None}]
         empty = {"status": "draft", "preliminary_surface_summary": {"included": 0, "openings_included": 0}, "blocked_reasons": []}
         ai_preliminary_service._phase1_coverage(empty, candidates)
-        self.assertEqual(empty["status"], "blocked")
-        self.assertEqual(empty["blocked_reasons"], ["No wall, roof or window of Bar could be resolved, so there is no envelope "
-                                                    "load to report yet. Kitchen and Shop have no area yet."])
+        # The number is still given and the job moves on, but 0 kW from nothing is labelled, never read as an answer.
+        self.assertEqual((empty["status"], empty["blocked_reasons"]), ("draft", []))
         self.assertEqual(empty["phase1_coverage"], {
-            "rooms_found": 3, "rooms_included": ["Bar"], "surfaces_included": 0, "complete": False, "rooms_fully_internal": [],
-            "rooms_left_out": [{"label": "Kitchen", "reason": "no area yet"}, {"label": "Shop", "reason": "no area yet"}]})
+            "rooms_found": 3, "rooms_included": ["Bar"], "surfaces_included": 0, "complete": True, "rooms_fully_internal": [],
+            "rooms_left_out": [{"label": "Kitchen", "reason": "no area yet"}, {"label": "Shop", "reason": "no area yet"}],
+            "partial": True, "partial_label": "Partial: 2 rooms not counted and walls not assessed",
+            "partial_reasons": ["Kitchen is not counted: no area yet.", "Shop is not counted: no area yet.",
+                                "No wall, roof or window of Bar could be resolved, so their envelope load isn't counted."]})
         partial = {"status": "draft", "preliminary_surface_summary": {"included": 4, "openings_included": 1}}
         ai_preliminary_service._phase1_coverage(partial, candidates)
         self.assertEqual((partial["status"], partial["phase1_coverage"]["surfaces_included"]), ("draft", 5))
-        # Rooms with no area are listed with why and don't hold the result back (Phase 1 always gives a number).
+        # Rooms with no area don't hold the result back (Phase 1 always gives a number), but it says "Partial".
         self.assertTrue(partial["phase1_coverage"]["complete"])
-        self.assertEqual(partial["phase1_result_assumptions"], ["Kitchen is not counted: no area yet.",
-                                                                "Shop is not counted: no area yet."])
+        self.assertEqual(partial["phase1_coverage"]["partial_label"], "Partial: 2 rooms not counted")
         inside = {"status": "draft", "preliminary_surface_summary": {"included": 0}}
         ai_preliminary_service._phase1_coverage(inside, candidates[:1], {"material": {"hourly_load_model": {"rooms": [
             {"name": "Bar", "cooling_load": {"envelope_not_applicable": True}}]}}})
         self.assertEqual((inside["status"], inside["phase1_coverage"]["complete"]), ("draft", True))   # a real 0 kW
+        self.assertFalse(inside["phase1_coverage"]["partial"])
         self.assertIn("Bar: every wall and the ceiling face conditioned space", inside["phase1_automation_note"])
         whole = {"status": "draft", "preliminary_surface_summary": {"included": 4}}
         ai_preliminary_service._phase1_coverage(whole, candidates[:1])
         self.assertTrue(whole["phase1_coverage"]["complete"])
+        # Assumed values alone (a roof, a height, north) don't make a result partial.
+        self.assertEqual((whole["phase1_coverage"]["partial"], whole["phase1_coverage"]["partial_label"]), (False, ""))
         self.assertEqual(ai_preliminary_service._workspace_report(partial)["phase1_coverage"]["rooms_included"], ["Bar"])
 
 
