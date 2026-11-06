@@ -3600,7 +3600,14 @@ def load_projects():
 
 def save_projects(projects):
     PROJECTS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    PROJECTS_FILE.write_text(json.dumps(projects, indent=2), encoding="utf-8")
+    # Replaced whole: every step reads this file without the lock, and a reader caught mid-write got an empty file and
+    # stopped that job's step (set 15, 2026-11-06). A crash mid-write would have lost every job's record.
+    temporary = PROJECTS_FILE.with_name(f"{PROJECTS_FILE.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        temporary.write_text(json.dumps(projects, indent=2), encoding="utf-8")
+        os.replace(temporary, PROJECTS_FILE)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def unique_project_id(filename):

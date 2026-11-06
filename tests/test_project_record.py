@@ -24,6 +24,33 @@ class ProjectRecordTests(unittest.TestCase):
     def stored(self):
         return json.loads(self.file.read_text())["job"]
 
+    def test_a_reader_never_sees_a_half_written_file(self):
+        projects = {"job": {"id": "job", "notes": "x" * 2_000_000}}
+        web_app.save_projects(projects)
+        failures, stop = [], threading.Event()
+
+        def read():
+            while not stop.is_set():
+                try:
+                    web_app.load_projects()
+                except ValueError as error:
+                    failures.append(error)
+                    return
+        reader = threading.Thread(target=read)
+        reader.start()
+        for _ in range(40):
+            web_app.save_projects(projects)
+        stop.set()
+        reader.join()
+        self.assertEqual(failures, [])
+
+    def test_a_failed_save_keeps_the_old_file_and_leaves_nothing_behind(self):
+        before = self.file.read_text()
+        with patch.object(web_app.os, "replace", side_effect=OSError("disk")), self.assertRaises(OSError):
+            web_app.save_projects({"other": {}})
+        self.assertEqual(self.file.read_text(), before)
+        self.assertEqual([path.name for path in self.file.parent.iterdir()], [self.file.name])
+
     def test_an_older_copy_saved_later_keeps_fields_it_never_had(self):
         older = web_app.load_projects()["job"]                 # a background step's copy, taken at its start
         fresh = web_app.load_projects()["job"]
