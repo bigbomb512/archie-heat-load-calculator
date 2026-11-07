@@ -53,7 +53,10 @@ def _write(path, value):
             prefix=f".{path.name}.", suffix=".stage", delete=False
         ) as handle:
             staged = Path(handle.name)
-            json.dump(value, handle, indent=2, allow_nan=False)
+            if path.name in COMPACT_FILES:
+                json.dump(value, handle, separators=(",", ":"), allow_nan=False)
+            else:
+                json.dump(value, handle, indent=2, allow_nan=False)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(staged, path)
@@ -2644,8 +2647,41 @@ def _calculate_load(web, project, scope, persist):
             report.setdefault("warnings", []).extend(row["message"] for row in checks)
         if report["supervisor_exceptions"]:
             report.setdefault("phase1_coverage", {})["complete"] = False
+    _slim_report(report)
     if persist:
         _write(paths["base_report"] if scope == "phase1_base_room" else paths["report"], report)
+    return report
+
+
+# The load reports run to hundreds of megabytes on a large house (set 16, 2026-11-07: 423 MB), so they are written
+# without indenting.
+COMPACT_FILES = {"hourly_ai_preliminary_load_report.json", "phase1_base_room_load_report.json"}
+# Each hour of each month repeated every wall's and window's whole description; only the kW figures change by the hour.
+SLIMMED_COMPONENTS = ("envelope", "solar", "glazing_conduction", "glazing_solar")
+SLIMMED_FIELDS = ("inputs", "input_rows", "formula")
+
+
+def _slim_report(report):
+    """Keep the wall and window workings on the design day and the peak's own month; the other months keep every kW
+    figure. Fresh air, leakage, people, lights and equipment keep their workings everywhere (the air-handling step and
+    the "still assumed" list read them). Set 16's report fell from 244 to about 40 MB of data."""
+    scenarios = [row for row in report.get("scenario_results") or [] if isinstance(row, dict)]
+    keep = {(report.get("included_scope_peak") or {}).get("scenario_id")} | ({scenarios[0].get("scenario_id")} if scenarios else set())
+    for scenario in scenarios:
+        if scenario.get("scenario_id") in keep:
+            continue
+        for level in ("rooms", "zones", "floors"):
+            for entity in scenario.get(level) or []:
+                for hour in (entity.get("hours") or []) if isinstance(entity, dict) else []:
+                    components = hour.get("components") if isinstance(hour, dict) else None
+                    if not isinstance(components, dict):
+                        continue
+                    # A trimmed copy: the room's peak can hold the very same component, and it keeps its workings.
+                    hour["components"] = {name: ({key: value for key, value in component.items() if key not in SLIMMED_FIELDS}
+                                                 if name in SLIMMED_COMPONENTS and isinstance(component, dict) else component)
+                                          for name, component in components.items()}
+        scenario["workings"] = "Wall and window workings are kept on the design day and the peak month only; every kW figure is kept."
+    report["workings_kept_for"] = sorted(item for item in keep if item)
     return report
 
 
