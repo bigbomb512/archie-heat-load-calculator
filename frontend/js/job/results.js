@@ -289,7 +289,7 @@ function bindReport(projectId) {
     button.disabled = true;
     status.textContent = "Creating the report…";
     try {
-      const report = await sendJson("/api/report-package", { project_id: projectId, report_type: "cooling" });
+      const report = await sendJson("/api/report-package", { project_id: projectId, report_type: "cooling", source: "job" });
       status.innerHTML = `Report ready: <a href="${escapeHtml(report.pdf_url)}" download>Download the PDF</a> or <a href="${escapeHtml(report.html_url)}" target="_blank" rel="noopener">open it in a new tab</a>.`;
     } catch (error) {
       status.textContent = `The report couldn’t be created: ${error.message}`;

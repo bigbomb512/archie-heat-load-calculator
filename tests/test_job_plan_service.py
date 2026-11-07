@@ -80,6 +80,12 @@ class JobPlanServiceTests(unittest.TestCase):
         self.assertEqual(rooms["shop"]["kind"], "comfort")
         self.assertEqual(result["outlines"][0]["kind"], "refrigeration")
 
+    def test_a_room_that_isnt_cooled_says_so_rather_than_waiting_for_a_load(self):
+        candidates = [{"key": "ens", "label": "Ensuite", "include": True, "status": "calculated", "area_m2": 8.2}]
+        uses = [{"room_id": "ens", "original_label": "Ensuite", "space_scope": "not_cooled"}]
+        _, rooms = self.plan(candidates, uses=uses)
+        self.assertEqual((rooms["ens"]["kind"], rooms["ens"]["state"], rooms["ens"]["included"]), ("not_cooled", "not_cooled", False))
+
     def test_room_without_an_area_is_being_found_then_typed_never_left_out(self):
         bar = {"key": "bar", "label": "Bar", "include": False, "status": "no_area", "level": "Unassigned level"}
         waiting = [{"task": "P0_room_sizes", "status": "waiting_for_reply", "reply_attempts": []}]

@@ -67,6 +67,9 @@ def _kind(space_scope):
         return "refrigeration"
     if space_scope == "not_a_room":
         return "not_a_room"
+    if space_scope == "not_cooled":
+        # A house's bathrooms, robes, laundry and garage (set 16, 2026-11-07: shown as "Not calculated yet").
+        return "not_cooled"
     return "comfort"
 
 
@@ -80,6 +83,8 @@ def _room_state(candidate, kind, area, load, areas_still_being_found, phase1_cur
         return "sized_separately"
     if kind == "not_a_room":
         return "left_out"
+    if kind == "not_cooled":
+        return "not_cooled"
     if candidate.get("status") == "needs_use":
         return "needs_use"
     if area is None:

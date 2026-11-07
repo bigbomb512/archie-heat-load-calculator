@@ -1167,7 +1167,70 @@ def api_audit_log(request):
     return {"id": project["id"], "events": events, "event_total": total, "offset": offset, "limit": limit, "has_more": offset + len(events) < total, "chain_valid": productization.validate_audit_chain(root), "artifact_url": safe_link(root / "audit_log.jsonl") if (root / "audit_log.jsonl").exists() else ""}
 
 
-def _report_package_inputs(project, report_type):
+def _job_report_inputs(project):
+    """The job's own final load, the one the Results page shows, and its freshness as the job judges it. Jobs from
+    the drawings never have the engineer workflow's cooling report, so packaging that one always failed (set 16,
+    2026-11-07: "No cooling report exists to package")."""
+    from backend import ai_preliminary_service, job_service
+    files = {key: Path(value) for key, value in ai_preliminary_service._paths(project).items() if isinstance(value, (str, Path))}
+    report_path = files["report"]
+    state = job_service.status(sys.modules[__name__], project)
+    current_result = bool(state.get("results_ready") and not state.get("result_stale"))
+    stale = ([] if current_result and report_path.exists() else
+             ["the final load is out of date; update it first"] if report_path.exists() else ["the final load has not been calculated"])
+    return files, Path(project["review_dir"]), report_path, (report_path if not stale else None), stale
+
+
+def _job_report_details(project, stale_reasons):
+    """What the Results page shows, for the contractor's report: the final load, design basis, components, rooms,
+    months and what is still assumed."""
+    from collections import Counter
+    from backend import job_plan_service, result_status_service
+    web = sys.modules[__name__]
+    plan = job_plan_service.get(web, project)
+    report = plan.get("final_report") or {}
+    peak = report.get("included_scope_peak") or {}
+    setup = job_service.job_setup(project)
+    basis = (report.get("design_conditions_basis") or {}).get("design_day") or {}
+    seasonal = report.get("seasonal") or {}
+    months = []
+    for row in seasonal.get("months") or []:
+        hours = row.get("hourly_kw") or []
+        if hours:
+            best = max(range(len(hours)), key=lambda hour: hours[hour])
+            months.append({"month": row.get("month", ""), "kw": hours[best], "hour": best})
+    rooms = sorted(({"name": row["name"], "level": row.get("level") or "", "area_m2": row.get("area_m2"), "kw": row["final_kw"],
+                     "w_m2": row.get("final_w_m2")} for row in plan.get("rooms", []) if row.get("final_kw") is not None),
+                   key=lambda row: (-row["kw"], row["name"]))
+    cooled = {row["name"] for row in rooms}
+    not_cooled = sorted({row["name"] for row in plan.get("rooms", []) if row.get("kind") == "not_cooled" and row["name"] not in cooled})
+    items = result_status_service.gather(web, project).get("items", [])
+    counts = Counter(item.get("text", "") for item in items if item.get("text"))
+    household = peak.get("household_counted_once") or {}
+    return {
+        "name": setup.get("name") or str(project.get("name") or project["id"]).removesuffix(".pdf"),
+        "address": setup.get("address") or plan.get("status", {}).get("found_site") or "",
+        "status": report.get("status", "draft"), "generated_at": productization._now(),
+        "total_kw": peak.get("final_design_total_kw", peak.get("design_total_kw")) or 0.0,
+        "sensible_kw": peak.get("sensible_kw") or 0.0, "latent_kw": peak.get("latent_kw") or 0.0,
+        "peak_month": peak.get("month", ""), "peak_hour": peak.get("hour", ""), "rooms_counted": len(rooms),
+        "household_note": (f"The household of {household.get('people_counted')} people is counted once for the whole house."
+                           if household.get("people_counted") else ""),
+        "design_basis": (f"Summer design days for {basis.get('location', 'the site')}"
+                         f"{', ' + basis['state'] if basis.get('state') else ''}, from {basis.get('source', 'the listed design data')}; "
+                         "the 21st of each month calculated hour by hour with the site's sun."),
+        "components": sorted(((key, round(value.get("total_kw") or 0.0, 2)) for key, value in (peak.get("components") or {}).items()
+                              if isinstance(value, dict)), key=lambda row: -row[1]),
+        "rooms": rooms, "not_cooled": not_cooled, "months": months,
+        "assumptions": sorted(counts.items(), key=lambda row: (-row[1], row[0])),
+        "exclusions": [f"{row.get('component')}: {row.get('reason')}" for row in report.get("known_exclusions") or [] if isinstance(row, dict)],
+        "stale_reasons": stale_reasons,
+    }
+
+
+def _report_package_inputs(project, report_type, source=""):
+    if report_type == "cooling" and source == "job":
+        return _job_report_inputs(project)
     paths, root = _product_artifacts(project)
     if report_type == "heating":
         report_path = paths["heating_report"]
@@ -1220,13 +1283,23 @@ def api_save_report_package(request):
     data = read_json_body(request)
     project = project_by_id(data.get("project_id") or data.get("id", ""))
     report_type = data.get("report_type", "cooling")
-    paths, root, report_path, current, stale = _report_package_inputs(project, report_type)
+    source = "job" if data.get("source") == "job" else ""
+    paths, root, report_path, current, stale = _report_package_inputs(project, report_type, source)
     if not report_path.exists():
-        raise ValueError(f"No {report_type} report exists to package.")
+        raise ValueError("The final load must be calculated first." if source else f"No {report_type} report exists to package.")
     if stale and not data.get("allow_historical", False):
         raise ValueError(f"Cannot create a current package: {'; '.join(stale)}")
+    if source == "job":
+        details = _job_report_details(project, stale)
+        result = productization.build_job_report_package(project, details, list(paths.values()), current=bool(current),
+                                                         stale_reasons=stale)
+        productization.append_audit_event(root, action="report_package_generated", target="cooling_report",
+                                          related_fingerprint=result["manifest"]["report_fingerprint"], result="success")
+        return {"id": project["id"], "report_type": report_type, "status": "current" if current and not stale else "historical",
+                "package": result, "artifact_url": safe_link(Path(result["artifact_url"]) / "manifest.json"),
+                "html_url": safe_link(result["html_path"]), "pdf_url": safe_link(result["pdf_path"])}
     report = load_json(report_path)
-    if current and not report.get("input_fingerprints", {}).get("calculator_input_set_fingerprint"):
+    if current and not source and not report.get("input_fingerprints", {}).get("calculator_input_set_fingerprint"):
         raise ValueError("A current report package requires an immutable calculator-input snapshot.")
     artifact_paths = [path for path in paths.values() if Path(path).is_file()]
     if report_type == "annual":

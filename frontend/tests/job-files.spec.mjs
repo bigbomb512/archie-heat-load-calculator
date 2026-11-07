@@ -42,7 +42,7 @@ test("Results creates the cooling report and offers the PDF and the page", async
   const status = page.locator("[data-report-status]");
   await expect(status.getByRole("link", { name: "Download the PDF" })).toHaveAttribute("href", "/files/report.pdf");
   await expect(status.getByRole("link", { name: "open it in a new tab" })).toHaveAttribute("href", "/files/report.html");
-  expect(posts).toEqual([{ project_id: "job-1", report_type: "cooling" }]);
+  expect(posts).toEqual([{ project_id: "job-1", report_type: "cooling", source: "job" }]);
 });
 
 test("a report that can't be built says why, and an out-of-date result asks for an update first", async ({ page }) => {

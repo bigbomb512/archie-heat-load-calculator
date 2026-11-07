@@ -111,6 +111,7 @@ function roomState(room) {
       needs_area: "Type the area",
       needs_use: "Say what the room is used for",
       left_out: "Left out",
+      not_cooled: "Not cooled",
     }[room.state] || "Not calculated yet"
   );
 }
