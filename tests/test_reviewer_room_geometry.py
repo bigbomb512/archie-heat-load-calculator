@@ -664,6 +664,29 @@ class ReviewerRoomGeometryTests(unittest.TestCase):
             self.assertEqual(mismatched["preview_url"], "")
             self.assertFalse(mismatched["preview_matches_vector_coordinates"])
 
+    def test_a_main_plan_from_the_page_reading_can_be_traced_whatever_the_early_sort_called_it(self):
+        # Set 16 (2026-11-07): the first floor plan was sorted as a schedule, so an operator couldn't trace or orient it.
+        from PIL import Image
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            screenshots = root / "chatgpt_packet" / "screenshots"
+            screenshots.mkdir(parents=True)
+            Image.new("RGB", (1000, 800), "white").save(screenshots / "page_007_schedule.png")
+            (root / "ai_input.json").write_text(json.dumps({"drawing_set": {"pages": [
+                {"page": 7, "title": "Wall Type Schedule", "plan_role": "reference_context"}]}}), encoding="utf-8")
+            (root / "drawing_coverage.json").write_text(json.dumps({"pages": [{"page": 7, "proposed_role": "reference_context"}]}),
+                                                        encoding="utf-8")
+            (root / "vector_geometry.json").write_text(json.dumps({"geometry_key_points": {"pages": [{
+                "page": 7, "image": "screenshots/page_007_schedule.png",
+                "coordinate_systems": {"image_px": {"image_width": 1000, "image_height": 800}}}]}}), encoding="utf-8")
+            paths = reviewer_room_geometry_service._paths({"review_dir": str(root)})
+            web = SimpleNamespace(safe_link=lambda path: str(path))
+            self.assertEqual(reviewer_room_geometry_service._page_context(paths, web), [])
+            (root / "page_inventory.json").write_text(json.dumps({"pages": {"7": {
+                "page_type": "floor_plan", "whole_floor": True, "floor_plan_kind": "proposed_layout",
+                "title": "First Floor Plan", "level": "First Floor"}}}), encoding="utf-8")
+            self.assertEqual([row["page"] for row in reviewer_room_geometry_service._page_context(paths, web)], [7])
+
     def test_diagnostics_report_filter_counts_and_empty_geometry(self):
         ai = {"source_pdf": "synthetic.pdf", "drawing_set": {"pages": [
             {"page": 1, "title": "Plan", "drawing_number": "A-01", "level_name": "Ground"},

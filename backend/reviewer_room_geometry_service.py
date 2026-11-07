@@ -474,6 +474,12 @@ def _page_context(paths, web):
         pdf_sizes = {}
     fallback_numbers = _fallback_trace_page_numbers(role_pages, coverage_pages, drawing_pages, vector_pages)
     printed_dimensions = _printed_dimension_pages(paths) if fallback_numbers else {}
+    # The page reading's main plans can be traced whatever the early sort called them: set 16's first floor and basement
+    # were filed as other sheets, so an operator couldn't correct those floors (2026-11-07).
+    from ai import page_inventory
+    readings = {int(key): row for key, row in (_read(paths["root"] / "page_inventory.json", {}).get("pages") or {}).items()
+                if str(key).isdigit() and isinstance(row, dict)} if paths.get("root") else {}
+    main_plans = {page for rows in page_inventory.main_plan_pages(readings).values() for page in rows}
     pages = []
     for number, vector in sorted(vector_pages.items()):
         drawing = drawing_pages.get(number, {})
@@ -481,7 +487,7 @@ def _page_context(paths, web):
         role = role_pages.get(number, {})
         proposed_role = role.get("proposed_role") or coverage_page.get("proposed_role") or drawing.get("plan_role")
         fallback_plan = number in fallback_numbers
-        if proposed_role not in TRACE_FLOOR_PLAN_ROLES and not fallback_plan:
+        if proposed_role not in TRACE_FLOOR_PLAN_ROLES and not fallback_plan and number not in main_plans:
             continue
         system = vector.get("coordinate_systems", {}).get("image_px", {})
         image_width, image_height = system.get("image_width"), system.get("image_height")
@@ -1012,7 +1018,8 @@ def post(web, project, data, _validated_current_records=None, _defer_evidence_re
         artifact = reviewer_room_geometry.validate_artifact({"records": kept, "rooms": artifact.get("rooms", []), "page_north": artifact.get("page_north", {})})
     elif action == "declare_north":
         page = data.get("page")
-        north_pages = {row.get("page") for row in autonomous_tasks.plan_pages(_read(paths["ai_input"], {}))}
+        north_pages = ({row.get("page") for row in autonomous_tasks.plan_pages(_read(paths["ai_input"], {}))}
+                       | {row["page"] for row in _page_context(paths, web)})
         if type(page) is not int or page not in north_pages:
             raise ValueError("Choose a supported floor, reflected ceiling, or services plan page before declaring north.")
         reviewer = str(data.get("reviewer", "")).strip()
