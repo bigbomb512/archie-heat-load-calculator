@@ -161,6 +161,9 @@ class MainPlanLineworkTests(unittest.TestCase):
             "7": {**plan, "title": "Ground Floor Plan", "level": "Ground"}, "8": {**plan, "title": "First Floor Plan", "level": "First"},
             "16": {**plan, "title": "GFA Diagram", "level": "Ground"}}}), encoding="utf-8")
         (self.root / "ai_input.json").write_text("{}", encoding="utf-8")
+        self.screenshots = self.root / "chatgpt_packet" / "screenshots"
+        self.screenshots.mkdir(parents=True)
+        (self.screenshots / "page_008_schedule.png").write_bytes(b"")
 
     def vector(self, *pages):
         (self.root / "vector_geometry.json").write_text(json.dumps({"note": "kept", "geometry_key_points": {
@@ -178,6 +181,34 @@ class MainPlanLineworkTests(unittest.TestCase):
         stored = self.stored()
         self.assertEqual([row["page"] for row in stored["geometry_key_points"]["pages"]], [7, 16, 8])
         self.assertEqual(stored["note"], "kept")
+
+    def test_a_page_whose_image_isnt_written_yet_waits(self):
+        self.vector(7, 16)
+        (self.screenshots / "page_008_schedule.png").unlink()
+        with patch("ai.vector_geometry.extract_pages") as extract:
+            self.assertEqual(tasks._add_main_plan_linework(self.root), [])
+        extract.assert_not_called()
+        (self.screenshots / "page_008_schedule.png").write_bytes(b"")
+        with patch("ai.vector_geometry.extract_pages", side_effect=lambda _a, _s, refs: [{"page": ref["page"]} for ref in refs]):
+            self.assertEqual(tasks._add_main_plan_linework(self.root), [8])
+
+    def test_linework_saved_without_a_size_is_replaced(self):
+        (self.root / "vector_geometry.json").write_text(json.dumps({"geometry_key_points": {"pages": [
+            {"page": 7}, {"page": 8, "evidence_bucket": "page_reading_main_plan",
+                          "coordinate_systems": {"image_px": {"image_width": None}}}]}}), encoding="utf-8")
+        fresh = {"page": 8, "evidence_bucket": "page_reading_main_plan", "coordinate_systems": {"image_px": {"image_width": 5960}}}
+        with patch("ai.vector_geometry.extract_pages", return_value=[fresh]):
+            self.assertEqual(tasks._add_main_plan_linework(self.root), [8])
+        self.assertEqual(self.stored()["geometry_key_points"]["pages"], [{"page": 7}, fresh])
+        with patch("ai.vector_geometry.extract_pages") as extract:
+            self.assertEqual(tasks._add_main_plan_linework(self.root), [])
+        extract.assert_not_called()
+
+    def test_one_failing_question_builder_costs_only_its_own_questions(self):
+        def broken(_root):
+            raise TypeError("unsupported operand type(s) for /: 'NoneType' and 'float'")
+        self.assertEqual(tasks._built_packets(broken, self.root), [])
+        self.assertEqual(tasks._built_packets(lambda _root: [("task",)], self.root), [("task",)])
 
     def test_nothing_is_read_when_every_main_plan_has_linework(self):
         self.vector(7, 8)

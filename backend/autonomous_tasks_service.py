@@ -6,6 +6,7 @@ import inspect
 import hashlib
 import json
 import math
+import traceback
 import re
 from functools import lru_cache
 from collections import OrderedDict
@@ -3699,10 +3700,23 @@ def _finish_north(web, project, root):
     _update_record(root, record)
 
 
+def _built_packets(builder, root):
+    """One builder's questions. A failure on one page's data costs that builder's questions this refresh, not the whole
+    drawing step: its rooms end in a labelled result (Phase 1 gives a number every time)."""
+    try:
+        return builder(root)
+    except (TypeError, ValueError, KeyError, IndexError, OSError) as error:
+        print(f"Couldn't build the {builder.__name__} questions: {type(error).__name__}: {error}", flush=True)
+        traceback.print_exc()
+        return []
+
+
 def _add_main_plan_linework(root):
     """Linework for the page reading's main plans that don't have it. It is extracted before the AI reads the pages, from a
     shortlist by page text; set 15's first floor plan was sorted as a schedule, so its walls were never read and every
-    outline drawn on it was refused (live check 2026-11-06). Needs no AI. A failure leaves the job as it was."""
+    outline drawn on it was refused (live check 2026-11-06). Needs no AI. A failure leaves the job as it was.
+    A page whose image isn't written yet waits for the next refresh: preparation can still be running, and linework saved
+    without the image's size has no pixel scale and crashed the drawing step (2026-11-07); such a row is replaced."""
     from ai import page_inventory, vector_geometry
     readings = {int(number): row for number, row in (_read(root / "page_inventory.json", {}).get("pages") or {}).items()
                 if str(number).isdigit() and isinstance(row, dict)}
@@ -3710,20 +3724,24 @@ def _add_main_plan_linework(root):
     rows = (vector.get("geometry_key_points") or {}).get("pages") if isinstance(vector, dict) else None
     if not isinstance(rows, list):      # a job with no extraction at all has its own path (a scan, or preparation not run)
         return []
-    have = {row.get("page") for row in rows if isinstance(row, dict)}
-    missing = sorted({page for pages in page_inventory.main_plan_pages(readings).values() for page in pages} - have)
+    screenshots = root / "chatgpt_packet" / "screenshots"
+    unsized = {row.get("page") for row in rows if isinstance(row, dict) and row.get("evidence_bucket") == "page_reading_main_plan"
+               and not ((row.get("coordinate_systems") or {}).get("image_px") or {}).get("image_width")}
+    have = {row.get("page") for row in rows if isinstance(row, dict)} - unsized
+    missing = sorted(page for page in {page for pages in page_inventory.main_plan_pages(readings).values() for page in pages} - have
+                     if vector_geometry.screenshot_for_page(screenshots, page))
     if not missing:
         return []
     refs = [{"page": page, "title": str(readings[page].get("title") or ""), "plan_role": "main_floor_plan",
              "evidence_bucket": "page_reading_main_plan"} for page in missing]
     try:
-        added = vector_geometry.extract_pages(_read(root / "ai_input.json", {}), root / "chatgpt_packet" / "screenshots", refs)
+        added = vector_geometry.extract_pages(_read(root / "ai_input.json", {}), screenshots, refs)
     except Exception as error:      # any PDF library failure: the plan is still traced from its image
         print(f"Couldn't read the linework of main plans {missing}: {error}", flush=True)
         return []
     if added:
         _write(root / "vector_geometry.json", {**vector, "geometry_key_points": {
-            **vector["geometry_key_points"], "pages": rows + added}})
+            **vector["geometry_key_points"], "pages": [row for row in rows if row.get("page") not in missing] + added}})
     return [row["page"] for row in added]
 
 
@@ -3747,7 +3765,7 @@ def _run_all(web, project, root):
                      "Prompt exceeds the 3,000-character limit; evidence was not shortened."
                      if task == "P0_wall_styles" and len(prompt) > 3000 else ""))
     for packet_builder in (_p0_followup_packets, _p0_tenancy_packets, _p0_outline_packets, _p0_unnamed_space_packets, _p0_corner_packets, _s1_packets, _p0_size_packets, _p3_packets, _p3_surroundings_packets, _p7_packets, _p4_packets, _p6_kitchen_packets):
-        for task, target, packet, prompt, images, reason in packet_builder(root):
+        for task, target, packet, prompt, images, reason in _built_packets(packet_builder, root):
             budget = autonomous_tasks.TASKS[task]["budget_chars"]
             _create_run(root, task, target, packet, prompt, images,
                         reason or (f"Prompt exceeds the {budget:,}-character limit; evidence was not shortened."
