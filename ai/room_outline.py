@@ -1031,6 +1031,29 @@ def subtract_nested(polygons, inside_share=0.8):
     return result
 
 
+def same_space(first, second, share=0.8):
+    """Two outlines that mostly cover each other are one space under two names (set 15's first floor: Living drawn over
+    the walled Rumpus), unlike a bar inside a dining area, which covers only a small part of it."""
+    overlap = first.intersection(second).area
+    return first.area > 0 and second.area > 0 and overlap >= share * first.area and overlap >= share * second.area
+
+
+def without_overlaps(piece, others, inside_share=0.8, ignore_share=0.02):
+    """piece less the floor other traced rooms already cover, so no floor is counted twice; None when it is one of them
+    (same_space). A piece mostly inside a larger room stays whole: it is a room within that room. Touching rooms whose
+    outlines differ by a wall's thickness aren't changed. others is [(name, polygon)]."""
+    net = piece
+    for _name, other in others:
+        overlap = piece.intersection(other).area
+        if overlap <= ignore_share * piece.area:
+            continue
+        if same_space(piece, other, inside_share):
+            return None
+        if overlap < inside_share * piece.area:
+            net = net.difference(other)
+    return net
+
+
 def faces_drawn_wall(edge, room_points, segments, mm_per_px, start_mm=450, reach_m=30):
     """Whether, looking outward from a room side (from a quarter, half and three-quarters along it), a drawn wall
     line is met every time within reach_m: the side faces more of the building (a dining area, a store room) rather

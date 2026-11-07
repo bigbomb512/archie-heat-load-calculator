@@ -1683,17 +1683,22 @@ def _apply_p0_outline_corners(web, project, root, record, validated, *, defer=Fa
               for row in reviewer_room_geometry_service.current_records(reviewer_room_geometry_service._paths(project))
               if row.get("page") == page and row.get("room_label") != room and len(row.get("points_image_px") or []) >= 4]
     minimum = room_outline.UNNAMED_SPACE_MIN_M2 if packet.get("source_task") == "P0_unnamed_space" else room_outline.MIN_ROOM_M2
-    polygons = []
+    polygons, duplicates = [], []
     for piece in clipped:
         if packet.get("source_task") == "P0_unnamed_space":
             net = piece.difference(unary_union([shape for _label, shape in others])) if others else piece
         else:
-            net = room_outline.subtract_nested([(room, piece), *others])[0][0]
+            net = room_outline.without_overlaps(piece, others)
+            if net is None:
+                duplicates.extend(label for label, shape in others if room_outline.same_space(piece, shape))
+                continue
         polygons.extend({"label": room, "polygon": shape, "method": "ai_corner_outline", "note": note}
                         for shape in getattr(net, "geoms", [net])
                         if shape.geom_type == "Polygon" and not shape.is_empty and room_outline.area_m2(shape, mm_per_px) >= minimum)
-    if not polygons:
+    if not polygons and not duplicates:
         raise ValueError(f"The listed corners leave no floor for {room} inside the tenancy and outside the other rooms.")
+    if duplicates:
+        note += f"; outlines the same space as {', '.join(sorted(set(duplicates)))}, so that floor isn't counted again"
     rows = _p0_trace_rows(root, record, polygons)
     prepared = reviewer_room_geometry_service.persist_ai_determined_traces(web, project, rows, record["run_id"],
         record["quality_label"], replace_pages=[page], replace_room_labels=[room], defer=defer)
@@ -3073,6 +3078,8 @@ def _apply_p0_outlines(web, project, root, record, validated, *, defer=False):
                   and isinstance(row.get("points_image_px"), list) and len(row["points_image_px"]) >= 4]
     except (OSError, ValueError, TypeError, KeyError):
         others = []
+    # An outline of the same space as a room already traced here is the same floor under another name: it isn't counted again.
+    polygons = [row for row in polygons if not any(room_outline.same_space(row["polygon"], shape) for _label, shape in others)]
     nested = room_outline.subtract_nested([(row["label"], row["polygon"]) for row in polygons] + others)
     for row, (net, taken) in zip(polygons, nested):
         if taken:   # a room drawn inside this one (a bar in the dining area): its floor is not counted twice

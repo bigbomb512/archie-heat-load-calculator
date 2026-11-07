@@ -732,6 +732,39 @@ class AutonomousTaskTests(unittest.TestCase):
             self.assertEqual(saved["kwargs"]["replace_room_labels"], ["Dining"])
             self.assertEqual(saved["rows"][0]["method"], "ai_corner_outline")
 
+    def _corner_apply(self, room, parts, existing):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            record = {"run_id": "run-1", "quality_label": "AI-determined (below accuracy bar)", "accuracy": {"auto_apply": False},
+                      "packet": {"page": 8, "room": room, "source_task": "P0_room_outlines",
+                                 "calibration": {"status": "agreed", "mm_per_px": 50.0}}}
+            saved = {}
+            with patch.object(autonomous_tasks_service, "_tenancy_polygon", return_value=None), \
+                    patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "current_records", return_value=existing), \
+                    patch.object(autonomous_tasks_service, "_p0_trace_rows", side_effect=lambda _root, _record, polygons: polygons), \
+                    patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "persist_ai_determined_traces",
+                                 side_effect=lambda web, project, rows, *args, **kwargs: saved.update(rows=rows, kwargs=kwargs) or []):
+                autonomous_tasks_service._apply_p0_outline_corners(None, {"id": "job", "review_dir": str(root)}, root, record,
+                    {"parts": parts, "repaired": False, "missing_sides": ""})
+            return record, saved
+
+    def test_a_corner_outline_of_the_same_space_replaces_nothing_and_counts_no_floor_twice(self):
+        # Set 15 2026-11-07: Living drawn over the walled Rumpus, 32 m² of a 36 m² room.
+        rumpus = {"room_label": "Rumpus", "page": 8, "points_image_px": [[0, 0], [400, 0], [400, 400], [0, 400], [0, 0]]}
+        record, saved = self._corner_apply("Living", [[(10, 10), (400, 10), (400, 400), (10, 400)]], [rumpus])
+        self.assertEqual(saved["rows"], [])                                  # and an earlier sketch of Living is cleared
+        self.assertEqual(saved["kwargs"]["replace_room_labels"], ["Living"])
+        self.assertIn("same space as Rumpus", record["applied_value"]["note"])
+
+    def test_a_corner_outline_loses_only_the_floor_another_room_covers(self):
+        rumpus = {"room_label": "Rumpus", "page": 8, "points_image_px": [[0, 0], [400, 0], [400, 400], [0, 400], [0, 0]]}
+        _record, saved = self._corner_apply("Awning", [[(300, 0), (700, 0), (700, 400), (300, 400)]], [rumpus])
+        self.assertAlmostEqual(saved["rows"][0]["polygon"].area, 300 * 400)
+
+    def test_corners_leaving_no_floor_are_still_refused(self):
+        with self.assertRaisesRegex(ValueError, "leave no floor"):
+            self._corner_apply("Store", [[(0, 0), (5, 0), (5, 5), (0, 5)]], [])
+
     def test_tenancy_only_includes_inferred_rooms_from_its_plan_level(self):
         from PIL import Image
         with TemporaryDirectory() as temporary:

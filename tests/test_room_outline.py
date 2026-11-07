@@ -225,6 +225,19 @@ def outline_checks():
           taken == ["Bar"] and net_dining.area == 9600 and none_taken == [] and net_bar.area == 400)
     side_net, side_taken = ro.subtract_nested([("A", box(0, 0, 10, 10)), ("B", box(10, 0, 20, 10))])[0]
     check("neighbouring rooms are not subtracted", side_taken == [] and side_net.area == 100)
+    # Set 15's first floor: Living drawn over the walled Rumpus is one floor under two names.
+    rumpus = box(0, 0, 100, 100)
+    check("two outlines mostly covering each other are the same space", ro.same_space(rumpus, box(5, 5, 100, 100)))
+    check("a bar inside a dining area is not the same space", not ro.same_space(rumpus, box(40, 40, 60, 60)))
+    check("an outline of the same space as a traced room isn't kept", ro.without_overlaps(box(5, 5, 100, 100), [("Rumpus", rumpus)]) is None)
+    check("the floor another room covers comes off an outline that only partly overlaps it",
+          ro.without_overlaps(box(50, 0, 150, 100), [("Rumpus", rumpus)]).area == 5000)
+    check("a room larger than an island inside it loses the island's floor",
+          ro.without_overlaps(rumpus, [("Bar", box(40, 40, 60, 60))]).area == 9600)
+    island = box(40, 40, 60, 60)
+    check("a room inside a larger one stays whole", ro.without_overlaps(island, [("Dining", rumpus)]).area == island.area)
+    check("neighbours sharing a wall's thickness aren't changed",
+          ro.without_overlaps(box(99, 0, 199, 100), [("Rumpus", rumpus)]).area == 10000)
     # A side with a drawn wall along it is walled; an open counter edge is not.
     walls = [LineString([(0, 0), (500, 0)]), LineString([(0, 4), (500, 4)]), LineString([(0, 0), (0, 200)])]
     check("a side along a drawn wall (double line counted once) is fully walled",

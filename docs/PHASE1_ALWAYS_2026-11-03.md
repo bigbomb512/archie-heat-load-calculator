@@ -54,5 +54,8 @@ Linework is extracted before the AI reads the pages, from a shortlist by page te
 ## Room names in outline answers (7 November)
 A name given again in one outline answer is another part of that room, and only a near-identical outline is dropped. In a house, a name the AI was asked to draw becomes a room once it is drawn. Before this, set 15's whole ground-floor answer was refused because four bedrooms shared the label "Bedrooms", and then its names were lost on saving. A shared name stays one room, so the occupant count for it is low until Phase 2 handles it.
 
+## Floor counted once (7 November)
+When an outline is saved, an outline that mostly covers a room already traced there is the same space under another name: it isn't counted again, and any earlier sketch of it is cleared. An outline that partly overlaps a room loses the overlap. A room drawn inside a larger one stays whole; where the larger room was traced first it still includes that floor, so small double counts can remain.
+
 ## Lessons from the first live checks (6 November)
 All four jobs failed the first live run, for US$0.457, though 1,209 tests passed: a not-needed north record crashed the export (GE, set 18), a missing import crashed the supervisor on any house with an ensuite (set 15), diagrams were traced as floor plans, one floor was split into two levels (Happy Cap), and leftover questions held the job at "drawings". Run the fake-AI step on real job data before spending.
