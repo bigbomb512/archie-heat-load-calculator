@@ -16,7 +16,7 @@ months and hours, plus the month and hour that size the system.
   - sunlight on each surface: beam × cos(incidence), isotropic sky, ground reflectance 0.2;
   - awning and building shadows from the profile angle;
   - sol-air U·(α/h_o)·I with 0.052 m²K/W;
-  - glass: A·(1 − frame)·SHGC·I;
+  - glass: A·(1 − frame)·SHGC·(direct × SHGC(angle)/SHGC(0) + diffuse × SHGC(diffuse)/SHGC(0)), with ASHRAE 2001 single clear glass (ID 1a) as the declared angle table (added 12 November 2026);
   - outside air: ASHRAE Fundamentals Ch. 1 psychrometrics on standard air;
   - fan heat 3.2%.
 - Declared inputs:

@@ -15,7 +15,7 @@ arithmetic and physics as written here; it is not engineering validation and not
 """
 
 import json
-from math import asin, atan2, cos, degrees, exp, pi, radians, sin, tan
+from math import acos, asin, atan2, cos, degrees, exp, pi, radians, sin, tan
 from pathlib import Path
 import sys
 
@@ -101,7 +101,23 @@ def sky(month, hour):
 
 
 # ---- Sunlight on a surface (beam on the plane, isotropic sky, ground reflection) and its shading -------------------
-def plane_sunlight(month, hour, tilt_deg, surface_azimuth, height=None, awning=None, building=None):
+# ---- Glass by incidence angle: ASHRAE Handbook—Fundamentals 2001 fenestration table, single clear 3.2 mm (ID 1a) ----
+# Declared data (as reproduced in Arici, MEEM 4200 Ch. 7, Table 7-3): SHGC at 0, 40, 50, 60, 70, 80 degrees and diffuse.
+# The pack's glass (U 5.8, SHGC 0.45) is single glazing, so it takes the single clear curve, relative to its 0-degree value.
+SINGLE_CLEAR_SHGC = [(0, 0.86), (40, 0.84), (50, 0.82), (60, 0.78), (70, 0.67), (80, 0.42), (90, 0.0)]
+SINGLE_CLEAR_DIFFUSE = 0.78
+
+
+def glass_angle_ratio(incidence_deg):
+    for (a0, s0), (a1, s1) in zip(SINGLE_CLEAR_SHGC, SINGLE_CLEAR_SHGC[1:]):
+        if incidence_deg <= a1:
+            return (s0 + (s1 - s0) * (incidence_deg - a0) / (a1 - a0)) / SINGLE_CLEAR_SHGC[0][1]
+    return 0.0
+
+
+def plane_sunlight(month, hour, tilt_deg, surface_azimuth, height=None, awning=None, building=None, glass=False):
+    """Sunlight on a plane, W/m². glass=True: each part as single clear glass takes it relative to normal incidence
+    (direct × SHGC(angle)/SHGC(0), diffuse × SHGC(diffuse)/SHGC(0))."""
     row = sky(month, hour)
     if row["dni"] <= 0 and row["dhi"] <= 0:
         return 0.0
@@ -125,6 +141,9 @@ def plane_sunlight(month, hour, tilt_deg, surface_azimuth, height=None, awning=N
             edge = building["height_m"] - building["distance_m"] * profile_tan
             bottom = min(max(edge - building["base_m"], 0.0), height) / height * building.get("coverage", 1.0)
         sunlit = max(0.0, 1.0 - top - bottom)
+    if glass:
+        incidence = degrees(acos(min(max(cos_incidence, -1.0), 1.0)))
+        return (beam * sunlit * glass_angle_ratio(incidence) if beam > 0 else 0.0) + diffuse * SINGLE_CLEAR_DIFFUSE / SINGLE_CLEAR_SHGC[0][1]
     return beam * sunlit + diffuse
 
 
@@ -191,7 +210,7 @@ def house_room_hour(room, month, hour):
         out["solar"] += surface["area_m2"] * surface["u"] * ALPHA_OVER_HO * sun * cooled_now / 1000
     for glass in room.get("glass", []):
         out["glazing_conduction"] += PACK["glass_u"] * glass["area_m2"] * (db - INDOOR_DB) / 1000
-        sun = plane_sunlight(month, hour, 90, glass["azimuth"], glass["height_m"])
+        sun = plane_sunlight(month, hour, 90, glass["azimuth"], glass["height_m"], glass=True)
         out["glazing_solar"] += glass["area_m2"] * (1 - PACK["frame_fraction"]) * PACK["shgc"] * sun * cooled_now / 1000
     people = room.get("people", 0)
     out["people_s"] = people * house["people"][0] * profile["people_diversity"] * open_now / 1000
@@ -228,7 +247,7 @@ def room_hour(room, month, hour):
         out["solar"] += area * u * ALPHA_OVER_HO * sun * open_now / 1000
     for glass in room.get("glass", []):
         out["glazing_conduction"] += PACK["glass_u"] * glass["area_m2"] * (db - INDOOR_DB) / 1000
-        sun = plane_sunlight(month, hour, 90, glass["azimuth"], glass["height_m"], glass.get("awning"), glass.get("building"))
+        sun = plane_sunlight(month, hour, 90, glass["azimuth"], glass["height_m"], glass.get("awning"), glass.get("building"), glass=True)
         out["glazing_solar"] += glass["area_m2"] * (1 - PACK["frame_fraction"]) * PACK["shgc"] * sun * open_now / 1000
     people = room.get("seats") or max(1, round(room["area_m2"] * profile["density"]))
     sensible_w, latent_w = PACK["activity"][room["activity"]]

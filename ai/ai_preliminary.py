@@ -19,7 +19,7 @@ from ai.hourly_loads import build_hourly_load_model, calculate_hourly_load_repor
 from ai import design_weather
 from ai import sun as site_sun_model
 from ai import value_resolution as value_resolver
-from ai import house_profiles
+from ai import glazing_angle, house_profiles
 from ai import model_input_resolution as shared_resolution
 from ai import room_use_resolution as room_use_resolver
 from ai import ceiling_volume_resolution as ceiling_volume_resolver
@@ -781,12 +781,15 @@ def _site_sun(site_location, site_days=None):
     return {"days": days, "latitude": latitude, "longitude": longitude, "timezone": timezone_name, "place": place}
 
 
-def _surface_sun(site_sun, scenarios, tilt_deg, azimuth_deg, shade=None, height_m=None, obstruction=None):
-    """{scenario_id: 24 hourly W/m² on the surface} for every design day, from its month's sun."""
+def _surface_sun(site_sun, scenarios, tilt_deg, azimuth_deg, shade=None, height_m=None, obstruction=None, glass=None):
+    """{scenario_id: 24 hourly W/m² on the surface} for every design day, from its month's sun. glass (a glazing_angle
+    kind) gives the window's sunlight scaled by its SHGC's angle-dependence, ready for its normal SHGC."""
     result = {}
     for row in scenarios.get("scenarios", []):
         month = int(row.get("sun_month") or 1)
         result[row["scenario_id"]] = ([0.0] * 24 if (obstruction or {}).get("inside") else
+                                      site_sun_model.glass_totals(site_sun, month, azimuth_deg or 0.0, glass, shade,
+                                                                  height_m, obstruction) if glass else
                                       site_sun_model.surface_totals(site_sun, month, tilt_deg, azimuth_deg or 0.0,
                                                                     shade, height_m, obstruction))
     return result
@@ -797,11 +800,11 @@ NORTH_UNKNOWN_NOTE = ("No true north was found on the drawings, so the sun on th
                       "directions it could face (user decision 2026-11-03).")
 
 
-def _averaged_surface_sun(site_sun, scenarios, tilt_deg, shade=None, height_m=None, obstruction=None):
+def _averaged_surface_sun(site_sun, scenarios, tilt_deg, shade=None, height_m=None, obstruction=None, glass=None):
     """A wall or window whose facing is unknown (no north): each hour's sun averaged over the four directions it could
     face. Its direction on the page is known, so the true one is that plus 0, 90, 180 or 270 degrees: the average is the
     same as over north, east, south and west."""
-    each = [_surface_sun(site_sun, scenarios, tilt_deg, bearing, shade, height_m, obstruction) for bearing in FOUR_BEARINGS]
+    each = [_surface_sun(site_sun, scenarios, tilt_deg, bearing, shade, height_m, obstruction, glass) for bearing in FOUR_BEARINGS]
     return {scenario: [round(sum(hours[scenario][hour] for hours in each) / len(each), 4) for hour in range(24)]
             for scenario in each[0]}
 
@@ -1816,13 +1819,21 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
             glazing_peak = max(glazing_profile)
             solar_schedule_id = f"prelim-solar-{opening['candidate_id']}"
             glass_sun, glass_shade = None, _shade_values(opening.get("shade"))
+            # Glass performance answered by the operators replaces the preliminary pack values (bounded, else ignored).
+            answered_u = _number(opening.get("u_value_w_m2k")) if 0.5 <= (_number(opening.get("u_value_w_m2k")) or 0) <= 7 else None
+            answered_shgc = _number(opening.get("shgc")) if 0.05 <= (_number(opening.get("shgc")) or 0) <= 0.95 else None
+            window_u = answered_u or pack["profiles"].get(opening.get("glazing_choice"), profile)["glazing_u_w_m2k"]
+            window_shgc = answered_shgc or pack["profiles"].get(opening.get("glazing_choice"), profile)["shgc"]
+            # The sun at an angle gets in less: the most similar ASHRAE window's SHGC by incidence angle (glazing_angle).
+            angle_glass = glazing_angle.glass_type(window_u, window_shgc)
+            blind_factor, blind_note = glazing_angle.iac(opening.get("internal_shade"), angle_glass, window_shgc)
             if site_sun and glazing_peak:
                 bearing = site_sun_model.surface_azimuth(opening_orientation, opening.get("azimuth_deg", candidate.get("azimuth_deg")))
                 glass_obstruction = _obstruction_values(opening.get("obstruction"))
                 glass_sun = (_averaged_surface_sun(site_sun, scenario_set, 90.0, glass_shade, _number(opening.get("height_m")),
-                                                   glass_obstruction) if glass_facing_unknown else
+                                                   glass_obstruction, angle_glass) if glass_facing_unknown else
                              _surface_sun(site_sun, scenario_set, 90.0, bearing, glass_shade, _number(opening.get("height_m")),
-                                          glass_obstruction))
+                                          glass_obstruction, angle_glass))
                 glazing_peak = max((value for hours in glass_sun.values() for value in hours), default=0.0)
                 if glass_shade:
                     shade = 1.0          # the awning's geometry replaces the shading category
@@ -1831,16 +1842,18 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                 values = (operating if glass_sun else [round(operating[hour] * glazing_profile[hour] / glazing_peak, 6) for hour in range(24)])
                 schedules.append(_schedule_with_values(solar_schedule_id, f"Preliminary {opening_orientation or 'averaged'} glazing solar profile", values, _source(f"solar-{opening_orientation or 'averaged'}")))
                 room["schedule_assignments"]["solar"][opening["candidate_id"]] = solar_schedule_id
-            # Glass performance answered by the operators replaces the preliminary pack values (bounded, else ignored).
-            answered_u = _number(opening.get("u_value_w_m2k")) if 0.5 <= (_number(opening.get("u_value_w_m2k")) or 0) <= 7 else None
-            answered_shgc = _number(opening.get("shgc")) if 0.05 <= (_number(opening.get("shgc")) or 0) <= 0.95 else None
             glazing = {"surface_id": opening["candidate_id"], "owner_room_id": room["room_id"], "owner_zone_id": room["zone_id"],
                        "host_surface_id": candidate["candidate_id"], "opening_mapping_status": "proposed", "geometry_mode": "preliminary_ai_estimate",
                        "review_status": "provisional", "verification_status": "provisional", "boundary_method": "external", "external_exposure": "external",
                        "explicit_opening_area_m2": opening["opening_area_m2"], "explicit_glass_area_m2": opening.get("explicit_glass_area_m2"),
-                       "window": {"record_id": f"window-{opening['candidate_id']}", "u_value_w_m2k": answered_u or pack["profiles"].get(opening.get("glazing_choice"), profile)["glazing_u_w_m2k"], "shgc": answered_shgc or pack["profiles"].get(opening.get("glazing_choice"), profile)["shgc"],
+                       "window": {"record_id": f"window-{opening['candidate_id']}", "u_value_w_m2k": window_u, "shgc": window_shgc,
                                   "frame_fraction": envelope["glazing_frame_fraction"], "glass_area_correction": envelope["glazing_glass_area_correction"],
-                                  "internal_shading_factor": envelope["glazing_internal_shading_factor"]},
+                                  "internal_shading_factor": round(envelope["glazing_internal_shading_factor"] * blind_factor, 4)},
+                       "angle_dependence": ({"glass": angle_glass, "ashrae_id": glazing_angle.GLASS[angle_glass]["ashrae_id"],
+                                             "label": glazing_angle.GLASS[angle_glass]["label"], "source": glazing_angle.SOURCE}
+                                            if glass_sun else {"glass": "", "note": "No site sun: the cardinal sun profile is used without angle dependence."}),
+                       **({"internal_shade": dict(opening["internal_shade"]), "internal_shade_note": blind_note}
+                          if isinstance(opening.get("internal_shade"), dict) else {}),
                        "manual_solar": {"enabled": bool(glazing_peak), "incident_solar_w_m2": glazing_peak, "external_shading_factor": shade},
                        "solar_basis": "site_sun_hourly" if glass_sun else "ai_preliminary_cardinal_profile",
                        "preliminary_solar_profile_w_m2": glazing_profile,
@@ -1862,6 +1875,8 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
             exclusions[:] = [item for item in exclusions if not (item.get("room_id") == room["room_id"] and item.get("component") == "glazing and façade solar" and "No resolved" in item.get("reason", ""))]
             if glass_facing_unknown:
                 phase1_assumptions.append({"room_id": room["room_id"], "component": "glazing orientation", "reason": NORTH_UNKNOWN_NOTE})
+            if blind_note:
+                phase1_assumptions.append({"room_id": room["room_id"], "component": "inside blinds", "reason": blind_note})
             if glass_shade and glass_sun:
                 phase1_assumptions.append({"room_id": room["room_id"], "component": "glazing shade",
                     "reason": (f"{glass_shade['kind'].capitalize()} {glass_shade['depth_m']:g} m deep, its underside "

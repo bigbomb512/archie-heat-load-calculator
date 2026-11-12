@@ -912,11 +912,13 @@ def _validated_trace_openings(data, trace, paths, room, calibration_record):
             opening_source = "reviewer"
         ai_run_id = (opening.get("ai_run_id") or prior.get("ai_run_id") or data.get("ai_run_id"))
         shade = _opening_shade(opening.get("shade"))
+        internal_shade = _opening_internal_shade(opening.get("internal_shade"))
         result.append({"opening_id": opening_id, "edge_index": edge_index, "width_m": float(width),
                        "head_height_m": float(head), "sill_height_m": float(sill),
                        "elevation_page": elevation_page, "glazing_choice": glazing_choice,
                        "shading_category": shading, "declaration_source": opening_source,
                        **({"shade": shade} if shade else {}),
+                       **({"internal_shade": internal_shade} if internal_shade else {}),
                        **({"ai_run_id": ai_run_id}
                           if opening_source in {"ai_determined", "ai_fallback", "drawing_text"} and ai_run_id else {}),
                        **({"mark": str(opening.get("mark", ""))[:20],
@@ -939,6 +941,20 @@ def _opening_shade(raw):
     evidence = [str(item)[:120] for item in evidence][:4] if isinstance(evidence, list) else ([str(evidence)[:200]] if evidence else [])
     return {"kind": str(raw["kind"]).casefold(), "depth_m": length("depth_m", 10), "gap_m": length("gap_m", 5),
             "full_width": bool(raw.get("full_width")), "evidence": evidence}
+
+
+def _opening_internal_shade(raw):
+    """An inside blind, shade or curtain on the window, from the drawings or an operator: {"kind" (venetian, roller,
+    curtain), "colour", "opacity", "evidence"}; None when absent or not recognised (ai.glazing_angle uses it)."""
+    if not isinstance(raw, dict) or str(raw.get("kind", "")).casefold() not in {"venetian", "roller", "curtain"}:
+        return None
+    colour = str(raw.get("colour", "")).casefold()
+    opacity = str(raw.get("opacity", "")).casefold()
+    evidence = raw.get("evidence", [])
+    evidence = [str(item)[:120] for item in evidence][:4] if isinstance(evidence, list) else ([str(evidence)[:200]] if evidence else [])
+    return {"kind": str(raw["kind"]).casefold(),
+            **({"colour": colour} if colour in {"light", "medium", "dark", "white"} else {}),
+            **({"opacity": opacity} if opacity in {"opaque", "translucent"} else {}), "evidence": evidence}
 
 
 def _matched_trace_edges(previous, current, midpoint_tolerance_mm=300.0, direction_tolerance_deg=5.0):

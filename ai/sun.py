@@ -120,8 +120,10 @@ def surface_hours(day, tilt_deg, azimuth_deg, shade=None, height_m=None, obstruc
     part of it)}: a building opposite shades it from the bottom up; with an awning too, the sunlit share is what is
     left between the two shadows."""
     import numpy as np
-    from pvlib.irradiance import get_total_irradiance
+    from pvlib.irradiance import aoi, get_total_irradiance
     up = np.array([row["altitude_deg"] > 0 for row in day])
+    incidence = np.asarray(aoi(tilt_deg, azimuth_deg, np.array([row["zenith_deg"] for row in day]),
+                               np.array([row["azimuth_deg"] for row in day])), dtype=float)
     plane = get_total_irradiance(tilt_deg, azimuth_deg, np.array([row["zenith_deg"] for row in day]),
                                  np.array([row["azimuth_deg"] for row in day]), np.array([row["dni_w_m2"] for row in day]),
                                  np.array([row["ghi_w_m2"] for row in day]), np.array([row["dhi_w_m2"] for row in day]),
@@ -141,8 +143,35 @@ def surface_hours(day, tilt_deg, azimuth_deg, shade=None, height_m=None, obstruc
                                                   obstruction.get("distance_m"), obstruction.get("height_m"))
             sunlit = round(max(0.0, sunlit - blocked * float(obstruction.get("coverage", 1.0))), 6)
         result.append({"direct_w_m2": round(float(direct[index]), 2), "diffuse_w_m2": round(float(diffuse[index]), 2),
-                       "sunlit_fraction": sunlit, "total_w_m2": round(float(direct[index]) * sunlit + float(diffuse[index]), 2)})
+                       "sunlit_fraction": sunlit, "total_w_m2": round(float(direct[index]) * sunlit + float(diffuse[index]), 2),
+                       "incidence_deg": round(float(incidence[index]), 2)})
     return result
+
+
+@lru_cache(maxsize=4096)
+def _glass_totals(latitude, longitude, timezone, month, azimuth_deg, glass, depth_m, gap_m, height_m, obstruction):
+    from ai import glazing_angle
+    day = design_days(latitude, longitude, timezone)[month]
+    shade = {"depth_m": depth_m, "gap_m": gap_m} if depth_m else None
+    blocking = dict(zip(("distance_m", "height_m", "base_m", "coverage"), obstruction)) if obstruction else None
+    diffuse_share = glazing_angle.diffuse_modifier(glass)
+    return tuple(round(row["direct_w_m2"] * row["sunlit_fraction"] * glazing_angle.angle_modifier(glass, row["incidence_deg"])
+                       + row["diffuse_w_m2"] * diffuse_share, 2)
+                 for row in surface_hours(day, 90.0, azimuth_deg, shade, height_m, blocking))
+
+
+def glass_totals(site, month, azimuth_deg, glass, shade=None, height_m=None, obstruction=None):
+    """The 24 hourly sunlight on a window, each part scaled by how this kind of glass takes it relative to normal
+    incidence (ai.glazing_angle): direct × sunlit share × SHGC(angle)/SHGC(0) + diffuse × SHGC(diffuse)/SHGC(0).
+    Multiplying by the window's normal SHGC gives its solar gain. Cached like surface_totals."""
+    shade = shade or {}
+    blocking = (tuple(round(float(obstruction.get(key) or default), 3) for key, default in
+                      (("distance_m", 0.0), ("height_m", 0.0), ("base_m", 0.0), ("coverage", 1.0)))
+                if obstruction and obstruction.get("distance_m") and obstruction.get("height_m") else None)
+    return list(_glass_totals(round(float(site["latitude"]), 4), round(float(site["longitude"]), 4), str(site["timezone"]),
+                              int(month), round(float(azimuth_deg or 0.0) % 360, 1), str(glass),
+                              float(shade.get("depth_m") or 0.0), float(shade.get("gap_m") or 0.0),
+                              float(height_m or 0.0), blocking))
 
 
 @lru_cache(maxsize=4096)

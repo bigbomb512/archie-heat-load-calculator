@@ -106,8 +106,39 @@ afternoon and living rooms in the morning). Nothing was tuned towards the Butche
 - **Glass sun dominates the houses** (set 15: 35.6 of 54.4 kW). It uses one SHGC (0.45) with no angle dependence and no
   blinds; the window-by-angle work in the plan is the next accuracy step for houses.
 
+## Glass sun by angle and inside blinds (12 November)
+Source: ASHRAE Handbook—Fundamentals 2001, fenestration chapter, as reproduced in Arici's course notes (Michigan Tech
+MEEM 4200, Chapter 7, Tables 7-3 and 7-4). EnergyPlus's simple-glazing curves (Arasteh, Kohler and Griffith) were
+also read; their U/SHGC-to-curve map is a figure not available as text, so the ASHRAE table was used.
+
+- **Angle** (`ai/glazing_angle.py`, `ai/sun.py`): the window's normal SHGC is kept, and the sunlight on the glass is
+  scaled first. The direct sun on the sunlit part is multiplied by SHGC(angle) / SHGC(0) of the most similar ASHRAE
+  window, linear between the tabulated angles and 0 at 90°. Diffuse sky and ground light is multiplied by
+  SHGC(diffuse) / SHGC(0). This follows the source's advice when a maker gives only the normal SHGC. The glass types are:
+  - single clear (1a): U 4.5 W/m²K or more;
+  - double clear (5a): lower U with a normal SHGC of 0.70 or more;
+  - low-e double (21a): otherwise.
+
+  The incidence angle each hour is pvlib's. Without a site sun (the generic cardinal profiles) there is no angle
+  dependence, and the glass says so.
+- **Blinds:** an inside venetian blind or roller shade multiplies the glass's solar gain by the table's IAC for the
+  device and glass. A blind counts only when a window schedule names it (`house_windows.internal_shade`) or an operator
+  enters it on the opening (`internal_shade` on a traced opening; no screen for it yet). With the colour or opacity not
+  shown, the device's highest IAC is used. Curtains get no credit (the drapery table isn't captured) and say so.
+- **Checked:** the angle table, the blind lookups, the incidence angle against plain geometry, glass totals hour by
+  hour (`tests/test_glazing_angle.py`), a blind's effect through the draft (light venetian on the pack's glass: × 0.78),
+  and the reference rooms. The worksheet applies the same table on its own sun geometry and interpolation; the draft
+  matches it within 2 %.
+- **Effect** (AI off): set 15 54.4 → 52.5 kW, set 16 37.1 → 35.5, set 18 25.0 → 24.0; glass sun about 10 % lower.
+  Shops unchanged: no saved shop has sunlit glass. No saved house has a blind on its schedule.
+- **Still open:**
+  - Every house window uses the pack's glass (U 5.8, SHGC 0.45, so the single clear curve) until the BASIX or window
+    certificates are read. Real house glass is often clearer (single clear 0.86, double clear 0.76), so this is now
+    the largest glass uncertainty for houses.
+  - There's no screen to enter blinds.
+
 ## Next
-1. Glass sun by angle, and blinds, for houses (largest share of their load).
+1. Read the house glass's U-value and SHGC from BASIX or window certificates (the largest house glass uncertainty).
 2. A listed-equipment case (commercial kitchen, hooded and free-standing) in the worksheet.
 3. Partner review of the equipment typical values against ASHRAE Fundamentals Ch. 18.
 4. More engineer numbers: Butcher Buffet's room breakdown, the first client's job, design partners.

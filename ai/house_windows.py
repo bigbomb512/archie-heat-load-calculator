@@ -327,9 +327,31 @@ def place_windows(tags, windows, rooms, mm_per_point, reach_mm=900):
             continue
         used[(room["trace_id"], edge)] += width_m
         sill, head, assumption = sill_and_head(row)
+        blind = internal_shade(row.get("type") or "")
         openings.append({"trace_id": room["trace_id"], "edge_index": edge, "mark": tag["mark"], "width_m": width_m,
                          "schedule_page": row["page"],
                          "sill_height_m": sill / 1000, "head_height_m": head / 1000,
                          "assumptions": [assumption] if assumption else [],
+                         **({"internal_shade": blind} if blind else {}),
                          "evidence": f"Schedule p{row['page']}: {row['evidence']}; tag on plan p{tag['page']}"})
     return {"openings": openings, "unplaced": unplaced}
+
+
+_VENETIAN = re.compile(r"\b(?:venetian|integral\s+blinds?|integrated\s+blinds?|between[\s-]glass\s+blinds?)\b", re.I)
+_ROLLER = re.compile(r"\b(?:roller|holland|block[\s-]?out|sunscreen|sheer)\b(?:\s+(?:blinds?|shades?))?|\broller\s+blinds?\b", re.I)
+_CURTAIN = re.compile(r"\b(?:curtains?|drapes?|draperies)\b", re.I)
+
+
+def internal_shade(description):
+    """An inside blind or curtain named in a window schedule's description, as {"kind", "colour"?, "opacity"?,
+    "evidence"} for ai.glazing_angle; None when it names none. Colour and opacity only when printed."""
+    text = " ".join(str(description).split())
+    # Curtains first: "sheer curtains" and "blockout curtains" are curtains, not roller blinds.
+    kind = "venetian" if _VENETIAN.search(text) else "curtain" if _CURTAIN.search(text) else "roller" if _ROLLER.search(text) else ""
+    if not kind:
+        return None
+    colour = next((word for word in ("white", "light", "medium", "dark") if re.search(rf"\b{word}\b", text, re.I)), "")
+    opacity = ("opaque" if re.search(r"\bblock[\s-]?out\b|\bopaque\b", text, re.I)
+               else "translucent" if re.search(r"\bsunscreen\b|\bsheer\b|\btranslucent\b", text, re.I) else "")
+    return {"kind": kind, **({"colour": colour} if colour else {}), **({"opacity": opacity} if opacity else {}),
+            "evidence": [text[:120]]}

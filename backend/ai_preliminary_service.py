@@ -1926,6 +1926,8 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                                 "external_exposure": "external", "orientation": orientation,
                                 **({"azimuth_deg": round(float(azimuth), 1)} if orientation and azimuth is not None else {}),
                                 **({"shade": dict(opening["shade"])} if isinstance(opening.get("shade"), dict) else {}),
+                                **({"internal_shade": dict(opening["internal_shade"])}
+                                   if isinstance(opening.get("internal_shade"), dict) else {}),
                                 **({"obstruction": ({**wall_obstruction} if wall_obstruction.get("inside") else
                                                     {**wall_obstruction, "base_m": floor_level_m + opening["sill_height_m"]})}
                                    if wall_obstruction else {}),

@@ -178,6 +178,7 @@ def apply(web, project, root, read_page=None):
                              "edge_index": row["edge_index"], "width_m": row["width_m"], "sill_height_m": row["sill_height_m"],
                              "head_height_m": row["head_height_m"], "elevation_page": int(row["schedule_page"]),
                              "glazing_choice": GLAZING_CHOICE, "shading_category": SHADING, "mark": row["mark"],
+                             **({"internal_shade": row["internal_shade"]} if row.get("internal_shade") else {}),
                              "declaration_source": "drawing_text", "ai_run_id": run_id, "evidence": [row["evidence"]],
                              "assumptions": row["assumptions"]}
                             for index, row in enumerate(kept)],
