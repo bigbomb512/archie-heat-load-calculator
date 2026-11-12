@@ -8,6 +8,7 @@ materialised field retains its origin, formula and provenance.
 
 from __future__ import annotations
 
+from collections import Counter
 from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
@@ -206,6 +207,29 @@ def _field(value, origin, confidence, rationale, evidence, formula="", operands=
             "formula": formula, "operands": deepcopy(operands or {})}
 
 
+# Where a listed item's value came from (backend/equipment_catalogue_service), with how far to trust it.
+VALUE_ORIGINS = {"contractor_override": .9, "equipment_catalogue": .7, "typical_value": .5, "generic_value": .3}
+VALUE_ORIGIN_LABELS = {"contractor_override": "entered by an operator", "equipment_catalogue": "matched model",
+                       "typical_value": "typical value", "generic_value": "generic value",
+                       "direct_project_evidence": "from the drawings"}
+DRAWN_EQUIPMENT_ORIGINS = set(VALUE_ORIGIN_LABELS)
+
+
+def _value_origin(item):
+    """{"origin", "confidence"} for a listed equipment item's value."""
+    origin = _text(item.get("origin"))
+    if origin in VALUE_ORIGINS:
+        return {"origin": origin, "confidence": VALUE_ORIGINS[origin]}
+    return {"origin": "direct_project_evidence", "confidence": .85}
+
+
+def _home_cooking_schedule():
+    """The typical home cooking value's hourly fractions (config/house_profiles.json), for each day type."""
+    items = json.loads(Path(__file__).resolve().parents[1].joinpath("config", "house_profiles.json").read_text(encoding="utf-8"))["kitchen_appliances"]["items"]
+    hours = next(item["schedule"] for item in items if "cooking" in item["name"].casefold())
+    return {day: list(hours) for day in ("weekday", "saturday", "sunday")}
+
+
 def _equipment_sources(sources):
     result = []
     for source in sources:
@@ -339,14 +363,21 @@ def resolve(building, vision=None, proposal=None, room_use=None, pack=None,
             qty = _positive(item.get("quantity")) or 1
             factor = _nonnegative(item.get("heat_to_space_factor"))
             if rated is not None and factor is not None and _has_citation(item):
-                equipment_records.append({"name": _text(item.get("name", item.get("model", "equipment"))), "quantity": qty,
+                record = {"name": _text(item.get("name", item.get("model", "equipment"))), "quantity": qty,
                     "rated_input_w": rated, "heat_to_space_factor": factor,
                     **({"latent_w": _nonnegative(item.get("latent_w"))} if _nonnegative(item.get("latent_w")) is not None else {}),
                     "diversity": (_nonnegative(item.get("diversity_factor")) if item.get("equipment_schedule")
                                   else _positive(item.get("diversity_factor")) or _positive(profile.get("equipment_diversity"))),
-                    **{key: deepcopy(item[key]) for key in ("equipment_schedule", "equipment_id", "catalogue_id", "catalogue_hash", "source") if key in item},
-                    "origin": "direct_project_evidence", "confidence": .85, "evidence": _evidence(item),
-                    "formula": "quantity × rated_input_w × heat_to_space_factor"})
+                    **{key: deepcopy(item[key]) for key in ("equipment_schedule", "equipment_id", "catalogue_id", "catalogue_hash", "source", "kind") if key in item},
+                    # The item is on the drawings; its value is labelled by where it came from (before 12 November
+                    # 2026 every typical and generic value was called project evidence at 0.85 confidence).
+                    **_value_origin(item), "evidence": _evidence(item),
+                    "formula": "quantity × rated_input_w × heat_to_space_factor"}
+                if profile_id == "house_living" and record.get("kind") == "cooking" and not item.get("equipment_schedule"):
+                    # A cooking appliance drawn in a house kitchen runs at home cooking hours (house kitchens use home
+                    # hours, user decision 2026-10-30), the same hours as the typical home cooking value.
+                    record.update(equipment_schedule=_home_cooking_schedule(), diversity=1.0)
+                equipment_records.append(record)
         if (not equipment_records and profile_id == "house_living" and scope in {"comfort_hvac", "comfort_hvac_with_process_exception"}
                 and re.search(r"\b(?:kitchen|kitch|scullery|pantry)\b", label, re.I)):
             # A house kitchen with no appliances on the drawings: labelled typical home appliances, each with its own
@@ -364,9 +395,15 @@ def resolve(building, vision=None, proposal=None, room_use=None, pack=None,
                 "diversity": _positive(profile.get("equipment_diversity")) or 0, "origin": "controlled_preliminary_profile",
                 "confidence": .3, "evidence": _evidence(area_source), "formula": "area_m2 × equipment_w_m2 × heat_to_space_factor"})
         typical_home = bool(equipment_records) and equipment_records[0]["origin"] == "typical_home_value"
-        fields["equipment"] = _field(equipment_records, "typical_home_value" if typical_home else "direct_project_evidence" if equipment_records and equipment_records[0]["origin"] == "direct_project_evidence" else "controlled_preliminary_profile" if equipment_records else "unresolved",
-                                      .85 if equipment_records and equipment_records[0]["origin"] == "direct_project_evidence" else .3 if equipment_records else 0,
-                                      "Typical home kitchen appliances (labelled, uncited, for review), each with its own hours." if typical_home else "Cited equipment heat-to-space records." if equipment_records and equipment_records[0]["origin"] == "direct_project_evidence" else "Controlled equipment-density fallback." if equipment_records else "Equipment heat-to-space data is unresolved.",
+        # Items on the drawings make the field project evidence (they are there); how good their values are is each
+        # item's own origin and confidence, and the field takes the weakest.
+        drawn = bool(equipment_records) and equipment_records[0]["origin"] in DRAWN_EQUIPMENT_ORIGINS
+        drawn_note = ("Equipment listed on the drawings; values: " + ", ".join(
+            f"{count} {VALUE_ORIGIN_LABELS[origin]}" for origin, count in sorted(Counter(item["origin"] for item in equipment_records).items()))
+            + ".") if drawn else ""
+        fields["equipment"] = _field(equipment_records, "typical_home_value" if typical_home else "direct_project_evidence" if drawn else "controlled_preliminary_profile" if equipment_records else "unresolved",
+                                      min(item["confidence"] for item in equipment_records) if drawn else .3 if equipment_records else 0,
+                                      "Typical home kitchen appliances (labelled, uncited, for review), each with its own hours." if typical_home else drawn_note if drawn else "Controlled equipment-density fallback." if equipment_records else "Equipment heat-to-space data is unresolved.",
                                       sum((item.get("evidence", []) for item in equipment_records), []), "Σ(quantity × rated_input_w × heat_to_space_factor)")
         schedule_id = "internal-gains-" + re.sub(r"[^a-z0-9_-]+", "-", room_id.casefold()).strip("-")
         schedule_input = next((source.get("schedules") for source in sources if isinstance(source, dict) and isinstance(source.get("schedules"), dict)), {})

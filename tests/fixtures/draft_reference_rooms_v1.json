@@ -99,6 +99,103 @@
      85,
      135
     ]
+   },
+   "house": {
+    "bedroom": {
+     "people_diversity": 0.8,
+     "lighting_w_m2": 8,
+     "lighting_diversity": 0.85,
+     "equipment_w_m2": 3,
+     "equipment_diversity": 0.75,
+     "equipment_space_gain": 0.85,
+     "open": [
+      [
+       22,
+       24
+      ],
+      [
+       0,
+       7
+      ]
+     ]
+    },
+    "living": {
+     "people_diversity": 0.8,
+     "lighting_w_m2": 8,
+     "lighting_diversity": 0.85,
+     "equipment_w_m2": 5,
+     "equipment_diversity": 0.75,
+     "equipment_space_gain": 0.85,
+     "open": [
+      [
+       7,
+       8
+      ],
+      [
+       15,
+       22
+      ]
+     ]
+    },
+    "circulation": {
+     "people_diversity": 0.8,
+     "lighting_w_m2": 4,
+     "lighting_diversity": 0.85,
+     "equipment_w_m2": 0,
+     "equipment_diversity": 0.75,
+     "equipment_space_gain": 0.85,
+     "open": [
+      [
+       7,
+       22
+      ]
+     ]
+    },
+    "people": [
+     67,
+     33
+    ],
+    "infiltration_ach": 0.36,
+    "kitchen_appliances": [
+     {
+      "w": 60,
+      "factor": 1.0,
+      "hours": {
+       "0": 1.0,
+       "1": 1.0,
+       "2": 1.0,
+       "3": 1.0,
+       "4": 1.0,
+       "5": 1.0,
+       "6": 1.0,
+       "7": 1.0,
+       "8": 1.0,
+       "9": 1.0,
+       "10": 1.0,
+       "11": 1.0,
+       "12": 1.0,
+       "13": 1.0,
+       "14": 1.0,
+       "15": 1.0,
+       "16": 1.0,
+       "17": 1.0,
+       "18": 1.0,
+       "19": 1.0,
+       "20": 1.0,
+       "21": 1.0,
+       "22": 1.0,
+       "23": 1.0
+      }
+     },
+     {
+      "w": 2000,
+      "factor": 0.5,
+      "hours": {
+       "17": 0.5,
+       "18": 0.5
+      }
+     }
+    ]
    }
   },
   "clear_sky": "tests/reference/sydney_clear_sky_2025.json"
@@ -178,10 +275,13 @@
        "equipment": 0.384,
        "outside_air_s": 0.4229,
        "outside_air_l": 0.9403,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0,
        "people": 12,
        "outside_air_lps": 114.0
       }
      },
+     "people_counted_share": 1.0,
      "fan_heat_kw": 0.0978,
      "total_kw": 5.2729
     },
@@ -200,10 +300,13 @@
        "equipment": 0.384,
        "outside_air_s": 0.9889,
        "outside_air_l": 1.3703,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0,
        "people": 12,
        "outside_air_lps": 114.0
       }
      },
+     "people_counted_share": 1.0,
      "fan_heat_kw": 0.1568,
      "total_kw": 8.172
     },
@@ -222,10 +325,13 @@
        "equipment": 0.384,
        "outside_air_s": 1.1294,
        "outside_air_l": 1.2243,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0,
        "people": 12,
        "outside_air_lps": 114.0
       }
      },
+     "people_counted_share": 1.0,
      "fan_heat_kw": 0.2266,
      "total_kw": 10.416
     },
@@ -244,10 +350,13 @@
        "equipment": 0.384,
        "outside_air_s": 0.9889,
        "outside_air_l": 1.3703,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0,
        "people": 12,
        "outside_air_lps": 114.0
       }
      },
+     "people_counted_share": 1.0,
      "fan_heat_kw": 0.2368,
      "total_kw": 10.7509
     },
@@ -266,10 +375,13 @@
        "equipment": 0.0,
        "outside_air_s": 0.0,
        "outside_air_l": 0.0,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0,
        "people": 12,
        "outside_air_lps": 0.0
       }
      },
+     "people_counted_share": 1.0,
      "fan_heat_kw": 0.0178,
      "total_kw": 0.5751
     },
@@ -288,10 +400,13 @@
        "equipment": 0.384,
        "outside_air_s": -0.2786,
        "outside_air_l": -1.3104,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0,
        "people": 12,
        "outside_air_lps": 114.0
       }
      },
+     "people_counted_share": 1.0,
      "fan_heat_kw": 0.1442,
      "total_kw": 3.8154
     }
@@ -364,10 +479,13 @@
        "equipment": 1.296,
        "outside_air_s": 0.7798,
        "outside_air_l": 1.2659,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0,
        "people": 12,
        "outside_air_lps": 126.0
       }
      },
+     "people_counted_share": 1.0,
      "fan_heat_kw": 0.2407,
      "total_kw": 10.3184
     },
@@ -386,10 +504,13 @@
        "equipment": 1.296,
        "outside_air_s": 1.2482,
        "outside_air_l": 1.3532,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0,
        "people": 12,
        "outside_air_lps": 126.0
       }
      },
+     "people_counted_share": 1.0,
      "fan_heat_kw": 0.2417,
      "total_kw": 10.9047
     },
@@ -408,10 +529,13 @@
        "equipment": 1.296,
        "outside_air_s": -0.6157,
        "outside_air_l": -1.5338,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0,
        "people": 12,
        "outside_air_lps": 126.0
       }
      },
+     "people_counted_share": 1.0,
      "fan_heat_kw": 0.1958,
      "total_kw": 4.6764
     },
@@ -430,10 +554,13 @@
        "equipment": 1.296,
        "outside_air_s": -0.1539,
        "outside_air_l": -1.6061,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0,
        "people": 12,
        "outside_air_lps": 126.0
       }
      },
+     "people_counted_share": 1.0,
      "fan_heat_kw": 0.1681,
      "total_kw": 4.1716
     },
@@ -452,10 +579,13 @@
        "equipment": 1.296,
        "outside_air_s": 0.7465,
        "outside_air_l": 0.6429,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0,
        "people": 12,
        "outside_air_lps": 126.0
       }
      },
+     "people_counted_share": 1.0,
      "fan_heat_kw": 0.2326,
      "total_kw": 9.4018
     }
@@ -513,6 +643,8 @@
        "equipment": 2.4,
        "outside_air_s": 7.8758,
        "outside_air_l": 8.5382,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0,
        "people": 100,
        "outside_air_lps": 795.0
       },
@@ -527,10 +659,13 @@
        "equipment": 0.64,
        "outside_air_s": 5.944,
        "outside_air_l": 6.4439,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0,
        "people": 12,
        "outside_air_lps": 600.0
       }
      },
+     "people_counted_share": 1.0,
      "fan_heat_kw": 0.4049,
      "total_kw": 47.8168
     },
@@ -549,6 +684,8 @@
        "equipment": 0.0,
        "outside_air_s": 0.0,
        "outside_air_l": 0.0,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0,
        "people": 100,
        "outside_air_lps": 0.0
       },
@@ -563,10 +700,13 @@
        "equipment": 0.0,
        "outside_air_s": 0.0,
        "outside_air_l": 0.0,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0,
        "people": 12,
        "outside_air_lps": 0.0
       }
      },
+     "people_counted_share": 1.0,
      "fan_heat_kw": 0.0,
      "total_kw": 0.0
     },
@@ -585,6 +725,8 @@
        "equipment": 2.4,
        "outside_air_s": -1.5522,
        "outside_air_l": -11.0636,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0,
        "people": 100,
        "outside_air_lps": 795.0
       },
@@ -599,10 +741,13 @@
        "equipment": 0.64,
        "outside_air_s": -1.1715,
        "outside_air_l": -8.3499,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0,
        "people": 12,
        "outside_air_lps": 600.0
       }
      },
+     "people_counted_share": 1.0,
      "fan_heat_kw": 0.4049,
      "total_kw": -3.1224
     }
@@ -611,6 +756,546 @@
     "month": 1,
     "hour": 14,
     "total_kw": 47.8843
+   }
+  },
+  {
+   "case_id": "D_house",
+   "title": "Single-storey house: main bedroom with a west window, bedroom 2, north living room, kitchen and hall (Sydney)",
+   "dwelling": true,
+   "household": 3,
+   "rooms": [
+    {
+     "name": "MASTER BEDROOM",
+     "profile": "bedroom",
+     "area_m2": 16.0,
+     "height_m": 2.7,
+     "people": 2,
+     "surfaces": [
+      {
+       "label": "West wall",
+       "kind": "wall",
+       "tilt": 90,
+       "azimuth": 270.0,
+       "area_m2": 8.64,
+       "gross_m2": 10.8,
+       "u": 0.6,
+       "height_m": 2.7
+      }
+     ],
+     "glass": [
+      {
+       "label": "West window",
+       "azimuth": 270.0,
+       "area_m2": 2.16,
+       "width_m": 1.8,
+       "height_m": 1.2,
+       "sill_m": 0.9
+      }
+     ]
+    },
+    {
+     "name": "BED 2",
+     "profile": "bedroom",
+     "area_m2": 11.0,
+     "height_m": 2.7,
+     "people": 1
+    },
+    {
+     "name": "LIVING",
+     "profile": "living",
+     "area_m2": 30.0,
+     "height_m": 2.7,
+     "people": 3,
+     "surfaces": [
+      {
+       "label": "North wall",
+       "kind": "wall",
+       "tilt": 90,
+       "azimuth": 0.0,
+       "area_m2": 9.899999999999999,
+       "gross_m2": 16.2,
+       "u": 0.6,
+       "height_m": 2.7
+      }
+     ],
+     "glass": [
+      {
+       "label": "North doors",
+       "azimuth": 0.0,
+       "area_m2": 6.300000000000001,
+       "width_m": 3.0,
+       "height_m": 2.1,
+       "sill_m": 0.0
+      }
+     ]
+    },
+    {
+     "name": "KITCHEN",
+     "profile": "living",
+     "area_m2": 15.0,
+     "height_m": 2.7,
+     "people": 3,
+     "kitchen": true
+    },
+    {
+     "name": "HALL",
+     "profile": "circulation",
+     "area_m2": 8.0,
+     "height_m": 2.7,
+     "people": 0
+    }
+   ],
+   "checks": [
+    {
+     "month": 1,
+     "hour": 10,
+     "rooms": {
+      "MASTER BEDROOM": {
+       "envelope": 0.0156,
+       "solar": 0.0,
+       "glazing_conduction": 0.0376,
+       "glazing_solar": 0.0,
+       "people_s": 0.0,
+       "people_l": 0.0,
+       "lighting": 0.0,
+       "equipment": 0.0,
+       "outside_air_s": 0.0,
+       "outside_air_l": 0.0,
+       "infiltration_s": 0.015,
+       "infiltration_l": 0.0346,
+       "people": 0.0,
+       "outside_air_lps": 0.0
+      },
+      "BED 2": {
+       "envelope": 0.0,
+       "solar": 0.0,
+       "glazing_conduction": 0.0,
+       "glazing_solar": 0.0,
+       "people_s": 0.0,
+       "people_l": 0.0,
+       "lighting": 0.0,
+       "equipment": 0.0,
+       "outside_air_s": 0.0,
+       "outside_air_l": 0.0,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0,
+       "people": 0.0,
+       "outside_air_lps": 0.0
+      },
+      "LIVING": {
+       "envelope": 0.0178,
+       "solar": 0.0,
+       "glazing_conduction": 0.1096,
+       "glazing_solar": 0.0,
+       "people_s": 0.0,
+       "people_l": 0.0,
+       "lighting": 0.0,
+       "equipment": 0.0,
+       "outside_air_s": 0.0,
+       "outside_air_l": 0.0,
+       "infiltration_s": 0.0282,
+       "infiltration_l": 0.0648,
+       "people": 0.0,
+       "outside_air_lps": 0.0
+      },
+      "KITCHEN": {
+       "envelope": 0.0,
+       "solar": 0.0,
+       "glazing_conduction": 0.0,
+       "glazing_solar": 0.0,
+       "people_s": 0.0,
+       "people_l": 0.0,
+       "lighting": 0.0,
+       "equipment": 0.06,
+       "outside_air_s": 0.0,
+       "outside_air_l": 0.0,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0,
+       "people": 0.0,
+       "outside_air_lps": 0.0
+      },
+      "HALL": {
+       "envelope": 0.0,
+       "solar": 0.0,
+       "glazing_conduction": 0.0,
+       "glazing_solar": 0.0,
+       "people_s": 0.0,
+       "people_l": 0.0,
+       "lighting": 0.0272,
+       "equipment": 0.0,
+       "outside_air_s": 0.0,
+       "outside_air_l": 0.0,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0,
+       "people": 0.0,
+       "outside_air_lps": 0.0
+      }
+     },
+     "people_counted_share": 1.0,
+     "fan_heat_kw": 0.01,
+     "total_kw": 0.4203
+    },
+    {
+     "month": 1,
+     "hour": 16,
+     "rooms": {
+      "MASTER BEDROOM": {
+       "envelope": 0.0415,
+       "solar": 0.0,
+       "glazing_conduction": 0.1002,
+       "glazing_solar": 0.0,
+       "people_s": 0.0,
+       "people_l": 0.0,
+       "lighting": 0.0,
+       "equipment": 0.0,
+       "outside_air_s": 0.0,
+       "outside_air_l": 0.0,
+       "infiltration_s": 0.0393,
+       "infiltration_l": 0.0448,
+       "people": 0.0,
+       "outside_air_lps": 0.0
+      },
+      "BED 2": {
+       "envelope": 0.0,
+       "solar": 0.0,
+       "glazing_conduction": 0.0,
+       "glazing_solar": 0.0,
+       "people_s": 0.0,
+       "people_l": 0.0,
+       "lighting": 0.0,
+       "equipment": 0.0,
+       "outside_air_s": 0.0,
+       "outside_air_l": 0.0,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0,
+       "people": 0.0,
+       "outside_air_lps": 0.0
+      },
+      "LIVING": {
+       "envelope": 0.0475,
+       "solar": 0.0668,
+       "glazing_conduction": 0.2923,
+       "glazing_solar": 0.5213,
+       "people_s": 0.1608,
+       "people_l": 0.0792,
+       "lighting": 0.204,
+       "equipment": 0.0956,
+       "outside_air_s": 0.0,
+       "outside_air_l": 0.0,
+       "infiltration_s": 0.0738,
+       "infiltration_l": 0.0839,
+       "people": 3.0,
+       "outside_air_lps": 0.0
+      },
+      "KITCHEN": {
+       "envelope": 0.0,
+       "solar": 0.0,
+       "glazing_conduction": 0.0,
+       "glazing_solar": 0.0,
+       "people_s": 0.1608,
+       "people_l": 0.0792,
+       "lighting": 0.102,
+       "equipment": 0.06,
+       "outside_air_s": 0.0,
+       "outside_air_l": 0.0,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0,
+       "people": 3.0,
+       "outside_air_lps": 0.0
+      },
+      "HALL": {
+       "envelope": 0.0,
+       "solar": 0.0,
+       "glazing_conduction": 0.0,
+       "glazing_solar": 0.0,
+       "people_s": 0.0,
+       "people_l": 0.0,
+       "lighting": 0.0272,
+       "equipment": 0.0,
+       "outside_air_s": 0.0,
+       "outside_air_l": 0.0,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0,
+       "people": 0.0,
+       "outside_air_lps": 0.0
+      }
+     },
+     "people_counted_share": 0.5,
+     "fan_heat_kw": 0.0586,
+     "total_kw": 2.0988
+    },
+    {
+     "month": 1,
+     "hour": 17,
+     "rooms": {
+      "MASTER BEDROOM": {
+       "envelope": 0.0363,
+       "solar": 0.0,
+       "glazing_conduction": 0.0877,
+       "glazing_solar": 0.0,
+       "people_s": 0.0,
+       "people_l": 0.0,
+       "lighting": 0.0,
+       "equipment": 0.0,
+       "outside_air_s": 0.0,
+       "outside_air_l": 0.0,
+       "infiltration_s": 0.0345,
+       "infiltration_l": 0.05,
+       "people": 0.0,
+       "outside_air_lps": 0.0
+      },
+      "BED 2": {
+       "envelope": 0.0,
+       "solar": 0.0,
+       "glazing_conduction": 0.0,
+       "glazing_solar": 0.0,
+       "people_s": 0.0,
+       "people_l": 0.0,
+       "lighting": 0.0,
+       "equipment": 0.0,
+       "outside_air_s": 0.0,
+       "outside_air_l": 0.0,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0,
+       "people": 0.0,
+       "outside_air_lps": 0.0
+      },
+      "LIVING": {
+       "envelope": 0.0416,
+       "solar": 0.0325,
+       "glazing_conduction": 0.2558,
+       "glazing_solar": 0.2538,
+       "people_s": 0.1608,
+       "people_l": 0.0792,
+       "lighting": 0.204,
+       "equipment": 0.0956,
+       "outside_air_s": 0.0,
+       "outside_air_l": 0.0,
+       "infiltration_s": 0.0647,
+       "infiltration_l": 0.0938,
+       "people": 3.0,
+       "outside_air_lps": 0.0
+      },
+      "KITCHEN": {
+       "envelope": 0.0,
+       "solar": 0.0,
+       "glazing_conduction": 0.0,
+       "glazing_solar": 0.0,
+       "people_s": 0.1608,
+       "people_l": 0.0792,
+       "lighting": 0.102,
+       "equipment": 0.56,
+       "outside_air_s": 0.0,
+       "outside_air_l": 0.0,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0,
+       "people": 3.0,
+       "outside_air_lps": 0.0
+      },
+      "HALL": {
+       "envelope": 0.0,
+       "solar": 0.0,
+       "glazing_conduction": 0.0,
+       "glazing_solar": 0.0,
+       "people_s": 0.0,
+       "people_l": 0.0,
+       "lighting": 0.0272,
+       "equipment": 0.0,
+       "outside_air_s": 0.0,
+       "outside_air_l": 0.0,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0,
+       "people": 0.0,
+       "outside_air_lps": 0.0
+      }
+     },
+     "people_counted_share": 0.5,
+     "fan_heat_kw": 0.0626,
+     "total_kw": 2.2421
+    },
+    {
+     "month": 1,
+     "hour": 23,
+     "rooms": {
+      "MASTER BEDROOM": {
+       "envelope": -0.0052,
+       "solar": 0.0,
+       "glazing_conduction": -0.0125,
+       "glazing_solar": 0.0,
+       "people_s": 0.1072,
+       "people_l": 0.0528,
+       "lighting": 0.1088,
+       "equipment": 0.0306,
+       "outside_air_s": 0.0,
+       "outside_air_l": 0.0,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0215,
+       "people": 2.0,
+       "outside_air_lps": 0.0
+      },
+      "BED 2": {
+       "envelope": 0.0,
+       "solar": 0.0,
+       "glazing_conduction": 0.0,
+       "glazing_solar": 0.0,
+       "people_s": 0.0536,
+       "people_l": 0.0264,
+       "lighting": 0.0748,
+       "equipment": 0.021,
+       "outside_air_s": 0.0,
+       "outside_air_l": 0.0,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0,
+       "people": 1.0,
+       "outside_air_lps": 0.0
+      },
+      "LIVING": {
+       "envelope": -0.0059,
+       "solar": 0.0,
+       "glazing_conduction": -0.0365,
+       "glazing_solar": 0.0,
+       "people_s": 0.0,
+       "people_l": 0.0,
+       "lighting": 0.0,
+       "equipment": 0.0,
+       "outside_air_s": 0.0,
+       "outside_air_l": 0.0,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0403,
+       "people": 0.0,
+       "outside_air_lps": 0.0
+      },
+      "KITCHEN": {
+       "envelope": 0.0,
+       "solar": 0.0,
+       "glazing_conduction": 0.0,
+       "glazing_solar": 0.0,
+       "people_s": 0.0,
+       "people_l": 0.0,
+       "lighting": 0.0,
+       "equipment": 0.06,
+       "outside_air_s": 0.0,
+       "outside_air_l": 0.0,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0,
+       "people": 0.0,
+       "outside_air_lps": 0.0
+      },
+      "HALL": {
+       "envelope": 0.0,
+       "solar": 0.0,
+       "glazing_conduction": 0.0,
+       "glazing_solar": 0.0,
+       "people_s": 0.0,
+       "people_l": 0.0,
+       "lighting": 0.0,
+       "equipment": 0.0,
+       "outside_air_s": 0.0,
+       "outside_air_l": 0.0,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0,
+       "people": 0.0,
+       "outside_air_lps": 0.0
+      }
+     },
+     "people_counted_share": 1.0,
+     "fan_heat_kw": 0.0127,
+     "total_kw": 0.5496
+    },
+    {
+     "month": 7,
+     "hour": 16,
+     "rooms": {
+      "MASTER BEDROOM": {
+       "envelope": -0.0083,
+       "solar": 0.0,
+       "glazing_conduction": -0.02,
+       "glazing_solar": 0.0,
+       "people_s": 0.0,
+       "people_l": 0.0,
+       "lighting": 0.0,
+       "equipment": 0.0,
+       "outside_air_s": 0.0,
+       "outside_air_l": 0.0,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0,
+       "people": 0.0,
+       "outside_air_lps": 0.0
+      },
+      "BED 2": {
+       "envelope": 0.0,
+       "solar": 0.0,
+       "glazing_conduction": 0.0,
+       "glazing_solar": 0.0,
+       "people_s": 0.0,
+       "people_l": 0.0,
+       "lighting": 0.0,
+       "equipment": 0.0,
+       "outside_air_s": 0.0,
+       "outside_air_l": 0.0,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0,
+       "people": 0.0,
+       "outside_air_lps": 0.0
+      },
+      "LIVING": {
+       "envelope": -0.0095,
+       "solar": 0.1054,
+       "glazing_conduction": -0.0585,
+       "glazing_solar": 0.8223,
+       "people_s": 0.1608,
+       "people_l": 0.0792,
+       "lighting": 0.204,
+       "equipment": 0.0956,
+       "outside_air_s": 0.0,
+       "outside_air_l": 0.0,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0,
+       "people": 3.0,
+       "outside_air_lps": 0.0
+      },
+      "KITCHEN": {
+       "envelope": 0.0,
+       "solar": 0.0,
+       "glazing_conduction": 0.0,
+       "glazing_solar": 0.0,
+       "people_s": 0.1608,
+       "people_l": 0.0792,
+       "lighting": 0.102,
+       "equipment": 0.06,
+       "outside_air_s": 0.0,
+       "outside_air_l": 0.0,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0,
+       "people": 3.0,
+       "outside_air_lps": 0.0
+      },
+      "HALL": {
+       "envelope": 0.0,
+       "solar": 0.0,
+       "glazing_conduction": 0.0,
+       "glazing_solar": 0.0,
+       "people_s": 0.0,
+       "people_l": 0.0,
+       "lighting": 0.0272,
+       "equipment": 0.0,
+       "outside_air_s": 0.0,
+       "outside_air_l": 0.0,
+       "infiltration_s": 0.0,
+       "infiltration_l": 0.0,
+       "people": 0.0,
+       "outside_air_lps": 0.0
+      }
+     },
+     "people_counted_share": 0.5,
+     "fan_heat_kw": 0.0474,
+     "total_kw": 1.6076
+    }
+   ],
+   "peak": {
+    "month": 3,
+    "hour": 15,
+    "total_kw": 2.9242
    }
   }
  ]

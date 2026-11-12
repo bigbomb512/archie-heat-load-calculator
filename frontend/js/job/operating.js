@@ -21,6 +21,11 @@ function sourceLabel(row) {
       contractor_override: "Entered by you",
       accepted_finding: "Drawing evidence",
       controlled_preliminary_profile: "Typical value",
+      equipment_catalogue: "Matched model",
+      typical_value: "Typical value for the type and size",
+      generic_value: "Generic value",
+      typical_home_value: "Typical home value",
+      household_rule: "Household rule",
       unresolved: "Not resolved",
       edited: "Entered by you",
     }[row?.origin] ||

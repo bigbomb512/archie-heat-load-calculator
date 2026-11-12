@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 
 from ai.research_cache import approved_source_pack, eligible_bindings, source_domain_allowed
 from ai import model_input_resolution as shared_resolution
+from ai import house_profiles
 
 
 SCHEMA_VERSION = 1
@@ -459,7 +460,8 @@ def build_value_resolution(pack, building, proposal, research_cache, resolution=
             continue
         target_id = room_target_id(name, level)
         profile_id = _text(row.get("preliminary_profile_id")) or "generic_conditioned_room"
-        profile = profiles.get(profile_id, profiles["generic_conditioned_room"])
+        # A house room's defaults are the house profile on the residential base, never the generic room's.
+        profile = house_profiles.profile(profiles, profile_id) or profiles.get(profile_id, profiles["generic_conditioned_room"])
         context = {**_project_context(building, site_location), "room_use": profile_id, "building_use": _text((building or {}).get("building_use")) or profile_id,
                    "room_name": name, "level": level}
         source_room = building_by_identity.get(target_id, {})

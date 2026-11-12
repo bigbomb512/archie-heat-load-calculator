@@ -9,7 +9,8 @@ import json
 from pathlib import Path
 import unittest
 
-from ai import ai_preliminary, sun
+from ai import (ai_preliminary, airflow_resolution, ceiling_volume_resolution, house_household, internal_gains_resolution,
+                room_use_resolution, sun)
 
 ROOT = Path(__file__).resolve().parents[1]
 SUITE = json.loads((ROOT / "tests" / "fixtures" / "draft_reference_rooms_v1.json").read_text(encoding="utf-8"))
@@ -26,7 +27,8 @@ COMPONENTS = {"envelope": ("envelope", "sensible_kw"), "solar": ("solar", "sensi
               "glazing_conduction": ("glazing_conduction", "sensible_kw"), "glazing_solar": ("glazing_solar", "sensible_kw"),
               "people_s": ("people", "sensible_kw"), "people_l": ("people", "latent_kw"),
               "lighting": ("lighting", "sensible_kw"), "equipment": ("equipment_refrigeration", "sensible_kw"),
-              "outside_air_s": ("outside_air", "sensible_kw"), "outside_air_l": ("outside_air", "latent_kw")}
+              "outside_air_s": ("outside_air", "sensible_kw"), "outside_air_l": ("outside_air", "latent_kw"),
+              "infiltration_s": ("infiltration", "sensible_kw"), "infiltration_l": ("infiltration", "latent_kw")}
 CARDINAL = {0.0: "N", 90.0: "E", 180.0: "S", 270.0: "W"}
 
 
@@ -36,8 +38,10 @@ def proposal(case):
     for room in case["rooms"]:
         name = room["name"]
         rooms.append({"kind": "room", "label": name, "level_name": "Ground", "area_m2": room["area_m2"],
-                      "preliminary_profile_id": room["profile"], "confidence": 0.8, "page": 1, "excerpt": name,
-                      "rationale": "Reference room.", **({"occupancy_count": room["seats"]} if room.get("seats") else {})})
+                      "preliminary_profile_id": "residential" if case.get("dwelling") else room["profile"], "confidence": 0.8,
+                      "page": 1, "excerpt": name, "rationale": "Reference room.", "evidence": [{"page": 1, "excerpt": name}],
+                      **({"ceiling_height_mm": round(room["height_m"] * 1000)} if room.get("height_m") else {}),
+                      **({"occupancy_count": room["seats"]} if room.get("seats") else {})})
         host_key = None
         for index, surface in enumerate(room.get("surfaces", [])):
             key = f"{name}-surface-{index}"
@@ -67,12 +71,35 @@ def proposal(case):
     return {"rooms": rooms, "surfaces": surfaces, "openings": openings}
 
 
+def house_inputs(case, traced):
+    """A house runs its own resolvers as the job does: room uses with the dwelling flag, the household, internal gains,
+    ceiling heights and airflow (which sees the rooms before the traced walls, ai_preliminary_service)."""
+    building = {"spaces": [{"name": room["name"], "level_name": "Ground", "area_m2": room["area_m2"],
+                            "ceiling_height_mm": round(room["height_m"] * 1000), "evidence": [{"page": 1, "excerpt": room["name"]}]}
+                           for room in case["rooms"]]}
+    rooms_only = {"rooms": traced["rooms"]}
+    uses = room_use_resolution.resolve(building, proposal=rooms_only,
+                                       dwelling_context={"is_dwelling": True, "evidence": [{"page": 1, "excerpt": "BASIX"}]})
+    areas = {room["name"]: room["area_m2"] for room in case["rooms"]}
+    household = house_household.plan([{"room_id": row["room_id"], "label": row["original_label"], "level": row["level_name"],
+                                       "category": row["taxonomy_id"], "scope": row["space_scope"],
+                                       "area_m2": areas[row["original_label"]]} for row in uses["records"]])
+    pack = ai_preliminary.load_pack()
+    gains = internal_gains_resolution.resolve(building, {}, rooms_only, uses, pack, {}, household=household)
+    ceiling = ceiling_volume_resolution.resolve(building, {}, rooms_only, {}, pack, {})
+    airflow = airflow_resolution.resolve(building, {}, rooms_only, uses, ceiling, pack, {})
+    return building, {"room_use_resolution": uses, "internal_gains_resolution": gains, "ceiling_volume_resolution": ceiling,
+                      "airflow_resolution": airflow}
+
+
 def run(case, scope="full"):
     exhaust = {room["name"].casefold(): {"lps": room["exhaust_lps"], "method": "through_space"}
                for room in case["rooms"] if room.get("exhaust_lps")}
-    model = ai_preliminary.assemble({"spaces": []}, preliminary_proposal=proposal(case), site_location=SITE,
+    traced = proposal(case)
+    building, resolved = house_inputs(case, traced) if case.get("dwelling") else ({"spaces": []}, {})
+    model = ai_preliminary.assemble(building, preliminary_proposal=traced, site_location=SITE,
                                     design_weather_table=DESIGN_TABLE, monthly_climate_table=MONTHLY_TABLE,
-                                    process_exhaust=exhaust or None)
+                                    process_exhaust=exhaust or None, **resolved)
     return model, ai_preliminary.calculate(model, scope=scope)
 
 

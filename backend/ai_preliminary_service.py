@@ -641,6 +641,7 @@ def _with_accepted_equipment(paths, proposal):
             **({"diversity_factor": item["diversity_factor"]} if item.get("diversity_factor") is not None else {}),
             "catalogue_hash": item["catalogue_hash"],
             "catalogue_id": item.get("catalogue_id") or item.get("typical_id"), "origin": item["origin"],
+            **({"kind": item["kind"]} if item.get("kind") else {}),
             "source": f"{item['label']}: {item.get('source') or ''}".rstrip(": "),
             "evidence": [{"page": page, "excerpt": item["name"], "reference": item.get("source") or item["label"]}
                          for page in item["pages"]]})

@@ -12,6 +12,8 @@ import json
 import math
 import re
 
+from ai import house_profiles
+
 
 SCHEMA_VERSION = 1
 AIR_PATH_TYPES = {"outside_air", "infiltration", "process_exhaust", "make_up_air", "transfer_air", "supply", "return", "relief"}
@@ -80,15 +82,10 @@ def _evidence(item):
 
 def _profile(pack, profile_id):
     profiles = (pack or {}).get("profiles", {}) if isinstance(pack, dict) else {}
-    if profile_id.startswith("house_") or profile_id in {"garage", "outdoor", "lift_shaft", "circulation"}:
-        try:
-            from pathlib import Path
-            house = json.loads(Path(__file__).resolve().parents[1].joinpath("config", "house_profiles.json").read_text(encoding="utf-8"))
-            result = deepcopy(profiles.get("residential", {}))
-            result.update({key: value for key, value in house["profiles"][profile_id].items() if key != "schedule_hours"})
-            return result
-        except (OSError, ValueError, KeyError):
-            pass
+    house = house_profiles.profile(profiles, profile_id)
+    if house is not None:
+        house.pop("schedule_hours", None)
+        return house
     return profiles.get(profile_id) or profiles.get("generic_conditioned_room", {})
 
 
@@ -355,13 +352,17 @@ def resolve(building, vision, proposal, room_use, ceiling_volume, pack, source_f
             unresolved.append("resolved room volume is required for ACH infiltration")
         infiltration = _make_record("infiltration", rid, "uncontrolled infiltration", value=infiltration_value, unit=infiltration_unit,
             origin=infiltration_origin, confidence=confidence if infiltration_origin != "controlled_fallback" else .35,
-            evidence=evidence, rationale="House ventilation decision: preliminary infiltration ACH; 0 outside air." if dwelling else "Door, exposure, cited leakage, or controlled preliminary infiltration basis.", schedule=_schedule(profile_id),
+            evidence=evidence, rationale="House ventilation decision: preliminary infiltration ACH; 0 outside air." if dwelling else "Door, exposure, cited leakage, or controlled preliminary infiltration basis.",
+            # Air leaks into a house through its walls at every hour, whoever is in the room (the room's occupied
+            # hours set people, not leakage). A shop keeps its opening hours: its doors are the main path.
+            schedule={day: [1.0] * 24 for day in DAY_TYPES} if dwelling else _schedule(profile_id),
             formula="ACH × room volume × 1000 ÷ 3600" if infiltration_unit == "ACH" else "direct airflow",
             operands={"room_volume_m3": volume, "ach": infiltration_value if infiltration_unit == "ACH" else None, "resolved_flow_lps": volume * infiltration_value * 1000 / 3600 if volume is not None and infiltration_unit == "ACH" else infiltration_value},
             status="provisional" if dwelling and infiltration_value is not None else "blocked" if unresolved else "provisional" if infiltration_origin in {"controlled_fallback", "research_candidate"} else "resolved", unresolved=[] if dwelling else unresolved,
             assumptions=["typical home ventilation decision: preliminary_defaults.infiltration_ach, uncited for review"] if dwelling and infiltration_origin == "controlled_fallback" else ["controlled preliminary infiltration ACH"] if infiltration_origin == "controlled_fallback" else [], extra={"room_volume_id": ceiling.get("room_id", rid) if isinstance(ceiling, dict) else rid, "air_path": "uncontrolled_infiltration"})
         if dwelling and not outside_wall and use.get("space_scope") not in {"not_cooled", "refrigeration_process", "unresolved_scope", "not_a_room"}:
-            infiltration.update(status="excluded", value=None, rationale="Dwelling infiltration is applied only where an outside wall is resolved; this room has no outside-wall assignment.", unresolved_fields=[])
+            # The traced walls join the proposal only at assembly, which decides again from them (ai_preliminary).
+            infiltration.update(status="excluded", value=None, rationale="Dwelling infiltration is applied only where an outside wall is resolved; this room has no outside-wall assignment.", unresolved_fields=[], excluded_reason="no_outside_wall")
             infiltration["resolution_fingerprint"] = fingerprint({key: value for key, value in infiltration.items() if key != "resolution_fingerprint"})
         records.append(infiltration)
 

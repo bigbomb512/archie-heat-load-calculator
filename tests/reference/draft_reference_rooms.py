@@ -47,6 +47,22 @@ PACK = {
     },
     # Heat from people by room use (AIRAH Technical Handbook 2007, p. 47, room at 24 °C), sensible / latent W.
     "activity": {"retail": (76, 74), "office": (70, 50), "dining": (70, 50), "kitchen": (85, 135)},
+    # Houses (config/house_profiles.json on the pack's residential profile; user decisions 2026-10-30): people come from
+    # the household (2 in the main bedroom, 1 in each other; living areas hold the whole household, counted once per
+    # hour across the house), no outside air, 0.36 ACH infiltration through rooms with a wall to outside at every hour.
+    "house": {
+        "bedroom": {"people_diversity": 0.8, "lighting_w_m2": 8, "lighting_diversity": 0.85, "equipment_w_m2": 3,
+                    "equipment_diversity": 0.75, "equipment_space_gain": 0.85, "open": [range(22, 24), range(0, 7)]},
+        "living": {"people_diversity": 0.8, "lighting_w_m2": 8, "lighting_diversity": 0.85, "equipment_w_m2": 5,
+                   "equipment_diversity": 0.75, "equipment_space_gain": 0.85, "open": [range(7, 8), range(15, 22)]},
+        "circulation": {"people_diversity": 0.8, "lighting_w_m2": 4, "lighting_diversity": 0.85, "equipment_w_m2": 0,
+                        "equipment_diversity": 0.75, "equipment_space_gain": 0.85, "open": [range(7, 22)]},
+        "people": (67, 33), "infiltration_ach": 0.36,
+        # A house kitchen with no appliances on the drawings: a fridge all day; cooking 2000 W × 0.5 to the room at
+        # half use from 5 to 7 pm.
+        "kitchen_appliances": [{"w": 60, "factor": 1.0, "hours": {hour: 1.0 for hour in range(24)}},
+                               {"w": 2000, "factor": 0.5, "hours": {17: 0.5, 18: 0.5}}],
+    },
 }
 
 # ---- Physics constants, each from its source ------------------------------------------------------------------------
@@ -139,13 +155,59 @@ def outside_air_kw(flow_lps, db, wb):
     return sensible, total - sensible
 
 
+def infiltration_kw(flow_lps, db, wb):
+    """Leakage measured as outdoor air (the approved infiltration method): mass flow at the outdoor specific volume
+    (Eq. 28), dry-air sensible heat, latent the rest of the enthalpy difference; only cooling gains count."""
+    w_out, w_in = humidity_ratio(db, wb), humidity_ratio(INDOOR_DB, INDOOR_WB)
+    specific_volume = 0.287042 * (db + 273.15) * (1 + 1.607858 * w_out) / PRESSURE
+    mass = flow_lps / 1000 / specific_volume
+    sensible = mass * 1.006 * (db - INDOOR_DB)
+    total = mass * (enthalpy(db, w_out) - enthalpy(INDOOR_DB, w_in))
+    return max(sensible, 0.0), max(total - sensible, 0.0)
+
+
 # ---- One room, one hour ---------------------------------------------------------------------------------------------
+def house_room_hour(room, month, hour):
+    """A house room: house values, its own hours, sun in its hours only (the draft's choice), leakage at every hour."""
+    house = PACK["house"]
+    profile = house[room["profile"]]
+    db, wb = design_day(month)[hour]
+    open_now = 1.0 if any(hour in hours for hours in profile["open"]) else 0.0
+    out = {key: 0.0 for key in ("envelope", "solar", "glazing_conduction", "glazing_solar", "people_s", "people_l",
+                                 "lighting", "equipment", "outside_air_s", "outside_air_l", "infiltration_s", "infiltration_l")}
+    for surface in room.get("surfaces", []):
+        out["envelope"] += surface["area_m2"] * surface["u"] * (db - INDOOR_DB) / 1000
+        sun = plane_sunlight(month, hour, surface["tilt"], surface.get("azimuth", 0.0), surface.get("height_m"))
+        out["solar"] += surface["area_m2"] * surface["u"] * ALPHA_OVER_HO * sun * open_now / 1000
+    for glass in room.get("glass", []):
+        out["glazing_conduction"] += PACK["glass_u"] * glass["area_m2"] * (db - INDOOR_DB) / 1000
+        sun = plane_sunlight(month, hour, 90, glass["azimuth"], glass["height_m"])
+        out["glazing_solar"] += glass["area_m2"] * (1 - PACK["frame_fraction"]) * PACK["shgc"] * sun * open_now / 1000
+    people = room.get("people", 0)
+    out["people_s"] = people * house["people"][0] * profile["people_diversity"] * open_now / 1000
+    out["people_l"] = people * house["people"][1] * profile["people_diversity"] * open_now / 1000
+    out["lighting"] = room["area_m2"] * profile["lighting_w_m2"] * profile["lighting_diversity"] * open_now / 1000
+    if room.get("kitchen"):
+        out["equipment"] = sum(item["w"] * item["factor"] * item["hours"].get(hour, 0.0) for item in house["kitchen_appliances"]) / 1000
+    else:
+        out["equipment"] = (room["area_m2"] * profile["equipment_w_m2"] * profile["equipment_space_gain"]
+                            * profile["equipment_diversity"] * open_now / 1000)
+    if room.get("surfaces"):              # a wall to outside: leakage through it at every hour
+        flow = house["infiltration_ach"] * room["area_m2"] * room["height_m"] / 3.6
+        out["infiltration_s"], out["infiltration_l"] = infiltration_kw(flow, db, wb)
+    out["people"] = people * open_now
+    out["outside_air_lps"] = 0.0
+    return out
+
+
 def room_hour(room, month, hour):
+    if room["profile"] in PACK["house"]:
+        return house_room_hour(room, month, hour)
     profile = PACK["profiles"][room["profile"]]
     db, wb = design_day(month)[hour]
     open_now = 1.0 if hour in profile["open"] else 0.0
     out = {key: 0.0 for key in ("envelope", "solar", "glazing_conduction", "glazing_solar", "people_s", "people_l",
-                                 "lighting", "equipment", "outside_air_s", "outside_air_l")}
+                                 "lighting", "equipment", "outside_air_s", "outside_air_l", "infiltration_s", "infiltration_l")}
     for surface in room.get("surfaces", []):
         area, u = surface["area_m2"], surface["u"]
         if surface.get("adjacent"):          # a wall to a mall, room or tenancy: at the room's temperature
@@ -198,31 +260,65 @@ CASES = [
                               "gross_m2": 36.0, "u": PACK["wall_u"], "adjacent": "mall"}]},
                {"name": "Kitchen", "profile": "hospitality", "activity": "kitchen", "area_m2": 40.0, "exhaust_lps": 600.0}],
      "checks": [(1, 15), (1, 9), (7, 15)]},
+    {"case_id": "D_house", "title": "Single-storey house: main bedroom with a west window, bedroom 2, north living room, kitchen and hall (Sydney)",
+     "dwelling": True, "household": 3,
+     "rooms": [{"name": "MASTER BEDROOM", "profile": "bedroom", "area_m2": 16.0, "height_m": 2.7, "people": 2,
+                "surfaces": [{"label": "West wall", "kind": "wall", "tilt": 90, "azimuth": 270.0, "area_m2": 10.8 - 2.16,
+                              "gross_m2": 10.8, "u": PACK["wall_u"], "height_m": 2.7}],
+                "glass": [{"label": "West window", "azimuth": 270.0, "area_m2": 1.8 * 1.2, "width_m": 1.8, "height_m": 1.2,
+                           "sill_m": 0.9}]},
+               {"name": "BED 2", "profile": "bedroom", "area_m2": 11.0, "height_m": 2.7, "people": 1},
+               {"name": "LIVING", "profile": "living", "area_m2": 30.0, "height_m": 2.7, "people": 3,
+                "surfaces": [{"label": "North wall", "kind": "wall", "tilt": 90, "azimuth": 0.0, "area_m2": 16.2 - 6.3,
+                              "gross_m2": 16.2, "u": PACK["wall_u"], "height_m": 2.7}],
+                "glass": [{"label": "North doors", "azimuth": 0.0, "area_m2": 3.0 * 2.1, "width_m": 3.0, "height_m": 2.1,
+                           "sill_m": 0.0}]},
+               {"name": "KITCHEN", "profile": "living", "area_m2": 15.0, "height_m": 2.7, "people": 3, "kitchen": True},
+               {"name": "HALL", "profile": "circulation", "area_m2": 8.0, "height_m": 2.7, "people": 0}],
+     "checks": [(1, 10), (1, 16), (1, 17), (1, 23), (7, 16)]},
 ]
 
 
-def fan_kw(hour_rooms):
-    room_sensible = sum(row["envelope"] + row["solar"] + row["glazing_conduction"] + row["glazing_solar"] + row["people_s"]
-                        + row["lighting"] + row["equipment"] for row in hour_rooms)
+def people_counted(case, hour_rooms):
+    """The share of the rooms' people heat a whole-house total keeps: a household is in one place at a time, so the
+    people in its rooms this hour count at most once (shops: every room's people count)."""
+    household = case.get("household")
+    present = sum(row["people"] for row in hour_rooms)
+    return min(1.0, household / present) if household and present else 1.0
+
+
+def fan_kw(hour_rooms, share=1.0):
+    room_sensible = sum(row["envelope"] + row["solar"] + row["glazing_conduction"] + row["glazing_solar"] + row["people_s"] * share
+                        + row["lighting"] + row["equipment"] + row["infiltration_s"] for row in hour_rooms)
     return max(room_sensible, 0.0) * PACK["fan_percent"] / 100
 
 
-def total_kw(hour_rooms):
-    return sum(row["envelope"] + row["solar"] + row["glazing_conduction"] + row["glazing_solar"] + row["people_s"]
-               + row["people_l"] + row["lighting"] + row["equipment"] + row["outside_air_s"] + row["outside_air_l"]
-               for row in hour_rooms) + fan_kw(hour_rooms)
+def total_kw(hour_rooms, share=1.0):
+    return sum(row["envelope"] + row["solar"] + row["glazing_conduction"] + row["glazing_solar"]
+               + (row["people_s"] + row["people_l"]) * share + row["lighting"] + row["equipment"] + row["outside_air_s"]
+               + row["outside_air_l"] + row["infiltration_s"] + row["infiltration_l"]
+               for row in hour_rooms) + fan_kw(hour_rooms, share)
+
+
+def case_total(case, month, hour):
+    rows = [room_hour(room, month, hour) for room in case["rooms"]]
+    return total_kw(rows, people_counted(case, rows))
 
 
 def work(case):
     checks = []
     for month, hour in case["checks"]:
         rows = {room["name"]: room_hour(room, month, hour) for room in case["rooms"]}
+        share = people_counted(case, list(rows.values()))
         checks.append({"month": month, "hour": hour,
                        "rooms": {name: {key: round(value, 4) for key, value in row.items()} for name, row in rows.items()},
-                       "fan_heat_kw": round(fan_kw(list(rows.values())), 4), "total_kw": round(total_kw(list(rows.values())), 4)})
-    best = max(((month, hour, total_kw([room_hour(room, month, hour) for room in case["rooms"]]))
+                       "people_counted_share": round(share, 4),
+                       "fan_heat_kw": round(fan_kw(list(rows.values()), share), 4),
+                       "total_kw": round(total_kw(list(rows.values()), share), 4)})
+    best = max(((month, hour, case_total(case, month, hour))
                 for month in range(1, 13) for hour in range(24)), key=lambda item: (round(item[2], 6), -item[0], -item[1]))
-    return {"case_id": case["case_id"], "title": case["title"], "rooms": case["rooms"], "checks": checks,
+    return {"case_id": case["case_id"], "title": case["title"],
+            **{key: case[key] for key in ("dwelling", "household") if key in case}, "rooms": case["rooms"], "checks": checks,
             "peak": {"month": best[0], "hour": best[1], "total_kw": round(best[2], 4)}}
 
 

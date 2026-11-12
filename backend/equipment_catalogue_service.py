@@ -175,6 +175,7 @@ def _resolve(row, decision, book, typical, assessment, evidence, room_names, dup
     if decision.get("status") == "rejected":
         return {**out, "status": "excluded", "label": LABELS["excluded"], "note": "Rejected by the operator."}
     kind = equipment_heat.equipment_type(name)
+    out["kind"] = kind
     component = any(word in str(name).casefold() for word in ("condenser", "compressor", "evaporator", "controller", "control system"))
     if kind in {"exhaust_hood", "refrigerated_room"} and not component:
         return {**out, "status": "excluded", "label": LABELS["excluded"],

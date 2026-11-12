@@ -19,6 +19,7 @@ from ai.hourly_loads import build_hourly_load_model, calculate_hourly_load_repor
 from ai import design_weather
 from ai import sun as site_sun_model
 from ai import value_resolution as value_resolver
+from ai import house_profiles
 from ai import model_input_resolution as shared_resolution
 from ai import room_use_resolution as room_use_resolver
 from ai import ceiling_volume_resolution as ceiling_volume_resolver
@@ -262,15 +263,35 @@ def _profile_from_label(label, dwelling=False, room_use_category=""):
 
 def _profiles_for_dwelling(profile_id, dwelling):
     """House profiles are isolated from the shop assumption pack and applied only with the persisted dwelling flag."""
-    base = deepcopy(load_pack()["profiles"]["residential"])
     if not dwelling or profile_id not in HOUSE_PROFILE_IDS:
-        return base
-    house = json.loads((ROOT / "config" / "house_profiles.json").read_text(encoding="utf-8"))
-    item = house["profiles"][profile_id]
-    base.update({key: value for key, value in item.items() if key != "schedule_hours"})
-    base["basis_label"] = house["basis_label"]
-    base["schedule_hours"] = item["schedule_hours"]
-    return base
+        return deepcopy(load_pack()["profiles"]["residential"])
+    return house_profiles.profile(load_pack()["profiles"], profile_id)
+
+
+def _outside_wall_rooms(proposal):
+    """{(room label, level)} with a wall to outside among the proposal's surfaces: the airflow step's test, applied
+    to the surfaces that include the traced walls."""
+    found = set()
+    for surface in (proposal or {}).get("surfaces", []):
+        if (isinstance(surface, dict)
+                and str(surface.get("physical_type", surface.get("surface_kind", "wall"))).strip().casefold() == "wall"
+                and str(surface.get("thermal_role", surface.get("boundary_reference", ""))).strip().casefold() in {"external", "outside", "outdoors"}):
+            found.add((str(surface.get("owner_room_label", surface.get("room_label", ""))).strip(),
+                       str(surface.get("owner_level_name", surface.get("level_name", ""))).strip()))
+    return found
+
+
+def _house_infiltration(record, outside_wall):
+    """A house room's preliminary infiltration record, decided by whether the room has a wall to outside."""
+    record = deepcopy(record)
+    ach = _number((record.get("operands") or {}).get("ach"))
+    if outside_wall and record.get("excluded_reason") == "no_outside_wall" and ach:
+        record.update(status="provisional", value=ach, unit="ACH", excluded_reason="",
+                      rationale="House ventilation decision: preliminary infiltration ACH through the room's walls to outside; 0 outside air.")
+    elif not outside_wall and record.get("status") not in {"blocked", "excluded"}:
+        record.update(status="excluded", value=None, excluded_reason="no_outside_wall",
+                      rationale="Dwelling infiltration is applied only where an outside wall is resolved; this room has no wall to outside.")
+    return record
 
 
 def _scope_from_label(label):
@@ -1354,6 +1375,7 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
             return [{"reference": f"product-owned:{pack['pack_id']}:{pack['version']}", "excerpt": "Controlled preliminary infiltration profile from the released assumption pack."}]
         return []
 
+    outside_wall_rooms = _outside_wall_rooms(effective_proposal)
     for room, row in zip(model["rooms"], active_rows):
         profile_id = next(item["profile_id"] for item in ledger if item["room_id"] == f"room-{row['key']}" and item["field"] == "room_profile")
         profile = (deepcopy(pack["profiles"].get(profile_id)) if profile_id in pack["profiles"] else _profiles_for_dwelling(profile_id, room_use_artifact.get("dwelling_context", {}).get("is_dwelling") is True))
@@ -1383,6 +1405,10 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
             room["schedule_assignments"]["equipment"][source["source_id"]] = schedule_id
         infiltration_record = room_airflows.get("infiltration", {})
         house_infiltration = room_use_artifact.get("dwelling_context", {}).get("is_dwelling") is True and infiltration_record.get("origin") == "controlled_fallback"
+        if house_infiltration:
+            # A house room takes infiltration only through a wall to outside. The airflow step runs before the traced
+            # walls join the proposal, so it can't see them: decide here from the walls this draft uses.
+            infiltration_record = _house_infiltration(infiltration_record, (row["name"], row["level"]) in outside_wall_rooms)
         if infiltration_record.get("air_path_type") == "infiltration" and infiltration_record.get("status") not in {"blocked", "excluded"} and infiltration_record.get("value") is not None:
             infiltration_schedule_id = f"airflow-infiltration-{room['room_id']}"
             day_profiles = infiltration_record.get("schedule", {})
