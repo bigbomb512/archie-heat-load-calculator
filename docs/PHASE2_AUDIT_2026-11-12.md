@@ -177,11 +177,19 @@ sections, its text is legible.
   - A fake-AI run of the drawing step on set 16 asks P8 for page 3 and finishes.
 - **Effect** (AI off, so default glass): set 15 52.5 → 73.8 kW, set 16 35.5 → 45.2, set 18 24.0 → 29.9 (glass sun up
   about 55–70 %). Shops unchanged.
-- **Not yet done:** P8 hasn't been run against a real AI reply. A live check on sets 16 and 19 needs the user's go-ahead
-  for the spend. Window-level matching by size and orientation isn't attempted; rooms take area-weighted values.
+- **Live check (13 November, Codex CLI with the ChatGPT sign-in; the user chose Codex over OpenRouter):** 4 sheets, every
+  reply passed the checker.
+  - Set 16 page 3 and set 19 page 19 were rightly answered "no window table". Set 16's BASIX page is blank apart from
+    its title block; set 19's BASIX page lists commitments only.
+  - Set 19 pages 20 and 21 (Dwellings A and B) gave both window types exactly: ALM-001-01 A 6.7 / 0.57 and ALM-002-01 A
+    6.7 / 0.70.
+  - Checked by eye against Dwelling A's schedule: 16 of 17 window rows right. The ensuite window was given type A
+    where the certificate prints ALM-002-01 A; ensuites aren't cooled.
+  - About 17,000 input tokens per sheet; set 16's A1 sheet went as 12 sections and 41,000 tokens.
+- **Not done:** window-level matching by size and orientation; rooms take area-weighted values.
 
 ## Next
-1. A live P8 check on sets 16 and 19 (one AI call per certificate sheet).
+1. Stored heat (radiant time series), started 13 November: see the session notes.
 2. A listed-equipment case (commercial kitchen, hooded and free-standing) in the worksheet.
 3. Partner review of the equipment typical values against ASHRAE Fundamentals Ch. 18.
 4. More engineer numbers: Butcher Buffet's room breakdown, the first client's job, design partners.
