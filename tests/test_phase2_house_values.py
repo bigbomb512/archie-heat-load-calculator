@@ -67,8 +67,8 @@ class HouseValuesTests(unittest.TestCase):
     def test_house_rooms_reach_the_draft_with_house_lighting_people_and_no_outside_air(self):
         bedroom, hall = self.model["MASTER BEDROOM"]["cooling_load"], self.model["HALL"]["cooling_load"]
         self.assertEqual((bedroom["lighting_w_m2"], bedroom["people_sensible_w_per_person"], bedroom["people_latent_w_per_person"]),
-                         (8, 67, 33))
-        self.assertEqual(hall["lighting_w_m2"], 4)
+                         (5, 67, 33))
+        self.assertEqual(hall["lighting_w_m2"], 5)
         self.assertEqual({name: row["cooling_load"]["outside_air_lps"] for name, row in self.model.items()},
                          {name: 0 for name in self.model})
 
@@ -80,7 +80,7 @@ class HouseValuesTests(unittest.TestCase):
 
         def infiltration(name, hour):
             return (rooms[name]["hours"][hour]["components"].get("infiltration") or {}).get("total_kw", 0)
-        # Living: 30 m² × 2.7 m × 0.36 ACH = 8.1 L/s; at 15:00 that is a cooling load. Bed 2 has no wall to outside.
+        # Living: 30 m² × 2.7 m × 0.45 ACH = 10.1 L/s; at 15:00 that is a cooling load. Bed 2 has no wall to outside.
         self.assertGreater(infiltration("LIVING", 15), 0.05)
         self.assertGreater(infiltration("MASTER BEDROOM", 15), 0.02)       # not only in the bedroom's night hours
         self.assertEqual(infiltration("BED 2", 15), 0)

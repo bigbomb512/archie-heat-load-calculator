@@ -12,7 +12,7 @@ import json
 import math
 import re
 
-from ai import house_profiles
+from ai import house_profiles, profile_values
 
 
 SCHEMA_VERSION = 1
@@ -80,13 +80,10 @@ def _evidence(item):
     return rows
 
 
-def _profile(pack, profile_id):
-    profiles = (pack or {}).get("profiles", {}) if isinstance(pack, dict) else {}
-    house = house_profiles.profile(profiles, profile_id)
-    if house is not None:
-        house.pop("schedule_hours", None)
-        return house
-    return profiles.get(profile_id) or profiles.get("generic_conditioned_room", {})
+def _profile(pack, profile_id, room_use=""):
+    profile = profile_values.room_profile(pack, profile_id, room_use)
+    profile.pop("schedule_hours", None)
+    return profile
 
 
 def _room_rows(building, proposal, room_use):
@@ -216,7 +213,7 @@ def _room_context(building, proposal, room, room_use, ceiling, pack):
     profile_id = _text(use.get("preliminary_profile_id", use.get("profile_id", "generic_conditioned_room"))) or "generic_conditioned_room"
     if profile_id in {"house_bedroom", "house_living", "house_wet", "house_service", "garage", "outdoor", "lift_shaft", "circulation"} and use.get("dwelling") is not True:
         profile_id = "generic_conditioned_room"
-    profile = _profile(pack, profile_id)
+    profile = _profile(pack, profile_id, use.get("taxonomy_id", ""))
     return rid, sources, use, record, area, volume, profile_id, profile, area_source
 
 
@@ -343,7 +340,9 @@ def resolve(building, vision, proposal, room_use, ceiling_volume, pack, source_f
             infiltration_unit = "L/s"
             infiltration_value = _number(infiltration_value, positive=True)
         if infiltration_value is None:
-            infiltration_value = _number((pack.get("preliminary_defaults", {}) or {}).get("infiltration_ach"), positive=True)
+            # A house: CSIRO's measured leakage of new NSW houses (config/house_profiles.json value_sources).
+            infiltration_value = _number(house_profiles.load().get("infiltration_ach") if dwelling else
+                                         (pack.get("preliminary_defaults", {}) or {}).get("infiltration_ach"), positive=True)
             infiltration_source = {"origin": "controlled_fallback"}
             infiltration_unit = "ACH"
         infiltration_origin = _origin(infiltration_source, "controlled_fallback")
@@ -359,7 +358,7 @@ def resolve(building, vision, proposal, room_use, ceiling_volume, pack, source_f
             formula="ACH × room volume × 1000 ÷ 3600" if infiltration_unit == "ACH" else "direct airflow",
             operands={"room_volume_m3": volume, "ach": infiltration_value if infiltration_unit == "ACH" else None, "resolved_flow_lps": volume * infiltration_value * 1000 / 3600 if volume is not None and infiltration_unit == "ACH" else infiltration_value},
             status="provisional" if dwelling and infiltration_value is not None else "blocked" if unresolved else "provisional" if infiltration_origin in {"controlled_fallback", "research_candidate"} else "resolved", unresolved=[] if dwelling else unresolved,
-            assumptions=["typical home ventilation decision: preliminary_defaults.infiltration_ach, uncited for review"] if dwelling and infiltration_origin == "controlled_fallback" else ["controlled preliminary infiltration ACH"] if infiltration_origin == "controlled_fallback" else [], extra={"room_volume_id": ceiling.get("room_id", rid) if isinstance(ceiling, dict) else rid, "air_path": "uncontrolled_infiltration"})
+            assumptions=["house leakage: CSIRO 2024 new NSW two-storey houses, 9.07 ACH50 ÷ 20 (config/house_profiles.json)"] if dwelling and infiltration_origin == "controlled_fallback" else ["controlled preliminary infiltration ACH"] if infiltration_origin == "controlled_fallback" else [], extra={"room_volume_id": ceiling.get("room_id", rid) if isinstance(ceiling, dict) else rid, "air_path": "uncontrolled_infiltration"})
         if dwelling and not outside_wall and use.get("space_scope") not in {"not_cooled", "refrigeration_process", "unresolved_scope", "not_a_room"}:
             # The traced walls join the proposal only at assembly, which decides again from them (ai_preliminary).
             infiltration.update(status="excluded", value=None, rationale="Dwelling infiltration is applied only where an outside wall is resolved; this room has no outside-wall assignment.", unresolved_fields=[], excluded_reason="no_outside_wall")

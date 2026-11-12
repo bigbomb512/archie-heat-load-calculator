@@ -70,12 +70,29 @@ of a method can pass both. Passing shows the draft does the arithmetic as writte
 | House infiltration | 0.36 ACH | — | uncited | Needs a source |
 | Equipment typical values (~70 rows) | — | ASHRAE Fundamentals Ch. 18 and data sheets | `data/equipment_typical_values.xlsx` | Every row "Codex (needs partner review)"; not checked here |
 
-None of these was changed: each changes results and is an engineering choice for the user.
+## Decisions (12 November, delegated by the user to research)
+The user asked for these to be decided from trustworthy sources. Each value is now in the pack's or the house
+profiles' `value_sources`, and `tests/test_pack_plausibility.py` checks it equals its table row.
+
+| Value | Was | Now | Source |
+|---|---|---|---|
+| Lighting where the drawings show none | office 10, retail 12, dining 14, kitchen 14, storage 6, generic 10 W/m² | office 4.5, retail 14, dining 14, kitchen 4, storage 1.5, generic 6 W/m² | NCC 2022 Vol One Table J7D3a maximum illumination power density, read from the ABCB page (generic: Note 1, 320–400 lx) |
+| House lighting | 8 W/m² (garage 3) | 5 W/m² (garage 3) | NCC 2016–2019 Vol Two Class 1 lamp power density; NCC 2022 lowered it to 4 W/m² outside NSW. The larger is used. |
+| People per m² with no seats or staff on the drawings | retail 0.15, dining and kitchen 0.3, storage 0.03 | retail 0.286, dining 0.667, kitchen 0.286, office 0.1, storage 0.1 | AS 1668.2-2002 Appendix A Table A1 net floor area per occupant (AIRAH-hosted extract, read directly). The standard calls them conservative. |
+| House sun | in the room's occupied hours | in the NatHERS cooled hours: bedrooms 4 pm–9 am, living 7 am–midnight | NatHERS internal heat loads (nathers.gov.au) and the ANSNAC appendices |
+| House infiltration | 0.36 ACH (uncited) | 0.45 ACH | CSIRO 2024, Air Infiltration of New Dwellings in Australia, Table 2: NSW two-storey new houses 9.07 at 50 Pa, ÷ 20 |
+| Heat per person | AIRAH p. 47 | unchanged | ASHRAE's restaurant row (about 80/80 W) was found only in secondary copies; the cited Australian handbook stays |
+| Outside air | 7.5 L/s per person + 0.3 L/s/m² | unchanged | AS 1668.2-2002 Table A1 gives 7.5 (Grade 2) for offices and dining; 10 L/s per person for the 2012/2024 editions comes only from consultants' summaries. Needs the purchased standard. |
+
+Not decided here: kitchen staff come from the AS 1668.2 density (Butcher Buffet's 118 m² kitchen: 34 people), which the
+standard itself calls conservative; real staff numbers from the client replace it.
+
+Effect on the saved jobs (AI off): Butcher Buffet 50.60 → 51.18 kW, now 1.2 kW above the 35–50 kW band (more people
+in the Bar, which has no counted seats; less kitchen lighting); Casa Nova 25.0 → 31.8; Happy Cap 2.0 → 3.0; Global
+Exchange 1.30 → 1.19; set 15 40.3 → 54.4; set 16 30.3 → 37.1; set 18 18.7 → 25.0 (houses: the sun on bedrooms in the
+afternoon and living rooms in the morning). Nothing was tuned towards the Butcher Buffet band.
 
 ## Found, not fixed
-- **A house's sun counts only in each room's occupied hours.** Bedrooms (10 pm–7 am) get no sun at any hour, and the
-  living areas none before 3 pm. Set 15's Bedroom 2 is sized on conduction alone (0.88 kW for 31 m²). Residential
-  methods usually assume the house is cooled all day. Needs a user decision.
 - **Equipment generic row TV-0060 ("any other appliance", 480 W) cites a planetary mixer data sheet.** It is used for
   heat lamps, a coolroom condenser and items known only by a code (E26, E32 …).
 - **Generic cooking under a hood is 180 W** (TV-0054) for a combi oven, wok burner, pizza deck oven or six-burner range
@@ -83,8 +100,14 @@ None of these was changed: each changes results and is an engineering choice for
 - **A house fridge is valued from a commercial Bromic data sheet** (TV-0055, 162 W).
 - **Casa Nova's "Shop"** is classed as retail, though the job is a restaurant.
 
+- **Butcher Buffet is above its band** at 51.2 kW. Its biggest parts are people (24.2 kW: 140 printed seats, 22 in
+  the Bar by density, 34 kitchen staff by density) and outside air (10.8 kW). A room breakdown from the engineer would
+  show which part differs.
+- **Glass sun dominates the houses** (set 15: 35.6 of 54.4 kW). It uses one SHGC (0.45) with no angle dependence and no
+  blinds; the window-by-angle work in the plan is the next accuracy step for houses.
+
 ## Next
-1. User decisions on the table above and on house sun hours.
+1. Glass sun by angle, and blinds, for houses (largest share of their load).
 2. A listed-equipment case (commercial kitchen, hooded and free-standing) in the worksheet.
 3. Partner review of the equipment typical values against ASHRAE Fundamentals Ch. 18.
 4. More engineer numbers: Butcher Buffet's room breakdown, the first client's job, design partners.

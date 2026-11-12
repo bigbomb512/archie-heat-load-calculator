@@ -10,14 +10,28 @@
     "infiltration_ach": 0.36,
     "infiltration_ach_label": "Controlled draft-only infiltration fallback; review required"
   },
+  "value_sources": {
+    "decided": "2026-11-12, after the Phase 2 audit (docs/PHASE2_AUDIT_2026-11-12.md); used only where the drawings give nothing better",
+    "lighting_w_m2": "NCC 2022 Volume One Table J7D3a, maximum illumination power density for the space type (the most a compliant new fit-out may install): office (200 lx or more) 4.5, retail space 14, restaurant/café/bar 14, kitchen and food preparation 4, storage 1.5. Residential 5: J7D3(1), a sole-occupancy unit. Generic 6: Table J7D3a Note 1, an unlisted space lit for ordinary tasks (more than 320 and not more than 400 lx).",
+    "occupancy_density_people_m2": "AS 1668.2-2002 Appendix A Table A1 (informative; AIRAH-hosted extract), net floor area per occupant where occupants aren't nominated: sales floors, basement and street 3.5 m² (0.286), offices 10 m² (0.1), dining rooms 1.5 m² (0.667), food preparation, serving and storage 3.5 m² (0.286), storage areas 10 m² (0.1). The standard calls these approximate and conservative. Generic 0.08 is uncited.",
+    "outside_air": "7.5 L/s per person plus 0.3 L/s per m², unchanged: an office at 10 m² per person gets 10.5 L/s per person. AS 1668.2-2002 Table A1 lists 7.5 as the Grade 2 dilution index for offices and dining; its Grade 1 points to Tables 4.3 and 4.4, which the extract doesn't include. Secondary sources give 10 L/s per person for offices and dining in the 2012 and 2024 editions; not verified against the standard.",
+    "people_activity": "AIRAH Technical Handbook 2007 p. 47, unchanged. ASHRAE Fundamentals Table 1 gives about 80/80 W for restaurant diners (secondary copies only, not verified)."
+  },
+  "room_use_values": {
+    "source": "Room uses that share a profile but have their own row in the sources above (value_sources).",
+    "by_room_use": {
+      "kitchen": {"lighting_w_m2": 4, "occupancy_density_people_m2": 0.286},
+      "dining": {"lighting_w_m2": 14, "occupancy_density_people_m2": 0.667}
+    }
+  },
   "profiles": {
     "retail": {
       "label": "Retail",
-      "occupancy_density_people_m2": 0.15,
+      "occupancy_density_people_m2": 0.286,
       "people_sensible_w": 75,
       "people_latent_w": 55,
       "people_diversity": 0.85,
-      "lighting_w_m2": 12,
+      "lighting_w_m2": 14,
       "lighting_diversity": 0.9,
       "equipment_w_m2": 8,
       "equipment_diversity": 0.75,
@@ -37,7 +51,7 @@
       "people_sensible_w": 75,
       "people_latent_w": 55,
       "people_diversity": 0.85,
-      "lighting_w_m2": 10,
+      "lighting_w_m2": 4.5,
       "lighting_diversity": 0.9,
       "equipment_w_m2": 15,
       "equipment_diversity": 0.8,
@@ -53,7 +67,7 @@
     },
     "hospitality": {
       "label": "Hospitality",
-      "occupancy_density_people_m2": 0.3,
+      "occupancy_density_people_m2": 0.667,
       "people_sensible_w": 75,
       "people_latent_w": 55,
       "people_diversity": 0.9,
@@ -73,11 +87,11 @@
     },
     "storage": {
       "label": "Storage",
-      "occupancy_density_people_m2": 0.03,
+      "occupancy_density_people_m2": 0.1,
       "people_sensible_w": 75,
       "people_latent_w": 55,
       "people_diversity": 0.6,
-      "lighting_w_m2": 6,
+      "lighting_w_m2": 1.5,
       "lighting_diversity": 0.85,
       "equipment_w_m2": 2,
       "equipment_diversity": 0.7,
@@ -97,7 +111,7 @@
       "people_sensible_w": 75,
       "people_latent_w": 55,
       "people_diversity": 0.8,
-      "lighting_w_m2": 8,
+      "lighting_w_m2": 5,
       "lighting_diversity": 0.85,
       "equipment_w_m2": 10,
       "equipment_diversity": 0.75,
@@ -117,7 +131,7 @@
       "people_sensible_w": 75,
       "people_latent_w": 55,
       "people_diversity": 0.8,
-      "lighting_w_m2": 10,
+      "lighting_w_m2": 6,
       "lighting_diversity": 0.85,
       "equipment_w_m2": 8,
       "equipment_diversity": 0.75,

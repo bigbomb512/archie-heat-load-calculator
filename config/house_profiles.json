@@ -1,11 +1,18 @@
 {
   "schema_version": 1,
   "status": "draft_preliminary_only",
-  "basis_label": "typical home value, uncited, for review",
-  "basis": "Product-team preliminary placeholders; no external engineering source adopted. Confirm or replace during review.",
+  "basis_label": "typical home value, for review",
+  "basis": "Product-team preliminary values. Lighting, cooled hours and infiltration are cited in value_sources (2026-11-12); equipment allowances, people heat and the kitchen appliances are uncited placeholders.",
+  "value_sources": {
+    "lighting_w_m2": "5 W/m² inside the house: the NCC lamp power density allowance for a Class 1 dwelling (NCC 2016–2019 Volume Two, Part 3.12.5); NCC 2022 lowered it to 4 W/m² (Housing Provisions 13.7.6, which does not apply in NSW). The larger is used: most houses in a set are older than NCC 2022 or in NSW. Garage 3 W/m²: the Class 10a allowance in NCC 2019 Volume Two.",
+    "cooled_hours": "NatHERS conditioning hours (nathers.gov.au, internal heat loads; ANSNAC appendices): living zones heated and cooled 07:00–24:00, bedrooms 16:00–09:00. The sun on a room's walls and glass counts in these hours; people, lights and appliances keep schedule_hours.",
+    "infiltration_ach": "0.45 air changes per hour: CSIRO (2024) Air Infiltration of New Dwellings in Australia, Table 2, NSW two-storey new houses average 9.07 m³/h/m² at 50 Pa (the report uses this interchangeably with ACH50), divided by 20 (the usual conversion from 50 Pa to natural infiltration, Sherman 1987). NSW single-storey houses average 6.35 (0.32 ACH); the 2015 CSIRO study of new houses averaged 15.4 ACH50 (0.77 ACH), so older houses leak more."
+  },
+  "infiltration_ach": 0.45,
   "profiles": {
     "house_bedroom": {
-      "lighting_w_m2": 8,
+      "cooled_hours": [[16, 24], [0, 9]],
+      "lighting_w_m2": 5,
       "equipment_w_m2": 3,
       "people_sensible_w": 67,
       "people_latent_w": 33,
@@ -26,7 +33,8 @@
       ]
     },
     "house_living": {
-      "lighting_w_m2": 8,
+      "cooled_hours": [[7, 24]],
+      "lighting_w_m2": 5,
       "equipment_w_m2": 5,
       "people_sensible_w": 67,
       "people_latent_w": 33,
@@ -47,7 +55,7 @@
       ]
     },
     "house_wet": {
-      "lighting_w_m2": 6,
+      "lighting_w_m2": 5,
       "equipment_w_m2": 0,
       "occupancy_density_people_m2": 0,
       "equipment_space_gain": 0.85,
@@ -57,7 +65,7 @@
       "schedule_hours": []
     },
     "house_service": {
-      "lighting_w_m2": 6,
+      "lighting_w_m2": 5,
       "equipment_w_m2": 0,
       "occupancy_density_people_m2": 0,
       "equipment_space_gain": 0.85,
@@ -97,7 +105,8 @@
       "schedule_hours": []
     },
     "circulation": {
-      "lighting_w_m2": 4,
+      "cooled_hours": [[7, 24]],
+      "lighting_w_m2": 5,
       "equipment_w_m2": 0,
       "occupancy_density_people_m2": 0,
       "equipment_space_gain": 0.85,

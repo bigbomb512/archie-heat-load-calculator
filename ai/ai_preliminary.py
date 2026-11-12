@@ -684,6 +684,17 @@ def _profile_schedule(profile_id):
     return [1.0 if hour in active else 0.0 for hour in range(24)]
 
 
+def _sun_schedule(profile_id):
+    """The hours the sun on a room's walls and glass counts: a house room's NatHERS cooled hours (a bedroom from 4 pm,
+    so the afternoon sun on it is counted though nobody is in it until 10 pm; decided 2026-11-12), else the room's
+    operating hours, when a shop's air conditioning runs."""
+    cooled = (house_profiles.load()["profiles"].get(profile_id) or {}).get("cooled_hours") if profile_id in HOUSE_PROFILE_IDS else None
+    if cooled:
+        active = {hour for start, end in cooled for hour in range(start, end)}
+        return [1.0 if hour in active else 0.0 for hour in range(24)]
+    return _profile_schedule(profile_id)
+
+
 def _source(profile_id):
     return f"AI preliminary assumption pack {PACK_VERSION}: {profile_id}"
 
@@ -1697,7 +1708,7 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                           _surface_sun(site_sun, scenario_set, tilt, bearing, wall_shade, wall_height, wall_obstruction))
             solar_peak = max((value for hours in hourly_sun.values() for value in hours), default=0.0)
         if solar_peak:
-            operating = _profile_schedule(profile_id)
+            operating = _sun_schedule(profile_id)
             values = (operating if hourly_sun else [round(operating[hour] * solar_profile[hour] / solar_peak, 6) for hour in range(24)])
             schedules.append(_schedule_with_values(solar_schedule_id, f"Preliminary {orientation or 'averaged'} façade solar profile", values, _source(f"solar-{orientation or 'averaged'}")))
             room["schedule_assignments"]["solar"][candidate["candidate_id"]] = solar_schedule_id
@@ -1816,7 +1827,7 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                 if glass_shade:
                     shade = 1.0          # the awning's geometry replaces the shading category
             if glazing_peak:
-                operating = _profile_schedule(profile_id)
+                operating = _sun_schedule(profile_id)
                 values = (operating if glass_sun else [round(operating[hour] * glazing_profile[hour] / glazing_peak, 6) for hour in range(24)])
                 schedules.append(_schedule_with_values(solar_schedule_id, f"Preliminary {opening_orientation or 'averaged'} glazing solar profile", values, _source(f"solar-{opening_orientation or 'averaged'}")))
                 room["schedule_assignments"]["solar"][opening["candidate_id"]] = solar_schedule_id

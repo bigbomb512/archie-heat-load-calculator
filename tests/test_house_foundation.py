@@ -123,7 +123,7 @@ class HouseFoundationTests(unittest.TestCase):
         self.assertEqual(entry_zone["occupancy"], 0)
         for name in ("BED 2", "LIVING/DINING"):
             infiltration = next(row for row in rooms[name]["unapproved_components"] if row["component_type"] == "infiltration")
-            self.assertEqual((infiltration["value"], infiltration["unit"]), (.36, "ACH"))
+            self.assertEqual((infiltration["value"], infiltration["unit"]), (.45, "ACH"))     # CSIRO 2024, NSW houses
             self.assertIn("House profile", infiltration["source"])
         excluded = next(row for row in assembled["excluded_spaces"] if row["room_name"] == "BATH")
         self.assertEqual(excluded["scope"], "not_cooled")

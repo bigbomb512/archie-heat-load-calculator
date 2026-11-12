@@ -43,9 +43,9 @@
    "fan_percent": 3.2,
    "profiles": {
     "retail": {
-     "density": 0.15,
+     "density": 0.286,
      "people_diversity": 0.85,
-     "lighting_w_m2": 12,
+     "lighting_w_m2": 14,
      "lighting_diversity": 0.9,
      "equipment_w_m2": 8,
      "equipment_diversity": 0.75,
@@ -58,7 +58,7 @@
     "office": {
      "density": 0.1,
      "people_diversity": 0.85,
-     "lighting_w_m2": 10,
+     "lighting_w_m2": 4.5,
      "lighting_diversity": 0.9,
      "equipment_w_m2": 15,
      "equipment_diversity": 0.8,
@@ -69,7 +69,7 @@
      ]
     },
     "hospitality": {
-     "density": 0.3,
+     "density": 0.667,
      "people_diversity": 0.9,
      "lighting_w_m2": 14,
      "lighting_diversity": 0.9,
@@ -80,6 +80,16 @@
       10,
       23
      ]
+    }
+   },
+   "room_use": {
+    "kitchen": {
+     "density": 0.286,
+     "lighting_w_m2": 4
+    },
+    "dining": {
+     "density": 0.667,
+     "lighting_w_m2": 14
     }
    },
    "activity": {
@@ -103,7 +113,7 @@
    "house": {
     "bedroom": {
      "people_diversity": 0.8,
-     "lighting_w_m2": 8,
+     "lighting_w_m2": 5,
      "lighting_diversity": 0.85,
      "equipment_w_m2": 3,
      "equipment_diversity": 0.75,
@@ -117,11 +127,21 @@
        0,
        7
       ]
+     ],
+     "cooled": [
+      [
+       16,
+       24
+      ],
+      [
+       0,
+       9
+      ]
      ]
     },
     "living": {
      "people_diversity": 0.8,
-     "lighting_w_m2": 8,
+     "lighting_w_m2": 5,
      "lighting_diversity": 0.85,
      "equipment_w_m2": 5,
      "equipment_diversity": 0.75,
@@ -135,11 +155,17 @@
        15,
        22
       ]
+     ],
+     "cooled": [
+      [
+       7,
+       24
+      ]
      ]
     },
     "circulation": {
      "people_diversity": 0.8,
-     "lighting_w_m2": 4,
+     "lighting_w_m2": 5,
      "lighting_diversity": 0.85,
      "equipment_w_m2": 0,
      "equipment_diversity": 0.75,
@@ -149,13 +175,19 @@
        7,
        22
       ]
+     ],
+     "cooled": [
+      [
+       7,
+       24
+      ]
      ]
     },
     "people": [
      67,
      33
     ],
-    "infiltration_ach": 0.36,
+    "infiltration_ach": 0.45,
     "kitchen_appliances": [
      {
       "w": 60,
@@ -269,21 +301,21 @@
        "solar": 0.0613,
        "glazing_conduction": 0.2506,
        "glazing_solar": 0.6939,
-       "people_s": 0.7752,
-       "people_l": 0.7548,
-       "lighting": 0.864,
+       "people_s": 1.4858,
+       "people_l": 1.4467,
+       "lighting": 1.008,
        "equipment": 0.384,
-       "outside_air_s": 0.4229,
-       "outside_air_l": 0.9403,
+       "outside_air_s": 0.7289,
+       "outside_air_l": 1.6208,
        "infiltration_s": 0.0,
        "infiltration_l": 0.0,
-       "people": 12,
-       "outside_air_lps": 114.0
+       "people": 23,
+       "outside_air_lps": 196.5
       }
      },
      "people_counted_share": 1.0,
-     "fan_heat_kw": 0.0978,
-     "total_kw": 5.2729
+     "fan_heat_kw": 0.1252,
+     "total_kw": 7.8332
     },
     {
      "month": 1,
@@ -294,21 +326,21 @@
        "solar": 0.1809,
        "glazing_conduction": 0.5846,
        "glazing_solar": 2.0469,
-       "people_s": 0.7752,
-       "people_l": 0.7548,
-       "lighting": 0.864,
+       "people_s": 1.4858,
+       "people_l": 1.4467,
+       "lighting": 1.008,
        "equipment": 0.384,
-       "outside_air_s": 0.9889,
-       "outside_air_l": 1.3703,
+       "outside_air_s": 1.7046,
+       "outside_air_l": 2.3619,
        "infiltration_s": 0.0,
        "infiltration_l": 0.0,
-       "people": 12,
-       "outside_air_lps": 114.0
+       "people": 23,
+       "outside_air_lps": 196.5
       }
      },
      "people_counted_share": 1.0,
-     "fan_heat_kw": 0.1568,
-     "total_kw": 8.172
+     "fan_heat_kw": 0.1842,
+     "total_kw": 11.4532
     },
     {
      "month": 1,
@@ -319,21 +351,21 @@
        "solar": 0.3503,
        "glazing_conduction": 0.6682,
        "glazing_solar": 3.9643,
-       "people_s": 0.7752,
-       "people_l": 0.7548,
-       "lighting": 0.864,
+       "people_s": 1.4858,
+       "people_l": 1.4467,
+       "lighting": 1.008,
        "equipment": 0.384,
-       "outside_air_s": 1.1294,
-       "outside_air_l": 1.2243,
+       "outside_air_s": 1.9467,
+       "outside_air_l": 2.1104,
        "infiltration_s": 0.0,
        "infiltration_l": 0.0,
-       "people": 12,
-       "outside_air_lps": 114.0
+       "people": 23,
+       "outside_air_lps": 196.5
       }
      },
      "people_counted_share": 1.0,
-     "fan_heat_kw": 0.2266,
-     "total_kw": 10.416
+     "fan_heat_kw": 0.2539,
+     "total_kw": 13.6932
     },
     {
      "month": 1,
@@ -344,21 +376,21 @@
        "solar": 0.3838,
        "glazing_conduction": 0.5846,
        "glazing_solar": 4.343,
-       "people_s": 0.7752,
-       "people_l": 0.7548,
-       "lighting": 0.864,
+       "people_s": 1.4858,
+       "people_l": 1.4467,
+       "lighting": 1.008,
        "equipment": 0.384,
-       "outside_air_s": 0.9889,
-       "outside_air_l": 1.3703,
+       "outside_air_s": 1.7046,
+       "outside_air_l": 2.3619,
        "infiltration_s": 0.0,
        "infiltration_l": 0.0,
-       "people": 12,
-       "outside_air_lps": 114.0
+       "people": 23,
+       "outside_air_lps": 196.5
       }
      },
      "people_counted_share": 1.0,
-     "fan_heat_kw": 0.2368,
-     "total_kw": 10.7509
+     "fan_heat_kw": 0.2642,
+     "total_kw": 14.0321
     },
     {
      "month": 1,
@@ -377,7 +409,7 @@
        "outside_air_l": 0.0,
        "infiltration_s": 0.0,
        "infiltration_l": 0.0,
-       "people": 12,
+       "people": 23,
        "outside_air_lps": 0.0
       }
      },
@@ -394,27 +426,27 @@
        "solar": 0.2166,
        "glazing_conduction": -0.167,
        "glazing_solar": 2.4514,
-       "people_s": 0.7752,
-       "people_l": 0.7548,
-       "lighting": 0.864,
+       "people_s": 1.4858,
+       "people_l": 1.4467,
+       "lighting": 1.008,
        "equipment": 0.384,
-       "outside_air_s": -0.2786,
-       "outside_air_l": -1.3104,
+       "outside_air_s": -0.4803,
+       "outside_air_l": -2.2588,
        "infiltration_s": 0.0,
        "infiltration_l": 0.0,
-       "people": 12,
-       "outside_air_lps": 114.0
+       "people": 23,
+       "outside_air_lps": 196.5
       }
      },
      "people_counted_share": 1.0,
-     "fan_heat_kw": 0.1442,
-     "total_kw": 3.8154
+     "fan_heat_kw": 0.1715,
+     "total_kw": 4.2393
     }
    ],
    "peak": {
     "month": 1,
     "hour": 17,
-    "total_kw": 10.7509
+    "total_kw": 14.0321
    }
   },
   {
@@ -475,7 +507,7 @@
        "glazing_solar": 0.3651,
        "people_s": 0.714,
        "people_l": 0.51,
-       "lighting": 1.08,
+       "lighting": 0.486,
        "equipment": 1.296,
        "outside_air_s": 0.7798,
        "outside_air_l": 1.2659,
@@ -486,8 +518,8 @@
       }
      },
      "people_counted_share": 1.0,
-     "fan_heat_kw": 0.2407,
-     "total_kw": 10.3184
+     "fan_heat_kw": 0.2217,
+     "total_kw": 9.7054
     },
     {
      "month": 1,
@@ -500,7 +532,7 @@
        "glazing_solar": 0.343,
        "people_s": 0.714,
        "people_l": 0.51,
-       "lighting": 1.08,
+       "lighting": 0.486,
        "equipment": 1.296,
        "outside_air_s": 1.2482,
        "outside_air_l": 1.3532,
@@ -511,8 +543,8 @@
       }
      },
      "people_counted_share": 1.0,
-     "fan_heat_kw": 0.2417,
-     "total_kw": 10.9047
+     "fan_heat_kw": 0.2226,
+     "total_kw": 10.2917
     },
     {
      "month": 6,
@@ -525,7 +557,7 @@
        "glazing_solar": 1.1096,
        "people_s": 0.714,
        "people_l": 0.51,
-       "lighting": 1.08,
+       "lighting": 0.486,
        "equipment": 1.296,
        "outside_air_s": -0.6157,
        "outside_air_l": -1.5338,
@@ -536,8 +568,8 @@
       }
      },
      "people_counted_share": 1.0,
-     "fan_heat_kw": 0.1958,
-     "total_kw": 4.6764
+     "fan_heat_kw": 0.1768,
+     "total_kw": 4.0634
     },
     {
      "month": 6,
@@ -550,7 +582,7 @@
        "glazing_solar": 0.9556,
        "people_s": 0.714,
        "people_l": 0.51,
-       "lighting": 1.08,
+       "lighting": 0.486,
        "equipment": 1.296,
        "outside_air_s": -0.1539,
        "outside_air_l": -1.6061,
@@ -561,8 +593,8 @@
       }
      },
      "people_counted_share": 1.0,
-     "fan_heat_kw": 0.1681,
-     "total_kw": 4.1716
+     "fan_heat_kw": 0.1491,
+     "total_kw": 3.5586
     },
     {
      "month": 3,
@@ -575,7 +607,7 @@
        "glazing_solar": 0.3047,
        "people_s": 0.714,
        "people_l": 0.51,
-       "lighting": 1.08,
+       "lighting": 0.486,
        "equipment": 1.296,
        "outside_air_s": 0.7465,
        "outside_air_l": 0.6429,
@@ -586,14 +618,14 @@
       }
      },
      "people_counted_share": 1.0,
-     "fan_heat_kw": 0.2326,
-     "total_kw": 9.4018
+     "fan_heat_kw": 0.2136,
+     "total_kw": 8.7888
     }
    ],
    "peak": {
     "month": 1,
     "hour": 14,
-    "total_kw": 11.1663
+    "total_kw": 10.5532
    }
   },
   {
@@ -653,21 +685,21 @@
        "solar": 0.0,
        "glazing_conduction": 0.0,
        "glazing_solar": 0.0,
-       "people_s": 0.918,
-       "people_l": 1.458,
-       "lighting": 0.504,
+       "people_s": 0.8415,
+       "people_l": 1.3365,
+       "lighting": 0.144,
        "equipment": 0.64,
        "outside_air_s": 5.944,
        "outside_air_l": 6.4439,
        "infiltration_s": 0.0,
        "infiltration_l": 0.0,
-       "people": 12,
+       "people": 11,
        "outside_air_lps": 600.0
       }
      },
      "people_counted_share": 1.0,
-     "fan_heat_kw": 0.4049,
-     "total_kw": 47.8168
+     "fan_heat_kw": 0.3909,
+     "total_kw": 47.2448
     },
     {
      "month": 1,
@@ -702,7 +734,7 @@
        "outside_air_l": 0.0,
        "infiltration_s": 0.0,
        "infiltration_l": 0.0,
-       "people": 12,
+       "people": 11,
        "outside_air_lps": 0.0
       }
      },
@@ -735,27 +767,27 @@
        "solar": 0.0,
        "glazing_conduction": 0.0,
        "glazing_solar": 0.0,
-       "people_s": 0.918,
-       "people_l": 1.458,
-       "lighting": 0.504,
+       "people_s": 0.8415,
+       "people_l": 1.3365,
+       "lighting": 0.144,
        "equipment": 0.64,
        "outside_air_s": -1.1715,
        "outside_air_l": -8.3499,
        "infiltration_s": 0.0,
        "infiltration_l": 0.0,
-       "people": 12,
+       "people": 11,
        "outside_air_lps": 600.0
       }
      },
      "people_counted_share": 1.0,
-     "fan_heat_kw": 0.4049,
-     "total_kw": -3.1224
+     "fan_heat_kw": 0.3909,
+     "total_kw": -3.6943
     }
    ],
    "peak": {
     "month": 1,
     "hour": 14,
-    "total_kw": 47.8843
+    "total_kw": 47.3123
    }
   },
   {
@@ -861,8 +893,8 @@
        "equipment": 0.0,
        "outside_air_s": 0.0,
        "outside_air_l": 0.0,
-       "infiltration_s": 0.015,
-       "infiltration_l": 0.0346,
+       "infiltration_s": 0.0188,
+       "infiltration_l": 0.0432,
        "people": 0.0,
        "outside_air_lps": 0.0
       },
@@ -884,17 +916,17 @@
       },
       "LIVING": {
        "envelope": 0.0178,
-       "solar": 0.0,
+       "solar": 0.0599,
        "glazing_conduction": 0.1096,
-       "glazing_solar": 0.0,
+       "glazing_solar": 0.4674,
        "people_s": 0.0,
        "people_l": 0.0,
        "lighting": 0.0,
        "equipment": 0.0,
        "outside_air_s": 0.0,
        "outside_air_l": 0.0,
-       "infiltration_s": 0.0282,
-       "infiltration_l": 0.0648,
+       "infiltration_s": 0.0352,
+       "infiltration_l": 0.081,
        "people": 0.0,
        "outside_air_lps": 0.0
       },
@@ -921,7 +953,7 @@
        "glazing_solar": 0.0,
        "people_s": 0.0,
        "people_l": 0.0,
-       "lighting": 0.0272,
+       "lighting": 0.034,
        "equipment": 0.0,
        "outside_air_s": 0.0,
        "outside_air_l": 0.0,
@@ -932,8 +964,8 @@
       }
      },
      "people_counted_share": 1.0,
-     "fan_heat_kw": 0.01,
-     "total_kw": 0.4203
+     "fan_heat_kw": 0.0274,
+     "total_kw": 1.0074
     },
     {
      "month": 1,
@@ -941,17 +973,17 @@
      "rooms": {
       "MASTER BEDROOM": {
        "envelope": 0.0415,
-       "solar": 0.0,
+       "solar": 0.194,
        "glazing_conduction": 0.1002,
-       "glazing_solar": 0.0,
+       "glazing_solar": 0.5946,
        "people_s": 0.0,
        "people_l": 0.0,
        "lighting": 0.0,
        "equipment": 0.0,
        "outside_air_s": 0.0,
        "outside_air_l": 0.0,
-       "infiltration_s": 0.0393,
-       "infiltration_l": 0.0448,
+       "infiltration_s": 0.0492,
+       "infiltration_l": 0.0559,
        "people": 0.0,
        "outside_air_lps": 0.0
       },
@@ -978,12 +1010,12 @@
        "glazing_solar": 0.5213,
        "people_s": 0.1608,
        "people_l": 0.0792,
-       "lighting": 0.204,
+       "lighting": 0.1275,
        "equipment": 0.0956,
        "outside_air_s": 0.0,
        "outside_air_l": 0.0,
-       "infiltration_s": 0.0738,
-       "infiltration_l": 0.0839,
+       "infiltration_s": 0.0922,
+       "infiltration_l": 0.1049,
        "people": 3.0,
        "outside_air_lps": 0.0
       },
@@ -994,7 +1026,7 @@
        "glazing_solar": 0.0,
        "people_s": 0.1608,
        "people_l": 0.0792,
-       "lighting": 0.102,
+       "lighting": 0.0638,
        "equipment": 0.06,
        "outside_air_s": 0.0,
        "outside_air_l": 0.0,
@@ -1010,7 +1042,7 @@
        "glazing_solar": 0.0,
        "people_s": 0.0,
        "people_l": 0.0,
-       "lighting": 0.0272,
+       "lighting": 0.034,
        "equipment": 0.0,
        "outside_air_s": 0.0,
        "outside_air_l": 0.0,
@@ -1021,8 +1053,8 @@
       }
      },
      "people_counted_share": 0.5,
-     "fan_heat_kw": 0.0586,
-     "total_kw": 2.0988
+     "fan_heat_kw": 0.0813,
+     "total_kw": 2.8627
     },
     {
      "month": 1,
@@ -1030,17 +1062,17 @@
      "rooms": {
       "MASTER BEDROOM": {
        "envelope": 0.0363,
-       "solar": 0.0,
+       "solar": 0.2126,
        "glazing_conduction": 0.0877,
-       "glazing_solar": 0.0,
+       "glazing_solar": 0.6514,
        "people_s": 0.0,
        "people_l": 0.0,
        "lighting": 0.0,
        "equipment": 0.0,
        "outside_air_s": 0.0,
        "outside_air_l": 0.0,
-       "infiltration_s": 0.0345,
-       "infiltration_l": 0.05,
+       "infiltration_s": 0.0431,
+       "infiltration_l": 0.0625,
        "people": 0.0,
        "outside_air_lps": 0.0
       },
@@ -1067,12 +1099,12 @@
        "glazing_solar": 0.2538,
        "people_s": 0.1608,
        "people_l": 0.0792,
-       "lighting": 0.204,
+       "lighting": 0.1275,
        "equipment": 0.0956,
        "outside_air_s": 0.0,
        "outside_air_l": 0.0,
-       "infiltration_s": 0.0647,
-       "infiltration_l": 0.0938,
+       "infiltration_s": 0.0809,
+       "infiltration_l": 0.1172,
        "people": 3.0,
        "outside_air_lps": 0.0
       },
@@ -1083,7 +1115,7 @@
        "glazing_solar": 0.0,
        "people_s": 0.1608,
        "people_l": 0.0792,
-       "lighting": 0.102,
+       "lighting": 0.0638,
        "equipment": 0.56,
        "outside_air_s": 0.0,
        "outside_air_l": 0.0,
@@ -1099,7 +1131,7 @@
        "glazing_solar": 0.0,
        "people_s": 0.0,
        "people_l": 0.0,
-       "lighting": 0.0272,
+       "lighting": 0.034,
        "equipment": 0.0,
        "outside_air_s": 0.0,
        "outside_air_l": 0.0,
@@ -1110,8 +1142,8 @@
       }
      },
      "people_counted_share": 0.5,
-     "fan_heat_kw": 0.0626,
-     "total_kw": 2.2421
+     "fan_heat_kw": 0.0876,
+     "total_kw": 3.0838
     },
     {
      "month": 1,
@@ -1124,12 +1156,12 @@
        "glazing_solar": 0.0,
        "people_s": 0.1072,
        "people_l": 0.0528,
-       "lighting": 0.1088,
+       "lighting": 0.068,
        "equipment": 0.0306,
        "outside_air_s": 0.0,
        "outside_air_l": 0.0,
        "infiltration_s": 0.0,
-       "infiltration_l": 0.0215,
+       "infiltration_l": 0.0269,
        "people": 2.0,
        "outside_air_lps": 0.0
       },
@@ -1140,7 +1172,7 @@
        "glazing_solar": 0.0,
        "people_s": 0.0536,
        "people_l": 0.0264,
-       "lighting": 0.0748,
+       "lighting": 0.0467,
        "equipment": 0.021,
        "outside_air_s": 0.0,
        "outside_air_l": 0.0,
@@ -1161,7 +1193,7 @@
        "outside_air_s": 0.0,
        "outside_air_l": 0.0,
        "infiltration_s": 0.0,
-       "infiltration_l": 0.0403,
+       "infiltration_l": 0.0504,
        "people": 0.0,
        "outside_air_lps": 0.0
       },
@@ -1199,8 +1231,8 @@
       }
      },
      "people_counted_share": 1.0,
-     "fan_heat_kw": 0.0127,
-     "total_kw": 0.5496
+     "fan_heat_kw": 0.0105,
+     "total_kw": 0.494
     },
     {
      "month": 7,
@@ -1208,9 +1240,9 @@
      "rooms": {
       "MASTER BEDROOM": {
        "envelope": -0.0083,
-       "solar": 0.0,
+       "solar": 0.1299,
        "glazing_conduction": -0.02,
-       "glazing_solar": 0.0,
+       "glazing_solar": 0.398,
        "people_s": 0.0,
        "people_l": 0.0,
        "lighting": 0.0,
@@ -1245,7 +1277,7 @@
        "glazing_solar": 0.8223,
        "people_s": 0.1608,
        "people_l": 0.0792,
-       "lighting": 0.204,
+       "lighting": 0.1275,
        "equipment": 0.0956,
        "outside_air_s": 0.0,
        "outside_air_l": 0.0,
@@ -1261,7 +1293,7 @@
        "glazing_solar": 0.0,
        "people_s": 0.1608,
        "people_l": 0.0792,
-       "lighting": 0.102,
+       "lighting": 0.0638,
        "equipment": 0.06,
        "outside_air_s": 0.0,
        "outside_air_l": 0.0,
@@ -1277,7 +1309,7 @@
        "glazing_solar": 0.0,
        "people_s": 0.0,
        "people_l": 0.0,
-       "lighting": 0.0272,
+       "lighting": 0.034,
        "equipment": 0.0,
        "outside_air_s": 0.0,
        "outside_air_l": 0.0,
@@ -1288,14 +1320,14 @@
       }
      },
      "people_counted_share": 0.5,
-     "fan_heat_kw": 0.0474,
-     "total_kw": 1.6076
+     "fan_heat_kw": 0.0608,
+     "total_kw": 2.0409
     }
    ],
    "peak": {
     "month": 3,
-    "hour": 15,
-    "total_kw": 2.9242
+    "hour": 17,
+    "total_kw": 3.397
    }
   }
  ]

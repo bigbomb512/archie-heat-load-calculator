@@ -38,26 +38,34 @@ PACK = {
     "wall_u": 0.6, "roof_u": 0.5, "glass_u": 5.8, "shgc": 0.45, "frame_fraction": 0.15,
     "oa_per_person": 7.5, "oa_per_m2": 0.3, "fan_percent": 3.2,
     "profiles": {
-        "retail": {"density": 0.15, "people_diversity": 0.85, "lighting_w_m2": 12, "lighting_diversity": 0.9,
+        # Lighting: NCC 2022 Table J7D3a; people per m²: AS 1668.2-2002 Table A1 (pack value_sources, 2026-11-12).
+        "retail": {"density": 0.286, "people_diversity": 0.85, "lighting_w_m2": 14, "lighting_diversity": 0.9,
                    "equipment_w_m2": 8, "equipment_diversity": 0.75, "equipment_space_gain": 0.8, "open": range(9, 18)},
-        "office": {"density": 0.10, "people_diversity": 0.85, "lighting_w_m2": 10, "lighting_diversity": 0.9,
+        "office": {"density": 0.10, "people_diversity": 0.85, "lighting_w_m2": 4.5, "lighting_diversity": 0.9,
                    "equipment_w_m2": 15, "equipment_diversity": 0.8, "equipment_space_gain": 0.9, "open": range(8, 18)},
-        "hospitality": {"density": 0.30, "people_diversity": 0.9, "lighting_w_m2": 14, "lighting_diversity": 0.9,
+        "hospitality": {"density": 0.667, "people_diversity": 0.9, "lighting_w_m2": 14, "lighting_diversity": 0.9,
                         "equipment_w_m2": 25, "equipment_diversity": 0.8, "equipment_space_gain": 0.8, "open": range(10, 23)},
     },
+    # A kitchen shares the hospitality profile but has its own rows: 4 W/m² and 3.5 m² per person.
+    "room_use": {"kitchen": {"density": 0.286, "lighting_w_m2": 4}, "dining": {"density": 0.667, "lighting_w_m2": 14}},
     # Heat from people by room use (AIRAH Technical Handbook 2007, p. 47, room at 24 °C), sensible / latent W.
     "activity": {"retail": (76, 74), "office": (70, 50), "dining": (70, 50), "kitchen": (85, 135)},
     # Houses (config/house_profiles.json on the pack's residential profile; user decisions 2026-10-30): people come from
     # the household (2 in the main bedroom, 1 in each other; living areas hold the whole household, counted once per
     # hour across the house), no outside air, 0.36 ACH infiltration through rooms with a wall to outside at every hour.
+    # Lighting 5 W/m² (NCC Class 1); sun counted in the NatHERS cooled hours ("cooled"), people/lights/appliances in
+    # the occupied hours ("open"); leakage 0.45 ACH (CSIRO 2024, NSW two-storey houses, ÷ 20).
     "house": {
-        "bedroom": {"people_diversity": 0.8, "lighting_w_m2": 8, "lighting_diversity": 0.85, "equipment_w_m2": 3,
-                    "equipment_diversity": 0.75, "equipment_space_gain": 0.85, "open": [range(22, 24), range(0, 7)]},
-        "living": {"people_diversity": 0.8, "lighting_w_m2": 8, "lighting_diversity": 0.85, "equipment_w_m2": 5,
-                   "equipment_diversity": 0.75, "equipment_space_gain": 0.85, "open": [range(7, 8), range(15, 22)]},
-        "circulation": {"people_diversity": 0.8, "lighting_w_m2": 4, "lighting_diversity": 0.85, "equipment_w_m2": 0,
-                        "equipment_diversity": 0.75, "equipment_space_gain": 0.85, "open": [range(7, 22)]},
-        "people": (67, 33), "infiltration_ach": 0.36,
+        "bedroom": {"people_diversity": 0.8, "lighting_w_m2": 5, "lighting_diversity": 0.85, "equipment_w_m2": 3,
+                    "equipment_diversity": 0.75, "equipment_space_gain": 0.85, "open": [range(22, 24), range(0, 7)],
+                    "cooled": [range(16, 24), range(0, 9)]},
+        "living": {"people_diversity": 0.8, "lighting_w_m2": 5, "lighting_diversity": 0.85, "equipment_w_m2": 5,
+                   "equipment_diversity": 0.75, "equipment_space_gain": 0.85, "open": [range(7, 8), range(15, 22)],
+                   "cooled": [range(7, 24)]},
+        "circulation": {"people_diversity": 0.8, "lighting_w_m2": 5, "lighting_diversity": 0.85, "equipment_w_m2": 0,
+                        "equipment_diversity": 0.75, "equipment_space_gain": 0.85, "open": [range(7, 22)],
+                        "cooled": [range(7, 24)]},
+        "people": (67, 33), "infiltration_ach": 0.45,
         # A house kitchen with no appliances on the drawings: a fridge all day; cooking 2000 W × 0.5 to the room at
         # half use from 5 to 7 pm.
         "kitchen_appliances": [{"w": 60, "factor": 1.0, "hours": {hour: 1.0 for hour in range(24)}},
@@ -168,21 +176,23 @@ def infiltration_kw(flow_lps, db, wb):
 
 # ---- One room, one hour ---------------------------------------------------------------------------------------------
 def house_room_hour(room, month, hour):
-    """A house room: house values, its own hours, sun in its hours only (the draft's choice), leakage at every hour."""
+    """A house room: house values; people, lights and appliances in its occupied hours; sun in its cooled hours;
+    leakage at every hour."""
     house = PACK["house"]
     profile = house[room["profile"]]
     db, wb = design_day(month)[hour]
     open_now = 1.0 if any(hour in hours for hours in profile["open"]) else 0.0
+    cooled_now = 1.0 if any(hour in hours for hours in profile["cooled"]) else 0.0
     out = {key: 0.0 for key in ("envelope", "solar", "glazing_conduction", "glazing_solar", "people_s", "people_l",
                                  "lighting", "equipment", "outside_air_s", "outside_air_l", "infiltration_s", "infiltration_l")}
     for surface in room.get("surfaces", []):
         out["envelope"] += surface["area_m2"] * surface["u"] * (db - INDOOR_DB) / 1000
         sun = plane_sunlight(month, hour, surface["tilt"], surface.get("azimuth", 0.0), surface.get("height_m"))
-        out["solar"] += surface["area_m2"] * surface["u"] * ALPHA_OVER_HO * sun * open_now / 1000
+        out["solar"] += surface["area_m2"] * surface["u"] * ALPHA_OVER_HO * sun * cooled_now / 1000
     for glass in room.get("glass", []):
         out["glazing_conduction"] += PACK["glass_u"] * glass["area_m2"] * (db - INDOOR_DB) / 1000
         sun = plane_sunlight(month, hour, 90, glass["azimuth"], glass["height_m"])
-        out["glazing_solar"] += glass["area_m2"] * (1 - PACK["frame_fraction"]) * PACK["shgc"] * sun * open_now / 1000
+        out["glazing_solar"] += glass["area_m2"] * (1 - PACK["frame_fraction"]) * PACK["shgc"] * sun * cooled_now / 1000
     people = room.get("people", 0)
     out["people_s"] = people * house["people"][0] * profile["people_diversity"] * open_now / 1000
     out["people_l"] = people * house["people"][1] * profile["people_diversity"] * open_now / 1000
@@ -203,7 +213,7 @@ def house_room_hour(room, month, hour):
 def room_hour(room, month, hour):
     if room["profile"] in PACK["house"]:
         return house_room_hour(room, month, hour)
-    profile = PACK["profiles"][room["profile"]]
+    profile = {**PACK["profiles"][room["profile"]], **PACK["room_use"].get(room.get("activity"), {})}
     db, wb = design_day(month)[hour]
     open_now = 1.0 if hour in profile["open"] else 0.0
     out = {key: 0.0 for key in ("envelope", "solar", "glazing_conduction", "glazing_solar", "people_s", "people_l",

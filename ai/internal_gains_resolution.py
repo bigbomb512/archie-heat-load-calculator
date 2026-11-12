@@ -138,19 +138,11 @@ def _schedule_for(item, profile_id):
     return profiles
 
 
-def _profile(pack, profile_id):
-    profiles = (pack or {}).get("profiles", {}) if isinstance(pack, dict) else {}
-    if profile_id.startswith("house_") or profile_id in {"garage", "outdoor", "lift_shaft", "circulation"}:
-        try:
-            from pathlib import Path
-            house = json.loads(Path(__file__).resolve().parents[1].joinpath("config", "house_profiles.json").read_text(encoding="utf-8"))
-            item = house["profiles"][profile_id]
-            result = deepcopy(profiles.get("residential", {}))
-            result.update({key: value for key, value in item.items() if key != "schedule_hours"})
-            return result
-        except (OSError, ValueError, KeyError):
-            pass
-    return profiles.get(profile_id) or profiles.get("generic_conditioned_room", {})
+def _profile(pack, profile_id, room_use=""):
+    from ai import profile_values
+    profile = profile_values.room_profile(pack, profile_id, room_use)
+    profile.pop("schedule_hours", None)
+    return profile
 
 
 def _room_rows(building, vision, proposal, room_use):
@@ -252,7 +244,7 @@ def resolve(building, vision=None, proposal=None, room_use=None, pack=None,
         label, level, sources = room["label"], room["level"], room["sources"]
         use = room.get("room_use") or {}
         profile_id = use.get("preliminary_profile_id") or "generic_conditioned_room"
-        profile = _profile(pack, profile_id)
+        profile = _profile(pack, profile_id, use.get("taxonomy_id", ""))
         evidence = []
         for source in sources:
             for ref in _evidence(source):

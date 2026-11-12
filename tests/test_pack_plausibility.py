@@ -50,10 +50,32 @@ class PackPlausibilityTests(unittest.TestCase):
                         "AS 1668.2 typical rates, sanity range")
             self.within(f"{name} outside air per m²", profile["outside_air_lps_m2"], 0.0, 1.5, "sanity range")
             self.within(f"{name} people per m²", profile["occupancy_density_people_m2"], 0.01, 1.5, "sanity range")
-            self.within(f"{name} lighting", profile["lighting_w_m2"], 3, 25, "sanity range for lighting power density")
+            self.within(f"{name} lighting", profile["lighting_w_m2"], 1, 25, "sanity range for lighting power density")
             self.within(f"{name} equipment", profile["equipment_w_m2"], 1, 60, "sanity range")
             for key in ("people_diversity", "lighting_diversity", "equipment_diversity", "equipment_space_gain"):
                 self.within(f"{name} {key}", profile[key], 0.3, 1.0, "sanity range for diversity factors")
+
+    def test_lighting_and_occupancy_are_the_cited_table_values(self):
+        """Each value equals its row in the cited source (pack "value_sources", decided 2026-11-12), so a change to
+        one has to change its citation too."""
+        ncc_j7d3a = {"office": 4.5, "retail": 14, "hospitality": 14, "storage": 1.5, "residential": 5, "generic_conditioned_room": 6}
+        as1668_table_a1 = {"office": 1 / 10, "retail": 1 / 3.5, "hospitality": 1 / 1.5, "storage": 1 / 10}
+        for name, value in ncc_j7d3a.items():
+            self.assertEqual(PROFILES[name]["lighting_w_m2"], value, f"{name} lighting: NCC 2022 Table J7D3a")
+        for name, value in as1668_table_a1.items():
+            self.assertAlmostEqual(PROFILES[name]["occupancy_density_people_m2"], value, delta=0.001,
+                                   msg=f"{name} people per m²: AS 1668.2-2002 Table A1")
+        uses = PACK["room_use_values"]["by_room_use"]
+        self.assertEqual((uses["kitchen"]["lighting_w_m2"], uses["dining"]["lighting_w_m2"]), (4, 14))
+        self.assertAlmostEqual(uses["kitchen"]["occupancy_density_people_m2"], 1 / 3.5, delta=0.001)
+        self.assertAlmostEqual(uses["dining"]["occupancy_density_people_m2"], 1 / 1.5, delta=0.001)
+        house = json.loads((Path(__file__).resolve().parents[1] / "config" / "house_profiles.json").read_text(encoding="utf-8"))
+        for name in ("house_bedroom", "house_living", "circulation", "house_wet", "house_service"):
+            self.assertEqual(house["profiles"][name]["lighting_w_m2"], 5, f"{name}: NCC Class 1 lamp power density")
+        self.assertEqual(house["profiles"]["garage"]["lighting_w_m2"], 3)
+        self.assertEqual(house["profiles"]["house_bedroom"]["cooled_hours"], [[16, 24], [0, 9]])     # NatHERS
+        self.assertEqual(house["profiles"]["house_living"]["cooled_hours"], [[7, 24]])
+        self.assertEqual(house["infiltration_ach"], round(9.07 / 20, 2))                             # CSIRO 2024 ÷ 20
 
     def test_fan_heat_and_no_safety_allowance(self):
         self.within("fan heat, % of room sensible", PACK["fan_heat"]["percent_of_room_sensible"], 1, 10,

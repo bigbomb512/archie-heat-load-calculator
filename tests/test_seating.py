@@ -95,7 +95,8 @@ class SeatingTests(unittest.TestCase):
         mapped={room_use_resolution.room_identity(room['name'],'Ground'):evidence[room['id']] for room in rooms()}
         result=gains.resolve(building,room_use=uses,pack=ai_preliminary.load_pack(),seating_evidence={"rooms":mapped})
         bar=next(row for row in result['records'] if row['original_label']=='Bar')
-        self.assertEqual(bar['occupancy_count'],6)
+        # Dining density fallback: AS 1668.2 Table A1 dining rooms, 1.5 m² per person (20 m² → 13).
+        self.assertEqual(bar['occupancy_count'],13)
         self.assertIn('72',bar['fields']['occupancy_count']['rationale'])
         self.assertFalse(bar['seating']['applied'])
 
