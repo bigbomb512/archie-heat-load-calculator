@@ -9,6 +9,11 @@
     "infiltration_ach": "0.45 air changes per hour: CSIRO (2024) Air Infiltration of New Dwellings in Australia, Table 2, NSW two-storey new houses average 9.07 m³/h/m² at 50 Pa (the report uses this interchangeably with ACH50), divided by 20 (the usual conversion from 50 Pa to natural infiltration, Sherman 1987). NSW single-storey houses average 6.35 (0.32 ACH); the 2015 CSIRO study of new houses averaged 15.4 ACH50 (0.77 ACH), so older houses leak more."
   },
   "infiltration_ach": 0.45,
+  "default_glazing": {
+    "source": "NatHERS default windows (NatHERS fact sheet 'How do windows work in NatHERS', Table 1; NSW Planning Portal, BASIX DIY default window data): aluminium single-glazed clear. Used for a house window when no certificate gives its glass (decided 2026-11-12). Group A frames (hinged or projected: awning, casement, bi-fold) and group B (fixed or sliding) differ in frame share; a window whose type isn't known takes group B, the higher SHGC.",
+    "A": {"window_id": "ALM-001-01 A", "label": "Aluminium A, single clear (hinged or projected)", "u_value_w_m2k": 6.7, "shgc": 0.57},
+    "B": {"window_id": "ALM-002-01 A", "label": "Aluminium B, single clear (fixed or sliding)", "u_value_w_m2k": 6.7, "shgc": 0.70}
+  },
   "profiles": {
     "house_bedroom": {
       "cooled_hours": [[16, 24], [0, 9]],

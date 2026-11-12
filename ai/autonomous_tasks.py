@@ -30,6 +30,7 @@ TASKS = {
     "P3_boundaries": {"id": "boundary_classification", "inputs": ["current_room_trace", "boundary_evidence"], "budget_chars": 1500, "media": "image", "prompt_builder": "build_boundary_packets", "reply_validator": "validate_boundary_reply", "apply_function": "_apply_p3", "fallback": "tenancy_boundary"},
     "P3_surroundings": {"id": "surroundings", "inputs": ["numbered_outside_walls", "site_or_context_plan", "street_elevation"], "budget_chars": 2000, "media": "image", "prompt_builder": "_p3_surroundings_packets", "reply_validator": "validate_surroundings_reply", "apply_function": "_apply_p3_surroundings", "fallback": None},
     "P7_ceiling_heights": {"id": "ceiling_heights", "inputs": ["ceiling_plan_or_elevation", "printed_height_labels", "room_names"], "budget_chars": 2000, "media": "image", "prompt_builder": "_p7_packets", "reply_validator": "validate_ceiling_height_reply", "apply_function": "_apply_p7", "fallback": "preliminary_ceiling_height"},
+    "P8_glazing_certificate": {"id": "glazing_certificate", "inputs": ["certificate_page_sections"], "budget_chars": 2500, "media": "image", "prompt_builder": "_p8_packets", "reply_validator": "validate_glazing_certificate_reply", "apply_function": "_apply_p8", "fallback": "nathers_default_windows"},
     "P4_storefront_wall": {"id": "storefront_wall", "inputs": ["numbered_outside_walls", "storefront_elevation"], "budget_chars": 1500, "media": "image", "prompt_builder": "_storefront_runs", "reply_validator": "validate_storefront_wall_reply", "apply_function": "_apply_p4_wall", "fallback": None},
     "P4_openings": {"id": "storefront_openings", "inputs": ["storefront_elevation", "current_room_trace"], "budget_chars": 2000, "media": "image", "prompt_builder": "build_opening_packets", "reply_validator": "validate_opening_reply", "apply_function": "_apply_p4", "fallback": "opening_dimensions"},
     "P1_site": {"id": "site_identification", "inputs": ["site_location_resolution.infer_pdf_context"],
@@ -472,7 +473,56 @@ def validate_ceiling_height_reply(packet, reply):
     return {"heights": heights, "not_shown": not_shown}
 
 
-STOREY_HEIGHT_M = 3.3          # a building drawn with no height is taken as one storey (user decision 2026-10-26)
+ORIENTATIONS = {"N", "NE", "E", "SE", "S", "SW", "W", "NW", "NNE", "ENE", "ESE", "SSE", "SSW", "WSW", "WNW", "NNW"}
+
+
+def validate_glazing_certificate_reply(packet, reply):
+    """A NatHERS or BASIX certificate's windows, transcribed (P8): the window types with their U-value and SHGC, and
+    the window schedule (room, window type, height, width, orientation). A sheet with no window table says why."""
+    value = parse_json_reply(reply)
+    types, windows = value.get("types") or [], value.get("windows") or []
+    if not isinstance(types, list) or not isinstance(windows, list):
+        raise ValueError("types and windows must be lists.")
+    clean_types = {}
+    for row in types:
+        if not isinstance(row, dict):
+            raise ValueError("Each window type must be an object.")
+        window_id = " ".join(str(row.get("window_id") or "").split())[:40]
+        u_value, shgc = row.get("u_value"), row.get("shgc")
+        if not window_id:
+            raise ValueError("Each window type needs its window ID as printed.")
+        if type(u_value) not in (int, float) or not 0.5 <= u_value <= 7.5:
+            raise ValueError(f"{window_id}: the U-value must be the printed number, 0.5 to 7.5 W/m²K.")
+        if type(shgc) not in (int, float) or not 0.05 <= shgc <= 0.95:
+            raise ValueError(f"{window_id}: the SHGC must be the printed number, 0.05 to 0.95.")
+        clean_types[window_id] = {"window_id": window_id, "description": " ".join(str(row.get("description") or "").split())[:120],
+                                  "u_value": float(u_value), "shgc": float(shgc)}
+    clean_windows = []
+    for row in windows:
+        if not isinstance(row, dict):
+            raise ValueError("Each window must be an object.")
+        window_id = " ".join(str(row.get("window_id") or "").split())[:40]
+        location = " ".join(str(row.get("location") or "").split())[:60]
+        height, width = row.get("height_mm"), row.get("width_mm")
+        orientation = str(row.get("orientation") or "").strip().upper()
+        if not location:
+            raise ValueError("Each window needs its location (room) as printed.")
+        if window_id not in clean_types:
+            raise ValueError(f"{location}: window ID {window_id!r} must be one of the window types listed: {sorted(clean_types)}.")
+        if any(type(size) not in (int, float) or not 100 <= size <= 12000 for size in (height, width)):
+            raise ValueError(f"{location} {window_id}: height_mm and width_mm must be the printed sizes in mm.")
+        if orientation and orientation not in ORIENTATIONS:
+            raise ValueError(f"{location} {window_id}: orientation must be a compass direction as printed (N, NE, ...).")
+        clean_windows.append({"location": location, "window_id": window_id, "height_mm": float(height),
+                              "width_mm": float(width), "orientation": orientation})
+    not_shown = " ".join(str(value.get("not_shown") or "").split())[:200]
+    if not clean_types and len(not_shown) < 8:
+        raise ValueError("Give the window types with their U-value and SHGC, or say in not_shown why this sheet has none.")
+    return {"certificate": str(value.get("certificate") or "")[:20], "dwelling": " ".join(str(value.get("dwelling") or "").split())[:40],
+            "types": list(clean_types.values()), "windows": clean_windows, "not_shown": not_shown}
+
+
+STOREY_HEIGHT_M = 3.3         # a building drawn with no height is taken as one storey (user decision 2026-10-26)
 OPPOSITE_KINDS = ("building", "open", "inside_building", "not_shown")
 
 

@@ -328,13 +328,27 @@ def place_windows(tags, windows, rooms, mm_per_point, reach_mm=900):
         used[(room["trace_id"], edge)] += width_m
         sill, head, assumption = sill_and_head(row)
         blind = internal_shade(row.get("type") or "")
+        group = frame_group(row.get("type") or "")
         openings.append({"trace_id": room["trace_id"], "edge_index": edge, "mark": tag["mark"], "width_m": width_m,
                          "schedule_page": row["page"],
                          "sill_height_m": sill / 1000, "head_height_m": head / 1000,
                          "assumptions": [assumption] if assumption else [],
                          **({"internal_shade": blind} if blind else {}),
+                         **({"frame_group": group} if group else {}),
                          "evidence": f"Schedule p{row['page']}: {row['evidence']}; tag on plan p{tag['page']}"})
     return {"openings": openings, "unplaced": unplaced}
+
+
+def frame_group(description):
+    """NatHERS window frame group from a schedule description: "A" hinged or projected (awning, casement, bi-fold),
+    "B" fixed or sliding (incl. stacker and double-hung); "" when it says neither (config/house_profiles.json
+    default_glazing)."""
+    text = str(description)
+    if re.search(r"\b(?:awning|casement|hinged|projected|bi[\s-]?fold|tilt[\s-]?(?:and|&)[\s-]?turn)\b", text, re.I):
+        return "A"
+    if re.search(r"\b(?:sliding|slider|fixed|stacker|double[\s-]?hung|single[\s-]?hung)\b", text, re.I):
+        return "B"
+    return ""
 
 
 _VENETIAN = re.compile(r"\b(?:venetian|integral\s+blinds?|integrated\s+blinds?|between[\s-]glass\s+blinds?)\b", re.I)

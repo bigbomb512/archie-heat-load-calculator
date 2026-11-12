@@ -246,7 +246,17 @@ def _sources(paths):
         "unconditioned_answers": _file_fingerprint(paths["root"] / "unconditioned_answers.json", {}),
         "exhaust_answers": _file_fingerprint(paths["root"] / "exhaust_answers.json", {}),
         "hours_answers": _file_fingerprint(paths["root"] / "hours_answers.json", {}),
+        # A house's window glass read from its energy certificate (P8) changes the draft's glazing.
+        "glazing_certificates": ai_preliminary.fingerprint(_certificate_answers(paths)),
     }
+
+
+def _certificate_answers(paths):
+    from backend import autonomous_tasks_service
+    try:
+        return autonomous_tasks_service.drawing_glazing_certificates(paths["root"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return []
 
 
 # Every file the draft geometry is built from (directly, or through room_proposal,
@@ -1928,6 +1938,7 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                                 **({"shade": dict(opening["shade"])} if isinstance(opening.get("shade"), dict) else {}),
                                 **({"internal_shade": dict(opening["internal_shade"])}
                                    if isinstance(opening.get("internal_shade"), dict) else {}),
+                                **({"frame_group": opening["frame_group"]} if opening.get("frame_group") else {}),
                                 **({"obstruction": ({**wall_obstruction} if wall_obstruction.get("inside") else
                                                     {**wall_obstruction, "base_m": floor_level_m + opening["sill_height_m"]})}
                                    if wall_obstruction else {}),
@@ -2449,6 +2460,28 @@ def _assemble(web, project, source="manual_placeholder"):
         return _assemble_inputs(web, project, source)
 
 
+def _with_certificate_glazing(paths, proposal, room_use):
+    """A house's windows take the glass its NatHERS or BASIX certificate gives their room (P8 drawing task,
+    ai.certificate_glazing); a window with its own U-value and SHGC keeps them. Without a certificate the draft uses
+    the NatHERS default windows (ai.ai_preliminary)."""
+    if (room_use or {}).get("dwelling_context", {}).get("is_dwelling") is not True:
+        return proposal
+    from ai import certificate_glazing, house_household
+    from backend import autonomous_tasks_service
+    certificates = autonomous_tasks_service.drawing_glazing_certificates(paths["root"])
+    if not certificates:
+        return proposal
+    for opening in proposal.get("openings", []):
+        if not isinstance(opening, dict) or (ai_preliminary._number(opening.get("u_value_w_m2k")) and ai_preliminary._number(opening.get("shgc"))):
+            continue
+        room = {"label": opening.get("owner_room_label", ""), "level": opening.get("owner_level_name", "")}
+        glass = certificate_glazing.room_glass(certificates, room["label"], house_household.dwelling_of(room))
+        if glass:
+            opening.update(u_value_w_m2k=glass["u_value"], shgc=glass["shgc"], glazing_source=glass["source"],
+                           assumptions=[*opening.get("assumptions", []), f"certificate_glazing_{glass['basis']}"])
+    return proposal
+
+
 def _assemble_inputs(web, project, source):
     paths = _paths(project)
     building, vision = _read(paths["building"], {}), _read(paths["vision"], {})
@@ -2487,6 +2520,7 @@ def _assemble_inputs(web, project, source):
     airflow_artifact = _read(paths["airflow"], airflow_artifact)
     geometry = _preliminary_geometry(paths)
     proposal = _prepare_preliminary_proposal(paths, proposal, room_use, geometry)
+    proposal = _with_certificate_glazing(paths, proposal, room_use)
     from backend import need_answers_service
     input_set = ai_preliminary.assemble(
         building, vision, source_fingerprints=_sources(paths), preliminary_proposal=proposal,

@@ -1822,8 +1822,16 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
             # Glass performance answered by the operators replaces the preliminary pack values (bounded, else ignored).
             answered_u = _number(opening.get("u_value_w_m2k")) if 0.5 <= (_number(opening.get("u_value_w_m2k")) or 0) <= 7 else None
             answered_shgc = _number(opening.get("shgc")) if 0.05 <= (_number(opening.get("shgc")) or 0) <= 0.95 else None
-            window_u = answered_u or pack["profiles"].get(opening.get("glazing_choice"), profile)["glazing_u_w_m2k"]
-            window_shgc = answered_shgc or pack["profiles"].get(opening.get("glazing_choice"), profile)["shgc"]
+            # A house window with no glass of its own (no certificate, no answer): the NatHERS default window for its
+            # frame group, group B (the higher SHGC) when the type isn't known (config/house_profiles.json).
+            house_glass = None
+            if room_use_artifact.get("dwelling_context", {}).get("is_dwelling") is True and not (answered_u and answered_shgc):
+                defaults = house_profiles.load()["default_glazing"]
+                group = opening.get("frame_group") if opening.get("frame_group") in {"A", "B"} else "B"
+                house_glass = {**defaults[group], "group": group, "source": defaults["source"],
+                               "group_known": opening.get("frame_group") in {"A", "B"}}
+            window_u = answered_u or (house_glass["u_value_w_m2k"] if house_glass else pack["profiles"].get(opening.get("glazing_choice"), profile)["glazing_u_w_m2k"])
+            window_shgc = answered_shgc or (house_glass["shgc"] if house_glass else pack["profiles"].get(opening.get("glazing_choice"), profile)["shgc"])
             # The sun at an angle gets in less: the most similar ASHRAE window's SHGC by incidence angle (glazing_angle).
             angle_glass = glazing_angle.glass_type(window_u, window_shgc)
             blind_factor, blind_note = glazing_angle.iac(opening.get("internal_shade"), angle_glass, window_shgc)
@@ -1863,6 +1871,9 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                           if glass_sun and _obstruction_values(opening.get("obstruction")) else {}),
                        "orientation": opening_orientation, "shading_category": opening["shading_category"], "preliminary_assumption": True,
                        "source": (opening.get("glazing_source") if answered_u and answered_shgc else
+                                  f"NatHERS default window {house_glass['window_id']}, {house_glass['label']}: U {house_glass['u_value_w_m2k']:g}, "
+                                  f"SHGC {house_glass['shgc']:g}" + ("" if house_glass["group_known"] else " (window type not shown: group B, the higher SHGC)")
+                                  if house_glass else
                                   _source(opening.get("glazing_choice") or profile_id) + "; preliminary assumption-pack glazing U-value and SHGC"),
                        "citations": deepcopy(opening.get("citations", [])), "source_pages": opening["evidence"],
                        "evidence": deepcopy(opening.get("evidence", opening["evidence"])),

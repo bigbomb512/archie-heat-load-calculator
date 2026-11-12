@@ -64,6 +64,7 @@ TASK_LABELS = {
     "P4_openings": "Finding the shopfront openings",
     "P5_roof": "Working out what is above",
     "P6_kitchen": "Listing the kitchen equipment",
+    "P8_glazing_certificate": "Reading the window glass from the energy certificate",
 }
 
 

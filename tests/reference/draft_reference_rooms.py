@@ -66,6 +66,8 @@ PACK = {
                         "equipment_diversity": 0.75, "equipment_space_gain": 0.85, "open": [range(7, 22)],
                         "cooled": [range(7, 24)]},
         "people": (67, 33), "infiltration_ach": 0.45,
+        # House glass with no certificate: NatHERS default ALM-002-01 A, aluminium single clear, fixed or sliding.
+        "glass_u": 6.7, "shgc": 0.70,
         # A house kitchen with no appliances on the drawings: a fridge all day; cooking 2000 W × 0.5 to the room at
         # half use from 5 to 7 pm.
         "kitchen_appliances": [{"w": 60, "factor": 1.0, "hours": {hour: 1.0 for hour in range(24)}},
@@ -209,9 +211,9 @@ def house_room_hour(room, month, hour):
         sun = plane_sunlight(month, hour, surface["tilt"], surface.get("azimuth", 0.0), surface.get("height_m"))
         out["solar"] += surface["area_m2"] * surface["u"] * ALPHA_OVER_HO * sun * cooled_now / 1000
     for glass in room.get("glass", []):
-        out["glazing_conduction"] += PACK["glass_u"] * glass["area_m2"] * (db - INDOOR_DB) / 1000
+        out["glazing_conduction"] += house["glass_u"] * glass["area_m2"] * (db - INDOOR_DB) / 1000
         sun = plane_sunlight(month, hour, 90, glass["azimuth"], glass["height_m"], glass=True)
-        out["glazing_solar"] += glass["area_m2"] * (1 - PACK["frame_fraction"]) * PACK["shgc"] * sun * cooled_now / 1000
+        out["glazing_solar"] += glass["area_m2"] * (1 - PACK["frame_fraction"]) * house["shgc"] * sun * cooled_now / 1000
     people = room.get("people", 0)
     out["people_s"] = people * house["people"][0] * profile["people_diversity"] * open_now / 1000
     out["people_l"] = people * house["people"][1] * profile["people_diversity"] * open_now / 1000

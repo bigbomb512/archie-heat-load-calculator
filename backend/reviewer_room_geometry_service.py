@@ -919,6 +919,7 @@ def _validated_trace_openings(data, trace, paths, room, calibration_record):
                        "shading_category": shading, "declaration_source": opening_source,
                        **({"shade": shade} if shade else {}),
                        **({"internal_shade": internal_shade} if internal_shade else {}),
+                       **({"frame_group": opening["frame_group"]} if opening.get("frame_group") in {"A", "B"} else {}),
                        **({"ai_run_id": ai_run_id}
                           if opening_source in {"ai_determined", "ai_fallback", "drawing_text"} and ai_run_id else {}),
                        **({"mark": str(opening.get("mark", ""))[:20],

@@ -137,8 +137,51 @@ also read; their U/SHGC-to-curve map is a figure not available as text, so the A
     the largest glass uncertainty for houses.
   - There's no screen to enter blinds.
 
+## House glass from the energy certificates (12 November)
+**What the six house sets hold:**
+- No set prints a window U-value or SHGC in its text layer.
+- Set 16 (page 3) and set 19 (BASIX page 19; NatHERS pages 20–21, one per dwelling) paste the certificate in as a picture.
+- Set 17 carries the BASIX certificate as text, but it says "Upgraded windows, refer to NatHERS Certificate", and that
+  certificate isn't in the set.
+- Set 15 only says "refer to BASIX certificate"; sets 18 and 20 have none.
+
+Set 19's NatHERS certificate lists window types with U and SHGC, and a window schedule by room. Read at 250 dpi in
+sections, its text is legible.
+
+- **New drawing question P8** (`_p8_packets`, `validate_glazing_certificate_reply`, `_apply_p8`):
+  - It's asked for each page whose page-reading title names NatHERS or BASIX, houses only.
+  - The page goes to the AI in 250 dpi sections.
+  - The AI transcribes the window types (ID, description, U, SHGC) and the schedule (room, type, height, width,
+    orientation). The checker refuses a U outside 0.5–7.5, an SHGC outside 0.05–0.95, or a schedule row whose type
+    isn't listed.
+  - A sheet with no window table must say why.
+- **Using it** (`ai/certificate_glazing.py`, `_with_certificate_glazing`): each house window takes the area-weighted U
+  and SHGC of the certificate windows in the room of the same name.
+  - Names match on their words (abbreviations expanded); numbers must agree.
+  - A room the schedule doesn't name takes the whole dwelling's area-weighted values.
+  - Types without a schedule give their average.
+  - With two dwellings, each certificate serves its own.
+  - A window with its own U and SHGC keeps them.
+  - The answers are part of the draft's input fingerprint, so a new reading refreshes it.
+- **No certificate:** the NatHERS default windows (NatHERS fact sheet Table 1; NSW Planning Portal BASIX default
+  window data), aluminium single clear:
+  - ALM-001-01 A (hinged or projected: awning, casement, bi-fold), U 6.7 / SHGC 0.57;
+  - ALM-002-01 A (fixed or sliding), U 6.7 / SHGC 0.70.
+
+  The frame group comes from the window schedule's description; unknown is group B. Set 19's certificate uses exactly
+  these two. This replaces the pack's uncited U 5.8 / SHGC 0.45 for houses only; shops keep the pack.
+- **Checked:**
+  - `tests/test_house_glazing.py` covers the defaults, the frame group, the reply checker, room matching, the service
+    and the page choice (titles from the page reading: set 16's drawing-set title for page 3 is a title-block artefact).
+  - The house reference case now uses U 6.7 / SHGC 0.70.
+  - A fake-AI run of the drawing step on set 16 asks P8 for page 3 and finishes.
+- **Effect** (AI off, so default glass): set 15 52.5 → 73.8 kW, set 16 35.5 → 45.2, set 18 24.0 → 29.9 (glass sun up
+  about 55–70 %). Shops unchanged.
+- **Not yet done:** P8 hasn't been run against a real AI reply. A live check on sets 16 and 19 needs the user's go-ahead
+  for the spend. Window-level matching by size and orientation isn't attempted; rooms take area-weighted values.
+
 ## Next
-1. Read the house glass's U-value and SHGC from BASIX or window certificates (the largest house glass uncertainty).
+1. A live P8 check on sets 16 and 19 (one AI call per certificate sheet).
 2. A listed-equipment case (commercial kitchen, hooded and free-standing) in the worksheet.
 3. Partner review of the equipment typical values against ASHRAE Fundamentals Ch. 18.
 4. More engineer numbers: Butcher Buffet's room breakdown, the first client's job, design partners.

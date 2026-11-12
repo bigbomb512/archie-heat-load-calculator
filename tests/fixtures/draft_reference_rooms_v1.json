@@ -188,6 +188,8 @@
      33
     ],
     "infiltration_ach": 0.45,
+    "glass_u": 6.7,
+    "shgc": 0.7,
     "kitchen_appliances": [
      {
       "w": 60,
@@ -885,7 +887,7 @@
       "MASTER BEDROOM": {
        "envelope": 0.0156,
        "solar": 0.0,
-       "glazing_conduction": 0.0376,
+       "glazing_conduction": 0.0434,
        "glazing_solar": 0.0,
        "people_s": 0.0,
        "people_l": 0.0,
@@ -917,8 +919,8 @@
       "LIVING": {
        "envelope": 0.0178,
        "solar": 0.0599,
-       "glazing_conduction": 0.1096,
-       "glazing_solar": 0.31,
+       "glazing_conduction": 0.1266,
+       "glazing_solar": 0.4822,
        "people_s": 0.0,
        "people_l": 0.0,
        "lighting": 0.0,
@@ -964,8 +966,8 @@
       }
      },
      "people_counted_share": 1.0,
-     "fan_heat_kw": 0.0224,
-     "total_kw": 0.845
+     "fan_heat_kw": 0.0286,
+     "total_kw": 1.0463
     },
     {
      "month": 1,
@@ -974,8 +976,8 @@
       "MASTER BEDROOM": {
        "envelope": 0.0415,
        "solar": 0.194,
-       "glazing_conduction": 0.1002,
-       "glazing_solar": 0.5623,
+       "glazing_conduction": 0.1158,
+       "glazing_solar": 0.8748,
        "people_s": 0.0,
        "people_l": 0.0,
        "lighting": 0.0,
@@ -1006,8 +1008,8 @@
       "LIVING": {
        "envelope": 0.0475,
        "solar": 0.0668,
-       "glazing_conduction": 0.2923,
-       "glazing_solar": 0.34,
+       "glazing_conduction": 0.3377,
+       "glazing_solar": 0.5288,
        "people_s": 0.1608,
        "people_l": 0.0792,
        "lighting": 0.1275,
@@ -1053,8 +1055,8 @@
       }
      },
      "people_counted_share": 0.5,
-     "fan_heat_kw": 0.0745,
-     "total_kw": 2.6423
+     "fan_heat_kw": 0.0925,
+     "total_kw": 3.2225
     },
     {
      "month": 1,
@@ -1063,8 +1065,8 @@
       "MASTER BEDROOM": {
        "envelope": 0.0363,
        "solar": 0.2126,
-       "glazing_conduction": 0.0877,
-       "glazing_solar": 0.6313,
+       "glazing_conduction": 0.1013,
+       "glazing_solar": 0.982,
        "people_s": 0.0,
        "people_l": 0.0,
        "lighting": 0.0,
@@ -1095,8 +1097,8 @@
       "LIVING": {
        "envelope": 0.0416,
        "solar": 0.0325,
-       "glazing_conduction": 0.2558,
-       "glazing_solar": 0.2302,
+       "glazing_conduction": 0.2955,
+       "glazing_solar": 0.358,
        "people_s": 0.1608,
        "people_l": 0.0792,
        "lighting": 0.1275,
@@ -1142,8 +1144,8 @@
       }
      },
      "people_counted_share": 0.5,
-     "fan_heat_kw": 0.0862,
-     "total_kw": 3.0387
+     "fan_heat_kw": 0.1032,
+     "total_kw": 3.5876
     },
     {
      "month": 1,
@@ -1152,7 +1154,7 @@
       "MASTER BEDROOM": {
        "envelope": -0.0052,
        "solar": 0.0,
-       "glazing_conduction": -0.0125,
+       "glazing_conduction": -0.0145,
        "glazing_solar": 0.0,
        "people_s": 0.1072,
        "people_l": 0.0528,
@@ -1184,7 +1186,7 @@
       "LIVING": {
        "envelope": -0.0059,
        "solar": 0.0,
-       "glazing_conduction": -0.0365,
+       "glazing_conduction": -0.0422,
        "glazing_solar": 0.0,
        "people_s": 0.0,
        "people_l": 0.0,
@@ -1231,8 +1233,8 @@
       }
      },
      "people_counted_share": 1.0,
-     "fan_heat_kw": 0.0105,
-     "total_kw": 0.494
+     "fan_heat_kw": 0.0102,
+     "total_kw": 0.4861
     },
     {
      "month": 7,
@@ -1241,8 +1243,8 @@
       "MASTER BEDROOM": {
        "envelope": -0.0083,
        "solar": 0.1299,
-       "glazing_conduction": -0.02,
-       "glazing_solar": 0.3879,
+       "glazing_conduction": -0.0232,
+       "glazing_solar": 0.6034,
        "people_s": 0.0,
        "people_l": 0.0,
        "lighting": 0.0,
@@ -1273,8 +1275,8 @@
       "LIVING": {
        "envelope": -0.0095,
        "solar": 0.1054,
-       "glazing_conduction": -0.0585,
-       "glazing_solar": 0.7591,
+       "glazing_conduction": -0.0675,
+       "glazing_solar": 1.1808,
        "people_s": 0.1608,
        "people_l": 0.0792,
        "lighting": 0.1275,
@@ -1320,14 +1322,14 @@
       }
      },
      "people_counted_share": 0.5,
-     "fan_heat_kw": 0.0585,
-     "total_kw": 1.9653
+     "fan_heat_kw": 0.0785,
+     "total_kw": 2.6103
     }
    ],
    "peak": {
     "month": 3,
-    "hour": 17,
-    "total_kw": 3.1875
+    "hour": 16,
+    "total_kw": 4.0115
    }
   }
  ]

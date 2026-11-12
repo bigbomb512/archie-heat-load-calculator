@@ -8,6 +8,7 @@ import json
 import math
 import traceback
 import re
+import subprocess
 from functools import lru_cache
 from collections import OrderedDict
 from pathlib import Path
@@ -2500,6 +2501,69 @@ def _apply_p7(record, validated):
     return record
 
 
+CERTIFICATE_TITLE = re.compile(r"\b(?:nathers|basix)\b", re.I)
+CERTIFICATE_DPI = 250      # a certificate sheet tiles several certificate pages; its table text needs ~250 dpi to read
+
+
+def _p8_packets(root):
+    """A house's window glass from its NatHERS or BASIX certificate (P8), one question per certificate sheet the page
+    titles name. The sheets are usually pictures pasted onto the drawings, so the AI reads the window types (U-value,
+    SHGC) and the window schedule (room, type, size, orientation) from the sheet in sections. Shops aren't asked."""
+    uses = _read(root / "room_use_resolution.json", {})
+    if (uses.get("dwelling_context") or {}).get("is_dwelling") is not True:
+        return []
+    ai_input, _spatial, _building = _load_inputs(root)
+    pdf = Path(str(ai_input.get("source_pdf", "")))
+    # The page reading's titles first (the drawing set's own often hold only a title-block artefact, set 16).
+    titles = {int(page): str(row.get("title") or "") for page, row in (_read(root / "page_inventory.json", {}).get("pages") or {}).items()
+              if isinstance(row, dict) and str(page).isdigit()}
+    for row in (ai_input.get("drawing_set") or {}).get("pages", []):
+        if isinstance(row, dict) and str(row.get("page", "")).isdigit() and CERTIFICATE_TITLE.search(str(row.get("title") or "")):
+            titles.setdefault(int(row["page"]), str(row["title"]))
+    pages = [{"page": page, "title": title} for page, title in sorted(titles.items()) if CERTIFICATE_TITLE.search(title)]
+    result = []
+    for row in pages:
+        page = int(row["page"])
+        record = _current_task(root, "P8_glazing_certificate", f"page-{page}")
+        if record and record.get("status") in {"applied", "below_accuracy_bar"}:
+            continue
+        packet = {"task": "P8_glazing_certificate", "page": page, "title": str(row.get("title") or "")[:120], "evidence": {"page": page}}
+        prompt = (f"The images are sections of page {page} ({packet['title']}), which may show a NatHERS or BASIX "
+                  "certificate. Transcribe its glazing exactly as printed: (1) every window type with its window ID, "
+                  "description, U-value and SHGC (the 'Window and glazed door type and performance' table, or BASIX's "
+                  "frame and glass types); (2) every row of the window schedule: location (room), window ID, height and "
+                  "width in mm, orientation. Leave out skylights, roof windows and doors without glass. Sections overlap: "
+                  "list each row once. If the page names a dwelling (e.g. 'Dwelling A'), give it. If it has no window "
+                  "table, say why in not_shown. JSON only: {\"certificate\":\"NatHERS\"|\"BASIX\"|\"none\",\"dwelling\":"
+                  "string|null,\"types\":[{\"window_id\":string,\"description\":string,\"u_value\":number,\"shgc\":number}],"
+                  "\"windows\":[{\"location\":string,\"window_id\":string,\"height_mm\":number,\"width_mm\":number,"
+                  "\"orientation\":string}],\"not_shown\":string|null}")
+        try:
+            from backend import page_extraction_service
+            sections = page_extraction_service.page_images(pdf, root / "certificate_pages", [page], dpi=CERTIFICATE_DPI)
+            images = [Path(path).read_bytes() for _key, (path, _count) in sorted(sections.items())]
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            result.append(("P8_glazing_certificate", f"page-{page}", packet, "", [], f"The certificate page could not be rendered: {error}"))
+            continue
+        result.append(("P8_glazing_certificate", f"page-{page}", packet, prompt, images, ""))
+    return result
+
+
+def _apply_p8(record, validated):
+    packet = record["packet"]
+    record.update({"status": _status_for_accuracy("ai_determined", record["accuracy"]), "source": "ai_determined",
+        "applied_value": {"page": packet["page"], "title": packet.get("title", ""), **validated, "label": record["quality_label"]},
+        "validation": validated, "block_reason": ""})
+    return record
+
+
+def drawing_glazing_certificates(root):
+    """The answered certificate sheets (P8): [{"page", "title", "certificate", "dwelling", "types", "windows"}]."""
+    return [record["applied_value"] for record in _all_current(Path(root))
+            if record.get("task") == "P8_glazing_certificate" and record.get("status") in {"applied", "below_accuracy_bar"}
+            and (record.get("applied_value") or {}).get("types")]
+
+
 def _storefront_runs(root, plan_page, eligible, run_geometry, elevation_pages, spatial, traces, perimeter, result,
                      candidates=None):
     """{elevation page: ([perimeter run indices], reason)} for the storefront on this plan page, or None after asking.
@@ -3498,7 +3562,7 @@ def _refresh_geometry_tasks(root, room_id=None, page_number=None):
             _create_run(root,task,target,packet,prompt,images,reason or
                         (f"Prompt exceeds the {budget:,}-character limit; evidence was not shortened." if len(prompt)>budget else ""))
     _refresh_roof_tasks(root)
-    for packet_builder in (_p3_packets,_p3_surroundings_packets,_p7_packets,_p4_packets,_p6_kitchen_packets):
+    for packet_builder in (_p3_packets,_p3_surroundings_packets,_p7_packets,_p4_packets,_p6_kitchen_packets,_p8_packets):
         for task,target,packet,prompt,images,reason in packet_builder(root):
             budget=autonomous_tasks.TASKS[task]["budget_chars"]
             _create_run(root,task,target,packet,prompt,images,reason or
@@ -3771,7 +3835,7 @@ def _run_all(web, project, root):
                      if task == "P0_dimensions" and len(prompt) > 1500 else
                      "Prompt exceeds the 3,000-character limit; evidence was not shortened."
                      if task == "P0_wall_styles" and len(prompt) > 3000 else ""))
-    for packet_builder in (_p0_followup_packets, _p0_tenancy_packets, _p0_outline_packets, _p0_unnamed_space_packets, _p0_corner_packets, _s1_packets, _p0_size_packets, _p3_packets, _p3_surroundings_packets, _p7_packets, _p4_packets, _p6_kitchen_packets):
+    for packet_builder in (_p0_followup_packets, _p0_tenancy_packets, _p0_outline_packets, _p0_unnamed_space_packets, _p0_corner_packets, _s1_packets, _p0_size_packets, _p3_packets, _p3_surroundings_packets, _p7_packets, _p4_packets, _p6_kitchen_packets, _p8_packets):
         for task, target, packet, prompt, images, reason in _built_packets(packet_builder, root):
             budget = autonomous_tasks.TASKS[task]["budget_chars"]
             _create_run(root, task, target, packet, prompt, images,
@@ -4262,6 +4326,9 @@ def _post(web, project, data, *, defer_evidence_rebuild=False):
         elif task == "P7_ceiling_heights":
             validated = autonomous_tasks.validate_ceiling_height_reply(record["packet"], reply)
             record = _apply_p7(record, validated)
+        elif task == "P8_glazing_certificate":
+            validated = autonomous_tasks.validate_glazing_certificate_reply(record["packet"], reply)
+            record = _apply_p8(record, validated)
         elif task == "P4_storefront_wall":
             validated = autonomous_tasks.validate_storefront_wall_reply(record["packet"], reply)
             record = _apply_p4_wall(web, project, root, record, validated, defer=True) if defer else _apply_p4_wall(web, project, root, record, validated)
@@ -4356,6 +4423,7 @@ def prepare_investigation(project, investigation):
         "P5_roof": lambda: [("P5_roof", target, packet, prompt, images, "")
                               for target, packet, prompt, images in _roof_packets(root, investigation.get("room_id") or None)],
         "P7_ceiling_heights": lambda: _p7_packets(root, requested_rooms=names),
+        "P8_glazing_certificate": lambda: _p8_packets(root),
     }
     if task not in builders:
         raise ValueError("This investigation has no supported drawing task.")
