@@ -444,7 +444,12 @@ class _HttpProvider:
 
         worker = threading.Thread(target=run, daemon=True, name="archie-ai-request")
         worker.start()
-        worker.join(remaining)
+        # The limit is also kept on the wall clock: the monotonic clock stops while a Mac sleeps (lid closed, set 22008
+        # on 13 November 2026: a request sent just before sleep waited 25 minutes of clock time), and a connection
+        # left open across a sleep is dead anyway, so the request is given up as soon as the computer wakes.
+        wall_deadline = time.time() + remaining
+        while worker.is_alive() and time.monotonic() < deadline and time.time() < wall_deadline:
+            worker.join(min(1.0, max(0.0, deadline - time.monotonic()), max(0.0, wall_deadline - time.time())))
         if worker.is_alive():
             # The worker stops on its own at its socket timeout; its reply, if any, is discarded.
             raise ProviderTimeout(self.deadline_s or self.timeout)

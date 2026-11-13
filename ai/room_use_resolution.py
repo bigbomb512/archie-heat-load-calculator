@@ -176,7 +176,7 @@ def plan_text_translation(source_words, target_words):
         grouped = {}
         for word in words:
             text = word.get("text", "")
-            if text.isdigit() and 100 <= int(text) <= 20000:
+            if text.isdecimal() and 100 <= int(text) <= 20000:   # not isdigit: '²' is a digit int() can't read
                 grouped.setdefault(text, []).append(word)
         return {key: rows[0] for key, rows in grouped.items() if len(rows) == 1}
     source, target = unique(source_words), unique(target_words)

@@ -104,7 +104,7 @@ def validate_equipment_item(row):
     quantity = row.get("quantity")
     if quantity in ("", None):
         quantity = None
-    elif isinstance(quantity, str) and quantity.strip().isdigit():
+    elif isinstance(quantity, str) and quantity.strip().isdecimal():
         quantity = int(quantity.strip())
     elif type(quantity) is not int or quantity < 0:
         raise ValueError(f"Quantity for {name!r} must be a whole number or null.")
@@ -298,7 +298,7 @@ def _row(code, name, size, qty, page):
         return None
     if _SIZE_LIKE.search(size):
         quantity = int(qty) if qty else None
-    elif size.isdigit() and len(size) <= 3:
+    elif size.isdecimal() and len(size) <= 3:
         size, quantity = "", int(size)              # no size column: the number is the quantity
     else:
         return None

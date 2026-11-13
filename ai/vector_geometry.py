@@ -651,7 +651,7 @@ def image_words(words, transform):
 
 def dimension_value(text):
     clean = text.replace(",", "").strip()
-    if not clean.isdigit():
+    if not clean.isdecimal():          # not isdigit: '²' (from 'm²') is a digit int() can't read
         return None
     value = int(clean)
     if 100 <= value <= 50000:
