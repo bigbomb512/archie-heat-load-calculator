@@ -129,7 +129,7 @@ function roomRows(plan, selected) {
         ? `<small class="job-row-source">${escapeHtml(room.area_label)}</small>`
         : "";
       return `<tr class="${selectedClass}">
-        <th scope="row"><button class="job-room-select" data-room="${escapeHtml(room.room_id)}" aria-current="${room.room_id === selected.room_id ? "true" : "false"}">${escapeHtml(room.name)}</button>${source}${noOutline}</th>
+        <th scope="row"><button class="job-room-select" data-room="${escapeHtml(room.room_id)}" aria-current="${room.room_id === selected.room_id ? "true" : "false"}">${escapeHtml(room.display_name || room.name)}</button>${source}${noOutline}</th>
         <td>${area}</td>
         <td>${load}</td>
         <td>${roomState(room)}</td>
@@ -288,7 +288,7 @@ function roomDetails(plan, room, status, uses, editor = {}) {
   const factors = room.use?.use_assessment?.factors || [];
   const useFactors = factors.length ? `<details><summary>Why this use was selected</summary><ul class="job-assumptions">${factors.map((factor) => `<li>${escapeHtml(factor.reason)} (${Number(factor.weight) || 0} points)</li>`).join("")}</ul></details>` : "";
   return `<section class="job-panel job-room-detail" aria-labelledby="room-detail-title">
-    <h2 class="job-room-title" id="room-detail-title">${escapeHtml(room.name)}</h2>
+    <h2 class="job-room-title" id="room-detail-title">${escapeHtml(room.display_name || room.name)}</h2>
     <p class="job-room-use">${escapeHtml(room.use?.taxonomy_label || (room.kind === "refrigeration" ? "Refrigeration" : "Comfort-HVAC room"))}</p>
     ${useReason}${useFactors}${useEditor}
     ${room.occupancy?.value != null ? `<p class="job-caption" data-room-occupancy><strong>Design occupants (operating loads): ${fmt(room.occupancy.value, 0)}</strong><br>${escapeHtml(room.occupancy.rationale || "Saved occupancy; source not recorded.")}</p>` : ""}
@@ -303,6 +303,7 @@ function roomDetails(plan, room, status, uses, editor = {}) {
     <h3>What the AI assumed</h3>
     ${assumptionList}
     <div class="job-editor-actions">
+      <a class="job-button secondary" href="#/job/${encodeURIComponent(plan.project_id || "")}/fix">Quick fixes for every room</a>
       <button class="job-button secondary" data-edit-area>Correct the area</button>
       <button class="job-button secondary" data-edit-envelope>Change a wall or the roof</button>
     </div>

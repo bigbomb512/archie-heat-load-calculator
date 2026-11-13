@@ -90,7 +90,7 @@ function roomRows(rooms, roomPeaks, maxLoad, stale) {
         : total;
       const area = room.area_m2 == null ? "Not available" : fmt(room.area_m2);
       return `<tr>
-        <th scope="row">${escapeHtml(room.name)}</th>
+        <th scope="row">${escapeHtml(room.display_name || room.name)}</th>
         <td>${area}</td>
         <td>${bar(peak?.components, breakdownTotal, maxLoad, historical)}</td>
         <td><b>${total == null ? "Not calculated yet" : `${fmt(total)} kW`}</b></td>
@@ -253,6 +253,7 @@ function resultsContent({ plan, report, gaps, projectId, stale, canUpdate }) {
           ? `<p class="job-muted">Update the final load before creating the report.</p>`
           : `<div class="job-report" data-report>
               <button class="job-button" type="button" data-create-report>Create the report</button>
+              <a class="job-button secondary" href="#/job/${encodeURIComponent(projectId)}/fix">Fix a room or window</a>
               ${reportUrl ? `<a class="job-link-button" href="${escapeHtml(reportUrl)}" download>Download the last report</a>` : ""}
               <p class="job-note" role="status" data-report-status></p>
             </div>`}

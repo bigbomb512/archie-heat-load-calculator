@@ -98,8 +98,14 @@ def room_sizing(report, plan_rooms):
             note = (f"Larger than one wall split: {_label(duct_units, duct_size)} ducted is the usual choice "
                     f"(or {_label(units, size)} wall splits).")
         row["note"] = note
+        row["name"] = shown(plan_rooms).get(row["name"], row["name"])
         rows.append(row)
     return rows
+
+
+def shown(plan_rooms):
+    """{drawing label: the name shown} from the plan's rows (a name given on the quick-fix screen, else the label)."""
+    return {row["name"]: row.get("display_name") or row["name"] for row in plan_rooms if row.get("name")}
 
 
 def ducted(total_kw, dwelling=False):
@@ -166,13 +172,15 @@ def room_values(input_set, plan_rooms):
     """Each cooled room's people, lights, outside air and equipment as the calculation used them."""
     uses = {row["name"]: (row.get("use") or {}).get("taxonomy_label") or "" for row in plan_rooms}
     included = {row["name"] for row in plan_rooms if row.get("final_kw") is not None}
+    names = shown(plan_rooms)
     rows, equipment = [], []
     for room in ((input_set.get("material") or {}).get("hourly_load_model") or {}).get("rooms") or []:
-        name = room.get("name", "")
-        if included and name not in included:
+        label = room.get("name", "")
+        if included and label not in included:
             continue
+        name = names.get(label, label)
         load = room.get("cooling_load") or {}
-        rows.append({"name": name, "use": uses.get(name, ""), "area_m2": room.get("area_m2"), "people": room.get("occupancy"),
+        rows.append({"name": name, "use": uses.get(label, ""), "area_m2": room.get("area_m2"), "people": room.get("occupancy"),
                      "people_w": (load.get("people_sensible_w_per_person"), load.get("people_latent_w_per_person")),
                      "lighting_w_m2": load.get("lighting_w_m2"), "outside_air_lps": load.get("outside_air_lps")})
         for source in room.get("heat_sources") or []:

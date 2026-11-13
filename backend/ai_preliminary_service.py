@@ -246,6 +246,8 @@ def _sources(paths):
         "unconditioned_answers": _file_fingerprint(paths["root"] / "unconditioned_answers.json", {}),
         "exhaust_answers": _file_fingerprint(paths["root"] / "exhaust_answers.json", {}),
         "hours_answers": _file_fingerprint(paths["root"] / "hours_answers.json", {}),
+        # The quick-fix screen's blinds, shading and cooled-or-not choices (backend/quick_fix_service.py).
+        "quick_fixes": _file_fingerprint(paths["root"] / "quick_fixes.json", {}),
         # A house's window glass read from its energy certificate (P8) changes the draft's glazing.
         "glazing_certificates": ai_preliminary.fingerprint(_certificate_answers(paths)),
     }
@@ -2037,9 +2039,10 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
     proposal.setdefault("issues", []).extend(area_issues)
     if trace_review_issue:
         proposal["issues"].append(trace_review_issue)
-    from backend import need_answers_service
+    from backend import need_answers_service, quick_fix_service
     proposal = need_answers_service.apply_glazing(paths["root"], proposal)  # answered glass performance, where given
-    return need_answers_service.apply_constructions(paths["root"], proposal)  # answered wall and roof U-values
+    proposal = need_answers_service.apply_constructions(paths["root"], proposal)  # answered wall and roof U-values
+    return quick_fix_service.apply_windows(paths["root"], proposal)  # blinds and awnings from the quick-fix screen
 
 
 def _queue_missing_research(paths, project, approved):

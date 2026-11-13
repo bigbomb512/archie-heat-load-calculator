@@ -6,6 +6,7 @@ import { renderOperating } from "./operating.js";
 import { renderResults } from "./results.js";
 import { renderJobs, renderNewJob } from "./jobs.js";
 import { renderJobDetails } from "./editors.js";
+import { renderFix } from "./fix.js";
 
 const root = document.querySelector("#jobApp");
 let generation = 0;
@@ -69,6 +70,8 @@ async function render() {
             ? await renderResults(projectId)
             : step === "details"
               ? await renderJobDetails(projectId)
+              : step === "fix"
+                ? await renderFix(projectId)
               : await renderDrawings(project, projectId);
     if (step === "details") step = "drawings";
     if (current !== generation) return;

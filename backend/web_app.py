@@ -335,6 +335,13 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._send_security_error(error, 403)
             except Exception as error:
                 return self.send_json(product_error(error), 400)
+        if urlparse(self.path).path == "/api/quick-fix":
+            try:
+                return self.send_json(api_quick_fix(self))
+            except security.SecurityError as error:
+                return self._send_security_error(error, 403)
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
         if urlparse(self.path).path == "/api/result-status":
             try:
                 return self.send_json(api_result_status(self))
@@ -477,6 +484,13 @@ class Handler(SimpleHTTPRequestHandler):
         if urlparse(self.path).path == "/api/new-job":
             try:
                 return self.send_json(api_start_new_job(self))
+            except security.SecurityError as error:
+                return self._send_security_error(error, 403)
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if urlparse(self.path).path == "/api/quick-fix":
+            try:
+                return self.send_json(api_save_quick_fix(self))
             except security.SecurityError as error:
                 return self._send_security_error(error, 403)
             except Exception as error:
@@ -1199,11 +1213,14 @@ def _job_report_details(project, stale_reasons):
         if hours:
             best = max(range(len(hours)), key=lambda hour: hours[hour])
             months.append({"month": row.get("month", ""), "kw": hours[best], "hour": best})
-    rooms = sorted(({"name": row["name"], "level": row.get("level") or "", "area_m2": row.get("area_m2"), "kw": row["final_kw"],
+    rooms = sorted(({"name": row.get("display_name") or row["name"], "level": row.get("level") or "", "area_m2": row.get("area_m2"), "kw": row["final_kw"],
                      "w_m2": row.get("final_w_m2")} for row in plan.get("rooms", []) if row.get("final_kw") is not None),
                    key=lambda row: (-row["kw"], row["name"]))
     cooled = {row["name"] for row in rooms}
-    not_cooled = sorted({row["name"] for row in plan.get("rooms", []) if row.get("kind") == "not_cooled" and row["name"] not in cooled})
+    # Not cooled: by the room's use, or marked not cooled on the quick-fix screen (then left out of the calculation).
+    not_cooled = sorted({row.get("display_name") or row["name"] for row in plan.get("rooms", [])
+                         if (row.get("kind") == "not_cooled" or (row.get("kind") == "comfort" and row.get("included") is False))
+                         and (row.get("display_name") or row["name"]) not in cooled})
     items = result_status_service.gather(web, project).get("items", [])
     counts = Counter(item.get("text", "") for item in items if item.get("text"))
     household = peak.get("household_counted_once") or {}
@@ -2514,6 +2531,29 @@ def api_page_reading(request):
                 return blocked_status(page_inventory_service.status(sys.modules[__name__], project), reason)
         return page_inventory_service.start(sys.modules[__name__], project, data)
     raise ValueError("Page reading action must be start, retry, resume, restart or set_enabled.")
+
+
+def api_quick_fix(request):
+    """The quick-fix screen: every room's name, use, area, people and cooled-or-not, and every room's windows."""
+    from backend import quick_fix_service
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    ensure_review_dir(project)
+    security.require_project_role(project, request._identity(), "viewer")
+    return quick_fix_service.get(sys.modules[__name__], project)
+
+
+def api_save_quick_fix(request):
+    """Save a batch of quick fixes (all checked before any is saved); the page then updates the load."""
+    from backend import calculation_service, quick_fix_service
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or "")
+    ensure_review_dir(project)
+    security.require_project_role(project, request._identity(), "editor")
+    if calculation_service._JOB.status(project).get("status") in {"queued", "running", "stopping"}:
+        raise ValueError("A calculation is running. Wait for it to finish, then save the fixes.")
+    reviewer = " ".join(str(data.get("reviewer") or "").split())[:80] or "Quick fixes"
+    return quick_fix_service.save(sys.modules[__name__], project, data, reviewer)
 
 
 def api_result_status(request):

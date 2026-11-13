@@ -252,7 +252,9 @@ def start(web, project, data):
             input_set = ai_preliminary_service._read(paths["current_set"], {})
             scope = ai_preliminary_service._room_scope_state(paths, input_set)
             if phase == "full":
-                rows = _rows(scope, include)
+                # Rooms marked cooled or not on the quick-fix screen, unless this request chooses them itself.
+                from backend import quick_fix_service
+                rows = _rows(scope, {**quick_fix_service.cooled_choices(paths["root"]), **include})
                 if not any(row["include"] for row in rows):
                     raise ValueError("No room has an area yet. The AI could not resolve a room area from the drawings.")
                 ai_preliminary_service._confirm_room_scope(paths, {"reviewer": reviewer, "rows": rows,

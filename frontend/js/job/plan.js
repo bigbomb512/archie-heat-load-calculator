@@ -41,7 +41,7 @@ function loadColor(value, values) {
 function outlineLabel(outline, room, shadeLoads) {
   const point = outline.label_point;
   if (!point) return "";
-  const label = escapeHtml(outline.name);
+  const label = escapeHtml(outline.display_name || outline.name);
   const detail = shadeLoads
     ? room.final_w_m2 == null
       ? ""
@@ -85,7 +85,7 @@ function renderPage(plan, page, options) {
         .map((point) => `${point[0]},${point[1]}`)
         .join(" ");
       const level = outline.level ? `, ${escapeHtml(outline.level)}` : "";
-      return `<g><polygon class="${classes}" points="${points}" fill="${fill}" data-room-id="${escapeHtml(outline.room_id)}" aria-label="${escapeHtml(outline.name)}${level}"/><title>${escapeHtml(outline.name)}${level}</title>${outlineLabel(outline, room, options.shadeLoads)}</g>`;
+      return `<g><polygon class="${classes}" points="${points}" fill="${fill}" data-room-id="${escapeHtml(outline.room_id)}" aria-label="${escapeHtml(outline.display_name || outline.name)}${level}"/><title>${escapeHtml(outline.display_name || outline.name)}${level}</title>${outlineLabel(outline, room, options.shadeLoads)}</g>`;
     })
     .join("");
   const heading =
@@ -93,7 +93,7 @@ function renderPage(plan, page, options) {
   const title = heading
     ? `<figcaption>${escapeHtml(heading)}</figcaption>`
     : "";
-  const accessibleName = outlines.map((outline) => outline.name).join(", ");
+  const accessibleName = outlines.map((outline) => outline.display_name || outline.name).join(", ");
   return `<figure class="job-plan-page">${title}<svg class="job-plan" viewBox="${bounds.x} ${bounds.y} ${bounds.width} ${bounds.height}" role="img" aria-label="Plan page ${page.page}${page.title ? `: ${escapeHtml(page.title)}` : ""}${accessibleName ? `, rooms: ${escapeHtml(accessibleName)}` : ""}" xmlns="http://www.w3.org/2000/svg"><defs><pattern id="${patternId}" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="8" stroke="#9AAAB3" stroke-width="2"/></pattern></defs>${polygons}</svg></figure>`;
 }
 
@@ -151,7 +151,7 @@ export function roomList(plan) {
         : "";
       const refrigeration =
         room.kind === "refrigeration" ? " · Refrigeration" : "";
-      return `<li><strong>${escapeHtml(room.name)}${refrigeration}</strong><small>${area}${pages}</small></li>`;
+      return `<li><strong>${escapeHtml(room.display_name || room.name)}${refrigeration}</strong><small>${area}${pages}</small></li>`;
     })
     .join("")}</ul>`;
 }

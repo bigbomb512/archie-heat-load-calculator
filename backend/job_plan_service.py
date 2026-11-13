@@ -224,8 +224,15 @@ def get(web, project):
                          "kind": room["kind"], "state": room["state"], "source": source})
 
     outlined = {row["room_id"] for row in outlines}
+    # Names given on the quick-fix screen are shown in place of the drawing's label ("name" stays the label: it is the
+    # room's identity for the area, people and glass answers and for matching the load report).
+    from backend import quick_fix_service
+    shown = quick_fix_service.display_names(project["review_dir"])
     for room in rooms:
         room["has_outline"] = room["room_id"] in outlined
+        room["display_name"] = shown.get(room["room_id"]) or room["name"]
+    for outline in outlines:
+        outline["display_name"] = shown.get(outline["room_id"]) or outline["name"]
 
     return {"project_id": project["id"], "status": status, "rooms": rooms,
             "room_use_options": {key: row["label"] for key, row in load_taxonomy()["categories"].items()},
