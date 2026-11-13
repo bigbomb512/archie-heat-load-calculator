@@ -5,7 +5,7 @@ pvlib==0.15.2
 # Magnetic declination (World Magnetic Model 2025, MIT) to turn a magnetic north arrow into true north.
 pygeomag==1.1.0
 # Room outlines from plan vectors (Card P0): noding, polygon operations.
-shapely==2.0.6
+shapely==2.2.0
 # Required only by the production Cognito verifier. Imported lazily so local
 # development and deterministic test fixtures remain dependency-light.
 PyJWT[crypto]==2.10.1
