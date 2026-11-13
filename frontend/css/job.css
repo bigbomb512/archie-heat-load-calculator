@@ -311,6 +311,13 @@ body.job-preview {
   stroke-width: 1.5;
   vector-effect: non-scaling-stroke;
 }
+.job-plan polygon.job-plan-wall {
+  fill: #c9d3d8;
+  stroke: #c9d3d8;
+  stroke-linejoin: round;
+  vector-effect: none;
+  pointer-events: none;
+}
 .job-plan polygon.assumed {
   stroke-dasharray: 6 4;
 }
