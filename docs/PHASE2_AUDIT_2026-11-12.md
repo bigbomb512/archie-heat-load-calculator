@@ -188,8 +188,77 @@ sections, its text is legible.
   - About 17,000 input tokens per sheet; set 16's A1 sheet went as 12 sections and 41,000 tokens.
 - **Not done:** window-level matching by size and orientation; rooms take area-weighted values.
 
+## Stored heat by the radiant time series method (13 November)
+Until now every heat gain reached the room air in the hour it happened. Real rooms store radiant heat (sun on the floor,
+heat from lights and people) and give it back over the following hours, and heavy walls and roofs pass heat hours late.
+The draft now uses ASHRAE's Radiant Time Series method (Fundamentals 2009 Ch 18).
+
+- **Where the factors come from:** ASHRAE's tables weren't available (only one row of Table 19 could be found, in a
+  2015 journal paper). The AIRAH Technical Handbook 2007 has no stored-heat factors either; searched on 13 November, it
+  has U-values, material properties, film resistances and check figures, but no RTS, CTS, CLTD or CLF. So Archie
+  calculates them with its own heat balance, `ai/stored_heat.py`, the way ASHRAE's were made:
+  - **Walls and roofs:** each layer's exact transmission matrix for a 24-hour periodic day, giving periodic response
+    factors for a one-hour pulse. They sum to U; divided by U they are the conduction time series (CTS).
+  - **Rooms:** a heat balance of every inside surface. Each surface convects to the air (held steady), exchanges
+    long-wave radiation through a mean-radiant node, and conducts into its construction. Behind the construction is
+    outdoors, the ground, an identical neighbouring room, or nothing (furnishings). A one-hour radiant pulse gives the
+    room's radiant time series (RTS): nonsolar heat lands on every surface by area, solar heat on the floor.
+  - **Inputs:** materials, films and emittance are from AIRAH 2007 pp.150–177; every value is cited in
+    `config/stored_heat.json`.
+- **Checked against published results** (`tests/test_stored_heat.py`):
+  - ASHRAE's PRF/RTF generator for a 30 cm thermo-stone wall (Univ. of Baghdad Journal of Engineering, 2015, Table 4):
+    every hour within 0.006 of the published fraction, the same peak hour, and the sum within 2 % of the table's.
+  - The same paper's concrete roof: within 0.002 (its membrane and tile thicknesses aren't printed; no membrane, 13 mm
+    tile assumed).
+  - ASHRAE 2009 Table 19, heavyweight / no carpet / 10 % glass nonsolar: within 2 points every hour (ours 20.4, 11.4,
+    6.5, 5.2, 4.5 … against 22, 10, 6, 5, 5 …).
+  - The zone is ASHRAE's representative zone as we read Table 21. Its furnishings line ("25 mm wood, 50 % of floor
+    area") matched as one face of wood over half the floor. Taken as both faces, hour 1 came out 14.7 against 10. Table
+    21 itself wasn't available to confirm that reading.
+  - These are two references only: light and medium construction, carpet, 50/90 % glass and all solar series are not
+    checked yet (TODO.md, "Stored heat").
+- **Each room's own series:** `ai/stored_heat_rooms.py` builds the heat balance from the room's traced surfaces (areas,
+  and what each faces). Each surface gets a typical construction (`config/stored_heat.json`): one named in its label or
+  answered construction, otherwise the lightest typical one, which takes the least stored-heat credit.
+  - Defaults: framed wall, metal roof, plasterboard partitions; a ground floor is a 100 mm slab on ground; between
+    storeys, concrete with a suspended ceiling (commercial) or timber with plasterboard (house).
+  - Insulation is sized to the surface's own U-value, so the series use the job's U.
+  - Floor finish by room use: carpet in house bedrooms and living rooms and in offices, tiles elsewhere.
+  - Furnishings: 25 mm timber over half the floor.
+  - Each room's job report lists the constructions it assumed ("stored heat").
+- **Splits** (Nigusse 2007, adopted by ASHRAE 2009): people 0.60 radiant (sensible only); lighting 0.40 (lower end of
+  recessed fluorescent with lens); walls and floors 0.46; roofs 0.60; windows 0.33 when SHGC > 0.5, otherwise 0.46;
+  sun through glass without blinds 1.0, by the solar series. No split is available for equipment or for glass behind
+  blinds, so both reach the air in their own hour (no credit). Outside air, infiltration and latent heat are
+  unchanged.
+- **The hourly step** (`hourly_loads.calculate_room_hours`): the room's 24 hours of heat gains are worked as before,
+  then conduction through outside walls and roofs is spread by its CTS and every gain is split and spread by the RTS.
+  Each component keeps its heat gain (`heat_gain_sensible_kw`) beside its cooling load, and a day's cooling load adds up
+  to its heat gains. Heating, annual energy and the reviewed (gated) dynamic-mass paths are unchanged.
+- **Hand-worked rooms:** the worksheet takes each room's series as declared numbers
+  (`tests/reference/draft_reference_series.json`, written by `make_draft_reference_series.py`; a test checks the draft
+  still produces them). It works the splits and the hour-by-hour spreading itself. All four cases agree at every check
+  hour within 2 %, and the sizing month, hour and total within 1 %.
+- **Effect** (AI off, copies of the saved jobs; every total repeats exactly):
+
+  | Job | Before (kW) | After (kW) |
+  |---|---|---|
+  | Butcher Buffet (26 Oct) | 51.18 | 49.40 (engineer 35–50; not tuned) |
+  | Butcher Buffet (20 Oct) | 53.05 | 50.52 |
+  | Casa Nova | 31.78 | 30.85 |
+  | Happy Cap | 2.98 | 2.88 |
+  | Global Exchange | 1.19 | 1.14 |
+  | Set 15 | 73.8 | 63.4 |
+  | Set 16 | 45.2 | 41.5 |
+  | Set 18 | 29.9 | 27.0 |
+
+  Shops drop 2–5 % (people and lights spread over the day). Houses drop 8–14 %: sun through glass is held in the floor
+  and comes back in the evening.
+- **Not done:** the browser check of the result page. The preview tool reads a launch configuration outside this
+  branch, and the server wasn't started any other way. The page only gains a "stored heat" assumption row per room.
+
 ## Next
-1. Stored heat (radiant time series), started 13 November: see the session notes.
+1. Check the stored-heat model against ASHRAE's full Tables 16, 19, 20 and 21 once the chapter is in hand (TODO.md).
 2. A listed-equipment case (commercial kitchen, hooded and free-standing) in the worksheet.
 3. Partner review of the equipment typical values against ASHRAE Fundamentals Ch. 18.
 4. More engineer numbers: Butcher Buffet's room breakdown, the first client's job, design partners.

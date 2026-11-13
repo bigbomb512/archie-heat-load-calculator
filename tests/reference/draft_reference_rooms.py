@@ -75,6 +75,16 @@ PACK = {
     },
 }
 
+# ---- Declared inputs: stored heat (ASHRAE Fundamentals 2009 Ch 18 Radiant Time Series method) ----------------------
+# Each room's radiant time series (nonsolar, solar) and each outside wall's and roof's conduction time series are
+# declared numbers (tests/reference/draft_reference_series.json), like the clear-sky sunlight: they come from Archie's
+# heat balance, which tests/test_stored_heat.py checks against published ASHRAE results, and are not re-derived here.
+# What this worksheet works independently is the method itself: the split of each gain into the part reaching the air
+# at once and the radiant part (Nigusse 2007 / ASHRAE 2009 splits, copied as numbers), and the hour-by-hour spreading.
+SERIES = json.loads((HERE / "draft_reference_series.json").read_text(encoding="utf-8"))["cases"]
+RADIANT = {"people": 0.60, "lighting": 0.40, "equipment": 0.0, "wall": 0.46, "roof": 0.60,
+           "glass_conduction_high_shgc": 0.33, "glass_conduction_low_shgc": 0.46, "glass_solar": 1.0}
+
 # ---- Physics constants, each from its source ------------------------------------------------------------------------
 ALPHA_OVER_HO = 0.052   # m²K/W, dark surface: ASHRAE Handbook—Fundamentals, sol-air temperature (0.026 light)
 ALBEDO = 0.2            # ground reflectance, common design value
@@ -206,10 +216,14 @@ def house_room_hour(room, month, hour):
     cooled_now = 1.0 if any(hour in hours for hours in profile["cooled"]) else 0.0
     out = {key: 0.0 for key in ("envelope", "solar", "glazing_conduction", "glazing_solar", "people_s", "people_l",
                                  "lighting", "equipment", "outside_air_s", "outside_air_l", "infiltration_s", "infiltration_l")}
+    out["parts"] = []
     for surface in room.get("surfaces", []):
-        out["envelope"] += surface["area_m2"] * surface["u"] * (db - INDOOR_DB) / 1000
+        envelope = surface["area_m2"] * surface["u"] * (db - INDOOR_DB) / 1000
         sun = plane_sunlight(month, hour, surface["tilt"], surface.get("azimuth", 0.0), surface.get("height_m"))
-        out["solar"] += surface["area_m2"] * surface["u"] * ALPHA_OVER_HO * sun * cooled_now / 1000
+        solar = surface["area_m2"] * surface["u"] * ALPHA_OVER_HO * sun * cooled_now / 1000
+        out["envelope"] += envelope
+        out["solar"] += solar
+        out["parts"].append({"label": surface["label"], "kind": surface["kind"], "envelope": envelope, "solar": solar})
     for glass in room.get("glass", []):
         out["glazing_conduction"] += house["glass_u"] * glass["area_m2"] * (db - INDOOR_DB) / 1000
         sun = plane_sunlight(month, hour, 90, glass["azimuth"], glass["height_m"], glass=True)
@@ -239,14 +253,18 @@ def room_hour(room, month, hour):
     open_now = 1.0 if hour in profile["open"] else 0.0
     out = {key: 0.0 for key in ("envelope", "solar", "glazing_conduction", "glazing_solar", "people_s", "people_l",
                                  "lighting", "equipment", "outside_air_s", "outside_air_l", "infiltration_s", "infiltration_l")}
+    out["parts"] = []
     for surface in room.get("surfaces", []):
         area, u = surface["area_m2"], surface["u"]
         if surface.get("adjacent"):          # a wall to a mall, room or tenancy: at the room's temperature
             continue
-        out["envelope"] += area * u * (db - INDOOR_DB) / 1000
+        envelope = area * u * (db - INDOOR_DB) / 1000
         sun = plane_sunlight(month, hour, surface["tilt"], surface.get("azimuth", 0.0), surface.get("height_m"),
                              None, surface.get("building"))
-        out["solar"] += area * u * ALPHA_OVER_HO * sun * open_now / 1000
+        solar = area * u * ALPHA_OVER_HO * sun * open_now / 1000
+        out["envelope"] += envelope
+        out["solar"] += solar
+        out["parts"].append({"label": surface["label"], "kind": surface["kind"], "envelope": envelope, "solar": solar})
     for glass in room.get("glass", []):
         out["glazing_conduction"] += PACK["glass_u"] * glass["area_m2"] * (db - INDOOR_DB) / 1000
         sun = plane_sunlight(month, hour, 90, glass["azimuth"], glass["height_m"], glass.get("awning"), glass.get("building"), glass=True)
@@ -264,6 +282,51 @@ def room_hour(room, month, hour):
     out["people"] = people
     out["outside_air_lps"] = flow
     return out
+
+
+# ---- Stored heat: one room, one whole day -----------------------------------------------------------------------------
+def spread(series, gains):
+    """Hour h receives series[j] of the gain j hours earlier (the day repeats)."""
+    return [sum(series[j] * gains[(hour - j) % 24] for j in range(24)) for hour in range(24)]
+
+
+def cooling(series, radiant, gains):
+    """The non-radiant part reaches the air in its own hour; the radiant part is spread by the room's series."""
+    released = spread(series, gains)
+    return [(1 - radiant) * gains[hour] + radiant * released[hour] for hour in range(24)]
+
+
+DAYS = {}
+
+
+def room_day(case, room, month):
+    """The room's 24 hours of cooling load: each hour's heat gains (room_hour) through the stored-heat step."""
+    key = (case["case_id"], room["name"], month)
+    if key in DAYS:
+        return DAYS[key]
+    hours = [room_hour(room, month, hour) for hour in range(24)]
+    series = SERIES[case["case_id"]][room["name"]]
+    nonsolar, solar = series["nonsolar"], series["solar"]
+    shgc = PACK["house"]["shgc"] if room["profile"] in PACK["house"] else PACK["shgc"]
+    glass_radiant = RADIANT["glass_conduction_high_shgc" if shgc > 0.5 else "glass_conduction_low_shgc"]
+    day = [{name: value for name, value in row.items() if name != "parts"} for row in hours]
+    for name, radiant, rts in (("people_s", RADIANT["people"], nonsolar), ("lighting", RADIANT["lighting"], nonsolar),
+                               ("equipment", RADIANT["equipment"], nonsolar),
+                               ("glazing_conduction", glass_radiant, nonsolar), ("glazing_solar", RADIANT["glass_solar"], solar)):
+        for hour, value in enumerate(cooling(rts, radiant, [row[name] for row in hours])):
+            day[hour][name] = value
+    for name in ("envelope", "solar"):          # each wall and roof: its conduction series first, then the split
+        totals = [0.0] * 24
+        for index, part in enumerate(hours[0]["parts"]):
+            gains = [row["parts"][index][name] for row in hours]
+            cts = series["cts"].get(part["label"])
+            arrived = spread(cts, gains) if cts else gains
+            for hour, value in enumerate(cooling(nonsolar, RADIANT["roof" if part["kind"] == "roof" else "wall"], arrived)):
+                totals[hour] += value
+        for hour in range(24):
+            day[hour][name] = totals[hour]
+    DAYS[key] = day
+    return day
 
 
 # ---- The three reference rooms --------------------------------------------------------------------------------------
@@ -332,14 +395,14 @@ def total_kw(hour_rooms, share=1.0):
 
 
 def case_total(case, month, hour):
-    rows = [room_hour(room, month, hour) for room in case["rooms"]]
+    rows = [room_day(case, room, month)[hour] for room in case["rooms"]]
     return total_kw(rows, people_counted(case, rows))
 
 
 def work(case):
     checks = []
     for month, hour in case["checks"]:
-        rows = {room["name"]: room_hour(room, month, hour) for room in case["rooms"]}
+        rows = {room["name"]: room_day(case, room, month)[hour] for room in case["rooms"]}
         share = people_counted(case, list(rows.values()))
         checks.append({"month": month, "hour": hour,
                        "rooms": {name: {key: round(value, 4) for key, value in row.items()} for name, row in rows.items()},

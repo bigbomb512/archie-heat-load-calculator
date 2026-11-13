@@ -1,0 +1,129 @@
+{
+  "schema_version": 1,
+  "method_id": "rts_heat_balance_v1",
+  "title": "Stored heat (radiant and conduction time series) from Archie's own heat balance",
+  "status": "own_calculation_not_checked_against_published_tables",
+  "basis": "ASHRAE Handbook—Fundamentals 2009 Ch 18 Radiant Time Series method, with the time series calculated by Archie's own periodic heat balance (ai/stored_heat.py) from AIRAH Technical Handbook 2007 material properties, because ASHRAE's published RTS and CTS tables (Ch 18 Tables 16, 19 and 20) aren't available to us. Checked against ASHRAE's PRF/RTF generator results for two constructions (Journal of Engineering, Univ. of Baghdad, vol 21 no 5, 2015, Table 4) and ASHRAE 2009 Table 19 heavyweight / no carpet / 10% glass nonsolar series (reproduced in the same paper, Table 7).",
+  "sources": {
+    "airah_2007": "AIRAH Technical Handbook, 4th edition (2007); page numbers are the printed page numbers.",
+    "nigusse_2007": "Nigusse (2007), recommended radiative/convective splits adopted by ASHRAE Handbook—Fundamentals 2009 Ch 18, reproduced in Journal of Engineering (Univ. of Baghdad) vol 21 no 5 (2015) Table 1.",
+    "ashrae_2009_zone": "ASHRAE Handbook—Fundamentals 2009 Ch 18 Table 21 representative zone furnishings, 25 mm wood over 50% of the floor area; this is the reading that reproduced Table 19's heavyweight series (tests/test_stored_heat.py), not a value checked against Table 21 itself."
+  },
+  "films": {
+    "inside_vertical_m2k_w": 0.12,
+    "inside_heat_flow_up_m2k_w": 0.11,
+    "inside_heat_flow_down_m2k_w": 0.16,
+    "outside_summer_m2k_w": 0.04,
+    "emittance": 0.9,
+    "source": "AIRAH 2007 p.150 Thermal resistance of air films (still air, high-emittance surface; 3 m/s summer outside); emittance p.151 (paint, any colour, 0.90-0.96; lower end)."
+  },
+  "materials": {
+    "plasterboard": {"k_w_mk": 0.17, "density_kg_m3": 880, "specific_heat_j_kgk": 1050, "source": "AIRAH 2007 p.170, plasterboard"},
+    "glasswool": {"k_w_mk": 0.043, "density_kg_m3": 12, "specific_heat_j_kgk": 880, "source": "AIRAH 2007 p.168, glasswool insulation 12 kg/m3"},
+    "clay_brick": {"k_w_mk": 0.758, "density_kg_m3": 1820, "specific_heat_j_kgk": 959, "source": "AIRAH 2007 p.164, generic extruded brickwork 110 mm"},
+    "dense_concrete": {"k_w_mk": 1.44, "density_kg_m3": 2400, "specific_heat_j_kgk": 880, "source": "AIRAH 2007 p.166, solid concrete (tilt slab)"},
+    "dense_hollow_block": {"k_w_mk": 0.95, "density_kg_m3": 1526, "specific_heat_j_kgk": 880, "source": "AIRAH 2007 p.166, dense-weight hollow concrete block"},
+    "fibre_cement": {"k_w_mk": 0.25, "density_kg_m3": 1270, "specific_heat_j_kgk": 840, "source": "AIRAH 2007 p.165, fibre cement sheet"},
+    "mild_steel": {"k_w_mk": 45, "density_kg_m3": 7830, "specific_heat_j_kgk": 500, "source": "AIRAH 2007 p.169, mild steel"},
+    "clay_roof_tile": {"k_w_mk": 0.84, "density_kg_m3": 1922, "specific_heat_j_kgk": 921, "source": "AIRAH 2007 p.173, tiles, clay, roofing"},
+    "clay_soil": {"k_w_mk": 1.21, "density_kg_m3": 1540, "specific_heat_j_kgk": 1260, "source": "AIRAH 2007 p.172, clay soil (loaded 107 kPa)"},
+    "ceramic_tile": {"k_w_mk": 1.45, "density_kg_m3": 2160, "specific_heat_j_kgk": 870, "source": "AIRAH 2007 p.172, stoneware"},
+    "acoustic_tile": {"k_w_mk": 0.060, "density_kg_m3": 480, "specific_heat_j_kgk": 840, "source": "AIRAH 2007 p.164, ceiling tiles, acoustic"},
+    "timber": {"k_w_mk": 0.10, "density_kg_m3": 506, "specific_heat_j_kgk": 2090, "source": "AIRAH 2007 p.174, pine (weatherboards); the only timber row with a specific heat"}
+  },
+  "resistances": {
+    "wall_cavity": {"r_m2k_w": 0.16, "source": "AIRAH 2007 p.151, vertical airspace, high emittance, 100 mm"},
+    "ceiling_cavity": {"r_m2k_w": 0.17, "source": "AIRAH 2007 p.151, horizontal airspace, heat flow down, high emittance, 100 mm"},
+    "roof_space": {"r_m2k_w": 0.46, "source": "AIRAH 2007 p.150, ventilated pitched roof space, summer, high emittance"},
+    "carpet_and_underlay": {"r_m2k_w": 0.30, "source": "AIRAH 2007 p.164, carpet 6 mm R0.058 + underlay 15 mm R0.24 (lower end of 0.24-0.41)"},
+    "outside_film": {"r_m2k_w": 0.04, "source": "AIRAH 2007 p.150, 3 m/s summer"},
+    "inside_film_vertical": {"r_m2k_w": 0.12, "source": "AIRAH 2007 p.150, still air, vertical (the far face of a wall to an unconditioned space)"},
+    "inside_film_down": {"r_m2k_w": 0.16, "source": "AIRAH 2007 p.150, still air, heat flow down (the top face of a ceiling to a roof space)"}
+  },
+  "constructions": {
+    "wall_lightweight": {"label": "lightweight framed wall (plasterboard, insulation, fibre-cement cladding)", "side": "outdoor",
+      "layers": [["plasterboard", 0.010], ["glasswool", "fit"], ["fibre_cement", 0.006], ["outside_film"]]},
+    "wall_brick_veneer": {"label": "brick veneer (plasterboard, insulation, cavity, 110 mm brick)", "side": "outdoor",
+      "layers": [["plasterboard", 0.010], ["glasswool", "fit"], ["wall_cavity"], ["clay_brick", 0.110], ["outside_film"]]},
+    "wall_cavity_brick": {"label": "cavity brick (110 mm brick, insulated cavity, 110 mm brick)", "side": "outdoor",
+      "layers": [["clay_brick", 0.110], ["glasswool", "fit"], ["wall_cavity"], ["clay_brick", 0.110], ["outside_film"]]},
+    "wall_concrete": {"label": "150 mm concrete panel, insulated and plasterboard lined", "side": "outdoor",
+      "layers": [["plasterboard", 0.010], ["glasswool", "fit"], ["dense_concrete", 0.150], ["outside_film"]]},
+    "wall_block": {"label": "190 mm concrete block, insulated and plasterboard lined", "side": "outdoor",
+      "layers": [["plasterboard", 0.010], ["glasswool", "fit"], ["dense_hollow_block", 0.190], ["outside_film"]]},
+    "roof_metal": {"label": "metal roof over a ventilated roof space, insulated plasterboard ceiling", "side": "outdoor",
+      "layers": [["plasterboard", 0.010], ["glasswool", "fit"], ["roof_space"], ["mild_steel", 0.00048], ["outside_film"]]},
+    "roof_tile": {"label": "clay-tile roof over a ventilated roof space, insulated plasterboard ceiling", "side": "outdoor",
+      "layers": [["plasterboard", 0.010], ["glasswool", "fit"], ["roof_space"], ["clay_roof_tile", 0.019], ["outside_film"]]},
+    "roof_concrete": {"label": "150 mm concrete roof slab, insulated, plasterboard ceiling below", "side": "outdoor",
+      "layers": [["plasterboard", 0.010], ["ceiling_cavity"], ["dense_concrete", 0.150], ["glasswool", "fit"], ["outside_film"]]},
+    "floor_slab_on_ground": {"label": "100 mm concrete slab on ground", "side": "fixed",
+      "layers": [["dense_concrete", 0.100], ["clay_soil", 1.0]]},
+    "floor_timber_suspended": {"label": "timber floor over a ventilated subfloor", "side": "fixed",
+      "layers": [["timber", 0.019], ["ceiling_cavity"], ["outside_film"]]},
+    "floor_concrete_intermediate": {"label": "150 mm concrete floor with a suspended ceiling below", "side": "mirror",
+      "layers": [["dense_concrete", 0.150], ["ceiling_cavity"], ["acoustic_tile", 0.013]]},
+    "floor_timber_intermediate": {"label": "timber upper floor on joists, plasterboard ceiling below", "side": "mirror",
+      "layers": [["timber", 0.019], ["ceiling_cavity"], ["plasterboard", 0.010]]},
+    "ceiling_suspended_under_slab": {"label": "suspended acoustic-tile ceiling under a 150 mm concrete floor", "side": "mirror",
+      "layers": [["acoustic_tile", 0.013], ["ceiling_cavity"], ["dense_concrete", 0.150]]},
+    "ceiling_plasterboard_under_timber": {"label": "plasterboard ceiling under a timber floor", "side": "mirror",
+      "layers": [["plasterboard", 0.010], ["ceiling_cavity"], ["timber", 0.019]]},
+    "ceiling_to_roof_space": {"label": "insulated plasterboard ceiling under an unconditioned roof space", "side": "fixed",
+      "layers": [["plasterboard", 0.010], ["glasswool", "fit"], ["inside_film_down"]]},
+    "partition_plasterboard": {"label": "plasterboard on studs", "side": "mirror",
+      "layers": [["plasterboard", 0.010], ["wall_cavity"], ["plasterboard", 0.010]]},
+    "partition_masonry": {"label": "110 mm brick or block partition", "side": "mirror",
+      "layers": [["clay_brick", 0.110]]},
+    "furnishings": {"label": "furnishings: 25 mm timber over half the floor area, one face exposed", "side": "adiabatic",
+      "layers": [["timber", 0.025]]}
+  },
+  "floor_coverings": {
+    "carpet": {"layers": [["carpet_and_underlay"]]},
+    "hard": {"layers": [["ceramic_tile", 0.010]]},
+    "carpet_profiles": ["house_bedroom", "house_living", "office"],
+    "basis": "Carpet in house bedrooms and living rooms and in offices; a hard floor (tiles) everywhere else, including shops, kitchens, dining, wet areas and garages. A typical finish by room use; the drawings don't say."
+  },
+  "construction_words": {
+    "wall": [
+      ["wall_cavity_brick", ["cavity brick", "double brick", "double-brick", "cavity masonry"]],
+      ["wall_brick_veneer", ["brick veneer", "veneer", "brick"]],
+      ["wall_concrete", ["concrete panel", "tilt", "precast", "concrete wall", "in-situ concrete", "insitu concrete"]],
+      ["wall_block", ["block", "besser", "masonry", "aac", "hebel"]],
+      ["wall_lightweight", ["weatherboard", "timber", "fibre cement", "fiber cement", "cladding", "clad", "sandwich", "metal", "steel", "frame", "lightweight"]]
+    ],
+    "roof": [
+      ["roof_concrete", ["concrete roof", "roof slab", "concrete slab", "concrete"]],
+      ["roof_tile", ["tile", "terracotta", "concrete tile"]],
+      ["roof_metal", ["metal", "steel", "colorbond", "zincalume", "deck", "sheet"]]
+    ],
+    "partition": [
+      ["partition_masonry", ["brick", "block", "masonry", "concrete", "besser"]]
+    ],
+    "floor": [
+      ["floor_timber_suspended", ["timber floor", "suspended", "bearers", "joists", "particleboard", "yellow tongue"]]
+    ]
+  },
+  "defaults": {
+    "wall": "wall_lightweight",
+    "roof": "roof_metal",
+    "partition": "partition_plasterboard",
+    "ground_floor": "floor_slab_on_ground",
+    "upper_floor_commercial": "floor_concrete_intermediate",
+    "upper_floor_dwelling": "floor_timber_intermediate",
+    "ceiling_commercial": "ceiling_suspended_under_slab",
+    "ceiling_dwelling": "ceiling_plasterboard_under_timber",
+    "basis": "When the drawings don't name a construction: the lightest typical construction (a framed wall, a metal roof, plasterboard partitions), which takes the least credit for stored heat; a ground floor is a concrete slab on ground (the Phase 1 floor rule already takes a ground floor as a slab); a floor or ceiling between storeys is concrete with a suspended ceiling in a commercial building and timber with plasterboard in a house."
+  },
+  "radiant_fractions": {
+    "people": {"value": 0.60, "source": "nigusse_2007", "note": "occupants, typical office conditions; sensible part only (latent heat reaches the air at once)"},
+    "lighting": {"value": 0.40, "source": "nigusse_2007", "note": "recessed fluorescent luminaire with lens, lower end of 0.40-0.50 (the split table gives no LED value); the lower end takes the least credit"},
+    "equipment": {"value": 0.0, "source": "none", "note": "no radiant split is applied to equipment until ASHRAE's equipment splits (2009 Ch 18 Tables 6-12) are available; all equipment heat reaches the air in its own hour, which takes no stored-heat credit"},
+    "wall_conduction": {"value": 0.46, "source": "nigusse_2007", "note": "conduction through walls and floors"},
+    "roof_conduction": {"value": 0.60, "source": "nigusse_2007", "note": "conduction through roofs"},
+    "window_conduction_high_shgc": {"value": 0.33, "source": "nigusse_2007", "note": "windows with SHGC above 0.5"},
+    "window_conduction_low_shgc": {"value": 0.46, "source": "nigusse_2007", "note": "windows with SHGC 0.5 or less"},
+    "window_solar_unshaded": {"value": 1.0, "source": "nigusse_2007", "note": "solar heat gain without interior shading, released by the solar time series"},
+    "window_solar_inside_shade": {"value": 0.0, "source": "none", "note": "with blinds or shades the split table says it varies and its source tables aren't available; taken as reaching the air at once, which takes no stored-heat credit"}
+  }
+}

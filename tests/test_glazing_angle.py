@@ -91,10 +91,16 @@ class BlindThroughTheDraftTests(unittest.TestCase):
         model = reference.ai_preliminary.assemble({"spaces": []}, preliminary_proposal=shaded_proposal, site_location=reference.SITE,
                                                    design_weather_table=reference.DESIGN_TABLE, monthly_climate_table=reference.MONTHLY_TABLE)
         shaded = reference.ai_preliminary.calculate(model)
-        before = reference.room_hour(plain, 1, 16, "Shop")["glazing_solar"]["sensible_kw"]
-        after = reference.room_hour(shaded, 1, 16, "Shop")["glazing_solar"]["sensible_kw"]
-        # The pack's glass (U 5.8, SHGC 0.45) is single glazing below SHGC 0.70: the heat-absorbing row, light venetian 0.78.
+        # The heat gain through the glass (before stored heat turns it into cooling load): the pack's glass (U 5.8,
+        # SHGC 0.45) is single glazing below SHGC 0.70: the heat-absorbing row, light venetian 0.78.
+        before = reference.room_hour(plain, 1, 16, "Shop")["glazing_solar"]["heat_gain_sensible_kw"]
+        after = reference.room_hour(shaded, 1, 16, "Shop")["glazing_solar"]["heat_gain_sensible_kw"]
         self.assertAlmostEqual(after / before, 0.78, places=3)
+        # Stored heat: unshaded glass sun is released by the room's solar series; behind a blind it reaches the air in
+        # its own hour (no radiant split for blinds is available), so over the day the cooling load equals the gain.
+        day = [reference.room_hour(shaded, 1, hour, "Shop")["glazing_solar"] for hour in range(24)]
+        self.assertAlmostEqual(sum(row["sensible_kw"] for row in day), sum(row["heat_gain_sensible_kw"] for row in day), places=2)
+        self.assertTrue(all(abs(row["sensible_kw"] - row["heat_gain_sensible_kw"]) < 1e-3 for row in day))
         glazing = model["material"]["hourly_load_model"]["rooms"][0]["cooling_load"]["glazing_surfaces"][0]
         self.assertEqual(glazing["window"]["internal_shading_factor"], 0.78)
         self.assertEqual(glazing["angle_dependence"]["ashrae_id"], "1a")

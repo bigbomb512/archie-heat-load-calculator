@@ -154,6 +154,21 @@ class DraftReferenceRoomTests(unittest.TestCase):
                 self.assert_close(f"{case['case_id']} Phase 1 at month {check['month']} {check['hour']:02d}:00", expected, actual,
                                   SUITE["tolerances"]["component_relative"])
 
+    def test_the_draft_produces_the_worksheets_declared_stored_heat_series(self):
+        declared = json.loads((ROOT / "tests" / "reference" / "draft_reference_series.json").read_text(encoding="utf-8"))["cases"]
+        for case in SUITE["cases"]:
+            model, _report = run(case)
+            for room in model["material"]["hourly_load_model"]["rooms"]:
+                record, expected = room["stored_heat"], declared[case["case_id"]][room["name"]]
+                with self.subTest(case=case["case_id"], room=room["name"]):
+                    self.assertEqual(record["status"], "calculated")
+                    for kind, name in (("nonsolar", "nonsolar_rts"), ("solar", "solar_rts")):
+                        for got, want in zip(record[name], expected[kind]):
+                            self.assertAlmostEqual(got, want, places=6)
+                    labels = {s["surface_id"]: s["label"] for s in room["cooling_load"]["envelope_surfaces"]}
+                    self.assertEqual(sorted(labels[sid][len(room["name"]) + 1:] for sid in record["surface_cts"]),
+                                     sorted(expected["cts"]))
+
     def test_the_worksheet_sun_agrees_with_archies_sun(self):
         self.assertLessEqual(SUITE["sun_position_check_deg"], SUITE["tolerances"]["sun_position_deg"])
         days = sun.design_days(INPUTS["site"]["latitude"], INPUTS["site"]["longitude"], INPUTS["site"]["timezone"])

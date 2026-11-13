@@ -18,12 +18,21 @@ months and hours, plus the month and hour that size the system.
   - sol-air U·(α/h_o)·I with 0.052 m²K/W;
   - glass: A·(1 − frame)·SHGC·(direct × SHGC(angle)/SHGC(0) + diffuse × SHGC(diffuse)/SHGC(0)), with ASHRAE 2001 single clear glass (ID 1a) as the declared angle table (added 12 November 2026);
   - outside air: ASHRAE Fundamentals Ch. 1 psychrometrics on standard air;
+  - stored heat (added 13 November 2026): each room's whole day of heat gains goes through ASHRAE's radiant time series
+    method, worked here:
+    - each wall's and roof's conduction is first spread by its conduction series;
+    - then every gain is split into the part reaching the air at once and the radiant part (Nigusse 2007 splits, as
+      numbers), and the radiant part is spread by the room's series, hour by hour;
   - fan heat 3.2%.
 - Declared inputs:
   - the rooms;
   - the assumption pack's product choices (U-values, SHGC, densities, W/m², opening hours, activity gains);
   - synthetic design and monthly temperatures;
-  - Sydney's clear-sky sunlight (`tests/reference/sydney_clear_sky_2025.json`, generated once with pvlib's Ineichen model, which is not re-derived).
+  - Sydney's clear-sky sunlight (`tests/reference/sydney_clear_sky_2025.json`, generated once with pvlib's Ineichen model, which is not re-derived);
+  - each room's stored-heat series: `tests/reference/draft_reference_series.json`, written by
+    `tests/reference/make_draft_reference_series.py` from the draft. They are not re-derived here; the heat balance that
+    makes them is checked against published ASHRAE results in `tests/test_stored_heat.py`. A test checks the draft
+    still produces the declared numbers.
 - Expected values: `tests/fixtures/draft_reference_rooms_v1.json`. Regenerate with
   `python3 tests/reference/draft_reference_rooms.py --write`, and never by calling Archie.
 - Test: `tests/test_draft_reference_rooms.py`, with tolerances: each component ±2% or ±0.02 kW, latent ±3%, total ±1%, and the peak month and hour exact.

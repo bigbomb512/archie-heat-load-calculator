@@ -20,6 +20,7 @@ from ai.shading_gate import empty_shading_method_gate, gate_is_approved as shadi
 from ai.shading_geometry import geometric_shading_factor
 from ai.envelope_method_gates import dynamic_thermal_mass_gate_is_approved as dynamic_mass_gate_is_approved, solar_radiation_gate_is_approved, solar_radiation_weather_gate_is_approved
 from ai.thermal_mass import calculate_first_order_rc
+from ai.stored_heat_rooms import apply as apply_stored_heat, validate as validate_stored_heat
 from ai.solar_radiation import absorbed_solar_gain_kw, facade_irradiance, validate_solar_radiation_source
 from ai.room_coupling import empty_room_coupling_method_gate, room_coupling_gate_is_approved, solve_dynamic_partition, validate_room_coupling_method_gate
 from ai.moisture_loads import empty_moisture_method_gate, moisture_gain, validate_moisture_method_gate
@@ -562,6 +563,7 @@ def validate_room(raw, index):
         "cooling_load_conditions": conditions,
         "schedule_assignments": assignments,
         "unapproved_components": components,
+        **({"stored_heat": validate_stored_heat(raw["stored_heat"])} if raw.get("stored_heat") else {}),
     }
 
 
@@ -1047,6 +1049,7 @@ def calculate_room_hours(requirements, library, scenario, room, zone, infiltrati
             provisional = True
     coupling_blockers = []
     room_by_id = {candidate.get("room_id"): candidate for candidate in all_rooms}
+    hourly_contributions = []
     for weather in scenario["hours"]:
         hour = weather["hour"]
         coupling_results = resolve_dynamic_couplings(
@@ -1068,9 +1071,18 @@ def calculate_room_hours(requirements, library, scenario, room, zone, infiltrati
             moisture_gate=moisture_gate,
             all_rooms=all_rooms,
         )
-        # Policy mode retains the cited room factor as evidence but neutralizes
-        # it before aggregation; the project policy is applied once at rollup.
-        room_factor = 1.0 if safety_factor_policy else room["cooling_load"]["safety_factor"]
+        hourly_contributions.append((hour, contributions))
+    # Stored heat (the draft's rooms only): the day's heat gains become cooling load through the room's radiant time
+    # series and its outside walls' and roofs' conduction time series. It needs the whole 24-hour day, in order.
+    if room.get("stored_heat", {}).get("status") == "calculated" and [hour for hour, _ in hourly_contributions] == list(range(24)):
+        loads = apply_stored_heat(room, [contributions for _, contributions in hourly_contributions])
+        hourly_contributions = list(zip(range(24), loads))
+        result["stored_heat"] = {"method_id": room["stored_heat"]["method_id"],
+                                 "nonsolar_rts": room["stored_heat"]["nonsolar_rts"], "solar_rts": room["stored_heat"]["solar_rts"]}
+    # Policy mode retains the cited room factor as evidence but neutralizes
+    # it before aggregation; the project policy is applied once at rollup.
+    room_factor = 1.0 if safety_factor_policy else room["cooling_load"]["safety_factor"]
+    for hour, contributions in hourly_contributions:
         result["hours"].append(hour_total(hour, contributions, room_factor))
     if coupling_blockers:
         result["blocked_reasons"].extend(sorted(set(coupling_blockers)))
@@ -1713,6 +1725,8 @@ def combine_components(contributions):
         for key in ("sensible_kw", "latent_kw", "base_sensible_kw", "base_latent_kw"):
             current[key] = round(current[key] + item.get(key, 0), 4)
         current["total_kw"] = round(current["sensible_kw"] + current["latent_kw"], 4)
+        if "heat_gain_sensible_kw" in item:      # stored heat: the hour's heat gain beside its cooling load
+            current["heat_gain_sensible_kw"] = round(current.get("heat_gain_sensible_kw", 0.0) + item["heat_gain_sensible_kw"], 4)
         if "schedule_factor" in item:
             current["schedule_factors"].append(item["schedule_factor"])
         if item.get("inputs") is not None:

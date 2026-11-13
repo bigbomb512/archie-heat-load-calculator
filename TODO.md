@@ -92,6 +92,50 @@ not a contractor workflow and does not block the geometry-review product work.
   permitted projects.
 - [ ] Record the remaining limitations; do not claim CAMEL+ validation.
 
+### Stored heat (radiant time series) — check against the real published numbers
+
+Since 2026-11-13 the AI draft turns heat gains into cooling load by ASHRAE's
+Radiant Time Series method (Fundamentals 2009 Ch 18), with every room's radiant
+time series and every outside wall's and roof's conduction time series
+calculated by Archie's own periodic heat balance (`ai/stored_heat.py`,
+`ai/stored_heat_rooms.py`, `config/stored_heat.json`) from AIRAH Technical
+Handbook 2007 material properties. ASHRAE's published tables were not
+available and the AIRAH handbook has none (searched 2026-11-13: it has U-values,
+material properties and check figures, no RTS, CTS, CLTD or CLF). So far the
+model is checked against only two published results (`tests/test_stored_heat.py`):
+ASHRAE's PRF/RTF generator for two constructions (2015 Baghdad journal paper,
+within 0.006 per hour) and one row of ASHRAE 2009 Table 19 (heavyweight, no
+carpet, 10% glass, nonsolar; within 2 points per hour). Record in
+`docs/PHASE2_AUDIT_2026-11-12.md`.
+
+- [ ] Get ASHRAE Handbook—Fundamentals Ch 18 (2009 or later): compare the model
+  with every row of Table 19 (nonsolar RTS) and Table 20 (solar RTS) for light,
+  medium and heavy construction, with and without carpet, 10/50/90% glass, using
+  Table 21's representative zone; and with Table 16's wall and roof CTS. Check
+  our reading of the Table 21 zone (furnishings taken as 25 mm wood over half the
+  floor area, one face exposed — the reading that matched the one row we have).
+  If any row differs by more than 2 percentage points, find out why before
+  changing the model; do not tune it to a single row.
+- [ ] Equipment radiant fractions: equipment heat currently reaches the air in
+  its own hour (no stored-heat credit) because ASHRAE's equipment splits (2009
+  Ch 18 Tables 6–12, incl. hooded cooking appliances) weren't available.
+- [ ] Glass behind blinds: taken as reaching the air in its own hour (no stored-
+  heat credit, the split table says "varies"); ASHRAE's interior-shading radiant
+  fractions (2009 Ch 15) would give a better split. Without them a blinded
+  window can show a higher peak-hour load than an unblinded one, though its
+  daily gain is lower.
+- [ ] Lighting radiant fraction 0.40 is the lower end of ASHRAE's recessed
+  fluorescent-with-lens range; check an LED value when the tables are in hand.
+- [ ] Constructions not shown on the drawings use the lightest typical
+  construction (framed walls, metal roof, plasterboard partitions); a ground
+  floor is a 100 mm slab on ground; floor finish by room use (carpet in house
+  bedrooms/living and offices). Read constructions from the drawings or
+  certificates where they are shown (the construction-word lists in
+  `config/stored_heat.json` only use surface labels and answered constructions).
+- [ ] Hourly heating, annual energy and the reviewed (gated) dynamic-mass paths do
+  not use stored heat; annual energy is unaffected in total (a day's cooling load
+  equals its heat gains) but its hourly shape is not.
+
 ## Deferred — annual and monthly energy analysis
 
 Annual analysis is intentionally deferred until the prerequisite peak-load and

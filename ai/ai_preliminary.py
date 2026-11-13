@@ -19,7 +19,7 @@ from ai.hourly_loads import build_hourly_load_model, calculate_hourly_load_repor
 from ai import design_weather
 from ai import sun as site_sun_model
 from ai import value_resolution as value_resolver
-from ai import glazing_angle, house_profiles
+from ai import glazing_angle, house_profiles, stored_heat_rooms
 from ai import model_input_resolution as shared_resolution
 from ai import room_use_resolution as room_use_resolver
 from ai import ceiling_volume_resolution as ceiling_volume_resolver
@@ -1935,6 +1935,19 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                                    "reviewer": item.get("reviewer", assessment.get("reviewer", "")),
                                    "source": item.get("boundary_source", ""), "envelope_exclusion": True})
     surface_summary["excluded"] = surface_summary["discovered"] - surface_summary["included"] - surface_summary["blocked"]
+    # Stored heat: each room's own radiant time series, and its outside walls' and roofs' conduction time series, from
+    # a heat balance of its traced surfaces with typical constructions (ai/stored_heat_rooms.py).
+    is_dwelling = room_use_artifact.get("dwelling_context", {}).get("is_dwelling") is True
+    for target in room_rows.values():
+        record = stored_heat_rooms.room_record(target["room"], is_dwelling, target["profile_id"])
+        target["room"]["stored_heat"] = record
+        defaults = sorted({item["label"] for item in record.get("constructions", []) if item.get("chosen") == "default"})
+        if record.get("status") == "calculated":
+            phase1_assumptions.append({"room_id": target["room"]["room_id"], "component": "stored heat",
+                "reason": ("Stored heat by ASHRAE's radiant time series method, with the series from Archie's own heat "
+                           "balance of this room (not ASHRAE's published tables)"
+                           + (f"; constructions not shown on the drawings taken as: {', '.join(defaults)}" if defaults else "")
+                           + f"; {record['floor_covering']} floor finish assumed.")})
     model["updated_at"] = now()
     model["source_requirements_updated_at"] = requirements["updated_at"]
     material = {"requirements": requirements, "schedule_library": {"schema_version": 1, "updated_at": now(), "schedules": schedules}, "design_day_scenarios": scenario_set, "hourly_load_model": model,
