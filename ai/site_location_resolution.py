@@ -68,6 +68,11 @@ BOILERPLATE_PATTERN = re.compile(
     r"do\s+not\s+scale|site\s*-\s*do\s+not\s+scale|prior\s+to\s+construction|construction\s+and\s+fit-?out",
     re.I,
 )
+# "PROJECT: …", "Site Name - …" in a title block. The label must be capitalised or in capitals: in running text a
+# lower-case "development:" is a sentence (set 22008's BASIX page: "…in the development: At least 1 Bathroom: individual
+# fan…", taken as the site until 13 November 2026).
+SITE_LABEL_PATTERN = re.compile(
+    r"\b(?:PROJECT|Project|SITE|Site|DEVELOPMENT|Development)\s*(?i:NAME|TITLE)?(?:\s*:\s*|\s+[-–]\s+)([^\n\r]{3,90})")
 SITE_NAME_REJECT = re.compile(r"^\W*\d|do not scale|drawing|dwg|scale|rev(?:ision)?\s+(?:no|date)|sheet|description|\babn\b|requirements", re.I)
 COORDINATE_PATTERN = re.compile(r"(?<!\d)(-?\d{1,2}\.\d{3,})\s*[,/]\s*(-?\d{2,3}\.\d{3,})(?!\d)")
 SURVEY_PATTERN = re.compile(r"\b(?:TRUE\s+NORTH|GRID\s+NORTH|NORTH\s+ARROW|SURVEY\s+BEARING|BEARING)\b", re.I)
@@ -227,7 +232,7 @@ def infer_pdf_context(ai_input, spatial_ocr=None, building_evidence=None):
             source = _source(page, excerpt)
             clues.append({"candidate_id": _candidate_id("orientation", excerpt, source), "kind": match.group(0).casefold(),
                           "source": source, "status": "proposed"})
-        for match in re.finditer(r"\b(?:PROJECT|SITE|DEVELOPMENT)\s*(?:NAME|TITLE)?(?:\s*:\s*|\s+[-\u2013]\s+)([^\n\r]{3,90})", text, re.I):
+        for match in SITE_LABEL_PATTERN.finditer(text):
             value = re.sub(r"\s+", " ", match.group(1)).strip(" .:-")
             if value and not DATE_PATTERN.search(value) and not SITE_NAME_REJECT.search(value):
                 source = _source(page, match.group(0))

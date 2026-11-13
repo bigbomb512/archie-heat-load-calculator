@@ -31,6 +31,20 @@ class SuperscriptTwoTests(unittest.TestCase):
         self.assertEqual(page_extraction.validate_equipment_item({"name": "FRIDGE", "quantity": "2"})["quantity"], 2)
 
 
+class SiteLabelTests(unittest.TestCase):
+    def names(self, text):
+        from ai import site_location_resolution as site
+        return [match.group(1).strip() for match in site.SITE_LABEL_PATTERN.finditer(text)]
+
+    def test_a_basix_sentence_is_not_a_site_name(self):
+        self.assertEqual(self.names("Ventilation in the development: At least 1 Bathroom: individual fan, not ducted"), [])
+
+    def test_title_block_labels_still_name_the_site(self):
+        self.assertEqual(self.names("PROJECT: 139A BURNS ROAD TURRAMURRA"), ["139A BURNS ROAD TURRAMURRA"])
+        self.assertEqual(self.names("Project Name - Kids Cafe"), ["Kids Cafe"])
+        self.assertEqual(self.names("SITE: Shop 12, Melrose Central"), ["Shop 12, Melrose Central"])
+
+
 class _Provider(ai_provider._HttpProvider):
     name = "openrouter"
     key_env = "TEST_PROVIDER_KEY"
