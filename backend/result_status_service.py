@@ -149,12 +149,24 @@ def gather(web, project):
                                                             f"{opaque['wall']['u_value_w_m2k']:g}, roof {opaque['roof']['u_value_w_m2k']:g} W/m²K): "
                                                             "answer the construction to use its own.", "drawings"))
 
-    # Windows on generic glass.
+    # Windows on generic glass: named as the calculation used it (a house without a window certificate takes the NatHERS
+    # default window, not the pack's U 5.8 / SHGC 0.45, since 12 November 2026).
     glazing = _read(root / "glazing_answers.json", {})
-    if (components.get("glazing_solar") or components.get("glazing_conduction")) and not (glazing.get("all") or glazing.get("rooms")):
-        items.append(_item("typical", "Windows", "Glass is generic single glazing (U 5.8, SHGC 0.45); its real type isn't known.", "drawings"))
+    windows = [surface for room in ((current_set.get("material") or {}).get("hourly_load_model") or {}).get("rooms", [])
+               if isinstance(room, dict) for surface in (room.get("cooling_load") or {}).get("glazing_surfaces", [])
+               if isinstance(surface, dict)]
+    nathers = any("NatHERS default" in str(surface.get("source", "")) for surface in windows)
+    certificate = windows and all("certificate" in str(surface.get("source", "")).casefold() for surface in windows)
+    generic = ("Glass is the NatHERS default window (aluminium single clear, U 6.7, SHGC 0.57 hinged or 0.70 fixed/sliding): "
+               "no window certificate was read, so its real type isn't known." if nathers
+               else "Glass is generic single glazing (U 5.8, SHGC 0.45); its real type isn't known.")
+    if certificate:
+        pass
+    elif (components.get("glazing_solar") or components.get("glazing_conduction")) and not (glazing.get("all") or glazing.get("rooms")):
+        items.append(_item("typical", "Windows", generic, "drawings"))
     elif components.get("glazing_solar") and glazing.get("rooms") and not glazing.get("all"):
-        items.append(_item("typical", "Windows", "Windows outside " + ", ".join(sorted(glazing["rooms"])) + " use generic single glazing.", "drawings"))
+        items.append(_item("typical", "Windows", "Windows outside " + ", ".join(sorted(glazing["rooms"])) + " use "
+                           + ("the NatHERS default window." if nathers else "generic single glazing."), "drawings"))
 
     # What's still to find, and findings still to review.
     try:
@@ -180,7 +192,13 @@ def gather(web, project):
         above = job_service.job_setup(project).get("above", "")
     except Exception:
         above = ""
-    if above in ("", "not_sure"):
+    # A house's levels decide its roof (the top level's rooms are under it), so the tenancy question doesn't apply there,
+    # and once roofs are in the model the roof is assessed whatever the question's answer.
+    roofed = any(surface.get("kind") == "roof" for room in ((current_set.get("material") or {}).get("hourly_load_model") or {}).get("rooms", [])
+                 if isinstance(room, dict) for surface in (room.get("cooling_load") or {}).get("envelope_surfaces", [])
+                 if isinstance(surface, dict))
+    dwelling = ((current_set.get("room_use_resolution") or {}).get("dwelling_context") or {}).get("is_dwelling") is True
+    if above in ("", "not_sure") and not roofed and not dwelling:
         items.append(_item("not_set", "Roof", "What is above the tenancy isn't answered, so roof heat isn't assessed.", "walls"))
 
     items.sort(key=lambda row: (ORDER[row["kind"]], row["topic"].casefold()))

@@ -1223,8 +1223,33 @@ def _job_report_details(project, stale_reasons):
                               if isinstance(value, dict)), key=lambda row: -row[1]),
         "rooms": rooms, "not_cooled": not_cooled, "months": months,
         "assumptions": sorted(counts.items(), key=lambda row: (-row[1], row[0])),
-        "exclusions": [f"{row.get('component')}: {row.get('reason')}" for row in report.get("known_exclusions") or [] if isinstance(row, dict)],
+        "exclusions": list(dict.fromkeys(f"{row.get('component')}: {row.get('reason')}"
+                                         for row in report.get("known_exclusions") or [] if isinstance(row, dict))),
         "stale_reasons": stale_reasons,
+        **_contractor_details(project, plan, peak),
+    }
+
+
+def _contractor_details(project, plan, peak):
+    """Unit sizes, the design day by the hour, the load by group and the values used, from the job's full hourly
+    report and input set (the plan carries only a summary of them)."""
+    from backend import ai_preliminary_service, contractor_report
+    paths = ai_preliminary_service._paths(project)
+    full = load_json(paths["report"]) if paths["report"].exists() else {}
+    input_set = load_json(paths["current_set"]) if paths["current_set"].exists() else {}
+    plan_rooms = [row for row in plan.get("rooms", []) if isinstance(row, dict) and row.get("name")]
+    room_values, equipment = contractor_report.room_values(input_set, plan_rooms)
+    dwelling = ((input_set.get("room_use_resolution") or {}).get("dwelling_context") or {}).get("is_dwelling") is True
+    return {
+        "room_sizing": contractor_report.room_sizing(full, plan_rooms),
+        "ducted": contractor_report.ducted(peak.get("final_design_total_kw", peak.get("design_total_kw")) or 0.0, dwelling),
+        "design_day": contractor_report.design_day(full),
+        "breakdown": contractor_report.breakdown(full["included_scope_peak"] if (full.get("included_scope_peak") or {}).get("components")
+                                                 else peak),
+        "room_values": room_values, "equipment": equipment,
+        "envelope": contractor_report.envelope_values(input_set),
+        "assumed": contractor_report.assumed(input_set),
+        "sources": contractor_report.sources(full, dwelling),
     }
 
 

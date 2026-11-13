@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "checked": "2026-11-13",
+  "wall_split_kw": [2.0, 2.5, 3.5, 4.6, 5.0, 6.0, 7.1, 8.5, 9.5],
+  "wall_split_source": "Nominal cooling capacities of one manufacturer's Australian wall-mounted split range: Daikin Australia, 2.0, 2.5, 3.5, 4.6, 5.0, 6.0 and 7.1 kW (standard and Lite series), 8.5 and 9.5 kW (XL Premium series); daikin.com.au, checked 13 November 2026. Other brands use similar but not identical steps.",
+  "ducted_kw": [7.1, 8.5, 10.0, 12.5, 14.0, 16.0, 18.0, 20.0, 24.0],
+  "ducted_source": "Nominal cooling capacities of one manufacturer's Australian ducted range: Daikin Australia, 7.1 to 24.0 kW; daikin.com.au, checked 13 November 2026. Mitsubishi Heavy Industries, Samsung and Actron Air publish different steps between about 5 and 28 kW.",
+  "rating_note": "Nominal capacities are rated at standard test conditions (AS/NZS 3823.1.1 T1: 35 °C outside, 27 °C dry bulb / 19 °C wet bulb inside). At the site's design temperature a unit can deliver more or less: check the chosen model's capacity table at the design outdoor temperature, and its sensible capacity against the sensible load.",
+  "rule": "The smallest nominal size at or above the load, with no margin added (no safety allowance: user decision 2026-10-25). A room whose load is above the largest wall split gets the fewest equal units that cover it; a whole-building load above the largest ducted size gets the fewest equal ducted units.",
+  "small_room_kw": 1.0,
+  "small_room_note": "Small load: often served from a neighbouring room or a ducted outlet."
+}

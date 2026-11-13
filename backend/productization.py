@@ -14,9 +14,14 @@ import io
 import json
 from pathlib import Path, PurePosixPath
 import re
+import os
 import shutil
+import subprocess
+import tempfile
 import time
 from zipfile import ZIP_DEFLATED, ZipFile
+
+from backend import contractor_report   # layout only: reads saved artifacts, never calculates
 
 
 SCHEMA_VERSION = 1
@@ -315,12 +320,41 @@ def _minimal_pdf(lines):
     return bytes(output)
 
 
+def _chrome_binary():
+    """A local Chrome or Chromium for printing reports: $ARCHIE_CHROME, the usual install paths, then PATH."""
+    candidates = [os.environ.get("ARCHIE_CHROME", ""),
+                  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                  "/Applications/Chromium.app/Contents/MacOS/Chromium"]
+    candidates += [shutil.which(name) or "" for name in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser")]
+    return next((path for path in candidates if path and Path(path).is_file() and os.access(path, os.X_OK)), "")
+
+
+def _render_chrome_pdf(html_path, pdf_path, timeout=90):
+    """Print the HTML with headless Chrome in a throwaway profile (never the user's own). True on success."""
+    binary = _chrome_binary()
+    if not binary:
+        return False
+    with tempfile.TemporaryDirectory(prefix="archie-pdf-") as profile:
+        command = [binary, "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
+                   "--disable-extensions", f"--user-data-dir={profile}", "--no-pdf-header-footer",
+                   "--print-to-pdf-no-header", f"--print-to-pdf={Path(pdf_path).resolve()}",
+                   Path(html_path).resolve().as_uri()]
+        try:
+            subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+    try:
+        return Path(pdf_path).read_bytes()[:5] == b"%PDF-"
+    except OSError:
+        return False
+
+
 def _render_browser_pdf(html_path, pdf_path):
-    """Render canonical HTML when Playwright and a local browser are available."""
+    """Render canonical HTML with Playwright when installed, else a local headless Chrome, else report the fallback."""
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
-        return "minimal-pdf-fallback-v1"
+        return "chrome-headless" if _render_chrome_pdf(html_path, pdf_path) else "minimal-pdf-fallback-v1"
     try:
         with sync_playwright() as playwright:
             browser_type = playwright.chromium
@@ -331,7 +365,7 @@ def _render_browser_pdf(html_path, pdf_path):
             browser.close()
         return "playwright-chromium"
     except Exception:
-        return "minimal-pdf-fallback-v1"
+        return "chrome-headless" if _render_chrome_pdf(html_path, pdf_path) else "minimal-pdf-fallback-v1"
 
 
 def _report_summary(report, report_type):
@@ -454,16 +488,18 @@ def build_job_report_package(project, details, source_paths, *, current=True, st
     details = {**details, "stale_reasons": stale_reasons}
     report_hash = fingerprint({key: value for key, value in details.items() if key != "generated_at"})
     package_fingerprint = fingerprint({"version": PACKAGE_VERSION, "report_type": "job_cooling", "report": report_hash,
+                                       "template": contractor_report.TEMPLATE_VERSION,
                                        "sources": [row["sha256"] for row in rows]})
     package_root = root / "report_packages" / package_fingerprint
     package_root.mkdir(parents=True, exist_ok=True)
     html_path, pdf_path, manifest_path = package_root / "report.html", package_root / "report.pdf", package_root / "manifest.json"
     if not html_path.exists():
-        html_path.write_text(_job_report_html(details), encoding="utf-8")
+        html_path.write_text(contractor_report.render_html(details) if "room_sizing" in details else _job_report_html(details),
+                             encoding="utf-8")
     renderer = "existing"
     if not pdf_path.exists():
         renderer = _render_browser_pdf(html_path, pdf_path)
-        if renderer != "playwright-chromium":
+        if renderer not in {"playwright-chromium", "chrome-headless"}:
             pdf_path.write_bytes(_minimal_pdf(_job_report_lines(details)))
     manifest = {
         "schema_version": SCHEMA_VERSION, "package_version": PACKAGE_VERSION, "package_fingerprint": package_fingerprint,

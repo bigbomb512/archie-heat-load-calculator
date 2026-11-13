@@ -257,6 +257,48 @@ The draft now uses ASHRAE's Radiant Time Series method (Fundamentals 2009 Ch 18)
 - **Not done:** the browser check of the result page. The preview tool reads a launch configuration outside this
   branch, and the server wasn't started any other way. The page only gains a "stored heat" assumption row per room.
 
+## The report to send (13 November)
+"Create the report" on the Results page now builds a report someone can quote from
+(`backend/contractor_report.py`, laid out by `productization.build_job_report_package`):
+
+- **Label:** every page says "Preliminary estimate from the drawings — not an engineer's design", with a banner on page
+  one.
+- **Units to consider:**
+  - One ducted system sized on the whole building's busiest hour.
+  - A wall split in each room, sized at that room's own worst hour of any month, plus fan heat at the report's 3.2%.
+  - Each is the smallest nominal size at or above the load, with no margin.
+  - A room too big for one wall split is offered a ducted size. A building above 24 kW is offered several units, or a
+    packaged unit if it isn't a house.
+  - Rooms under 1 kW are flagged as usually served from a neighbouring room.
+  - The size steps are Daikin Australia's range (`config/unit_sizes.json`, checked 13 November 2026). The report says
+    these are nominal ratings at AS/NZS 3823.1.1 T1, and to check the chosen model at the design temperature and its
+    sensible capacity.
+- **Charts** (inline SVG, so the HTML and PDF need no scripts or network):
+  - the sizing design day hour by hour, stacked by where the load comes from;
+  - the peak in each month;
+  - the load by group at the sizing hour.
+
+  Colours are the dataviz skill's validated categorical palette in fixed order, and each chart has a table beside it.
+- **Values used, room by room:** people, W per person, lights, outside air, every equipment item with where its value
+  comes from, and the wall, roof and glass values with their sources.
+- **Still to confirm, assumed for this job, not included, sources.** The per-surface notes are grouped by rule (98 lines
+  became 10 on set 16), and stored heat is one line for the job.
+- **The PDF:** printed with Playwright when installed, otherwise a local headless Chrome or Chromium in a throwaway
+  profile (`ARCHIE_CHROME` can name one), otherwise the old one-page text PDF. Python Playwright isn't installed here,
+  so until now every PDF was that text fallback.
+- **Fixed on the way:** the "still to confirm" list said "generic single glazing (U 5.8, SHGC 0.45)" for houses on the
+  NatHERS default window, and "what is above the tenancy isn't answered" for houses with roofs
+  (`backend/result_status_service.py`).
+- **Checked:**
+  - `tests/test_contractor_report.py` covers sizes, worst hour, chart data adding up, grouping and the page. When a
+    Chrome is present it also prints a real PDF.
+  - `tests/test_result_status.py` covers the glass and roof lines; `tests/test_job_report_package.py` is updated.
+  - Reports were built from copies of Butcher Buffet and set 16 (AI off), and every page of each PDF was read.
+- **Not done:**
+  - The Results page itself doesn't show the unit sizes yet; they are only in the report.
+  - The "Create the report" button wasn't clicked in a browser: the preview tool reads another worktree's launch
+    configuration. The button's server call is covered by the package test.
+
 ## Next
 1. Check the stored-heat model against ASHRAE's full Tables 16, 19, 20 and 21 once the chapter is in hand (TODO.md).
 2. A listed-equipment case (commercial kitchen, hooded and free-standing) in the worksheet.

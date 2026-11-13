@@ -136,6 +136,20 @@ carpet, 10% glass, nonsolar; within 2 points per hour). Record in
   not use stored heat; annual energy is unaffected in total (a day's cooling load
   equals its heat gains) but its hourly shape is not.
 
+### The report to send (2026-11-13)
+
+`backend/contractor_report.py` builds the job report with unit sizes, charts, the values used and their sources
+(`docs/PHASE2_AUDIT_2026-11-12.md`, "The report to send").
+
+- [ ] Show the unit sizes and the design-day chart on the Results page too, not only in the report; then run the
+  browser check (`docs/BROWSER_TEST_LOOP.md`) on the page and the "Create the report" button.
+- [ ] Unit size steps are one manufacturer's range (Daikin Australia, checked 2026-11-13); let the operator pick a
+  brand's range, and recheck the list each year.
+- [ ] Unit capacity at the design temperature: the report only says to check it; a manufacturer's capacity table per
+  outdoor temperature would let it check the size itself.
+- [ ] A hosted server needs Chrome/Chromium (or Playwright) for the laid-out PDF; without one the report falls back to
+  the one-page text PDF.
+
 ## Deferred — annual and monthly energy analysis
 
 Annual analysis is intentionally deferred until the prerequisite peak-load and

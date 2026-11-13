@@ -112,5 +112,37 @@ class GatherTests(unittest.TestCase):
         self.assertEqual((result["items"], result["calculated"]), ([], False))
 
 
+class GlassAndRoofTests(unittest.TestCase):
+    """The glass and roof lines name what the calculation used (the contractor's report prints them beside its tables)."""
+
+    def gather(self, glazing_source, dwelling, roof=False, above=""):
+        with tempfile.TemporaryDirectory() as folder, patch.object(skill_workflow_service, "get", return_value={}), \
+                patch.object(job_service, "job_setup", return_value={"above": above}):
+            write(folder, "hourly_ai_preliminary_load_report.json", {
+                "included_scope_peak": {"components": {"glazing_solar": {"total_kw": 2}}}})
+            surfaces = [{"kind": "roof", "boundary_method": "external"}] if roof else []
+            write(folder, "ai_preliminary_input_set.json", {
+                "room_use_resolution": {"dwelling_context": {"is_dwelling": dwelling}},
+                "material": {"hourly_load_model": {"rooms": [{"room_id": "r1", "name": "Living", "cooling_load": {
+                    "envelope_surfaces": surfaces, "glazing_surfaces": [{"source": glazing_source}]}}]}}})
+            return {row["topic"]: row["text"] for row in status.gather(None, {"id": "j", "review_dir": folder})["items"]}
+
+    def test_a_house_without_a_certificate_names_the_nathers_default_window(self):
+        items = self.gather("NatHERS default window ALM-002-01 A, Aluminium B, single clear: U 6.7, SHGC 0.7", True)
+        self.assertIn("NatHERS default window", items["Windows"])
+        self.assertNotIn("U 5.8", items["Windows"])
+
+    def test_a_shop_on_the_packs_glass_still_says_generic_single_glazing(self):
+        self.assertIn("U 5.8, SHGC 0.45", self.gather("AI preliminary assumption pack au-preliminary-v3: retail", False)["Windows"])
+
+    def test_glass_read_from_a_certificate_needs_no_line(self):
+        self.assertNotIn("Windows", self.gather("NatHERS certificate (page 20): 3 window(s) in Living", True))
+
+    def test_the_tenancy_roof_question_only_applies_to_a_tenancy_without_roofs(self):
+        self.assertIn("Roof", self.gather("x", False))
+        self.assertNotIn("Roof", self.gather("x", True))                 # a house's levels decide its roof
+        self.assertNotIn("Roof", self.gather("x", False, roof=True))     # roofs are already in the model
+
+
 if __name__ == "__main__":
     unittest.main()
