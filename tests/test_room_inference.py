@@ -29,6 +29,14 @@ def main():
     check("printed room areas survive without a literal area prefix",
           {(row["label"], row.get("area_m2")) for row in printed["rooms"]} ==
           {("Office", 9.0), ("Service Counter", 13.0), ("Retail space", None)})
+    def labels_on(title):
+        drawing = {"drawing_set": {"pages": [{"page": 2, "title": title, "detected_type": "floor_plan",
+                                              "plan_role": "main_floor_plan", "level_name": "Ground", "scale": "1:100"}]}}
+        spatial = {"pages": [{"page": 2, "width": 1000, "height": 700, "standalone_text_items": [
+            {"text": "SHOP", "bbox": [100, 100, 140, 110]}, {"text": "ENTRY", "bbox": [400, 300, 450, 310]}]}]}
+        return sorted(row["label"] for row in room_inference.infer(drawing, spatial_ocr=spatial)["rooms"])
+    check("a house-only word (Entry) is not a room on a shop plan", labels_on("Ground floor plan") == ["Shop"])
+    check("the same word is a room on a dwelling's plan", labels_on("New dwelling - ground floor plan") == ["Entry", "Shop"])
     check("balcony is a valid plan label", room_inference.parse_room_label_item("Balcony")[0] == "Balcony")
     check("printed bedroom numbers stay distinct", [room_inference.parse_room_label_item(label)[0]
           for label in ("BEDROOM 3", "BEDROOM 4", "MASTER BEDROOM")] ==

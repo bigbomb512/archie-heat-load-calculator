@@ -18,7 +18,7 @@ from backend import reviewer_room_geometry_service
 from backend.job_runner import read_json
 
 RESULT_FILE = "house_windows.json"
-VERSION = "house-windows-text-v4"
+VERSION = "house-windows-text-v7"
 REVIEWER = "Archie drawing text (windows)"
 GLAZING_CHOICE = "residential"      # preliminary pack glazing (U 5.8, SHGC 0.45) until certificates are read (W7)
 SHADING = "unshaded"
@@ -31,6 +31,40 @@ def _same_plan_level(trace, plan_levels):
     expected = normalize(plan_levels.get(trace.get("page")))
     actual = normalize(trace.get("level_name"))
     return not expected or not actual or expected == actual
+
+
+def _untraced_labels(spatial_page, level, traced_ids):
+    """Cited plan labels that can own a provisional scheduled window."""
+    from ai import room_inference
+    from ai import room_use_resolution
+    items = spatial_page.get("standalone_text_items") or spatial_page.get("word_samples") or []
+    in_title = room_inference.title_block_test(spatial_page, items)
+    labels = []
+    for text, bbox in room_inference._text_item_lines(items):
+        if in_title({"bbox": bbox}):
+            continue
+        label, _, _ = room_inference.parse_room_label_item(text)
+        if not label or room_use_resolution.room_identity(label, level) in traced_ids:
+            continue
+        eligible = not bool(set(room_use_resolution._house_label_matches(label)) &
+                            {"outdoor", "garage", "house_wet", "house_service"})
+        labels.append({"label": label, "level_name": level, "x": (bbox[0] + bbox[2]) / 2,
+                       "y": (bbox[1] + bbox[3]) / 2, "excerpt": text, "eligible": eligible})
+    return labels
+
+
+def _page_scale(root, page, records, sx):
+    """mm per PDF point on a plan page: from any calibrated trace on it, else the sheet's printed scale; None if
+    neither is known."""
+    for row in records:
+        if row.get("page") == page:
+            return float(row["calibration"]["mm_per_px"]) * sx
+    try:
+        from backend.autonomous_tasks_service import _p0_context
+        declared = _p0_context(root, page).get("declared_mm_per_px")
+    except (OSError, ValueError, KeyError, TypeError, IndexError):
+        return None
+    return float(declared) * sx if declared else None
 
 
 def _fingerprint(value):
@@ -101,13 +135,14 @@ def apply(web, project, root, read_page=None):
               and _same_plan_level(row, plan_levels)]
     systems = {page.get("page"): page.get("coordinate_systems", {}).get("image_px", {})
                for page in read_json(root / "vector_geometry.json").get("geometry_key_points", {}).get("pages", [])}
+    spatial_pages = {page.get("page"): page for page in read_json(root / "spatial_ocr.json").get("pages", [])}
     source = read_json(root / "ai_input.json").get("source_pdf")
     schedule_pages = _schedule_pages(root)
     inputs = {"version": VERSION, "pdf": str(source), "schedule_pages": schedule_pages,
               "plan_levels": plan_levels,
               "traces": [{key: row.get(key) for key in ("trace_id", "room_id", "page", "points_image_px", "calibration")}
                          for row in cooled],
-              "scopes": scopes}
+              "scopes": scopes, "spatial_fingerprint": _fingerprint(spatial_pages)}
     if source and Path(source).exists():
         stat = Path(source).stat()
         inputs["pdf_version"] = [stat.st_size, stat.st_mtime_ns]
@@ -117,7 +152,7 @@ def apply(web, project, root, read_page=None):
         return saved
     result = {"schema_version": 1, "version": VERSION, "fingerprint": fingerprint, "schedule_pages": schedule_pages,
               "windows_in_schedule": 0, "skylights": [], "doors_not_counted": [], "unread_schedule_rows": [],
-              "placed": [], "unplaced": [], "walls_taken_as_outside": [],
+              "placed": [], "assigned_without_wall": [], "unplaced": [], "walls_taken_as_outside": [],
               "invalid_traces": [{"room": row.get("room_label"), "page": row.get("page"),
                                   "level_name": row.get("level_name"), "plan_level": plan_levels.get(row.get("page")),
                                   "reason": "Room trace is assigned to a different level than its plan page."}
@@ -148,7 +183,10 @@ def apply(web, project, root, read_page=None):
         for trace in cooled:
             by_page.setdefault(trace.get("page"), []).append(trace)
         run_id = f"house-windows-{fingerprint[:12]}"
-        for page, traces in sorted(by_page.items()):
+        # Every main plan, not only those with a traced cooled room: a floor with no outlines still has windows, which
+        # go to their rooms by the nearest printed label below.
+        for page in sorted({*by_page, *[number for number in plan_levels if isinstance(number, int)]}):
+            traces = by_page.get(page, [])
             system = systems.get(page) or {}
             width_pt, height_pt, words = read_page(page)
             if not windows:
@@ -157,16 +195,47 @@ def apply(web, project, root, read_page=None):
                 result["unplaced"].append({"page": page, "reason": "No image frame for this plan page; its windows weren't placed."})
                 continue
             sx, sy = system["image_width"] / width_pt, system["image_height"] / height_pt
-            level = traces[0].get("level_name") or None
+            level = plan_levels.get(page) or (traces[0].get("level_name") if traces else None) or None
             tags = house_windows.find_window_tags(words, page, level)
-            rooms, scale = [], None
+            rooms, scale = [], _page_scale(root, page, records, sx)
             for trace in traces:
                 mm_per_px = float(trace["calibration"]["mm_per_px"])
                 scale = mm_per_px * sx
                 rooms.append({"trace_id": trace["trace_id"], "points": [[x / sx, y / sy] for x, y in trace["points_image_px"]],
                               "outside_edges": _outside_edges(trace, records, mm_per_px)})
-            placed = house_windows.place_windows(tags, windows, rooms, scale)
+            if scale is None:
+                result["unplaced"] += [{"mark": tag["mark"], "page": page,
+                                        "reason": "The plan's scale isn't known, so the window can't be matched to a room."}
+                                       for tag in tags]
+                continue
+            placed = house_windows.place_windows(tags, windows, rooms, scale) if rooms else {"openings": [], "unplaced": []}
             result["unplaced"] += placed["unplaced"]
+            traced_ids = {trace.get("room_id") for trace in records if trace.get("page") == page}
+            labels = _untraced_labels(spatial_pages.get(page, {}), level or plan_levels.get(page) or "Unassigned level", traced_ids)
+            placed_marks = {row["mark"].upper() for row in placed["openings"]}
+            for tag in tags:
+                if tag["mark"].upper() in placed_marks:
+                    continue
+                matching = [row for row in windows if row["mark"].upper() == tag["mark"].upper()]
+                if len({(row["width_mm"], row["height_mm"]) for row in matching}) != 1 or not matching or not labels:
+                    continue
+                nearest = sorted(labels, key=lambda row: math.dist((tag["x"], tag["y"]), (row["x"], row["y"])))
+                if not nearest[0]["eligible"]:
+                    continue
+                distance_mm = math.dist((tag["x"], tag["y"]), (nearest[0]["x"], nearest[0]["y"])) * scale
+                if distance_mm > 9000 or (len(nearest) > 1 and
+                    (math.dist((tag["x"], tag["y"]), (nearest[1]["x"], nearest[1]["y"])) * scale - distance_mm) < 500):
+                    continue
+                sill, head, note = house_windows.sill_and_head(matching[0])
+                result["assigned_without_wall"].append({"mark": tag["mark"], "page": page,
+                    "room": nearest[0]["label"], "level_name": nearest[0]["level_name"],
+                    "schedule_page": matching[0]["page"], "width_m": matching[0]["width_mm"] / 1000,
+                    "sill_height_m": sill / 1000, "head_height_m": head / 1000,
+                    "frame_group": house_windows.frame_group(matching[0].get("type") or ""),
+                    "assumptions": ["Nearest printed room label on the same plan; no host wall or azimuth was established.",
+                                    *([note] if note else [])],
+                    "evidence": f"Window schedule p{matching[0]['page']}: {matching[0]['evidence']}; "
+                                f"plan p{page}: {nearest[0]['excerpt']}"})
             by_trace = {}
             for opening in placed["openings"]:
                 by_trace.setdefault(opening["trace_id"], []).append(opening)
@@ -218,10 +287,22 @@ def apply(web, project, root, read_page=None):
         if close:
             close()
     placed_marks = {str(row.get("mark", "")).upper() for row in result["placed"]}
+    assigned_counts = {}
+    for row in result["assigned_without_wall"]:
+        mark = row["mark"].upper()
+        assigned_counts[mark] = assigned_counts.get(mark, 0) + 1
+    conflicted = {mark for mark, count in assigned_counts.items() if count > 1 or mark in placed_marks}
+    if conflicted:
+        result["assigned_without_wall"] = [row for row in result["assigned_without_wall"]
+                                            if row["mark"].upper() not in conflicted]
+        result["unplaced"] += [{"mark": mark, "reason": "Window tag has competing room or wall placements across plan pages."}
+                                for mark in sorted(conflicted)]
+    assigned_marks = {row["mark"].upper() for row in result["assigned_without_wall"]}
+    result["unplaced"] = [row for row in result["unplaced"] if str(row.get("mark", "")).upper() not in assigned_marks]
     unplaced_marks = {str(row.get("mark", "")).upper() for row in result["unplaced"]}
     for window in windows:
         mark = str(window.get("mark", "")).upper()
-        if mark and mark not in placed_marks and mark not in unplaced_marks:
+        if mark and mark not in placed_marks and mark not in assigned_marks and mark not in unplaced_marks:
             result["unplaced"].append({"mark": window["mark"], "page": window["page"],
                 "reason": "Window is listed in the schedule but is not matched to a traced room wall."})
             unplaced_marks.add(mark)
@@ -229,6 +310,7 @@ def apply(web, project, root, read_page=None):
         from backend.phase1_supervisor_service import _build_calculation_evidence
         _build_calculation_evidence(web, project)
     result["coverage_status"] = ("unresolved" if not result["windows_in_schedule"] else
-                                 "needs_review" if result["unplaced"] or result["invalid_traces"] or not result["placed"] else "placed")
+                                 "needs_review" if result["unplaced"] or result["invalid_traces"] or not result["placed"] else
+                                 "provisional" if result["assigned_without_wall"] else "placed")
     reviewer_room_geometry_service._atomic_json(root / RESULT_FILE, result)
     return result

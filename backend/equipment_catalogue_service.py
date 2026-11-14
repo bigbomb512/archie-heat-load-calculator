@@ -97,6 +97,8 @@ def _named_room(value, room_names):
 # Customer-facing buffet and servery stations belong to the dining or shop area the customers use (user rule 2026-10-18,
 # first for room areas; for equipment 2026-10-26, after Butcher Buffet's buffet stations were placed in its Bar).
 BUFFET_LOCATION = re.compile(r"\b(?:buffet|servery|salad\s+bar|food\s+station|hot\s+food|bain[\s-]?marie|carvery)\b", re.I)
+HOUSE_SYSTEM_EQUIPMENT = re.compile(r"\b(?:air[ -]?condition(?:er|ing)?|a\.?c\.?|pool\s+pump|hot[ -]?water|hws)\b", re.I)
+ONE_LETTER_TAG = re.compile(r"^[A-Za-z](?:\s*[x×]\s*\d+)?$", re.I)
 
 
 def _buffet_room(root, room_names):
@@ -166,7 +168,7 @@ def _hood_heat(row, under_hood, notes):
 
 
 def _resolve(row, decision, book, typical, assessment, evidence, room_names, duplicates, catalogue_hash, zones=None,
-             buffet_room=""):
+             buffet_room="", dwelling=False):
     value = deepcopy(decision.get("value") or row.get("value") or {})
     name = value.get("name", "Equipment")
     out = {"id": row["id"], "name": name, "value": value, "pages": row.get("pages", []),
@@ -174,6 +176,9 @@ def _resolve(row, decision, book, typical, assessment, evidence, room_names, dup
            "applicability_evidence": {}, "room": "", "quantity": None, "candidates": []}
     if decision.get("status") == "rejected":
         return {**out, "status": "excluded", "label": LABELS["excluded"], "note": "Rejected by the operator."}
+    if dwelling and (HOUSE_SYSTEM_EQUIPMENT.search(str(name)) or ONE_LETTER_TAG.fullmatch(str(name).strip())):
+        return {**out, "status": "excluded", "label": LABELS["excluded"],
+                "note": "House service equipment or an unidentified one-letter tag; no room equipment heat assigned."}
     kind = equipment_heat.equipment_type(name)
     out["kind"] = kind
     component = any(word in str(name).casefold() for word in ("condenser", "compressor", "evaporator", "controller", "control system"))
@@ -300,7 +305,7 @@ def resolve(project, room_names, *, assess=None, locate=None, persist=False):
     typical = catalogue.load_typical()
     catalogue_hash = catalogue.current_hash(book, typical)
     inputs = _inputs(project, room_names)
-    source_hash = fingerprint({"version": 2, "catalogue": catalogue_hash, "inputs": inputs})
+    source_hash = fingerprint({"version": 3, "catalogue": catalogue_hash, "inputs": inputs})
     root = Path(project["review_dir"])
     saved = read_json(root / ARTIFACT)
     assessments = dict(saved.get("assessments", {}) if saved.get("source_hash") == source_hash else {})
@@ -353,8 +358,10 @@ def resolve(project, room_names, *, assess=None, locate=None, persist=False):
                 provider_error = _provider_error(error)
                 break
     buffet_room = _buffet_room(root, room_names)
+    from backend.house_windows_service import is_dwelling
+    dwelling = is_dwelling(root)
     records = [_resolve(row, decisions.get(row["id"], {}), book, typical, assessments.get(row["id"], {}),
-                        evidence, room_names, duplicates, catalogue_hash, zones, buffet_room) for row in findings]
+                        evidence, room_names, duplicates, catalogue_hash, zones, buffet_room, dwelling) for row in findings]
     summary = {state: sum(row["status"] == state for row in records) for state in STATUSES}
     reading_complete = bool(inputs["result"].get("run") and not inputs["result"].get("failures")
                             and inputs.get("reading_job", {}).get("status") not in {"running", "queued", "stopping"})

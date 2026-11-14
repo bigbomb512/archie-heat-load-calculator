@@ -93,6 +93,37 @@ class BatchTasks(FakeTasks):
 
 
 class DrawingTaskTests(unittest.TestCase):
+    def test_tenancy_timeout_retry_uses_smaller_image(self):
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as folder:
+            image = Path(folder) / "large.png"
+            Image.new("RGB", (2200, 1600), "white").save(image)
+            class Provider:
+                def propose(self, prompt, image_paths):
+                    with Image.open(image_paths[0]) as opened:
+                        self.size = opened.size
+                    # Corners of the smaller image: they must come back as corners of the full-size one.
+                    return json.dumps({"points_px": [[0, 0], [self.size[0], 0], [self.size[0], self.size[1]]],
+                                       "evidence": "outer walls"}), {"provider": "fake"}
+            provider = Provider()
+            reply, raw = drawing._retry_smaller_tenancy(provider, "outline", [str(image)])
+            self.assertLessEqual(max(provider.size), 1024)
+            points = json.loads(reply)["points_px"]
+            self.assertAlmostEqual(points[1][0], 2200, delta=3)
+            self.assertAlmostEqual(points[2][1], 1600, delta=3)
+            self.assertEqual(json.loads(reply)["evidence"], "outer walls")
+            self.assertIn("retried_smaller_image", raw)
+
+    def test_codex_cli_time_out_is_a_provider_timeout(self):
+        import subprocess
+        from backend import ai_provider
+        with tempfile.TemporaryDirectory() as folder:
+            provider = ai_provider.CodexCliProvider(executable="codex", timeout=300,
+                                                    config_path=Path(folder) / "missing.toml")
+        with patch("backend.ai_provider.subprocess.run", side_effect=subprocess.TimeoutExpired("codex", 300)):
+            with self.assertRaises(ai_provider.ProviderTimeout):
+                provider.propose("outline")
+
     def test_round_fetches_in_parallel_applies_in_order_and_rebuilds_once(self):
         with tempfile.TemporaryDirectory() as folder:
             fake = BatchTasks(folder)

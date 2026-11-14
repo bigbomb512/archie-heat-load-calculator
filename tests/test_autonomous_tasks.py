@@ -859,6 +859,27 @@ class AutonomousTaskTests(unittest.TestCase):
             autonomous_tasks_service._inferred_room_data(root)
             self.assertEqual(infer.call_count, 7)
 
+    def test_diagram_pages_are_read_for_rooms_only_when_the_plans_name_none(self):
+        from ai import page_inventory, room_inference
+
+        def infer(*args, skip_pages=(), **kwargs):
+            return {"rooms": [] if skip_pages else [{"label": "Kitchen"}]}
+        with TemporaryDirectory() as temporary, \
+                patch("backend.ai_provider.get", side_effect=AssertionError("No provider calls")), \
+                patch.object(page_inventory, "diagram_pages", return_value={16}), \
+                patch.object(room_inference, "infer", side_effect=infer) as called:
+            autonomous_tasks_service._cached_inferred_room_data.cache_clear()
+            self.assertEqual(autonomous_tasks_service._inferred_room_data(Path(temporary)), [{"label": "Kitchen"}])
+            self.assertEqual([call.kwargs.get("skip_pages", ()) for call in called.call_args_list], [{16}, ()])
+        with TemporaryDirectory() as temporary, \
+                patch("backend.ai_provider.get", side_effect=AssertionError("No provider calls")), \
+                patch.object(page_inventory, "diagram_pages", return_value={16}), \
+                patch.object(room_inference, "infer", return_value={"rooms": [{"label": "Bedroom 2"}]}) as called:
+            autonomous_tasks_service._cached_inferred_room_data.cache_clear()
+            self.assertEqual(autonomous_tasks_service._inferred_room_data(Path(temporary)), [{"label": "Bedroom 2"}])
+            self.assertEqual(called.call_count, 1)
+        autonomous_tasks_service._cached_inferred_room_data.cache_clear()
+
     def test_geometry_refresh_runs_room_inference_at_most_once(self):
         from ai import room_inference
         from contextlib import ExitStack

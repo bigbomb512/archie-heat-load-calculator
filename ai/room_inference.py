@@ -23,6 +23,15 @@ NON_ROOM_LABEL = re.compile(
     r"|\b(?:fence|boundary|bdy)\b", re.I)
 
 
+# Room words only a house's plans use as room names. On a shop or restaurant plan "Entry", "Hall" or "Family" is an
+# annotation (Butcher Buffet's page 21 "ENTRY" became a sixth room, 2026-11-14), so these count only on a dwelling.
+HOUSE_ONLY_TERMS = frozenset({
+    "balcony", "cellar", "master bedroom", "bed", "br", "ensuite", "ens", "laundry", "wir", "walk in robe", "garage",
+    "family", "entry", "study", "media", "sitting", "scullery", "linen", "hall", "alfresco", "bath", "powder room",
+    "wardrobe",
+})
+
+
 def plausible_room_label(label):
     """Reject site objects before they enter the room and area registries."""
     return bool(_text(label)) and not NON_ROOM_LABEL.search(_text(label))
@@ -524,6 +533,8 @@ def infer(ai_input, coverage=None, spatial_ocr=None, vector_geometry=None, visio
         spatial_page = spatial_by_page.get(number, {})
         kinds = room_label_evidence(spatial_page)
         for label, area in room_label_items(spatial_page):
+            if not dwelling and parse_room_label_item(label)[1] in HOUSE_ONLY_TERMS:
+                continue
             level = level_of(page)
             # Treat spelling variants such as "cool room" and "coolroom" as
             # one candidate while retaining the clearest display label.
@@ -545,6 +556,8 @@ def infer(ai_input, coverage=None, spatial_ocr=None, vector_geometry=None, visio
                 **({"note_text": kinds[label.casefold()]["context"]} if kinds.get(label.casefold(), {}).get("context") else {}),
             }
             row = add_candidate(label, level, number, evidence, confidence)
+            if row is None:          # a site or exterior label (plausible_room_label)
+                continue
             if area is not None:
                 row["area_m2"] = area
                 row["geometry"] = {"area_m2": area, "formula": "explicit_room_area", "operands": {"value_m2": area}}

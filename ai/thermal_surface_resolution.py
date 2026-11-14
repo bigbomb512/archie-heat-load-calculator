@@ -212,6 +212,9 @@ def _resolve_surface_area(row, openings, ceiling_by_room=None, allow_incomplete_
         return gross, None, derivation, ["opening_geometry_missing:" + ",".join(sorted(missing))]
     opening_total = sum(item["opening_area_m2"] for item in area_rows)
     net = gross - opening_total
+    if net == 0 and row.get("glazing_only_host") is True:
+        return gross, 0.0, {**derivation, "gross_area_m2": gross, "net_area_m2": 0.0,
+                            "openings": area_rows, "formula": "glazing-only host; no opaque area"}, []
     if net <= 0:
         return gross, None, derivation, ["opening_area_exceeds_gross_area"]
     return gross, net, {**derivation, "gross_area_m2": gross, "net_area_m2": net, "openings": area_rows,

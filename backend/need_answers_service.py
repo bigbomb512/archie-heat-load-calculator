@@ -84,13 +84,18 @@ def options(web, project):
                      for row in current.get("findings", [])]
     except Exception:
         equipment = []
+    from ai import construction_u_values
+    root = Path(project["review_dir"])
+    from backend.job_runner import read_json
+    observed_walls = construction_u_values.plan_wall_legend(
+        read_json(root / "spatial_ocr.json"), read_json(root / "page_inventory.json"))
     return {"kinds": [{"id": key, "label": label, "applied": key in APPLIED_KINDS, "unit": APPLIED_KINDS.get(key, {}).get("unit", "")}
                       for key, label in KINDS.items()],
             "rooms": [{"label": label, "level": level} for label, level in room_rows],
             "equipment": equipment,
             "above": [{"id": key, "label": label} for key, label in job_service.ABOVE_CHOICES.items() if key],
             "exhaust_methods": [{"id": key, "label": label} for key, label in EXHAUST_METHODS.items()],
-            "constructions": _construction_choices()}
+            "constructions": _construction_choices(), "observed_wall_constructions": observed_walls}
 
 
 def _construction_choices():

@@ -12,6 +12,7 @@ pack's preliminary U-value and the Results tab lists it as typical. No I/O excep
 
 import json
 import os
+import re
 from pathlib import Path
 
 DEFAULT_TABLE_PATH = Path.home() / ".archie" / "airah_handbook_2007_u_values.json"
@@ -20,6 +21,28 @@ SOURCE = "AIRAH Technical Handbook, 4th edition (2007), Overall heat transfer co
 # The handbook's tables that hold each kind of surface.
 SECTIONS = {"wall": ("Masonry walls", "Frame walls", "Sandwich panel walls"), "roof": ("Flat roofs", "Pitched roofs")}
 U_RANGE = (0.1, 7.0)       # W/m²K
+PLAN_WALL_TYPES = (("dincel", "Dincel wall"), ("brick cavity", "Brick cavity wall"),
+                   ("stud wall", "Stud wall"))
+
+
+def plan_wall_legend(spatial, inventory):
+    """Cite construction names printed on plan pages; no U-value or wall ownership is inferred."""
+    pages = inventory.get("pages", {}) if isinstance(inventory, dict) else {}
+    found = []
+    for page in spatial.get("pages", []) if isinstance(spatial, dict) else []:
+        number = page.get("page")
+        meta = pages.get(str(number), {})
+        if not isinstance(meta, dict) or not any(word in (str(meta.get("page_type") or "") + " " + str(meta.get("title") or "")).casefold()
+                                               for word in ("plan", "wall", "schedule")):
+            continue
+        lines = [str(item.get("text") or "") for item in page.get("standalone_text_items", []) if isinstance(item, dict)]
+        text = re.sub(r"[+/_-]+", " ", " ".join(lines).casefold())
+        for phrase, label in PLAN_WALL_TYPES:
+            pattern = r"\b" + (r"stud(?:\s+wall)?" if phrase == "stud wall" else re.escape(phrase)) + r"\b"
+            if re.search(pattern, text):
+                found.append({"page": number, "construction": label, "source": "drawing text",
+                              "status": "needs_review", "note": "Match this legend to a specific wall and a cited U-value."})
+    return sorted(found, key=lambda row: (row["page"], row["construction"]))
 
 
 def table_path():

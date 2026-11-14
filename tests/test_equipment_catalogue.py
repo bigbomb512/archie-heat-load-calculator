@@ -46,6 +46,18 @@ PATTERNS = [{"id": "CONTINUOUS", "description": "On around the clock", "basis": 
             {"id": "WHILE_OPEN", "description": "While open", "basis": "ROOM_HOURS", "fraction": None}]
 
 
+class HouseEquipmentScopeTests(unittest.TestCase):
+    def test_house_services_and_unknown_tag_do_not_get_room_heat(self):
+        for name in ("AC x2", "Pool pump", "Outdoor hot-water unit", "F x2"):
+            with self.subTest(name=name):
+                row = {"id": name, "value": {"name": name}, "pages": []}
+                result = service._resolve(row, {}, {}, {}, {}, {}, ["Kitchen"], set(), "", dwelling=True)
+                self.assertEqual(result["status"], "excluded")
+
+    def test_house_service_name_rule_does_not_match_a_mixer(self):
+        self.assertIsNone(service.HOUSE_SYSTEM_EQUIPMENT.search("Planetary mixer"))
+
+
 def typical_workbook(path, rows=TYPICAL_ROWS, patterns=PATTERNS):
     w = Workbook(); s = w.active; s.title = "Typical values"
     s.append(["Instructions above the header are ignored."]); s.append(list(cat.TYPICAL_HEADERS.values()))

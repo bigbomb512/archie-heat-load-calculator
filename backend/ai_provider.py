@@ -334,7 +334,9 @@ class CodexCliProvider:
                 result = subprocess.run(command, input=str(prompt), capture_output=True, text=True,
                                         timeout=self.timeout, env=env, check=False, cwd=folder)
             except subprocess.TimeoutExpired as error:
-                raise RuntimeError(f"No reply within {self.timeout} seconds.") from error
+                # A ProviderTimeout, like the HTTP providers', so callers can retry or fall back on a time-out
+                # (set 17's whole-house outline, 2026-11-14, showed as a plain service error).
+                raise ProviderTimeout(self.timeout) from error
             reply_text = output.read_text(encoding="utf-8") if output.is_file() else ""
             usage = codex_event_usage(result.stdout or "")
             if not usage:

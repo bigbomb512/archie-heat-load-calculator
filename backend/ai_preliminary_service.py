@@ -2040,6 +2040,33 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
             "remediation": "Trace and calibrate the room, then accept its area in the calculator draft.",
         })
     proposal["rooms"] = calculation_rooms
+    # A scheduled house window can contribute draft glass load when its room
+    # is known but no wall outline was proved. This host has no opaque area.
+    house_windows = _read(paths["root"] / "house_windows.json", {})
+    for window in house_windows.get("assigned_without_wall", []):
+        owner = next((room for room in calculation_rooms if room.get("label", "").casefold() == str(window.get("room", "")).casefold()
+                      and room.get("level_name", "").casefold() == str(window.get("level_name", "")).casefold()
+                      and str(room.get("space_scope", "")).startswith("comfort_hvac")), None)
+        height = (window.get("head_height_m") or 0) - (window.get("sill_height_m") or 0)
+        if owner is None or height <= 0 or not isinstance(window.get("width_m"), (int, float)):
+            continue
+        area = window["width_m"] * height
+        host = f"house-untraced:{window['page']}:{window['mark']}:{owner['room_id']}"
+        citation = {"page": window["page"], "excerpt": window.get("evidence", ""),
+                    "reference": "Window schedule and nearest printed room label"}
+        proposal.setdefault("surfaces", []).append({"surface_key": host, "label": f"{owner['label']} window-only host",
+            "owner_room_label": owner["label"], "owner_level_name": owner["level_name"],
+            "physical_type": "wall", "thermal_role": "external", "external_exposure": "external",
+            "gross_area_m2": area, "opening_coverage": "complete", "glazing_only_host": True,
+            "page": window["page"], "evidence": [citation], "confidence": 0.35,
+            "verification_status": "provisional", "rationale": "Room assigned by plan-label proximity; wall and azimuth unresolved."})
+        proposal.setdefault("openings", []).append({"opening_key": host + ":glass", "label": f"{owner['label']} window {window['mark']}",
+            "owner_room_label": owner["label"], "owner_level_name": owner["level_name"],
+            "host_surface_key": host, "width_m": window["width_m"], "height_m": height,
+            "opening_area_m2": area, "quantity": 1, "external_exposure": "external", "orientation": "",
+            "shading_category": "unshaded", "glazing_choice": "residential", "preliminary_profile_id": "residential",
+            "page": window["schedule_page"], "evidence": [citation], "confidence": 0.35,
+            "verification_status": "provisional", "assumptions": window.get("assumptions", [])})
     proposal.setdefault("issues", []).extend(area_issues)
     if trace_review_issue:
         proposal["issues"].append(trace_review_issue)
@@ -2599,13 +2626,15 @@ def _attach_house_window_coverage(paths, report):
     window_state = _read(paths["root"] / "house_windows.json", {})
     scheduled = int(window_state.get("windows_in_schedule") or 0)
     placed = len(window_state.get("placed") or [])
+    assigned = len(window_state.get("assigned_without_wall") or [])
     unplaced = len(window_state.get("unplaced") or [])
     status = window_state.get("coverage_status") or "unresolved"
     report["glazing_coverage"] = {"status": status, "scheduled": scheduled,
-                                  "placed": placed, "unplaced": unplaced}
+                                  "placed": placed, "assigned_without_wall": assigned, "unplaced": unplaced}
     if status != "placed":
-        message = (f"Glazing coverage is incomplete: {scheduled} scheduled windows, {placed} placed, "
-                   f"{unplaced} placement issues. The reported load is an included-scope subtotal.")
+        message = (f"Glazing coverage is incomplete: {scheduled} scheduled windows, {placed} placed on walls, "
+                   f"{assigned} assigned to rooms without wall outlines, {unplaced} placement issues. "
+                   "The reported load is an included-scope subtotal.")
         report.setdefault("warnings", []).append(message)
         report.setdefault("known_exclusions", []).append({"component_type": "glazing and solar",
             "component": "unmatched scheduled windows", "reason": message})

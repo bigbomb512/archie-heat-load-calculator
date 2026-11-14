@@ -47,6 +47,65 @@ def read_page(number):
 
 
 class HouseWindowsServiceTests(unittest.TestCase):
+    def test_untraced_label_candidates_exclude_outdoor_and_retain_bedroom(self):
+        spatial = {"standalone_text_items": [
+            {"text": "BEDROOM", "bbox": [10, 10, 60, 20]},
+            {"text": "3", "bbox": [62, 10, 70, 20]},
+            {"text": "BALCONY", "bbox": [10, 40, 65, 50]},
+        ]}
+        rows = house_windows_service._untraced_labels(spatial, "First Floor", set())
+        self.assertEqual([(row["label"], row["eligible"]) for row in rows],
+                         [("Bedroom 3", True), ("Balcony", False)])
+
+    def test_scheduled_window_can_be_assigned_to_untraced_room_label(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = job(folder)
+            (root / "spatial_ocr.json").write_text(json.dumps({"pages": [{"page": 9,
+                "standalone_text_items": [{"text": "BEDROOM", "bbox": [700, 180, 760, 190]},
+                                          {"text": "3", "bbox": [762, 180, 770, 190]}]}]}))
+            def pages(number):
+                return (1000, 700, SCHEDULE if number == 20 else [word("W4", 750, 200)])
+            with patch.object(reviewer_room_geometry_service, "current_records", return_value=[TRACE]), \
+                 patch.object(reviewer_room_geometry_service, "post"), \
+                 patch.object(autonomous_tasks_service, "room_ceiling_height", return_value=2700):
+                result = house_windows_service.apply(None, {"review_dir": str(root)}, root, read_page=pages)
+            self.assertEqual([(row["mark"], row["room"]) for row in result["assigned_without_wall"]],
+                             [("W4", "Bedroom 3")])
+            self.assertFalse(any(row.get("mark") == "W4" for row in result["unplaced"]))
+
+    def test_a_plan_with_no_traced_room_still_assigns_its_windows_by_label(self):
+        # Page 9 has no trace at all; its scale comes from the sheet's printed scale (5 mm per image px).
+        with tempfile.TemporaryDirectory() as folder:
+            root = job(folder)
+            (root / "spatial_ocr.json").write_text(json.dumps({"pages": [{"page": 9,
+                "standalone_text_items": [{"text": "BEDROOM", "bbox": [700, 180, 760, 190]},
+                                          {"text": "2", "bbox": [762, 180, 770, 190]}]}]}))
+
+            def pages(number):
+                return (1000, 700, SCHEDULE if number == 20 else [word("W4", 750, 200)])
+            with patch.object(reviewer_room_geometry_service, "current_records", return_value=[]), \
+                 patch.object(reviewer_room_geometry_service, "post"), \
+                 patch.object(autonomous_tasks_service, "_p0_main_geometry_pages",
+                              return_value=[{"page": 9, "level_name": "Ground Floor"}]), \
+                 patch.object(autonomous_tasks_service, "_p0_context", return_value={"declared_mm_per_px": 5}), \
+                 patch.object(autonomous_tasks_service, "room_ceiling_height", return_value=2700):
+                result = house_windows_service.apply(None, {"review_dir": str(root)}, root, read_page=pages)
+            self.assertEqual([(row["mark"], row["room"]) for row in result["assigned_without_wall"]],
+                             [("W4", "Bedroom 2")])
+
+    def test_a_plan_with_no_known_scale_leaves_its_windows_unplaced(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = job(folder)
+            with patch.object(reviewer_room_geometry_service, "current_records", return_value=[]), \
+                 patch.object(reviewer_room_geometry_service, "post"), \
+                 patch.object(autonomous_tasks_service, "_p0_main_geometry_pages",
+                              return_value=[{"page": 9, "level_name": "Ground Floor"}]), \
+                 patch.object(autonomous_tasks_service, "_p0_context", side_effect=OSError("no plan")), \
+                 patch.object(autonomous_tasks_service, "room_ceiling_height", return_value=2700):
+                result = house_windows_service.apply(None, {"review_dir": str(root)}, root, read_page=read_page)
+            self.assertEqual(result["assigned_without_wall"], [])
+            self.assertTrue(any("scale isn't known" in row.get("reason", "") for row in result["unplaced"]))
+
     def test_trace_must_belong_to_its_plan_level(self):
         levels = {8: "Ground Floor", 9: "First Floor"}
         self.assertFalse(house_windows_service._same_plan_level(
@@ -66,7 +125,7 @@ class HouseWindowsServiceTests(unittest.TestCase):
             ai_preliminary_service._attach_house_window_coverage(
                 {"root": root, "room_use": root / "room_use_resolution.json"}, report)
             self.assertEqual(report["glazing_coverage"], {"status": "needs_review", "scheduled": 28,
-                                                          "placed": 1, "unplaced": 1})
+                                                          "placed": 1, "assigned_without_wall": 0, "unplaced": 1})
             self.assertIn("included-scope subtotal", report["warnings"][0])
             self.assertEqual(report["known_exclusions"][0]["component_type"], "glazing and solar")
 

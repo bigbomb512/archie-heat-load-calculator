@@ -22,6 +22,7 @@ Every call is logged in the job's ai_usage.jsonl under "drawing:<task>" with its
 import json
 import hashlib
 import re
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
@@ -34,7 +35,7 @@ from backend.job_runner import BackgroundJob, now, read_json, write_json, checkp
 JOB_FILE = "drawing_tasks_job.json"
 STEPS = [("build", "Preparing the drawing tasks"), ("answer", "The AI is answering the drawing tasks"),
          ("skills", "Starting the skills")]
-MAX_ROUNDS = 8          # scale -> names -> outlines -> walls/openings -> kitchen: five stages, with room to spare
+MAX_ROUNDS = 16         # a successful retry can unlock several further rounds without another click
 MAX_ATTEMPTS = 2        # a refused reply is tried once more, told why it was refused
 # Connection failures on this many calls in a row mean the connection itself is broken (on Butcher Buffet,
 # 2026-10-17, all 24 calls failed the same way): the run stops calling instead of spending a call on every task.
@@ -189,6 +190,39 @@ def _sizes(paths):
     return sizes
 
 
+def _retry_smaller_tenancy(provider, prompt, images):
+    """One retry of a timed-out whole-floor outline with the plan image at most 1024 px. The question asks for points
+    in image pixels, so the reply's points are scaled back to the full-size image the packet's transform is for."""
+    with tempfile.TemporaryDirectory(prefix="archie-tenancy-retry-") as folder:
+        smaller, factor = [], 1.0
+        for index, path in enumerate(images):
+            target = Path(folder) / f"image-{index}.png"
+            with Image.open(path) as opened:
+                image = opened.copy()
+                width = image.width
+                image.thumbnail((1024, 1024))
+                image.save(target)
+            if index == 0:
+                factor = width / image.width if image.width else 1.0
+            smaller.append(str(target))
+        reply, raw = provider.propose(prompt, image_paths=smaller)
+    if factor == 1.0:
+        return reply, raw
+    from ai.autonomous_tasks import parse_json_reply
+    try:
+        value = parse_json_reply(reply)
+    except ValueError:
+        return reply, raw              # refused by the outline check as usual
+    if isinstance(value.get("points_px"), list):
+        value["points_px"] = [[float(point[0]) * factor, float(point[1]) * factor]
+                              if isinstance(point, (list, tuple)) and len(point) >= 2
+                              and all(isinstance(v, (int, float)) for v in point[:2]) else point
+                              for point in value["points_px"]]
+    if isinstance(raw, dict):
+        raw = {**raw, "retried_smaller_image": {"scale_back": round(factor, 4)}}
+    return json.dumps(value), raw
+
+
 # Tasks whose coordinates are always on the first image; the images after it are only for reading (e.g. the sheets
 # that print the room names for the outline task).
 FIRST_IMAGE_TASKS = {"P0_room_outlines"}
@@ -286,7 +320,12 @@ def answer_all(web, project, step=lambda *args: None, provider_for=None, retry_n
             _context.check = check
             try:
                 checkpoint()
-                reply, raw = provider.propose(prompt, image_paths=images)
+                try:
+                    reply, raw = provider.propose(prompt, image_paths=images)
+                except ai_provider.ProviderTimeout:
+                    if record["task"] != "P0_tenancy_outline" or not images:
+                        raise
+                    reply, raw = _retry_smaller_tenancy(provider, prompt, images)
                 _write_json(cached_path, {"reply": reply, "raw": raw})
                 return {"record": record, "reply": reply, "raw": raw, "provider": provider,
                         "images": images, "sizes": sizes, "key": key, "cached": False}
@@ -340,6 +379,15 @@ def answer_all(web, project, step=lambda *args: None, provider_for=None, retry_n
             if result.get("error"):
                 error = result["error"]
                 calls += 1
+                if record["task"] == "P0_tenancy_outline" and isinstance(error, ai_provider.ProviderTimeout):
+                    current = autonomous_tasks_service._current_task(root, record["task"], record["target"])
+                    if current and current.get("run_id") == record["run_id"]:
+                        current.update(status="below_accuracy_bar", source="timeout_fallback",
+                            applied_value={"note": "Whole-floor outline timed out at both image sizes; room-specific area routes continue without tenancy clipping."},
+                            block_reason="The whole-floor outline could not be read within the provider limit.", finished_at=now())
+                        autonomous_tasks_service._write(autonomous_tasks_service._record_file(root, current), current)
+                        refused += 1
+                        continue
                 if isinstance(error, ai_provider.InvalidProviderReply):
                     archive_investigation_failure(project, record, error, model_note="Drawing task")
                     refused += 1

@@ -1527,6 +1527,7 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                     "owner_room_id": target["room"].get("room_id", ""),
                     "owner_zone_id": target["room"].get("zone_id", ""),
                     "gross_area_m2": surface.get("gross_area_m2"),
+                    "glazing_only_host": surface.get("glazing_only_host") is True,
                     "net_opaque_area_m2": surface.get("net_opaque_area_m2"),
                     "opening_coverage_status": surface.get("opening_coverage", "not_applicable"),
                     "linked_opening_ids": [opening.get("candidate_id") for opening in effective_proposal.get("openings", [])
@@ -1581,6 +1582,7 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                 "owner_room_id": owner_id,
                 "owner_zone_id": room_rows.get(_room_identity(owner["name"], owner["level"]), {}).get("room", {}).get("zone_id", "") if owner else "",
                 "gross_area_m2": candidate.get("gross_area_m2"),
+                "glazing_only_host": candidate.get("glazing_only_host") is True,
                 "net_opaque_area_m2": candidate.get("net_opaque_area_m2"),
                 "opening_coverage": candidate.get("opening_coverage", "not_applicable"),
                 "opening_ids": [item.get("candidate_id") for item in effective_proposal.get("openings", []) if isinstance(item, dict) and item.get("host_surface_key") in {candidate.get("surface_key"), candidate.get("candidate_id")}],
@@ -1678,7 +1680,8 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
         if openings:
             net = gross - sum(item["opening_area_m2"] for item in openings)
         net = net if net is not None else gross
-        if net <= 0:
+        glazing_only = candidate.get("glazing_only_host") is True and bool(openings)
+        if net <= 0 and not glazing_only:
             surface_summary["blocked"] += 1
             exclusions.append({"room_id": room["room_id"], "component": "opaque envelope", "candidate_id": candidate["candidate_id"], "reason": "Net opaque area is not positive after opening coverage."})
             continue
@@ -1799,17 +1802,18 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                            "boundary_source": source})
         opaque["area_derivation"] = deepcopy(opaque_by_id.get(candidate["candidate_id"], {}).get("area_derivation", {}))
         opaque["opaque_resolution_fingerprint"] = opaque_by_id.get(candidate["candidate_id"], {}).get("resolution_fingerprint", "")
-        room["cooling_load"]["envelope_not_applicable"] = False
-        room["cooling_load"]["envelope_surfaces"].append(opaque)
-        accepted_surface_ids.add(candidate["candidate_id"])
-        surface_summary["included"] += 1
-        exclusions[:] = [item for item in exclusions if not (item.get("room_id") == room["room_id"] and item.get("component") == "opaque envelope" and "No structurally valid" in item.get("reason", ""))]
-        ledger.append({"room_id": room["room_id"], "field": "envelope_surface", "value": net, "origin": "ai_geometry", "profile_id": profile_id,
-                       "confidence": candidate["confidence"], "confidence_band": candidate["confidence_band"],
-                       "rationale": candidate.get("rationale", "AI preliminary external surface; controlled profile U-value and solar basis."),
-                       "evidence": candidate["evidence"], "surface_id": candidate["candidate_id"],
-                       "reviewer_trace_id": candidate.get("reviewer_trace_id", ""),
-                       "reviewer": candidate.get("reviewer", "")})
+        if not glazing_only:
+            room["cooling_load"]["envelope_not_applicable"] = False
+            room["cooling_load"]["envelope_surfaces"].append(opaque)
+            accepted_surface_ids.add(candidate["candidate_id"])
+            surface_summary["included"] += 1
+            exclusions[:] = [item for item in exclusions if not (item.get("room_id") == room["room_id"] and item.get("component") == "opaque envelope" and "No structurally valid" in item.get("reason", ""))]
+            ledger.append({"room_id": room["room_id"], "field": "envelope_surface", "value": net, "origin": "ai_geometry", "profile_id": profile_id,
+                           "confidence": candidate["confidence"], "confidence_band": candidate["confidence_band"],
+                           "rationale": candidate.get("rationale", "AI preliminary external surface; controlled profile U-value and solar basis."),
+                           "evidence": candidate["evidence"], "surface_id": candidate["candidate_id"],
+                           "reviewer_trace_id": candidate.get("reviewer_trace_id", ""),
+                           "reviewer": candidate.get("reviewer", "")})
         for opening in openings:
             shade = envelope["shading_categories"][opening["shading_category"]]
             opening_orientation = opening.get("orientation") if opening.get("orientation") in CARDINALS else orientation if orientation in CARDINALS else ""

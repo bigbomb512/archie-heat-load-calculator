@@ -1239,10 +1239,16 @@ def _cached_inferred_room_data(root, input_signature):
     from ai import page_inventory
     readings = {int(number): row for number, row in _read(root / "page_inventory.json", {}).get("pages", {}).items()
                 if str(number).isdigit() and isinstance(row, dict)}
-    inferred = room_inference.infer(ai_input, _read(root / "drawing_coverage.json", {}), spatial,
-                                    _read(root / "vector_geometry.json", {}), page_levels=_main_plan_levels(root),
+    arguments = (ai_input, _read(root / "drawing_coverage.json", {}), spatial, _read(root / "vector_geometry.json", {}))
+    inferred = room_inference.infer(*arguments, page_levels=_main_plan_levels(root),
                                     skip_pages=page_inventory.diagram_pages(readings))
-    return [row for row in inferred.get("rooms", []) if row.get("label")]
+    rooms = [row for row in inferred.get("rooms", []) if row.get("label")]
+    if not rooms:
+        # Compliance diagrams (floor-area, open-space) are skipped only while the plans themselves name rooms: on
+        # 2026.08.06's set the main plans' labels aren't readable text, and its diagrams were the only room names.
+        inferred = room_inference.infer(*arguments, page_levels=_main_plan_levels(root))
+        rooms = [row for row in inferred.get("rooms", []) if row.get("label")]
+    return rooms
 
 
 def _p0_followup_packets(root):

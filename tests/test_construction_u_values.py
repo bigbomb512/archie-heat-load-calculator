@@ -46,6 +46,15 @@ TABLE = {"source": "Test table", "constructions": [
 
 
 class ImportTests(unittest.TestCase):
+    def test_plan_wall_legend_is_cited_without_inventing_a_u_value(self):
+        spatial = {"pages": [{"page": 25, "standalone_text_items": [
+            {"text": "Dincel 200"}, {"text": "Brick cavity wall"}, {"text": "Stud wall"}]}]}
+        inventory = {"pages": {"25": {"page_type": "floor_plan", "title": "First Floor Plan"}}}
+        rows = construction_u_values.plan_wall_legend(spatial, inventory)
+        self.assertEqual({row["construction"] for row in rows},
+                         {"Dincel wall", "Brick cavity wall", "Stud wall"})
+        self.assertTrue(all(row["page"] == 25 and "u_value_w_m2k" not in row for row in rows))
+
     def test_the_importer_reads_constructions_variants_and_summer_values_and_skips_notes(self):
         rows = importer.parse(TEXT)
         self.assertEqual([(row["section"], row["name"], row["u_value_w_m2k"]) for row in rows], [

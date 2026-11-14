@@ -177,6 +177,12 @@ def main():
     prelim_room = preliminary_envelope["material"]["hourly_load_model"]["rooms"][0]
     check("proposal external wall and glazing materialize only in the preliminary model", len(prelim_room["cooling_load"]["envelope_surfaces"]) == 1 and len(prelim_room["cooling_load"]["glazing_surfaces"]) == 1)
     check("complete opening coverage subtracts opening area once", prelim_room["cooling_load"]["envelope_surfaces"][0]["area_m2"] == 22)
+    window_only = deepcopy(proposal)
+    window_only["surfaces"][0].update({"gross_area_m2": 8, "glazing_only_host": True, "orientation": ""})
+    window_only["openings"][0].update({"orientation": "", "shading_category": "unshaded"})
+    provisional_window = assemble({"spaces": []}, preliminary_proposal=window_only)["material"]["hourly_load_model"]["rooms"][0]["cooling_load"]
+    check("untraced scheduled window adds glass without inventing opaque wall area",
+          len(provisional_window["glazing_surfaces"]) == 1 and not provisional_window["envelope_surfaces"])
     envelope_report = calculate(preliminary_envelope)
     peak_components = envelope_report["included_scope_peak"]["components"]
     check("preliminary report keeps opaque and glazing solar components separate", "envelope" in peak_components and "glazing_conduction" in peak_components and "glazing_solar" in peak_components)
