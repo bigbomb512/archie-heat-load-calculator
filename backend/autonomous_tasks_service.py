@@ -1220,13 +1220,28 @@ def _inferred_rooms_for_plan(root, page, rooms=None, plans=None):
     return result
 
 
+def _p0_page_room_text(root, page):
+    """Text on the plan itself that can corroborate a newly named room."""
+    from ai import room_inference
+    spatial = next((row for row in _read(root / "spatial_ocr.json", {}).get("pages", [])
+                    if row.get("page") == page), {})
+    items = spatial.get("standalone_text_items") or spatial.get("word_samples") or []
+    in_title = room_inference.title_block_test(spatial, items)
+    lines = room_inference._text_item_lines(items)
+    return [text for text, bbox in lines if not in_title({"bbox": bbox})]
+
+
 @lru_cache(maxsize=8)
 def _cached_inferred_room_data(root, input_signature):
     """Bounded, in-memory cache; the signature identifies the files read below."""
     from ai import room_inference
     ai_input, spatial, _building = _load_inputs(root)
+    from ai import page_inventory
+    readings = {int(number): row for number, row in _read(root / "page_inventory.json", {}).get("pages", {}).items()
+                if str(number).isdigit() and isinstance(row, dict)}
     inferred = room_inference.infer(ai_input, _read(root / "drawing_coverage.json", {}), spatial,
-                                    _read(root / "vector_geometry.json", {}), page_levels=_main_plan_levels(root))
+                                    _read(root / "vector_geometry.json", {}), page_levels=_main_plan_levels(root),
+                                    skip_pages=page_inventory.diagram_pages(readings))
     return [row for row in inferred.get("rooms", []) if row.get("label")]
 
 
@@ -1265,6 +1280,7 @@ def _p0_followup_packets(root):
                 room_names = sorted({*room_names, *read_names})
             notes = _note_only_rooms(root, room_names)
             naming_packet = {"task":"P0_room_names", "page":number, **({"dwelling":True} if dwelling else {}),
+                             "on_page_text": _p0_page_room_text(root, number),
                              **({"read_room_names":read_names} if read_names else {}), "area_count":len(areas), "room_names":room_names,
                              **({"note_only_rooms": notes} if notes else {}),
                              "transform":transform, "calibration":calibration, "areas_px": [list(poly.exterior.coords) for poly in areas],
@@ -1430,6 +1446,7 @@ def _p0_outline_packets(root, requested_rooms=None):
             notes = _note_only_rooms(root, missing)
             prompt = room_outline.outline_prompt(missing, references, notes, dwelling=dwelling)
             packet = {"task":"P0_room_outlines", "page":number, **({"dwelling":True} if dwelling else {}), "room_names":missing, "transform":transform,
+                      "on_page_text": _p0_page_room_text(root, number),
                       "calibration":calibration, "wall_style_ids":wall_style_ids, "raster_mode":raster_mode,
                       "name_sheets":references, **({"note_only_rooms": notes} if notes else {})}
             result.append(("P0_room_outlines", f"page-{number}", packet, prompt,
@@ -1696,7 +1713,8 @@ def _apply_p0_outline_corners(web, project, root, record, validated, *, defer=Fa
     others = [(row["room_label"], Polygon(row["points_image_px"]).buffer(0))
               for row in reviewer_room_geometry_service.current_records(reviewer_room_geometry_service._paths(project))
               if row.get("page") == page and row.get("room_label") != room and len(row.get("points_image_px") or []) >= 4]
-    minimum = room_outline.UNNAMED_SPACE_MIN_M2 if packet.get("source_task") == "P0_unnamed_space" else room_outline.MIN_ROOM_M2
+    minimum = (room_outline.UNNAMED_SPACE_MIN_M2 if packet.get("source_task") == "P0_unnamed_space"
+               else room_outline.minimum_room_area(room))
     polygons, duplicates = [], []
     for piece in clipped:
         if packet.get("source_task") == "P0_unnamed_space":
@@ -1710,7 +1728,12 @@ def _apply_p0_outline_corners(web, project, root, record, validated, *, defer=Fa
                         for shape in getattr(net, "geoms", [net])
                         if shape.geom_type == "Polygon" and not shape.is_empty and room_outline.area_m2(shape, mm_per_px) >= minimum)
     if not polygons and not duplicates:
-        raise ValueError(f"The listed corners leave no floor for {room} inside the tenancy and outside the other rooms.")
+        note = (f"The corner-built area for {room} is below the {minimum:g} m² draft sanity floor or has no "
+                "non-overlapping floor. Try printed dimensions or a scaled estimate next.")
+        record.update({"status": "below_accuracy_bar", "source": "ai_determined",
+                       "applied_value": {"rooms": [], "note": note, "label": record["quality_label"]},
+                       "validation": validated, "block_reason": ""})
+        return record
     if duplicates:
         note += f"; outlines the same space as {', '.join(sorted(set(duplicates)))}, so that floor isn't counted again"
     rows = _p0_trace_rows(root, record, polygons)
@@ -1803,7 +1826,8 @@ def _p0_size_packets(root, requested_rooms=None):
         names = sorted({row["label"] for row in _inferred_rooms_for_plan(root, number, inferred, pages)})
         have = {str(row.get("room_label", "")).casefold() for row in traced
                 if (row.get("page") == number or (len(pages) == 1 and row.get("page") is None))
-                and row.get("area_m2")}
+                and isinstance(row.get("area_m2"), (int, float))
+                and row["area_m2"] >= room_outline.minimum_room_area(row.get("room_label"))}
         missing = ([name for name in requested_rooms if name in names] if requested_rooms else
                    [name for name in names if name.casefold() not in have])
         if not missing:

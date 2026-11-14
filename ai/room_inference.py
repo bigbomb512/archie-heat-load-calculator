@@ -122,9 +122,11 @@ def parse_room_label_item(value):
     area = float(area_match.group(1)) if area_match else None
     text = text[:area_match.start()] if area_match else text
     text = re.sub(r"\s+(?:area)\s*$", "", text, flags=re.I)
-    text = re.sub(r"\s+\d{1,3}(?:\.\d{1,3})?\s*$", "", text)
+    numbered_bedroom = re.fullmatch(r"(?i)(?:bedroom|bed|br)\s*([1-9]\d?)", text.strip())
+    if not numbered_bedroom:
+        text = re.sub(r"\s+\d{1,3}(?:\.\d{1,3})?\s*$", "", text)
     text = re.sub(r"\s+", " ", text).strip(" .,:;-/")
-    if not text or len(text.split()) > 5 or re.search(r"\d", text):
+    if not text or len(text.split()) > 5 or (re.search(r"\d", text) and not numbered_bedroom):
         return None, None, None
     known_terms = (
         "cool room", "coolroom", "freezer", "food preparation", "back of house", "dining area", "dining",
@@ -132,12 +134,17 @@ def parse_room_label_item(value):
         "meeting", "reception", "amenity", "toilet", "bathroom", "corridor", "foyer", "lobby",
         "showroom", "retail", "shop", "bedroom", "living", "lounge", "balcony", "cellar", "service counter", "front of house",
         "counter", "kiosk", "plant room", "staff room", "staff", "storage",
+        "master bedroom", "bed", "br", "ensuite", "ens", "laundry", "wir", "walk in robe",
+        "garage", "family", "entry", "study", "media", "sitting", "scullery", "linen",
+        "hall", "alfresco", "bath", "powder room", "wardrobe",
     )
     matches = [term for term in known_terms if re.search(r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])", text, re.I)]
     matches = [term for term in matches if not any(term != other and term in other for other in matches)]
     # A single OCR item such as "Coolroom Freezer" is two room labels, not
     # evidence that either is a complete standalone label.
-    if len(matches) != 1 or re.sub(r"\s+", " ", text).casefold() != matches[0].casefold():
+    normalized = re.sub(r"\s+", " ", text).casefold()
+    if len(matches) != 1 or (normalized != matches[0].casefold() and not (
+        numbered_bedroom and matches[0].casefold() in {"bedroom", "bed", "br"})):
         return None, None, None
     display = text.title() if text.isupper() else text
     return display, matches[0], area
@@ -349,7 +356,7 @@ def room_label_items(spatial_page):
     return _spatial_label_items(spatial_page)
 
 
-def _geometry_rows(page, page_number):
+def _geometry_rows(page, page_number, dwelling=False):
     """Return structured geometry candidates already attached to a page.
 
     The local interpreter is not allowed to invent a polygon from visual
@@ -387,12 +394,13 @@ def _geometry_rows(page, page_number):
             "source_crop": raw.get("source_crop", ""),
             "independent_witnesses": raw.get("independent_witnesses") or [],
         }
-        # A page's generic `rooms` list may contain a site/lot annotation with
-        # an area. An area is a room value only with room-linked geometry or a
-        # literal room-area notation; never adopt an unrelated printed figure.
-        explicit_area = bool(re.search(r"\b(?:room\s+)?area\s*[:=]?\s*\d", _text(raw.get("area")), re.I))
-        area_supported = bool(points or geometry["wall_ids"] or explicit_area or raw.get("area_basis") == "explicit_room_area")
-        if area_value is not None and area_supported:
+        printed = " ".join(_text(raw.get(key)) for key in ("label", "name", "area", "printed_text", "excerpt"))
+        site_area = bool(re.search(r"\b(?:site|lot|land|driveway|landscape)\s+area\b", printed, re.I))
+        footprint = next((float(page[key]) for key in ("floor_footprint_m2", "floor_area_m2", "level_area_m2")
+                          if isinstance(page.get(key), (int, float)) and 0 < page[key] < 100000), None)
+        maximum = min(footprint, 500 if dwelling else 5000) if footprint else (500 if dwelling else 5000)
+        area_supported = isinstance(area_value, (int, float)) and not isinstance(area_value, bool) and 0.5 <= area_value <= maximum
+        if area_supported and not site_area:
             geometry["area_m2"] = area_value
             geometry["formula"] = raw.get("formula", "explicit_room_area")
             geometry["operands"] = raw.get("operands", {"value_m2": area_value})
@@ -487,15 +495,18 @@ def infer(ai_input, coverage=None, spatial_ocr=None, vector_geometry=None, visio
 
     # Carry geometry candidates from the PDF/vector/vision preprocessing
     # layer into the same normalized room proposal used by the resolver.
+    dwelling = any(re.search(r"\b(?:new\s+)?dwelling\b|\bBASIX\b", " ".join((
+        str(page.get("title") or ""), str((page.get("structured_content") or {}).get("markdown") or ""))), re.I)
+        for page in pages)
     for page in pages:
         if not _room_origin_page(page):
             continue
         number = page.get("page")
         sources = [
-            _geometry_rows(page, number),
-            _geometry_rows(vision_by_page.get(number, {}), number),
-            _geometry_rows(spatial_by_page.get(number, {}), number),
-            _geometry_rows(vector_by_page.get(number, {}), number),
+            _geometry_rows(page, number, dwelling),
+            _geometry_rows(vision_by_page.get(number, {}), number, dwelling),
+            _geometry_rows(spatial_by_page.get(number, {}), number, dwelling),
+            _geometry_rows(vector_by_page.get(number, {}), number, dwelling),
         ]
         for geometry_row in next((rows for rows in sources if rows), []):
             level = page_levels.get(number) or _text(geometry_row.get("level_name")) or _level(page)

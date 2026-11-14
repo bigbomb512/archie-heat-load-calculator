@@ -15,6 +15,7 @@ from pathlib import Path
 from ai import design_weather
 from ai import ai_preliminary
 from ai import reviewer_room_geometry
+from ai import room_outline
 from ai import value_resolution as value_resolver
 from ai import room_use_resolution
 from ai import room_scope_confirmation
@@ -1566,7 +1567,9 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
         room_use_id = str((use or {}).get("room_id") or room_id or
                           room_use_resolution.room_identity(room.get("label", ""), room.get("level_name", "")))
         traced_area = traced_areas.get(room_use_id)
-        if traced_area and not traced_area.get("conflict"):
+        if (traced_area and not traced_area.get("conflict")
+                and isinstance(traced_area.get("area_m2"), (int, float))
+                and traced_area["area_m2"] >= room_outline.minimum_room_area(room.get("label"))):
             room["reviewer_traced_area"] = deepcopy(traced_area)
             existing_area = ai_preliminary._number(room.get("area_m2"))
             existing_origin = str(room.get("area_origin", ""))

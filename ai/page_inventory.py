@@ -143,7 +143,7 @@ def diagram_pages(readings):
     "ELEMENT m" and "Behind Building Line:"). Nothing is excluded when they are all the set has."""
     if not main_plan_pages(readings):
         return set()
-    return {page for page, row in readings.items() if row and row.get("page_type") == "floor_plan" and _diagram_sheet(row)}
+    return {page for page, row in readings.items() if row and _diagram_sheet(row)}
 
 
 def main_plan_pages(readings):

@@ -112,6 +112,10 @@ class RoomSizeStepTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "not a plausible room area"):
             autonomous_tasks.validate_room_size_reply({**self.packet, "dwelling": True}, json.dumps({
                 "rooms": [{"room": "Bar", "basis": "printed_area", "area_m2": 985.8, "evidence": "BAR 985.8m²"}]}))
+        one_room = autonomous_tasks.validate_room_size_reply({"room_names": ["Shop"]}, json.dumps({
+            "rooms": [{"room": "Shop", "basis": "printed_area", "area_m2": 68,
+                       "evidence": "Tenancy area 68m²"}]}))
+        self.assertEqual(one_room["rooms"][0]["area_m2"], 68)
 
     def test_one_room_left_over_takes_the_tenancy_remainder(self):
         record = {"packet": self.packet, "accuracy": {"auto_apply": False}, "quality_label": "AI-determined (below accuracy bar)"}

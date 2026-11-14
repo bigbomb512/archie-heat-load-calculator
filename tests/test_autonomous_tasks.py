@@ -761,9 +761,12 @@ class AutonomousTaskTests(unittest.TestCase):
         _record, saved = self._corner_apply("Awning", [[(300, 0), (700, 0), (700, 400), (300, 400)]], [rumpus])
         self.assertAlmostEqual(saved["rows"][0]["polygon"].area, 300 * 400)
 
-    def test_corners_leaving_no_floor_are_still_refused(self):
-        with self.assertRaisesRegex(ValueError, "leave no floor"):
-            self._corner_apply("Store", [[(0, 0), (5, 0), (5, 5), (0, 5)]], [])
+    def test_corners_leaving_no_floor_fall_through_to_area_estimate(self):
+        record, saved = self._corner_apply("Store", [[(0, 0), (5, 0), (5, 5), (0, 5)]], [])
+        self.assertEqual(record["status"], "below_accuracy_bar")
+        self.assertEqual(record["applied_value"]["rooms"], [])
+        self.assertIn("printed dimensions", record["applied_value"]["note"])
+        self.assertFalse(saved)
 
     def test_tenancy_only_includes_inferred_rooms_from_its_plan_level(self):
         from PIL import Image
@@ -2075,6 +2078,13 @@ class AutonomousTaskTests(unittest.TestCase):
         packet = {"rule_based_top_candidate": {"text": "TENANCY MZ01, M38, MELROSE CENTRAL", "page": 20}}
         reply = {"site": {"text": "tenancy   mz01, m38, melrose central", "page": 1}}
         self.assertEqual(autonomous_tasks.site_cross_check(packet, reply)["status"], "agrees")
+
+    def test_site_cross_check_accepts_truncated_suburb_only_for_same_street(self):
+        ai = {"site": {"text": "139a Burns Road, Turramurra", "page": 8}}
+        packet = {"rule_based_top_candidate": {"text": "139a Burns Road, Turra Lot", "page": 8}}
+        self.assertEqual(autonomous_tasks.site_cross_check(packet, ai)["status"], "agrees")
+        packet["rule_based_top_candidate"]["text"] = "141 Burns Road, Turra Lot"
+        self.assertEqual(autonomous_tasks.site_cross_check(packet, ai)["status"], "disagrees")
 
     def test_site_cross_check_accepts_contained_real_project_excerpt_and_rejects_other_centre(self):
         full_line = "PROJECT NAME: BUTCHER'S BUFFET TENANCY MZ01,M38, MELROSE CENTRAL PROJECT ADDRESS"

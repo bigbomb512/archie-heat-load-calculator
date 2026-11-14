@@ -114,6 +114,15 @@ def wall_style_checks():
 
 def naming_and_split_checks():
     transform = {"offset_px": [0, 0], "factor": 0.5}
+    found, _ = ro.validate_naming_reply({"areas": [{"number": 1, "room": "Ensuite"}]}, 1, [], transform,
+                                        on_page_text=["ENSUITE"], page=9)
+    check("a new room printed on this page is accepted", found == {0: "Ensuite"})
+    expect_error("an off-page room is refused", lambda: ro.validate_naming_reply(
+        {"areas": [{"number": 1, "room": "Ensuite"}]}, 1, [], transform,
+        on_page_text=["KITCHEN"], page=9), "not in the room list")
+    expect_error("a site object is refused even when quoted", lambda: ro.validate_naming_reply(
+        {"areas": [{"number": 1, "room": "Driveway", "source_page": 9,
+                    "evidence_excerpt": "Driveway"}]}, 1, [], transform, page=9), "not in the room list")
     names, splits = ro.validate_naming_reply({"areas": [{"number": 1, "room": "Shop"}, {"number": 2, "room": "not_a_room"}],
                                                "splits": [{"number": 1, "line_px": [[100, 0], [100, 300]],
                                                            "rooms": [{"room": "Shop", "point_px": [50, 100]}, {"room": "Bar", "point_px": [200, 100]}],

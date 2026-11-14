@@ -25,6 +25,7 @@ from collections import Counter, defaultdict
 import hashlib
 import json
 import math
+import re
 
 import numpy
 from shapely.geometry import LineString, Point, Polygon, box
@@ -32,6 +33,16 @@ from shapely.ops import unary_union
 
 
 MIN_ROOM_M2 = 1.0
+
+
+def minimum_room_area(label):
+    """Conservative draft sanity floor; undersized traces need another area basis."""
+    name = str(label or "").casefold()
+    if re.search(r"\b(?:bedroom|bed|br|master bedroom)\b", name):
+        return 6.0
+    if re.search(r"\b(?:bathroom|bath|ensuite|ens|shower|wc)\b", name):
+        return 2.5
+    return MIN_ROOM_M2
 # A room known only from a note or finish legend (no printed label) whose outline stays under this is taken as not on the
 # plan and removed, labelled (user decision 2026-11-02; Happy Cap's copied "DRINK BAR AREA" note gave a 0.58 m² Bar).
 # Rooms with a printed label are never removed for size.
@@ -727,7 +738,25 @@ def _to_page(point, transform):
     return (point[0] / factor + transform["offset_px"][0], point[1] / factor + transform["offset_px"][1])
 
 
-def validate_naming_reply(reply, area_count, room_names, transform, require_all=False, dwelling=False):
+def _allow_page_room(room, row, allowed, on_page_text=(), page=None):
+    row = row or {}
+    if room.casefold() in allowed:
+        return allowed[room.casefold()]
+    from ai.room_inference import plausible_room_label
+    if not plausible_room_label(room) or len(room) > 60:
+        return None
+    printed = any(re.search(r"(?<![\w])" + re.escape(room) + r"(?![\w])", str(text), re.I)
+                  for text in on_page_text)
+    quote = str(row.get("evidence_excerpt") or "").strip()
+    cited = page is not None and row.get("source_page") == page and quote and room.casefold() in quote.casefold()
+    if not printed and not cited:
+        return None
+    allowed[room.casefold()] = room
+    return room
+
+
+def validate_naming_reply(reply, area_count, room_names, transform, require_all=False, dwelling=False,
+                          on_page_text=(), page=None):
     """Check the AI's naming/split reply and convert image points back to page pixels. A room the drawings don't name
     may be named by its use (USE_ROOM_NAMES). With require_all, every numbered area must be answered, so a room-sized
     space can't be left out silently (replies saved before 2026-10-23 didn't have to)."""
@@ -741,7 +770,7 @@ def validate_naming_reply(reply, area_count, room_names, transform, require_all=
         if type(number) is not int or not 1 <= number <= area_count:
             raise ValueError(f"Naming reply refers to an unknown area: {number!r}.")
         room = str(row.get("room", "")).strip()
-        if room != NOT_A_ROOM and room.casefold() not in allowed:
+        if room != NOT_A_ROOM and _allow_page_room(room, row, allowed, on_page_text, page) is None:
             raise ValueError(f"Naming reply uses a room name that is not in the room list: {room!r}.")
         names[number - 1] = NOT_A_ROOM if room == NOT_A_ROOM else allowed[room.casefold()]
         if room != NOT_A_ROOM:
@@ -758,7 +787,7 @@ def validate_naming_reply(reply, area_count, room_names, transform, require_all=
         converted = []
         for item in rooms:
             room = str((item or {}).get("room", "")).strip()
-            if room.casefold() not in allowed:
+            if _allow_page_room(room, item, allowed, on_page_text, page) is None:
                 raise ValueError(f"Split uses a room name that is not in the room list: {room!r}.")
             converted.append({"room": allowed[room.casefold()], "point": _to_page(item["point_px"], transform)})
             used[allowed[room.casefold()]] += 1
@@ -1110,7 +1139,7 @@ def wall_coverage(edge, segments, mm_per_px, max_offset_mm=400, max_angle_deg=8)
 REPEATED_OUTLINE_OVERLAP = 0.5
 
 
-def validate_outline_reply(reply, room_names, transform, dwelling=False):
+def validate_outline_reply(reply, room_names, transform, dwelling=False, on_page_text=(), page=None):
     """The drawn outlines, for the listed rooms and for spaces no listed name covers, named by their use
     (USE_ROOM_NAMES)."""
     if not isinstance(reply, dict) or not isinstance(reply.get("rooms"), list):
@@ -1120,7 +1149,7 @@ def validate_outline_reply(reply, room_names, transform, dwelling=False):
     outlines, drawn = [], {}
     for row in reply["rooms"]:
         room = str((row or {}).get("room", "")).strip()
-        if room.casefold() not in allowed:
+        if _allow_page_room(room, row, allowed, on_page_text, page) is None:
             raise ValueError(f"Outline reply uses a room name that is not in the room list: {room!r}.")
         points = row.get("points_px")
         if not isinstance(points, list) or len(points) < 3:

@@ -214,7 +214,8 @@ def validate_p0_room_names(packet, reply):
     value = parse_json_reply(reply)
     from ai import room_outline as ro
     names, splits = ro.validate_naming_reply(value, packet["area_count"], packet["room_names"], packet["transform"],
-                                             require_all=True, dwelling=packet.get("dwelling") is True)
+                                             require_all=True, dwelling=packet.get("dwelling") is True,
+                                             on_page_text=packet.get("on_page_text", ()), page=packet.get("page"))
     listed = {str(name).casefold() for name in packet["room_names"]}
     used = set(names.values()) | {item["room"] for split in splits for item in split["rooms"]}
     return {"names": names, "splits": splits,
@@ -239,7 +240,8 @@ def validate_p0_unnamed_space(packet, reply):
 
 def validate_p0_outlines(packet, reply):
     value = parse_json_reply(reply)
-    return room_outline.validate_outline_reply(value, packet["room_names"], packet["transform"], dwelling=packet.get("dwelling") is True)
+    return room_outline.validate_outline_reply(value, packet["room_names"], packet["transform"],
+        dwelling=packet.get("dwelling") is True, on_page_text=packet.get("on_page_text", ()), page=packet.get("page"))
 
 
 ROOM_SIZE_BASES = {"printed_area", "printed_dimensions", "estimated"}
@@ -288,8 +290,11 @@ def validate_room_size_reply(packet, reply):
         if basis == "printed_area":
             if not number(area) or not evidence:
                 raise ValueError(f"A printed area for {name} needs the area and the printed text it was read from.")
-            if re.search(r"\b(?:site|lot|land|driveway|tenancy|floor)\s+area\b", evidence, re.I):
+            if re.search(r"\b(?:site|lot|land|driveway|landscape)\s+area\b", evidence, re.I):
                 raise ValueError(f"The printed area for {name} describes a site or whole-floor area, not that room.")
+            whole_floor = re.search(r"\b(?:tenancy|floor)\s+area\b", evidence, re.I)
+            if whole_floor and len(allowed) != 1 and "tenancy" not in name.casefold():
+                raise ValueError(f"The printed area for {name} describes a whole-floor area, not that room.")
             area = float(area)
         else:
             if not (number(length) and number(width)):
@@ -832,6 +837,14 @@ def site_cross_check(packet, validated):
     normalise = lambda value: " ".join(str(value or "").casefold().split())
     ai_text, candidate_text = normalise((site or {}).get("text")), normalise(candidate.get("text"))
     agrees = bool(site and ai_text and candidate_text and (ai_text in candidate_text or candidate_text in ai_text))
+    if not agrees:
+        street = re.compile(r"\b(\d+[a-z]?)\s+([a-z][a-z\s]+?)\s+(road|rd|street|st|avenue|ave|drive|dr|lane|ln)\b", re.I)
+        ai_street, rule_street = street.search(ai_text), street.search(candidate_text)
+        if ai_street and rule_street and ai_street.groups() == rule_street.groups():
+            suburb = lambda text, match: re.split(r"\b(?:lot|dp|plan|nsw|\d{4})\b", text[match.end():].lstrip(" ,"), 1)[0].strip(" ,")
+            ai_suburb, rule_suburb = suburb(ai_text, ai_street), suburb(candidate_text, rule_street)
+            agrees = bool(ai_suburb and rule_suburb and min(len(ai_suburb), len(rule_suburb)) >= 4
+                          and (ai_suburb.startswith(rule_suburb) or rule_suburb.startswith(ai_suburb)))
     return {"status": "agrees" if agrees else "disagrees",
             "rule_based_candidate": {key: candidate.get(key) for key in ("text", "page", "kind", "confidence")},
             "ai_site": deepcopy(site)}
