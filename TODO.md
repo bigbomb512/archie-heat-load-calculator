@@ -150,6 +150,22 @@ carpet, 10% glass, nonsolar; within 2 points per hour). Record in
 - [ ] A hosted server needs Chrome/Chromium (or Playwright) for the laid-out PDF; without one the report falls back to
   the one-page text PDF.
 
+### New training sets: set 17 fixes (2026-11-14, branch set17-continue)
+
+Set 17 (139a Burns Road, a 3-level house) gave 37.5 kW with a driveway and a fence counted as rooms. What was changed
+and checked is in `docs/SET17_FIXES_2026-11-14.md`.
+
+- [ ] Re-run set 17 live on Codex with this branch (fresh room questions use the new room list) and score it; then
+  sets 19 and 20.
+- [ ] Wall legends (Dincel 200, brick cavity, stud on set 17 page 25) are only noted for review; no U-value is set from
+  them and the note isn't shown on any page yet. Decide whether a legend may set the wall U-value (which wall is
+  which type is unknown), and show the note on the What-we-need-to-find page.
+- [ ] Windows assigned to a room by the nearest printed label have no wall or direction (averaged sun, labelled);
+  17 of set 17's 28 windows were still unplaced on the old traces.
+- [ ] Rooms that print the same name more than once on a level (two "Bedroom" labels) are still one room; numbered
+  names are kept apart.
+- [ ] The Quick-fix screen's save flow hasn't been checked in a browser yet (`docs/BROWSER_TEST_LOOP.md`).
+
 ## Deferred — annual and monthly energy analysis
 
 Annual analysis is intentionally deferred until the prerequisite peak-load and
