@@ -3,7 +3,7 @@
 import re
 
 from ai.drawing_coverage import has_current_level_classification, source_fingerprint, timestamp
-from ai.room_inference import parse_room_label_item, room_label_items
+from ai.room_inference import parse_room_label_item, plausible_room_label, room_label_items
 
 
 EQUIPMENT_WORDS = {
@@ -454,7 +454,10 @@ def issue(item_id, question):
 def deduplicate(result):
     # When page classification has no confirmed level, it may emit an
     # Unassigned duplicate of the same room already tied to a named level.
-    spaces = result["spaces"]
+    # Site and landscape labels (Driveway, Site, Timber Fence BDY) are never spaces, whatever page or route found them:
+    # the calculation builds its zones from these spaces directly (set 17 re-run, 2026-11-15: a 1,985.8 m² "Site" and
+    # a 985.8 m² "Driveway" from the site plan's "SITE AREA" text and page reading).
+    spaces = [item for item in result["spaces"] if plausible_room_label(item.get("name"))]
     named = {}
     for item in spaces:
         evidence_pages = tuple(sorted(e.get("page") for e in item.get("evidence", []) if e.get("page") is not None))
