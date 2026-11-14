@@ -164,6 +164,9 @@ def validate_area_reply(reply, tiles, factors=None, outlines=None):
         name = " ".join(str(row.get("name") or "").split())
         if not name:
             raise ValueError("Every room needs its printed name.")
+        from ai.room_inference import plausible_room_label
+        if not plausible_room_label(name):
+            raise ValueError(f"{name}: this is a site or exterior annotation, not a room area.")
         unit = _unit(row.get("unit"))
         if unit is None:
             raise ValueError(f"{name}: unit must be m2 or sf, not {row.get('unit')!r}.")

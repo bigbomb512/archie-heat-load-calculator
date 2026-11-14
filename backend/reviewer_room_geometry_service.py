@@ -580,6 +580,7 @@ def _cached_pdf_sizes(source_pdf, inode, size, mtime_ns, ctime_ns):
 
 
 def _rooms(paths):
+    from ai.room_inference import plausible_room_label
     building = _read(paths["building"], {})
     room_use = _read(paths["room_use"], {})
     run = _read(paths["run"], {})
@@ -592,18 +593,18 @@ def _rooms(paths):
                        and row.get("room_source_id")}
     rows = []
     for row in building.get("spaces", []) if isinstance(building, dict) else []:
-        if isinstance(row, dict) and row.get("id") and row.get("name"):
+        if isinstance(row, dict) and row.get("id") and plausible_room_label(row.get("name")):
             rows.append({"room_id": row["id"], "label": row["name"], "level_name": row.get("level_name", ""),
                          "source_pages": sorted({item.get("page") for item in row.get("evidence", []) if isinstance(item, dict) and isinstance(item.get("page"), int)}),
                          "evidence": deepcopy(row.get("evidence", [])), "source": "building_evidence"})
     for row in room_use.get("records", []) if isinstance(room_use, dict) else []:
-        if isinstance(row, dict) and row.get("room_id") and (row.get("original_label") or row.get("label")):
+        if isinstance(row, dict) and row.get("room_id") and plausible_room_label(row.get("original_label") or row.get("label")):
             rows.append({"room_id": row["room_id"], "label": row.get("original_label") or row.get("label"),
                          "level_name": row.get("level_name", ""),
                          "source_pages": sorted({item.get("page") for item in row.get("evidence", []) if isinstance(item, dict) and isinstance(item.get("page"), int)}),
                          "evidence": deepcopy(row.get("evidence", [])), "source": "room_use_resolution"})
     for row in proposal.get("rooms", []) if isinstance(proposal, dict) else []:
-        if isinstance(row, dict) and row.get("room_id") and row.get("label"):
+        if isinstance(row, dict) and row.get("room_id") and plausible_room_label(row.get("label")):
             rows.append({"room_id": row["room_id"], "label": row["label"], "level_name": row.get("level_name") or row.get("level", ""),
                          "source_pages": row.get("source_pages", []) or ([row["page"]] if isinstance(row.get("page"), int) else []),
                          "evidence": deepcopy(row.get("evidence", [])), "source": "room_inference_proposal"})

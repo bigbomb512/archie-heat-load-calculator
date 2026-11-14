@@ -809,11 +809,29 @@ class AutonomousTaskTests(unittest.TestCase):
                 patch.object(autonomous_tasks_service, "_all_current", return_value=[]), \
                 patch.object(autonomous_tasks_service, "_inferred_room_data", return_value=inferred), \
                 patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "current_records", return_value=[]):
-            self.assertEqual(autonomous_tasks_service._tenancy_rooms_needing_outline(Path("/x"), 1), ["Same level", "Same page"])
+            self.assertEqual(autonomous_tasks_service._tenancy_rooms_needing_outline(Path("/x"), 1), ["Same level"])
             plans[0]["level_name"] = ""
             self.assertEqual(autonomous_tasks_service._tenancy_rooms_needing_outline(Path("/x"), 1), ["Same page", "Unknown"])
             plans.pop()
             self.assertEqual(autonomous_tasks_service._tenancy_rooms_needing_outline(Path("/x"), 1), sorted(row["label"] for row in inferred))
+
+    def test_size_questions_are_scoped_to_their_own_plan(self):
+        from PIL import Image
+        plans = [{"page": 1, "level_name": "Ground"}, {"page": 2, "level_name": "First"}]
+        inferred = [{"label": "Kitchen", "level_name": "Ground", "source_pages": [1]},
+                    {"label": "Bedroom", "level_name": "First", "source_pages": [2]}]
+        context = {"image": Image.new("RGB", (100, 100)), "viewport": (0, 0, 100, 100), "declared_mm_per_px": 10}
+        with patch("backend.ai_provider.get", side_effect=AssertionError("No provider calls")), \
+                patch.object(autonomous_tasks_service, "_p0_main_geometry_pages", return_value=plans), \
+                patch.object(autonomous_tasks_service, "_inferred_room_data", return_value=inferred), \
+                patch.object(autonomous_tasks_service, "_all_current", return_value=[]), \
+                patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "current_traced_areas", return_value={}), \
+                patch.object(autonomous_tasks_service, "_p0_context", return_value=context), \
+                patch.object(autonomous_tasks_service, "_p0_calibration_ready", return_value=({"mm_per_px": 10}, "")), \
+                patch.object(autonomous_tasks_service, "_p0_name_sheets", return_value=([], [])):
+            packets = autonomous_tasks_service._p0_size_packets(Path("/unused"))
+        self.assertEqual([(row[2]["page"], row[2]["room_names"]) for row in packets],
+                         [(1, ["Kitchen"]), (2, ["Bedroom"])])
 
     def test_room_inference_cache_invalidates_each_input_and_protects_cached_rows(self):
         from ai import room_inference

@@ -239,6 +239,7 @@ def _sources(paths):
         "plant_resolution": artifact_fingerprint(paths["plant_resolution"], plant_resolution.empty_plant_resolution()),
         "safety_factor_resolution": artifact_fingerprint(paths["safety_factor_resolution"], safety_factor_resolution.empty_safety_factor_resolution()),
         "preliminary_geometry_resolution": _preliminary_geometry_fingerprint(paths),
+        "house_windows": artifact_fingerprint(paths["root"] / "house_windows.json", {}),
         # Answers from the What-we-need-to-find list that the model reads directly.
         "glazing_answers": _file_fingerprint(paths["root"] / "glazing_answers.json", {}),
         "construction_answers": _file_fingerprint(paths["root"] / "construction_answers.json", {}),
@@ -2195,6 +2196,7 @@ def _workspace_report(report):
                                               if isinstance(item, dict)],
         "confirmed_rooms": [{key: row.get(key) for key in confirmed_fields} for row in confirmed if isinstance(row, dict)],
         "equipment_coverage": report.get("equipment_coverage", {}),
+        "glazing_coverage": report.get("glazing_coverage", {}),
         "phase1_coverage": report.get("phase1_coverage") if isinstance(report.get("phase1_coverage"), dict) else {},
         "supervisor_exceptions": report.get("supervisor_exceptions", []),
         "supervisor_assumptions": report.get("supervisor_assumptions", []),
@@ -2586,6 +2588,26 @@ def _calculate(web, project, scope="full", persist=True):
         return _calculate_load(web, project, scope, persist)
 
 
+def _attach_house_window_coverage(paths, report):
+    """Keep unmatched drawing windows visible in every new house draft report."""
+    room_use = _read(paths["room_use"], {})
+    if (room_use.get("dwelling_context") or {}).get("is_dwelling") is not True:
+        return
+    window_state = _read(paths["root"] / "house_windows.json", {})
+    scheduled = int(window_state.get("windows_in_schedule") or 0)
+    placed = len(window_state.get("placed") or [])
+    unplaced = len(window_state.get("unplaced") or [])
+    status = window_state.get("coverage_status") or "unresolved"
+    report["glazing_coverage"] = {"status": status, "scheduled": scheduled,
+                                  "placed": placed, "unplaced": unplaced}
+    if status != "placed":
+        message = (f"Glazing coverage is incomplete: {scheduled} scheduled windows, {placed} placed, "
+                   f"{unplaced} placement issues. The reported load is an included-scope subtotal.")
+        report.setdefault("warnings", []).append(message)
+        report.setdefault("known_exclusions", []).append({"component_type": "glazing and solar",
+            "component": "unmatched scheduled windows", "reason": message})
+
+
 def _calculate_load(web, project, scope, persist):
     paths = _paths(project)
     input_set = _read(paths["current_set"], {})
@@ -2644,6 +2666,7 @@ def _calculate_load(web, project, scope, persist):
     policy_artifact = _read(paths["safety_factor_resolution"], safety_factor_resolution.empty_safety_factor_resolution())
     policy = safety_factor_resolution.policy_for(policy_artifact, "cooling", preliminary=True)
     report = ai_preliminary.calculate(confirmed_set, safety_factor_policy=policy, scope=scope)
+    _attach_house_window_coverage(paths, report)
     if scope != "phase1_base_room":
         report["equipment_source_hash"] = coverage["source_hash"]
         report["equipment_catalogue_hash"] = coverage["catalogue_hash"]

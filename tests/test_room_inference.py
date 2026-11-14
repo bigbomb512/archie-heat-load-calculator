@@ -16,6 +16,13 @@ def check(name, value):
 
 
 def main():
+    site_plan = {"drawing_set": {"pages": [{"page": 19, "detected_type": "floor_plan", "plan_role": "main_floor_plan",
+        "rooms": [{"name": "Driveway", "area": "985.8m²"}, {"name": "Timber Fence BDY m", "area": "290.72 m²"},
+                  {"name": "Balcony", "area": "12 m²"}]}]}}
+    site_result = room_inference.infer(site_plan)
+    check("site objects cannot enter room or area proposals",
+          [(row["label"], row.get("area_m2")) for row in site_result["rooms"]] == [("Balcony", None)])
+    check("balcony is a valid plan label", room_inference.parse_room_label_item("Balcony")[0] == "Balcony")
     pages = [
         {"page": 2, "title": "Floor plan", "detected_type": "floor_plan", "plan_role": "main_floor_plan",
          "level_name": "Ground", "scale": "1:100", "structured_content": {"markdown": "KITCHEN DINING BAR COOL ROOM"}},

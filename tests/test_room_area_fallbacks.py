@@ -104,10 +104,14 @@ class RoomSizeStepTests(unittest.TestCase):
         self.assertEqual([(row["room"], row["area_m2"]) for row in checked["rooms"]], [("Bar", 32.6), ("Office", 9.0), ("Store", 5.0)])
         self.assertEqual(checked["tenancy_area_m2"], 300)
         for bad, message in (({"room": "Bar", "basis": "printed_area", "area_m2": 32.6, "evidence": ""}, "printed text"),
+                             ({"room": "Bar", "basis": "printed_area", "area_m2": 985.8, "evidence": "SITE AREA 985.8m²"}, "site or whole-floor"),
                              ({"room": "Bar", "basis": "estimated", "length_mm": 200000, "width_mm": 200000}, "not a plausible"),
                              ({"room": "Bar", "basis": "guess", "area_m2": 3}, "basis")):
             with self.assertRaisesRegex(ValueError, message):
                 autonomous_tasks.validate_room_size_reply(self.packet, json.dumps({"rooms": [bad]}))
+        with self.assertRaisesRegex(ValueError, "not a plausible room area"):
+            autonomous_tasks.validate_room_size_reply({**self.packet, "dwelling": True}, json.dumps({
+                "rooms": [{"room": "Bar", "basis": "printed_area", "area_m2": 985.8, "evidence": "BAR 985.8m²"}]}))
 
     def test_one_room_left_over_takes_the_tenancy_remainder(self):
         record = {"packet": self.packet, "accuracy": {"auto_apply": False}, "quality_label": "AI-determined (below accuracy bar)"}

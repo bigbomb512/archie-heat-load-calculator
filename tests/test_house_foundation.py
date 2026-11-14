@@ -32,6 +32,9 @@ class HouseFoundationTests(unittest.TestCase):
         # actual named house function in the requested taxonomy must resolve deterministically.
         for label in labels:
             old_use = next((case.get("room_use", {}).get(label) for case in data.values() if label in case.get("rooms", {})), "")
+            if not room_use_resolution._room_rows({"spaces": [{"name": label}]}, {}, {}):
+                self.assertTrue(re.search(r"fence|boundary|bdy", label, re.I), label)
+                continue
             row = room_use_resolution.resolve({"spaces": [{"name": label}]}, dwelling_context={"is_dwelling": True, "evidence": [{"page": 1, "excerpt": "BASIX"}]})["records"][0]
             if any(word in label.casefold() for word in ("bed", "br ", "mbr", "ens", "bath", "wc", "powder", "laundry", "dry", "wir", "robe", "linen", "garage", "carport", "balcony", "alfresco", "deck", "terrace", "patio", "pool", "lift", "living", "lounge", "family", "rumpus", "media", "cinema", "theatre", "games", "study", "gym", "kitchen", "dining", "meals", "pantry", "scullery", "entry", "hall", "stair", "lobby")):
                 self.assertEqual(len(room_use_resolution._house_label_matches(label)), 1, label)

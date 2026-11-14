@@ -108,12 +108,13 @@ def _evidence(row):
 
 
 def _room_rows(building, vision, proposal):
+    from ai.room_inference import plausible_room_label
     vision_entities = (((vision or {}).get("result", {}) or {}).get("auto_extraction", {}) or {}).get("entities", []) if isinstance(vision, dict) else []
     ai_rooms = [row for row in list(vision_entities) + list((proposal or {}).get("rooms", []))
-                if isinstance(row, dict) and row.get("kind") == "room"]
+                if isinstance(row, dict) and row.get("kind") == "room" and plausible_room_label(row.get("label"))]
     grouped = {}
     for row in (building or {}).get("spaces", []) if isinstance(building, dict) else []:
-        if not isinstance(row, dict) or not _text(row.get("name")):
+        if not isinstance(row, dict) or not plausible_room_label(row.get("name")):
             continue
         label, level = _text(row.get("name")), _text(row.get("level_name")) or "Unassigned level"
         grouped.setdefault(room_identity(label, level), {"label": label, "level_name": level, "building": row, "ai": []})["ai"].extend(

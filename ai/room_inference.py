@@ -16,7 +16,18 @@ from ai.room_use_resolution import room_identity
 from ai.drawing_coverage import has_current_level_classification
 
 
-VERSION = "local-room-inference-v7"
+VERSION = "local-room-inference-v8"
+NON_ROOM_LABEL = re.compile(
+    r"^(?:site(?:\s+(?:area|plan))?|lot(?:\s+area)?)$"
+    r"|^(?:driveway|landscape|setback|footpath|road|street|paving)\b"
+    r"|\b(?:fence|boundary|bdy)\b", re.I)
+
+
+def plausible_room_label(label):
+    """Reject site objects before they enter the room and area registries."""
+    return bool(_text(label)) and not NON_ROOM_LABEL.search(_text(label))
+
+
 PLAN_ROLES = {
     "main_floor_plan", "primary_geometry_plan", "supporting_geometry_plan",
     "uncertain_top_down_context", "reflected_ceiling_plan", "reflected_ceiling",
@@ -119,7 +130,7 @@ def parse_room_label_item(value):
         "cool room", "coolroom", "freezer", "food preparation", "back of house", "dining area", "dining",
         "restaurant", "kitchen", "bar", "store room", "store", "stockroom", "office",
         "meeting", "reception", "amenity", "toilet", "bathroom", "corridor", "foyer", "lobby",
-        "showroom", "retail", "shop", "bedroom", "living", "lounge", "service counter", "front of house",
+        "showroom", "retail", "shop", "bedroom", "living", "lounge", "balcony", "cellar", "service counter", "front of house",
         "counter", "kiosk", "plant room", "staff room", "staff", "storage",
     )
     matches = [term for term in known_terms if re.search(r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])", text, re.I)]
@@ -356,7 +367,7 @@ def _geometry_rows(page, page_number):
     output = []
     for raw in rows:
         label = _text(raw.get("label") or raw.get("room_label") or raw.get("name"))
-        if not label:
+        if not plausible_room_label(label):
             continue
         area_value = raw.get("area_m2")
         if area_value is None:
@@ -376,10 +387,17 @@ def _geometry_rows(page, page_number):
             "source_crop": raw.get("source_crop", ""),
             "independent_witnesses": raw.get("independent_witnesses") or [],
         }
-        if area_value is not None:
+        # A page's generic `rooms` list may contain a site/lot annotation with
+        # an area. An area is a room value only with room-linked geometry or a
+        # literal room-area notation; never adopt an unrelated printed figure.
+        explicit_area = bool(re.search(r"\b(?:room\s+)?area\s*[:=]?\s*\d", _text(raw.get("area")), re.I))
+        area_supported = bool(points or geometry["wall_ids"] or explicit_area or raw.get("area_basis") == "explicit_room_area")
+        if area_value is not None and area_supported:
             geometry["area_m2"] = area_value
             geometry["formula"] = raw.get("formula", "explicit_room_area")
             geometry["operands"] = raw.get("operands", {"value_m2": area_value})
+        else:
+            area_value = None
         if raw.get("test_fixture_only"):
             geometry["test_fixture_only"] = True
             geometry["fixture_id"] = raw.get("fixture_id", "")
@@ -433,6 +451,8 @@ def infer(ai_input, coverage=None, spatial_ocr=None, vector_geometry=None, visio
     vision_by_page = _vision_geometry_pages(vision_response)
 
     def add_candidate(label, level, number, evidence, confidence=0.68, geometry=None, metadata=None):
+        if not plausible_room_label(label):
+            return None
         key = room_identity(label, level)
         row = candidates.setdefault(key, {
             "kind": "room", "room_id": key, "label": label, "level_name": level,

@@ -1197,6 +1197,29 @@ def _inferred_room_data(root):
     return deepcopy(_cached_inferred_room_data(root, tuple(signature)))
 
 
+def _inferred_rooms_for_plan(root, page, rooms=None, plans=None):
+    """Only rooms evidenced on this plan or its explicitly identified level."""
+    rooms = _inferred_room_data(root) if rooms is None else rooms
+    plans = _p0_main_geometry_pages(root) if plans is None else plans
+    if len(plans) <= 1:
+        return rooms
+    plan = next((row for row in plans if row.get("page") == page), {})
+
+    def level_name(row):
+        value = " ".join(str(row.get("level_name") or row.get("floor_label") or "").casefold().split())
+        return "" if value in {"unknown", "unknown level", "unassigned", "unassigned level"} else value
+
+    level = level_name(plan)
+    result = []
+    for row in rooms:
+        room_level = level_name(row)
+        if level and room_level and room_level != level:
+            continue
+        if page in (row.get("source_pages") or []) or room_level == level:
+            result.append(row)
+    return result
+
+
 @lru_cache(maxsize=8)
 def _cached_inferred_room_data(root, input_signature):
     """Bounded, in-memory cache; the signature identifies the files read below."""
@@ -1229,12 +1252,12 @@ def _p0_followup_packets(root):
                     result.append(("P0_room_names", f"page-{number}", {"task":"P0_room_names", "page":number}, "", [],
                                    "No wall styles were identified across the complete legend; enclosed-room naming is unavailable."))
                     continue
-                wall_style_ids, added_styles = _completed_wall_styles(root, context, calibration, wall_style_ids)
+                wall_style_ids, added_styles = _completed_wall_styles(root, number, context, calibration, wall_style_ids)
             _walls, areas, segments = _p0_walls_areas(root, number, context, calibration, wall_style_ids, raster_mode)
             if not areas:
                 continue
             image, transform = room_outline.render_candidate_areas(context["image"], areas, context["viewport"])
-            room_names = sorted({row["label"] for row in _inferred_room_data(root)})
+            room_names = sorted({row["label"] for row in _inferred_rooms_for_plan(root, number)})
             from backend import house_windows_service
             dwelling = house_windows_service.is_dwelling(root)
             read_names = _reading_room_names(root, number) if dwelling else []
@@ -1260,14 +1283,14 @@ def _p0_followup_packets(root):
 WALL_STYLE_COMPLETION_FILE = "wall_style_completion.json"
 
 
-def _completed_wall_styles(root, context, calibration, wall_style_ids):
+def _completed_wall_styles(root, page, context, calibration, wall_style_ids):
     """The wall styles the vision task chose, completed when they enclose fewer rooms than the plan has names
     (room_outline.complete_wall_styles). Every place that turns wall styles into enclosed areas uses this, so the
     numbered areas in the naming question are the areas its answer is applied to.
 
     Worked out once per page and set of inputs and saved in the job: on a detailed plan one enclosed-area pass takes
     about 12 s (Global Exchange), and the drawing tasks rebuild their questions every round."""
-    expected = len({row["label"] for row in _inferred_room_data(root)})
+    expected = len({row["label"] for row in _inferred_rooms_for_plan(root, page)})
     mm_per_px = context.get("declared_mm_per_px") or calibration["mm_per_px"]
     key = autonomous_tasks.fingerprint({"summary": context.get("summary"), "viewport": list(context["viewport"]),
                                         "chosen": sorted(wall_style_ids), "expected": expected,
@@ -1332,18 +1355,7 @@ def _p0_outline_room_names(root, names_record, area_count, requested_rooms=None,
 
 def _tenancy_rooms_needing_outline(root, page):
     """Rooms that still use, or would need, the AI outline/corner route. None means unknown coverage."""
-    inferred_rooms = _inferred_room_data(root)
-    plans = _p0_main_geometry_pages(root)
-    if len(plans) > 1:
-        plan = next((row for row in plans if row["page"] == page), {})
-
-        def level_name(row):
-            value = " ".join(str(row.get("level_name") or row.get("floor_label") or "").casefold().split())
-            return "" if value in {"unknown", "unknown level", "unassigned", "unassigned level"} else value
-
-        level = level_name(plan)
-        inferred_rooms = [row for row in inferred_rooms if page in (row.get("source_pages") or [])
-                          or level_name(row) == level]
+    inferred_rooms = _inferred_rooms_for_plan(root, page)
     names = _current_task(root, "P0_room_names", f"page-{page}")
     traces = [row for row in reviewer_room_geometry_service.current_records(
         reviewer_room_geometry_service._paths({"review_dir": str(root)})) if row.get("page") == page]
@@ -1406,10 +1418,11 @@ def _p0_outline_packets(root, requested_rooms=None):
                                          for style_id in row.get("applied_value", {}).get("wall_style_ids", [])})
                 if not wall_style_ids:
                     continue
-                wall_style_ids, _added = _completed_wall_styles(root, context, calibration, wall_style_ids)
+                wall_style_ids, _added = _completed_wall_styles(root, number, context, calibration, wall_style_ids)
             _walls, areas, _segments = _p0_walls_areas(root, number, context, calibration,
                                                         wall_style_ids, raster_mode)
-            _room_names, missing = _p0_outline_room_names(root, names_record, len(areas), requested_rooms, dwelling=dwelling)
+            _room_names, missing = _p0_outline_room_names(root, names_record, len(areas), requested_rooms,
+                inferred_rooms=_inferred_rooms_for_plan(root, number), dwelling=dwelling)
             if not missing:
                 continue
             image, transform = room_outline.render_candidate_areas(context["image"], [], context["viewport"])
@@ -1554,7 +1567,7 @@ def _p0_corner_packets(root, force=False):
             wall_style_ids = sorted({style_id for row in _p0_wall_style_records(root, number)
                                      for style_id in row.get("applied_value", {}).get("wall_style_ids", [])})
             if wall_style_ids:
-                wall_style_ids, _added = _completed_wall_styles(root, context, calibration, wall_style_ids)
+                wall_style_ids, _added = _completed_wall_styles(root, number, context, calibration, wall_style_ids)
         except (OSError, ValueError, IndexError, KeyError, TypeError) as error:
             result.append(("P0_outline_corners", f"tenancy-page-{number}", {"task": "P0_outline_corners", "page": number},
                            "", [], f"The corner question is blocked: {error}"))
@@ -1782,28 +1795,38 @@ def _p0_size_packets(root, requested_rooms=None):
     if not requested_rooms and any(record.get("task") in OUTLINE_STEPS and record.get("status") == "waiting_for_reply"
            and len(record.get("reply_attempts") or []) < 2 for record in _all_current(root)):
         return []
-    names = sorted({row["label"] for row in _inferred_room_data(root)})
-    have = {str(row.get("room_label", "")).casefold()
-            for row in reviewer_room_geometry_service.current_traced_areas(root).values() if row.get("area_m2")}
-    missing = list(requested_rooms) if requested_rooms else [name for name in names if name.casefold() not in have]
-    if not missing:
-        return []
-    number = pages[0]["page"]
-    try:
-        context = _p0_context(root, number)
-        image, transform = room_outline.render_candidate_areas(context["image"], [], context["viewport"])
-        calibration, _reason = _p0_calibration_ready(root, number, context)
-        scale = (calibration or {}).get("mm_per_px") or context.get("declared_mm_per_px")
-        scale_label = ((calibration or {}).get("label") or ("printed dimensions" if calibration else "the sheet's printed scale"))
-        references, reference_images = _p0_name_sheets(root, number, missing)
-    except (OSError, ValueError, KeyError, TypeError, IndexError) as error:
-        return [("P0_room_sizes", f"page-{number}", {"task": "P0_room_sizes", "page": number}, "", [],
-                 f"The plan page could not be prepared for the room sizes: {error}")]
-    mm_per_image_px = round(scale / transform["factor"], 3) if scale else None
-    packet = {"task": "P0_room_sizes", "page": number, "room_names": missing, "name_sheets": references,
-              "mm_per_image_px": mm_per_image_px, "level_name": str(pages[0].get("level_name") or "Unassigned level")}
-    prompt = autonomous_tasks.room_size_prompt(missing, references, mm_per_image_px, scale_label)
-    return [("P0_room_sizes", f"page-{number}", packet, prompt, [_png_bytes(image), *reference_images], "")]
+    inferred = _inferred_room_data(root)
+    traced = reviewer_room_geometry_service.current_traced_areas(root).values()
+    result = []
+    for plan in pages:
+        number = plan["page"]
+        names = sorted({row["label"] for row in _inferred_rooms_for_plan(root, number, inferred, pages)})
+        have = {str(row.get("room_label", "")).casefold() for row in traced
+                if (row.get("page") == number or (len(pages) == 1 and row.get("page") is None))
+                and row.get("area_m2")}
+        missing = ([name for name in requested_rooms if name in names] if requested_rooms else
+                   [name for name in names if name.casefold() not in have])
+        if not missing:
+            continue
+        try:
+            context = _p0_context(root, number)
+            image, transform = room_outline.render_candidate_areas(context["image"], [], context["viewport"])
+            calibration, _reason = _p0_calibration_ready(root, number, context)
+            scale = (calibration or {}).get("mm_per_px") or context.get("declared_mm_per_px")
+            scale_label = ((calibration or {}).get("label") or ("printed dimensions" if calibration else "the sheet's printed scale"))
+            references, reference_images = _p0_name_sheets(root, number, missing)
+        except (OSError, ValueError, KeyError, TypeError, IndexError) as error:
+            result.append(("P0_room_sizes", f"page-{number}", {"task": "P0_room_sizes", "page": number}, "", [],
+                           f"The plan page could not be prepared for the room sizes: {error}"))
+            continue
+        mm_per_image_px = round(scale / transform["factor"], 3) if scale else None
+        from backend import house_windows_service
+        packet = {"task": "P0_room_sizes", "page": number, "room_names": missing, "name_sheets": references,
+                  "dwelling": house_windows_service.is_dwelling(root),
+                  "mm_per_image_px": mm_per_image_px, "level_name": str(plan.get("level_name") or "Unassigned level")}
+        prompt = autonomous_tasks.room_size_prompt(missing, references, mm_per_image_px, scale_label)
+        result.append(("P0_room_sizes", f"page-{number}", packet, prompt, [_png_bytes(image), *reference_images], ""))
+    return result
 
 
 def _apply_p0_sizes(web, project, root, record, validated):
@@ -3176,7 +3199,7 @@ def _apply_p0_unnamed_space(web, project, root, record, validated, *, defer=Fals
         wall_style_ids = [] if raster_mode else sorted({style_id for row in _p0_wall_style_records(root, page)
                                                         for style_id in row.get("applied_value", {}).get("wall_style_ids", [])})
         if wall_style_ids:
-            wall_style_ids, _added = _completed_wall_styles(root, context, calibration, wall_style_ids)
+            wall_style_ids, _added = _completed_wall_styles(root, page, context, calibration, wall_style_ids)
         _walls, _areas, segments = _p0_walls_areas(root, page, context, calibration, wall_style_ids, raster_mode)
     except (OSError, ValueError, KeyError, TypeError):
         segments = []

@@ -10,6 +10,7 @@ left for a later (AI) step.
 import hashlib
 import json
 import math
+import re
 from pathlib import Path
 
 from ai import house_windows
@@ -17,11 +18,19 @@ from backend import reviewer_room_geometry_service
 from backend.job_runner import read_json
 
 RESULT_FILE = "house_windows.json"
-VERSION = "house-windows-text-v1"
+VERSION = "house-windows-text-v4"
 REVIEWER = "Archie drawing text (windows)"
 GLAZING_CHOICE = "residential"      # preliminary pack glazing (U 5.8, SHGC 0.45) until certificates are read (W7)
 SHADING = "unshaded"
 COOLED = {"comfort_hvac", "comfort_hvac_with_process_exception"}
+
+
+def _same_plan_level(trace, plan_levels):
+    """A saved trace on a different floor cannot host a plan window."""
+    normalize = lambda value: re.sub(r"\s+floor$", "", " ".join(str(value or "").casefold().split()))
+    expected = normalize(plan_levels.get(trace.get("page")))
+    actual = normalize(trace.get("level_name"))
+    return not expected or not actual or expected == actual
 
 
 def _fingerprint(value):
@@ -78,7 +87,7 @@ def apply(web, project, root, read_page=None):
     root = Path(root)
     if not is_dwelling(root):
         return None
-    from backend.autonomous_tasks_service import room_ceiling_height
+    from backend.autonomous_tasks_service import room_ceiling_height, _p0_main_geometry_pages
     paths = reviewer_room_geometry_service._paths({"review_dir": str(root)})
     from ai.autonomous_tasks import usable_calibration
     records = [row for row in reviewer_room_geometry_service.current_records(paths)
@@ -86,12 +95,16 @@ def apply(web, project, root, read_page=None):
                and float(row.get("calibration", {}).get("mm_per_px") or 0) > 0]
     scopes = {row.get("room_id"): row.get("space_scope") for row in read_json(root / "room_use_resolution.json").get("records", [])
               if isinstance(row, dict)}
-    cooled = [row for row in records if scopes.get(row.get("room_id")) in COOLED]
+    plan_levels = {row["page"]: row.get("level_name") for row in _p0_main_geometry_pages(root)}
+    invalid_traces = [row for row in records if not _same_plan_level(row, plan_levels)]
+    cooled = [row for row in records if scopes.get(row.get("room_id")) in COOLED
+              and _same_plan_level(row, plan_levels)]
     systems = {page.get("page"): page.get("coordinate_systems", {}).get("image_px", {})
                for page in read_json(root / "vector_geometry.json").get("geometry_key_points", {}).get("pages", [])}
     source = read_json(root / "ai_input.json").get("source_pdf")
     schedule_pages = _schedule_pages(root)
     inputs = {"version": VERSION, "pdf": str(source), "schedule_pages": schedule_pages,
+              "plan_levels": plan_levels,
               "traces": [{key: row.get(key) for key in ("trace_id", "room_id", "page", "points_image_px", "calibration")}
                          for row in cooled],
               "scopes": scopes}
@@ -104,12 +117,17 @@ def apply(web, project, root, read_page=None):
         return saved
     result = {"schema_version": 1, "version": VERSION, "fingerprint": fingerprint, "schedule_pages": schedule_pages,
               "windows_in_schedule": 0, "skylights": [], "doors_not_counted": [], "unread_schedule_rows": [],
-              "placed": [], "unplaced": [], "walls_taken_as_outside": []}
+              "placed": [], "unplaced": [], "walls_taken_as_outside": [],
+              "invalid_traces": [{"room": row.get("room_label"), "page": row.get("page"),
+                                  "level_name": row.get("level_name"), "plan_level": plan_levels.get(row.get("page")),
+                                  "reason": "Room trace is assigned to a different level than its plan page."}
+                                 for row in invalid_traces]}
     close = None
     any_saved = False
     if read_page is None:
         if not source or not Path(source).exists():
             result["blocked"] = "The source PDF isn't available; windows weren't read."
+            result["coverage_status"] = "unresolved"
             reviewer_room_geometry_service._atomic_json(root / RESULT_FILE, result)
             return result
         close, read_page = _pdf_pages(source)
@@ -124,7 +142,8 @@ def apply(web, project, root, read_page=None):
             result["unread_schedule_rows"] += [{key: row.get(key) for key in ("mark", "page", "reason")} for row in schedules["unread"]]
         result["windows_in_schedule"] = len(windows)
         if not windows:
-            result["unplaced"].append({"reason": "No window schedule could be read as text; windows need the drawing step."})
+            result["blocked"] = "No window schedule could be read. Glazing coverage is unresolved; inspect the window schedule or elevations."
+            result["unplaced"].append({"reason": result["blocked"]})
         by_page = {}
         for trace in cooled:
             by_page.setdefault(trace.get("page"), []).append(trace)
@@ -198,8 +217,18 @@ def apply(web, project, root, read_page=None):
     finally:
         if close:
             close()
+    placed_marks = {str(row.get("mark", "")).upper() for row in result["placed"]}
+    unplaced_marks = {str(row.get("mark", "")).upper() for row in result["unplaced"]}
+    for window in windows:
+        mark = str(window.get("mark", "")).upper()
+        if mark and mark not in placed_marks and mark not in unplaced_marks:
+            result["unplaced"].append({"mark": window["mark"], "page": window["page"],
+                "reason": "Window is listed in the schedule but is not matched to a traced room wall."})
+            unplaced_marks.add(mark)
     if any_saved and web is not None:   # once, after every room's windows (a house has many rooms; each took a rebuild)
         from backend.phase1_supervisor_service import _build_calculation_evidence
         _build_calculation_evidence(web, project)
+    result["coverage_status"] = ("unresolved" if not result["windows_in_schedule"] else
+                                 "needs_review" if result["unplaced"] or result["invalid_traces"] or not result["placed"] else "placed")
     reviewer_room_geometry_service._atomic_json(root / RESULT_FILE, result)
     return result

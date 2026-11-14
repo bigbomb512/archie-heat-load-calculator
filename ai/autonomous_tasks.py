@@ -288,6 +288,8 @@ def validate_room_size_reply(packet, reply):
         if basis == "printed_area":
             if not number(area) or not evidence:
                 raise ValueError(f"A printed area for {name} needs the area and the printed text it was read from.")
+            if re.search(r"\b(?:site|lot|land|driveway|tenancy|floor)\s+area\b", evidence, re.I):
+                raise ValueError(f"The printed area for {name} describes a site or whole-floor area, not that room.")
             area = float(area)
         else:
             if not (number(length) and number(width)):
@@ -299,7 +301,8 @@ def validate_room_size_reply(packet, reply):
                 area = float(length) * float(width) / 1e6
             if basis == "printed_dimensions" and not evidence:
                 raise ValueError(f"Quote the printed dimensions used for {name}.")
-        if not 0.5 <= area <= 5000:
+        maximum = 500 if packet.get("dwelling") else 5000
+        if not 0.5 <= area <= maximum:
             raise ValueError(f"{name} would be {area:.1f} m², which is not a plausible room area.")
         seen.add(name.casefold())
         rooms.append({"room": name, "basis": basis, "area_m2": round(area, 2), "evidence": evidence})

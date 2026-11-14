@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from backend import autonomous_tasks_service, house_windows_service, reviewer_room_geometry_service
+from backend import ai_preliminary_service, autonomous_tasks_service, house_windows_service, reviewer_room_geometry_service
 
 
 def word(text, x, y):
@@ -47,6 +47,29 @@ def read_page(number):
 
 
 class HouseWindowsServiceTests(unittest.TestCase):
+    def test_trace_must_belong_to_its_plan_level(self):
+        levels = {8: "Ground Floor", 9: "First Floor"}
+        self.assertFalse(house_windows_service._same_plan_level(
+            {"page": 8, "level_name": "Basement"}, levels))
+        self.assertTrue(house_windows_service._same_plan_level(
+            {"page": 9, "level_name": "First Floor"}, levels))
+        self.assertTrue(house_windows_service._same_plan_level(
+            {"page": 10, "level_name": "Basement"}, levels))
+
+    def test_unmatched_windows_are_visible_in_new_draft_reports(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "room_use_resolution.json").write_text(json.dumps({"dwelling_context": {"is_dwelling": True}}))
+            (root / "house_windows.json").write_text(json.dumps({"coverage_status": "needs_review",
+                "windows_in_schedule": 28, "placed": [{"mark": "W01"}], "unplaced": [{"mark": "W02"}]}))
+            report = {"warnings": [], "known_exclusions": []}
+            ai_preliminary_service._attach_house_window_coverage(
+                {"root": root, "room_use": root / "room_use_resolution.json"}, report)
+            self.assertEqual(report["glazing_coverage"], {"status": "needs_review", "scheduled": 28,
+                                                          "placed": 1, "unplaced": 1})
+            self.assertIn("included-scope subtotal", report["warnings"][0])
+            self.assertEqual(report["known_exclusions"][0]["component_type"], "glazing and solar")
+
     def run_apply(self, root, ceiling=2700):
         writes = []
         with patch.object(reviewer_room_geometry_service, "current_records", return_value=[TRACE]), \

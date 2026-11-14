@@ -59,6 +59,21 @@ def column_table():
 
 
 class ScheduleTests(unittest.TestCase):
+    def test_window_list_id_and_w_by_h_columns(self):
+        # Set 17 prints two horizontal WINDOW LIST blocks, not WINDOW NUMBER.
+        words = line(10, ("WINDOW", 20), ("LIST", 55))
+        words += line(20, ("ID", 20), ("W01", 100), ("W02", 200))
+        words += line(30, ("W", 20), ("x", 28), ("H", 36), ("3,250×2,200", 100), ("1,090×2,200", 200))
+        words += line(40, ("Head", 20), ("Height", 40), ("2,400", 100), ("2,400", 200))
+        words += line(90, ("WINDOW", 20), ("LIST", 55))
+        words += line(100, ("ID", 20), ("W03", 100))
+        words += line(110, ("W", 20), ("x", 28), ("H", 36), ("610×945", 100))
+        words += line(120, ("Head", 20), ("Height", 40), ("2,200", 100))
+        result = hw.read_schedules(words, 17)
+        self.assertEqual([(row["mark"], row["width_mm"], row["height_mm"], row["head_mm"])
+                          for row in result["windows"]],
+                         [("W01", 3250, 2200, 2400), ("W02", 1090, 2200, 2400), ("W03", 610, 945, 2200)])
+
     def test_row_table_reads_columns_by_their_headers_and_keeps_tables_apart(self):
         result = hw.read_schedules(row_table(), 20)
         windows = {row["mark"]: row for row in result["windows"]}

@@ -11,7 +11,7 @@ from copy import deepcopy
 import json
 from pathlib import Path
 
-from ai import reviewer_room_geometry
+from ai import reviewer_room_geometry, room_inference
 from ai.room_use_resolution import room_identity
 
 
@@ -25,6 +25,8 @@ def base_proposal(run):
     proposal = deepcopy(proposal) if isinstance(proposal, dict) else {}
     if not isinstance(proposal.get("rooms"), list):
         proposal["rooms"] = []
+    proposal["rooms"] = [row for row in proposal["rooms"] if isinstance(row, dict)
+                         and room_inference.plausible_room_label(row.get("label") or row.get("name"))]
     return proposal
 
 
@@ -85,10 +87,14 @@ def room_proposal(run, root):
     existing = {room_identity(row.get("label", ""), row.get("level_name") or "Unassigned level")
                 for row in proposal["rooms"] if isinstance(row, dict)}
     for row in reviewer_rooms(root):
+        if not room_inference.plausible_room_label(row.get("label")):
+            continue
         if row["room_id"] not in existing:
             proposal["rooms"].append(proposal_room(row))
             existing.add(row["room_id"])
     for row in use_named_rooms(root):
+        if not room_inference.plausible_room_label(row.get("label")):
+            continue
         identity = room_identity(row["label"], row["level_name"])
         if identity in existing:
             continue
@@ -111,7 +117,7 @@ def room_proposal(run, root):
             continue
         page = record.get("packet", {}).get("page")
         for area in record.get("applied_value", {}).get("rooms", []):
-            if not isinstance(area, dict) or not area.get("label"):
+            if not isinstance(area, dict) or not room_inference.plausible_room_label(area.get("label")):
                 continue
             label = str(area["label"]).strip()
             level = str(area.get("level_name") or "Unassigned level").strip()

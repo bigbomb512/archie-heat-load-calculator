@@ -342,7 +342,7 @@ NOT_A_ROOM = "not_a_room"
 # became a room). Each maps onto a room-use category (config/au_room_use_taxonomy_v1.json) by its alias.
 USE_ROOM_NAMES = ("Dining", "Shop", "Kitchen", "Bar", "Office", "Store", "Toilet", "Corridor")
 # A house's rooms besides those (offered only when the drawings show a dwelling; 2026-10-30).
-HOUSE_ROOM_NAMES = ("Bedroom", "Living", "Family", "Bathroom", "Ensuite", "Laundry", "Garage", "Study", "Entry")
+HOUSE_ROOM_NAMES = ("Bedroom", "Living", "Family", "Bathroom", "Ensuite", "Laundry", "Garage", "Study", "Entry", "Balcony", "Cellar")
 
 
 # Shop-only names a house never has (house set 18, 2026-11-01: a whole lower-ground floor was named "Shop").

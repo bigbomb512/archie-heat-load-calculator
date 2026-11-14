@@ -161,10 +161,12 @@ def _column_table(rows, start, page):
     fields = {index: {} for index in range(len(marks))}
     label_rows = {}
     for number, row in enumerate(rows[start + 1:start + 12], start + 1):
-        label = " ".join(_text(word) for word in row if float(word["x0"]) < centres[0] - spacing * 0.6).upper()
-        if re.search(r"\b(WINDOW|DOOR|SKYLIGHT)\s+NUMBER\b", " ".join(_text(w) for w in row).upper()):
+        label = " ".join(_text(word) for word in row if float(word["x0"]) < centres[0] - 25).upper()
+        if (re.search(r"\b(WINDOW|DOOR|SKYLIGHT)\s+NUMBER\b", " ".join(_text(w) for w in row).upper())
+                or any(_text(w).upper() == "ID" for w in row)
+                and any(MARK.fullmatch(_text(w)) or DOOR_MARK.fullmatch(_text(w)) for w in row)):
             break                                       # the next table on the sheet
-        if "UNIT DIMENSIONS" in label:
+        if "UNIT DIMENSIONS" in label or re.search(r"\bW\s*[X×]\s*H\b", label):
             label_rows["size"] = number
         elif "SILL" in label:
             label_rows["sill"] = number
@@ -223,6 +225,12 @@ def read_schedules(words, page):
     for index, row in enumerate(rows):
         joined = " ".join(_text(word) for word in row).upper()
         if re.search(r"\b(WINDOW|DOOR|SKYLIGHT)\s+NUMBER\b", joined):
+            records.extend(_column_table(rows, index, page))
+            continue
+        if (any(_text(word).upper() == "ID" for word in row)
+                and any(MARK.fullmatch(_text(word)) for word in row)
+                and any("WINDOW" in " ".join(_text(word) for word in previous).upper()
+                        for previous in rows[max(0, index - 2):index])):
             records.extend(_column_table(rows, index, page))
             continue
         tables = _row_header(row)
