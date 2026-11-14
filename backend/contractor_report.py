@@ -18,7 +18,7 @@ SIZES_PATH = ROOT / "config" / "unit_sizes.json"
 PACK_PATH = ROOT / "config" / "ai_preliminary_assumption_pack.json"
 HOUSE_PATH = ROOT / "config" / "house_profiles.json"
 STORED_HEAT_PATH = ROOT / "config" / "stored_heat.json"
-TEMPLATE_VERSION = "job-report-v3"
+TEMPLATE_VERSION = "job-report-v4"   # v4: design conditions under the total (2026-11-15)
 LABEL = "Preliminary estimate from the drawings — not an engineer's design"
 
 # Load groups in the fixed categorical order of the reference palette (dataviz skill, light mode), stacked in that order.
@@ -141,6 +141,75 @@ def design_day(report):
         hours.append({key: round(max(value, 0.0), 3) for key, value in groups.items()})
     return {"month": month, "hours": hours, "totals": [round(sum(hour.values()), 2) for hour in hours],
             "peak_hour": peak.get("display_hour", peak.get("hour"))}
+
+
+def _value(row):
+    return _number(row.get("value")) if isinstance(row, dict) else _number(row)
+
+
+def design_conditions(report, input_set):
+    """The temperatures the load was calculated at, for the top of the report (a contractor checks these first):
+    the summer design point and where it comes from, the outdoor air at the sizing hour, indoor, and the difference."""
+    from collections import Counter
+    from ai import heat_loads
+    basis = (report.get("design_conditions_basis") or {}).get("design_day") or {}
+    days = {row.get("day"): row.get("design_point") or {} for row in basis.get("days") or [] if isinstance(row, dict)}
+    hot, humid = days.get("hot") or {}, days.get("humid") or {}
+    peak = report.get("included_scope_peak") or {}
+    material = (input_set or {}).get("material") or {}
+    scenarios = (material.get("design_day_scenarios") or {}).get("scenarios") or []
+    scenario = next((row for row in scenarios if row.get("scenario_id") == peak.get("scenario_id")), None) \
+        or next((row for row in scenarios if row.get("representative_month") == peak.get("month")), None) or {}
+    hours = scenario.get("hours") or []
+    hour = peak.get("display_hour", peak.get("hour"))
+    at_peak = next((row for row in hours if row.get("hour") == hour), {}) if isinstance(hour, int) else {}
+    day_max = max((_value(row.get("outdoor_dry_bulb_c")) for row in hours if _value(row.get("outdoor_dry_bulb_c")) is not None), default=None)
+    rooms = (material.get("hourly_load_model") or {}).get("rooms") or []
+    indoor_db = Counter(_number(row.get("indoor_cooling_setpoint_c")) for row in rooms if _number(row.get("indoor_cooling_setpoint_c")) is not None)
+    indoor_wb = Counter(_number((row.get("cooling_load_conditions") or {}).get("indoor_cooling_wet_bulb_c")) for row in rooms
+                        if _number((row.get("cooling_load_conditions") or {}).get("indoor_cooling_wet_bulb_c")) is not None)
+    pack = (_json(PACK_PATH).get("scenario") or {})
+    indoor = {"db": indoor_db.most_common(1)[0][0] if indoor_db else _number(pack.get("indoor_dry_bulb_c")),
+              "wb": indoor_wb.most_common(1)[0][0] if indoor_wb else _number(pack.get("indoor_wet_bulb_c"))}
+    pressure = _value(scenario.get("atmospheric_pressure_kpa")) or 101.325
+    if indoor["db"] is not None and indoor["wb"] is not None and indoor["wb"] <= indoor["db"]:
+        ratio = heat_loads.humidity_ratio_from_db_wb(indoor["db"], indoor["wb"], pressure, "thermodynamic")
+        vapour = pressure * ratio / (0.621945 + ratio)
+        indoor["rh_percent"] = round(100 * vapour / heat_loads.ashrae_saturation_pressure_kpa(indoor["db"]))
+    sizing = {"month": scenario.get("representative_month") or peak.get("month", ""), "hour": hour,
+              "db": _value(at_peak.get("outdoor_dry_bulb_c")), "wb": _value(at_peak.get("outdoor_wet_bulb_c")), "day_max_db": day_max}
+    design_db = _number(hot.get("db"))
+    return {"location": ", ".join(str(part) for part in (basis.get("location"), basis.get("state")) if part),
+            "source": basis.get("source", ""), "far_from_site": bool(basis.get("far_from_site")),
+            "distance_km": basis.get("distance_km"),
+            "summer": {"db": design_db, "wb": _number(hot.get("wb"))},
+            "humid": {"db": _number(humid.get("db")), "wb": _number(humid.get("wb"))},
+            "sizing": sizing, "indoor": indoor,
+            "difference_k": round(design_db - indoor["db"], 1) if design_db is not None and indoor["db"] is not None else None,
+            "sizing_difference_k": round(sizing["db"] - indoor["db"], 1) if sizing["db"] is not None and indoor["db"] is not None else None}
+
+
+def _temps(db, wb):
+    if db is None:
+        return "not recorded"
+    return f"{db:.1f} °C DB" + (f" / {wb:.1f} °C WB" if wb is not None else "")
+
+
+def design_conditions_text(c):
+    """One line with the numbers, for places that show the basis as text."""
+    if not c or (c.get("summer") or {}).get("db") is None:
+        return ""
+    sizing, indoor = c["sizing"], c["indoor"]
+    parts = [f"Outdoor summer design {_temps(c['summer']['db'], c['summer']['wb'])}"
+             f"{' for ' + c['location'] if c.get('location') else ''}{' (' + c['source'] + ')' if c.get('source') else ''}"]
+    if sizing.get("db") is not None:
+        parts.append(f"at the sizing hour ({sizing['month']} {sizing['hour']}:00) {_temps(sizing['db'], sizing['wb'])}")
+    if indoor.get("db") is not None:
+        parts.append(f"indoor {_temps(indoor['db'], indoor.get('wb'))}"
+                     + (f" (about {indoor['rh_percent']}% RH)" if indoor.get("rh_percent") is not None else ""))
+    if c.get("difference_k") is not None:
+        parts.append(f"design temperature difference {c['difference_k']:.1f} K")
+    return "; ".join(parts) + "."
 
 
 def breakdown(peak):
@@ -430,6 +499,41 @@ def legend():
 
 # ----- the page ------------------------------------------------------------------------------------------------------
 
+def design_conditions_html(c):
+    """The design temperatures as cards under the total; a plain warning when they weren't recorded."""
+    e = _e
+    summer = c.get("summer") or {}
+    if summer.get("db") is None:
+        return ("<h2>Design conditions</h2><p class=warn>The design temperatures weren't recorded with this result; "
+                "update the load before using this report.</p>")
+    sizing, indoor, humid = c.get("sizing") or {}, c.get("indoor") or {}, c.get("humid") or {}
+    where = e(c.get("location") or "the site")
+    far = (f"<p class=warn>The nearest listed design location is {e(c['distance_km'])} km from the site; check it suits the site.</p>"
+           if c.get("far_from_site") else "")
+    lowered = (f"{summer['db'] - sizing['day_max_db']:.1f} K below the summer design day"
+               if sizing.get("day_max_db") is not None and summer["db"] - sizing["day_max_db"] >= 0.05 else "the summer design day")
+    def deg(value):
+        return "not recorded" if value is None else f"{value:.1f} °C"
+
+    def wet(value):
+        return "" if value is None else f"{value:.1f} °C wet bulb"
+    cards = [
+        ("Outdoor design (summer)", deg(summer["db"]), wet(summer.get("wb")), f"{where} · {c.get('source') or 'source not recorded'}"),
+        ("Outdoor at the sizing hour", deg(sizing.get("db")), wet(sizing.get("wb")),
+         f"{sizing.get('month', '')} design day, {sizing.get('hour', '')}:00 · {lowered}"),
+        ("Indoor design", deg(indoor.get("db")), wet(indoor.get("wb")),
+         f"about {indoor['rh_percent']}% relative humidity" if indoor.get("rh_percent") is not None else ""),
+        ("Design temperature difference", f"{c['difference_k']:.1f} K" if c.get("difference_k") is not None else "not recorded", "",
+         "outdoor summer design dry bulb less indoor"),
+    ]
+    body = "".join(f"<div class=card>{e(title)}<b>{e(value)}</b>{f'<span>{e(second)}</span><br>' if second else ''}"
+                   f"<span class=muted>{e(note)}</span></div>" for title, value, second, note in cards)
+    check = (f" Dehumidification check day: {e(_temps(humid['db'], humid.get('wb')))}." if humid.get("db") is not None else "")
+    return (f"<h2>Design conditions</h2>{far}<div class=cards>{body}</div>"
+            f"<p class=muted>Each month's design day runs hour by hour from these temperatures.{check} "
+            "This report is for cooling only: no winter (heating) design temperature or heating load is calculated.</p>")
+
+
 def _kw(value, digits=1):
     value = _number(value)
     return "" if value is None else f"{value:.{digits}f}"
@@ -475,6 +579,7 @@ def render_html(d):
     source_rows = "".join(f"<li><b>{e(row['topic'])}:</b> {e(row['text'])}</li>" for row in d.get("sources", []))
     not_cooled = ", ".join(e(name) for name in d["not_cooled"]) or "None"
     day = d.get("design_day") or {}
+    conditions = design_conditions_html(d.get("design_conditions") or {})
     return f"""<!doctype html><html lang="en" data-theme="light"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>Cooling load: {e(d['name'])}</title>
 <style>
@@ -507,6 +612,7 @@ svg,tr,.card{{break-inside:avoid}}
 <div class=card>Latent<b>{_kw(d['latent_kw'])} kW</b><span class=muted>moisture from people and outside air</span></div>
 <div class=card>Sensible heat ratio<b>{'' if shr is None else f'{shr:.2f}'}</b><span class=muted>check the unit's sensible capacity</span></div>
 </div>
+{conditions}
 
 <h2>Units to consider</h2>
 <h3>One ducted system for the whole building</h3>
@@ -550,7 +656,7 @@ Stored heat is included: sun, lights and people warm the floor and walls and rea
 for the kind of item only, and the weakest. A manufacturer's data sheet for the installed model replaces either.</p>
 <h3>Walls, roof and glass to outside</h3>
 <table><tr><th>What</th><th>Value</th><th class=n>Surfaces</th><th>Source</th></tr>{envelope or '<tr><td colspan=4>None.</td></tr>'}</table>
-<p class=muted>Design conditions: {e(d['design_basis'])}</p>
+<p class=muted>Design conditions: {e(d['design_basis'])} See Design conditions at the top.</p>
 
 <h2>Still to confirm</h2><ul>{to_confirm or '<li>None reported.</li>'}</ul>
 <h2>Assumed for this job</h2><ul>{assumed_rows or '<li>None reported.</li>'}</ul>

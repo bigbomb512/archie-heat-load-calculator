@@ -1224,6 +1224,11 @@ def _job_report_details(project, stale_reasons):
     items = result_status_service.gather(web, project).get("items", [])
     counts = Counter(item.get("text", "") for item in items if item.get("text"))
     household = peak.get("household_counted_once") or {}
+    from backend import contractor_report
+    contractor = _contractor_details(project, plan, peak)
+    design_basis = (f"Summer design days for {basis.get('location', 'the site')}"
+                    f"{', ' + basis['state'] if basis.get('state') else ''}, from {basis.get('source', 'the listed design data')}; "
+                    "the 21st of each month calculated hour by hour with the site's sun.")
     return {
         "name": setup.get("name") or str(project.get("name") or project["id"]).removesuffix(".pdf"),
         "address": setup.get("address") or plan.get("status", {}).get("found_site") or "",
@@ -1233,9 +1238,6 @@ def _job_report_details(project, stale_reasons):
         "peak_month": peak.get("month", ""), "peak_hour": peak.get("hour", ""), "rooms_counted": len(rooms),
         "household_note": (f"The household of {household.get('people_counted')} people is counted once for the whole house."
                            if household.get("people_counted") else ""),
-        "design_basis": (f"Summer design days for {basis.get('location', 'the site')}"
-                         f"{', ' + basis['state'] if basis.get('state') else ''}, from {basis.get('source', 'the listed design data')}; "
-                         "the 21st of each month calculated hour by hour with the site's sun."),
         "components": sorted(((key, round(value.get("total_kw") or 0.0, 2)) for key, value in (peak.get("components") or {}).items()
                               if isinstance(value, dict)), key=lambda row: -row[1]),
         "rooms": rooms, "not_cooled": not_cooled, "months": months,
@@ -1243,7 +1245,10 @@ def _job_report_details(project, stale_reasons):
         "exclusions": list(dict.fromkeys(f"{row.get('component')}: {row.get('reason')}"
                                          for row in report.get("known_exclusions") or [] if isinstance(row, dict))),
         "stale_reasons": stale_reasons,
-        **_contractor_details(project, plan, peak),
+        **contractor,
+        # The temperatures first: a contractor checks the design conditions before anything else (2026-11-15).
+        "design_basis": " ".join(part for part in (contractor_report.design_conditions_text(contractor.get("design_conditions")),
+                                                   design_basis) if part),
     }
 
 
@@ -1267,6 +1272,7 @@ def _contractor_details(project, plan, peak):
         "envelope": contractor_report.envelope_values(input_set),
         "assumed": contractor_report.assumed(input_set),
         "sources": contractor_report.sources(full, dwelling),
+        "design_conditions": contractor_report.design_conditions(full, input_set),
     }
 
 

@@ -138,6 +138,58 @@ class ValuesAndAssumptionsTests(unittest.TestCase):
         self.assertIn("Daikin", texts)
 
 
+def _scenario(scenario_id, month, top):
+    return {"scenario_id": scenario_id, "representative_month": month, "atmospheric_pressure_kpa": {"value": 101.325},
+            "hours": [{"hour": h, "outdoor_dry_bulb_c": {"value": top - abs(h - 15) * 0.5}, "outdoor_wet_bulb_c": {"value": 19.0}}
+                      for h in range(24)]}
+
+
+CONDITIONS_REPORT = {
+    "included_scope_peak": {"scenario_id": "feb", "month": "February", "hour": 16, "display_hour": 16},
+    "design_conditions_basis": {"design_day": {
+        "location": "Sydney", "state": "NSW", "source": "AIRAH Technical Handbook, 4th edition (2007), p. 37",
+        "far_from_site": False, "days": [{"day": "hot", "design_point": {"db": 31.1, "wb": 19.8}},
+                                         {"day": "humid", "design_point": {"db": 29.5, "wb": 22.7}}]}}}
+CONDITIONS_INPUT = {"material": {
+    "design_day_scenarios": {"scenarios": [_scenario("jan", "January", 31.1), _scenario("feb", "February", 30.57)]},
+    "hourly_load_model": {"rooms": [{"indoor_cooling_setpoint_c": 24.0, "cooling_load_conditions": {"indoor_cooling_wet_bulb_c": 18.0}},
+                                    {"indoor_cooling_setpoint_c": 24.0, "cooling_load_conditions": {"indoor_cooling_wet_bulb_c": 18.0}}]}}}
+
+
+class DesignConditionsTests(unittest.TestCase):
+    """A contractor checks the design temperatures first (a mechanical contractor's review, 2026-11-15)."""
+
+    def test_the_summer_point_the_sizing_hour_indoor_and_the_difference(self):
+        c = cr.design_conditions(CONDITIONS_REPORT, CONDITIONS_INPUT)
+        self.assertEqual((c["summer"]["db"], c["summer"]["wb"]), (31.1, 19.8))
+        self.assertEqual(c["location"], "Sydney, NSW")
+        self.assertEqual((c["sizing"]["month"], c["sizing"]["hour"]), ("February", 16))
+        self.assertAlmostEqual(c["sizing"]["db"], 30.07)                 # the February day's 16:00, not January's
+        self.assertAlmostEqual(c["sizing"]["day_max_db"], 30.57)
+        self.assertEqual((c["indoor"]["db"], c["indoor"]["wb"]), (24.0, 18.0))
+        self.assertTrue(54 <= c["indoor"]["rh_percent"] <= 58)           # 24 °C DB / 18 °C WB at sea level is about 56 %
+        self.assertEqual(c["difference_k"], 7.1)
+        text = cr.design_conditions_text(c)
+        for part in ("31.1 °C DB / 19.8 °C WB", "Sydney, NSW", "February 16:00", "24.0 °C DB / 18.0 °C WB", "7.1 K"):
+            self.assertIn(part, text)
+
+    def test_the_page_shows_them_under_the_total(self):
+        details = PageTests().details()
+        details["design_conditions"] = cr.design_conditions(CONDITIONS_REPORT, CONDITIONS_INPUT)
+        page = cr.render_html(details)
+        self.assertLess(page.index("Design conditions"), page.index("Units to consider"))
+        for text in ("31.1 °C", "19.8 °C wet bulb", "Outdoor at the sizing hour", "30.1 °C", "19.0 °C wet bulb", "0.5 K below the summer design day",
+                     "relative humidity", "7.1 K", "29.5 °C DB / 22.7 °C WB", "cooling only"):
+            self.assertIn(text, page)
+
+    def test_missing_conditions_are_said_plainly_not_left_blank(self):
+        self.assertIn("weren't recorded", cr.design_conditions_html({}))
+        self.assertEqual(cr.design_conditions_text({}), "")
+        far = cr.design_conditions({**CONDITIONS_REPORT, "design_conditions_basis": {"design_day": {
+            **CONDITIONS_REPORT["design_conditions_basis"]["design_day"], "far_from_site": True, "distance_km": 140}}}, CONDITIONS_INPUT)
+        self.assertIn("140 km from the site", cr.design_conditions_html(far))
+
+
 class PageTests(unittest.TestCase):
     def details(self):
         return {"name": "Test job", "address": "1 Street", "status": "draft", "generated_at": "now", "total_kw": 9.0,
