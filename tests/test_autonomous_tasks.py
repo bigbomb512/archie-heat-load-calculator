@@ -859,6 +859,19 @@ class AutonomousTaskTests(unittest.TestCase):
             autonomous_tasks_service._inferred_room_data(root)
             self.assertEqual(infer.call_count, 7)
 
+    def test_a_plan_whose_geometry_fails_is_blocked_not_the_whole_round(self):
+        from shapely.errors import GEOSException
+        plans = [{"page": 7, "level_name": "Basement"}, {"page": 8, "level_name": "Ground"}]
+        styles = [{"status": "applied", "applied_value": {"wall_style_ids": ["style-a"]}}]
+        with patch("backend.ai_provider.get", side_effect=AssertionError("No provider calls")), \
+                patch.object(autonomous_tasks_service, "_p0_main_geometry_pages", return_value=plans), \
+                patch.object(autonomous_tasks_service, "_p0_wall_style_records", return_value=styles), \
+                patch.object(autonomous_tasks_service, "_p0_context",
+                             side_effect=GEOSException("TopologyException: side location conflict")):
+            packets = autonomous_tasks_service._p0_followup_packets(Path("/unused"))
+        self.assertEqual([(row[0], row[1]) for row in packets], [("P0_room_names", "page-7"), ("P0_room_names", "page-8")])
+        self.assertTrue(all("side location conflict" in row[5] for row in packets))
+
     def test_diagram_pages_are_read_for_rooms_only_when_the_plans_name_none(self):
         from ai import page_inventory, room_inference
 

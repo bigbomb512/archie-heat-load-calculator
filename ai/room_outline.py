@@ -28,8 +28,10 @@ import math
 import re
 
 import numpy
+from shapely.errors import GEOSException
 from shapely.geometry import LineString, Point, Polygon, box
 from shapely.ops import unary_union
+from shapely.validation import make_valid
 
 
 MIN_ROOM_M2 = 1.0
@@ -271,7 +273,14 @@ def enclosed_rooms(walls, viewport, mm_per_px, door_gap_mm=DEFAULT_DOOR_GAP_MM, 
     closed = walls.buffer(radius, join_style=2).buffer(-radius, join_style=2)
     plan = box(*viewport)
     edge = plan.exterior.buffer(2.0)
-    free = plan.difference(closed)
+    # Closing the door gaps can leave a self-touching wall shape that GEOS can't subtract ("side location conflict":
+    # set 17's ground floor with an added line style, 2026-11-15); the wall shape is repaired first.
+    if not closed.is_valid:
+        closed = make_valid(closed).buffer(0)
+    try:
+        free = plan.difference(closed)
+    except GEOSException:
+        free = plan.difference(make_valid(closed).buffer(0))
     rooms = []
     for part in getattr(free, "geoms", [free]):
         if part.is_empty or part.intersects(edge):

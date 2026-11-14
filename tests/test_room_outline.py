@@ -75,6 +75,25 @@ def enclosed_room_checks():
     check("room areas are measured to the inside face of the walls (within 2%)",
           abs(areas[0] - 4.55 * 5.70) / (4.55 * 5.70) < 0.02 and abs(areas[1] - 5.00 * 5.70) / (5.00 * 5.70) < 0.02)
     check("furniture inside a room is part of its floor, not a hole", all(len(room.interiors) == 0 for room in rooms))
+    # Set 17 (2026-11-15): GEOS refused to subtract a self-touching wall shape ("side location conflict"); the wall shape
+    # is repaired and the same rooms come out instead of the whole round stopping.
+    from unittest.mock import patch
+    from shapely.errors import GEOSException
+    real_difference = Polygon.difference
+    calls = []
+
+    def refuse_first(self, other, *args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise GEOSException("TopologyException: side location conflict")
+        return real_difference(self, other, *args, **kwargs)
+    with patch.object(Polygon, "difference", refuse_first):
+        repaired = ro.enclosed_rooms(walls, VIEWPORT, MM_PER_PX, door_gap_mm=1000)
+    check("a wall shape GEOS can't subtract is repaired and gives the same rooms",
+          sorted(round(ro.area_m2(room, MM_PER_PX), 2) for room in repaired) == areas and len(calls) == 2)
+    bowtie = Polygon([(200, 200), (400, 400), (400, 200), (200, 400)])     # self-crossing, invalid
+    check("an invalid wall shape doesn't stop the enclosed-room pass",
+          isinstance(ro.enclosed_rooms(bowtie, VIEWPORT, MM_PER_PX, door_gap_mm=0), list))
     merged = ro.enclosed_rooms(walls, VIEWPORT, MM_PER_PX, door_gap_mm=600)
     check("a door wider than the closing gap leaves the two rooms joined", len(merged) == 1)
     with_furniture_as_wall = ro.enclosed_rooms(ro.wall_geometry(objects, [ro.style_id(WALL), ro.style_id(FURNITURE)], VIEWPORT),

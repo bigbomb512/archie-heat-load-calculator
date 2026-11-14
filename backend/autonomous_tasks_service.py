@@ -872,7 +872,7 @@ def _s1_packets(root):
                       "working_scale_denominator": 100}
             result.append(("S1_printed_areas", f"page-{number}", packet,
                            scan_reading.area_prompt(len(tiles)), images, ""))
-        except (OSError, ValueError, IndexError, KeyError, TypeError) as error:
+        except PACKET_ERRORS as error:
             result.append(("S1_printed_areas", f"page-{number}", {"task": "S1_printed_areas", "page": number},
                            "", [], f"Scanned-area packet could not be built: {error}"))
     return result
@@ -1032,7 +1032,7 @@ def _p0_initial_packets(root):
                           "declared_mm_per_px": context["declared_mm_per_px"]}
                 result.append(("P0_wall_styles", target, packet,
                                room_outline.wall_style_prompt(numbered), [_png_bytes(style_image)], ""))
-        except (OSError, ValueError, IndexError, KeyError, TypeError) as error:
+        except PACKET_ERRORS as error:
             result.append(("P0_dimensions", f"page-{number}-dimension-1", {"task":"P0_dimensions", "page":number}, "", [],
                            f"P0 page packet could not be built: {error}"))
     return result
@@ -1155,6 +1155,11 @@ def _dimension_lines_to_ask(root, page, context):
 
 
 _INFERRED_ROOM_INPUTS = ("ai_input.json", "drawing_coverage.json", "spatial_ocr.json", "vector_geometry.json", "page_inventory.json")
+
+# What a page's question builder turns into a blocked question for that page, instead of stopping every drawing task.
+# Shapely's GEOS errors are included: on set 17 (2026-11-15) one plan's wall geometry stopped the whole round.
+from shapely.errors import GEOSException
+PACKET_ERRORS = (OSError, ValueError, IndexError, KeyError, TypeError, GEOSException)
 
 
 # "Basement floor plan includes Garage, Lift, Bar and Bath." or "Ground floor rooms: Alfresco, Dining, Bed 2": some
@@ -1294,7 +1299,7 @@ def _p0_followup_packets(root):
                              **({"wall_styles_added": added_styles} if not raster_mode and added_styles else {})}
             result.append(("P0_room_names", f"page-{number}", naming_packet,
                            room_outline.room_naming_prompt(room_names, len(areas), notes, dwelling=dwelling), [_png_bytes(image)], ""))
-        except (OSError, ValueError, IndexError, KeyError, TypeError) as error:
+        except PACKET_ERRORS as error:
             result.append(("P0_room_names", f"page-{number}", {"task":"P0_room_names", "page":number}, "", [],
                            f"P0 enclosed-area packet is blocked: {error}"))
     # Open-plan outline packets are built after the naming replies identify
@@ -1457,7 +1462,7 @@ def _p0_outline_packets(root, requested_rooms=None):
                       "name_sheets":references, **({"note_only_rooms": notes} if notes else {})}
             result.append(("P0_room_outlines", f"page-{number}", packet, prompt,
                            [_png_bytes(image), *reference_images], ""))
-        except (OSError, ValueError, IndexError, KeyError, TypeError) as error:
+        except PACKET_ERRORS as error:
             result.append(("P0_room_outlines", f"page-{number}", {"task":"P0_room_outlines", "page":number}, "", [],
                            f"Open-plan outline packet is blocked: {error}"))
     return result
@@ -1591,7 +1596,7 @@ def _p0_corner_packets(root, force=False):
                                      for style_id in row.get("applied_value", {}).get("wall_style_ids", [])})
             if wall_style_ids:
                 wall_style_ids, _added = _completed_wall_styles(root, number, context, calibration, wall_style_ids)
-        except (OSError, ValueError, IndexError, KeyError, TypeError) as error:
+        except PACKET_ERRORS as error:
             result.append(("P0_outline_corners", f"tenancy-page-{number}", {"task": "P0_outline_corners", "page": number},
                            "", [], f"The corner question is blocked: {error}"))
             continue
@@ -1663,7 +1668,7 @@ def _p0_tenancy_packets(root, force=False):
             packet = {"task": "P0_tenancy_outline", "page": number, "transform": transform, "calibration": calibration}
             result.append(("P0_tenancy_outline", f"page-{number}", packet, room_outline.tenancy_outline_prompt(dwelling=dwelling),
                            [_png_bytes(image)], ""))
-        except (OSError, ValueError, IndexError, KeyError, TypeError) as error:
+        except PACKET_ERRORS as error:
             result.append(("P0_tenancy_outline", f"page-{number}", {"task": "P0_tenancy_outline", "page": number}, "", [],
                            f"The tenancy outline is blocked: {error}"))
     return result
@@ -1809,7 +1814,7 @@ def _p0_unnamed_space_packets(root, force=False):
                       "calibration": calibration}
             result.append(("P0_unnamed_space", f"page-{number}", packet, room_outline.unnamed_space_prompt(names, dwelling=dwelling),
                            [_png_bytes(image)], ""))
-        except (OSError, ValueError, IndexError, KeyError, TypeError) as error:
+        except PACKET_ERRORS as error:
             result.append(("P0_unnamed_space", f"page-{number}", {"task": "P0_unnamed_space", "page": number}, "", [],
                            f"The floor-with-no-room check is blocked: {error}"))
     return result
