@@ -268,10 +268,19 @@ def sill_and_head(record):
 
 # --- Tags on plans ---------------------------------------------------------------------------------------------------
 
-def find_window_tags(words, page, level=None):
-    """Window marks printed on one floor-plan page: [{"mark", "x", "y", "page", "level"}] in PDF points."""
-    return [{"mark": _text(word), "x": _x(word), "y": _y(word), "page": page, "level": level}
-            for word in words if MARK.fullmatch(_text(word).strip(".,:;()[]"))]
+def find_window_tags(words, page, level=None, same_within=3.0):
+    """Window marks printed on one floor-plan page: [{"mark", "x", "y", "page", "level"}] in PDF points. The words may
+    come from two readings of the page (position order and text order); a mark read twice at one spot is one tag."""
+    tags = []
+    for word in words:
+        text = _text(word).strip(".,:;()[]")
+        if not MARK.fullmatch(text):
+            continue
+        x, y = _x(word), _y(word)
+        if any(tag["mark"].upper() == text.upper() and math.dist((tag["x"], tag["y"]), (x, y)) <= same_within for tag in tags):
+            continue
+        tags.append({"mark": text, "x": x, "y": y, "page": page, "level": level})
+    return tags
 
 
 # --- Walls -----------------------------------------------------------------------------------------------------------

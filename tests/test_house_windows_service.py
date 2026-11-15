@@ -169,6 +169,22 @@ class HouseWindowsServiceTests(unittest.TestCase):
             self.assertIn({"mark": "W99", "page": 9, "reason": "no window schedule row with this mark"}, result["unplaced"])
             self.assertEqual(json.loads((root / "house_windows.json").read_text())["windows_in_schedule"], 2)
 
+    def test_a_tag_only_the_text_order_reading_finds_is_placed(self):
+        # Set 15 draws each tag letter by letter; position order splits "W6" into "W" and "6", text order keeps it.
+        split_plan = [row for row in PLAN if row["text"] != "W6"] + [word("W", 299, 392), word("6", 301, 392)]
+
+        def reader(number):
+            return (1000, 700, SCHEDULE if number == 20 else split_plan)
+        reader.flow = lambda number: [word("W6", 300, 392)] if number == 9 else []
+        with tempfile.TemporaryDirectory() as folder:
+            writes = []
+            with patch.object(reviewer_room_geometry_service, "current_records", return_value=[TRACE]), \
+                 patch.object(reviewer_room_geometry_service, "post", side_effect=lambda _web, _project, body, **_kwargs: writes.append(body)), \
+                 patch.object(autonomous_tasks_service, "room_ceiling_height", return_value=2700):
+                house_windows_service.apply(None, {"id": "house"}, job(folder), read_page=reader)
+            new = sorted(row["mark"] for row in writes[0]["openings"] if row.get("declaration_source") == "drawing_text")
+            self.assertEqual(new, ["W4", "W6"])
+
     def test_a_window_taller_than_the_room_is_listed_not_saved(self):
         with tempfile.TemporaryDirectory() as folder:
             result, writes = self.run_apply(job(folder), ceiling=2000)

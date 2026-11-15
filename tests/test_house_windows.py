@@ -115,6 +115,13 @@ class TagTests(unittest.TestCase):
         words = line(100, ("W4", 10), ("WG_01", 40), ("HLW_02", 80), ("W1200", 120), ("WIR", 160), ("W.I.R.", 200), ("WC", 240))
         self.assertEqual([tag["mark"] for tag in hw.find_window_tags(words, 7, "Ground Floor")], ["W4", "WG_01", "HLW_02"])
 
+    def test_a_tag_read_in_both_word_orders_is_one_tag(self):
+        # The page is read in position order and in text order (house_windows_service); a tag found both ways is once.
+        words = line(100, ("WG_07", 40)) + line(100, ("WG_07", 41)) + line(300, ("WG_07", 40))
+        tags = hw.find_window_tags(words, 7)
+        self.assertEqual([tag["mark"] for tag in tags], ["WG_07", "WG_07"])     # the same mark on two windows stays two
+        self.assertEqual(round(tags[1]["y"] - tags[0]["y"]), 200)
+
 
 class PlacementTests(unittest.TestCase):
     # A 6 m × 4 m room, 1 point = 10 mm: outline in points 0..600 × 0..400; edge 0 is the top wall (outside).

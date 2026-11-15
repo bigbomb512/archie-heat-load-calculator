@@ -18,7 +18,7 @@ from backend import reviewer_room_geometry_service
 from backend.job_runner import read_json
 
 RESULT_FILE = "house_windows.json"
-VERSION = "house-windows-text-v7"
+VERSION = "house-windows-text-v8"   # v8: tags also read in text order (2026-11-15)
 REVIEWER = "Archie drawing text (windows)"
 GLAZING_CHOICE = "residential"      # preliminary pack glazing (U 5.8, SHGC 0.45) until certificates are read (W7)
 SHADING = "unshaded"
@@ -102,6 +102,15 @@ def _pdf_pages(source):
     def read(number):
         page = seating_service._Page(doc, number, version)
         return page.width, page.height, page.extract_words()
+    flowed = {}
+
+    def flow(number):
+        """The page's words in the PDF's own text order: a tag drawn letter by letter (set 15's "WG_07") is one word
+        here, where position order splits it; set 15's ground floor had 2 tags read that way, 17 this way (2026-11-15)."""
+        if number not in flowed:
+            flowed[number] = doc.pages[number - 1].extract_words(use_text_flow=True)
+        return flowed[number]
+    read.flow = flow
     return doc.close, read
 
 
@@ -196,7 +205,8 @@ def apply(web, project, root, read_page=None):
                 continue
             sx, sy = system["image_width"] / width_pt, system["image_height"] / height_pt
             level = plan_levels.get(page) or (traces[0].get("level_name") if traces else None) or None
-            tags = house_windows.find_window_tags(words, page, level)
+            flow = getattr(read_page, "flow", None)
+            tags = house_windows.find_window_tags(words + (flow(page) if flow else []), page, level)
             rooms, scale = [], _page_scale(root, page, records, sx)
             for trace in traces:
                 mm_per_px = float(trace["calibration"]["mm_per_px"])
