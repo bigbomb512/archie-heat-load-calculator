@@ -880,13 +880,55 @@ def _page_screenshot(root, page):
     return matches[0]
 
 
-def north_crop_boxes(width, height):
-    """Three disjoint title-block/corner crops in full-page pixel coordinates."""
-    return [
-        (round(width * .62), round(height * .62), width, height),
-        (0, 0, round(width * .38), round(height * .38)),
-        (round(width * .62), 0, width, round(height * .38)),
-    ]
+NORTH_CROP_DEFAULTS = (      # (left, top, right, bottom) as page fractions, in the order they are tried
+    (.62, .62, 1, 1),         # bottom-right corner and title block
+    (0, .78, .62, 1),         # the rest of a bottom title-block band (sets 16 and 18 put the arrow there)
+    (.62, 0, 1, .38),         # top-right corner
+    (0, 0, .38, .38),         # top-left corner
+)
+NORTH_WORD_BOX = (.22, .16)   # a crop this share of the page around a printed "NORTH"
+NOT_AN_ARROW_AFTER = {"elevation", "elevations", "east", "west", "boundary", "side", "facing", "wall", "facade", "façade",
+                      "western", "eastern", "and", "&", "-", "of", "to"}
+
+
+def north_crop_boxes(width, height, word_points=()):
+    """Up to three title-block/corner crops in full-page pixel coordinates. A printed "NORTH" (an arrow's label, e.g.
+    "PROJECT NORTH") gets its own crop first, then the corners and title-block band that don't already hold one."""
+    boxes = []
+    for fx, fy in list(word_points)[:2]:
+        half_w, half_h = NORTH_WORD_BOX[0] / 2, NORTH_WORD_BOX[1] / 2
+        left = min(max(fx - half_w, 0), 1 - NORTH_WORD_BOX[0])
+        top = min(max(fy - half_h, 0), 1 - NORTH_WORD_BOX[1])
+        boxes.append((left, top, left + NORTH_WORD_BOX[0], top + NORTH_WORD_BOX[1]))
+    for box in NORTH_CROP_DEFAULTS:
+        if len(boxes) >= 3:
+            break
+        if any(box[0] <= fx <= box[2] and box[1] <= fy <= box[3] for fx, fy in word_points):
+            continue
+        boxes.append(box)
+    return [(round(width * l), round(height * t), round(width * r), round(height * b)) for l, t, r, b in boxes[:3]]
+
+
+def north_word_points(pdf_path, page):
+    """Page fractions (x, y) of a printed "NORTH" that labels an arrow, title-block band first; none for a scan or an
+    unreadable PDF. "NORTH ELEVATION", "north boundary" and the like aren't arrow labels."""
+    try:
+        import pdfplumber
+        with pdfplumber.open(str(pdf_path)) as pdf:
+            sheet = pdf.pages[page - 1]
+            words = sheet.extract_words()
+            width, height = float(sheet.width), float(sheet.height)
+    except Exception:
+        return []
+    points = []
+    for index, word in enumerate(words):
+        if word["text"].strip(".:").casefold() != "north":
+            continue
+        following = words[index + 1]["text"].casefold() if index + 1 < len(words) else ""
+        if following in NOT_AN_ARROW_AFTER:
+            continue
+        points.append(((word["x0"] + word["x1"]) / 2 / width, (word["top"] + word["bottom"]) / 2 / height))
+    return sorted(points, key=lambda point: -point[1])[:2]      # title blocks sit low on the sheet
 
 
 def crop_to_page(point, crop):
@@ -909,7 +951,10 @@ def make_north_crops(root, page, output_dir):
     with Image.open(source) as original:
         image = original.convert("RGB")
         width, height = image.size
-        for index, box in enumerate(north_crop_boxes(width, height)):
+        source_pdf = (json.loads((Path(root) / "ai_input.json").read_text(encoding="utf-8")) if (Path(root) / "ai_input.json").exists()
+                      else {}).get("source_pdf") or ""
+        words = north_word_points(source_pdf, page) if source_pdf and Path(source_pdf).is_file() else []
+        for index, box in enumerate(north_crop_boxes(width, height, words)):
             left, top, right, bottom = box
             region = image.crop(box)
             scale = min(1.0, 1024.0 / max(region.size))
@@ -993,16 +1038,48 @@ def validate_north_reply(packet, reply):
             "description": str(value.get("description", ""))[:300]}
 
 
-def true_north(validated, site_declination_deg=None):
+SURVEY_TOLERANCE_DEG = 10.0   # an arrow read within 10° of the boundary bearings' axis is that axis
+
+
+def true_north(validated, site_declination_deg=None, survey_axis=None):
     """(page-up bearing from true north, basis) for a validated north answer, or (None, basis) when it can't be used:
-    no arrow, or only a project-north arrow. A magnetic arrow is corrected by its printed declination, else the site's
-    (ai/magnetic.py); with neither it is used as drawn and the basis says so."""
+    no arrow, or a project-north arrow the survey bearings don't confirm. A magnetic arrow is corrected by its printed
+    declination, else the site's (ai/magnetic.py); with neither it is used as drawn and the basis says so.
+
+    `survey_axis` is ai/survey_bearings.axis() for the drawing set: the sheet's orientation from its boundary bearings,
+    exact but either way round. An arrow within 10° of it takes the bearings' exact angle (an arrow read from an image
+    is good to a few degrees). A project-north arrow is used only when the bearings confirm it this way: then it is
+    the site's true orientation, not a convenience rotation (extends the user's 2026-10-26 rule, 2026-11-15)."""
     if not isinstance(validated, dict) or not validated.get("found"):
         return None, {"label": "", "reason": "No north arrow on this sheet."}
     label = validated.get("label") or "unlabelled"
     bearing = float(validated["plan_up_azimuth_deg"])
+    axis_deg = (survey_axis or {}).get("axis_deg")
     if label == "project":
+        if axis_deg is not None:
+            from ai import survey_bearings
+            refined, difference = survey_bearings.refine(bearing, axis_deg, SURVEY_TOLERANCE_DEG)
+            if refined is not None:
+                return refined, {"label": label, "survey_axis_deg": axis_deg, "arrow_deg": round(bearing, 2),
+                                 "reason": f"Project-north arrow confirmed by the survey's boundary bearings ({difference:.1f}° apart); "
+                                           f"the bearings' exact angle is used."}
+            return None, {"label": label, "survey_axis_deg": axis_deg, "arrow_deg": round(bearing, 2),
+                          "reason": f"Project-north arrow {difference:.0f}° from the survey's boundary bearings: not used for the sun."}
         return None, {"label": label, "reason": "Only a project-north arrow: not used for the sun (a true-north arrow is looked for on other sheets)."}
+    found_bearing, basis = _arrow_true_north(label, bearing, validated, site_declination_deg)
+    if axis_deg is None or found_bearing is None:
+        return found_bearing, basis
+    from ai import survey_bearings
+    refined, difference = survey_bearings.refine(found_bearing, axis_deg, SURVEY_TOLERANCE_DEG)
+    if refined is None:
+        return found_bearing, {**basis, "survey_axis_deg": axis_deg,
+                               "reason": basis["reason"] + f" The survey's boundary bearings are {difference:.0f}° away; the arrow is used."}
+    return refined, {**basis, "survey_axis_deg": axis_deg, "arrow_deg": round(found_bearing, 2),
+                     "reason": basis["reason"] + f" Refined to the survey's boundary bearings ({difference:.1f}° from the arrow as read)."}
+
+
+def _arrow_true_north(label, bearing, validated, site_declination_deg):
+    """The arrow's own true-north bearing and basis, before any survey refinement."""
     if label == "magnetic":
         printed = validated.get("declination_deg")
         declination = printed if printed is not None else site_declination_deg

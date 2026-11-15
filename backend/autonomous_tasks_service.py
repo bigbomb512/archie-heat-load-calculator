@@ -111,6 +111,28 @@ def _site_packet(root):
     return packet, prompt, {"ai_input": ai_input, "spatial_ocr": spatial, "building_evidence": building}
 
 
+def _survey_axis(root):
+    """The drawing set's orientation from its boundary bearings (ai/survey_bearings.py), read once per PDF and kept in
+    the job; None when the set has no agreeing bearings or the PDF can't be read."""
+    from ai import survey_bearings
+    pdf = Path(str((_read(root / "ai_input.json", {}) or {}).get("source_pdf") or ""))
+    if not pdf.is_file():
+        return None
+    stat = pdf.stat()
+    key = f"{survey_bearings.METHOD_ID}:{stat.st_size}:{stat.st_mtime_ns}"
+    cached = _read(root / "survey_bearings.json", {})
+    if isinstance(cached, dict) and cached.get("key") == key:
+        return cached.get("axis")
+    try:
+        rows = survey_bearings.labels(pdf)
+    except Exception as error:      # any PDF library failure: north comes from the arrows alone
+        print(f"Couldn't read the survey bearings: {type(error).__name__}: {error}", flush=True)
+        rows = []
+    result = survey_bearings.axis(rows)
+    _write(root / "survey_bearings.json", {"key": key, "method_id": survey_bearings.METHOD_ID, "axis": result, "labels": rows[:200]})
+    return result
+
+
 def _site_declination(root):
     """East-positive magnetic declination at the site (confirmed site position, else the weather location's), or None."""
     from ai import design_weather, magnetic
@@ -157,10 +179,14 @@ def _north_pages(root):
               sorted({row["page"]: row for row in floor + site}.values(), key=lambda row: row["page"]),
               plans]
 
+    survey = _survey_axis(root)
+
     def found(record):
-        # A project-north arrow doesn't count: keep looking for a true one (user decision 2026-10-26).
+        # A project-north arrow doesn't count unless the survey bearings confirm it: keep looking for a true one
+        # (user decision 2026-10-26; confirmation by the bearings 2026-11-15).
         value = _north_answer(record)
-        return isinstance(value, dict) and value.get("found") and value.get("label") != "project"
+        return isinstance(value, dict) and value.get("found") and (
+            value.get("label") != "project" or autonomous_tasks.true_north(value, None, survey)[0] is not None)
     asked = []
     for stage in stages:
         new = [row for row in stage if row["page"] not in {done["page"] for done in asked}]
@@ -4058,7 +4084,8 @@ def _apply_p2(web, project, root, record, validated, *, defer=False):
         record.update({"status": "applied", "source": "reviewer", "applied_value": {"page": page, "plan_up_azimuth_deg": existing_declaration.get("plan_up_azimuth_deg"), "overrode_by": "reviewer"}, "validation": validated})
         return record
     declination = _site_declination(root) if validated.get("label") == "magnetic" else None
-    own_bearing, own_basis = autonomous_tasks.true_north(validated, declination)
+    survey = _survey_axis(root)
+    own_bearing, own_basis = autonomous_tasks.true_north(validated, declination, survey)
     if own_bearing is None:
         record.update({"status": _status_for_accuracy("ai_determined", record.get("accuracy", {})),
                        "source": "ai_determined",
@@ -4085,8 +4112,8 @@ def _apply_p2(web, project, root, record, validated, *, defer=False):
         if other_validation.get("found") is not None or other.get("status") in {"blocked", "not_needed"} or _not_answered(other):
             completed_pages.add(int(other.get("packet", {}).get("page", 0)))     # a page that can't answer doesn't hold the rest
         other_bearing, _other_basis = autonomous_tasks.true_north(
-            other_validation, _site_declination(root) if other_validation.get("label") == "magnetic" else None)
-        if other_bearing is not None:          # project-north arrows don't take part in the agreement
+            other_validation, _site_declination(root) if other_validation.get("label") == "magnetic" else None, survey)
+        if other_bearing is not None:          # project-north arrows take part only when the bearings confirm them
             other_page = int(other.get("packet", {}).get("page", 0))
             candidates_by_page[other_page] = other_bearing
             other_records[other_page] = other
@@ -4130,7 +4157,7 @@ def _apply_p2(web, project, root, record, validated, *, defer=False):
         try:
             page_answer = _north_answer(north_record) if north_record is not record else validated
             page_basis = autonomous_tasks.true_north(
-                page_answer, _site_declination(root) if page_answer.get("label") == "magnetic" else None)[1]
+                page_answer, _site_declination(root) if page_answer.get("label") == "magnetic" else None, survey)[1]
             reviewer_room_geometry_service.post(web, project, {
                 "action": "declare_north", "page": north_page, "reviewer": reviewer,
                 "plan_up_azimuth_deg": applied_angle, "declaration_source": declaration_source,
