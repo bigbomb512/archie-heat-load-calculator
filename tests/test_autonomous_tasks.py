@@ -27,6 +27,42 @@ class AutonomousTaskTests(unittest.TestCase):
         self.assertEqual(autonomous_tasks_service._number_repeated_house_bedrooms(
             {0: "Bedroom"}, areas)[0], {0: "Bedroom"})
 
+    def test_outline_steps_number_bedrooms_with_a_wall_between_them(self):
+        # Set 18's first floor (2026-11-15): the open-plan outline step drew four rooms all called "Bedroom".
+        from shapely.geometry import box
+        from backend import room_proposal
+        record = {"task": "P0_room_outlines", "target": "page-10", "run_id": "run-2", "packet": {"page": 10}}
+        mm_per_px = 10.0                       # 100 px = 1 m
+        polygons = [{"label": "Bedroom", "polygon": box(0, 0, 300, 400)},          # 12 m²
+                    {"label": "Bedroom", "polygon": box(310, 0, 610, 400)},        # a 100 mm wall away: another room
+                    {"label": "Bedroom", "polygon": box(610, 0, 700, 400)},        # touching the second: part of it
+                    {"label": "Bedroom", "polygon": box(0, 500, 300, 900)},        # below: a third room
+                    {"label": "Bedroom", "polygon": box(305, 500, 345, 540)},      # 0.16 m² sliver: joins the third
+                    {"label": "Ensuite", "polygon": box(800, 0, 900, 200)}]
+        with TemporaryDirectory() as folder, \
+             patch("backend.house_windows_service.is_dwelling", return_value=True), \
+             patch.object(autonomous_tasks_service, "_page_level", return_value="First Floor"), \
+             patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "_rooms",
+                          return_value=[{"label": "Bedroom 2", "level_name": "First Floor"}]):
+            root = Path(folder)
+            autonomous_tasks_service._number_separate_house_bedrooms(root, record, polygons, mm_per_px)
+            self.assertEqual([row["label"] for row in polygons],
+                             ["Bedroom 1", "Bedroom 3", "Bedroom 3", "Bedroom 4", "Bedroom 4", "Ensuite"])  # 2 is taken
+            saved = room_proposal.use_named_rooms(root)
+            self.assertEqual(sorted(row["label"] for row in saved), ["Bedroom 1", "Bedroom 3", "Bedroom 4"])
+            self.assertTrue(all(row.get("derived_from_repeated_label") == "Bedroom" for row in saved))
+            # The next answer on that page with one bedroom: the level is numbered, so it is numbered too.
+            single = [{"label": "Bedroom", "polygon": box(0, 1000, 300, 1400)}]
+            with patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "_rooms",
+                              return_value=[{"label": f"Bedroom {n}", "level_name": "First Floor"} for n in (1, 2, 3, 4)]):
+                autonomous_tasks_service._number_separate_house_bedrooms(root, {**record, "target": "room-bedroom-page-10"},
+                                                                         single, mm_per_px)
+            self.assertEqual(single[0]["label"], "Bedroom 5")
+        shop = [{"label": "Bedroom", "polygon": box(0, 0, 300, 400)}, {"label": "Bedroom", "polygon": box(400, 0, 700, 400)}]
+        with TemporaryDirectory() as folder, patch("backend.house_windows_service.is_dwelling", return_value=False):
+            autonomous_tasks_service._number_separate_house_bedrooms(Path(folder), record, shop, mm_per_px)
+        self.assertEqual([row["label"] for row in shop], ["Bedroom", "Bedroom"])
+
     def test_numbered_bedrooms_replace_only_the_same_levels_unnumbered_record(self):
         from backend import room_proposal
         from ai import room_use_resolution

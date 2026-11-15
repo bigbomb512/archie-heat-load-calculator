@@ -1775,7 +1775,7 @@ def _apply_p0_outline_corners(web, project, root, record, validated, *, defer=Fa
         note += f"; outlines the same space as {', '.join(sorted(set(duplicates)))}, so that floor isn't counted again"
     rows = _p0_trace_rows(root, record, polygons)
     prepared = reviewer_room_geometry_service.persist_ai_determined_traces(web, project, rows, record["run_id"],
-        record["quality_label"], replace_pages=[page], replace_room_labels=[room], defer=defer)
+        record["quality_label"], replace_pages=[page], replace_room_labels=[room, *{row.get("room_label") for row in rows if row.get("room_label")}], defer=defer)
     record.update({"status": _status_for_accuracy("ai_determined", record["accuracy"]), "source": "ai_determined",
                    "applied_value": {"rooms": _p0_result_rooms(prepared), "note": note, "label": record["quality_label"]},
                    "validation": validated, "block_reason": ""})
@@ -3003,11 +3003,69 @@ def surroundings_by_edge(root):
     return result
 
 
+HOUSE_ROOM_GAP_MM = 50.0        # outlines further apart than this have a wall between them: separate rooms
+HOUSE_NUMBERED_MIN_M2 = 4.0     # a smaller separate piece stays part of the room it is nearest
+
+
+def _number_separate_house_bedrooms(root, record, polygons, mm_per_px):
+    """A house prints BEDROOM on several rooms; one name became one room, so set 18's four first-floor bedrooms were one
+    13 m² room (2026-11-15). The room-naming step numbers them (_number_repeated_house_bedrooms); here every other outline
+    step does the same: same-named bedroom outlines with a wall between them become Bedroom 1, 2, ... (numbers already
+    used on the level are skipped), while pieces that touch, or are under 4 m², stay one room. Shops are unchanged."""
+    from backend import house_windows_service, room_proposal
+    from shapely.ops import unary_union
+    if not house_windows_service.is_dwelling(root):
+        return polygons
+    page = int(record["packet"]["page"])
+    level = _page_level(root, page)
+    rows = [row for row in polygons if str(row["label"]).strip().casefold() in {"bedroom", "bed"}]
+    groups = []                                        # clusters of touching pieces
+    for row in rows:
+        shape = row.get("net_polygon") or row["polygon"]
+        touching = [group for group in groups if any(shape.distance(other) * mm_per_px <= HOUSE_ROOM_GAP_MM for other in group["shapes"])]
+        merged = {"rows": [row], "shapes": [shape]}
+        for group in touching:
+            merged["rows"] += group["rows"]
+            merged["shapes"] += group["shapes"]
+            groups.remove(group)
+        groups.append(merged)
+    big = [group for group in groups if unary_union(group["shapes"]).area * (mm_per_px / 1000) ** 2 >= HOUSE_NUMBERED_MIN_M2]
+    for group in groups:
+        if group not in big and big:                   # a sliver joins the room it is nearest
+            nearest = min(big, key=lambda other: unary_union(group["shapes"]).distance(unary_union(other["shapes"])))
+            nearest["rows"] += group["rows"]
+            nearest["shapes"] += group["shapes"]
+    numbered = []
+    # On a level whose bedrooms are already numbered there is no plain "Bedroom" room left: one more gets the next number.
+    already = str(level or "Unassigned level").casefold() in room_proposal.numbered_bedroom_levels(root)
+    if len(big) >= 2 or (big and already):
+        rooms = reviewer_room_geometry_service._rooms(reviewer_room_geometry_service._paths({"review_dir": str(root)}))
+        from ai.page_inventory import level_key
+        used = {int(match.group(1)) for room in rooms if level_key(room.get("level_name")) == level_key(level)
+                if (match := re.fullmatch(r"bed(?:room)?\s*(\d+)", str(room.get("label", "")).strip(), re.I))}
+        ordered = sorted(big, key=lambda group: (round(unary_union(group["shapes"]).centroid.y, 3),
+                                                 round(unary_union(group["shapes"]).centroid.x, 3)))
+        number = 1
+        for group in ordered:
+            while number in used:
+                number += 1
+            label = f"Bedroom {number}"
+            used.add(number)
+            numbered.append(label)
+            for row in group["rows"]:
+                row["label"] = label
+    room_proposal.save_use_named_rooms(root, f"P0_numbered:{record['task']}:{record['target']}", page, level,
+                                       numbered, record["run_id"], derived_from_repeated_label=True)
+    return polygons
+
+
 def _p0_trace_rows(root, record, polygons):
     page = int(record["packet"]["page"])
     calibration = deepcopy(record["packet"]["calibration"])
     if not autonomous_tasks.usable_calibration(calibration.get("status")):
         raise ValueError("P0 cannot apply room areas until printed dimensions calibrate within 2%.")
+    if record.get("task") != "P0_room_names":       # the naming step numbers its own (_number_repeated_house_bedrooms)
+        polygons = _number_separate_house_bedrooms(root, record, polygons, float(calibration["mm_per_px"]))
     rooms = reviewer_room_geometry_service._rooms(reviewer_room_geometry_service._paths({"review_dir": str(root)}))
     room_ids = {}
     for room in rooms:
@@ -3268,7 +3326,7 @@ def _apply_p0_outlines(web, project, root, record, validated, *, defer=False):
     trace_kwargs = {"defer": True} if defer else {}
     prepared = reviewer_room_geometry_service.persist_ai_determined_traces(web, project, rows,
         record["run_id"], record["quality_label"], replace_pages=[record["packet"]["page"]],
-        replace_room_labels=[*record["packet"].get("room_names", []), *use_named], **trace_kwargs)
+        replace_room_labels=[*record["packet"].get("room_names", []), *use_named, *{row.get("room_label") for row in rows if row.get("room_label")}], **trace_kwargs)
     record.update({"status":_status_for_accuracy("ai_determined",record["accuracy"]),"source":"ai_determined",
         "applied_value":{"rooms":_p0_result_rooms(prepared),"label":record["quality_label"]},
         "validation":validated,"block_reason":""})
@@ -3322,7 +3380,7 @@ def _apply_p0_unnamed_space(web, project, root, record, validated, *, defer=Fals
         rows = _p0_trace_rows(root, record, polygons)
         trace_kwargs = {"defer": True} if defer else {}
         prepared = reviewer_room_geometry_service.persist_ai_determined_traces(web, project, rows,
-            record["run_id"], record["quality_label"], replace_pages=[page], replace_room_labels=names, **trace_kwargs)
+            record["run_id"], record["quality_label"], replace_pages=[page], replace_room_labels=[*names, *{row.get("room_label") for row in rows if row.get("room_label")}], **trace_kwargs)
     record.update({"status": _status_for_accuracy("ai_determined", record["accuracy"]), "source": "ai_determined",
                    "applied_value": {"rooms": _p0_result_rooms(prepared) if prepared else [], "dropped": dropped,
                                      "label": record["quality_label"]},
