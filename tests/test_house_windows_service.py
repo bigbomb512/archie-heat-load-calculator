@@ -64,7 +64,7 @@ class HouseWindowsServiceTests(unittest.TestCase):
                 "standalone_text_items": [{"text": "BEDROOM", "bbox": [700, 180, 760, 190]},
                                           {"text": "3", "bbox": [762, 180, 770, 190]}]}]}))
             def pages(number):
-                return (1000, 700, SCHEDULE if number == 20 else [word("W4", 750, 200)])
+                return (1000, 700, SCHEDULE if number == 20 else [word("W4", 1000, 200)])
             with patch.object(reviewer_room_geometry_service, "current_records", return_value=[TRACE]), \
                  patch.object(reviewer_room_geometry_service, "post"), \
                  patch.object(autonomous_tasks_service, "room_ceiling_height", return_value=2700):
@@ -184,6 +184,70 @@ class HouseWindowsServiceTests(unittest.TestCase):
                 house_windows_service.apply(None, {"id": "house"}, job(folder), read_page=reader)
             new = sorted(row["mark"] for row in writes[0]["openings"] if row.get("declaration_source") == "drawing_text")
             self.assertEqual(new, ["W4", "W6"])
+
+    def test_legend_samples_are_not_reported_as_unmatched_plan_tags(self):
+        legend = [word("W1", 700, 18), word("W01", 700, 40), word("Window", 735, 40),
+                  word("numbers", 775, 40), word("(as", 825, 40), word("scheduled)", 845, 40),
+                  word("W2", 700, 100), word("110mm", 730, 100), word("brick", 770, 100), word("wall", 805, 100)]
+
+        def pages(number):
+            return (1000, 700, SCHEDULE if number == 20 else PLAN + legend)
+        with tempfile.TemporaryDirectory() as folder:
+            root = job(folder)
+            with patch.object(reviewer_room_geometry_service, "current_records", return_value=[TRACE]), \
+                 patch.object(reviewer_room_geometry_service, "post"), \
+                 patch.object(autonomous_tasks_service, "room_ceiling_height", return_value=2700):
+                result = house_windows_service.apply(None, {"review_dir": str(root)}, root, read_page=pages)
+            self.assertEqual([row["mark"] for row in result["unplaced"]], ["W99"])
+
+    def test_anisotropic_page_image_scale_keeps_trimmed_width_within_saved_edge(self):
+        def pages(number):
+            return (1000, 700, SCHEDULE if number == 20 else [word("W6", 590, 200)])
+        with tempfile.TemporaryDirectory() as folder:
+            root = job(folder)
+            vector = json.loads((root / "vector_geometry.json").read_text())
+            vector["geometry_key_points"]["pages"][0]["coordinate_systems"]["image_px"]["image_height"] = 1050
+            (root / "vector_geometry.json").write_text(json.dumps(vector))
+            with patch.object(reviewer_room_geometry_service, "current_records", return_value=[TRACE]), \
+                 patch.object(reviewer_room_geometry_service, "post") as post, \
+                 patch.object(autonomous_tasks_service, "room_ceiling_height", return_value=2700):
+                result = house_windows_service.apply(None, {"review_dir": str(root)}, root, read_page=pages)
+            openings = [row for row in post.call_args.args[2]["openings"] if row.get("declaration_source") == "drawing_text"]
+            self.assertEqual([(row["mark"], row["edge_index"]) for row in openings], [("W6", 1)])
+            self.assertAlmostEqual(openings[0]["width_m"], 4.0)
+            self.assertIn("trimmed to fit", openings[0]["assumptions"][0])
+            self.assertFalse(any(row.get("mark") == "W6" for row in result["unplaced"]))
+
+    def test_a_mark_reused_on_another_plan_stays_reported_but_a_schedule_sheet_row_does_not(self):
+        # A house reuses a mark for identical windows (2026-11-15 review): an unplaced W4 on the first-floor plan is a
+        # real window still missing, even though the ground floor's W4 was placed.
+        first_floor = dict(TRACE, trace_id="bed-first", room_id="room-use:first:bed", page=10,
+                           level_name="First Floor", edges=[{"index": index, "boundary": "internal"} for index in range(4)],
+                           openings=[])
+        def pages(number):
+            return (1000, 700, SCHEDULE if number == 20 else PLAN if number == 9 else [word("W4", 150, 18)])
+        with tempfile.TemporaryDirectory() as folder:
+            root = job(folder)
+            (root / "room_use_resolution.json").write_text(json.dumps({"dwelling_context": {"is_dwelling": True},
+                "records": [{"room_id": TRACE["room_id"], "space_scope": "comfort_hvac"},
+                            {"room_id": first_floor["room_id"], "space_scope": "comfort_hvac"}]}))
+            vector = json.loads((root / "vector_geometry.json").read_text())
+            vector["geometry_key_points"]["pages"].append({"page": 10, "coordinate_systems": {
+                "image_px": {"image_width": 2000, "image_height": 1400}}})
+            (root / "vector_geometry.json").write_text(json.dumps(vector))
+            (root / "page_inventory.json").write_text(json.dumps({"pages": {"20": {"page_type": "schedule", "title": "Window Schedule"},
+                "9": {"page_type": "floor_plan", "title": "Ground Floor"},
+                "10": {"page_type": "floor_plan", "title": "First Floor"}}}))
+            with patch.object(reviewer_room_geometry_service, "current_records", return_value=[TRACE, first_floor]), \
+                 patch.object(reviewer_room_geometry_service, "post"), \
+                 patch.object(autonomous_tasks_service, "_p0_main_geometry_pages", return_value=[
+                     {"page": 9, "level_name": "Ground Floor"}, {"page": 10, "level_name": "First Floor"}]), \
+                 patch.object(autonomous_tasks_service, "_p0_context", return_value={"declared_mm_per_px": 5}), \
+                 patch.object(autonomous_tasks_service, "room_ceiling_height", return_value=2700):
+                result = house_windows_service.apply(None, {"review_dir": str(root)}, root, read_page=pages)
+            self.assertEqual(sorted(row["mark"] for row in result["placed"]), ["W4", "W6"])
+            self.assertTrue(any(row.get("mark") == "W4" and row.get("page") == 10 for row in result["unplaced"]))
+            self.assertFalse(any(row.get("mark") == "W4" and row.get("page") == 20 for row in result["unplaced"]))
 
     def test_a_window_taller_than_the_room_is_listed_not_saved(self):
         with tempfile.TemporaryDirectory() as folder:

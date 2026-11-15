@@ -122,6 +122,12 @@ class TagTests(unittest.TestCase):
         self.assertEqual([tag["mark"] for tag in tags], ["WG_07", "WG_07"])     # the same mark on two windows stays two
         self.assertEqual(round(tags[1]["y"] - tags[0]["y"]), 200)
 
+    def test_legend_window_samples_and_wall_type_marks_are_not_plan_tags(self):
+        words = line(100, ("W01", 10), ("Window", 45), ("numbers", 90), ("(as", 130), ("scheduled)", 150))
+        words += line(180, ("W2", 10), ("-", 25), ("110mm", 35), ("brick", 70), ("wall", 100))
+        words += line(1000, ("W2", 300))
+        self.assertEqual([tag["mark"] for tag in hw.find_window_tags(words, 7)], ["W2"])
+
 
 class PlacementTests(unittest.TestCase):
     # A 6 m × 4 m room, 1 point = 10 mm: outline in points 0..600 × 0..400; edge 0 is the top wall (outside).
@@ -134,6 +140,17 @@ class PlacementTests(unittest.TestCase):
     def tag(self, mark, x, y, level="Ground Floor"):
         return {"mark": mark, "x": x, "y": y, "page": 5, "level": level}
 
+    def test_a_tag_far_from_the_traced_wall_is_placed_and_labelled(self):
+        # An AI outline can stop short of the wall: a tag 1.5 m outside it still goes on that room's outside wall,
+        # with the distance stated; one beside the wall carries no such note.
+        far = hw.place_windows([self.tag("W1", 300, -150)], self.schedule, [self.room], 10)
+        self.assertEqual([(row["mark"], row["edge_index"]) for row in far["openings"]], [("W1", 0)])
+        self.assertTrue(any("1.5 m from this room's traced outside wall" in note for note in far["openings"][0]["assumptions"]))
+        near = hw.place_windows([self.tag("W1", 300, 30)], self.schedule, [self.room], 10)
+        self.assertFalse(any("traced outside wall" in note for note in near["openings"][0]["assumptions"]))
+        too_far = hw.place_windows([self.tag("W1", 300, -350)], self.schedule, [self.room], 10)
+        self.assertEqual(too_far["openings"], [])
+
     def test_several_windows_share_one_wall_while_they_fit(self):
         result = hw.place_windows([self.tag("W1", 150, 30), self.tag("W2", 450, 30)], self.schedule, [self.room], 10)
         self.assertEqual([(row["mark"], row["edge_index"]) for row in result["openings"]], [("W1", 0), ("W2", 0)])
@@ -142,16 +159,46 @@ class PlacementTests(unittest.TestCase):
         self.assertEqual(result["unplaced"], [])
 
     def test_a_wall_already_filled_refuses_the_next_window(self):
-        tags = [self.tag("W2", 100, 20), self.tag("W2", 300, 20), self.tag("W2", 500, 20)]
+        tags = [self.tag("W2", 100, 20), self.tag("W2", 300, 20), self.tag("W2", 500, 20),
+                self.tag("W2", 150, 20)]
         result = hw.place_windows(tags, self.schedule, [self.room], 10)
-        self.assertEqual(len(result["openings"]), 2)                  # 2 × 2.4 m fit a 6 m wall; a third doesn't
+        self.assertEqual(len(result["openings"]), 3)                  # widths are 2.4 + 2.4 + 1.2 m
+        self.assertAlmostEqual(sum(row["width_m"] for row in result["openings"]), 6.0)
         self.assertIn("already filled", result["unplaced"][0]["reason"])
+        trimmed = min(result["openings"], key=lambda row: row["width_m"])
+        self.assertAlmostEqual(trimmed["width_m"], 1.2)
+        self.assertIn("trimmed to fit", trimmed["assumptions"][0])
 
     def test_tag_too_far_from_an_outside_wall_or_only_near_an_inside_wall(self):
         room = dict(self.room, outside_edges=[1])                      # the top wall is inside
-        result = hw.place_windows([self.tag("W1", 300, 30), self.tag("W1", 300, 200)], self.schedule, [room], 10)
+        result = hw.place_windows([self.tag("W1", 100, 30), self.tag("W1", 100, 200)], self.schedule, [room], 10)
         self.assertEqual(result["openings"], [])
-        self.assertEqual({row["reason"] for row in result["unplaced"]}, {"no outside wall within 900 mm of the tag"})
+        self.assertEqual({row["reason"] for row in result["unplaced"]}, {"no outside wall within 3000 mm of the tag"})
+
+    def test_a_tag_inside_a_room_cannot_jump_to_a_neighbouring_rooms_closer_outside_edge(self):
+        left = {"trace_id": "left", "points": [[0, 0], [100, 0], [100, 100], [0, 100], [0, 0]],
+                "outside_edges": [0]}
+        right = {"trace_id": "right", "points": [[100, 0], [200, 0], [200, 100], [100, 100], [100, 0]],
+                 "outside_edges": [3]}
+        # The tag is inside left; the right room's eligible edge is only 10 mm away.
+        tag = self.tag("W1", 90, 20)
+        result = hw.place_windows([tag], self.schedule, [left, right], 1)
+        self.assertEqual([(row["trace_id"], row["edge_index"]) for row in result["openings"]], [("left", 0)])
+
+    def test_existing_reviewed_openings_reserve_edge_capacity_before_trimming(self):
+        room = dict(self.room, existing_openings=[{"edge_index": 0, "width_m": 5.0,
+                                                    "declaration_source": "reviewer"}])
+        result = hw.place_windows([self.tag("W2", 300, 20)], self.schedule, [room], 10)
+        self.assertAlmostEqual(result["openings"][0]["width_m"], 1.0)
+        self.assertIn("trimmed to fit", result["openings"][0]["assumptions"][0])
+
+    def test_room_selection_uses_each_traces_own_calibration(self):
+        first = {"trace_id": "first", "points": [[0, 0], [100, 0], [100, 100], [0, 100], [0, 0]],
+                 "outside_edges": [0], "mm_per_point": 10}
+        second = {"trace_id": "second", "points": [[200, 0], [300, 0], [300, 100], [200, 100], [200, 0]],
+                  "outside_edges": [0], "mm_per_point": 1}
+        result = hw.place_windows([self.tag("W1", 150, 20)], self.schedule, [first, second], 5)
+        self.assertEqual(result["openings"][0]["trace_id"], "second")
 
     def test_unknown_mark_and_a_mark_with_two_sizes_are_listed_not_guessed(self):
         schedule = self.schedule + [dict(self.schedule[1], width_mm=900)]

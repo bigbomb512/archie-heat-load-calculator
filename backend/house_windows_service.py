@@ -18,7 +18,7 @@ from backend import reviewer_room_geometry_service
 from backend.job_runner import read_json
 
 RESULT_FILE = "house_windows.json"
-VERSION = "house-windows-text-v8"   # v8: tags also read in text order (2026-11-15)
+VERSION = "house-windows-text-v11"  # v11: use each room trace's own calibration (2026-11-15)
 REVIEWER = "Archie drawing text (windows)"
 GLAZING_CHOICE = "residential"      # preliminary pack glazing (U 5.8, SHGC 0.45) until certificates are read (W7)
 SHADING = "unshaded"
@@ -208,17 +208,22 @@ def apply(web, project, root, read_page=None):
             flow = getattr(read_page, "flow", None)
             tags = house_windows.find_window_tags(words + (flow(page) if flow else []), page, level)
             rooms, scale = [], _page_scale(root, page, records, sx)
+            placement_tags = [{**tag, "x": tag["x"] * sx, "y": tag["y"] * sy} for tag in tags]
             for trace in traces:
                 mm_per_px = float(trace["calibration"]["mm_per_px"])
-                scale = mm_per_px * sx
-                rooms.append({"trace_id": trace["trace_id"], "points": [[x / sx, y / sy] for x, y in trace["points_image_px"]],
-                              "outside_edges": _outside_edges(trace, records, mm_per_px)})
+                rooms.append({"trace_id": trace["trace_id"], "points": trace["points_image_px"],
+                              "outside_edges": _outside_edges(trace, records, mm_per_px),
+                              "mm_per_point": mm_per_px,
+                              "existing_openings": trace.get("openings", [])})
             if scale is None:
                 result["unplaced"] += [{"mark": tag["mark"], "page": page,
                                         "reason": "The plan's scale isn't known, so the window can't be matched to a room."}
                                        for tag in tags]
                 continue
-            placed = house_windows.place_windows(tags, windows, rooms, scale) if rooms else {"openings": [], "unplaced": []}
+            # Placement runs in image pixels (each room has its own mm per pixel); `scale` stays mm per PDF point for the
+            # printed-label step below, whose tags and labels are in PDF points.
+            placed = (house_windows.place_windows(placement_tags, windows, rooms, scale / sx) if rooms
+                      else {"openings": [], "unplaced": []})
             result["unplaced"] += placed["unplaced"]
             traced_ids = {trace.get("room_id") for trace in records if trace.get("page") == page}
             labels = _untraced_labels(spatial_pages.get(page, {}), level or plan_levels.get(page) or "Unassigned level", traced_ids)
@@ -297,6 +302,12 @@ def apply(web, project, root, read_page=None):
         if close:
             close()
     placed_marks = {str(row.get("mark", "")).upper() for row in result["placed"]}
+    # The same mark can be read on more than one plan page or by both PDF text orders. Once it is placed,
+    # don't also count another reading of that mark as a failed opening.
+    # Only readings on other sheets (a schedule page, an RCP) are dropped: a house reuses a mark for identical windows,
+    # so an unplaced W1 on a plan is a real window still missing even when another W1 was placed.
+    result["unplaced"] = [row for row in result["unplaced"]
+                          if str(row.get("mark", "")).upper() not in placed_marks or row.get("page") in plan_levels]
     assigned_counts = {}
     for row in result["assigned_without_wall"]:
         mark = row["mark"].upper()

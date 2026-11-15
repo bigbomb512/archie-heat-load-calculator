@@ -271,12 +271,24 @@ def sill_and_head(record):
 def find_window_tags(words, page, level=None, same_within=3.0):
     """Window marks printed on one floor-plan page: [{"mark", "x", "y", "page", "level"}] in PDF points. The words may
     come from two readings of the page (position order and text order); a mark read twice at one spot is one tag."""
+    words = list(words)
     tags = []
     for word in words:
         text = _text(word).strip(".,:;()[]")
         if not MARK.fullmatch(text):
             continue
         x, y = _x(word), _y(word)
+        # Schedules and plan legends often print sample window marks. They are text in the drawing,
+        # but are not openings. Filter marks beside the explicit window-number legend or in a wall-type
+        # schedule so those examples never become unmatched plan tags.
+        nearby = [_text(other).casefold().strip(".,:;()[]") for other in words
+                  if abs(_y(other) - y) <= 34 and x - 30 <= _x(other) <= x + 260]
+        context = " ".join(nearby)
+        window_sample = re.search(r"\bwindow\s+numbers\b", context) and re.search(r"\bscheduled\b", context)
+        wall_type_sample = ((re.search(r"\bwall\s+types\s+schedule\b", context))
+                            or (re.search(r"\b\d+\s*mm\b", context) and re.search(r"\bwall\b", context)))
+        if window_sample or wall_type_sample:
+            continue
         if any(tag["mark"].upper() == text.upper() and math.dist((tag["x"], tag["y"]), (x, y)) <= same_within for tag in tags):
             continue
         tags.append({"mark": text, "x": x, "y": y, "page": page, "level": level})
@@ -292,13 +304,31 @@ def _segment_distance(point, a, b):
     return math.dist(point, (a[0] + t * dx, a[1] + t * dy))
 
 
-def place_windows(tags, windows, rooms, mm_per_point, reach_mm=900):
+def _inside_room(point, points):
+    """Whether a tag falls inside a closed room outline."""
+    x, y = point
+    inside = False
+    for (x1, y1), (x2, y2) in zip(points, points[1:]):
+        if (y1 > y) != (y2 > y) and x < (x2 - x1) * (y - y1) / (y2 - y1) + x1:
+            inside = not inside
+    return inside
+
+
+def _outline_distance(point, points):
+    return min((_segment_distance(point, a, b) for a, b in zip(points, points[1:])), default=math.inf)
+
+
+NEAR_WALL_MM = 900      # a tag this close to the wall is beside it; farther, the placement is labelled as an assumption
+
+
+def place_windows(tags, windows, rooms, mm_per_point, reach_mm=3000):
     """Put each tagged window on the outside wall it stands against.
 
-    rooms: [{"trace_id", "points": [[x, y], ...] closed outline in this page's PDF points,
-             "outside_edges": [edge indices that face outside]}].
+    rooms: [{"trace_id", "points": [[x, y], ...] closed outline in a shared coordinate system,
+             "outside_edges": [edge indices that face outside], "mm_per_point": optional room-specific scale}].
     A tag takes the schedule row with its mark (on the tag's level when the schedule gives levels); it goes on the
-    nearest outside edge within reach_mm (wall thickness plus the tag's offset from the wall). Several windows may
+    nearest outside edge within reach_mm (the AI outline may stop inside the wall face). The nearest room outline
+    owns the tag, so an outside edge from a different room across an internal wall cannot take it. Several windows may
     share a wall as long as their widths fit its length. Returns {"openings": [{"trace_id", "edge_index", "mark",
     "width_m", "sill_height_m", "head_height_m", "assumptions", "evidence"}], "unplaced": [{"mark", "page", "reason"}]}.
     """
@@ -318,30 +348,57 @@ def place_windows(tags, windows, rooms, mm_per_point, reach_mm=900):
             unplaced.append({"mark": tag["mark"], "page": tag["page"],
                              "reason": "the schedule gives this mark more than one size; which one is here isn't printed"})
             continue
-        best = None
-        for room in rooms:
-            points = room["points"]
-            for edge in room.get("outside_edges", []):
-                if not 0 <= edge < len(points) - 1:
-                    continue
-                distance = _segment_distance((tag["x"], tag["y"]), points[edge], points[edge + 1]) * mm_per_point
-                if best is None or distance < best[0]:
-                    best = (distance, room, edge)
+        point = (tag["x"], tag["y"])
+        located = [(0 if _inside_room(point, room["points"]) else 1,
+                    _outline_distance(point, room["points"]) * room.get("mm_per_point", mm_per_point), index, room)
+                   for index, room in enumerate(rooms)]
+        if not located:
+            best = None
+        else:
+            # A tag inside an outline takes that room. If it is outside every approximate outline, use only the
+            # nearest outline, rather than allowing a neighbouring room's outside edge to win globally.
+            located.sort(key=lambda row: (row[0], row[1], row[2]))
+            _, outline_distance, _, room = located[0]
+            best = None
+            if outline_distance <= reach_mm:
+                points = room["points"]
+                for edge in room.get("outside_edges", []):
+                    if not 0 <= edge < len(points) - 1:
+                        continue
+                    distance = (_segment_distance(point, points[edge], points[edge + 1])
+                                * room.get("mm_per_point", mm_per_point))
+                    if best is None or distance < best[0]:
+                        best = (distance, room, edge)
         if best is None or best[0] > reach_mm:
             unplaced.append({"mark": tag["mark"], "page": tag["page"],
                              "reason": f"no outside wall within {reach_mm} mm of the tag"})
             continue
         candidates.append((best[0], tag, rows[0], best[1], best[2]))
+        tag["_far_mm"] = best[0] if best[0] > NEAR_WALL_MM else None
     used = defaultdict(float)
+    for room in rooms:
+        for opening in room.get("existing_openings", []):
+            if opening.get("declaration_source") != "drawing_text":
+                used[(room["trace_id"], opening.get("edge_index"))] += float(opening.get("width_m") or 0)
     openings = []
     for distance, tag, row, room, edge in sorted(candidates, key=lambda item: item[0]):
         points = room["points"]
-        edge_m = math.dist(points[edge], points[edge + 1]) * mm_per_point / 1000
-        width_m = row["width_mm"] / 1000
-        if used[(room["trace_id"], edge)] + width_m > edge_m + 0.05:
+        edge_m = math.dist(points[edge], points[edge + 1]) * room.get("mm_per_point", mm_per_point) / 1000
+        scheduled_width_m = row["width_mm"] / 1000
+        available_m = edge_m - used[(room["trace_id"], edge)]
+        if available_m <= 1e-8:
             unplaced.append({"mark": tag["mark"], "page": tag["page"],
                              "reason": f"its wall ({edge_m:.2f} m) is already filled by other windows"})
             continue
+        width_m = min(scheduled_width_m, available_m)
+        if tag.get("_far_mm"):
+            width_assumption_far = [f"Tag {tag['_far_mm'] / 1000:.1f} m from this room's traced outside wall: placed on the "
+                                    "nearest outside wall of the room it is nearest (the outline may stop short of the wall)."]
+        else:
+            width_assumption_far = []
+        width_assumption = ([f"Scheduled width {scheduled_width_m:.2f} m exceeds the remaining traced edge length "
+                             f"{available_m:.2f} m; width trimmed to fit the traced edge."]
+                            if width_m < scheduled_width_m else [])
         used[(room["trace_id"], edge)] += width_m
         sill, head, assumption = sill_and_head(row)
         blind = internal_shade(row.get("type") or "")
@@ -349,7 +406,7 @@ def place_windows(tags, windows, rooms, mm_per_point, reach_mm=900):
         openings.append({"trace_id": room["trace_id"], "edge_index": edge, "mark": tag["mark"], "width_m": width_m,
                          "schedule_page": row["page"],
                          "sill_height_m": sill / 1000, "head_height_m": head / 1000,
-                         "assumptions": [assumption] if assumption else [],
+                         "assumptions": ([assumption] if assumption else []) + width_assumption + width_assumption_far,
                          **({"internal_shade": blind} if blind else {}),
                          **({"frame_group": group} if group else {}),
                          "evidence": f"Schedule p{row['page']}: {row['evidence']}; tag on plan p{tag['page']}"})
