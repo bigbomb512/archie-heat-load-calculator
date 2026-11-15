@@ -104,6 +104,90 @@ class ChartDataTests(unittest.TestCase):
 
 
 class ValuesAndAssumptionsTests(unittest.TestCase):
+    def test_ahu_results_show_each_system_at_its_own_governing_hour(self):
+        inputs = {"input_fingerprint": "snapshot-1", "material": {"hourly_load_model": {"rooms": [
+            {"room_id": "room-1", "name": "Living"}, {"room_id": "room-2", "name": "Office"}]}}}
+        room_report = {"preliminary_input_set_fingerprint": "snapshot-1"}
+        def system(ident, room, hour, coil):
+            return {"ahu_id": ident, "name": ident, "system_type": "constant_volume", "number_off": 1,
+                    "served_zone_ids": ["zone-" + ident], "room_ids": [room],
+                    "peak": {"hour": hour, "design_total_kw": coil + 0.4},
+                    "hours": [{"hour": hour, "coil_total_kw": coil, "coil_sensible_kw": coil - 0.5,
+                               "coil_latent_kw": 0.5, "fan_heat_kw": 0.3, "duct_effect_kw": 0.1,
+                               "flows_lps": {"supply": 250, "outside_air": 20},
+                               "mixed_air_state": {"dry_bulb_c": 23.5, "wet_bulb_c": 16.5},
+                               "coil_leaving_state": {"dry_bulb_c": 12, "wet_bulb_c": 11.5}}]}
+        ahu_report = {"status": "draft", "calculation_mode": "ai_preliminary",
+                      "input_snapshot_fingerprint": "snapshot-1",
+                      "input_fingerprints": {"calculator_input_snapshot": "snapshot-1", "ahu_resolution": "ahu-1"},
+                      "scenario_results": [{"scenario_id": "summer", "ahus": [
+                          system("AHU-1", "room-1", 15, 4.0), system("AHU-2", "room-2", 12, 2.0)]}]}
+        rows = cr.ahu_results(ahu_report, room_report, inputs,
+                              [{"name": "Living", "display_name": "Family"}], {"fingerprint": "ahu-1"})
+        self.assertEqual(rows["status"], "draft")
+        self.assertEqual([(row["name"], row["hour"], row["coil_total_kw"]) for row in rows["systems"]],
+                         [("AHU-1", 15, 4.0), ("AHU-2", 12, 2.0)])
+        self.assertEqual(rows["systems"][0]["rooms"], ["Family"])
+        html = cr._ahu_html(rows)
+        for text in ("Air systems and coil duty", "4.0 kW", "250.0 L/s", "Mixed air", "fan 0.3 kW", "Family"):
+            self.assertIn(text, html)
+        self.assertNotIn("4.4 kW</strong>", html)  # system total is not relabelled coil duty
+
+    def test_ahu_missing_blocked_or_stale_never_shows_a_coil_value(self):
+        inputs = {"input_fingerprint": "current"}
+        room_report = {"preliminary_input_set_fingerprint": "current"}
+        base = {"status": "draft", "calculation_mode": "ai_preliminary",
+                "input_snapshot_fingerprint": "current",
+                "input_fingerprints": {"calculator_input_snapshot": "current", "ahu_resolution": "old"},
+                "scenario_results": []}
+        cases = [({}, "No preliminary"),
+                 ({**base, "status": "blocked", "input_fingerprints": {
+                     "calculator_input_snapshot": "current", "ahu_resolution": "new"},
+                   "blocked_ahus": [{"reasons": ["Missing supply path."]}]}, "Missing supply path"),
+                 ({**base, "input_snapshot_fingerprint": "old"}, "older room-load"),
+                 (base, "AHU inputs changed")]
+        for report, reason in cases:
+            with self.subTest(reason=reason):
+                result = cr.ahu_results(report, room_report, inputs, [], {"fingerprint": "new"})
+                self.assertEqual(result["status"], "unavailable")
+                self.assertIn(reason, result["reason"])
+                self.assertIn("AHU duty not calculated", cr._ahu_html(result))
+                self.assertNotIn(" kW</strong>", cr._ahu_html(result))
+
+    def test_design_temperatures_come_from_governing_hour_and_saved_room_setpoints(self):
+        report = {"included_scope_peak": {"scenario_id": "hot", "hour": 15},
+                  "design_conditions_basis": {"design_day": {"source": "Cited weather pack", "days": [
+                      {"day": "hot", "design_point": {"db": 31.1, "wb": 19.8}}]}},
+                  "scenario_results": [{"scenario_id": "hot", "rooms": [{"name": "Living", "status": "calculated"}]}]}
+        inputs = {"material": {"design_day_scenarios": {"scenarios": [{
+            "scenario_id": "hot", "title": "Summer design day: design dry bulb with coincident wet bulb",
+            "status": "provisional", "source": "Cited weather pack", "hours": [
+                {"hour": 15, "outdoor_dry_bulb_c": {"value": 30.1}, "outdoor_wet_bulb_c": {"value": 19.8}}]}]},
+            "hourly_load_model": {"rooms": [
+                {"name": "Living", "indoor_cooling_setpoint_c": 24,
+                 "cooling_load_conditions": {"indoor_cooling_wet_bulb_c": 18}},
+                {"name": "Excluded", "indoor_cooling_setpoint_c": 20}]}}}
+        conditions = cr.design_conditions(report, inputs)
+        self.assertEqual((conditions["sizing"]["db"], conditions["summer"]["db"],
+                          conditions["indoor"]["db_values"], conditions["difference_k"]),
+                         (30.1, 31.1, [24.0], 7.1))      # the excluded room's 20 °C setpoint isn't counted
+
+    def test_missing_or_mixed_conditions_are_not_filled_with_a_guess(self):
+        self.assertIsNone(cr.design_conditions({}, {})["difference_k"])
+        self.assertEqual(cr.design_conditions({}, {})["indoor"]["db_values"], [])
+        report = {"included_scope_peak": {"scenario_id": "a", "hour": 12},
+                  "design_conditions_basis": {"design_day": {"days": [{"day": "hot", "design_point": {"db": 32, "wb": 20}}]}}}
+        inputs = {"material": {"design_day_scenarios": {"scenarios": [{"scenario_id": "a", "hours": [
+            {"hour": 12, "outdoor_dry_bulb_c": 32}]}]},
+            "hourly_load_model": {"rooms": [{"indoor_cooling_setpoint_c": 22}, {"indoor_cooling_setpoint_c": 24}]}}}
+        conditions = cr.design_conditions(report, inputs)
+        self.assertEqual(conditions["indoor"]["db_values"], [22.0, 24.0])
+        self.assertIsNone(conditions["indoor"]["db"])
+        self.assertIsNone(conditions["difference_k"])
+        page = cr.design_conditions_html(conditions)
+        self.assertIn("22.0–24.0 °C", page)
+        self.assertIn("differs by room", page)
+
     def test_internal_source_notes_read_plainly(self):
         self.assertEqual(cr._source_head("Generic value TV-0054: https://example"), "Generic value TV-0054")
         self.assertEqual(cr._source_head("Generic value: Rating 100 W (generic placeholder (AIRAH DA09 pending)) × 1"),
@@ -201,11 +285,37 @@ class PageTests(unittest.TestCase):
                 "assumed": [], "sources": cr.sources({}, False)}
 
     def test_the_page_carries_the_label_sizes_charts_and_sources(self):
-        page = cr.render_html(self.details())
+        details = self.details()
+        details["design_conditions"] = cr.design_conditions(CONDITIONS_REPORT, CONDITIONS_INPUT)
+        page = cr.render_html(details)
         for text in ("not an engineer&#x27;s design", "Units to consider", "7.1 kW", "10 kW", "<svg", "Sensible heat ratio",
-                     "0.83", "Still to confirm", "Uses typical lighting.", "Duct heat", "Daikin", "AS/NZS 3823"):
+                     "0.83", "Still to confirm", "Uses typical lighting.", "Duct heat", "Daikin", "AS/NZS 3823",
+                     "Design conditions", "31.1 °C", "19.8 °C wet bulb", "30.1 °C", "7.1 K", "cooling only"):
             self.assertIn(text, page)
+        self.assertNotIn("Air systems and coil duty", page)     # no AHU result passed: no section
         self.assertNotIn("<script", page)         # prints and opens offline
+
+    def test_plain_text_pdf_fallback_keeps_the_temperatures(self):
+        details = self.details()
+        details["design_conditions"] = cr.design_conditions(CONDITIONS_REPORT, CONDITIONS_INPUT)
+        details["ahu"] = cr.ahu_results({}, {}, {}, [])          # a shop with no AHU report: said plainly
+        text = "\n".join(productization._job_report_lines(details))
+        self.assertIn("Outdoor summer design 31.1 °C DB / 19.8 °C WB", text)
+        self.assertIn("at the sizing hour (February 16:00) 30.1 °C DB", text)
+        self.assertIn("indoor 24.0 °C DB / 18.0 °C WB", text)
+        self.assertIn("Cooling only", text)
+        self.assertIn("AHU duty not calculated", text)
+        details["ahu"] = cr.ahu_results({}, {}, {}, [], dwelling=True)   # a house with no AHU: nothing to say
+        self.assertNotIn("AHU", "\n".join(productization._job_report_lines(details)))
+        details["ahu"] = {"status": "draft", "systems": [{
+            "name": "AHU-1", "type": "Constant volume", "number_off": 1, "scenario": "January", "hour": 15,
+            "coil_total_kw": 4.0, "coil_sensible_kw": 3.5, "coil_latent_kw": 0.5, "supply_lps": 250,
+            "outside_lps": 20, "fan_kw": 0.3, "duct_kw": 0.1, "rooms": ["Family"],
+            "mixed_air": {"dry_bulb_c": 23.5, "wet_bulb_c": 16.5},
+            "coil_leaving": {"dry_bulb_c": 12, "wet_bulb_c": 11.5}}]}
+        text = "\n".join(productization._job_report_lines(details))
+        for value in ("AHU-1", "coil 4.0 kW", "Supply 250.0 L/s", "Mixed air: 23.5 °C", "Rooms: Family"):
+            self.assertIn(value, text)
 
     @unittest.skipUnless(productization._chrome_binary(), "no local Chrome or Chromium")
     def test_a_local_chrome_prints_it_as_a_real_pdf(self):

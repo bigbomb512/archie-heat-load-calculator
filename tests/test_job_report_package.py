@@ -67,6 +67,40 @@ class JobReportPackageTests(unittest.TestCase):
         self.assertIn("hourly_ai_preliminary_load_report.json", [row["path"] for row in manifest["source_artifacts"]])
         self.assertFalse((Path(result["package"]["artifact_url"]) / "artifacts").exists())   # sources named by hash, not copied
 
+    def test_current_ahu_result_is_in_report_and_changes_package_fingerprint(self):
+        room_path = self.root / "hourly_ai_preliminary_load_report.json"
+        room = json.loads(room_path.read_text(encoding="utf-8"))
+        room["preliminary_input_set_fingerprint"] = "snapshot-1"
+        room_path.write_text(json.dumps(room), encoding="utf-8")
+        (self.root / "ai_preliminary_input_set.json").write_text(json.dumps({
+            "input_fingerprint": "snapshot-1", "material": {"hourly_load_model": {"rooms": [
+                {"room_id": "room-1", "name": "Living room"}]}}}), encoding="utf-8")
+        (self.root / "ahu_resolution.json").write_text(json.dumps({"fingerprint": "ahu-1"}), encoding="utf-8")
+        ahu_path = self.root / "hourly_ai_preliminary_ahu_load_report.json"
+        ahu = {"status": "draft", "calculation_mode": "ai_preliminary",
+               "input_snapshot_fingerprint": "snapshot-1",
+               "input_fingerprints": {"calculator_input_snapshot": "snapshot-1", "ahu_resolution": "ahu-1"},
+               "scenario_results": [{"scenario_id": "summer", "ahus": [{
+                   "ahu_id": "AHU-1", "name": "AHU-1", "system_type": "constant_volume", "number_off": 1,
+                   "served_zone_ids": ["zone-1"], "room_ids": ["room-1"],
+                   "peak": {"hour": 15, "design_total_kw": 4.4},
+                   "hours": [{"hour": 15, "coil_total_kw": 4.0, "coil_sensible_kw": 3.5, "coil_latent_kw": 0.5,
+                              "flows_lps": {"supply": 250, "outside_air": 15}, "fan_heat_kw": 0.3,
+                              "duct_effect_kw": 0.1}]}]}]}
+        ahu_path.write_text(json.dumps(ahu), encoding="utf-8")
+        first = self.post({"report_type": "cooling", "source": "job"}, {"results_ready": True, "result_stale": False})
+        html = Path(first["package"]["html_path"]).read_text(encoding="utf-8")
+        self.assertIn("Air systems and coil duty", html)
+        self.assertIn("AHU-1", html)
+        self.assertIn("4.0 kW", html)
+        self.assertIn("hourly_ai_preliminary_ahu_load_report.json",
+                      [row["path"] for row in first["package"]["manifest"]["source_artifacts"]])
+        ahu["scenario_results"][0]["ahus"][0]["hours"][0]["coil_total_kw"] = 4.2
+        ahu_path.write_text(json.dumps(ahu), encoding="utf-8")
+        second = self.post({"report_type": "cooling", "source": "job"}, {"results_ready": True, "result_stale": False})
+        self.assertNotEqual(first["package"]["package_fingerprint"], second["package"]["package_fingerprint"])
+        self.assertIn("4.0 kW", Path(first["package"]["html_path"]).read_text(encoding="utf-8"))
+
     def test_an_out_of_date_final_load_asks_for_an_update_first(self):
         with self.assertRaisesRegex(ValueError, "out of date; update it first"):
             self.post({"report_type": "cooling", "source": "job"}, {"results_ready": True, "result_stale": True})

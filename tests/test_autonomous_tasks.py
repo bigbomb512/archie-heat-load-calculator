@@ -17,6 +17,63 @@ from backend import page_analysis_cache
 
 
 class AutonomousTaskTests(unittest.TestCase):
+    def test_distinct_enclosed_house_bedrooms_get_stable_numbers(self):
+        from shapely.geometry import box
+        areas = [box(0, 0, 10, 10), box(20, 0, 30, 10), box(0, 20, 10, 30)]
+        names, added = autonomous_tasks_service._number_repeated_house_bedrooms(
+            {0: "BEDROOM", 1: "BEDROOM", 2: "Bedroom 3"}, areas, ["Bedroom 3"])
+        self.assertEqual((names[0], names[1], names[2], added),
+                         ("Bedroom 1", "Bedroom 2", "Bedroom 3", ["Bedroom 1", "Bedroom 2"]))
+        self.assertEqual(autonomous_tasks_service._number_repeated_house_bedrooms(
+            {0: "Bedroom"}, areas)[0], {0: "Bedroom"})
+
+    def test_numbered_bedrooms_replace_only_the_same_levels_unnumbered_record(self):
+        from backend import room_proposal
+        from ai import room_use_resolution
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            room_proposal.save_use_named_rooms(root, "P0_room_names_numbered", 9, "First Floor",
+                                               ["Bedroom 1", "Bedroom 2"], "run-1",
+                                               derived_from_repeated_label=True)
+            run = {"local_room_inference_proposal": {"rooms": [
+                {"kind": "room", "label": "Bedroom", "level_name": "First Floor"},
+                {"kind": "room", "label": "Bedroom", "level_name": "Ground Floor"}]}}
+            proposal = room_proposal.room_proposal(run, root)
+            labels = {(row["label"], row["level_name"]) for row in proposal["rooms"]}
+            self.assertEqual(labels, {("Bedroom 1", "First Floor"), ("Bedroom 2", "First Floor"),
+                                      ("Bedroom", "Ground Floor")})
+            building = {"spaces": [{"name": "Bedroom", "level_name": "First Floor"},
+                                   {"name": "Bedroom", "level_name": "Ground Floor"}]}
+            rows = room_use_resolution._room_rows(building, {}, proposal)
+            self.assertEqual({(row["label"], row["level_name"]) for row in rows}, labels)
+
+    def test_house_naming_step_passes_separate_bedroom_outlines_to_trace(self):
+        from shapely.geometry import box
+        from backend import house_windows_service
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            record = {"packet": {"page": 9, "calibration": {"mm_per_px": 5},
+                                 "wall_style_ids": [], "read_room_names": ["BEDROOM"], "transform": {}},
+                      "run_id": "run-1", "quality_label": "AI draft", "accuracy": {}}
+            captured = []
+            def traces(_root, _record, polygons):
+                captured.extend(row["label"] for row in polygons)
+                return []
+            with patch.object(house_windows_service, "is_dwelling", return_value=True), \
+                 patch.object(autonomous_tasks_service, "_p0_context", return_value={}), \
+                 patch.object(autonomous_tasks_service, "_p0_walls_areas",
+                              return_value=([], [box(0, 0, 10, 10), box(20, 0, 30, 10)], [])), \
+                 patch.object(autonomous_tasks_service, "_page_level", return_value="First Floor"), \
+                 patch.object(autonomous_tasks_service, "_p0_trace_rows", side_effect=traces), \
+                 patch("backend.reviewer_room_geometry_service.persist_ai_determined_traces", return_value=[]):
+                autonomous_tasks_service._apply_p0_room_names(
+                    None, {"review_dir": folder}, root, record,
+                    {"names": {0: "Bedroom", 1: "Bedroom"}, "splits": [], "use_named_rooms": []}, defer=True)
+            self.assertEqual(captured, ["Bedroom 1", "Bedroom 2"])
+            saved = json.loads((root / "ai_named_rooms.json").read_text())
+            self.assertEqual([row["label"] for row in saved["pages"]["P0_room_names_numbered:page-9"]],
+                             ["Bedroom 1", "Bedroom 2"])
+
     def test_house_disables_shop_only_packets_and_shop_retains_them(self):
         from backend import house_windows_service
         with TemporaryDirectory() as temporary:

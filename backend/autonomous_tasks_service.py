@@ -3124,6 +3124,12 @@ def _apply_p0_room_names(web, project, root, record, validated, *, defer=False):
     walls, areas, segments = _p0_walls_areas(root, packet["page"], context, packet["calibration"],
                                              packet.get("wall_style_ids", []), packet.get("raster_mode", False))
     names, splits = validated["names"], validated["splits"]
+    from backend import house_windows_service
+    if house_windows_service.is_dwelling(root):
+        names, numbered_bedrooms = _number_repeated_house_bedrooms(
+            names, areas, packet.get("read_room_names", []))
+    else:
+        numbered_bedrooms = []
     # Rooms named by their use must be in the room list before their outlines are saved.
     from backend import room_proposal
     level = _page_level(root, packet["page"])
@@ -3136,6 +3142,8 @@ def _apply_p0_room_names(web, project, root, record, validated, *, defer=False):
                                        record["run_id"])
     room_proposal.save_use_named_rooms(root, "P0_room_names_read", packet["page"], level, named, record["run_id"],
                                        named_on_plan=True)
+    room_proposal.save_use_named_rooms(root, "P0_room_names_numbered", packet["page"], level,
+                                       numbered_bedrooms, record["run_id"], derived_from_repeated_label=True)
     snap_px = 250 / packet["calibration"]["mm_per_px"]
     by_room = {}
     for index, name in names.items():
@@ -3156,6 +3164,29 @@ def _apply_p0_room_names(web, project, root, record, validated, *, defer=False):
         "applied_value":{"rooms":_p0_result_rooms(prepared),
                         "label":record["quality_label"]}, "validation":validated, "block_reason":""})
     return record
+
+
+def _number_repeated_house_bedrooms(names, areas, printed_names=()):
+    """Keep separate enclosed BEDROOM areas distinct when the plan prints no numbers."""
+    import re
+    result = dict(names)
+    repeated = [index for index, name in result.items() if str(name).strip().casefold() in {"bedroom", "bed"}]
+    if len(repeated) < 2:
+        return result, []
+    used = {int(match.group(1)) for name in [*result.values(), *printed_names]
+            if (match := re.fullmatch(r"bed(?:room)?\s*(\d+)", str(name).strip(), re.I))}
+    ordered = sorted(repeated, key=lambda index: (round(areas[index].centroid.y, 3),
+                                                   round(areas[index].centroid.x, 3), index))
+    numbered = []
+    next_number = 1
+    for index in ordered:
+        while next_number in used:
+            next_number += 1
+        label = f"Bedroom {next_number}"
+        result[index] = label
+        numbered.append(label)
+        used.add(next_number)
+    return result, numbered
 
 
 def _main_plan_levels(root):

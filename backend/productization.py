@@ -440,6 +440,7 @@ def _job_report_html(details):
     excluded = "".join(f"<li>{e(text)}</li>" for text in details["exclusions"])
     not_cooled = ", ".join(e(name) for name in details["not_cooled"]) or "None"
     stale = "".join(f"<p class=warn>{e(reason)}</p>" for reason in details.get("stale_reasons", []))
+    conditions_text = contractor_report.design_conditions_text(details.get("design_conditions") or {})
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Cooling load: {e(details['name'])}</title>
 <style>body{{font:14px/1.45 system-ui,sans-serif;max-width:900px;margin:28px auto;padding:0 16px;color:#17242b}}
 h1{{font-size:22px;margin:0}}h2{{font-size:16px;margin:26px 0 8px;border-bottom:1px solid #d6dde0;padding-bottom:4px}}
@@ -451,11 +452,15 @@ td.n,th.n{{text-align:right}}ul{{padding-left:18px}}@media print{{body{{margin:0
 <div class=total>{kw(details['total_kw'])} kW</div>
 <div>Design cooling load at {e(details['peak_hour'])}:00 on the {e(details['peak_month'])} design day: sensible {kw(details['sensible_kw'])} kW, latent {kw(details['latent_kw'])} kW.
 {e(details['rooms_counted'])} rooms counted. {e(details['household_note'])}</div>
-<h2>Design conditions</h2><p>{e(details['design_basis'])}</p>
+<h2>Design conditions</h2>
+<p>{e(conditions_text or "The design temperatures weren't recorded with this result; update the load before using this report.")}<br>
+Cooling only: no winter (heating) design temperature or heating load is calculated.</p>
+<p>{e(details['design_basis'])}</p>
 <h2>Where the load comes from (at the peak hour)</h2><table><tr><th>Component</th><th class=n>kW</th></tr>{components}</table>
 <h2>Rooms</h2><p class=muted>Each room's own peak, which can fall at a different hour from the whole job's.</p>
 <table><tr><th>Room</th><th>Level</th><th class=n>m²</th><th class=n>kW</th><th class=n>W/m²</th></tr>{rooms}</table>
 <p class=muted>Not cooled: {not_cooled}.</p>
+{contractor_report._ahu_html(details.get('ahu') or {})}
 <h2>Peak by month</h2><table><tr><th>Month</th><th class=n>kW</th><th class=n>Hour</th></tr>{months}</table>
 <h2>Still assumed</h2><ul>{assumed or '<li>None reported.</li>'}</ul>
 <h2>Not included</h2><ul>{excluded or '<li>None reported.</li>'}</ul>
@@ -463,10 +468,15 @@ td.n,th.n{{text-align:right}}ul{{padding-left:18px}}@media print{{body{{margin:0
 
 
 def _job_report_lines(details):
+    conditions_text = contractor_report.design_conditions_text(details.get("design_conditions") or {})
     lines = [f"Cooling load: {details['name']}", details["address"], "Draft estimate; not engineer approved.",
              f"Design cooling load {details['total_kw']:.1f} kW at {details['peak_hour']}:00, {details['peak_month']} design day "
-             f"(sensible {details['sensible_kw']:.1f} kW, latent {details['latent_kw']:.1f} kW).", details["design_basis"], "", "Rooms (own peak):"]
+             f"(sensible {details['sensible_kw']:.1f} kW, latent {details['latent_kw']:.1f} kW).",
+             conditions_text or "Design temperatures not recorded with this result.",
+             "Cooling only: no winter (heating) design temperature or heating load is calculated.",
+             details["design_basis"], "", "Rooms (own peak):"]
     lines += [f"  {row['name']} ({row['level']}): {row['area_m2'] or 0:.1f} m2, {row['kw']:.1f} kW" for row in details["rooms"]]
+    lines += [""] + contractor_report.ahu_lines(details.get("ahu") or {})
     lines += ["", "Still assumed:"] + [f"  - {text}" for text, _count in details["assumptions"]]
     lines += ["", "Not included:"] + [f"  - {text}" for text in details["exclusions"]]
     return lines

@@ -1187,6 +1187,7 @@ def _job_report_inputs(project):
     2026-11-07: "No cooling report exists to package")."""
     from backend import ai_preliminary_service, job_service
     files = {key: Path(value) for key, value in ai_preliminary_service._paths(project).items() if isinstance(value, (str, Path))}
+    files["ahu_preliminary_report"] = Path(project["review_dir"]) / "hourly_ai_preliminary_ahu_load_report.json"
     report_path = files["report"]
     state = job_service.status(sys.modules[__name__], project)
     current_result = bool(state.get("results_ready") and not state.get("result_stale"))
@@ -1255,10 +1256,13 @@ def _job_report_details(project, stale_reasons):
 def _contractor_details(project, plan, peak):
     """Unit sizes, the design day by the hour, the load by group and the values used, from the job's full hourly
     report and input set (the plan carries only a summary of them)."""
-    from backend import ai_preliminary_service, contractor_report
+    from backend import ai_preliminary_service, ahu_resolution_service, contractor_report
     paths = ai_preliminary_service._paths(project)
     full = load_json(paths["report"]) if paths["report"].exists() else {}
     input_set = load_json(paths["current_set"]) if paths["current_set"].exists() else {}
+    ahu_paths = ahu_resolution_service._paths(project)
+    ahu_report = load_json(ahu_paths["preliminary_report"]) if ahu_paths["preliminary_report"].exists() else {}
+    ahu_resolution = load_json(ahu_paths["artifact"]) if ahu_paths["artifact"].exists() else {}
     plan_rooms = [row for row in plan.get("rooms", []) if isinstance(row, dict) and row.get("name")]
     room_values, equipment = contractor_report.room_values(input_set, plan_rooms)
     dwelling = ((input_set.get("room_use_resolution") or {}).get("dwelling_context") or {}).get("is_dwelling") is True
@@ -1266,6 +1270,7 @@ def _contractor_details(project, plan, peak):
         "room_sizing": contractor_report.room_sizing(full, plan_rooms),
         "ducted": contractor_report.ducted(peak.get("final_design_total_kw", peak.get("design_total_kw")) or 0.0, dwelling),
         "design_day": contractor_report.design_day(full),
+        "ahu": contractor_report.ahu_results(ahu_report, full, input_set, plan_rooms, ahu_resolution, dwelling),
         "breakdown": contractor_report.breakdown(full["included_scope_peak"] if (full.get("included_scope_peak") or {}).get("components")
                                                  else peak),
         "room_values": room_values, "equipment": equipment,

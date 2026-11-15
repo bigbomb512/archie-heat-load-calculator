@@ -18,7 +18,7 @@ SIZES_PATH = ROOT / "config" / "unit_sizes.json"
 PACK_PATH = ROOT / "config" / "ai_preliminary_assumption_pack.json"
 HOUSE_PATH = ROOT / "config" / "house_profiles.json"
 STORED_HEAT_PATH = ROOT / "config" / "stored_heat.json"
-TEMPLATE_VERSION = "job-report-v4"   # v4: design conditions under the total (2026-11-15)
+TEMPLATE_VERSION = "job-report-v5"   # v5: design conditions under the total; AHU coil duty when there is one (2026-11-15)
 LABEL = "Preliminary estimate from the drawings — not an engineer's design"
 
 # Load groups in the fixed categorical order of the reference palette (dataviz skill, light mode), stacked in that order.
@@ -150,7 +150,6 @@ def _value(row):
 def design_conditions(report, input_set):
     """The temperatures the load was calculated at, for the top of the report (a contractor checks these first):
     the summer design point and where it comes from, the outdoor air at the sizing hour, indoor, and the difference."""
-    from collections import Counter
     from ai import heat_loads
     basis = (report.get("design_conditions_basis") or {}).get("design_day") or {}
     days = {row.get("day"): row.get("design_point") or {} for row in basis.get("days") or [] if isinstance(row, dict)}
@@ -165,12 +164,17 @@ def design_conditions(report, input_set):
     at_peak = next((row for row in hours if row.get("hour") == hour), {}) if isinstance(hour, int) else {}
     day_max = max((_value(row.get("outdoor_dry_bulb_c")) for row in hours if _value(row.get("outdoor_dry_bulb_c")) is not None), default=None)
     rooms = (material.get("hourly_load_model") or {}).get("rooms") or []
-    indoor_db = Counter(_number(row.get("indoor_cooling_setpoint_c")) for row in rooms if _number(row.get("indoor_cooling_setpoint_c")) is not None)
-    indoor_wb = Counter(_number((row.get("cooling_load_conditions") or {}).get("indoor_cooling_wet_bulb_c")) for row in rooms
-                        if _number((row.get("cooling_load_conditions") or {}).get("indoor_cooling_wet_bulb_c")) is not None)
-    pack = (_json(PACK_PATH).get("scenario") or {})
-    indoor = {"db": indoor_db.most_common(1)[0][0] if indoor_db else _number(pack.get("indoor_dry_bulb_c")),
-              "wb": indoor_wb.most_common(1)[0][0] if indoor_wb else _number(pack.get("indoor_wet_bulb_c"))}
+    # Only the rooms in the result, and no guess: rooms held at different setpoints show as a range (Codex, 2026-11-15).
+    included = {row.get("name") for result in report.get("scenario_results") or []
+                if result.get("scenario_id") == peak.get("scenario_id")
+                for row in result.get("rooms") or [] if row.get("status") != "blocked"}
+    if included:
+        rooms = [row for row in rooms if row.get("name") in included]
+    db_values = sorted({value for row in rooms if (value := _value(row.get("indoor_cooling_setpoint_c"))) is not None})
+    wb_values = sorted({value for row in rooms
+                        if (value := _value((row.get("cooling_load_conditions") or {}).get("indoor_cooling_wet_bulb_c"))) is not None})
+    indoor = {"db": db_values[0] if len(db_values) == 1 else None, "wb": wb_values[0] if len(wb_values) == 1 else None,
+              "db_values": db_values, "wb_values": wb_values}
     pressure = _value(scenario.get("atmospheric_pressure_kpa")) or 101.325
     if indoor["db"] is not None and indoor["wb"] is not None and indoor["wb"] <= indoor["db"]:
         ratio = heat_loads.humidity_ratio_from_db_wb(indoor["db"], indoor["wb"], pressure, "thermodynamic")
@@ -187,6 +191,13 @@ def design_conditions(report, input_set):
             "sizing": sizing, "indoor": indoor,
             "difference_k": round(design_db - indoor["db"], 1) if design_db is not None and indoor["db"] is not None else None,
             "sizing_difference_k": round(sizing["db"] - indoor["db"], 1) if sizing["db"] is not None and indoor["db"] is not None else None}
+
+
+def _range(values):
+    values = list(values or [])
+    if not values:
+        return "not recorded"
+    return f"{values[0]:.1f} °C" if len(values) == 1 else f"{values[0]:.1f}–{values[-1]:.1f} °C"
 
 
 def _temps(db, wb):
@@ -207,9 +218,73 @@ def design_conditions_text(c):
     if indoor.get("db") is not None:
         parts.append(f"indoor {_temps(indoor['db'], indoor.get('wb'))}"
                      + (f" (about {indoor['rh_percent']}% RH)" if indoor.get("rh_percent") is not None else ""))
+    elif indoor.get("db_values"):
+        parts.append(f"indoor {_range(indoor['db_values'])} DB across rooms")
     if c.get("difference_k") is not None:
         parts.append(f"design temperature difference {c['difference_k']:.1f} K")
     return "; ".join(parts) + "."
+
+
+def ahu_results(ahu_report, room_report, input_set, plan_rooms, ahu_resolution=None, dwelling=False):
+    """Present saved draft AHU results only when they belong to this room-load snapshot. A house with no AHU report
+    has nothing to show (its units are the splits and ducted system above), not a "not calculated" warning."""
+    unavailable = lambda reason: {"status": "unavailable", "reason": reason,
+                                   "next_action": "Resolve AHU and air-side inputs, then calculate preliminary coil duty."}
+    if not ahu_report:
+        if dwelling:
+            return {"status": "not_applicable"}
+        return unavailable("No preliminary AHU coil-duty report has been calculated for this job.")
+    snapshot = input_set.get("input_fingerprint")
+    if not snapshot or room_report.get("preliminary_input_set_fingerprint") != snapshot:
+        return unavailable("The current room-load input snapshot cannot be verified.")
+    if (ahu_report.get("input_snapshot_fingerprint") != snapshot or
+            (ahu_report.get("input_fingerprints") or {}).get("calculator_input_snapshot") != snapshot):
+        return unavailable("The AHU report belongs to an older room-load input snapshot.")
+    resolution_fingerprint = (ahu_resolution or {}).get("fingerprint")
+    if not resolution_fingerprint or (ahu_report.get("input_fingerprints") or {}).get("ahu_resolution") != resolution_fingerprint:
+        return unavailable("AHU inputs changed after the coil-duty report was calculated.")
+    if ahu_report.get("status") == "blocked" or ahu_report.get("calculation_mode") != "ai_preliminary":
+        blockers = [reason for row in ahu_report.get("blocked_ahus") or [] for reason in row.get("reasons") or []]
+        return unavailable(blockers[0] if blockers else "No draft AHU system has a calculated coil duty.")
+
+    material_rooms = (input_set.get("material", {}).get("hourly_load_model") or {}).get("rooms") or []
+    room_labels = {row.get("room_id"): row.get("name") for row in material_rooms if row.get("room_id")}
+    display_names = shown(plan_rooms)
+    scenario_labels = {row.get("scenario_id"): row.get("representative_month") or row.get("scenario_id")
+                       for row in room_report.get("scenario_results") or []}
+    results = {}
+    for scenario in ahu_report.get("scenario_results") or []:
+        for system in scenario.get("ahus") or []:
+            peak = system.get("peak") or {}
+            hour = peak.get("hour")
+            hourly = next((row for row in system.get("hours") or [] if row.get("hour") == hour), {})
+            if not hourly or _number(hourly.get("coil_total_kw")) is None:
+                continue
+            ident = system.get("ahu_id")
+            if not ident or (ident in results and results[ident]["total_kw"] >= peak.get("design_total_kw", 0)):
+                continue
+            flows = hourly.get("flows_lps") or {}
+            results[ident] = {
+                "id": ident, "name": system.get("name") or ident,
+                "type": {"constant_volume": "Constant volume", "vav": "Variable air volume"}.get(
+                    system.get("system_type"), system.get("system_type") or ""),
+                "number_off": system.get("number_off"), "scenario": scenario_labels.get(scenario.get("scenario_id")) or scenario.get("scenario_id") or "",
+                "hour": hour, "rooms": sorted({display_names.get(room_labels.get(room_id), room_labels.get(room_id) or room_id)
+                                                for room_id in system.get("room_ids") or [] if room_id}),
+                "zones": sorted(str(zone) for zone in system.get("served_zone_ids") or []),
+                "coil_total_kw": hourly.get("coil_total_kw"), "coil_sensible_kw": hourly.get("coil_sensible_kw"),
+                "coil_latent_kw": hourly.get("coil_latent_kw"), "total_kw": peak.get("design_total_kw", 0),
+                "supply_lps": flows.get("supply"), "outside_lps": flows.get("outside_air"),
+                "mixed_air": hourly.get("mixed_air_state") or {}, "coil_leaving": hourly.get("coil_leaving_state") or {},
+                "fan_kw": hourly.get("fan_heat_kw"), "duct_kw": hourly.get("duct_effect_kw"),
+            }
+    if not results:
+        blockers = [reason for scenario in ahu_report.get("scenario_results") or []
+                    for row in scenario.get("blocked_ahus") or [] for reason in row.get("reasons") or []]
+        return unavailable(blockers[0] if blockers else "No AHU has a calculated coil duty in the saved report.")
+    return {"status": "draft", "systems": sorted(results.values(), key=lambda row: (row["name"], row["id"])),
+            "excluded": [row for scenario in ahu_report.get("scenario_results") or []
+                         for row in scenario.get("blocked_ahus") or []]}
 
 
 def breakdown(peak):
@@ -521,9 +596,12 @@ def design_conditions_html(c):
         ("Outdoor design (summer)", deg(summer["db"]), wet(summer.get("wb")), f"{where} · {c.get('source') or 'source not recorded'}"),
         ("Outdoor at the sizing hour", deg(sizing.get("db")), wet(sizing.get("wb")),
          f"{sizing.get('month', '')} design day, {sizing.get('hour', '')}:00 · {lowered}"),
-        ("Indoor design", deg(indoor.get("db")), wet(indoor.get("wb")),
-         f"about {indoor['rh_percent']}% relative humidity" if indoor.get("rh_percent") is not None else ""),
-        ("Design temperature difference", f"{c['difference_k']:.1f} K" if c.get("difference_k") is not None else "not recorded", "",
+        ("Indoor design", deg(indoor.get("db")) if indoor.get("db") is not None else _range(indoor.get("db_values")),
+         wet(indoor.get("wb")) if indoor.get("wb") is not None else (_range(indoor.get("wb_values")) + " wet bulb" if indoor.get("wb_values") else ""),
+         f"about {indoor['rh_percent']}% relative humidity" if indoor.get("rh_percent") is not None
+         else "rooms are held at different setpoints" if len(indoor.get("db_values") or []) > 1 else ""),
+        ("Design temperature difference", f"{c['difference_k']:.1f} K" if c.get("difference_k") is not None
+         else "differs by room" if len(indoor.get("db_values") or []) > 1 else "not recorded", "",
          "outdoor summer design dry bulb less indoor"),
     ]
     body = "".join(f"<div class=card>{e(title)}<b>{e(value)}</b>{f'<span>{e(second)}</span><br>' if second else ''}"
@@ -537,6 +615,68 @@ def design_conditions_html(c):
 def _kw(value, digits=1):
     value = _number(value)
     return "" if value is None else f"{value:.{digits}f}"
+
+
+def _temperature(value):
+    return f"{value:g} °C" if _number(value) is not None else "Not recorded"
+
+
+def ahu_lines(ahu):
+    if not ahu or ahu.get("status") == "not_applicable":
+        return []
+    if ahu.get("status") != "draft":
+        return ["AHU duty not calculated: " + str(ahu.get("reason") or "No current AHU result is available."),
+                str(ahu.get("next_action") or "")]
+    lines = ["Air systems and coil duty (draft; not engineering reviewed):"]
+    for system in ahu.get("systems") or []:
+        lines += [f"  {system['name']} ({system['type']}, {system['number_off']} unit(s)); "
+                  f"{system['scenario']} at {system['hour']}:00; "
+                  f"coil {_kw(system.get('coil_total_kw'))} kW total, {_kw(system.get('coil_sensible_kw'))} kW sensible, "
+                  f"{_kw(system.get('coil_latent_kw'))} kW latent.",
+                  f"    Supply {_kw(system.get('supply_lps')) or 'Not recorded'} L/s; "
+                  f"outdoor {_kw(system.get('outside_lps')) or 'Not recorded'} L/s; "
+                  f"fan {_kw(system.get('fan_kw')) or 'Not recorded'} kW; "
+                  f"duct effect {_kw(system.get('duct_kw')) or 'Not recorded'} kW.",
+                  f"    Mixed air: {_temperature((system.get('mixed_air') or {}).get('dry_bulb_c'))} DB / "
+                  f"{_temperature((system.get('mixed_air') or {}).get('wet_bulb_c'))} WB; "
+                  f"coil leaving: {_temperature((system.get('coil_leaving') or {}).get('dry_bulb_c'))} DB / "
+                  f"{_temperature((system.get('coil_leaving') or {}).get('wet_bulb_c'))} WB.",
+                  "    Rooms: " + (", ".join(system.get("rooms") or []) or "Not recorded")]
+    for row in ahu.get("excluded") or []:
+        lines.append(f"  Not included: {row.get('ahu_id') or 'AHU'}: {'; '.join(row.get('reasons') or [])}")
+    return lines
+
+
+def _ahu_html(ahu):
+    e = _e
+    if not ahu or ahu.get("status") == "not_applicable":
+        return ""
+    if ahu.get("status") != "draft":
+        return ("<section class=ahu-section><h2>Air systems and coil duty</h2>"
+                f"<p class=warn><b>AHU duty not calculated.</b> {e(ahu.get('reason') or 'No current AHU result is available.')}</p>"
+                f"<p>{e(ahu.get('next_action') or '')}</p></section>")
+    cards = []
+    for system in ahu.get("systems") or []:
+        flows = f"Supply {_kw(system.get('supply_lps')) or 'Not recorded'} L/s · Outdoor {_kw(system.get('outside_lps')) or 'Not recorded'} L/s"
+        rooms = ", ".join(system.get("rooms") or []) or "Not recorded"
+        zones = ", ".join(system.get("zones") or []) or "Not recorded"
+        mixed, leaving = system.get("mixed_air") or {}, system.get("coil_leaving") or {}
+        cards.append(f"""<article class=ahu-card>
+<h3>{e(system['name'])} <span class=muted>· {e(system['type'])} · {e(system['number_off'])} unit(s)</span></h3>
+<p class=muted>Draft coil duty at {e(system['hour'])}:00 in scenario {e(system['scenario'])}. Served rooms: {e(rooms)}. Zones: {e(zones)}.</p>
+<div class=ahu-metrics><div><span>Coil total</span><strong>{_kw(system['coil_total_kw'])} kW</strong></div>
+<div><span>Sensible</span><strong>{_kw(system['coil_sensible_kw'])} kW</strong></div>
+<div><span>Latent</span><strong>{_kw(system['coil_latent_kw'])} kW</strong></div></div>
+<p>{e(flows)}</p>
+<p>Mixed air: {_temperature(mixed.get('dry_bulb_c'))} DB / {_temperature(mixed.get('wet_bulb_c'))} WB. Coil leaving: {_temperature(leaving.get('dry_bulb_c'))} DB / {_temperature(leaving.get('wet_bulb_c'))} WB.</p>
+<p>Separate effects: fan {_kw(system.get('fan_kw')) or 'Not recorded'} kW; duct {_kw(system.get('duct_kw')) or 'Not recorded'} kW. These are not the coil duty.</p>
+</article>""")
+    excluded = "".join(f"<li>{e(row.get('ahu_id') or 'AHU')}: {e('; '.join(row.get('reasons') or []))}</li>"
+                       for row in ahu.get("excluded") or [])
+    return ("<section class=ahu-section><h2>Air systems and coil duty</h2>"
+            "<p class=muted>Draft AHU results are separate from the coincident building load and each room’s own peak. "
+            "They are not engineering reviewed.</p>" + "".join(cards) +
+            (f"<h3>AHUs not included</h3><ul>{excluded}</ul>" if excluded else "") + "</section>")
 
 
 def render_html(d):
@@ -591,6 +731,9 @@ h3{{font-size:14px;margin:16px 0 6px}}.muted{{color:var(--muted)}}.warn{{backgro
 .total{{font-size:40px;font-weight:700;margin:12px 0 2px;font-variant-numeric:tabular-nums}}
 .cards{{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin:12px 0}}
 .card{{border:1px solid var(--line);border-radius:10px;padding:10px 12px}}.card b{{display:block;font-size:22px;font-variant-numeric:tabular-nums}}
+.ahu-card{{border:1px solid var(--line);border-radius:10px;padding:12px 16px;margin:12px 0;break-inside:avoid}}
+.ahu-card h3{{margin:0 0 6px}}.ahu-card p{{margin:7px 0}}.ahu-metrics{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}}
+.ahu-metrics span{{display:block;color:var(--muted)}}.ahu-metrics strong{{font-size:18px;font-variant-numeric:tabular-nums}}
 table{{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}}td,th{{padding:4px 8px;border-bottom:1px solid #eef1f2;text-align:left;vertical-align:top}}
 th{{font-weight:600;background:var(--wash)}}td.n,th.n{{text-align:right;white-space:nowrap}}ul{{padding-left:18px}}li{{margin:3px 0}}
 .chart{{width:100%;height:auto;display:block;margin:6px 0}}.chart .grid{{stroke:#e6eaec;stroke-width:1}}
@@ -599,7 +742,7 @@ th{{font-weight:600;background:var(--wash)}}td.n,th.n{{text-align:right;white-sp
 .footer{{position:fixed;bottom:0;left:0;right:0;font-size:10px;color:var(--muted);text-align:center;padding:4px;background:#fff}}
 svg,tr,.card{{break-inside:avoid}}
 @page{{size:A4;margin:14mm 12mm 16mm}}@media print{{body{{margin:0 auto;max-width:none}}.pagebreak{{break-before:page}}}}
-@media (max-width:600px){{.total{{font-size:32px}}td,th{{padding:4px}}}}
+@media (max-width:600px){{.total{{font-size:32px}}.ahu-metrics{{grid-template-columns:1fr}}td,th{{padding:4px}}}}
 </style></head><body>
 <div class=footer>{e(LABEL)} · {e(d['name'])} · generated {e(d['generated_at'])}</div>
 <h1>Cooling load: {e(d['name'])}</h1><div class=muted>{e(d['address'])}</div>
@@ -644,6 +787,7 @@ Stored heat is included: sun, lights and people warm the floor and walls and rea
 <h2>Rooms</h2><p class=muted>Each room's load on the design day that sizes the system.</p>
 <table><tr><th>Room</th><th>Level</th><th class=n>m²</th><th class=n>kW</th><th class=n>W/m²</th></tr>{rooms}</table>
 <p class=muted>Not cooled: {not_cooled}.</p>
+{_ahu_html(d.get('ahu') or {})}
 
 <h2>Values used, room by room</h2>
 <table><tr><th>Room</th><th>Use</th><th class=n>m²</th><th class=n>People</th><th class=n>W/person sens. / lat.</th><th class=n>Lights W/m²</th><th class=n>Outside air L/s</th></tr>
@@ -656,7 +800,7 @@ Stored heat is included: sun, lights and people warm the floor and walls and rea
 for the kind of item only, and the weakest. A manufacturer's data sheet for the installed model replaces either.</p>
 <h3>Walls, roof and glass to outside</h3>
 <table><tr><th>What</th><th>Value</th><th class=n>Surfaces</th><th>Source</th></tr>{envelope or '<tr><td colspan=4>None.</td></tr>'}</table>
-<p class=muted>Design conditions: {e(d['design_basis'])} See Design conditions at the top.</p>
+<p class=muted>Design weather basis: {e(d['design_basis'])} The temperatures are under Design conditions at the top.</p>
 
 <h2>Still to confirm</h2><ul>{to_confirm or '<li>None reported.</li>'}</ul>
 <h2>Assumed for this job</h2><ul>{assumed_rows or '<li>None reported.</li>'}</ul>

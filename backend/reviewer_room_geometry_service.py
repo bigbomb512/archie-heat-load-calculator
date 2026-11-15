@@ -584,8 +584,12 @@ def _rooms(paths):
     building = _read(paths["building"], {})
     room_use = _read(paths["room_use"], {})
     run = _read(paths["run"], {})
-    from backend.room_proposal import room_proposal
+    from backend.room_proposal import room_proposal, numbered_bedroom_levels
     proposal = room_proposal(run, paths["root"])
+    numbered_levels = numbered_bedroom_levels(paths["root"])
+    def replaced_bedroom(row):
+        return (str(row.get("label") or row.get("name") or row.get("original_label") or "").strip().casefold()
+                in {"bedroom", "bed"} and str(row.get("level_name") or "Unassigned level").casefold() in numbered_levels)
     geometry = _read(paths["geometry"], {})
     active_area_ids = {row.get("room_source_id") for row in geometry.get("entities", [])
                        if isinstance(row, dict) and row.get("kind") == "area"
@@ -593,12 +597,13 @@ def _rooms(paths):
                        and row.get("room_source_id")}
     rows = []
     for row in building.get("spaces", []) if isinstance(building, dict) else []:
-        if isinstance(row, dict) and row.get("id") and plausible_room_label(row.get("name")):
+        if isinstance(row, dict) and row.get("id") and plausible_room_label(row.get("name")) and not replaced_bedroom(row):
             rows.append({"room_id": row["id"], "label": row["name"], "level_name": row.get("level_name", ""),
                          "source_pages": sorted({item.get("page") for item in row.get("evidence", []) if isinstance(item, dict) and isinstance(item.get("page"), int)}),
                          "evidence": deepcopy(row.get("evidence", [])), "source": "building_evidence"})
     for row in room_use.get("records", []) if isinstance(room_use, dict) else []:
-        if isinstance(row, dict) and row.get("room_id") and plausible_room_label(row.get("original_label") or row.get("label")):
+        if (isinstance(row, dict) and row.get("room_id") and plausible_room_label(row.get("original_label") or row.get("label"))
+                and not replaced_bedroom(row)):
             rows.append({"room_id": row["room_id"], "label": row.get("original_label") or row.get("label"),
                          "level_name": row.get("level_name", ""),
                          "source_pages": sorted({item.get("page") for item in row.get("evidence", []) if isinstance(item, dict) and isinstance(item.get("page"), int)}),

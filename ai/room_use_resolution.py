@@ -112,9 +112,15 @@ def _room_rows(building, vision, proposal):
     vision_entities = (((vision or {}).get("result", {}) or {}).get("auto_extraction", {}) or {}).get("entities", []) if isinstance(vision, dict) else []
     ai_rooms = [row for row in list(vision_entities) + list((proposal or {}).get("rooms", []))
                 if isinstance(row, dict) and row.get("kind") == "room" and plausible_room_label(row.get("label"))]
+    numbered_levels = {_text(row.get("level_name") or "Unassigned level").casefold() for row in ai_rooms
+                       if row.get("source") == "numbered_from_repeated_label"}
+    def replaced_bedroom(label, level):
+        return _text(label).casefold() in {"bedroom", "bed"} and _text(level or "Unassigned level").casefold() in numbered_levels
+    ai_rooms = [row for row in ai_rooms if not replaced_bedroom(row.get("label"), row.get("level_name"))]
     grouped = {}
     for row in (building or {}).get("spaces", []) if isinstance(building, dict) else []:
-        if not isinstance(row, dict) or not plausible_room_label(row.get("name")):
+        if (not isinstance(row, dict) or not plausible_room_label(row.get("name"))
+                or replaced_bedroom(row.get("name"), row.get("level_name"))):
             continue
         label, level = _text(row.get("name")), _text(row.get("level_name")) or "Unassigned level"
         grouped.setdefault(room_identity(label, level), {"label": label, "level_name": level, "building": row, "ai": []})["ai"].extend(
