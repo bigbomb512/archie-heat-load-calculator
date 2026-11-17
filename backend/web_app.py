@@ -1256,7 +1256,7 @@ def _job_report_details(project, stale_reasons):
 def _contractor_details(project, plan, peak):
     """Unit sizes, the design day by the hour, the load by group and the values used, from the job's full hourly
     report and input set (the plan carries only a summary of them)."""
-    from backend import ai_preliminary_service, ahu_resolution_service, contractor_report
+    from backend import ai_preliminary_service, ahu_resolution_service, contractor_report, setpoint_comparison
     paths = ai_preliminary_service._paths(project)
     full = load_json(paths["report"]) if paths["report"].exists() else {}
     input_set = load_json(paths["current_set"]) if paths["current_set"].exists() else {}
@@ -1270,6 +1270,8 @@ def _contractor_details(project, plan, peak):
         "room_sizing": contractor_report.room_sizing(full, plan_rooms),
         "ducted": contractor_report.ducted(peak.get("final_design_total_kw", peak.get("design_total_kw")) or 0.0, dwelling),
         "design_day": contractor_report.design_day(full),
+        "engineer_rooms": contractor_report.engineer_room_details(full, input_set, plan_rooms),
+        "setpoint_comparison": setpoint_comparison.compare(input_set, full),
         "ahu": contractor_report.ahu_results(ahu_report, full, input_set, plan_rooms, ahu_resolution, dwelling),
         "breakdown": contractor_report.breakdown(full["included_scope_peak"] if (full.get("included_scope_peak") or {}).get("components")
                                                  else peak),

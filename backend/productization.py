@@ -475,7 +475,29 @@ def _job_report_lines(details):
              conditions_text or "Design temperatures not recorded with this result.",
              "Cooling only: no winter (heating) design temperature or heating load is calculated.",
              details["design_basis"], "", "Rooms (own peak):"]
-    lines += [f"  {row['name']} ({row['level']}): {row['area_m2'] or 0:.1f} m2, {row['kw']:.1f} kW" for row in details["rooms"]]
+    engineer_rooms = details.get("engineer_rooms") or []
+    if engineer_rooms:
+        lines += [f"  {row['name']} ({row['level']}): {row['area_m2']:.1f} m2, "
+                  f"{row['peak']['design_total_kw']:.2f} kW total, "
+                  f"{row['peak'].get('sensible_kw', 0):.2f} sensible, "
+                  f"{row['peak'].get('latent_kw', 0):.2f} latent, "
+                  f"{row['month']} {row['peak']['hour']}:00"
+                  for row in engineer_rooms if row.get("area_m2") is not None]
+    else:
+        lines += [f"  {row['name']} ({row['level']}): {row['area_m2'] or 0:.1f} m2, {row['kw']:.1f} kW" for row in details["rooms"]]
+    comparison = details.get("setpoint_comparison") or {}
+    lines += ["", "Indoor setpoint comparison:"]
+    if comparison.get("status") == "calculated":
+        baseline = (comparison["variants"][0].get("peak") or {}).get("final_design_total_kw")
+        for row in comparison["variants"]:
+            peak = row.get("peak") or {}
+            total = peak.get("final_design_total_kw", peak.get("design_total_kw"))
+            lines.append(f"  {row['setpoint_c']} C DB / {row.get('wet_bulb_c', 'not recorded')} C WB, "
+                         f"RH {row.get('relative_humidity', 0) * 100:.1f}%: "
+                         + (f"{total:.2f} kW ({total - baseline:+.2f} kW from baseline)" if total is not None and baseline is not None
+                            else f"not calculated: {row.get('reason', 'no peak recorded')}"))
+    else:
+        lines.append("  Not calculated: " + str(comparison.get("reason") or "no compatible indoor state recorded"))
     lines += [""] + contractor_report.ahu_lines(details.get("ahu") or {})
     lines += ["", "Still assumed:"] + [f"  - {text}" for text, _count in details["assumptions"]]
     lines += ["", "Not included:"] + [f"  - {text}" for text in details["exclusions"]]

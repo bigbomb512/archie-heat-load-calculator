@@ -18,7 +18,7 @@ SIZES_PATH = ROOT / "config" / "unit_sizes.json"
 PACK_PATH = ROOT / "config" / "ai_preliminary_assumption_pack.json"
 HOUSE_PATH = ROOT / "config" / "house_profiles.json"
 STORED_HEAT_PATH = ROOT / "config" / "stored_heat.json"
-TEMPLATE_VERSION = "job-report-v5"   # v5: design conditions under the total; AHU coil duty when there is one (2026-11-15)
+TEMPLATE_VERSION = "job-report-v6"
 LABEL = "Preliminary estimate from the drawings — not an engineer's design"
 
 # Load groups in the fixed categorical order of the reference palette (dataviz skill, light mode), stacked in that order.
@@ -131,6 +131,7 @@ def design_day(report):
                      if row.get("scenario_id") == scenario.get("scenario_id")), {})
     totals = seasonal.get("hourly_kw") if len(seasonal.get("hourly_kw") or []) == 24 else None
     hours = []
+    actual_hours = []
     for index, row in enumerate(scenario["included_scope_hours"]):
         groups = {key: 0.0 for key, *_rest in GROUPS}
         for name, item in (row.get("components") or {}).items():
@@ -139,8 +140,73 @@ def design_day(report):
         total = _number(totals[index]) if totals else _number(row.get("design_total_kw")) or parts
         groups["fan"] += max(0.0, total - parts)
         hours.append({key: round(max(value, 0.0), 3) for key, value in groups.items()})
+        signed = {key: 0.0 for key, *_rest in GROUPS}
+        for name, item in (row.get("components") or {}).items():
+            signed[GROUP_OF.get(name, "equipment")] += _number((item or {}).get("total_kw")) or 0.0
+        actual_total = _number(totals[index]) if totals else _number(row.get("design_total_kw"))
+        actual_total = actual_total if actual_total is not None else sum(signed.values())
+        fan_residual = actual_total - sum(signed.values())
+        signed["fan"] += fan_residual
+        actual_hours.append({"total_kw": actual_total,
+                             "sensible_kw": (_number(row.get("subtotal_sensible_kw")) or 0.0) + fan_residual,
+                             "latent_kw": _number(row.get("subtotal_latent_kw")), "groups": signed})
     return {"month": month, "hours": hours, "totals": [round(sum(hour.values()), 2) for hour in hours],
-            "peak_hour": peak.get("display_hour", peak.get("hour"))}
+            "actual_hours": actual_hours, "peak_hour": peak.get("display_hour", peak.get("hour"))}
+
+
+def engineer_room_details(report, input_set, plan_rooms):
+    """Room peaks and hourly component records from the saved calculation, without new load estimates."""
+    model = (input_set.get("material") or {}).get("hourly_load_model") or {}
+    by_id = {row.get("room_id"): row for row in model.get("rooms") or []}
+    names = shown(plan_rooms)
+    levels = {row.get("name"): row.get("level") or "" for row in plan_rooms}
+    # The room's own floor from the model (room -> zone -> floor); the plan's display list is only a fallback.
+    floor_names = {row.get("floor_id"): row.get("name") or "" for row in model.get("floors") or []}
+    zone_floor = {row.get("zone_id"): floor_names.get(row.get("floor_id"), "") for row in model.get("zones") or []}
+    best = {}
+    fan_percent = _number((report.get("fan_heat") or {}).get("percent_of_room_sensible")) or 0.0
+    for scenario in report.get("scenario_results") or []:
+        for result in scenario.get("rooms") or []:
+            peak = result.get("peak") or {}
+            if result.get("status") == "blocked" or _number(peak.get("design_total_kw")) is None:
+                continue
+            room_id = result.get("room_id")
+            if room_id in best and best[room_id]["peak"]["design_total_kw"] >= peak["design_total_kw"]:
+                continue
+            source = by_id.get(room_id) or {}
+            name = source.get("name") or result.get("name") or room_id or "not recorded"
+            load = source.get("cooling_load") or {}
+            glass = {}
+            for item in load.get("glazing_surfaces") or []:
+                facing = item.get("orientation") or "not recorded"
+                area = _number(item.get("explicit_opening_area_m2"))
+                if area is not None:
+                    glass[facing] = glass.get(facing, 0) + area
+            external_wall = sum(_number(item.get("area_m2")) or 0 for item in load.get("envelope_surfaces") or []
+                                if item.get("kind") == "opaque_wall" and item.get("boundary_method") == "external")
+            roof = any(item.get("kind") == "roof" and item.get("boundary_method") == "external"
+                       for item in load.get("envelope_surfaces") or [])
+            area, height = _number(source.get("area_m2")), _number(source.get("ceiling_height_mm"))
+            hours = []
+            for hour in result.get("hours") or []:
+                components = {key: {"sensible_kw": _number(value.get("sensible_kw")),
+                                    "latent_kw": _number(value.get("latent_kw")),
+                                    "total_kw": _number(value.get("total_kw"))}
+                              for key, value in (hour.get("components") or {}).items() if isinstance(value, dict)}
+                hours.append({"hour": hour.get("hour"), "total_kw": hour.get("design_total_kw"),
+                              "sensible_kw": hour.get("subtotal_sensible_kw"),
+                              "latent_kw": hour.get("subtotal_latent_kw"), "components": components})
+            level = zone_floor.get(source.get("zone_id")) or levels.get(name, "")
+            best[room_id] = {"room_id": room_id, "name": names.get(name, name), "level": level, "area_m2": area,
+                             "height_mm": height, "volume_m3": area * height / 1000 if area is not None and height is not None else None,
+                             "people": source.get("occupancy"), "lighting_w_m2": load.get("lighting_w_m2"),
+                             "equipment_w": sum((_number(item.get("watts")) or 0) * (_number(item.get("quantity")) or 0)
+                                                for item in source.get("heat_sources") or []),
+                             "glass_by_facing_m2": glass, "external_wall_m2": external_wall if external_wall else None,
+                             "roof_exposed": roof, "peak": peak, "month": scenario.get("representative_month") or "not recorded",
+                             "fan_heat_sizing_kw": (_number(peak.get("sensible_kw")) or 0.0) * fan_percent / 100,
+                             "fan_heat_percent": fan_percent, "hours": hours}
+    return sorted(best.values(), key=lambda row: (row["level"], row["name"]))
 
 
 def _value(row):
@@ -679,6 +745,130 @@ def _ahu_html(ahu):
             (f"<h3>AHUs not included</h3><ul>{excluded}</ul>" if excluded else "") + "</section>")
 
 
+COMPONENT_LABELS = {"glazing_solar": "Window sun", "glazing_conduction": "Window conduction", "solar": "Wall and roof sun",
+                    "envelope": "Wall, roof and floor conduction", "people": "People", "lighting": "Lights",
+                    "equipment_refrigeration": "Equipment", "outside_air": "Outside air", "infiltration": "Air leakage",
+                    "internal_moisture": "Internal moisture", "transfer_air": "Transfer air", "fan_heat": "Fan heat",
+                    "dynamic_thermal_mass": "Stored heat", "dynamic_partition": "Partitions"}
+
+
+def engineer_tables_html(details):
+    """Compact A4 tables supplementing the existing graphical contractor summary."""
+    e = _e
+    day = details.get("design_day") or {}
+    groups = [(key, label) for key, label, _members, _color in GROUPS]
+    hourly = ""
+    if len(day.get("actual_hours") or []) == 24:
+        rows = []
+        for hour, values in enumerate(day["actual_hours"]):
+            total = values["total_kw"]
+            cells = "".join(f"<td class=n>{_kw(values['groups'].get(key)) or '—'}</td>" for key, _label in groups)
+            rows.append(f"<tr{' class=peak-row' if hour == day.get('peak_hour') else ''}><td>{hour:02d}:00</td>"
+                        f"<td class=n><b>{_kw(total)}</b></td>"
+                        f"<td class=n>{_kw(values.get('sensible_kw')) or 'not recorded'}</td>"
+                        f"<td class=n>{_kw(values.get('latent_kw')) or 'not recorded'}</td>{cells}</tr>")
+        short = {"air": "Air", "sun": "Sun", "people": "People", "lights": "Lights",
+                 "equipment": "Equip.", "conduction": "Cond.", "fan": "Fan"}
+        headings = "".join(f"<th class=n title='{e(label)}'>{short[key]}</th>" for key, label in groups)
+        hourly = (f"<h2>Whole-building hourly load · {e(day.get('month') or 'design day')}</h2>"
+                  "<p class=muted>All 24 hours are shown. Signed load groups are in kW; negative values offset cooling demand. "
+                  "The highlighted hour sizes the building. The chart above shows positive gains only.</p>"
+                  f"<div class=table-scroll><table class=hourly-table><tr><th>Hour</th><th class=n>Total kW</th>"
+                  f"<th class=n>Sensible</th><th class=n>Latent</th>{headings}</tr>"
+                  + "".join(rows) + "</table></div>")
+    room_rows = details.get("engineer_rooms") or []
+    if not room_rows:
+        return hourly
+    summary = []
+    sections = []
+    for room in room_rows:
+        peak = room["peak"]
+        area = room.get("area_m2")
+        density = peak.get("design_total_kw") * 1000 / area if area else None
+        summary.append(f"<tr><td>{e(room['name'])}</td><td>{e(room['level'])}</td><td class=n>{_kw(area) or 'not recorded'}</td>"
+                       f"<td class=n>{_kw(peak.get('design_total_kw'), 2)}</td><td class=n>{_kw(peak.get('sensible_kw'), 2)}</td>"
+                       f"<td class=n>{_kw(peak.get('latent_kw'), 2)}</td><td class=n>{_kw(density, 0) or 'not recorded'}</td>"
+                       f"<td>{e(room['month'])} {e(peak.get('hour'))}:00</td></tr>")
+        facts = [("Level", room["level"] or "not recorded"), ("Area", f"{area:.1f} m²" if area is not None else "not recorded"),
+                 ("Ceiling height", f"{room['height_mm']:.0f} mm" if room.get("height_mm") is not None else "not recorded"),
+                 ("Volume", f"{room['volume_m3']:.1f} m³" if room.get("volume_m3") is not None else "not recorded"),
+                 ("People", room.get("people") if room.get("people") is not None else "not recorded"),
+                 ("Lighting", f"{room['lighting_w_m2']} W/m²" if room.get("lighting_w_m2") is not None else "not recorded"),
+                 ("Equipment rated", f"{room['equipment_w']:.0f} W" if room.get("equipment_w") is not None else "not recorded"),
+                 ("External wall area", f"{room['external_wall_m2']:.1f} m²" if room.get("external_wall_m2") is not None else "not recorded"),
+                 ("Roof exposed", "Yes" if room.get("roof_exposed") else "No recorded exposed roof"),
+                 ("Glazing by facing", ", ".join(f"{key}: {value:.1f} m²" for key, value in sorted(room.get("glass_by_facing_m2", {}).items())) or "not recorded")]
+        fact_html = " · ".join(f"<b>{e(key)}:</b> {e(value)}" for key, value in facts)
+        peak_hour = next((row for row in room["hours"] if row.get("hour") == peak.get("hour")), {})
+        components = "".join(f"<tr><td>{e(COMPONENT_LABELS.get(name, name.replace('_', ' ').capitalize()))}</td><td class=n>{_kw(value.get('sensible_kw'), 3) or 'not recorded'}</td>"
+                             f"<td class=n>{_kw(value.get('latent_kw'), 3) or 'not recorded'}</td>"
+                             f"<td class=n>{_kw(value.get('total_kw'), 3) or 'not recorded'}</td></tr>"
+                             for name, value in sorted((peak_hour.get("components") or {}).items()))
+        hours = "".join(f"<tr{' class=peak-row' if row.get('hour') == peak.get('hour') else ''}>"
+                        f"<td>{row.get('hour', 0):02d}:00</td><td class=n>{_kw(row.get('total_kw'), 2) or 'not recorded'}</td>"
+                        f"<td class=n>{_kw(row.get('sensible_kw'), 2) or 'not recorded'}</td>"
+                        f"<td class=n>{_kw(row.get('latent_kw'), 2) or 'not recorded'}</td></tr>" for row in room["hours"])
+        fan_note = (f"<p>Fan heat for separate room unit sizing: {_kw(room['fan_heat_sizing_kw'], 3)} kW "
+                    f"({room['fan_heat_percent']:g}% of room sensible). It is added in the unit-sizing table, "
+                    "not to this room calculation subtotal.</p>") if room.get("fan_heat_percent") else ""
+        sections.append(f"<section class=room-detail><h3>{e(room['name'])}: own peak {_kw(peak.get('design_total_kw'), 2)} kW "
+                        f"at {e(room['month'])} {e(peak.get('hour'))}:00</h3><p>{fact_html}</p>"
+                        f"<h4>At this room’s peak · kW</h4><table><tr><th>Component</th><th class=n>Sensible</th>"
+                        f"<th class=n>Latent</th><th class=n>Total</th></tr>{components}</table>{fan_note}"
+                        f"<h4>{e(room['month'])} hourly room profile · kW</h4><table class=room-hours>"
+                        f"<tr><th>Hour</th><th class=n>Total</th><th class=n>Sensible</th><th class=n>Latent</th></tr>"
+                        f"{hours}</table></section>")
+    comparison = comparison_html(details.get("setpoint_comparison") or {}, room_rows)
+    return (hourly + "<h2>Room peak summary</h2><p class=muted>These are each room’s own worst hour; "
+            "adding them does not give the coincident whole-building peak. Fan heat is applied to the separate room "
+            "sizing figures above, not silently added to these room calculation components.</p>"
+            "<div class=table-scroll><table><tr><th>Room</th><th>Level</th><th class=n>m²</th><th class=n>Total kW</th>"
+            "<th class=n>Sensible</th><th class=n>Latent</th><th class=n>W/m²</th><th>Peak</th></tr>"
+            + "".join(summary) + "</table></div>" + comparison + "<h2>Room detail</h2>" + "".join(sections))
+
+
+def comparison_html(comparison, rooms=()):
+    e = _e
+    if comparison.get("status") != "calculated":
+        return f"<h2>Indoor setpoint comparison</h2><p>Not calculated: {e(comparison.get('reason') or 'No compatible indoor state is recorded.')}</p>"
+    variants = comparison.get("variants") or []
+    baseline = (variants[0].get("peak") or {}).get("final_design_total_kw") if variants else None
+    rows = []
+    for item in variants:
+        peak = item.get("peak") or {}
+        total = peak.get("final_design_total_kw", peak.get("design_total_kw"))
+        if item.get("status") == "not_calculated" or total is None:
+            rows.append(f"<tr><td>{e(item['setpoint_c'])} °C</td><td colspan=8>Not calculated: {e(item.get('reason') or 'No peak recorded.')}</td></tr>")
+            continue
+        delta = total - baseline if baseline is not None else None
+        percent = delta / baseline * 100 if baseline else None
+        rows.append(f"<tr><td>{e(item['setpoint_c'])} °C</td><td class=n>{_kw(item.get('wet_bulb_c'))} °C</td>"
+                    f"<td class=n>{item['relative_humidity']*100:.1f}%</td><td class=n>{_kw(total)} kW</td>"
+                    f"<td class=n>{_kw(peak.get('sensible_kw'))}</td><td class=n>{_kw(peak.get('latent_kw'))}</td>"
+                    f"<td>{e(peak.get('month') or 'not recorded')} {e(peak.get('hour'))}:00</td>"
+                    f"<td class=n>{_kw(delta) if delta is not None else 'not recorded'}</td>"
+                    f"<td class=n>{_kw(percent) if percent is not None else 'not recorded'}%</td></tr>")
+    room_comparison = []
+    for room in rooms:
+        cells = []
+        for variant in variants:
+            peaks = [result.get("peak") or {} for scenario in variant.get("scenario_results") or []
+                     for result in scenario.get("rooms") or [] if result.get("room_id") == room.get("room_id")]
+            value = max((_number(peak.get("design_total_kw")) for peak in peaks
+                         if _number(peak.get("design_total_kw")) is not None), default=None)
+            cells.append(f"<td class=n>{_kw(value) if value is not None else 'not recorded'}</td>")
+        room_comparison.append(f"<tr><td>{e(room['name'])}</td>{''.join(cells)}</tr>")
+    room_headings = "".join(f"<th class=n>{e(variant.get('setpoint_c'))} °C kW</th>" for variant in variants)
+    room_table = (f"<h3>Each room’s own peak at each setpoint</h3><table><tr><th>Room</th>{room_headings}</tr>"
+                  + "".join(room_comparison) + "</table>") if rooms else ""
+    return ("<h2>Indoor setpoint comparison</h2><p class=muted>Only the indoor condition changed: dry bulb, and the wet bulb "
+            "that keeps the baseline relative humidity. Walls, floors and ceilings to other cooled rooms stay at the room's "
+            "temperature (no heat flows through them); everything else is the baseline's. Peaks can occur at different hours.</p>"
+            "<div class=table-scroll><table><tr><th>Indoor DB</th><th class=n>Indoor WB</th><th class=n>RH</th>"
+            "<th class=n>Peak</th><th class=n>Sensible</th><th class=n>Latent</th><th>When</th>"
+            "<th class=n>Δ kW</th><th class=n>Δ %</th></tr>" + "".join(rows) + "</table></div>" + room_table)
+
+
 def render_html(d):
     e = _e
     config = sizes()
@@ -720,6 +910,7 @@ def render_html(d):
     not_cooled = ", ".join(e(name) for name in d["not_cooled"]) or "None"
     day = d.get("design_day") or {}
     conditions = design_conditions_html(d.get("design_conditions") or {})
+    engineer = engineer_tables_html(d)
     return f"""<!doctype html><html lang="en" data-theme="light"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>Cooling load: {e(d['name'])}</title>
 <style>
@@ -741,6 +932,10 @@ th{{font-weight:600;background:var(--wash)}}td.n,th.n{{text-align:right;white-sp
 .keys{{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12px}}.key i,.swatch{{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}}
 .footer{{position:fixed;bottom:0;left:0;right:0;font-size:10px;color:var(--muted);text-align:center;padding:4px;background:#fff}}
 svg,tr,.card{{break-inside:avoid}}
+.room-detail{{break-before:page}}.room-detail h3{{break-after:avoid}}.room-detail h4{{margin:12px 0 4px}}
+.room-hours{{font-size:11px}}.peak-row{{background:#dceef5;font-weight:700}}.hourly-table{{font-size:9px;table-layout:fixed}}
+.hourly-table td,.hourly-table th{{padding:3px 2px}}
+.table-scroll{{overflow-x:auto}}
 @page{{size:A4;margin:14mm 12mm 16mm}}@media print{{body{{margin:0 auto;max-width:none}}.pagebreak{{break-before:page}}}}
 @media (max-width:600px){{.total{{font-size:32px}}.ahu-metrics{{grid-template-columns:1fr}}td,th{{padding:4px}}}}
 </style></head><body>
@@ -772,7 +967,7 @@ ducted {', '.join(f'{v:g}' for v in config.get('ducted_kw', []))} kW (one manufa
 <h2>The {e(day.get('month') or d['peak_month'])} design day, hour by hour</h2>
 <div class=keys>{legend()}</div>
 {design_day_svg(day)}
-<p class=muted>The whole building's cooling load in each hour of the day that sizes the system, stacked by where it comes from.
+<p class=muted>Positive heat-gain components on the design day; negative offsets are omitted from this chart. The signed net hourly load is in the table below.
 Stored heat is included: sun, lights and people warm the floor and walls and reach the air over the following hours.</p>
 
 <h2>Peak by month</h2>
@@ -787,6 +982,7 @@ Stored heat is included: sun, lights and people warm the floor and walls and rea
 <h2>Rooms</h2><p class=muted>Each room's load on the design day that sizes the system.</p>
 <table><tr><th>Room</th><th>Level</th><th class=n>m²</th><th class=n>kW</th><th class=n>W/m²</th></tr>{rooms}</table>
 <p class=muted>Not cooled: {not_cooled}.</p>
+{engineer}
 {_ahu_html(d.get('ahu') or {})}
 
 <h2>Values used, room by room</h2>
