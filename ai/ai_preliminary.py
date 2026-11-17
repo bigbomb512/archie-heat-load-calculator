@@ -889,8 +889,10 @@ def _scenario(pack, resolved=None, basis=None, site_days=None):
         "scenario_id": "ai_preliminary_cooling_day", "title": title, "mode": "cooling",
         "representative_month": "January", "sun_month": 1, "day_type": "weekday", "status": "provisional",
         "source": design_day.get("source") or f"AI preliminary assumption pack {pack['version']}", "citations": [],
+        "value_origin": "standard_value" if design_day.get("site_specific") else "assumed_default",
         "atmospheric_pressure_kpa": {"value": scenario["pressure_kpa"], "status": "provisional", "source": _source("scenario"), "citations": []},
-        "hours": [{"hour": hour, "outdoor_dry_bulb_c": {"value": point["db"], "status": "provisional", "source": _source("scenario"), "citations": []},
+        "hours": [{"hour": hour, "outdoor_dry_bulb_c": {"value": point["db"], "status": "provisional", "source": _source("scenario"), "citations": [],
+                   "value_origin": "standard_value" if design_day.get("site_specific") else "assumed_default"},
                    "outdoor_wet_bulb_c": {"value": point["wb"], "status": "provisional", "source": _source("scenario"), "citations": []},
                    "outdoor_wet_bulb_basis": point.get("wet_bulb_basis", "legacy_unverified")}
                   for hour, point in enumerate(scenario["hours"])],
@@ -908,6 +910,31 @@ def _proposal_evidence(item):
         evidence = [{"page": page, "drawing_number": str(item.get("drawing_number", "")).strip(),
                      "excerpt": str(item.get("excerpt", item.get("label", ""))).strip()}]
     return [row for row in evidence if isinstance(row, dict) and _number(row.get("page"))]
+
+
+def _glazing_value_origin(opening, answered_u, answered_shgc, house_glass):
+    basis = opening.get("glazing_basis")
+    if basis in {"certificate", "schedule"}:
+        return "read_from_schedule"
+    if basis == "user_edit":
+        return "edited_by_user"
+    if answered_u and answered_shgc:
+        return "ai_estimate"
+    return "standard_value" if house_glass else "assumed_default"
+
+
+def _shading_value_origin(opening):
+    basis = opening.get("shading_basis")
+    if basis == "user_edit":
+        return "edited_by_user"
+    if basis == "ai_determined":
+        return "ai_estimate"
+    shade = opening.get("shade") or {}
+    if isinstance(shade, dict) and shade.get("declaration_source") in {"ai_determined", "ai_fallback"}:
+        return "ai_estimate"
+    if shade and opening.get("declaration_source") in {"ai_determined", "ai_fallback"}:
+        return "ai_estimate"
+    return "assumed_default"
 
 
 def _proposal_id(prefix, item, owner=""):
@@ -1244,6 +1271,11 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
         people_diversity = (internal_fields.get("people_diversity", {}).get("value") if isinstance(internal_fields.get("people_diversity"), dict) else None) or profile["people_diversity"]
         lighting_load_w = _resolved_internal_value("lighting_load_w", "lighting_load_w") if internal_record else None
         lighting_w_m2 = lighting_load_w / area if lighting_load_w is not None and area else profile["lighting_w_m2"]
+        lighting_origin = ((internal_fields.get("lighting_load_w") or {}).get("origin") if lighting_load_w is not None else "")
+        lighting_source = ((house_profiles.load().get("value_sources") or {}).get("lighting_w_m2") if profile_id in HOUSE_PROFILE_IDS
+                           else (pack.get("value_sources") or {}).get("lighting_w_m2"))
+        if lighting_load_w is None:
+            lighting_origin = "standard_value" if lighting_source else "assumed_default"
         lighting_diversity = (internal_fields.get("lighting_diversity", {}).get("value") if isinstance(internal_fields.get("lighting_diversity"), dict) else None) or profile["lighting_diversity"]
         room_airflows = airflow_by_room.get(ceiling_volume_resolver.room_identity(row["name"], row["level"]), {})
         outside_record = room_airflows.get("outside_air", {})
@@ -1290,6 +1322,8 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
         cooling = {**({"occupancy_group": occupancy_group} if occupancy_group else {}),
                    "people_sensible_w_per_person": people_sensible or default_sensible, "people_latent_w_per_person": people_latent or default_latent,
                    "people_diversity_factor": people_diversity, "lighting_w_m2": lighting_w_m2,
+                   "lighting_value_origin": lighting_origin,
+                   "lighting_value_citation": lighting_source if lighting_origin == "standard_value" else "",
                    "lighting_diversity_factor": lighting_diversity,
                    "outside_air_lps": outside_air,
                    # Standard air (1.2 kg dry air/m³) with moist-air sensible heat, the AIRAH/ASHRAE simplified method
@@ -1730,6 +1764,7 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                   "orientation": orientation, "area_m2": net, "u_value_w_m2k": u_value,
                   "solar_design_w_m2": solar_peak, "solar_gain_factor": solar_factor,
                   "shading_factor": 1, "boundary_method": "external", "boundary_temperature_c": None, "construction_id": "",
+                  "shading_value_origin": _shading_value_origin(candidate),
                   "verification_status": "provisional",
                   "source": (_source(profile_id) + "; reviewer-declared boundary" if candidate.get("reviewer_trace_id")
                              else _source(profile_id) + "; AI preliminary surface classification"),
@@ -1748,7 +1783,8 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
             if wall_obstruction:
                 opaque["obstruction"] = wall_obstruction
         if candidate.get("reviewer_trace_id"):
-            opaque.update({"reviewer_trace_id": candidate.get("reviewer_trace_id"),
+            opaque.update({"edge_index": candidate.get("edge_index"),
+                           "reviewer_trace_id": candidate.get("reviewer_trace_id"),
                            "reviewer": candidate.get("reviewer", ""),
                            "boundary_rationale": candidate.get("rationale", "Reviewer-declared boundary."),
                            "provenance_status": "provisional"})
@@ -1855,9 +1891,15 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                 schedules.append(_schedule_with_values(solar_schedule_id, f"Preliminary {opening_orientation or 'averaged'} glazing solar profile", values, _source(f"solar-{opening_orientation or 'averaged'}")))
                 room["schedule_assignments"]["solar"][opening["candidate_id"]] = solar_schedule_id
             glazing = {"surface_id": opening["candidate_id"], "owner_room_id": room["room_id"], "owner_zone_id": room["zone_id"],
-                       "host_surface_id": candidate["candidate_id"], "opening_mapping_status": "proposed", "geometry_mode": "preliminary_ai_estimate",
+                       "host_surface_id": candidate["candidate_id"],
+                       "reviewer_trace_id": opening.get("reviewer_trace_id", candidate.get("reviewer_trace_id")),
+                       "edge_index": opening.get("edge_index", candidate.get("edge_index")),
+                       "offset_m": opening.get("offset_m"),
+                       "position_basis": opening.get("position_basis", "assumed_centred"),
+                       "opening_mapping_status": "proposed", "geometry_mode": "preliminary_ai_estimate",
                        "review_status": "provisional", "verification_status": "provisional", "boundary_method": "external", "external_exposure": "external",
                        "explicit_opening_area_m2": opening["opening_area_m2"], "explicit_glass_area_m2": opening.get("explicit_glass_area_m2"),
+                       "area_value_origin": opening.get("opening_value_origin"),
                        "window": {"record_id": f"window-{opening['candidate_id']}", "u_value_w_m2k": window_u, "shgc": window_shgc,
                                   "frame_fraction": envelope["glazing_frame_fraction"], "glass_area_correction": envelope["glazing_glass_area_correction"],
                                   "internal_shading_factor": round(envelope["glazing_internal_shading_factor"] * blind_factor, 4)},
@@ -1874,12 +1916,16 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                        **({"obstruction": _obstruction_values(opening.get("obstruction"))}
                           if glass_sun and _obstruction_values(opening.get("obstruction")) else {}),
                        "orientation": opening_orientation, "shading_category": opening["shading_category"], "preliminary_assumption": True,
+                       "glazing_value_origin": _glazing_value_origin(opening, answered_u, answered_shgc, house_glass),
+                       "shading_value_origin": _shading_value_origin(opening),
                        "source": (opening.get("glazing_source") if answered_u and answered_shgc else
                                   f"NatHERS default window {house_glass['window_id']}, {house_glass['label']}: U {house_glass['u_value_w_m2k']:g}, "
                                   f"SHGC {house_glass['shgc']:g}" + ("" if house_glass["group_known"] else " (window type not shown: group B, the higher SHGC)")
                                   if house_glass else
                                   _source(opening.get("glazing_choice") or profile_id) + "; preliminary assumption-pack glazing U-value and SHGC"),
-                       "citations": deepcopy(opening.get("citations", [])), "source_pages": opening["evidence"],
+                       "citations": deepcopy(opening.get("citations", [])) or
+                                    ([{"reference": house_glass["source"], "record_id": house_glass["window_id"]}] if house_glass else []),
+                       "source_pages": opening["evidence"],
                        "evidence": deepcopy(opening.get("evidence", opening["evidence"])),
                        "supported_uncertainty_ranges": deepcopy(opening.get("supported_uncertainty_ranges", [])),
                        "confidence": opening.get("confidence"),

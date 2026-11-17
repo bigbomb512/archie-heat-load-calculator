@@ -426,7 +426,13 @@ def place_windows(tags, windows, rooms, mm_per_point, reach_mm=3000):
         sill, head, assumption = sill_and_head(row)
         blind = internal_shade(row.get("type") or "")
         group = frame_group(row.get("type") or "")
+        segment_start, segment_end = points[edge], points[edge + 1]
+        dx, dy = segment_end[0] - segment_start[0], segment_end[1] - segment_start[1]
+        fraction = max(0.0, min(1.0, ((tag["x"] - segment_start[0]) * dx +
+                                         (tag["y"] - segment_start[1]) * dy) / (dx * dx + dy * dy)))
+        offset_m = max(0.0, min(edge_m - width_m, fraction * edge_m - width_m / 2))
         openings.append({"trace_id": room["trace_id"], "edge_index": edge, "mark": tag["mark"], "width_m": width_m,
+                         "offset_m": round(offset_m, 4), "position_basis": "plan_tag_projection",
                          "schedule_page": row["page"],
                          "sill_height_m": sill / 1000, "head_height_m": head / 1000,
                          "assumptions": ([assumption] if assumption else []) + width_assumption + width_assumption_far,

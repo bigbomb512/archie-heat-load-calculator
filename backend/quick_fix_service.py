@@ -84,12 +84,14 @@ def apply_windows(root, proposal):
         # The room's own answer wins field by field over the answer for every window.
         answer = {**(windows.get("*") or {}), **(rooms.get(str(opening.get("owner_room_label", "")).casefold()) or {})}
         if "blinds" in answer:
+            opening["shading_basis"] = "user_edit"
             shade = BLINDS.get(answer["blinds"], ("", None))[1]
             if shade:
                 opening["internal_shade"] = {**shade, "evidence": ["Entered on the quick-fix screen"]}
             else:
                 opening.pop("internal_shade", None)
         if "shade" in answer:
+            opening["shading_basis"] = "user_edit"
             if answer["shade"]:
                 # Its shadow is worked from its depth hour by hour (ai_preliminary); the shading category stays as it
                 # was, so the shade isn't counted twice.

@@ -76,6 +76,7 @@ def _paths(project):
         "sets": root / "ai_preliminary_input_sets",
         "current_set": root / "ai_preliminary_input_set.json",
         "report": root / "hourly_ai_preliminary_load_report.json",
+        "thermal_audit_elements": root / "thermal_audit_elements.json",
         "base_report": root / "phase1_base_room_load_report.json",
         "codex_handoff": root / "codex_preliminary_handoff.json",
         "codex_response": root / "codex_preliminary_response.json",
@@ -1374,6 +1375,7 @@ def _merge_phase1_skill_proposals(paths, proposal):
             "owner_room_id": owner.get("room_id", ""), "owner_room_label": owner.get("label", ""),
             "owner_level_name": owner.get("level_name", "Unassigned level"),
             "host_surface_key": host_id, "opening_area_m2": opening_area,
+            "opening_value_origin": "ai_estimate",
             "explicit_glass_area_m2": ai_preliminary._number(prop.get("glass_area_m2")),
             "external_exposure": exposure_value,
             "orientation": orientation, "shading_category": "unshaded", "glazing_choice": prop.get("glazing_choice"),
@@ -1800,7 +1802,8 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                                     "boundary_source": f"Faces {faces}, air-conditioned to the same temperature: no heat flows "
                                                        "(Phase 1 rule, 2026-10-15).",
                                     "confidence": 0.65, "page": part.get("page"), "evidence": [citation],
-                                    "reviewer_trace_id": part.get("trace_id", ""), "reviewer": boundary_label,
+                                    "reviewer_trace_id": part.get("trace_id", ""), "edge_index": index,
+                                    "reviewer": boundary_label,
                                     "verification_status": "provisional", "rationale": f"Wall to {faces}.",
                                     **({"phase1_assumption": " ".join(filter(None, [wall_note, height_note]))}
                                        if wall_note or height_note else {}),
@@ -1846,7 +1849,7 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                                     "boundary_condition": "unconditioned_space", "orientation": "", "gross_area_m2": wall_area,
                                     "opening_coverage": "not_applicable", "confidence": 0.5, "page": part.get("page"),
                                     "evidence": [citation], "reviewer_trace_id": part.get("trace_id", ""),
-                                    "reviewer": declaration_reviewer, "verification_status": "provisional",
+                                    "edge_index": index, "reviewer": declaration_reviewer, "verification_status": "provisional",
                                     "rationale": "Wall to an unconditioned space; no temperature given, so the standard buffer-space estimate is used.",
                                     **({"phase1_assumption": " ".join(filter(None, [wall_note, height_note]))}
                                        if wall_note or height_note else {}),
@@ -1863,8 +1866,8 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                                                     + (f": {answer['space']}" if answer.get("space") else "")),
                                 "orientation": "", "gross_area_m2": wall_area, "opening_coverage": "not_applicable", "confidence": 0.65,
                                 "page": part.get("page"), "evidence": [citation],
-                                "reviewer_trace_id": part.get("trace_id", ""), "reviewer": declaration_reviewer,
-                                "verification_status": "provisional",
+                                "reviewer_trace_id": part.get("trace_id", ""), "edge_index": index,
+                                "reviewer": declaration_reviewer, "verification_status": "provisional",
                                 "rationale": f"Reviewer-declared wall to an unconditioned space at {temperature:g} °C (operators' answer); conduction only, no sun.",
                                 "assumptions": ["answered_unconditioned_space_temperature"],
                                 **({"phase1_assumption": wall_note} if wall_note else {}),
@@ -1914,7 +1917,8 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                             **({"shade": wall_shade} if wall_shade else {}),
                             "opening_coverage": "reviewer_entered" if wall_openings else "not_applicable", "confidence": 0.65,
                             "page": part.get("page"), "evidence": [citation],
-                            "reviewer_trace_id": part.get("trace_id", ""), "reviewer": declaration_reviewer,
+                            "reviewer_trace_id": part.get("trace_id", ""), "edge_index": index,
+                            "reviewer": declaration_reviewer,
                             "verification_status": "provisional",
                             "rationale": ("Reviewer-declared external boundary edge; outward orientation derived from the calibrated polygon winding and page north."
                                           if orientation else "Reviewer-declared external boundary edge; no north reference is available, so its sun is averaged over the four directions it could face."),
@@ -1937,8 +1941,13 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                                 "label": (f"{room.get('label', 'Room')} window {opening.get('mark', '')}".rstrip() if from_text
                                           else f"{room.get('label', 'Room')} shopfront opening"),
                                 "owner_room_label": room.get("label", ""), "owner_level_name": room.get("level_name", ""),
-                                "host_surface_key": surface_key, "width_m": opening["width_m"], "height_m": height,
+                                "host_surface_key": surface_key, "reviewer_trace_id": part.get("trace_id", ""),
+                                "edge_index": index, "width_m": opening["width_m"], "height_m": height,
+                                "offset_m": opening.get("offset_m", max(0.0, (length_m - opening["width_m"]) / 2)),
+                                "position_basis": opening.get("position_basis", "assumed_centred"),
                                 "quantity": 1, "opening_area_m2": opening["width_m"] * height,
+                                "opening_value_origin": ("read_from_schedule" if from_text else
+                                                         "ai_estimate" if opening.get("declaration_source") in {"ai_determined", "ai_fallback"} else "edited_by_user"),
                                 "external_exposure": "external", "orientation": orientation,
                                 **({"azimuth_deg": round(float(azimuth), 1)} if orientation and azimuth is not None else {}),
                                 **({"shade": dict(opening["shade"])} if isinstance(opening.get("shade"), dict) else {}),
@@ -2513,6 +2522,7 @@ def _with_certificate_glazing(paths, proposal, room_use):
         glass = certificate_glazing.room_glass(certificates, room["label"], house_household.dwelling_of(room))
         if glass:
             opening.update(u_value_w_m2k=glass["u_value"], shgc=glass["shgc"], glazing_source=glass["source"],
+                           glazing_basis="certificate",
                            assumptions=[*opening.get("assumptions", []), f"certificate_glazing_{glass['basis']}"])
     return proposal
 
@@ -2742,6 +2752,9 @@ def _calculate_load(web, project, scope, persist):
             report.setdefault("warnings", []).extend(row["message"] for row in checks)
         if report["supervisor_exceptions"]:
             report.setdefault("phase1_coverage", {})["complete"] = False
+    if persist and scope != "phase1_base_room":
+        from backend.thermal_audit_service import build_elements
+        _write(paths["thermal_audit_elements"], build_elements(report))
     _slim_report(report)
     if persist:
         _write(paths["base_report"] if scope == "phase1_base_room" else paths["report"], report)
@@ -2750,7 +2763,7 @@ def _calculate_load(web, project, scope, persist):
 
 # The load reports run to hundreds of megabytes on a large house (set 16, 2026-11-07: 423 MB), so they are written
 # without indenting.
-COMPACT_FILES = {"hourly_ai_preliminary_load_report.json", "phase1_base_room_load_report.json"}
+COMPACT_FILES = {"hourly_ai_preliminary_load_report.json", "phase1_base_room_load_report.json", "thermal_audit_elements.json"}
 # Each hour of each month repeated every wall's and window's whole description; only the kW figures change by the hour.
 SLIMMED_COMPONENTS = ("envelope", "solar", "glazing_conduction", "glazing_solar")
 SLIMMED_FIELDS = ("inputs", "input_rows", "formula")

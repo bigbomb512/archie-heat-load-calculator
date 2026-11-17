@@ -247,6 +247,12 @@ class ReviewerRoomGeometryTests(unittest.TestCase):
                 valid = reviewer_room_geometry_service._validated_trace_openings(
                     inputs, trace, paths, room, self.calibration)
                 self.assertEqual(valid[0]["width_m"], 2.025)
+                self.assertEqual(valid[0]["position_basis"], "assumed_centred")
+                placed = {**inputs["openings"][0], "offset_m": 0.4, "position_basis": "plan_tag_projection"}
+                saved = reviewer_room_geometry_service._validated_trace_openings(
+                    {"openings": [placed]}, trace, paths, room, self.calibration)
+                self.assertEqual((saved[0]["edge_index"], saved[0]["offset_m"], saved[0]["position_basis"]),
+                                 (0, 0.4, "plan_tag_projection"))
                 legacy = {**inputs["openings"][0], "glazing_choice": "office"}
                 self.assertEqual(reviewer_room_geometry_service._validated_trace_openings(
                     {"openings": [legacy]}, trace, paths, room, self.calibration)[0]["glazing_choice"], "office")
