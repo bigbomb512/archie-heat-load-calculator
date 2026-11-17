@@ -151,6 +151,16 @@ class PlacementTests(unittest.TestCase):
         too_far = hw.place_windows([self.tag("W1", 300, -350)], self.schedule, [self.room], 10)
         self.assertEqual(too_far["openings"], [])
 
+    def test_a_window_a_person_already_entered_is_not_added_again(self):
+        # Set 18's hand-checked job got its windows twice when the drawing-text step ran over it (2026-11-17).
+        room = {**self.room, "existing_openings": [{"opening_id": "op-W1", "edge_index": 0, "width_m": 1.8,
+                                                    "sill_height_m": 0.9, "head_height_m": 2.1, "declaration_source": "reviewer"}]}
+        result = hw.place_windows([self.tag("W1", 150, 30), self.tag("W1", 450, 30), self.tag("W2", 300, 370)],
+                                  self.schedule, [room], 10)
+        self.assertEqual(sorted(row["mark"] for row in result["openings"]), ["W1", "W2"])   # the second W1 and W2 are new
+        skipped = [row for row in result["unplaced"] if row.get("skipped")]
+        self.assertEqual([(row["mark"], "op-W1" in row["reason"]) for row in skipped], [("W1", True)])
+
     def test_several_windows_share_one_wall_while_they_fit(self):
         result = hw.place_windows([self.tag("W1", 150, 30), self.tag("W2", 450, 30)], self.schedule, [self.room], 10)
         self.assertEqual([(row["mark"], row["edge_index"]) for row in result["openings"]], [("W1", 0), ("W2", 0)])

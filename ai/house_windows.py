@@ -321,6 +321,21 @@ def _outline_distance(point, points):
 NEAR_WALL_MM = 900      # a tag this close to the wall is beside it; farther, the placement is labelled as an assumption
 
 
+def _same_window_entered(room, row, claimed):
+    """The id of a window a person entered on this room with this schedule row's size (width within 5 %, glass height
+    within 0.1 m), not already matched to another tag; None when there isn't one."""
+    width, height = row["width_mm"] / 1000, row["height_mm"] / 1000
+    for opening in room.get("existing_openings", []):
+        if opening.get("declaration_source") != "reviewer" or (room["trace_id"], opening.get("opening_id")) in claimed:
+            continue
+        entered_width = float(opening.get("width_m") or 0)
+        entered_height = float(opening.get("head_height_m") or 0) - float(opening.get("sill_height_m") or 0)
+        if width and abs(entered_width - width) <= 0.05 * width and abs(entered_height - height) <= 0.1:
+            claimed.add((room["trace_id"], opening.get("opening_id")))
+            return opening.get("opening_id") or "a window"
+    return None
+
+
 def place_windows(tags, windows, rooms, mm_per_point, reach_mm=3000):
     """Put each tagged window on the outside wall it stands against.
 
@@ -336,6 +351,7 @@ def place_windows(tags, windows, rooms, mm_per_point, reach_mm=3000):
     for window in windows:
         by_mark[window["mark"].upper()].append(window)
     candidates, unplaced = [], []
+    claimed = set()
     for tag in tags:
         rows = by_mark.get(tag["mark"].upper(), [])
         if tag.get("level") and any(row.get("level") for row in rows):
@@ -360,6 +376,13 @@ def place_windows(tags, windows, rooms, mm_per_point, reach_mm=3000):
             located.sort(key=lambda row: (row[0], row[1], row[2]))
             _, outline_distance, _, room = located[0]
             best = None
+            entered = _same_window_entered(room, rows[0], claimed) if outline_distance <= reach_mm else None
+            if entered:
+                # A person already entered this window on this room (the same size): it isn't added again. Set 18's
+                # hand-checked job got its windows twice before this (2026-11-17).
+                unplaced.append({"mark": tag["mark"], "page": tag["page"], "skipped": True,
+                                 "reason": f"already entered by a person on this room ({entered})"})
+                continue
             if outline_distance <= reach_mm:
                 points = room["points"]
                 for edge in room.get("outside_edges", []):

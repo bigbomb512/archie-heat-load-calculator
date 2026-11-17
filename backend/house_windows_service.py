@@ -18,7 +18,7 @@ from backend import reviewer_room_geometry_service
 from backend.job_runner import read_json
 
 RESULT_FILE = "house_windows.json"
-VERSION = "house-windows-text-v11"  # v11: use each room trace's own calibration (2026-11-15)
+VERSION = "house-windows-text-v12"  # v12: a window a person already entered isn't added again from the drawing text (2026-11-17)
 REVIEWER = "Archie drawing text (windows)"
 GLAZING_CHOICE = "residential"      # preliminary pack glazing (U 5.8, SHGC 0.45) until certificates are read (W7)
 SHADING = "unshaded"
