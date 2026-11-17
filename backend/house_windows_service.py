@@ -18,7 +18,7 @@ from backend import reviewer_room_geometry_service
 from backend.job_runner import read_json
 
 RESULT_FILE = "house_windows.json"
-VERSION = "house-windows-text-v11"  # v11: use each room trace's own calibration (2026-11-15)
+VERSION = "house-windows-text-v12"  # v12: persist plan-tag offsets along traced wall edges
 REVIEWER = "Archie drawing text (windows)"
 GLAZING_CHOICE = "residential"      # preliminary pack glazing (U 5.8, SHGC 0.45) until certificates are read (W7)
 SHADING = "unshaded"
@@ -278,7 +278,9 @@ def apply(web, project, root, read_page=None):
                         "roof": trace.get("roof", "unknown"),
                         "openings": [row for row in trace.get("openings", []) if row.get("declaration_source") != "drawing_text"] + [
                             {"opening_id": f"text-{row['mark']}-{trace['trace_id']}-{row['edge_index']}-{index}",
-                             "edge_index": row["edge_index"], "width_m": row["width_m"], "sill_height_m": row["sill_height_m"],
+                             "edge_index": row["edge_index"], "width_m": row["width_m"],
+                             "offset_m": row["offset_m"], "position_basis": row["position_basis"],
+                             "sill_height_m": row["sill_height_m"],
                              "head_height_m": row["head_height_m"], "elevation_page": int(row["schedule_page"]),
                              "glazing_choice": GLAZING_CHOICE, "shading_category": SHADING, "mark": row["mark"],
                              **({"internal_shade": row["internal_shade"]} if row.get("internal_shade") else {}),

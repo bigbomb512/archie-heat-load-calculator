@@ -906,6 +906,16 @@ def _validated_trace_openings(data, trace, paths, room, calibration_record):
         if area_by_edge[edge_index] > edge_length * height_mm / 1000.0 + 1e-8:
             raise ValueError("Opening area cannot exceed the derived wall area.")
         prior = prior_openings.get(opening_id, {})
+        requested_offset = opening.get("offset_m", prior.get("offset_m"))
+        position_basis = opening.get("position_basis", prior.get("position_basis", "assumed_centred"))
+        if requested_offset is None:
+            requested_offset = max(0.0, (edge_length - width) / 2)
+            position_basis = "assumed_centred"
+        if (type(requested_offset) not in (int, float) or not math.isfinite(requested_offset)
+                or requested_offset < 0 or requested_offset + width > edge_length + 1e-6):
+            raise ValueError("Opening offset must place the full opening on its traced wall edge.")
+        if position_basis not in {"plan_tag_projection", "assumed_centred", "reviewer_entered"}:
+            raise ValueError("Opening position basis is unsupported.")
         prior_source = prior.get("declaration_source") or prior.get("source")
         requested_source = opening.get("declaration_source") or opening.get("source")
         if prior_source == "reviewer":
@@ -920,6 +930,7 @@ def _validated_trace_openings(data, trace, paths, room, calibration_record):
         shade = _opening_shade(opening.get("shade"))
         internal_shade = _opening_internal_shade(opening.get("internal_shade"))
         result.append({"opening_id": opening_id, "edge_index": edge_index, "width_m": float(width),
+                       "offset_m": round(float(requested_offset), 4), "position_basis": position_basis,
                        "head_height_m": float(head), "sill_height_m": float(sill),
                        "elevation_page": elevation_page, "glazing_choice": glazing_choice,
                        "shading_category": shading, "declaration_source": opening_source,

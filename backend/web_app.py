@@ -335,6 +335,20 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._send_security_error(error, 403)
             except Exception as error:
                 return self.send_json(product_error(error), 400)
+        if urlparse(self.path).path == "/api/thermal-audit":
+            try:
+                from backend.thermal_audit_service import read_audit
+                query = parse_qs(urlparse(self.path).query)
+                project = project_by_id(query.get("project_id", [""])[0])
+                return self.send_json(read_audit(project["review_dir"], int(query.get("month", ["1"])[0]),
+                                                 int(query.get("hour", ["15"])[0])))
+            except security.SecurityError as error:
+                return self._send_security_error(error, 403)
+            except (ValueError, KeyError, TypeError):
+                return self.send_json({"error": "Thermal audit unavailable or invalid month/hour.", "code": "thermal_audit_unavailable"}, 400)
+            except Exception:
+                LOGGER.exception("Thermal audit read failed")
+                return self.send_json({"error": "Thermal audit is unavailable.", "code": "thermal_audit_failed"}, 500)
         if urlparse(self.path).path == "/api/quick-fix":
             try:
                 return self.send_json(api_quick_fix(self))

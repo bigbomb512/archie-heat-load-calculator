@@ -117,6 +117,9 @@ def solar_load(surfaces):
             "surface_id": surface["surface_id"],
             "orientation": surface["orientation"],
             "gain_kw": round(gain_kw, 4),
+            "solar_design_w_m2": surface["solar_design_w_m2"],
+            "solar_gain_factor": surface["solar_gain_factor"],
+            "shading_factor": surface["shading_factor"],
         })
     return contribution(
         "solar",

@@ -253,6 +253,7 @@ def apply_glazing(root, proposal):
         if not answer:
             continue
         opening["u_value_w_m2k"], opening["shgc"] = answer["u_value_w_m2k"], answer["shgc"]
+        opening["glazing_basis"] = "user_edit"
         opening["glazing_source"] = (f"Answered by the operators ({answer.get('source') or 'source not given'})"
                                      + (f": {answer['glass']}" if answer.get("glass") else ""))
         opening["assumptions"] = [item for item in opening.get("assumptions", []) if item != "preliminary_glazing_profile"]

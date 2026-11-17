@@ -310,8 +310,9 @@ def apply(room, hourly):
         arrived = stored_heat.convolve(cts, gain) if cts else gain
         rts = record["solar_rts"] if kind == "solar" else record["nonsolar_rts"]
         released = stored_heat.convolve(rts, arrived) if fraction else [0.0] * 24
+        zero_lag = (cts[0] if cts else 1.0) * (1 - fraction + fraction * rts[0])
         loads[key] = {"gain": gain, "arrived": arrived, "fraction": fraction, "kind": kind if fraction else "none",
-                      "cts": bool(cts),
+                      "cts": bool(cts), "zero_lag": zero_lag,
                       "load": [(1 - fraction) * arrived[h] + fraction * released[h] for h in range(24)]}
     for hour, items in enumerate(hourly):
         for item, keys in zip(items, occurrences[hour]):
@@ -331,6 +332,11 @@ def apply(room, hourly):
                     key = (item["name"], row.get("surface_id"))
                     if key in loads:
                         row["cooling_load_kw"] = round(loads[key]["load"][hour], 4)
+                        row["earlier_hour_load_kw"] = round(loads[key]["load"][hour] -
+                                                            loads[key]["gain"][hour] * loads[key]["zero_lag"], 6)
                         row["conduction_time_series"] = loads[key]["cts"]
+            if item["name"] in {"glazing_conduction", "glazing_solar"} and len(keys) == 1:
+                note["earlier_hour_load_kw"] = round(loads[keys[0]]["load"][hour] -
+                                                       loads[keys[0]]["gain"][hour] * loads[keys[0]]["zero_lag"], 6)
             item["inputs"] = {**(item.get("inputs") or {}), "stored_heat": note}
     return hourly

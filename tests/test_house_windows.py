@@ -154,6 +154,8 @@ class PlacementTests(unittest.TestCase):
     def test_several_windows_share_one_wall_while_they_fit(self):
         result = hw.place_windows([self.tag("W1", 150, 30), self.tag("W2", 450, 30)], self.schedule, [self.room], 10)
         self.assertEqual([(row["mark"], row["edge_index"]) for row in result["openings"]], [("W1", 0), ("W2", 0)])
+        self.assertEqual([row["position_basis"] for row in result["openings"]], ["plan_tag_projection"] * 2)
+        self.assertLess(result["openings"][0]["offset_m"], result["openings"][1]["offset_m"])
         opening = result["openings"][0]
         self.assertEqual((opening["width_m"], opening["sill_height_m"], opening["head_height_m"]), (1.8, 0.9, 2.1))
         self.assertEqual(result["unplaced"], [])
