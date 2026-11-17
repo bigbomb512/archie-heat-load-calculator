@@ -189,6 +189,29 @@ def humidity_ratio_from_db_wb(dry_bulb_c, wet_bulb_c, pressure_kpa, wet_bulb_bas
     return humidity_ratio_from_vapour_pressure(vapour_pressure, pressure_kpa)
 
 
+def wet_bulb_from_db_rh(dry_bulb_c, relative_humidity, pressure_kpa):
+    """Thermodynamic wet bulb at a dry bulb, relative humidity (0–1), and pressure."""
+    from math import isfinite
+    db, rh, pressure = float(dry_bulb_c), float(relative_humidity), float(pressure_kpa)
+    if not all(isfinite(value) for value in (db, rh, pressure)) or not 0 < rh <= 1 or pressure <= 0:
+        raise ValueError("Dry bulb, relative humidity, and pressure must be finite and physically valid.")
+    vapour = rh * (ashrae_ice_saturation_pressure_kpa(db) if db < 0 else ashrae_saturation_pressure_kpa(db))
+    target = humidity_ratio_from_vapour_pressure(vapour, pressure)
+    low, high = -100.0, db
+    for _ in range(80):
+        middle = (low + high) / 2
+        try:
+            actual = humidity_ratio_from_db_wb(db, middle, pressure, "thermodynamic")
+        except ValueError:
+            low = middle
+            continue
+        if actual < target:
+            low = middle
+        else:
+            high = middle
+    return (low + high) / 2
+
+
 def humidity_ratio_from_vapour_pressure(vapour_pressure_kpa, pressure_kpa):
     if vapour_pressure_kpa <= 0 or vapour_pressure_kpa >= pressure_kpa:
         raise ValueError("Water-vapour pressure must be between zero and total pressure.")
