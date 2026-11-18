@@ -10,6 +10,7 @@ import re
 import time
 import uuid
 
+from ai import house_envelope
 from backend import ai_provider, autonomous_tasks_service as tasks, drawing_tasks_service as drawings
 from backend.job_runner import BackgroundJob, JobCancelled, checkpoint, current_check, read_json, write_json
 
@@ -96,9 +97,10 @@ def load_snapshot(project, report=None):
         room_tasks = [row for row in current_tasks if (row.get("packet") or {}).get("room_id") == use.get("room_id")
                       or any(_key(label) == _key(value) for value in (row.get("packet") or {}).get("room_names", []))]
         rooms.append({"id": use.get("room_id"), "name": label, "scope": use.get("space_scope"),
+            "level": use.get("level_name") or "",
             "use_status": use.get("status"), "traces": matching, "area_m2": area.get("area_m2") or sum(
                 row.get("ai_measured_area_m2", 0) or 0 for row in matching),
-            "area_source": area.get("area_origin") or area.get("method") or " ".join(str(row.get("method", "")) for row in matching),
+            "area_source": area.get("area_origin") or area.get("method") or area.get("area_source") or " ".join(str(row.get("method", "")) for row in matching),
             "height": height, "model": material, "model_current": current, "tasks": room_tasks,
             "pages": sorted({row.get("page") for row in matching if type(row.get("page")) is int}
                             | {row.get("page") for row in use.get("evidence", []) if type(row.get("page")) is int})})
@@ -112,6 +114,7 @@ def load_snapshot(project, report=None):
                 if mapping.get("perimeter_run_index") is not None:
                     perimeter_sides.append(edges.get(mapping["edge_index"], "unknown"))
     return {"rooms": rooms, "tasks": current_tasks, "traces": traces,
+        "dwelling": ((uses.get("dwelling_context") or {}).get("is_dwelling") is True),
         "storefront_pages": [row["page"] for row in tasks._storefront_elevation_pages(ai_input)],
         "height_pages": [row["page"] for row, _labels in [*ceiling, *views]], "perimeter_sides": perimeter_sides,
         "report": stored if report_current else {}, "input_current": current,
@@ -229,8 +232,13 @@ def audit(snapshot):
         label = _name(room.get("name"))
         traces = room.get("traces", [])
         area = room.get("area_m2")
+        # An area-only room's source is the room-size step's wording ("AI estimate from the plan", "tenancy area
+        # remainder": autonomous_tasks_service.ROOM_SIZE_SOURCES), not its method name; both are last-resort areas.
         if not _positive(area) or any(term in str(room.get("area_source", "")).casefold()
-                                      for term in ("room_size_estimated", "last_resort", "generic_profile", "profile_default")):
+                                      for term in ("room_size_estimated", "room_size_remainder", "last_resort",
+                                                   "generic_profile", "profile_default",
+                                                   tasks.ROOM_SIZE_SOURCES["estimated"].casefold(),
+                                                   tasks.ROOM_SIZE_SOURCES["remainder"].casefold())):
             add(1, "room_area", room, "P0_room_outlines", f"Check {label}'s outline and area; its area is missing or only a last-resort estimate.")
         if room.get("use_status") in {"unresolved", "conflict", "blocked", "needs_review", "stale"}:
             add(1, "room_use", room, "room_identity_use", f"Check how {label} is used so its empty-room calculation includes the right space.")
@@ -258,7 +266,12 @@ def audit(snapshot):
             add(5, "internal_perimeter", room, "P3_boundaries", f"Check {label}'s perimeter: its walls all face other rooms or tenancies although a shopfront elevation exists.", pages=storefront + room.get("pages", []))
         if any(side == "unknown" for side in sides):
             add(6, "unknown_walls", room, "P3_boundaries", f"Check what is on the other side of {label}'s unknown walls.")
-        if traces and any(trace.get("roof") in {None, "", "unknown"} or trace.get("roof_source") == "ai_fallback" for trace in traces):
+        # In a house what is over a room follows from its level (the top storey is under the roof, a lower one under the
+        # storey above: ai_preliminary_service._house_level_roof), and no roof question is asked (Turramurra, 2026-11-18:
+        # every room was flagged and sent a tenancy roof check that a house never gets).
+        house_level = snapshot.get("dwelling") and house_envelope.level_rank(room.get("level")) is not None
+        if (traces and not house_level
+                and any(trace.get("roof") in {None, "", "unknown"} or trace.get("roof_source") == "ai_fallback" for trace in traces)):
             add(6, "roof", room, "P5_roof", f"Check what is above {label}; its roof or ceiling exposure is unknown or assumed.")
 
     report = snapshot.get("report") or {}

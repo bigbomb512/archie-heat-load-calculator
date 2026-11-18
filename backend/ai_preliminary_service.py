@@ -1644,9 +1644,18 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                         part = {"trace_id": f"area-only-{room_use_id}", "page": traced_area.get("page")}
                         citation = {"page": traced_area.get("page"), "reference": f"Room area ({traced_area.get('area_source', '')})",
                                     "excerpt": str(traced_area.get("printed_text") or room.get("label", ""))}
-                        roof, roof_note = _roof_assumption(paths, phase1_ai_input, phase1_site, room)
                         area_note = (f"{room.get('label', 'This room')}'s area ({area_only_area:g} m²) is "
                                      f"{traced_area.get('area_source', 'from the drawings')}: no outline was available.")
+                        house_level_roof = _house_level_roof(house, room, area_only=True) if house is not None else None
+                        if house_level_roof and not skip_roof:
+                            # A house: what is over the room follows from its level (no tenancy roof question).
+                            tops = _house_roof_surfaces(room, part, area_only_area, house_level_roof, citation, "")
+                            for surface in tops:
+                                surface["phase1_assumptions"] = [{"component": "room area", "reason": area_note},
+                                                                 {"component": "roof", "reason": surface.get("phase1_assumption", "")}]
+                            proposal["surfaces"].extend(tops)
+                        roof, roof_note = ((None, "") if house_level_roof else
+                                           _roof_assumption(paths, phase1_ai_input, phase1_site, room))
                         top = {"surface_key": f"reviewer-trace:{part['trace_id']}:" + ("roof" if roof == "exposed" else "ceiling"),
                                "label": f"{room.get('label', 'Room')} " + ("roof" if roof == "exposed" else "ceiling (floor above)"),
                                "owner_room_label": room.get("label", ""), "owner_level_name": room.get("level_name", ""),
@@ -1661,7 +1670,8 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                                "rationale": "Roof or ceiling over the room's area (no outline).",
                                "phase1_assumptions": [{"component": "room area", "reason": area_note},
                                                       *([{"component": "roof", "reason": roof_note}] if roof_note else [])]}
-                        proposal["surfaces"].append(top)
+                        if not house_level_roof:
+                            proposal["surfaces"].append(top)
                         if house is not None and house["floors"]:
                             proposal["surfaces"].extend(_house_floor_surfaces(room, part, area_only_area,
                                 _house_area_only_floor(house, room), citation, ""))
@@ -1685,7 +1695,9 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                                      if isinstance(row, dict) and type(row.get("index")) is int}
                     roof = part.get("roof", "unknown")
                     roof_note = ""
-                    if roof == "unknown":
+                    house_level_roof = (_house_level_roof(house, room) if house is not None and roof == "unknown"
+                                        and part.get("roof_source") != "reviewer" else None)
+                    if roof == "unknown" and not house_level_roof:
                         roof, roof_note = _roof_assumption(paths, phase1_ai_input, phase1_site, room)
                     area = ai_preliminary._number(part.get("area_m2"))
                     calibration = part.get("calibration", {})
@@ -1698,7 +1710,7 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                     north_note = north_basis.get("reason", "") if north_basis.get("label") in {"unlabelled", "magnetic", "grid"} else ""
                     part_unknown_edges = []
                     house_roof = ((house or {}).get("roofs", {}).get(part.get("trace_id"))
-                                  if part.get("roof_source") != "reviewer" else None)
+                                  if part.get("roof_source") != "reviewer" else None) or house_level_roof
                     if house_roof and area and not skip_roof:
                         # A house: what is over the room, from the level plans (no AI roof question in a house).
                         proposal["surfaces"].extend(_house_roof_surfaces(room, part, area, house_roof, citation, declaration_reviewer))
@@ -2857,8 +2869,62 @@ def _house_context(paths, room_use, trace_records):
     from ai import house_envelope
     ranks = [rank for rank in (house_envelope.level_rank(row.get("level_name")) for row in trace_records) if rank is not None]
     levels = _house_floor_bases(paths, trace_records, rooms)
+    # Every level the drawings name a room on (traced or not), highest first: what is over a room follows from it.
+    level_names = {}
+    for row in [*trace_records, *((room_use or {}).get("records") or [])]:
+        if not isinstance(row, dict):
+            continue
+        rank = house_envelope.level_rank(row.get("level_name"))
+        if rank is not None:
+            level_names.setdefault(rank, str(row.get("level_name")))
     return {"rooms": rooms, "floors": levels.get("floors", {}), "roofs": levels.get("roofs", {}),
+            "levels": level_names, "roof_plan_pages": _roof_plan_pages(paths),
             **({"lowest_rank": min(ranks)} if ranks else {})}
+
+
+def _roof_plan_pages(paths):
+    """Pages the page reading calls a roof plan: cited for the top level's roof."""
+    pages = []
+    for number, page in (_read(paths["root"] / "page_inventory.json", {}).get("pages") or {}).items():
+        if (isinstance(page, dict) and str(number).isdigit()
+                and re.search(r"\broof\s+plan\b", f"{page.get('title', '')} {page.get('level', '')}", re.I)):
+            pages.append(int(number))
+    return sorted(pages)
+
+
+def _house_level_roof(house, room, area_only=False):
+    """What is over a house room when its plan couldn't be stacked under the level above (or it has no outline), from
+    the level order alone; None when the room's level isn't named. In the shape _house_roof_surfaces takes.
+
+    User rule (2026-11-18, Turramurra): in a house the top storey is under the roof, a lower storey under the
+    air-conditioned storey above it, and a basement under the ground floor; a house is never asked what is "above the
+    tenancy". A part of a lower room with the roof directly over it (a single-storey wing) is found only by matching
+    the plans (_house_floor_bases), so until then it is named in the labelled assumption."""
+    from ai import house_envelope
+    levels = (house or {}).get("levels") or {}
+    rank = house_envelope.level_rank(room.get("level_name"))
+    if rank is None or not levels:
+        return None
+    level = room.get("level_name") or "This level"
+    roof_pages = (house or {}).get("roof_plan_pages") or []
+    roof_ref = f" (roof plan, p. {', '.join(map(str, roof_pages))})" if roof_pages else ""
+    higher = sorted(value for value in levels if value > rank)
+    if not higher:
+        reason = (f"{level} is the house's top level: the roof is over it{roof_ref}." if len(levels) > 1 else
+                  f"{level} is the house's only level: the roof is over it{roof_ref}.")
+        return {"parts": [{"below": "open", "fraction": 1.0, "rooms": []}], "method": "", "reason": reason,
+                "level_rule": "top_level"}
+    above = levels[higher[0]]
+    why = ("it was found by its area only, so it can't be placed on that plan" if area_only else
+           f"this plan couldn't be matched to the {above} plan (no stair or lift traced on both, and no dimension text "
+           "the two share)")
+    reason = (f"Under the {above} (the house's next level up): taken as under its air-conditioned rooms, at the same "
+              f"temperature, so no heat flows (labelled assumption: in a house a lower storey sits under the storey "
+              f"above). Any part of this room with the roof directly over it (a single-storey part"
+              f"{'; see the roof plan, p. ' + ', '.join(map(str, roof_pages)) if roof_pages else ''}) isn't "
+              f"counted, because {why}.")
+    return {"parts": [{"below": "cooled", "fraction": 1.0, "rooms": [f"the {above}"], "reason": reason}],
+            "method": "", "level_above": above, "level_rule": "under_level_above"}
 
 
 def _house_floor_bases(paths, records, rooms):
@@ -2990,7 +3056,7 @@ def _house_roof_surfaces(room, part, area, basis, citation, reviewer):
                              "orientation": "horizontal", "rationale": reason + method,
                              "assumptions": ["flat_roof_over_traced_footprint"], "phase1_assumption": reason + method})
         elif share["below"] == "cooled":
-            reason = f"Under {names}, air-conditioned to the same temperature: no heat flows.{method}"
+            reason = share.get("reason") or f"Under {names}, air-conditioned to the same temperature: no heat flows.{method}"
             surfaces.append({**common, "surface_key": f"reviewer-trace:{part['trace_id']}:ceiling",
                              "label": f"{room.get('label', 'Room')} ceiling (under {names})",
                              "physical_type": "ceiling", "thermal_role": "conditioned_adjacent", "external_exposure": "",
