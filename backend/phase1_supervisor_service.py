@@ -390,6 +390,39 @@ def _rebuild(web, project):
     return load_snapshot(project, report=report)
 
 
+def room_areas(snapshot):
+    """{room id: {"name", "area_m2"}} for the rooms of a snapshot (area rounded to 0.1 m², None when it has none)."""
+    result = {}
+    for room in snapshot.get("rooms", []):
+        if not room.get("id"):
+            continue
+        area = room.get("area_m2")
+        result[str(room["id"])] = {"name": room.get("name") or "", "area_m2": round(float(area), 1) if _positive(area) else None}
+    return result
+
+
+def area_changes(before, after):
+    """Rooms whose area this check changed: [{"room", "before_m2", "after_m2"}]. A difference under 0.1 m² is rounding."""
+    changes = []
+    for room_id, start in sorted((before or {}).items(), key=lambda item: str(item[1].get("name", ""))):
+        now = (after or {}).get(room_id)
+        if not now or start.get("area_m2") == now.get("area_m2"):
+            continue
+        if start.get("area_m2") is not None and now.get("area_m2") is not None and abs(start["area_m2"] - now["area_m2"]) < 0.1:
+            continue
+        changes.append({"room": now.get("name") or start.get("name"), "before_m2": start.get("area_m2"), "after_m2": now.get("area_m2")})
+    return changes
+
+
+def _take_in_review(project):
+    """The fixes this check applied (traced rooms, wall faces, room uses) refine the drawing review's answers; they
+    are downstream of it, so they must not make "Review room names and site" look out of date. Changes that don't
+    come through this check (a new PDF, other pages, new page readings or instructions) still do."""
+    from backend import skill_workflow_service as skills
+    manifest = read_json(Path(project["review_dir"]) / "skill_workflow_run.json")
+    skills.take_in_downstream(project, manifest.get("run_id"))
+
+
 def _room_use_investigation(web, project, gap):
     """Replace only a complete, validated room-use answer; partial replies never overwrite the room list."""
     from backend import skill_workflow_service as skills
@@ -476,16 +509,20 @@ def run(web, project, step=lambda *args: None):
     gaps = audit(snapshot)
     initial_ids = {row["id"] for row in gaps}
     check = current_check()
+    # Each room's area when this check started (kept across a resume), so a changed area is said, not silent.
+    baseline = saved.get("area_baseline") if isinstance(saved.get("area_baseline"), dict) else room_areas(snapshot)
 
     def progress(**extra):
         checkpoint()
         state = read_json(root / JOB_FILE)
         state.update(attempts=attempts, history=history, cycle=cycle, max_cycles=MAX_CYCLES,
                      gaps_found=len(initial_ids | set(attempts) | {gap["id"] for gap in gaps}), gaps_fixed=len(resolved),
-                     resolved_gap_ids=sorted(resolved), gaps=deepcopy(gaps), spend=_usage(root), **extra)
+                     resolved_gap_ids=sorted(resolved), gaps=deepcopy(gaps), spend=_usage(root),
+                     area_baseline=baseline, area_changes=area_changes(baseline, room_areas(snapshot)), **extra)
         write_json(root / JOB_FILE, state)
         write_json(root / "phase1_supervisor_state.json", {key: state[key] for key in (
-            "supervision_id", "attempts", "history", "cycle", "resolved_gap_ids", "exceptions", "model_fingerprint") if key in state})
+            "supervision_id", "attempts", "history", "cycle", "resolved_gap_ids", "exceptions", "model_fingerprint",
+            "area_baseline") if key in state})
 
     unavailable = ai_unavailable(project)
     progress(stop_reason="", not_asked=unavailable)
@@ -583,6 +620,7 @@ def run(web, project, step=lambda *args: None):
             _build_calculation_evidence(web, project)
             tasks._refresh_geometry_tasks(root)
             snapshot = _rebuild(web, project)
+            _take_in_review(project)
             gaps = audit(snapshot)
         after = model_fingerprint(snapshot), {row["id"] for row in gaps}
         resolved = (resolved | (before[1] - after[1])) - after[1]
@@ -603,6 +641,7 @@ def run(web, project, step=lambda *args: None):
         try:
             drawings.answer_all(web, project)
             snapshot = _rebuild(web, project)
+            _take_in_review(project)
             gaps = audit(snapshot)
         except ai_provider.UsageLimitReached:
             pass
@@ -656,8 +695,11 @@ def status(web, project):
         "label": drawings.TASK_LABELS.get(row.get("task"), "Room-use specialist" if row.get("task") == "room_identity_use" else "Model investigation"),
         "status": row.get("status") or row.get("outcome", "unknown"), "cycle": row.get("cycle"),
     } for row in state.get("history", [])[-8:]]
-    for key in ("history", "attempts", "resolved_gap_ids"):
+    for key in ("history", "attempts", "resolved_gap_ids", "area_baseline"):
         state.pop(key, None)
+    state["area_changes"] = [{name: row.get(name) for name in ("room", "before_m2", "after_m2")}
+                             for row in state.get("area_changes") or [] if isinstance(row, dict)]
+
     if state.get("error"):
         state["error"] = "Checking the empty-room model stopped before it finished. Resume to keep the saved answers."
     if state.get("status") == "done" and not state["current"]:
@@ -665,7 +707,12 @@ def status(web, project):
         state.update(status="stale", step_state="waiting", recovery=recovery("stale", "The drawing inputs changed. Recheck the empty-room model."))
     # Keep internal routing in the job archive, outside operator-facing progress and exceptions.
     for key in ("gaps", "exceptions"):
-        state[key] = [{name: row.get(name) for name in ("message", "room", "pages", "attempts")} for row in state.get(key, [])]
+        state[key] = [{name: row.get(name) for name in ("message", "room", "pages", "attempts", "kind")} for row in state.get(key, [])]
+    # Stopped at a limit with gaps left: the check is finished, but it isn't a clean "done" for the person (Turramurra
+    # 2026-11-18: 56 gaps found, 9 fixed, shown as a plain green tick).
+    state["gaps_remaining"] = len(state.get("exceptions") or [])
+    state["stopped_at_limit"] = bool(state.get("status") == "done" and state["gaps_remaining"]
+                                     and state.get("stop_reason") in {"cycle_limit", "attempt_limit", "no_progress"})
     return state
 
 
@@ -699,7 +746,7 @@ def start(web, project, action="start", expected_run_id=None):
     previous = read_json(_JOB.path(project))
     if action == "start" and previous.get("status") == "done" and previous.get("source_fingerprint") == source_fingerprint(project):
         return {**status(web, project), "deduplicated": True}
-    fields = {key: deepcopy(previous[key]) for key in ("attempts", "history", "cycle", "resolved_gap_ids", "supervision_id") if key in previous}
+    fields = {key: deepcopy(previous[key]) for key in ("attempts", "history", "cycle", "resolved_gap_ids", "supervision_id", "area_baseline") if key in previous}
     if previous.get("status") == "done" and previous.get("source_fingerprint") != source_fingerprint(project):
         fields = {}
     fields.setdefault("supervision_id", uuid.uuid4().hex)

@@ -131,6 +131,17 @@ class CalculationJobTests(unittest.TestCase):
         take_in.assert_called_once()
         self.assertEqual(take_in.call_args.args[1], "r7")
 
+    def test_a_calculation_that_stops_after_rebuilding_the_model_still_takes_in_the_review(self):
+        # Turramurra (2026-11-18): the model was rebuilt from the review's answers, then the calculation failed
+        # ("Missing required artifacts: hourly load model"), and the review looked out of date.
+        from backend import skill_workflow_service
+        (self.root / "skill_workflow_run.json").write_text(json.dumps({"run_id": "r8", "scope": "phase1_envelope"}))
+        with patch.object(skill_workflow_service, "take_in_downstream") as take_in:
+            _, failed = self.run_job({}, assemble_errors=[ValueError("Analyse the PDF before assembling an AI preliminary model.")])
+        self.assertEqual(failed["status"], "failed")
+        take_in.assert_called_once()
+        self.assertEqual(take_in.call_args.args[1], "r8")
+
     def test_the_jobs_phase_one_note_is_added_to_the_reports_own_note_not_written_over_it(self):
         own = "Shop: every wall and the ceiling face conditioned space, so its envelope load is 0 kW."
         (self.root / "phase1_base_room_load_report.json").write_text(json.dumps({"phase1_automation_note": own,

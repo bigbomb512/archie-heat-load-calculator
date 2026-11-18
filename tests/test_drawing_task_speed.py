@@ -81,6 +81,22 @@ class UnreadableDimensionTests(unittest.TestCase):
         self.assertEqual(second["status"], "waiting_for_reply")
         self.assertEqual(autonomous_tasks_service._task_progress(root)["blocked"], 0)
 
+    def test_an_unreadable_printed_scale_says_so_plainly_without_the_checkers_instruction(self):
+        # Turramurra (2026-11-18): "Not needed. Not usable (Return a readable scale notation or scale bar, or null so
+        # the standard-object estimate can be used.); the next way of finding the scale is used."
+        root = Path(tempfile.mkdtemp())
+        project = {"id": "t", "review_dir": str(root)}
+        autonomous_tasks_service._create_run(root, "P0_scale_read", "page-9", {"task": "P0_scale_read", "page": 9}, "Read it.", [])
+        with mock.patch.object(autonomous_tasks_service, "_refresh_geometry_tasks"):
+            autonomous_tasks_service.post(None, project, {"action": "validate_apply", "task": "P0_scale_read",
+                                                          "target": "page-9", "reply": '{"scale_text": null}'})
+        record = autonomous_tasks_service._current_task(root, "P0_scale_read", "page-9")
+        self.assertEqual(record["status"], "not_needed")
+        self.assertEqual(record["block_reason"], "No readable scale on page 9; the scale is found another way.")
+        self.assertNotIn("Return a", record["block_reason"])
+        self.assertIn("Return a readable scale", record["validation"]["error"])      # kept for the record, not shown
+        self.assertEqual(record["reply_attempts"][-1]["outcome"], "rejected_fallback")
+
 
 class TextLayerPairingTests(unittest.TestCase):
     """Numbers are paired with tick-ended lines by real distance and in image pixels (saved jobs 2026-11-06: with PDF-point

@@ -315,9 +315,90 @@ def _source_fingerprint(paths, catalog):
     return result
 
 
-def _derived_dependency_fingerprints(paths):
-    names = _DOMAIN_ARTIFACTS
-    return {name: _fingerprint(_read(paths["root"] / name, {})) for name in names}
+# Files the source fingerprint already covers: a change to them is a source change, not a dependency change.
+_SOURCE_FILE_NAMES = frozenset({
+    "ai_input.json", "drawing_coverage.json", "spatial_ocr.json", "vector_geometry.json", "vision_response.json",
+    "vision_extraction_settings.json", "page_inventory.json", "page_extraction.json",
+})
+# Rebuilt from the review's own answers (and the drawing tasks) every time the model is assembled: by the calculation,
+# the empty-room check and the value resolver. Only what a person typed into them (the overrides) is an input to the
+# review; the rest is downstream of it. Fingerprinting the whole file made the review go out of date as soon as a
+# later step rebuilt it (Turramurra, 2026-11-18). The empty-room check's own source fingerprint does the same.
+_REBUILT_FROM_REVIEW = frozenset({"room_use_resolution.json", "ceiling_volume_resolution.json"})
+DEPENDENCY_BASIS = "consumed_v2"
+
+
+def _dependency_value(root, name):
+    value = _read(root / name, {})
+    if name not in _REBUILT_FROM_REVIEW:
+        return value
+    records = value.get("records", []) if isinstance(value, dict) else []
+    return sorted(({"room_id": row.get("room_id"), "override": row["override"]} for row in records
+                   if isinstance(row, dict) and row.get("override")), key=lambda row: str(row["room_id"]))
+
+
+def _consumed_artifact_names(paths, manifest):
+    """The files the run's skills actually read as evidence (recorded on each answer), less the source files.
+    A file no skill of this run read can't make its answers out of date."""
+    root = paths["root"]
+    proposals = root / "skill_workflow_runs" / str(manifest.get("run_id", "")) / "proposals"
+    names = set()
+    for skill_id, row in (manifest.get("subskills") or {}).items():
+        if not isinstance(row, dict) or row.get("status") in {"not_in_scope", "not_started", "queued"}:
+            continue
+        recorded = _read(proposals / f"{skill_id}.json", {}).get("evidence_artifact_names", [])
+        if isinstance(recorded, list):
+            names.update(name for name in recorded if isinstance(name, str))
+    return sorted(name for name in names if name not in _SOURCE_FILE_NAMES and "/" not in name)
+
+
+def _instruction_fingerprints(manifest):
+    """What each skill of the run was told: an edit to one of their instructions makes the run out of date."""
+    specs = {row["id"]: row for row in load_subskill_registry().get("subskills", [])}
+    result = {}
+    for skill_id, row in (manifest.get("subskills") or {}).items():
+        if skill_id in specs and isinstance(row, dict) and row.get("status") not in {"not_in_scope", "not_started", "queued"}:
+            try:
+                result[skill_id] = subskill_instructions_fingerprint(specs[skill_id])
+            except (OSError, KeyError, ValueError):
+                continue
+    return result
+
+
+def _derived_dependency_fingerprints(paths, names=None):
+    root = paths["root"]
+    names = _DOMAIN_ARTIFACTS if names is None else names
+    return {name: _fingerprint(_dependency_value(root, name)) for name in names}
+
+
+def _record_dependencies(paths, manifest):
+    """Save the fingerprints of what this run's skills read, to tell later whether their answers are out of date."""
+    manifest["dependency_fingerprints"] = _derived_dependency_fingerprints(paths, _consumed_artifact_names(paths, manifest))
+    manifest["dependency_basis"] = DEPENDENCY_BASIS
+    manifest["instruction_fingerprints"] = _instruction_fingerprints(manifest)
+
+
+def _dependency_changes(paths, manifest):
+    """The consumed files that changed since the run (or a later step that used its answers) recorded them."""
+    stored = manifest.get("dependency_fingerprints") or {}
+    if not isinstance(stored, dict) or not stored:
+        return []
+    if manifest.get("dependency_basis") == DEPENDENCY_BASIS:
+        current = _derived_dependency_fingerprints(paths, list(stored))
+        return sorted(name for name in stored if stored[name] != current.get(name))
+    # A run saved before 2026-11-18 fingerprinted 17 whole files. Compare only the ones its skills read, and not the
+    # files later steps rebuild (their old whole-file fingerprint can't tell a rebuild from an override).
+    consumed = [name for name in _consumed_artifact_names(paths, manifest) if name in stored and name not in _REBUILT_FROM_REVIEW]
+    current = {name: _fingerprint(_read(paths["root"] / name, {})) for name in consumed}
+    return sorted(name for name in consumed if stored[name] != current[name])
+
+
+def _instruction_changes(manifest):
+    stored = manifest.get("instruction_fingerprints")
+    if not isinstance(stored, dict) or not stored:
+        return []
+    current = _instruction_fingerprints({"subskills": {key: {"status": "resolved"} for key in stored}})
+    return sorted(key for key, value in stored.items() if key in current and current[key] != value)
 
 
 def _project_lock(project_id):
@@ -3685,7 +3766,7 @@ def _run_worker(web, project, run_id, source_fp, catalog):
                 manifest["status"] = "needs_review"
             if manifest["status"] in {"needs_review", "failed", "blocked"}:
                 manifest["remediation"] = "Some evidence tasks need review. Independent findings are preserved; review the exceptions before relying on draft inputs."
-            manifest["dependency_fingerprints"] = _derived_dependency_fingerprints(paths)
+            _record_dependencies(paths, manifest)
             manifest["finished_at"] = time.time()
             _write_manifest(run_path, manifest)
     except JobCancelled:
@@ -3745,7 +3826,7 @@ def take_in_downstream(project, run_id):
         if (not run_id or manifest.get("run_id") != run_id
                 or manifest.get("status") not in {"completed", "needs_review", "provisional"}):
             return False
-        manifest["dependency_fingerprints"] = _derived_dependency_fingerprints(paths)
+        _record_dependencies(paths, manifest)
         manifest["downstream_taken_in_at"] = time.time()
         _write_manifest(paths["manifest"], manifest)
     return True
@@ -3782,13 +3863,18 @@ def _response(web, project):
     manifest = _read(paths["manifest"], {})
     current_fp = _source_fingerprint(paths, catalog) if paths["ai_input"].exists() else ""
     source_stale = bool(manifest.get("source_fingerprint") and current_fp and manifest["source_fingerprint"] != current_fp)
-    dependency_stale = False
-    if manifest.get("dependency_fingerprints") and manifest.get("status") in {"completed", "needs_review", "provisional"}:
-        dependency_stale = manifest["dependency_fingerprints"] != _derived_dependency_fingerprints(paths)
-    stale = source_stale or dependency_stale
+    changed_files, changed_instructions = [], []
+    if manifest.get("status") in {"completed", "needs_review", "provisional"}:
+        changed_files = _dependency_changes(paths, manifest)
+        changed_instructions = _instruction_changes(manifest)
+    stale = source_stale or bool(changed_files) or bool(changed_instructions)
     if stale and manifest.get("status") in {"completed", "needs_review", "provisional"}:
         manifest["status"] = "stale"
-        manifest["stale_reasons"] = ["PDF evidence, selected pages, skill instructions, or skill catalog changed." if source_stale else "A current domain artifact used by one or more skill proposals changed."]
+        manifest["stale_reasons"] = [
+            "PDF evidence, selected pages, skill instructions, or skill catalog changed." if source_stale else
+            "The instructions for " + ", ".join(_subskill_label(key) for key in changed_instructions) + " changed." if changed_instructions else
+            "A file the review's skills read changed since they answered: " + ", ".join(changed_files) + "."]
+        manifest["stale_files"] = changed_files
         for row in manifest.get("subskills", {}).values():
             if row.get("status") in {"resolved", "provisional", "needs_review", "excluded"}:
                 row["status"] = "stale"

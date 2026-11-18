@@ -1598,8 +1598,50 @@ def _corner_subjects(root, page):
         for room, sketches in sorted(pieces.items()):
             if room.casefold() in removed:
                 continue        # a note-only room the plan doesn't show gets no corner question
-            subjects.append((f"room-{re.sub(r'[^a-z0-9]+', '-', room.casefold()).strip('-')}-page-{page}", room, task, sketches))
+            target = f"room-{re.sub(r'[^a-z0-9]+', '-', room.casefold()).strip('-')}-page-{page}"
+            earlier = next((index for index, row in enumerate(subjects) if row[0] == target), None)
+            if earlier is None:
+                subjects.append((target, room, task, sketches))
+                continue
+            # The floor-with-no-room step named a space after a room the outline step already traced: one corner
+            # question per room. Two sketches under one target replaced each other's question on every rebuild, so one
+            # was always left unsent and the room's area flipped between the two answers (Turramurra Store, page 25,
+            # 2026-11-18: 7.8 m² and 5.8 m²). The same space is asked once; a separate piece is added to its sketch.
+            name, owner, source, kept = subjects[earlier]
+            extra = [points for points in sketches if not _same_sketched_space(points, kept)]
+            if extra:
+                subjects[earlier] = (name, owner, source, [*kept, *extra])
     return subjects
+
+
+# What the screen says when one way of finding a plan's scale gave nothing usable and the next one takes over. The
+# checker's refusal is written for the AI ("Return a readable scale notation ... or null so ..."); it is kept in the
+# record's validation and reply history, never shown as the reason (Turramurra, 2026-11-18).
+_SCALE_FALLBACK_TEXT = {
+    "P0_dimensions": "The printed dimension{where} couldn't be read; the scale is found another way.",
+    "P0_scale_read": "No readable scale{where}; the scale is found another way.",
+    "P0_scale_objects": "No standard object{where} gave a usable scale; the scale is found another way.",
+}
+SCALE_FALLBACK_TASKS = frozenset(_SCALE_FALLBACK_TEXT)
+
+
+def scale_fallback_reason(task, target):
+    match = re.search(r"page-(\d+)", str(target or ""))
+    return _SCALE_FALLBACK_TEXT[task].format(where=f" on page {match.group(1)}" if match else " on the plan")
+
+
+def _same_sketched_space(points, sketches, share=0.5):
+    """Whether a sketched piece mostly covers floor already sketched (half its area or more)."""
+    from shapely.geometry import Polygon
+    from shapely.ops import unary_union
+    try:
+        piece = Polygon(points).buffer(0)
+        drawn = unary_union([Polygon(row).buffer(0) for row in sketches if len(row) >= 3])
+    except (ValueError, TypeError, GEOSException):
+        return False
+    if piece.is_empty or not piece.area:
+        return True
+    return piece.intersection(drawn).area >= share * piece.area
 
 
 def _p0_corner_packets(root, force=False):
@@ -4526,7 +4568,7 @@ def _post(web, project, data, *, defer_evidence_rebuild=False):
         if task in {"P0_dimensions", "P0_scale_read", "P0_scale_objects"}:
             # The next way of finding the scale takes over (another dimension line, the printed scale, standard
             # objects, then an assumed 1:100): this reading is no longer needed and doesn't hold the job.
-            record.update({"status": "not_needed", "block_reason": f"Not usable ({error}); the next way of finding the scale is used.",
+            record.update({"status": "not_needed", "block_reason": scale_fallback_reason(task, record.get("target")),
                            "validation": {"valid": False, "error": str(error)}, "applied_value": {"fallback_required": True}})
             archived = _read(reply_path, {})
             archived.update({"outcome": "rejected_fallback", "reason": str(error)})

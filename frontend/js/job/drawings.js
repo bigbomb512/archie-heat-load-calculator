@@ -8,6 +8,14 @@ const query = (projectId) => `?project_id=${encodeURIComponent(projectId)}`;
 const stepOf = (data) => String(data?.step_state || "waiting");
 const working = (data) => ["active", "stopping"].includes(stepOf(data));
 const stopped = (data) => stepOf(data) === "failed";
+// Finished, but something is left for the person: drawing questions nobody has sent, or a model check that stopped
+// at its limit with gaps remaining. Such a step never shows the done tick.
+const queuedQuestions = (data) => Number(data?.waiting_tasks) || 0;
+const stoppedAtLimit = (data) => Boolean(data?.stopped_at_limit) && stepOf(data) === "done";
+const needsAction = (data, kind) =>
+  kind === "rooms" ? stateOf(data) === "done" && queuedQuestions(data) > 0
+    : kind === "supervisor" ? stoppedAtLimit(data) : false;
+const plural = (count, one, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
 
 function stateOf(data) {
   if (data?.status === "not_needed") return "done";
@@ -149,6 +157,7 @@ function stageLine(data, kind, status, plan) {
       : "Reviewing room names and site details.";
   }
   if (kind === "supervisor") {
+    if (stoppedAtLimit(data)) return supervisorLimitLine(data);
     const copy = working(data) ? data.step_label || "Checking the empty-room model."
       : stepOf(data) === "done" ? data.outcome === "needs_information"
         ? "The model checks finished, but no cooled room has enough supported inputs yet. See the remaining exceptions."
@@ -190,6 +199,88 @@ function stageLine(data, kind, status, plan) {
   return "The empty-room load calculation has not started yet.";
 }
 
+const LIMIT_WHY = {
+  cycle_limit: (data) => `It stopped at its limit of ${plural(Number(data.max_cycles) || 3, "investigation cycle")}`,
+  attempt_limit: () => "It stopped after asking about each gap twice",
+  no_progress: () => "It stopped because its last cycle changed nothing",
+};
+
+function supervisorLimitLine(data) {
+  // Counted as listed below (the same check for two rooms of one name is one line), so the two numbers agree.
+  const listed = groupedGaps(data.exceptions).reduce((sum, row) => sum + row.count, 0);
+  const left = listed || Number(data.gaps_remaining) || 0;
+  const why = (LIMIT_WHY[data.stop_reason] || LIMIT_WHY.attempt_limit)(data);
+  const counts = `${Number(data.gaps_found) || 0} gaps found · ${Number(data.gaps_fixed) || 0} fixed`;
+  const price = data.spend ? ` · US$${Number(data.spend.cost_usd || 0).toFixed(4)} spent` : "";
+  return `${why} with ${plural(left, "gap")} still open (${counts}${price}). The empty-room load uses labelled estimates for these until you fix them.`;
+}
+
+// What each kind of gap asks the person to check, worded as something to look at (never as a finding).
+const GAP_KINDS = {
+  room_area: "outline and area", room_use: "how it is used", roof: "what is above",
+  unknown_walls: "what its unknown walls face", unanswered: "a drawing check that wasn't answered",
+  storefront_glass: "the shopfront glass", ceiling_height: "ceiling height",
+  internal_perimeter: "which walls face outside", zero_load: "whether it has an outside wall, roof or glass",
+  zero_tenancy: "whether the tenancy has an outside wall, roof or glass",
+  omitted_room: "why it is missing from the result", missing_room: "floor that no traced room covers",
+};
+
+// The remaining gaps, one line per room with what to check there; exact repeats are dropped.
+export function groupedGaps(rows) {
+  const rooms = new Map();
+  const seen = new Set();
+  for (const row of rows || []) {
+    const room = String(row.room || "Other");
+    const what = GAP_KINDS[row.kind] || String(row.message || "").trim();
+    const key = `${room}|${what}`;
+    if (!what) continue;
+    const entry = rooms.get(room) || { room, checks: [], pages: new Set(), count: 0 };
+    for (const page of row.pages || []) entry.pages.add(page);
+    rooms.set(room, entry);
+    if (seen.has(key)) continue;      // the same check for the same room: listed once, its pages kept
+    seen.add(key);
+    entry.checks.push(what);
+    entry.count += 1;
+  }
+  return [...rooms.values()].sort((a, b) => b.count - a.count || a.room.localeCompare(b.room));
+}
+
+// Disclosures inside the stage list stay open across the five-second redraws.
+const openDetails = new Set();
+let detailsWatched = false;
+function watchDetails() {
+  if (detailsWatched || typeof document === "undefined") return;
+  detailsWatched = true;
+  document.addEventListener("toggle", (event) => {
+    const key = event.target?.dataset?.stageDetails;
+    if (!key) return;
+    if (event.target.open) openDetails.add(key);
+    else openDetails.delete(key);
+  }, true);
+}
+
+function gapsMarkup(data) {
+  const groups = groupedGaps(data?.exceptions);
+  if (!groups.length) return "";
+  const total = groups.reduce((sum, row) => sum + row.count, 0);
+  const key = `${data.recovery_project_id || ""}:gaps`;
+  const pages = (row) => {
+    const list = [...row.pages].sort((a, b) => a - b);
+    return list.length && list.length <= 4 ? ` (page${list.length === 1 ? "" : "s"} ${list.join(", ")})` : "";
+  };
+  return `<details class="job-stage-details" data-stage-details="${escapeHtml(key)}" data-supervisor-exceptions ${openDetails.has(key) ? "open" : ""}>
+    <summary>${escapeHtml(`${plural(total, "gap")} left in ${plural(groups.length, "room")}`)}</summary>
+    <ul class="job-note">${groups.map((row) => `<li><strong>${escapeHtml(row.room)}:</strong> ${escapeHtml(row.checks.join("; "))}${escapeHtml(pages(row))}</li>`).join("")}</ul></details>`;
+}
+
+const m2 = (value) => `${Number(value).toFixed(1)} m²`;
+export function areaChangeLine(changes) {
+  const parts = (changes || []).map((row) => row.before_m2 == null ? `${row.room} area found: ${m2(row.after_m2)}`
+    : row.after_m2 == null ? `${row.room} area removed (was ${m2(row.before_m2)})`
+    : `${row.room} area updated ${Number(row.before_m2).toFixed(1)} → ${m2(row.after_m2)}`);
+  return parts.length ? `${parts.join("; ")} by the model check.` : "";
+}
+
 function stage(title, data, kind, status, plan, retryEndpoint = "") {
   const state =
     kind === "calculation"
@@ -198,7 +289,9 @@ function stage(title, data, kind, status, plan, retryEndpoint = "") {
         : working(data) || data?.readiness?.ready && !data.offerStart && !stopped(data) && stepOf(data) !== "done"
           ? "active"
           : "waiting"
-      : stateOf(data) === "done" && data?.recovery?.label === "Try again"
+      : needsAction(data, kind)
+        ? "attention"
+        : stateOf(data) === "done" && data?.recovery?.label === "Try again"
         ? "waiting"
         : stateOf(data);
   const copy = stageLine(data, kind, status, plan);
@@ -208,17 +301,23 @@ function stage(title, data, kind, status, plan, retryEndpoint = "") {
     ? stopped(data) && data?.readiness?.ready && retryEndpoint
       ? `<button class="job-button secondary" data-retry="${retryEndpoint}">Try again</button><p class="job-note" role="status"></p>` : ""
     : recoveryButton(data, retryEndpoint, kind);
-  const exceptions = kind === "supervisor" && data?.exceptions?.length
-    ? `<ul class="job-note" data-supervisor-exceptions>${data.exceptions.map((row) => `<li>${escapeHtml(row.message)}</li>`).join("")}</ul>` : "";
+  const exceptions = kind === "supervisor" ? gapsMarkup(data) : "";
+  const areaLine = kind === "supervisor" ? areaChangeLine(data?.area_changes) : "";
+  const areaNote = areaLine ? `<p class="job-caption" data-area-changes>${escapeHtml(areaLine)}</p>` : "";
+  const nextStep = kind === "supervisor" && stoppedAtLimit(data) && data.recovery_project_id
+    ? `<a class="job-button secondary" data-next-step href="#/job/${encodeURIComponent(data.recovery_project_id)}/fix">Fix the remaining rooms</a>` : "";
   const problem =
     kind === "rooms" && data?.last_problem && stateOf(data) === "active"
       ? `<p class="job-caption" data-stage-problem>${escapeHtml(data.last_problem)}</p>`
       : "";
-  const notNeeded = kind === "rooms" ? (data?.not_needed_tasks || []).map((row) =>
-    `<p class="job-caption" data-task-not-needed><strong>${escapeHtml(row.label)}: Not needed.</strong> ${escapeHtml(row.reason || "")}</p>`).join("")
+  const notNeeded = kind === "rooms" ? (data?.not_needed_tasks || []).map((row) => row.fallback
+    ? `<p class="job-caption" data-task-not-needed><strong>${escapeHtml(row.label)}:</strong> ${escapeHtml(row.reason || "")}</p>`
+    : `<p class="job-caption" data-task-not-needed><strong>${escapeHtml(row.label)}: Not needed.</strong> ${escapeHtml(row.reason || "")}</p>`).join("")
     + (data?.not_answered_tasks || []).map((row) =>
       `<p class="job-caption" data-task-not-answered><strong>${escapeHtml(row.label)}: Not answered.</strong> The checker refused the AI's reply twice${row.reason ? ` (${escapeHtml(row.reason)})` : ""}; the room keeps the area its other steps found.</p>`).join("") : "";
-  return `<li class="job-stage ${state}" data-stage="${kind}"><span class="job-stage-icon" aria-hidden="true">${state === "done" ? "✓" : ""}</span><span><strong>${title}</strong><p>${escapeHtml(copy)}</p>${problem}${notNeeded}${exceptions}${retry}${startNow}</span></li>`;
+  const icon = state === "done" ? "✓" : state === "attention" ? "!" : "";
+  const flag = state === "attention" ? `<span class="job-stage-flag">Needs your action</span>` : "";
+  return `<li class="job-stage ${state}" data-stage="${kind}"><span class="job-stage-icon" aria-hidden="true">${icon}</span><span><strong>${title}</strong>${flag}<p>${escapeHtml(copy)}</p>${areaNote}${problem}${notNeeded}${exceptions}${retry}${nextStep}${startNow}</span></li>`;
 }
 
 const recoveryNotes = new Map();
@@ -286,6 +385,7 @@ function statusSentence(data, status, plan) {
   const unfinished = ([kind, value]) => {
     if (kind === "calculation") return !status.phase1_complete;
     if (kind === "rooms" && stateOf(value) === "done" && callFailures(value).length) return true;
+    if (needsAction(value, kind)) return true;
     return value && stateOf(value) !== "done";
   };
   const current =
@@ -300,11 +400,14 @@ function statusSentence(data, status, plan) {
     if (kind === "pages") return pageReadingProblem(value);
     return kind === "envelope"
       ? `${(value.failed_steps || []).map((row) => row.label).join(" and ") || "Working out the walls, roof and floor"} stopped. Try again to continue; finished steps are kept.`
+      : kind === "calculation" ? "The empty-room load calculation stopped. Try again under Calculate each room’s empty-room load."
       : "A drawing step stopped. Try again to continue.";
   }
   const copy = stageLine(value, kind, status, plan);
   if (kind === "pages")
     return `${copy} You can close this page and come back later.`;
+  if (kind === "rooms" && needsAction(value, kind)) return `${copy} Check and resume under Trace the rooms and walls sends it.`;
+  if (kind === "supervisor" && needsAction(value, kind)) return `${copy} Fix the remaining rooms, or continue with the estimates.`;
   if (kind === "rooms") return `${copy} The review keeps going if you leave.`;
   if (kind === "envelope")
     return `${copy} The review keeps going if you leave.`;
@@ -381,7 +484,7 @@ function sentenceFor(data, status, plan) {
 // Which stages are finished and which one is working; when this changes, the plan and facts are re-read too.
 function stageShape(data) {
   const kinds = ["reading", "equipment", "rooms", "envelope", "supervisor", "calculation"];
-  const shape = kinds.map((kind) => `${kind}:${data[kind]?.status || ""}:${JSON.stringify(data[kind]?.recovery || {})}:${JSON.stringify(data[kind]?.readiness || {})}:${JSON.stringify([data[kind]?.cycle, data[kind]?.gaps_fixed, data[kind]?.exceptions, data[kind]?.spend, data[kind]?.not_needed_tasks, data[kind]?.not_answered_tasks])}:${data[kind]?.offerStart || false}`);
+  const shape = kinds.map((kind) => `${kind}:${data[kind]?.status || ""}:${JSON.stringify(data[kind]?.recovery || {})}:${JSON.stringify(data[kind]?.readiness || {})}:${JSON.stringify([data[kind]?.cycle, data[kind]?.gaps_fixed, data[kind]?.exceptions, data[kind]?.spend, data[kind]?.not_needed_tasks, data[kind]?.not_answered_tasks, data[kind]?.waiting_tasks, data[kind]?.stopped_at_limit, data[kind]?.area_changes])}:${data[kind]?.offerStart || false}`);
   shape.push(`prep:${stepOf(data.newJob)}`);
   return shape.join("|");
 }
@@ -517,6 +620,7 @@ export async function renderDrawings(project, projectId) {
     statusLine: sentenceFor(data, status, plan),
     plan,
     bind: () => {
+      watchDetails();
       bindActivity(document.querySelector("[data-ai-activity]"), projectId);
       bindStageButtons(projectId, document.querySelector(".job-progress-panel") || document);
       watchStages(projectId, data, status, plan);

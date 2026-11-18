@@ -412,6 +412,56 @@ class RunTests(unittest.TestCase):
 
 
 
+class StatusHonestyTests(unittest.TestCase):
+    """Turramurra (2026-11-18): the check stopped at its cycle limit with 42 gaps left and showed a plain done tick; the
+    Store's area changed 7.8 -> 5.8 m² without a word; its fixes made the earlier room-name review look out of date."""
+    setUp = RunTests.setUp
+    fake_prepare = RunTests.fake_prepare
+    execute = RunTests.execute
+
+    def test_an_area_the_check_changed_is_recorded_with_before_and_after(self):
+        before = snapshot(room(name="Store", area_m2=7.8, area_source="room_size_estimated"), room(name="Shop"))
+        after = snapshot(room(name="Store", area_m2=5.84), room(name="Shop"))
+        self.execute([before, after])
+        state = read_json(self.root / supervisor.JOB_FILE)
+        self.assertEqual(state["area_changes"], [{"room": "Store", "before_m2": 7.8, "after_m2": 5.8}])
+        self.assertEqual(read_json(self.root / "phase1_supervisor_state.json")["area_baseline"]["store"]["area_m2"], 7.8)
+
+    def test_rounding_and_unchanged_areas_are_not_reported(self):
+        self.assertEqual(supervisor.area_changes({"a": {"name": "A", "area_m2": 10.0}}, {"a": {"name": "A", "area_m2": 10.04}}), [])
+        self.assertEqual(supervisor.area_changes({"a": {"name": "A", "area_m2": None}}, {"a": {"name": "A", "area_m2": 4.0}}),
+                         [{"room": "A", "before_m2": None, "after_m2": 4.0}])
+
+    def test_its_fixes_are_taken_in_by_the_drawing_review(self):
+        with patch.object(supervisor, "_take_in_review") as take_in:
+            self.execute([snapshot(room(area_m2=None)), snapshot()])
+        take_in.assert_called_once_with(self.project)
+
+    def test_take_in_review_records_the_current_review_run(self):
+        write_json(self.root / "skill_workflow_run.json", {"run_id": "r9"})
+        with patch("backend.skill_workflow_service.take_in_downstream") as take_in:
+            supervisor._take_in_review(self.project)
+        take_in.assert_called_once_with(self.project, "r9")
+
+    def status_for(self, **state):
+        base = {"status": "done", "source_fingerprint": "fp", "area_baseline": {"x": {}}, "max_cycles": 3,
+                "exceptions": [{"message": "Check what is above Store.", "room": "Store", "pages": [25], "attempts": 2,
+                                "kind": "roof", "id": "roof:store", "tried": [{"private": True}]}]}
+        with patch.object(supervisor._JOB, "status", return_value={**base, **state}), \
+                patch.object(supervisor, "source_fingerprint", return_value="fp"):
+            return supervisor.status(None, self.project)
+
+    def test_stopping_at_a_limit_with_gaps_left_is_flagged(self):
+        result = self.status_for(stop_reason="cycle_limit", outcome="partial_draft")
+        self.assertTrue(result["stopped_at_limit"])
+        self.assertEqual(result["gaps_remaining"], 1)
+        self.assertEqual(result["exceptions"][0]["kind"], "roof")
+        self.assertNotIn("tried", result["exceptions"][0])
+        self.assertNotIn("area_baseline", result)
+        self.assertFalse(self.status_for(stop_reason="ready", exceptions=[])["stopped_at_limit"])
+        self.assertFalse(self.status_for(status="running", stop_reason="cycle_limit")["stopped_at_limit"])
+
+
 class ConsentTests(unittest.TestCase):
     def test_page_reading_jobs_may_ask_and_start_needs_no_opt_in_or_key(self):
         temp = tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup)

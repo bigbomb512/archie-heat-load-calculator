@@ -266,14 +266,24 @@ def start(web, project, data):
         review_run = ai_preliminary_service._read(paths["root"] / "skill_workflow_run.json", {}).get("run_id")
         resolved = False
         try:
-            model_and_calculate()
-        except ValueError as error:
-            if not NEEDS_INPUTS.search(str(error)):
-                raise
-            step("inputs")
-            _resolve_inputs(web, project_id)
-            resolved = True
-            model_and_calculate()
+            try:
+                model_and_calculate()
+            except ValueError as error:
+                if not NEEDS_INPUTS.search(str(error)):
+                    raise
+                step("inputs")
+                _resolve_inputs(web, project_id)
+                resolved = True
+                model_and_calculate()
+        except BaseException:
+            # The model was (re)assembled from the review's results before the calculation stopped: those rewritten
+            # files are still downstream of the review, so a failed calculation mustn't make it look out of date
+            # (Turramurra, 2026-11-18: "Missing required artifacts: hourly load model" after the rebuild).
+            try:
+                skill_workflow_service.take_in_downstream(web.project_by_id(project_id), review_run)
+            except BaseException:          # e.g. the job was cancelled meanwhile: the original error is what counts
+                logging.getLogger(__name__).debug("Could not record the review as taken in after a stopped calculation", exc_info=True)
+            raise
         project = web.project_by_id(project_id)
         project["updated_at"] = __import__("ai.ai_preliminary", fromlist=["now"]).now()
         web.update_project(project)
