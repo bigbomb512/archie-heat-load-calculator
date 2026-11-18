@@ -82,7 +82,10 @@ def apply_windows(root, proposal):
         if not isinstance(opening, dict):
             continue
         # The room's own answer wins field by field over the answer for every window.
-        answer = {**(windows.get("*") or {}), **(rooms.get(str(opening.get("owner_room_label", "")).casefold()) or {})}
+        from ai.room_use_resolution import base_label
+        label = str(opening.get("owner_room_label", ""))
+        own = rooms.get(label.casefold()) or rooms.get(base_label(label).casefold())   # an answer for the merged name
+        answer = {**(windows.get("*") or {}), **(own or {})}
         if "blinds" in answer:
             opening["shading_basis"] = "user_edit"
             shade = BLINDS.get(answer["blinds"], ("", None))[1]

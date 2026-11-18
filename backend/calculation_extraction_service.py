@@ -382,6 +382,9 @@ def post(web, project, data):
         return {"id": project["id"], **_interpretations_response(root, web), **result, "status": "current"}
     if action != "build":
         raise ValueError("Calculation-input evidence supports build and component-interpretation actions.")
+    from backend import reviewer_room_geometry_service
+    # A job saved before separate same-named rooms were told apart is migrated before its evidence is rebuilt.
+    reviewer_room_geometry_service.split_repeated_room_traces(root)
     evidence = _build(root)
     existing = _read(paths["calculation_input_evidence"], {})
     reused = existing.get("fingerprint") == evidence.get("fingerprint") and existing.get("extractor_version") == EXTRACTOR_VERSION

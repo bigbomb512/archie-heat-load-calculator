@@ -544,6 +544,7 @@ def validate_room(raw, index):
         "source": room_source,
         "citations": validate_citations(raw.get("citations", []), f"Room {room_id}"),
         "source_room_labels": text_list(raw.get("source_room_labels", []), f"Room {room_id} source room labels"),
+        **({"source_room_id": text(raw["source_room_id"], f"Room {room_id} source room ID")} if raw.get("source_room_id") else {}),
         "area_m2": optional_number(raw.get("area_m2"), f"Room {room_id} area", 0, 1000000),
         "occupancy": optional_number(raw.get("occupancy"), f"Room {room_id} occupancy", 0, 1000000),
         "indoor_cooling_setpoint_c": optional_number(raw.get("indoor_cooling_setpoint_c"), f"Room {room_id} cooling setpoint", -100, 100),

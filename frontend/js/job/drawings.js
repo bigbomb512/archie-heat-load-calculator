@@ -122,11 +122,11 @@ function stageLine(data, kind, status, plan) {
     const stillFinding = (plan.rooms || []).filter(
       (room) => room.state === "finding_area",
     );
-    const names = traced.map((room) => room.name);
+    const names = traced.map((room) => room.display_name || room.name);
     if (names.length) {
       const found = `${names.join(", ")} traced.`;
       return stillFinding.length
-        ? `${found} Working out the area of ${stillFinding.map((room) => room.name).join(", ")}.`
+        ? `${found} Working out the area of ${stillFinding.map((room) => room.display_name || room.name).join(", ")}.`
         : found;
     }
     return stepOf(data) === "done"
@@ -246,7 +246,8 @@ function preparationStage(newJob) {
 }
 
 function facts(status, plan) {
-  const named = [...new Set((plan.rooms || []).map((room) => room.name))];
+  // Each room once: separate rooms of one name are numbered ("Ensuite (1)") and other levels' are shown with their level.
+  const named = [...new Set((plan.rooms || []).map((room) => room.display_name || room.name))];
   const weather =
     status.weather_location ||
     status.weather_ai_pick ||

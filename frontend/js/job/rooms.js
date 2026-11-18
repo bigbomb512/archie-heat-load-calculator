@@ -12,10 +12,16 @@ function norm(value) {
     .trim();
 }
 
+// A report row is this room's by the room list's identity (source_room_id) when it has one: the name alone can be
+// another level's room ("Storage" on the Basement and on the First Floor).
+function sameRoom(row, room) {
+  if (row.source_room_id) return row.source_room_id === room.room_id;
+  return row.room_id === room.room_id || norm(row.room_name) === norm(room.name);
+}
+
 function roomSurfaces(plan, room) {
-  return (plan.phase1_report?.phase1_surface_audit || []).filter(
-    (row) =>
-      row.room_id === room.room_id || norm(row.room_name) === norm(room.name),
+  return (plan.phase1_report?.phase1_surface_audit || []).filter((row) =>
+    sameRoom(row, room),
   );
 }
 

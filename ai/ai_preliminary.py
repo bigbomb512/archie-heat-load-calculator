@@ -1429,7 +1429,10 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
         profile = (deepcopy(pack["profiles"].get(profile_id)) if profile_id in pack["profiles"] else _profiles_for_dwelling(profile_id, room_use_artifact.get("dwelling_context", {}).get("is_dwelling") is True))
         profile.update({key: value for key, value in resolved_values["rooms"].get(value_resolver.room_target_id(row["name"], row["level"]), {}).items() if key in profile and value is not None})
         room.update({"room_id": f"room-{row['key']}", "name": row["name"], "zone_id": f"zone-{row['key']}", "source_zone_id": f"zone-{row['key']}",
-                     "mapping_status": "confirmed", "verification_status": "provisional", "source": _source("topology"), "citations": [], "source_room_labels": [row["name"]], "ceiling_height_mm": resolved_values["rooms"].get(value_resolver.room_target_id(row["name"], row["level"]), {}).get("ceiling_height_mm")})
+                     "mapping_status": "confirmed", "verification_status": "provisional", "source": _source("topology"), "citations": [], "source_room_labels": [row["name"]],
+                     # The room list's identity (level + label): the model's name alone repeats on another level.
+                     "source_room_id": room_use_resolver.room_identity(row["name"], row["level"]),
+                     "ceiling_height_mm": resolved_values["rooms"].get(value_resolver.room_target_id(row["name"], row["level"]), {}).get("ceiling_height_mm")})
         resolved_internal = internal_records.get(room_use_resolver.room_identity(row["name"], row["level"]), {})
         internal_schedule_id = resolved_internal.get("schedule_id") or f"prelim-{profile_id}"
         room["schedule_assignments"] = {"people": internal_schedule_id, "lighting": internal_schedule_id, "outside_air": internal_schedule_id, "infiltration": "", "equipment": {source["source_id"]: internal_schedule_id for source in room["heat_sources"]}, "solar": {}}
@@ -2210,6 +2213,7 @@ def _phase1_surface_audit(report, material):
                 window = surface.get("window", {}) if isinstance(surface.get("window"), dict) else {}
                 by_surface[str(surface["surface_id"])] = {
                     "room_id": room_id, "room_name": room.get("name", ""),
+                    **({"source_room_id": room["source_room_id"]} if room.get("source_room_id") else {}),
                     "surface_id": str(surface["surface_id"]), "surface_type": surface.get("kind", kind),
                     "area_m2": surface.get("area_m2", surface.get("explicit_opening_area_m2")),
                     "opening_area_m2": surface.get("explicit_opening_area_m2"),

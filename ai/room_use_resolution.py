@@ -56,6 +56,35 @@ def room_identity(label, level):
     return f"room-use:{'unassigned-level' if level_slug in UNKNOWN_LEVELS else level_slug}:{_slug(label)}"
 
 
+# A drawing can print one name on several separate rooms on a level (a house's three ENSUITEs). Identity is
+# level + label, so each separate room gets its own occurrence label, "Ensuite (1)", "Ensuite (2)", ..., numbered in
+# plan reading order; its identity is then room-use:<level>:ensuite-1, and so on. A name printed once keeps its plain
+# label and identity. The parenthesised form is never a printed name, so base_label() can recover the drawing's label.
+_OCCURRENCE = re.compile(r"^(?P<base>.*\S)\s+\((?P<number>\d+)\)$")
+
+
+def occurrence_label(label, number):
+    return f"{_text(label)} ({int(number)})"
+
+
+def base_label(label):
+    """The drawing's label for an occurrence label ("Ensuite (2)" -> "Ensuite"); any other label is returned as is."""
+    match = _OCCURRENCE.match(_text(label))
+    return match.group("base") if match else _text(label)
+
+
+def replaced_label_keys(repeated_label, level):
+    """(label, level) keys, casefolded, of the merged record that numbered separate rooms replace on a level."""
+    label, level = _text(repeated_label).casefold(), _text(level or "Unassigned level").casefold()
+    labels = {"bedroom", "bed"} if label in {"bedroom", "bed"} else {label}
+    return {(item, level) for item in labels if item}
+
+
+def occurrence_number(label):
+    match = _OCCURRENCE.match(_text(label))
+    return int(match.group("number")) if match else None
+
+
 def _confidence(value, fallback=0.4):
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return max(0.0, min(1.0, float(value)))
@@ -112,10 +141,14 @@ def _room_rows(building, vision, proposal):
     vision_entities = (((vision or {}).get("result", {}) or {}).get("auto_extraction", {}) or {}).get("entities", []) if isinstance(vision, dict) else []
     ai_rooms = [row for row in list(vision_entities) + list((proposal or {}).get("rooms", []))
                 if isinstance(row, dict) and row.get("kind") == "room" and plausible_room_label(row.get("label"))]
-    numbered_levels = {_text(row.get("level_name") or "Unassigned level").casefold() for row in ai_rooms
-                       if row.get("source") == "numbered_from_repeated_label"}
+    # Separate rooms printed with one name were numbered (Bedroom 1, 2 / Ensuite (1), (2)): the plain label on that
+    # level is the merged record they replace.
+    replaced = set()
+    for row in ai_rooms:
+        if row.get("source") == "numbered_from_repeated_label":
+            replaced |= replaced_label_keys(row.get("repeated_label") or "Bedroom", row.get("level_name"))
     def replaced_bedroom(label, level):
-        return _text(label).casefold() in {"bedroom", "bed"} and _text(level or "Unassigned level").casefold() in numbered_levels
+        return (_text(label).casefold(), _text(level or "Unassigned level").casefold()) in replaced
     ai_rooms = [row for row in ai_rooms if not replaced_bedroom(row.get("label"), row.get("level_name"))]
     grouped = {}
     for row in (building or {}).get("spaces", []) if isinstance(building, dict) else []:
@@ -443,7 +476,14 @@ def resolve(building, vision=None, proposal=None, source_fingerprints=None, exis
     if dwelling_context.get("is_dwelling") is True:
         for room_context in evidence_by_room.values():
             room_context["dwelling_evidence"] = deepcopy(dwelling_context.get("evidence", []))
-    records = [_record(room, taxonomy, source_fingerprints or {}, previous.get(room_identity(room["label"], room["level_name"])),
+    def prior(room):
+        # A room split out of one merged same-name record ("Ensuite" -> "Ensuite (1)", "(2)", ...) inherits that
+        # record's reviewer decision (its use override) until it has its own: the decision was made for the name.
+        identity = room_identity(room["label"], room["level_name"])
+        if identity in previous or occurrence_number(room["label"]) is None:
+            return previous.get(identity)
+        return previous.get(room_identity(base_label(room["label"]), room["level_name"]))
+    records = [_record(room, taxonomy, source_fingerprints or {}, prior(room),
                        evidence_by_room.get(room_identity(room["label"], room["level_name"])), dwelling_context.get("is_dwelling") is True)
                for room in _room_rows(building, vision or {}, proposal or {})]
     result = {"schema_version": 1, "taxonomy_pack_id": PACK_ID, "taxonomy_fingerprint": _taxonomy_fingerprint(taxonomy, dwelling_context.get("is_dwelling") is True),

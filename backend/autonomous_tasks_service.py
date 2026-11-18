@@ -3059,6 +3059,62 @@ def _number_separate_house_bedrooms(root, record, polygons, mm_per_px):
     return polygons
 
 
+def number_repeated_rooms(labels_and_shapes, mm_per_px, printed_labels=()):
+    """Separate rooms one name was printed on, for every name but Bedroom (numbered Bedroom 1, 2 by the steps above):
+    same-named outlines with a wall between them become "Ensuite (1)", "Ensuite (2)", ... in plan reading order, so
+    each is its own room with its own area (Turramurra's three first-floor ensuites were one 16.4 m² room, 2026-11-18).
+    Pieces that touch, or are under 1 m², stay one room. A number the drawing prints for that name on the level
+    ("Ensuite 2") is skipped. Returns ({index: new label}, [(new label, drawing label)])."""
+    from ai.room_use_resolution import occurrence_label, occurrence_number
+    by_name = {}
+    for index, (label, shape) in enumerate(labels_and_shapes):
+        name = str(label or "").strip()
+        if (not name or name.casefold() in {"bedroom", "bed"} or name == room_outline.NOT_A_ROOM
+                or occurrence_number(name) is not None or shape is None):
+            continue
+        by_name.setdefault(name.casefold(), []).append(index)
+    renamed, numbered = {}, []
+    for key, indexes in by_name.items():
+        if len(indexes) < 2:
+            continue
+        groups = room_outline.separate_rooms([labels_and_shapes[index][1] for index in indexes], mm_per_px)
+        if len(groups) < 2:
+            continue
+        base = str(labels_and_shapes[indexes[0]][0]).strip()
+        used = {int(match.group(1)) for label in printed_labels
+                if (match := re.fullmatch(re.escape(base) + r"\s*(\d+)", str(label or "").strip(), re.I))}
+        number = 1
+        for group in groups:
+            while number in used:
+                number += 1
+            label = occurrence_label(base, number)
+            used.add(number)
+            numbered.append((label, base))
+            for position in group:
+                renamed[indexes[position]] = label
+    return renamed, numbered
+
+
+def _number_separate_repeated_rooms(root, record, polygons, mm_per_px):
+    """Apply number_repeated_rooms to one step's outlines on a house plan page and keep the numbered rooms in the room
+    list (the merged plain-name record on the level is replaced). Shops are unchanged, as for bedrooms."""
+    from backend import house_windows_service, room_proposal
+    if not house_windows_service.is_dwelling(root):
+        return polygons
+    page = int(record["packet"]["page"])
+    level = _page_level(root, page)
+    from ai.page_inventory import level_key
+    rooms = reviewer_room_geometry_service._rooms(reviewer_room_geometry_service._paths({"review_dir": str(root)}))
+    printed = [room.get("label", "") for room in rooms if level_key(room.get("level_name")) == level_key(level)]
+    renamed, numbered = number_repeated_rooms(
+        [(row.get("label"), row.get("net_polygon") or row.get("polygon")) for row in polygons], mm_per_px, printed)
+    for index, label in renamed.items():
+        polygons[index]["label"] = label
+    room_proposal.save_numbered_rooms(root, f"P0_numbered_repeat:{record['task']}:{record['target']}", page, level,
+                                      numbered, record["run_id"])
+    return polygons
+
+
 def _p0_trace_rows(root, record, polygons):
     page = int(record["packet"]["page"])
     calibration = deepcopy(record["packet"]["calibration"])
@@ -3066,6 +3122,7 @@ def _p0_trace_rows(root, record, polygons):
         raise ValueError("P0 cannot apply room areas until printed dimensions calibrate within 2%.")
     if record.get("task") != "P0_room_names":       # the naming step numbers its own (_number_repeated_house_bedrooms)
         polygons = _number_separate_house_bedrooms(root, record, polygons, float(calibration["mm_per_px"]))
+    polygons = _number_separate_repeated_rooms(root, record, polygons, float(calibration["mm_per_px"]))
     rooms = reviewer_room_geometry_service._rooms(reviewer_room_geometry_service._paths({"review_dir": str(root)}))
     room_ids = {}
     for room in rooms:

@@ -27,15 +27,24 @@ function isNumber(value) {
 }
 
 function roomPeakFor(room, roomPeaks) {
+  // By the room list's identity first: a name can repeat on another level.
+  const byId = roomPeaks.find(
+    (peak) => peak.source_room_id && peak.source_room_id === room.room_id,
+  );
+  if (byId) return byId;
   const name = String(room.name || "")
     .trim()
     .toLowerCase();
-  return roomPeaks.find(
+  const named = roomPeaks.filter(
     (peak) =>
       String(peak.name || peak.room_name || "")
         .trim()
         .toLowerCase() === name,
   );
+  // A name shared by rooms on two levels is never guessed.
+  return named.length === 1 || !named.some((peak) => peak.source_room_id)
+    ? named[0]
+    : undefined;
 }
 
 function componentEntries(components) {
