@@ -122,6 +122,15 @@ class CalculationJobTests(unittest.TestCase):
         self.assertNotIn("rooms", [call[0] if isinstance(call, tuple) else call for call in self.calls])
         self.assertIn(("calculate", "phase1_base_room"), self.calls)
 
+    def test_current_input_set_skips_the_extra_assembly(self):
+        from backend import skill_workflow_service
+        (self.root / "ai_preliminary_input_set.json").write_text(json.dumps({"material": {"hourly_load_model": {"rooms": []}}}))
+        with patch.object(ai_preliminary_service, "_stale_reasons", return_value=[]), \
+                patch.object(skill_workflow_service, "take_in_downstream"):
+            _, done = self.run_job({})
+        self.assertEqual(done["status"], "done")
+        self.assertNotIn("model", self.calls)
+
     def test_a_finished_calculation_records_the_review_it_used_as_current(self):
         from backend import skill_workflow_service
         (self.root / "skill_workflow_run.json").write_text(json.dumps({"run_id": "r7", "scope": "phase1_envelope"}))

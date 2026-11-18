@@ -376,7 +376,9 @@ def investigation_text(gap):
 
 def select_investigations(gaps, attempts):
     """Queue every eligible material gap, ranked; concurrency bounds execution, never the queue length."""
-    return [gap for gap in gaps if attempts.get(gap["id"], 0) < MAX_ATTEMPTS]
+    eligible = [gap for gap in gaps if attempts.get(gap["id"], 0) < MAX_ATTEMPTS]
+    return sorted(eligible, key=lambda gap: (gap.get("rank", 99), 0 if gap.get("kind") == "room_area" else 1,
+                                             _key(gap.get("room")), gap["id"]))
 
 
 def _investigation_wave(task):
@@ -586,6 +588,8 @@ def run(web, project, step=lambda *args: None):
     attempts, history = deepcopy(saved.get("attempts", {})), deepcopy(saved.get("history", []))
     resolved = set(saved.get("resolved_gap_ids", []))
     cycle = int(saved.get("cycle") or 0)
+    failed_inputs = deepcopy(saved.get("failed_inputs", {}))
+    cycle_timings = deepcopy(saved.get("cycle_timings", []))
     snapshot = _rebuild(web, project)
     gaps = audit(snapshot)
     initial_ids = {row["id"] for row in gaps}
@@ -599,7 +603,8 @@ def run(web, project, step=lambda *args: None):
         state.update(attempts=attempts, history=history, cycle=cycle, max_cycles=MAX_CYCLES,
                      gaps_found=len(initial_ids | set(attempts) | {gap["id"] for gap in gaps}), gaps_fixed=len(resolved),
                      resolved_gap_ids=sorted(resolved), gaps=deepcopy(gaps), spend=_usage(root),
-                     area_baseline=baseline, area_changes=area_changes(baseline, room_areas(snapshot)), **extra)
+                     area_baseline=baseline, area_changes=area_changes(baseline, room_areas(snapshot)),
+                     failed_inputs=failed_inputs, cycle_timings=cycle_timings, **extra)
         write_json(root / JOB_FILE, state)
         write_json(root / "phase1_supervisor_state.json", {key: state[key] for key in (
             "supervision_id", "attempts", "history", "cycle", "resolved_gap_ids", "exceptions", "model_fingerprint",
@@ -610,16 +615,21 @@ def run(web, project, step=lambda *args: None):
     while cycle < MAX_CYCLES and not unavailable:
         checkpoint()
         selected = select_investigations(gaps, attempts)
+        current_fp = model_fingerprint(snapshot)
+        selected = [gap for gap in selected if failed_inputs.get(gap["id"]) != current_fp]
         if not selected:
             break
         cycle += 1
+        cycle_started = time.monotonic()
+        ai_seconds = rebuild_seconds = audit_seconds = 0.0
         before = model_fingerprint(snapshot), {row["id"] for row in gaps}
+        changed = False
         step("audit", "Checking room areas, boundaries, glass and ceiling heights")
         for wave in range(5):
             selected = [gap for gap in select_investigations(gaps, attempts) if _investigation_wave(gap["task"]) == wave]
             if not selected:
                 continue
-            prepared, skills_to_run, changed = {}, [], False
+            prepared, skills_to_run = {}, []
             for gap in selected:
                 attempts[gap["id"]] = attempts.get(gap["id"], 0) + 1
             progress()
@@ -660,30 +670,36 @@ def run(web, project, step=lambda *args: None):
             progress(active_investigations=list(active.values()))
             if active:
                 step("investigate", next(iter(active.values()))["message"])
-            with ThreadPoolExecutor(max_workers=ai_provider.parallel_calls()) as pool:
-                futures = {pool.submit(drawings.request_investigation, project, record, check=check): (record, gap)
-                           for record, gap in prepared.values()}
-                for future in as_completed(futures):
-                    checkpoint()
-                    record, gap = futures[future]
-                    from backend.job_progress import stage_blocker
-                    if stage_blocker(project, "supervisor"):
-                        raise JobCancelled()
-                    try:
-                        result = future.result()
-                        outcome = drawings.apply_investigation(web, project, record, result)
-                    except Exception as error:
-                        outcome = drawings.archive_investigation_failure(project, record, error) or {
-                            "status": "superseded", "reason": "The drawing inputs changed while this check was running."}
-                    changed = changed or outcome.get("status") in SUCCESS
-                    history.extend({"gap_id": gap_id, "task": record["task"], "target": record["target"],
-                                    "cycle": cycle, "run_id": record["run_id"], **outcome} for gap_id in gap["gap_ids"])
-                    active.pop((record["task"], record["target"]), None)
-                    progress(active_investigations=list(active.values()))
-                    if active:
-                        step("investigate", next(iter(active.values()))["message"])
+            if prepared:
+                ai_started = time.monotonic()
+                with ThreadPoolExecutor(max_workers=min(4, ai_provider.parallel_calls())) as pool:
+                    futures = {pool.submit(drawings.request_investigation, project, record, check=check): (record, gap)
+                               for record, gap in prepared.values()}
+                    for future in as_completed(futures):
+                        checkpoint()
+                        record, gap = futures[future]
+                        from backend.job_progress import stage_blocker
+                        if stage_blocker(project, "supervisor"):
+                            raise JobCancelled()
+                        try:
+                            result = future.result()
+                            outcome = drawings.apply_investigation(web, project, record, result)
+                        except Exception as error:
+                            outcome = drawings.archive_investigation_failure(project, record, error) or {
+                                "status": "superseded", "reason": "The drawing inputs changed while this check was running."}
+                        changed = changed or outcome.get("status") in SUCCESS
+                        if outcome.get("status") not in SUCCESS:
+                            failed_inputs.update({gap_id: current_fp for gap_id in gap["gap_ids"]})
+                        history.extend({"gap_id": gap_id, "task": record["task"], "target": record["target"],
+                                        "cycle": cycle, "run_id": record["run_id"], **outcome} for gap_id in gap["gap_ids"])
+                        active.pop((record["task"], record["target"]), None)
+                        progress(active_investigations=list(active.values()))
+                        if active:
+                            step("investigate", next(iter(active.values()))["message"])
+                ai_seconds += time.monotonic() - ai_started
             for gap in skills_to_run:
                 checkpoint()
+                ai_started = time.monotonic()
                 step("investigate", investigation_text(gap))
                 progress(active_investigations=[{"message": investigation_text(gap), "pages": gap["pages"],
                     "label": "Room-use specialist", "started_at": time.time()}])
@@ -693,28 +709,39 @@ def run(web, project, step=lambda *args: None):
                     outcome = {"status": "failed", "reason": str(error)[:500]}
                 changed = changed or outcome.get("status") in SUCCESS
                 history.extend({"gap_id": gap_id, "cycle": cycle, **outcome} for gap_id in gap["gap_ids"])
+                if outcome.get("status") not in SUCCESS:
+                    failed_inputs.update({gap_id: current_fp for gap_id in gap["gap_ids"]})
+                ai_seconds += time.monotonic() - ai_started
             checkpoint()
-            if not changed:
-                continue                 # nothing was applied: the model and its audit are unchanged (a rebuild takes 30-55 s)
+        # All independent/dependent questions in this cycle have now been answered. Regenerate once only
+        # when an accepted answer changed physical inputs; the pre-rebuild fingerprint is authoritative.
+        if changed:
             step("rebuild")
             tasks._export_determinations(root)
             _build_calculation_evidence(web, project)
             tasks._refresh_geometry_tasks(root)
-            snapshot = _rebuild(web, project)
+            from backend import ai_preliminary_service as model
+            paths = model._paths(project)
+            stored_inputs = read_json(paths["current_set"])
+            if not stored_inputs or model._stale_reasons(paths, stored_inputs):
+                rebuild_started = time.monotonic()
+                snapshot = _rebuild(web, project)
+                rebuild_seconds += time.monotonic() - rebuild_started
+            audit_started = time.monotonic()
             _take_in_review(project)
             gaps = audit(snapshot)
+            audit_seconds += time.monotonic() - audit_started
+        else:
+            failed_inputs.update({gap["id"]: current_fp for gap in select_investigations(gaps, attempts)})
+        cycle_timings.append({"cycle": cycle, "ai_seconds": round(ai_seconds, 3),
+                              "rebuild_seconds": round(rebuild_seconds, 3), "audit_seconds": round(audit_seconds, 3),
+                              "total_seconds": round(time.monotonic() - cycle_started, 3)})
         after = model_fingerprint(snapshot), {row["id"] for row in gaps}
         resolved = (resolved | (before[1] - after[1])) - after[1]
         progress(active_investigations=[])
-        if before == after:
-            # A rejected answer has not changed the model, but its correction feedback changes
-            # the next question. Allow the existing second attempt before declaring no progress.
-            correction_pending = any(
-                row.get("cycle") == cycle and row.get("status") == "waiting_for_reply"
-                and attempts.get(row.get("gap_id"), 0) < MAX_ATTEMPTS for row in history)
-            if not correction_pending:
-                progress(stop_reason="no_progress")
-                break
+        if before == after or not changed:
+            progress(stop_reason="no_progress")
+            break
     # Questions the fixes above unlocked have no other way to be sent: answer them once (the drawing step's own limits
     # apply), so the result uses them.
     if not unavailable and drawings._waiting(root):

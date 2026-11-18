@@ -311,6 +311,30 @@ class RunTests(unittest.TestCase):
         tasks._refresh_geometry_tasks.assert_called_once()
         self.assertEqual(read_json(self.root / supervisor.JOB_FILE)["gaps_fixed"], 1)
 
+    def test_successful_answers_across_waves_rebuild_once_per_cycle(self):
+        first = snapshot(room(area_m2=None), model_inputs=[{"area_m2": 40}])
+        second = snapshot(room("Shop", model={"cooling_load": {"envelope_surfaces": [{"kind": "opaque_wall", "area_m2": 20}]}}),
+                          model_inputs=[{"area_m2": 40, "envelope": [{"kind": "opaque_wall", "area_m2": 20}]}])
+        with patch.object(supervisor, "_rebuild", side_effect=[first, second]) as rebuild, \
+                patch.object(tasks, "prepare_investigation", side_effect=self.fake_prepare), \
+                patch.object(drawings, "request_investigation", return_value={}), \
+                patch.object(drawings, "apply_investigation", return_value={"status": "applied"}) as apply:
+            supervisor.run(None, self.project)
+        self.assertGreaterEqual(apply.call_count, 1)
+        self.assertEqual(rebuild.call_count, 2)  # initial snapshot plus one cycle rebuild
+        timing = read_json(self.root / supervisor.JOB_FILE)["cycle_timings"][0]
+        self.assertEqual(timing["rebuild_seconds"], 0)
+        self.assertIn("ai_seconds", timing)
+
+    def test_failed_question_is_not_reasked_for_same_model_inputs(self):
+        value = snapshot(room(area_m2=None))
+        with patch.object(supervisor, "_rebuild", return_value=value), \
+                patch.object(tasks, "prepare_investigation", side_effect=self.fake_prepare), \
+                patch.object(drawings, "request_investigation", return_value={}) as ask, \
+                patch.object(drawings, "apply_investigation", return_value={"status": "rejected"}):
+            supervisor.run(None, self.project)
+        self.assertEqual(ask.call_count, 1)
+
     def test_no_progress_stops_after_one_cycle_and_retains_exception(self):
         value = snapshot(room(area_m2=None))
         result, calls = self.execute([value, value])
@@ -319,15 +343,15 @@ class RunTests(unittest.TestCase):
         self.assertEqual(result["exceptions"][0]["attempts"], 1)
         self.assertTrue(result["exceptions"][0]["tried"])
 
-    def test_rejected_answer_gets_its_bounded_correction_before_no_progress_stop(self):
+    def test_rejected_answer_is_not_reasked_for_unchanged_inputs(self):
         value = snapshot(room(area_m2=None))
         with patch.object(supervisor, "_rebuild", return_value=value), \
                 patch.object(tasks, "prepare_investigation", side_effect=self.fake_prepare), \
                 patch.object(drawings, "request_investigation", return_value={"reply": {}}) as ask, \
                 patch.object(drawings, "apply_investigation", return_value={"status": "waiting_for_reply", "reason": "Invalid JSON"}):
             result = supervisor.run(None, self.project)
-        self.assertEqual(ask.call_count, 2)
-        self.assertEqual(result["exceptions"][0]["attempts"], 2)
+        self.assertEqual(ask.call_count, 1)
+        self.assertEqual(result["exceptions"][0]["attempts"], 1)
         self.assertEqual(read_json(self.root / supervisor.JOB_FILE)["stop_reason"], "no_progress")
 
     def test_each_gap_gets_at_most_two_attempts_even_if_other_inputs_improve(self):
@@ -358,6 +382,11 @@ class RunTests(unittest.TestCase):
             _, calls = self.execute([values, values])
         self.assertEqual(calls, 12)
         self.assertEqual(read_json(self.root / supervisor.JOB_FILE)["cycle"], 1)
+
+    def test_missing_area_question_precedes_other_independent_investigations(self):
+        value = snapshot(room(area_m2=None, height={"origin": "preliminary_fallback"}), height_pages=[21])
+        gaps = supervisor.audit(value)
+        self.assertEqual(supervisor.select_investigations(gaps, {})[0]["kind"], "room_area")
 
     def test_concurrency_setting_controls_simultaneous_provider_calls(self):
         values = snapshot(*[room(f"Space {number}", traces=[{"roof": "unknown", "edges": []}]) for number in range(9)])

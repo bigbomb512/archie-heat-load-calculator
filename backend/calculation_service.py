@@ -247,7 +247,9 @@ def start(web, project, data):
 
         def model_and_calculate():
             step("model")
-            ai_preliminary_service._assemble(web, web.project_by_id(project_id))
+            input_set = ai_preliminary_service._read(paths["current_set"], {})
+            if not input_set or ai_preliminary_service._stale_reasons(paths, input_set):
+                ai_preliminary_service._assemble(web, web.project_by_id(project_id))
             step("rooms")
             input_set = ai_preliminary_service._read(paths["current_set"], {})
             scope = ai_preliminary_service._room_scope_state(paths, input_set)
