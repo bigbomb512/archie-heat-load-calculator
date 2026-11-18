@@ -403,6 +403,10 @@ def _p0_calibration_ready(root, page, context):
         sheet = _sheet_scale_calibration(root, page, context, reason)
         if sheet:
             return sheet, ""
+    if not context.get("declared_mm_per_px") and _p0_dimensions_settled(root, page):
+        sibling = _registered_sibling_scale(root, page, context, reason)
+        if sibling:
+            return sibling, ""
     if _p0_dimensions_settled(root, page) and _scale_read_settled(root, page):
         scale_record = _current_task(root, "P0_scale_read", f"page-{page}")
         scale = (scale_record or {}).get("applied_value") or {}
@@ -417,6 +421,57 @@ def _p0_calibration_ready(root, page, context):
         if _settled_step(root, "P0_scale_objects", page):
             return _assumed_scale_calibration(context, reason), ""
     return None, reason
+
+
+def _registered_sibling_scale(root, page, context, reason=""):
+    """A plan sheet that prints no scale takes the printed scale of another plan of the set that prints the same
+    dimension figures and grid letters at the same places (house_envelope.plan_text_registration): the two are drawn
+    at one scale on one sheet layout. Turramurra's first-floor plan (2026-11-18) prints no scale; its rooms were scaled
+    from a door and a WC measured by eye (11.67 mm/px) although its grid A-G spans the same 599 pt as the 1:100
+    basement and ground plans (14.11 mm/px), so its areas came out about a third too small. None when no such sheet."""
+    for plan in _p0_main_geometry_pages(root):
+        other = plan.get("page")
+        if other == page:
+            continue
+        try:
+            other_context = _p0_context(root, other)
+        except PACKET_ERRORS:
+            continue
+        declared = other_context.get("declared_mm_per_px")
+        if not declared or not _sheets_registered(root, page, other):
+            continue
+        ratio = float(other_context.get("image_scale") or 1) / float(context.get("image_scale") or 1)
+        scale_text = next((str(row.get("text") or "") for row in other_context.get("declared_scale_candidates") or []
+                           if isinstance(row, dict) and row.get("text")), "")
+        return {"source": "registered_sheet_scale", "status": "declared_scale_only", "mm_per_px": float(declared) * ratio,
+                "scale_text": scale_text, "scale_page": other,
+                "label": (f"This sheet prints no scale; scaled from the printed scale {scale_text} of plan page {other}, "
+                          "which prints the same dimension figures and grid letters at the same places (labelled "
+                          "assumption: one scale for both sheets). No printed dimension could be read to check it.")
+                .replace("scale  of", "scale of"), "reason": reason[:300]}
+    return None
+
+
+def _sheets_registered(root, page, other):
+    ai_input, _spatial, _building = _load_inputs(root)
+    source = Path(str(ai_input.get("source_pdf", "")))
+    if not source.is_file():
+        return False
+    stat = source.stat()
+    return _cached_sheets_registered(str(source), stat.st_mtime_ns, stat.st_size, int(page), int(other))
+
+
+@lru_cache(maxsize=64)
+def _cached_sheets_registered(source, _mtime_ns, _size, page, other):
+    import pdfplumber
+    from ai import house_envelope
+    from backend import seating_service
+    version = seating_service._pdf_version(source)
+    with pdfplumber.open(source) as doc:
+        if not (0 < page <= len(doc.pages) and 0 < other <= len(doc.pages)):
+            return False
+        words = [seating_service._words(seating_service._Page(doc, number, version)) for number in (page, other)]
+    return house_envelope.plan_text_registration(*words) is not None
 
 
 def _settled_step(root, task, page):

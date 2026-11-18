@@ -1668,8 +1668,10 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                             # A house: what is over the room follows from its level (no tenancy roof question).
                             tops = _house_roof_surfaces(room, part, area_only_area, house_level_roof, citation, "")
                             for surface in tops:
-                                surface["phase1_assumptions"] = [{"component": "room area", "reason": area_note},
-                                                                 {"component": "roof", "reason": surface.get("phase1_assumption", "")}]
+                                roof_notes = surface.pop("phase1_assumptions", None) or [
+                                    {"component": "roof", "reason": surface.pop("phase1_assumption", "")}]
+                                surface.pop("phase1_assumption", None)
+                                surface["phase1_assumptions"] = [{"component": "room area", "reason": area_note}, *roof_notes]
                             proposal["surfaces"].extend(tops)
                         roof, roof_note = ((None, "") if house_level_roof else
                                            _roof_assumption(paths, phase1_ai_input, phase1_site, room))
@@ -1728,6 +1730,8 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
                     part_unknown_edges = []
                     house_roof = ((house or {}).get("roofs", {}).get(part.get("trace_id"))
                                   if part.get("roof_source") != "reviewer" else None) or house_level_roof
+                    if house_roof and house_roof.get("unmatched"):
+                        house_roof = _house_level_roof(house, room, why=house_roof["unmatched"])
                     if house_roof and area and not skip_roof:
                         # A house: what is over the room, from the level plans (no AI roof question in a house).
                         proposal["surfaces"].extend(_house_roof_surfaces(room, part, area, house_roof, citation, declaration_reviewer))
@@ -2928,7 +2932,12 @@ def _roof_plan_pages(paths):
     return sorted(pages)
 
 
-def _house_level_roof(house, room, area_only=False):
+# The component of the labelled assumption a house room gets when what is over it couldn't be worked out from the plans
+# (phase1_supervisor_service turns it into a gap to check).
+HOUSE_ROOF_NOT_LINED_UP = "roof — not lined up with the plan above"
+
+
+def _house_level_roof(house, room, area_only=False, why=""):
     """What is over a house room when its plan couldn't be stacked under the level above (or it has no outline), from
     the level order alone; None when the room's level isn't named. In the shape _house_roof_surfaces takes.
 
@@ -2951,24 +2960,30 @@ def _house_level_roof(house, room, area_only=False):
         return {"parts": [{"below": "open", "fraction": 1.0, "rooms": []}], "method": "", "reason": reason,
                 "level_rule": "top_level"}
     above = levels[higher[0]]
-    why = ("it was found by its area only, so it can't be placed on that plan" if area_only else
-           f"this plan couldn't be matched to the {above} plan (no stair or lift traced on both, and no dimension text "
-           "the two share)")
-    reason = (f"Under the {above} (the house's next level up): taken as under its air-conditioned rooms, at the same "
-              f"temperature, so no heat flows (labelled assumption: in a house a lower storey sits under the storey "
-              f"above). Any part of this room with the roof directly over it (a single-storey part"
-              f"{'; see the roof plan, p. ' + ', '.join(map(str, roof_pages)) if roof_pages else ''}) isn't "
-              f"counted, because {why}.")
+    why = why or (f"{room.get('label') or 'This room'} was found by its area only (no outline), so it can't be laid over the "
+           f"{above} plan" if area_only else
+           f"this plan couldn't be lined up with the {above} plan (no stair or lift traced on both, and too few dimension "
+           "figures or grid letters printed at the same places on both sheets)")
+    roof_plan = f" (roof plan p. {', '.join(map(str, roof_pages))})" if roof_pages else ""
+    reason = (f"Under the {above} (the house's next level up) — {why}. Whether part of it is single-storey with the "
+              f"roof directly over it{roof_plan} isn't known, so it is taken as under the {above}'s air-conditioned "
+              f"rooms, at the same temperature, so no heat flows (labelled assumption: a lower storey sits under the "
+              f"storey above).")
     return {"parts": [{"below": "cooled", "fraction": 1.0, "rooms": [f"the {above}"], "reason": reason}],
             "method": "", "level_above": above, "level_rule": "under_level_above"}
 
 
 def _house_floor_bases(paths, records, rooms):
-    """{trace_id: {"kind": "ground" | "split" | "assumed_cooled", "reason", "parts" (split: what lies under it)}}.
+    """{"floors": {trace_id: {"kind": "ground" | "split" | "assumed_cooled", "reason", "parts"}},
+        "roofs": {trace_id: {"parts", "method", "level_above", "reason"}}}.
 
-    The lowest traced level sits on the ground. An upper room's plan is matched to the level below by the stairs or
-    lift traced on both, else by dimension text the two plans share; its floor is then split by the rooms under it.
-    With one level known (or none), the project-wide floor basis stays as it is.
+    The lowest traced level sits on the ground. Each level's plan is lined up with the level below by the stairs or
+    lift traced on both, else by the dimension text and grid letters the two sheets print at the same places
+    (house_envelope.plan_text_registration). An upper room's floor is then split by the rooms under it, and a lower
+    room's top by what of the level above is over it: its rooms, a balcony or void, its untraced floor (stair, hall),
+    or nothing of it at all, where the roof is directly over the room (user decision 2026-11-18: the roof plan's
+    single-storey parts get a roof). A room whose plan can't be lined up gets no entry and keeps the labelled
+    level-order assumption (_house_level_roof).
     """
     from ai import house_envelope
     traced = []
@@ -2982,11 +2997,38 @@ def _house_floor_bases(paths, records, rooms):
         traced.append({"trace_id": row.get("trace_id"), "page": row.get("page"), "rank": rank, "mm_per_px": mm_per_px,
                        "level": row.get("level_name", ""), "label": use.get("label") or row.get("room_label", ""),
                        "category": use.get("category", ""), "scope": use.get("scope", ""),
+                       "points_px": [[float(x), float(y)] for x, y in points],
                        "points_mm": [[x * mm_per_px, y * mm_per_px] for x, y in points]})
     ranks = sorted({row["rank"] for row in traced})
     if len(ranks) < 2:
         return {}
-    offsets, result = {}, {}
+    registrations = {}
+
+    def level_rows(rank):
+        """A level's traced rooms on its main plan sheet (the page holding most of them)."""
+        rows = [row for row in traced if row["rank"] == rank]
+        pages = [row["page"] for row in rows]
+        main = max(set(pages), key=pages.count) if pages else None
+        return [row for row in rows if row["page"] == main]
+
+    def registration(upper_rank, lower_rank):
+        """{"move": f(upper row) -> its points in the lower plan's mm frame, "evidence"} or None."""
+        key = (upper_rank, lower_rank)
+        if key not in registrations:
+            upper, lower = level_rows(upper_rank), level_rows(lower_rank)
+            registrations[key] = None
+            if upper and lower and upper[0]["page"] != lower[0]["page"]:
+                stacked = house_envelope.stacked_offset(upper, lower)
+                if stacked:
+                    dx, dy, evidence = stacked
+                    registrations[key] = {"move": lambda row, dx=dx, dy=dy: [[x + dx, y + dy] for x, y in row["points_mm"]],
+                                          "evidence": evidence}
+                else:
+                    registrations[key] = _plan_text_registration(paths, upper[0]["page"], lower[0]["page"],
+                                                                 lower[0]["mm_per_px"])
+        return registrations[key]
+
+    result = {}
     for room in traced:
         if room["rank"] == ranks[0]:
             result[room["trace_id"]] = {"kind": "ground", "reason": (
@@ -2994,81 +3036,163 @@ def _house_floor_bases(paths, records, rooms):
                 "slab on the ground adds no cooling load (Phase 1 rule, 2026-10-15).")}
             continue
         below = max(rank for rank in ranks if rank < room["rank"])
-        lower = [row for row in traced if row["rank"] == below]
-        key = (room["rank"], below)
-        if key not in offsets:
-            upper = [row for row in traced if row["rank"] == room["rank"]]
-            offsets[key] = (house_envelope.stacked_offset(upper, lower)
-                            or _plan_text_offset(paths, upper, lower))
-        offset = offsets[key]
+        lower = level_rows(below)
         level_below = lower[0]["level"] if lower else "the level below"
-        if not offset:
+        match = registration(room["rank"], below) if room["page"] == (level_rows(room["rank"]) or [{}])[0].get("page") else None
+        if not match:
             result[room["trace_id"]] = {"kind": "assumed_cooled", "reason": (
                 f"This plan couldn't be matched to the {level_below} plan (no stair or lift traced on both, and no "
                 "dimension text the two share): taken as over air-conditioned rooms, the most likely case for a house "
                 "(labelled assumption).")}
             continue
-        dx, dy, evidence = offset
-        moved = [[x + dx, y + dy] for x, y in room["points_mm"]]
-        result[room["trace_id"]] = {"kind": "split", "level_below": level_below, "method": evidence,
-                                    "parts": house_envelope.floor_split(moved, lower)}
-    # What is over each room: the top level has the roof; a lower room is under the rooms of the level above where they
-    # overlap it (moved onto its plan by the same match) and under the roof elsewhere.
-    roofs = {}
+        result[room["trace_id"]] = {"kind": "split", "level_below": level_below, "method": match["evidence"],
+                                    "parts": house_envelope.floor_split(match["move"](room), lower)}
+    # What is over each room: the top level has the roof; a lower room is under the level above where that level's
+    # floor (its traced rooms, the gaps between them closed) is over it, and under the roof elsewhere.
+    roofs, coverages = {}, {}
+    roof_note = _roof_plan_note(paths)
     for room in traced:
         if room["rank"] == ranks[-1]:
             roofs[room["trace_id"]] = {"parts": [{"below": "open", "fraction": 1.0, "rooms": []}], "method": "",
-                                       "reason": f"{room['level'] or 'The top level'} is the house's top level: the roof is over it."}
+                                       "reason": f"{room['level'] or 'The top level'} is the house's top level: the roof is over it."
+                                                 + (f" {roof_note}" if roof_note else "")}
             continue
         above = min(rank for rank in ranks if rank > room["rank"])
-        offset = offsets.get((above, room["rank"]))
-        if (above, room["rank"]) not in offsets:
-            upper = [row for row in traced if row["rank"] == above]
-            this_level = [row for row in traced if row["rank"] == room["rank"]]
-            offset = offsets[(above, room["rank"])] = (house_envelope.stacked_offset(upper, this_level)
-                                                       or _plan_text_offset(paths, upper, this_level))
-        if not offset:
-            continue                       # can't tell what's over it: the room keeps the general roof rule
-        dx, dy, evidence = offset
-        upper = [{**row, "points_mm": [[x + dx, y + dy] for x, y in row["points_mm"]]} for row in traced if row["rank"] == above]
-        roofs[room["trace_id"]] = {"parts": house_envelope.floor_split(room["points_mm"], upper), "method": evidence,
-                                   "level_above": upper[0]["level"] if upper else ""}
+        own_sheet = (level_rows(room["rank"]) or [{}])[0].get("page")
+        if room["page"] != own_sheet:
+            roofs[room["trace_id"]] = {"unmatched": (
+                f"its outline was traced on plan page {room['page']}, not on the {room['level'] or 'its level'}'s plan "
+                f"(page {own_sheet}), so it can't be laid over the plan above")}
+            continue
+        match = registration(above, room["rank"])
+        if not match:
+            continue                       # can't tell what's over it: the labelled level-order assumption applies
+        upper = [{**row, "points_mm": match["move"](row)} for row in level_rows(above)]
+        level_above = upper[0]["level"] if upper else ""
+        footprint = house_envelope.upper_footprint(upper)
+        if footprint is None:
+            continue
+        coverage = coverages.setdefault(above, _level_coverage(paths, level_above, footprint.area / 1e6))
+        if coverage:
+            roofs[room["trace_id"]] = {"unmatched": coverage}
+            continue
+        roofs[room["trace_id"]] = {"parts": _above_parts(house_envelope.above_split(room["points_mm"], upper, footprint),
+                                                         level_above, match["evidence"], roof_note),
+                                   "method": match["evidence"], "level_above": level_above}
     return {"floors": result, "roofs": roofs}
 
 
-def _plan_text_offset(paths, upper, lower):
-    """(dx_mm, dy_mm, evidence) moving the upper plan onto the lower one by dimension text both sheets print at the same
-    places (the seating step's plan registration), when both are at the same scale; else None."""
-    from ai.room_use_resolution import plan_text_translation
+# The level above's traced rooms must cover this share of its floor before the floor outside them is taken as roof.
+MIN_UPPER_COVERAGE = 0.8
+
+
+def _level_floor_area(paths, level_name):
+    """(m², where from) for a level's whole floor: the floor area the drawings print for it ("First floor area 177.76
+    m²", read by the page reading), else the sum of its rooms' areas; (None, "") when neither is known."""
+    level = " ".join(str(level_name or "").casefold().split())
+    if level:
+        pattern = re.compile(re.escape(level).replace(r"\ ", r"\s+") + r"\s+(?:area|gfa)\s*[:=]?\s*([\d,]+(?:\.\d+)?)\s*m", re.I)
+        pages = _read(paths["root"] / "page_inventory.json", {}).get("pages") or {}
+        for number, page in sorted(pages.items(), key=lambda item: int(item[0]) if str(item[0]).isdigit() else 0):
+            for row in (page or {}).get("information") or [] if isinstance(page, dict) else []:
+                found = pattern.search(str((row or {}).get("what") or "")) if isinstance(row, dict) else None
+                if found:
+                    return float(found.group(1).replace(",", "")), f"printed on p. {number}"
+    try:
+        from backend import reviewer_room_geometry_service
+        areas = reviewer_room_geometry_service.current_traced_areas(paths["root"]).values()
+    except (OSError, ValueError, TypeError, KeyError):
+        return None, ""
+    total = sum(float(row["area_m2"]) for row in areas if isinstance(row.get("area_m2"), (int, float))
+                and " ".join(str(row.get("level_name") or "").casefold().split()) == level)
+    return (total, "the sum of its rooms' areas") if total else (None, "")
+
+
+def _level_coverage(paths, level_name, footprint_m2):
+    """"" when the level's traced rooms cover enough of its floor to tell where the roof is over the level below;
+    otherwise why not (said in the labelled assumption and the Phase 1 gap)."""
+    floor_m2, where = _level_floor_area(paths, level_name)
+    if not floor_m2 or footprint_m2 >= MIN_UPPER_COVERAGE * floor_m2:
+        return ""
+    return (f"the {level_name} plan's traced rooms cover only {footprint_m2:.0f} m² of its {floor_m2:.0f} m² floor "
+            f"({where}), so where that floor ends and the roof is directly over this room isn't known")
+
+
+def _above_parts(split, level_above, evidence, roof_note):
+    """house_envelope.above_split rows in the shape _house_roof_surfaces takes, each with its cited reason."""
+    method = f" Lined up with the {level_above} plan by {evidence}." if evidence else ""
+    roof_cite = f" {roof_note}" if roof_note else ""
+    parts = []
+    for row in split:
+        names = ", ".join(row["rooms"])
+        over = row["over"]
+        if over == "roof":
+            parts.append({"below": "open", "fraction": row["fraction"], "rooms": [], "reason": (
+                f"No part of the {level_above} is over this part of the room (a single-storey part): the roof is "
+                f"directly over it.{method}{roof_cite}")})
+        elif over == "outdoor":
+            parts.append({"below": "outdoor", "fraction": row["fraction"], "rooms": row["rooms"], "reason": (
+                f"Under {names} (outdoors, a balcony or deck above): the slab over it is exposed like a roof.{method}{roof_cite}")})
+        elif over == "void":
+            parts.append({"below": "open", "key": "void", "fraction": row["fraction"], "rooms": row["rooms"], "reason": (
+                f"Under the {names} of the {level_above}: the room is open to the roof over that void, so the roof "
+                f"counts as this part's top.{method}")})
+        elif over == "upper_untraced":
+            parts.append({"below": "cooled", "key": "untraced", "fraction": row["fraction"], "rooms": [f"the {level_above}"], "reason": (
+                f"Under the {level_above}'s floor where no room of it is traced (a stair, hall or landing inside its "
+                f"outline): taken as part of the air-conditioned storey, so no heat flows (labelled assumption).{method}")})
+        else:
+            parts.append({"below": over, "fraction": row["fraction"], "rooms": row["rooms"]})
+    return parts
+
+
+def _roof_plan_note(paths):
+    """A citation of the roof plan's own notes ("concrete roof below; balcony below"), or ""."""
+    pages = _roof_plan_pages(paths)
+    if not pages:
+        return ""
+    inventory = (_read(paths["root"] / "page_inventory.json", {}).get("pages") or {}).get(str(pages[0])) or {}
+    what = next((str(row.get("what") or "") for row in inventory.get("information") or []
+                 if isinstance(row, dict) and row.get("kind") == "room_geometry"), "")
+    return f"Roof plan p. {pages[0]}" + (f": “{what[:220]}”." if what else ".")
+
+
+def _plan_text_registration(paths, upper_page, lower_page, lower_mm_per_px):
+    """{"move", "evidence"} lining the upper sheet up with the lower one by the dimension numbers and grid letters both
+    print at the same places (house_envelope.plan_text_registration), worked in sheet points so each plan's own scale
+    calibration doesn't matter; else None."""
+    from ai import house_envelope
     from backend import seating_service
-    if not upper or not lower:
-        return None
     source = _read(paths["root"] / "ai_input.json", {}).get("source_pdf")
     systems = {page.get("page"): page.get("coordinate_systems", {}).get("image_px", {})
                for page in _read(paths["root"] / "vector_geometry.json", {}).get("geometry_key_points", {}).get("pages", [])}
-    top_page, bottom_page = upper[0]["page"], lower[0]["page"]
-    if not source or not Path(source).exists() or top_page == bottom_page:
+    if not source or not Path(source).exists() or upper_page == lower_page:
         return None
     import pdfplumber
     version = seating_service._pdf_version(source)
     with pdfplumber.open(source) as doc:
-        if not (0 < top_page <= len(doc.pages) and 0 < bottom_page <= len(doc.pages)):
+        if not (0 < upper_page <= len(doc.pages) and 0 < lower_page <= len(doc.pages)):
             return None
-        top, bottom = seating_service._Page(doc, top_page, version), seating_service._Page(doc, bottom_page, version)
-        registration = plan_text_translation(seating_service._words(top), seating_service._words(bottom))
+        top, bottom = seating_service._Page(doc, upper_page, version), seating_service._Page(doc, lower_page, version)
+        fit = house_envelope.plan_text_registration(seating_service._words(top), seating_service._words(bottom))
         widths = (top.width, bottom.width)
-    if not registration:
+    if not fit:
         return None
-    scales = []
-    for rows, page, width in ((upper, top_page, widths[0]), (lower, bottom_page, widths[1])):
+    px_per_pt = []
+    for page, width in ((upper_page, widths[0]), (lower_page, widths[1])):
         image_width = (systems.get(page) or {}).get("image_width")
         if not image_width or not width:
             return None
-        scales.append(rows[0]["mm_per_px"] * image_width / width)      # mm per PDF point on that sheet
-    if abs(scales[0] - scales[1]) > 0.02 * scales[1]:
-        return None
-    return (registration["dx_pt"] * scales[1], registration["dy_pt"] * scales[1],
-            f"dimension text printed on both plans ({', '.join(registration['anchors'][:4])})")
+        px_per_pt.append(float(image_width) / float(width))
+    upper_scale, lower_scale = px_per_pt
+    dx, dy = fit["dx_pt"], fit["dy_pt"]
+
+    def move(row):
+        return [[(x / upper_scale + dx) * lower_scale * lower_mm_per_px, (y / upper_scale + dy) * lower_scale * lower_mm_per_px]
+                for x, y in row["points_px"]]
+    anchors = ", ".join(fit["anchors"][:6])
+    return {"move": move, "evidence": (f"the dimension figures and grid letters printed at the same places on both sheets "
+                                       f"({fit['votes']} matches, e.g. {anchors})")}
 
 
 def _house_roof_surfaces(room, part, area, basis, citation, reviewer):
@@ -3084,21 +3208,24 @@ def _house_roof_surfaces(room, part, area, basis, citation, reviewer):
                   "reviewer_trace_id": part.get("trace_id", ""), "reviewer": reviewer, "verification_status": "provisional",
                   "gross_area_m2": share_area}
         if share["below"] in {"open", "outdoor"}:
-            reason = basis.get("reason") or (f"Under {names} (outdoors): the slab over it is exposed like a roof." if share["below"] == "outdoor"
+            reason = share.get("reason") or basis.get("reason") or (f"Under {names} (outdoors): the slab over it is exposed like a roof." if share["below"] == "outdoor"
                                              else "No room of the level above is over this part: the roof is over it.")
-            surfaces.append({**common, "surface_key": f"reviewer-trace:{part['trace_id']}:roof" + ("" if share["fraction"] >= 1 else f":{share['below']}"),
+            reason = reason if share.get("reason") else reason + method
+            surfaces.append({**common, "surface_key": f"reviewer-trace:{part['trace_id']}:roof" + ("" if share["fraction"] >= 1 else f":{share.get('key') or share['below']}"),
                              "label": f"{room.get('label', 'Room')} roof" + (f" (under {names})" if names else ""),
                              "physical_type": "roof", "thermal_role": "external", "external_exposure": "external",
-                             "orientation": "horizontal", "rationale": reason + method,
-                             "assumptions": ["flat_roof_over_traced_footprint"], "phase1_assumption": reason + method})
+                             "orientation": "horizontal", "rationale": reason,
+                             "assumptions": ["flat_roof_over_traced_footprint"], "phase1_assumption": reason})
         elif share["below"] == "cooled":
             reason = share.get("reason") or f"Under {names}, air-conditioned to the same temperature: no heat flows.{method}"
-            surfaces.append({**common, "surface_key": f"reviewer-trace:{part['trace_id']}:ceiling",
+            notes = ({"phase1_assumptions": [{"component": HOUSE_ROOF_NOT_LINED_UP, "reason": reason}]}
+                     if basis.get("level_rule") == "under_level_above" else {"phase1_assumption": reason})
+            surfaces.append({**notes, **common, "surface_key": f"reviewer-trace:{part['trace_id']}:ceiling" + (f":{share['key']}" if share.get("key") else ""),
                              "label": f"{room.get('label', 'Room')} ceiling (under {names})",
                              "physical_type": "ceiling", "thermal_role": "conditioned_adjacent", "external_exposure": "",
                              "boundary_condition": "floor_above", "orientation": "",
                              "boundary_source": "A floor or other conditioned space above, at the room's temperature: no heat flows.",
-                             "rationale": reason, "phase1_assumption": reason})
+                             "rationale": reason})
         else:
             reason = (f"Under {names} (not air-conditioned in a house): the buffer-space estimate (outdoor temperature "
                       f"minus 3 K) applies.{method}")

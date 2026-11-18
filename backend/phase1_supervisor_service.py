@@ -12,6 +12,7 @@ import uuid
 
 from ai import house_envelope
 from backend import ai_provider, autonomous_tasks_service as tasks, drawing_tasks_service as drawings
+from backend.ai_preliminary_service import HOUSE_ROOF_NOT_LINED_UP
 from backend.job_runner import BackgroundJob, JobCancelled, checkpoint, current_check, read_json, write_json
 
 JOB_FILE = "phase1_supervisor_job.json"
@@ -147,6 +148,9 @@ def load_snapshot(project, report=None):
                 row.get("ai_measured_area_m2", 0) or 0 for row in matching),
             "area_source": area.get("area_origin") or area.get("method") or area.get("area_source") or " ".join(str(row.get("method", "")) for row in matching),
             "height": height, "model": material, "model_current": current, "tasks": room_tasks,
+            "house_roof_not_lined_up": next((str(row.get("reason") or "") for row in inputs.get("phase1_assumptions") or []
+                if material and isinstance(row, dict) and row.get("room_id") == material.get("room_id")
+                and row.get("component") == HOUSE_ROOF_NOT_LINED_UP), ""),
             "pages": sorted({row.get("page") for row in matching if type(row.get("page")) is int}
                             | {row.get("page") for row in use.get("evidence", []) if type(row.get("page")) is int})})
     perimeter_sides = []
@@ -322,6 +326,12 @@ def audit(snapshot):
         if (traces and not house_level
                 and any(trace.get("roof") in {None, "", "unknown"} or trace.get("roof_source") == "ai_fallback" for trace in traces)):
             add(6, "roof", room, "P5_roof", f"Check what is above {label}; its roof or ceiling exposure is unknown or assumed.")
+        elif house_level and room.get("house_roof_not_lined_up"):
+            # The plans couldn't settle what is over it (roof or the storey above): said, not guessed (2026-11-18).
+            note = room["house_roof_not_lined_up"]
+            why = note.split(" — ", 1)[1].split(". Whether", 1)[0] if " — " in note else ""
+            add(6, "roof", room, "P5_roof", f"Check what is above {label} — the roof plan couldn't be lined up with the "
+                f"{room.get('level') or 'room'}'s plan" + (f" ({why})" if why else "") + "; it is taken as under the storey above.")
 
     report = snapshot.get("report") or {}
     if report:

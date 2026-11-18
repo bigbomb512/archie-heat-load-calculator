@@ -166,7 +166,8 @@ class HouseLevelRoofTests(unittest.TestCase):
         surfaces = model._house_roof_surfaces({"label": "Kitchen", "level_name": "Ground Floor"}, {"trace_id": "area-only-k", "page": 8},
                                               19.3, ground, {"page": 8}, "")
         self.assertEqual([(row["physical_type"], row["boundary_condition"]) for row in surfaces], [("ceiling", "floor_above")])
-        self.assertEqual(surfaces[0]["phase1_assumption"], ground["parts"][0]["reason"])
+        self.assertEqual(surfaces[0]["phase1_assumptions"],
+                         [{"component": model.HOUSE_ROOF_NOT_LINED_UP, "reason": ground["parts"][0]["reason"]}])
 
     def test_single_storey_house_and_unnamed_level(self):
         only = model._house_level_roof(house({0: "Ground Floor"}), {"label": "Living", "level_name": "Ground Floor"})
@@ -214,6 +215,131 @@ class HouseFactsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             _write(Path(directory) / "room_use_resolution.json", {"dwelling_context": {"is_dwelling": False}, "records": []})
             self.assertEqual(job_service.house_above(directory), {"dwelling": False})
+
+
+def _word(text, x, y):
+    return {"text": text, "bbox": [x - 5, y - 3, x + 5, y + 3]}
+
+
+def _sheet(dx=0.0, dy=0.0, title_block=True):
+    words = []
+    for index, letter in enumerate("ABCDEFG"):
+        words += [_word(letter, 380 + 100 * index + dx, 70 + dy), _word(letter, 380 + 100 * index + dx, 1110 + dy)]
+    for index, figure in enumerate(["4,420", "3,040", "4,470", "3,710", "4,430", "1,070"]):
+        words += [_word(figure, 430 + 100 * index + dx, 95 + dy), _word(figure, 430 + 100 * index + dx, 1085 + dy)]
+    if title_block:       # identical on every sheet, never shifted with the plan
+        words += [_word("22008", 1500, 1150), _word("2158", 360, 1150), _word("1672", 80, 1135)]
+    return words
+
+
+class PlanRegistrationTests(unittest.TestCase):
+    def test_repeated_grid_figures_and_letters_line_two_plans_up(self):
+        from ai import house_envelope
+        fit = house_envelope.plan_text_registration(_sheet(1.0, -1.2), _sheet())
+        self.assertAlmostEqual(fit["dx_pt"], -1.0, places=3)
+        self.assertAlmostEqual(fit["dy_pt"], 1.2, places=3)
+        self.assertGreaterEqual(fit["votes"], 20)
+        self.assertEqual(fit["anchors"][:3], ["A", "B", "C"])
+
+    def test_no_registration_without_enough_shared_text(self):
+        from ai import house_envelope
+        roof_plan = [_word("CONCRETE", 1040, 270), _word("22008", 1500, 1150), _word("2158", 360, 1150)]
+        self.assertIsNone(house_envelope.plan_text_registration(roof_plan, _sheet()))
+        self.assertIsNone(house_envelope.plan_text_registration(_sheet()[:6], _sheet()[:6]))
+
+
+def square(x0, y0, x1, y1):
+    return [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
+
+
+class AboveSplitTests(unittest.TestCase):
+    def test_a_lower_room_is_split_into_roof_floor_above_void_balcony_and_untraced_upper_floor(self):
+        from ai import house_envelope
+        upper = [{"label": "Bedroom", "scope": "comfort_hvac", "category": "house_bedroom", "points_mm": square(0, 0, 4000, 4000)},
+                 {"label": "Void", "scope": "not_cooled", "category": "not_a_room", "points_mm": square(5000, 0, 8000, 4000)},
+                 {"label": "Balcony", "scope": "not_cooled", "category": "outdoor", "points_mm": square(0, 4000, 4000, 6000)}]
+        footprint = house_envelope.upper_footprint(upper[:2])           # the 1 m gap (a stair) between them is closed
+        room = square(0, 0, 12000, 6000)                               # 72 m²: 16 bedroom, 12 void, 8 balcony, 4 gap, rest roof
+        split = {row["over"]: round(row["fraction"] * 72, 1) for row in house_envelope.above_split(room, upper, footprint)}
+        self.assertEqual(split, {"cooled": 16.0, "void": 12.0, "outdoor": 8.0, "upper_untraced": 4.0, "roof": 32.0})
+
+
+def _traces():
+    def trace(trace_id, label, level, page, points_px, room_id):
+        return {"trace_id": trace_id, "room_id": room_id, "room_label": label, "level_name": level, "page": page,
+                "points_image_px": points_px, "calibration": {"mm_per_px": 10.0}}
+    return [trace("up-stair", "Stair", "First Floor", 9, square(0, 0, 200, 300), "ff-stair"),
+            trace("up-bed", "Bedroom 2", "First Floor", 9, square(200, 0, 600, 400), "ff-bed"),
+            trace("gf-stair", "Stair", "Ground Floor", 8, square(1000, 1000, 1200, 1300), "gf-stair"),
+            # Living: half under the bedroom above, half single-storey (roof directly over it)
+            trace("gf-living", "Living", "Ground Floor", 8, square(1200, 1000, 2000, 1400), "gf-living")]
+
+
+ROOMS = {"ff-stair": {"label": "Stair", "category": "circulation", "scope": "comfort_hvac"},
+         "ff-bed": {"label": "Bedroom 2", "category": "house_bedroom", "scope": "comfort_hvac"},
+         "gf-stair": {"label": "Stair", "category": "circulation", "scope": "comfort_hvac"},
+         "gf-living": {"label": "Living", "category": "house_living", "scope": "comfort_hvac"}}
+
+
+class HouseRoofOverlayTests(unittest.TestCase):
+    def bases(self, first_floor_area):
+        with tempfile.TemporaryDirectory() as directory:
+            _write(Path(directory) / "page_inventory.json", {"pages": {
+                "9": {"title": "First Floor Plan", "information": [{"kind": "room_geometry", "what": f"First floor area {first_floor_area} m²"}]},
+                "12": {"title": "Roof Plan", "level": "Roof", "information": [{"kind": "room_geometry", "what": "concrete roof below; balcony below"}]}}})
+            return model._house_floor_bases({"root": Path(directory)}, _traces(), ROOMS)
+
+    def test_the_single_storey_part_of_a_lower_room_gets_the_roof_with_cited_evidence(self):
+        roofs = self.bases(22)["roofs"]
+        parts = {row["below"]: row for row in roofs["gf-living"]["parts"]}
+        self.assertAlmostEqual(parts["open"]["fraction"], 0.5, places=3)
+        self.assertAlmostEqual(parts["cooled"]["fraction"], 0.5, places=3)
+        self.assertEqual(parts["cooled"]["rooms"], ["Bedroom 2"])
+        self.assertIn("roof is directly over it", parts["open"]["reason"])
+        self.assertIn("Stair above Stair", parts["open"]["reason"])
+        self.assertIn("Roof plan p. 12", parts["open"]["reason"])
+        surfaces = model._house_roof_surfaces({"label": "Living", "level_name": "Ground Floor"}, {"trace_id": "gf-living", "page": 8},
+                                              32.0, roofs["gf-living"], {"page": 8}, "")
+        self.assertEqual(sorted((row["physical_type"], round(row["gross_area_m2"], 1)) for row in surfaces),
+                         [("ceiling", 16.0), ("roof", 16.0)])
+
+    def test_a_poorly_traced_level_above_is_not_read_as_roof(self):
+        roofs = self.bases(200)["roofs"]
+        self.assertIn("cover only", roofs["gf-living"]["unmatched"])
+        basis = model._house_level_roof({"levels": {0: "Ground Floor", 1: "First Floor"}, "roof_plan_pages": [12]},
+                                        {"label": "Living", "level_name": "Ground Floor"}, why=roofs["gf-living"]["unmatched"])
+        surfaces = model._house_roof_surfaces({"label": "Living", "level_name": "Ground Floor"}, {"trace_id": "gf-living", "page": 8},
+                                              32.0, basis, {"page": 8}, "")
+        self.assertEqual(surfaces[0]["physical_type"], "ceiling")
+        self.assertEqual(surfaces[0]["phase1_assumptions"][0]["component"], model.HOUSE_ROOF_NOT_LINED_UP)
+        self.assertNotIn("phase1_assumption", surfaces[0])
+
+    def test_supervisor_says_when_the_roof_plan_could_not_be_lined_up(self):
+        room = {"id": "r", "name": "Kitchen", "scope": "comfort_hvac", "level": "Ground Floor", "area_m2": 19, "area_source": "edited",
+                "height": {}, "pages": [8], "traces": [],
+                "house_roof_not_lined_up": "Under the First Floor (the house's next level up) — Kitchen was found by its area "
+                                           "only (no outline), so it can't be laid over the First Floor plan. Whether part..."}
+        snapshot = {"rooms": [room], "tasks": [], "height_pages": [], "storefront_pages": [], "report": {}, "model_inputs": [],
+                    "dwelling": True}
+        gap = next(row for row in supervisor.audit(snapshot) if row["kind"] == "roof")
+        self.assertIn("the roof plan couldn't be lined up with the Ground Floor's plan", gap["message"])
+        self.assertIn("found by its area only", gap["message"])
+
+
+class RegisteredSheetScaleTests(unittest.TestCase):
+    def test_a_sheet_with_no_printed_scale_takes_the_scale_of_a_registered_sibling_plan(self):
+        contexts = {8: {"declared_mm_per_px": 14.109, "image_scale": 2.5, "declared_scale_candidates": [{"text": "1:100"}]},
+                    9: {"declared_mm_per_px": None, "image_scale": 2.5}}
+        with patch.object(tasks, "_p0_main_geometry_pages", return_value=[{"page": 8}, {"page": 9}]), \
+             patch.object(tasks, "_p0_context", side_effect=lambda _root, page: contexts[page]), \
+             patch.object(tasks, "_sheets_registered", return_value=True):
+            calibration = tasks._registered_sibling_scale(Path("."), 9, contexts[9])
+        self.assertEqual((calibration["source"], calibration["mm_per_px"], calibration["scale_page"]), ("registered_sheet_scale", 14.109, 8))
+        self.assertIn("1:100 of plan page 8", calibration["label"])
+        with patch.object(tasks, "_p0_main_geometry_pages", return_value=[{"page": 8}, {"page": 9}]), \
+             patch.object(tasks, "_p0_context", side_effect=lambda _root, page: contexts[page]), \
+             patch.object(tasks, "_sheets_registered", return_value=False):
+            self.assertIsNone(tasks._registered_sibling_scale(Path("."), 9, contexts[9]))
 
 
 if __name__ == "__main__":
