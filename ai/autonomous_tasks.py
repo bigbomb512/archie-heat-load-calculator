@@ -9,6 +9,7 @@ import hashlib
 import json
 import math
 import re
+from functools import lru_cache
 from pathlib import Path
 
 from ai import reviewer_room_geometry, site_location_resolution, room_outline, kitchen_equipment
@@ -941,7 +942,23 @@ def north_crop_boxes(width, height, word_points=()):
 
 def north_word_points(pdf_path, page):
     """Page fractions (x, y) of a printed "NORTH" that labels an arrow, title-block band first; none for a scan or an
-    unreadable PDF. "NORTH ELEVATION", "north boundary" and the like aren't arrow labels."""
+    unreadable PDF. "NORTH ELEVATION", "north boundary" and the like aren't arrow labels.
+
+    Read once per page of each version of the PDF: the north questions are rebuilt every round of drawing questions,
+    and reading a page's words took about 9 s on a 30-sheet house set (Turramurra 2026-11-18)."""
+    try:
+        stat = Path(str(pdf_path)).stat()
+    except (OSError, TypeError, ValueError):
+        return []
+    return list(_cached_north_word_points(str(pdf_path), stat.st_mtime_ns, stat.st_size, getattr(stat, "st_ino", 0), int(page)))
+
+
+@lru_cache(maxsize=64)
+def _cached_north_word_points(pdf_path, _mtime_ns, _size, _inode, page):
+    return tuple(_read_north_word_points(pdf_path, page))
+
+
+def _read_north_word_points(pdf_path, page):
     try:
         import pdfplumber
         with pdfplumber.open(str(pdf_path)) as pdf:

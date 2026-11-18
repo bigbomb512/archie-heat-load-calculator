@@ -6,6 +6,7 @@ task crops and replies remain owned by the task service.
 """
 
 from contextlib import contextmanager
+from collections import OrderedDict
 from contextvars import ContextVar
 import hashlib
 import json
@@ -26,6 +27,13 @@ _LOCKS = {}
 _LOCKS_GUARD = threading.Lock()
 _FILE_DIGESTS = {}
 _DIGESTS_GUARD = threading.Lock()
+# Page contexts already loaded, shared across operations of this process (the drawing questions alternate between a
+# house's plan pages, and each operation reloaded each page's linework and image from disk: Turramurra 2026-11-18,
+# 228 reloads in one replayed run). Keyed by the cache generation folder, which names every input, so a change to the
+# PDF, the page readings or the code gives new keys. Contexts are read-only to their callers, as within an operation.
+_SHARED_CONTEXTS = OrderedDict()
+_SHARED_GUARD = threading.Lock()
+SHARED_CONTEXT_PAGES = 4
 
 
 def _project_lock(root):
@@ -122,6 +130,15 @@ class PageAnalysisCache:
 
         directory = self.cache_root / f"page_{page:04d}"
         metadata_path, image_path = directory / "context.json", directory / "page.png"
+        shared_key = (str(self.cache_root), page)
+        with _SHARED_GUARD:
+            shared = _SHARED_CONTEXTS.get(shared_key)
+            if shared is not None:
+                _SHARED_CONTEXTS.move_to_end(shared_key)
+        if shared is not None and metadata_path.is_file() and image_path.is_file():
+            self._count(self.stats["cache_hits"], page)
+            self._memory_page, self._memory_context = page, shared
+            return shared
         if metadata_path.is_file() and image_path.is_file():
             try:
                 from PIL import Image
@@ -136,6 +153,7 @@ class PageAnalysisCache:
                     context["image"] = image.copy()
                 self._count(self.stats["cache_hits"], page)
                 self._memory_page, self._memory_context = page, context
+                _share(shared_key, context)
                 return context
             except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
                 shutil.rmtree(directory, ignore_errors=True)
@@ -159,7 +177,16 @@ class PageAnalysisCache:
                 stage.unlink()
         context["image"] = image
         self._memory_page, self._memory_context = page, context
+        _share(shared_key, context)
         return context
+
+
+def _share(key, context):
+    with _SHARED_GUARD:
+        _SHARED_CONTEXTS[key] = context
+        _SHARED_CONTEXTS.move_to_end(key)
+        while len(_SHARED_CONTEXTS) > SHARED_CONTEXT_PAGES:
+            _SHARED_CONTEXTS.popitem(last=False)
 
 
 @contextmanager
