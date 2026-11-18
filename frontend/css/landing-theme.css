@@ -1,0 +1,86 @@
+/* Reference palette: charcoal #21232E, royal blue #105BFF, tangerine #FE8500.
+   Semantic tokens keep the public landing page independent of workspace styling. */
+:root[data-theme] {
+  --brand-charcoal:#21232e; --brand-blue:#105bff; --brand-orange:#fe8500;
+  --theme-bg:#f7f8fc; --theme-surface:#fff; --theme-wash:#edf1ff;
+  --theme-ink:#21232e; --theme-muted:#565c70; --theme-border:#d5d9e6;
+  --theme-link:#084bdc; --theme-signal:#a54b00;
+  --ui-ink:var(--theme-ink); --ui-primary:var(--theme-link);
+  --ui-canvas:var(--theme-bg); --ui-white:var(--theme-surface);
+  --ui-muted:var(--theme-muted); --ui-border:var(--theme-border); --ui-wash:var(--theme-wash);
+  --canvas:var(--theme-bg); --paper:var(--theme-surface); --sea:var(--theme-ink);
+  --sea-deep:var(--theme-ink); --sea-tint:var(--theme-wash); --slate-ink:var(--theme-ink);
+  --steel:var(--theme-muted); --mist:var(--theme-muted); --silver:var(--theme-border);
+  --orange:var(--brand-orange); --orange-deep:#e97800; --orange-tint:var(--theme-wash);
+  color-scheme:light;
+}
+:root[data-theme="dark"] {
+  --theme-bg:#21232e; --theme-surface:#2a2d3b; --theme-wash:#30364c;
+  --theme-ink:#f4f5fb; --theme-muted:#bcc2d5; --theme-border:#484e64;
+  --theme-link:#91b1ff; --theme-signal:#fe8500; color-scheme:dark;
+}
+body.hvac-site {background:var(--theme-bg);color:var(--theme-ink)}
+.hvac-site .nav,.hvac-site .nav.scrolled {background:var(--theme-bg);border-color:var(--theme-border)}
+.hvac-site .navlinks a {color:var(--theme-muted)}
+.hvac-site .navlinks a:hover {color:var(--theme-link)}
+.hvac-site .theme-toggle {display:inline-flex;align-items:center;justify-content:center;gap:8px;flex-shrink:0;min-height:44px;padding:10px 13px;border:1px solid var(--theme-border);border-radius:6px;background:var(--theme-surface);color:var(--theme-ink);font:700 13px var(--sans);cursor:pointer}
+.theme-toggle svg {width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.7}
+.theme-toggle .sun {display:none}
+[data-theme="dark"] .theme-toggle .sun {display:block}
+[data-theme="dark"] .theme-toggle .moon {display:none}
+.hvac-site .theme-toggle:hover {border-color:var(--theme-link);background:var(--theme-wash)}
+[data-theme="dark"] .hvac-site .nav .archie-wordmark {filter:grayscale(1) invert(1);mix-blend-mode:screen}
+.hvac-site .city-hero {background:var(--brand-charcoal)}
+.hvac-site .city-hero__shade {background:linear-gradient(90deg,rgba(33,35,46,.96),rgba(33,35,46,.78) 48%,rgba(16,91,255,.18))}
+.hvac-site .city-hero h1 {color:#fff}
+.hvac-site .city-hero h1 em {color:var(--brand-orange)}
+.hvac-site .city-hero .kicker {color:#b5caff}
+.hvac-site .city-hero__intro,.hvac-site .city-hero__link {color:#f1f3ff}
+.hvac-site .city-hero__note {color:#c7cce0}
+.hvac-site .btn-primary,.hvac-site .city-hero .btn-primary {background:var(--brand-orange);color:#21232e;border-color:var(--brand-orange)}
+.hvac-site .btn-primary:hover,.hvac-site .city-hero .btn-primary:hover {background:#ff9d33;border-color:#ff9d33;color:#21232e}
+.hvac-site .btn-quiet {background:var(--brand-blue);border-color:var(--brand-blue);color:#fff}
+.hvac-site .navlinks .btn-quiet {color:#fff}
+.hvac-site .btn-quiet:hover {background:#084bdc;border-color:#084bdc;color:#fff}
+.hvac-site .principles-band,.hvac-site .shortcut-section,.hvac-site .foot {background:var(--theme-wash);border-color:var(--theme-border)}
+.hvac-site #method,.hvac-site .band-end {background:var(--theme-bg)}
+.hvac-site .scrub {background:var(--theme-surface)}
+.hvac-site :is(.h2,.steps h3,.hero-ledger strong,.foot-mark,.drawing-desk,.desk-tabs button[aria-selected="true"]) {color:var(--theme-ink)}
+.hvac-site :is(.lede,.steps p,.hero-ledger p,.shortcut-heading>p,.workflow-note,.endnote,.end-lede,.footnote,.foot a,.desk-detail p) {color:var(--theme-muted)}
+.hvac-site :is(.kicker,.ledger-label,.stepno,.desk-arrow,.desk-detail__label) {color:var(--theme-link)}
+.hvac-site .hero-ledger>div {border-color:var(--theme-border)}
+.hvac-site #method .steps li {border-top-color:var(--brand-blue)!important}
+.hvac-site #method .offsetpair::before {border-color:var(--theme-border);background:repeating-linear-gradient(0deg,transparent,transparent 31px,var(--theme-border) 32px),repeating-linear-gradient(90deg,transparent,transparent 31px,var(--theme-border) 32px)}
+.hvac-site .ticks li {background:var(--theme-wash);border-color:var(--brand-blue);color:var(--theme-ink)}
+.hvac-site :is(.drawing-desk,.workflow-diagram) {background:var(--theme-bg);border-color:var(--theme-border)}
+.hvac-site :is(.desk-top,.desk-tabs,.desk-plan,.desk-plan figcaption) {border-color:var(--theme-border)}
+.hvac-site :is(.desk-status,.desk-plan) {background:var(--theme-wash)}
+.hvac-site .desk-tabs button {color:var(--theme-muted)}
+.hvac-site .desk-tabs button[aria-selected="true"] {border-color:var(--brand-orange)}
+.hvac-site .desk-bottom {background:var(--brand-blue);color:#fff}
+.hvac-site .desk-plan svg g[fill="#dcebf4"] {fill:var(--theme-wash);stroke:var(--theme-link)}
+.hvac-site .desk-plan svg g[stroke="#163B50"],.hvac-site .desk-plan svg g[stroke="#246B91"] {stroke:var(--theme-link)}
+.hvac-site .desk-plan svg g[fill="#163B50"] {fill:var(--theme-ink)}
+.hvac-site .workflow-context,.hvac-site .band-quote {background:#181b25;color:#fff}
+.hvac-site .workflow-context .kicker,.hvac-site .workflow-context dt {color:#a9c2ff}
+.hvac-site .workflow-context p {color:#d6dbeb}
+.hvac-site .workflow-context dl>div {border-color:#484e64}
+.hvac-site .flow-node {background:var(--theme-surface);border-color:var(--theme-border);color:var(--theme-ink)}
+.hvac-site .flow-node h3 {color:var(--theme-ink)}
+.hvac-site .flow-node .flow-num {background:var(--theme-wash);color:var(--theme-link);border-color:var(--theme-border)}
+.hvac-site .flow-review {border-color:var(--brand-orange);background:var(--theme-wash)}
+.hvac-site .flow-review .flow-num {background:var(--brand-orange);color:#21232e}
+.hvac-site .flow-label {background:transparent;color:var(--theme-signal)}
+.hvac-site .flow-node:not(:last-child)::after {color:var(--theme-link);border-color:var(--theme-link)}
+.hvac-site :is(.pull,.attrib) {color:#f4f5fb}
+.hvac-site .landing-skip {background:var(--brand-blue);color:#fff}
+body.hvac-site :focus-visible {outline-color:var(--theme-link)}
+body.hvac-site .city-hero :focus-visible {outline-color:var(--brand-orange)}
+@media(max-width:720px) {
+ .hvac-site .nav {height:auto;min-height:72px}
+ .hvac-site .nav .wrap {padding-block:10px;gap:12px}
+ .hvac-site .navlinks {gap:8px;justify-content:flex-end;flex-wrap:wrap}
+ .hvac-site .navlinks>a:not(.btn) {display:none}
+ .hvac-site .navlinks .btn {font-size:12px;padding:10px}
+ .hvac-site .theme-toggle {padding:10px;gap:5px;font-size:12px}
+}

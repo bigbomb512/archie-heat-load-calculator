@@ -30,7 +30,7 @@ export function renderFrame({
       ? `<details class="job-tools-menu"><summary aria-label="More tools">⋯</summary><div><a href="/?engineer=1#/job/${encodeURIComponent(projectId)}/drawings">Detailed tools</a><a href="/?operator=1#/job/${encodeURIComponent(projectId)}/drawings">Manual AI task review</a></div></details>`
       : "";
   const header = `<header class="job-header"><div class="job-head-inner">
-    <a href="#/jobs" aria-label="Jobs"><img class="job-wordmark" src="/frontend/assets/images/toki-wordmark-exact.png" alt="Toki"></a>
+    <a href="#/jobs" aria-label="Jobs"><img class="job-wordmark" src="/frontend/assets/images/archie-wordmark.svg" alt="Archie"></a>
     <a href="#/jobs">Jobs</a>
     <div class="job-name"><strong>${escapeHtml(status?.name || project?.display_name || project?.name || "Job")}</strong><span>${escapeHtml(project?.site || project?.address || status?.address || status?.found_site || "Site not added yet")}</span></div>
     <a class="job-details" href="#/job/${encodeURIComponent(projectId)}/details">Job details</a>${toolsMenu}

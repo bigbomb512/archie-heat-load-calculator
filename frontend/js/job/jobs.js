@@ -15,7 +15,7 @@ const updatedDate = (value) => {
       });
 };
 const listHeader = () =>
-  `<header class="job-header"><div class="job-head-inner"><a href="#/jobs" aria-label="Jobs"><img class="job-wordmark" src="/frontend/assets/images/toki-wordmark-exact.png" alt="Toki"></a><a href="#/jobs">Jobs</a></div></header>`;
+  `<header class="job-header"><div class="job-head-inner"><a href="#/jobs" aria-label="Jobs"><img class="job-wordmark" src="/frontend/assets/images/archie-wordmark.svg" alt="Archie"></a><a href="#/jobs">Jobs</a></div></header>`;
 export async function renderJobs() {
   const projects = await getJson("/api/projects");
   const body = `${listHeader()}<main class="job-main job-list-inner"><div class="job-status-row"><h1>Jobs</h1><div class="job-actions"><label class="job-button secondary" for="job-import">Import a job</label><input id="job-import" type="file" accept=".zip,application/zip" hidden><a class="job-button" href="#/new-job">New job</a></div></div><p class="job-note" role="status" data-jobs-status></p>${
@@ -86,7 +86,7 @@ function uploadMarkup() {
   return `${listHeader()}<main class="job-main job-list-inner job-new">
     <a class="job-link-button" href="#/jobs">Back to Jobs</a>
     <h1>New job</h1>
-    <p class="job-new-lede">Give Toki the architect’s drawing set as one PDF. The AI reads every page.</p>
+    <p class="job-new-lede">Give Archie the architect’s drawing set as one PDF. The AI reads every page.</p>
     <button type="button" class="job-drop" id="job-drop" aria-describedby="job-drop-help">
       ${SHEET_ICON}
       <span class="job-drop-title" data-drop-title>Drop the PDF here</span>
@@ -173,7 +173,7 @@ export function renderNewJob() {
         };
         xhr.onerror = () => {
           reset();
-          error.textContent = "The upload didn’t reach Toki. Check the connection and try again.";
+          error.textContent = "The upload didn’t reach Archie. Check the connection and try again.";
         };
         xhr.onload = async () => {
           let result = {};

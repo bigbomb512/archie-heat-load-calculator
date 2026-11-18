@@ -1,4 +1,4 @@
-# Toki frontend conventions
+# Archie frontend conventions
 
 Use `css/design-system.css` for shared tokens and controls. The palette has one primary blue, one ink colour, one muted text colour, white, a canvas colour, a border and a wash. Status colours are reserved for warnings, errors and readiness.
 
@@ -14,3 +14,21 @@ Use `css/design-system.css` for shared tokens and controls. The palette has one 
 `workspace-theme.css` owns calculator layout. `hvac-identity.css` owns the shared visual identity and landing compositions. Both consume shared tokens. Earlier stylesheets still supply legacy components; migrate them incrementally when those components change rather than introducing a competing page redesign.
 
 Do not remove engineering evidence, review gates, scope labels, or infer missing engineering values to simplify the interface. Do not introduce nonfunctional navigation or imply a CAD editor exists where the product supplies calculation and evidence review.
+
+## Public landing palette and appearance
+
+`landing-theme.css` is loaded last on `landing.html`, scoped to the public page.
+Reference colours are charcoal `#21232E`, royal blue `#105BFF`, and tangerine
+`#FE8500`. Orange primary actions use charcoal text for contrast; blue actions
+use white. The two surface palettes use semantic tokens; lighter blue text in
+dark mode and a darker orange label in light mode keep small text readable.
+The video hero retains a dark contrast layer in both modes.
+
+`landing-theme.js` runs in the head before styles paint. It follows the system
+colour preference until an explicit toggle selection, then persists that choice
+under `toki.landing.theme`. Blocked storage still permits in-page switching.
+The header control exposes its state and target action to assistive technology.
+
+Verification: `node --test frontend/tests/landing-theme.test.cjs`; browser checks
+at desktop and 390px mobile, both palettes, keyboard activation, reload
+persistence, and console errors. Calculator workspace styling is independent.

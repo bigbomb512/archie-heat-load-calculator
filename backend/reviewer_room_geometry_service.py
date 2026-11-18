@@ -535,7 +535,7 @@ TRACE_SERVICES_PLAN_ROLES = {"existing_hvac_plan", "services_or_lighting_plan"}
 FALLBACK_TRACE_REASON = "No architectural floor plan in this set; tracing on a services plan."
 # A hand trace is calibrated on a printed dimension the operator picks. With none printed, the AI traces the rooms at
 # the sheet's printed scale, labelled unchecked (user decisions 2026-10-16 and, for services-only sets, 2026-11-02).
-ARCHITECTURAL_SET_ADVICE = "Toki traces the rooms on this plan at the sheet's printed scale, labelled unchecked."
+ARCHITECTURAL_SET_ADVICE = "Archie traces the rooms on this plan at the sheet's printed scale, labelled unchecked."
 NO_DIMENSION_WARNING = ("No printed building dimensions were found on this services plan, so a hand trace here can't be "
                         "checked against one. " + ARCHITECTURAL_SET_ADVICE)
 
