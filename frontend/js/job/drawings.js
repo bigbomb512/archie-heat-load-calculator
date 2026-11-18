@@ -358,15 +358,18 @@ function facts(status, plan) {
         ? "Suggested from the site details"
         : "Not identified yet";
   const site = status.address || status.found_site || "Not identified yet";
-  const above =
-    status.above && status.above !== "not_sure"
+  // A house has no tenancy: what is over each room follows from its level (top floor under the roof).
+  const aboveTerm = status.dwelling ? "What is above the rooms" : "Above the tenancy";
+  const above = status.dwelling
+    ? status.above_summary || "Worked out from the floor levels once they are read"
+    : status.above && status.above !== "not_sure"
       ? status.above.replaceAll("_", " ")
       : "Not identified yet";
   return `<dl class="job-facts">
     <div><dt>Site</dt><dd>${escapeHtml(site)}</dd></div>
     <div><dt>Weather</dt><dd>${escapeHtml(weather || "Not identified yet")}</dd><small class="job-caption">${escapeHtml(weatherWhy)}</small></div>
     <div><dt>Rooms named on the drawings</dt><dd>${escapeHtml(named.length ? named.join(", ") : "Still reading the drawing set")}</dd></div>
-    <div><dt>Above the tenancy</dt><dd>${escapeHtml(above)}</dd></div>
+    <div><dt>${escapeHtml(aboveTerm)}</dt><dd>${escapeHtml(above)}</dd></div>
   </dl>`;
 }
 

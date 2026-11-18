@@ -307,35 +307,76 @@ def current_traced_areas(root):
     # printed area, printed dimensions, an AI estimate off the plan, or the tenancy remainder).
     pointers = [*(paths["root"] / "ai_tasks" / "S1_printed_areas").glob("*/current.json"),
                 *(paths["root"] / "ai_tasks" / "P0_room_sizes").glob("*/current.json")]
+    answers = []
     for pointer in pointers:
         current = _read(pointer, {})
         record = _read(pointer.parent / current.get("run_path", "") / "record.json", {})
-        if record.get("status") not in {"applied", "below_accuracy_bar"}:
-            continue
+        if pointer.parent.parent.name == "P0_room_sizes":
+            answers.extend(room_size_answers(pointer.parent, record))
+        elif record.get("status") in {"applied", "below_accuracy_bar"}:
+            answers.extend((record, area) for area in record.get("applied_value", {}).get("rooms", []))
+    for record, area in answers:
         page = record.get("packet", {}).get("page")
-        for area in record.get("applied_value", {}).get("rooms", []):
-            if not isinstance(area, dict) or not area.get("label"):
-                continue
-            label = str(area["label"]).strip()
-            level = str(area.get("level_name") or "Unassigned level")
-            identity = room_identity(label, level)
-            room = rooms_by_identity.get(identity, {})
-            room_id = str(room.get("room_id") or identity)
-            previous = result.get(room_id)
-            area_source = str(area.get("source") or "printed (read from image)")
-            if not area_only_may_replace(previous, area_source):
-                continue
-            result[room_id] = {"room_id": room_id, "room_label": room.get("label") or label,
-                "level_name": room.get("level_name") or level, "area_m2": area.get("area_m2"),
-                "area_source": area_source, "source": area_source,
-                "page": page, "source_pages": [page] if type(page) is int else [],
-                "area_only": True, "outline": None, "trace_id": "", "proof_id": "",
-                "points_image_px": [], "edges": [], "openings": [], "roof": "unknown",
-                "declaration_source": "ai_determined", "ai_run_id": record.get("run_id"),
-                "ai_quality_label": area.get("quality_label") or record.get("quality_label", "AI-determined"),
-                "printed_text": area.get("printed_text", ""), "calibration_status": "not_required"}
+        if not isinstance(area, dict) or not area.get("label"):
+            continue
+        label = str(area["label"]).strip()
+        level = str(area.get("level_name") or "Unassigned level")
+        identity = room_identity(label, level)
+        room = rooms_by_identity.get(identity, {})
+        room_id = str(room.get("room_id") or identity)
+        previous = result.get(room_id)
+        area_source = str(area.get("source") or "printed (read from image)")
+        if not area_only_may_replace(previous, area_source):
+            continue
+        result[room_id] = {"room_id": room_id, "room_label": room.get("label") or label,
+            "level_name": room.get("level_name") or level, "area_m2": area.get("area_m2"),
+            "area_source": area_source, "source": area_source,
+            "page": page, "source_pages": [page] if type(page) is int else [],
+            "area_only": True, "outline": None, "trace_id": "", "proof_id": "",
+            "points_image_px": [], "edges": [], "openings": [], "roof": "unknown",
+            "declaration_source": "ai_determined", "ai_run_id": record.get("run_id"),
+            "ai_quality_label": area.get("quality_label") or record.get("quality_label", "AI-determined"),
+            "printed_text": area.get("printed_text", ""), "calibration_status": "not_required"}
     from backend.job_service import area_overrides
     return apply_area_overrides(result, area_overrides(paths["root"]))
+
+
+def room_size_answers(target_dir, current_record):
+    """[(record, area)] for one plan's room-size step: each room's area from the latest answer that asked about it.
+
+    The room-size step keeps one current record per plan page, and a follow-up question asks only the rooms still
+    without an area. Reading the current record alone dropped every room the follow-up didn't ask: on the Turramurra
+    house (2026-11-18) the ground floor's first answer sized Kitchen, Entry, Media, Scullery and Bedroom 5, a follow-up
+    for Sitting alone replaced it, and those five cooled rooms fell out of the room model (the next round asked them
+    again, then lost them again). Earlier answers count only when they were asked at the same plan scale and level as
+    the current question; a room a later answer was asked about takes that answer (found or not found)."""
+    if current_record.get("status") not in {"applied", "below_accuracy_bar"} and not current_record.get("packet"):
+        return []
+    current_packet = current_record.get("packet") or {}
+    same_basis = lambda packet: (packet.get("page") == current_packet.get("page")
+                                 and packet.get("mm_per_image_px") == current_packet.get("mm_per_image_px")
+                                 and packet.get("level_name") == current_packet.get("level_name"))
+    records = []
+    for path in sorted(Path(target_dir).glob("runs/*/record.json")):
+        record = _read(path, {})
+        if record.get("run_id") == current_record.get("run_id"):
+            record = current_record
+        if record.get("task", "P0_room_sizes") != "P0_room_sizes" or not same_basis(record.get("packet") or {}):
+            continue
+        records.append(record)
+    if not any(row.get("run_id") == current_record.get("run_id") for row in records):
+        records.append(current_record)
+    records.sort(key=lambda row: (str(row.get("created_at", "")), str(row.get("run_id", ""))))
+    by_room = {}
+    for record in records:
+        if record.get("status") not in {"applied", "below_accuracy_bar"}:
+            continue
+        for name in (record.get("packet") or {}).get("room_names", []):
+            by_room.pop(str(name).casefold(), None)
+        for area in (record.get("applied_value") or {}).get("rooms", []):
+            if isinstance(area, dict) and area.get("label"):
+                by_room[str(area["label"]).casefold()] = (record, area)
+    return list(by_room.values())
 
 
 def area_only_may_replace(previous, area_source):

@@ -1283,6 +1283,51 @@ def _cached_inferred_room_data(root, input_signature):
     return rooms
 
 
+_SETTLED_STYLE = {"applied", "below_accuracy_bar"}
+
+
+def _page_wall_style_ids(root, page, records=None):
+    """(wall style ids, borrowed) for one plan page: the styles the wall-style task chose on it, or, when that task
+    answered and chose none, the styles the same drawing set's other floor plans chose that this page also draws.
+
+    The plans of one set are drawn with the same pens, so a wall pen on the first floor and basement is a wall pen on
+    the ground floor too. On the Turramurra house (2026-11-18) the task chose no wall style on the ground-floor plan
+    although it chose the same heavy wall line (style-9b1117bacc, 1,722 m drawn on that sheet) on the other two; with
+    no walls the plan's room naming was blocked, no open-plan outline was ever asked, and Kitchen, Entry, Media, Scullery
+    and Bedroom 5 had no outline. Borrowed styles only give the naming and outline steps walls to work with; their
+    areas are still named and checked by those steps. borrowed is [{"style_id", "pages"}] (empty when nothing was
+    borrowed)."""
+    records = _p0_wall_style_records(root, page) if records is None else records
+    chosen = sorted({style_id for row in records for style_id in (row.get("applied_value") or {}).get("wall_style_ids", [])})
+    if chosen or not records or any(row.get("status") not in _SETTLED_STYLE for row in records):
+        return chosen, []
+    present = {row["style_id"] for row in _p0_context(root, page)["summary"] if not row.get("hatch")}
+    votes = {}
+    for plan in _p0_main_geometry_pages(root):
+        other = plan.get("page")
+        if other == page:
+            continue
+        try:
+            other_records = _p0_wall_style_records(root, other)
+        except PACKET_ERRORS:
+            continue
+        if not other_records or any(row.get("status") not in _SETTLED_STYLE for row in other_records):
+            continue
+        for style_id in {value for row in other_records for value in (row.get("applied_value") or {}).get("wall_style_ids", [])}:
+            if style_id in present:
+                votes.setdefault(style_id, set()).add(other)
+    borrowed = [{"style_id": style_id, "pages": sorted(pages)} for style_id, pages in sorted(votes.items())]
+    return sorted(votes), borrowed
+
+
+def _borrowed_styles_note(page, borrowed):
+    pages = sorted({number for row in borrowed for number in row["pages"]})
+    return (f"The wall-style check chose no wall line on plan page {page}; the wall lines chosen on the same set's other "
+            f"floor plan{'s' if len(pages) > 1 else ''} (page{'s' if len(pages) > 1 else ''} "
+            f"{', '.join(map(str, pages))}), which this plan also draws, were used to find its rooms (labelled assumption: "
+            "one drawing set uses the same wall pens on every floor plan).")
+
+
 def _p0_followup_packets(root):
     result = []
     pages = _p0_main_geometry_pages(root)
@@ -1295,12 +1340,13 @@ def _p0_followup_packets(root):
             if not calibration:
                 continue  # Dimension tasks remain available; geometry waits for the required calibration.
             raster_mode = _p0_is_raster(root, number, context, calibration)
+            borrowed_styles = []
             if raster_mode:
                 wall_style_ids = []
             else:
                 if not styles or any(style.get("status") not in {"applied", "below_accuracy_bar"} for style in styles):
                     continue
-                wall_style_ids = sorted({style_id for style in styles for style_id in style["applied_value"].get("wall_style_ids", [])})
+                wall_style_ids, borrowed_styles = _page_wall_style_ids(root, number, styles)
                 if not wall_style_ids:
                     result.append(("P0_room_names", f"page-{number}", {"task":"P0_room_names", "page":number}, "", [],
                                    "No wall styles were identified across the complete legend; enclosed-room naming is unavailable."))
@@ -1323,7 +1369,10 @@ def _p0_followup_packets(root):
                              **({"note_only_rooms": notes} if notes else {}),
                              "transform":transform, "calibration":calibration, "areas_px": [list(poly.exterior.coords) for poly in areas],
                              "wall_style_ids":wall_style_ids, "raster_mode":raster_mode,
-                             **({"wall_styles_added": added_styles} if not raster_mode and added_styles else {})}
+                             **({"wall_styles_added": added_styles} if not raster_mode and added_styles else {}),
+                             **({"wall_styles_borrowed": borrowed_styles,
+                                 "wall_styles_note": _borrowed_styles_note(number, borrowed_styles)}
+                                if not raster_mode and borrowed_styles else {})}
             result.append(("P0_room_names", f"page-{number}", naming_packet,
                            room_outline.room_naming_prompt(room_names, len(areas), notes, dwelling=dwelling), [_png_bytes(image)], ""))
         except PACKET_ERRORS as error:
@@ -1454,7 +1503,18 @@ def _p0_outline_packets(root, requested_rooms=None):
         if not requested_rooms and _tenancy_waiting(root, number):
             continue      # its outlines are clipped to the tenancy once that is answered
         names_record = _current_task(root, "P0_room_names", f"page-{number}")
-        if names_record and names_record.get("status") not in {"applied", "below_accuracy_bar"}: continue
+        plan_rooms = _inferred_rooms_for_plan(root, number)
+        page_requested = None
+        if requested_rooms:
+            # Only the requested rooms this plan shows: the Phase 1 check asked the first-floor and basement plans to
+            # outline the ground floor's Kitchen (Turramurra, 2026-11-18) because the ground floor had no packet.
+            on_plan = {str(row["label"]).casefold() for row in plan_rooms}
+            on_plan.update(str(name).casefold() for name in ((names_record or {}).get("packet") or {}).get("room_names", []))
+            if dwelling:
+                on_plan.update(name.casefold() for name in _reading_room_names(root, number))
+            page_requested = [name for name in requested_rooms if str(name).casefold() in on_plan]
+            if not page_requested:
+                continue
         wall_records = _p0_wall_style_records(root, number)
         try:
             context = _p0_context(root, number)
@@ -1462,21 +1522,26 @@ def _p0_outline_packets(root, requested_rooms=None):
             if not calibration:
                 continue
             raster_mode = _p0_is_raster(root, number, context, calibration)
+            borrowed_styles = []
             if raster_mode:
                 wall_style_ids = []
             else:
                 if (not wall_records or
                         any(row.get("status") not in {"applied", "below_accuracy_bar"} for row in wall_records)):
                     continue
-                wall_style_ids = sorted({style_id for row in wall_records
-                                         for style_id in row.get("applied_value", {}).get("wall_style_ids", [])})
-                if not wall_style_ids:
-                    continue
-                wall_style_ids, _added = _completed_wall_styles(root, number, context, calibration, wall_style_ids)
-            _walls, areas, _segments = _p0_walls_areas(root, number, context, calibration,
-                                                        wall_style_ids, raster_mode)
-            _room_names, missing = _p0_outline_room_names(root, names_record, len(areas), requested_rooms,
-                inferred_rooms=_inferred_rooms_for_plan(root, number), dwelling=dwelling)
+                wall_style_ids, borrowed_styles = _page_wall_style_ids(root, number, wall_records)
+                if wall_style_ids:
+                    wall_style_ids, _added = _completed_wall_styles(root, number, context, calibration, wall_style_ids)
+            names_blocked = bool(names_record) and names_record.get("status") not in {"applied", "below_accuracy_bar"}
+            if names_blocked and not (names_record.get("status") == "blocked" and not wall_style_ids and not raster_mode):
+                continue    # the naming question is still open: the open-plan outlines follow its answer
+            if names_blocked:
+                # No wall line at all on this plan (not even one its sibling plans use): its naming can't be asked, so
+                # every room on it is asked as an open-plan outline rather than left with no outline.
+                names_record = None
+            _walls, areas, _segments = _p0_walls_areas(root, number, context, calibration, wall_style_ids, raster_mode)
+            _room_names, missing = _p0_outline_room_names(root, names_record, len(areas), page_requested,
+                inferred_rooms=plan_rooms, dwelling=dwelling)
             if not missing:
                 continue
             image, transform = room_outline.render_candidate_areas(context["image"], [], context["viewport"])
@@ -1486,7 +1551,9 @@ def _p0_outline_packets(root, requested_rooms=None):
             packet = {"task":"P0_room_outlines", "page":number, **({"dwelling":True} if dwelling else {}), "room_names":missing, "transform":transform,
                       "on_page_text": _p0_page_room_text(root, number),
                       "calibration":calibration, "wall_style_ids":wall_style_ids, "raster_mode":raster_mode,
-                      "name_sheets":references, **({"note_only_rooms": notes} if notes else {})}
+                      "name_sheets":references, **({"note_only_rooms": notes} if notes else {}),
+                      **({"wall_styles_borrowed": borrowed_styles,
+                          "wall_styles_note": _borrowed_styles_note(number, borrowed_styles)} if borrowed_styles else {})}
             result.append(("P0_room_outlines", f"page-{number}", packet, prompt,
                            [_png_bytes(image), *reference_images], ""))
         except PACKET_ERRORS as error:
@@ -1661,8 +1728,7 @@ def _p0_corner_packets(root, force=False):
             if not calibration or _p0_is_raster(root, number, context, calibration):
                 continue            # an image-only plan has no drawn corners; its sketches stay
             mm_per_px = float(context.get("declared_mm_per_px") or calibration["mm_per_px"])
-            wall_style_ids = sorted({style_id for row in _p0_wall_style_records(root, number)
-                                     for style_id in row.get("applied_value", {}).get("wall_style_ids", [])})
+            wall_style_ids, _borrowed = _page_wall_style_ids(root, number)
             if wall_style_ids:
                 wall_style_ids, _added = _completed_wall_styles(root, number, context, calibration, wall_style_ids)
         except PACKET_ERRORS as error:
@@ -2331,8 +2397,7 @@ def _edge_wall_coverage(root, page, traces):
     it looks onto more drawn building}}} from the page's chosen wall styles; empty when the wall styles or page
     geometry aren't available (raster pages, no wall-style answer)."""
     try:
-        records = _p0_wall_style_records(root, page)
-        style_ids = sorted({style_id for row in records for style_id in (row.get("applied_value") or {}).get("wall_style_ids", [])})
+        style_ids, _borrowed = _page_wall_style_ids(root, page)
         if not style_ids:
             return {}
         segments = room_outline.drawn_segments(_p0_context(root, page)["objects"], style_ids)
@@ -3389,8 +3454,7 @@ def _apply_p0_unnamed_space(web, project, root, record, validated, *, defer=Fals
     context = _p0_context(root, page)
     try:    # the drawn lines the outline snaps to, as for the open-plan outlines
         raster_mode = _p0_is_raster(root, page, context, calibration)
-        wall_style_ids = [] if raster_mode else sorted({style_id for row in _p0_wall_style_records(root, page)
-                                                        for style_id in row.get("applied_value", {}).get("wall_style_ids", [])})
+        wall_style_ids = [] if raster_mode else _page_wall_style_ids(root, page)[0]
         if wall_style_ids:
             wall_style_ids, _added = _completed_wall_styles(root, page, context, calibration, wall_style_ids)
         _walls, _areas, segments = _p0_walls_areas(root, page, context, calibration, wall_style_ids, raster_mode)

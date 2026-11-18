@@ -89,8 +89,13 @@ def options(web, project):
     from backend.job_runner import read_json
     observed_walls = construction_u_values.plan_wall_legend(
         read_json(root / "spatial_ocr.json"), read_json(root / "page_inventory.json"))
+    from backend import house_windows_service
+    try:
+        dwelling = house_windows_service.is_dwelling(root)
+    except (OSError, ValueError, TypeError, KeyError):
+        dwelling = False
     return {"kinds": [{"id": key, "label": label, "applied": key in APPLIED_KINDS, "unit": APPLIED_KINDS.get(key, {}).get("unit", "")}
-                      for key, label in KINDS.items()],
+                      for key, label in KINDS.items() if not (dwelling and key == "roof_above")],
             "rooms": [{"label": label, "level": level} for label, level in room_rows],
             "equipment": equipment,
             "above": [{"id": key, "label": label} for key, label in job_service.ABOVE_CHOICES.items() if key],
@@ -153,6 +158,10 @@ def apply(web, project, data):
         return {"applied": False, "summary": f"Kept as a note ({KINDS[kind].lower()}); not used by the calculation yet."}
     found = options(web, project)
     if kind == "roof_above":
+        from backend import house_windows_service
+        if house_windows_service.is_dwelling(Path(project["review_dir"])):
+            return {"applied": False, "summary": "Not used: in a house what is above each room follows from its level "
+                                                 "(the top floor is under the roof, a lower floor under the floor above)."}
         choice = str(data.get("value") or "")
         if choice not in {row["id"] for row in found["above"]}:
             raise ValueError("Choose what is above the tenancy.")
