@@ -261,6 +261,44 @@ body.job-preview {
 .job-stage.waiting {
   color: var(--ink-3);
 }
+/* Finished with work left for the person (unsent questions, gaps left at a limit): never the done tick. */
+.job-stage.attention .job-stage-icon {
+  background: var(--needs);
+  border-color: var(--needs-ink);
+  color: var(--needs-ink);
+  font-weight: 700;
+}
+.job-stage-flag {
+  display: inline-block;
+  margin: 2px 0;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--needs);
+  color: var(--needs-ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+.job-stage-details {
+  margin: 6px 0;
+  font-size: 13px;
+}
+.job-stage-details > summary {
+  cursor: pointer;
+  min-height: 32px;
+  padding: 6px 0;
+  color: var(--ink-2);
+}
+.job-stage-details > summary:focus-visible {
+  outline: 2px solid var(--action);
+  outline-offset: 2px;
+}
+.job-stage-details ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+.job-stage [data-next-step] {
+  margin-top: 8px;
+}
 .job-stage strong {
   display: block;
   font-weight: 700;

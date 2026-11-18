@@ -47,6 +47,8 @@ _JOB = BackgroundJob(JOB_FILE, STEPS, "archie-drawing-tasks",
 # What each drawing task is doing, in the words the Drawings screen shows.
 TASK_LABELS = {
     "P0_dimensions": "Reading the scale from a printed dimension",
+    "P0_scale_read": "Reading the printed scale",
+    "P0_scale_objects": "Estimating the scale from standard objects",
     "P0_wall_styles": "Telling the wall styles apart",
     "P0_room_names": "Finding the room names",
     "P0_room_outlines": "Tracing the room outlines",
@@ -76,13 +78,22 @@ def _seconds_since(stamp):
         return None
 
 
+def _not_needed_row(row, task_records):
+    """A drawing question that wasn't needed, in the screen's words. A way of finding the scale that gave nothing
+    usable is a fallback (the next way is used), not "not needed"; its reason is a plain sentence, never the checker's
+    instruction to the AI (records saved before 2026-11-18 have that in block_reason)."""
+    fallback = row["task"] in task_records.SCALE_FALLBACK_TASKS and bool((row.get("applied_value") or {}).get("fallback_required"))
+    reason = task_records.scale_fallback_reason(row["task"], row.get("target")) if fallback else row.get("block_reason", "")
+    return {"task": row["task"], "target": row["target"], "status": "not_needed", "fallback": fallback,
+            "label": TASK_LABELS.get(row["task"], "Drawing check"), "reason": reason}
+
+
 def status(web, project):
     job = _JOB.status(project)
     # A supervisor or manual reply may have repaired a task since this job finished.
     # Reconcile the response only; retain the original run's failure history on disk.
     from backend import autonomous_tasks_service as task_records
-    job["not_needed_tasks"] = [{"task": row["task"], "target": row["target"], "status": "not_needed",
-                                "label": TASK_LABELS.get(row["task"], "Drawing check"), "reason": row.get("block_reason", "")}
+    job["not_needed_tasks"] = [_not_needed_row(row, task_records)
                                for row in task_records._all_current(Path(project["review_dir"])) if row.get("status") == "not_needed"]
     job["not_answered_tasks"] = [{"task": row["task"], "target": row["target"], "status": "not_answered",
                                   "label": TASK_LABELS.get(row["task"], "Drawing check"),

@@ -1756,3 +1756,88 @@ test("room occupants show the seating source and fallback rationale", async ({ p
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: "test-results/room-seating-mobile.png", fullPage: true });
 });
+
+// Turramurra (2026-11-18): stage honesty on the Drawings screen.
+async function finishedStages(page) {
+  await page.route("**/api/page-reading**", (route) =>
+    route.fulfill({ json: { status: "done", step_state: "done", pages_read: 38, page_count: 38 } }));
+  await page.route("**/api/page-extraction**", (route) =>
+    route.fulfill({ json: { status: "done", step_state: "done", findings: [] } }));
+  await page.route("**/api/job-calculation**", (route) => route.fulfill({ json: {
+    status: "waiting", step_state: "waiting", readiness: { ready: false, reasons: ["Waiting for drawing review."] } } }));
+}
+
+test("a model check stopped at its cycle limit is not ticked, groups its gaps and says what changed", async ({ page }) => {
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await preview(page, { status: { stage: "drawings" } });
+  await finishedStages(page);
+  await page.route("**/api/drawing-tasks**", (route) => route.fulfill({ json: { status: "done", step_state: "done", answered: 45 } }));
+  await page.route("**/api/skill-workflow**", (route) => route.fulfill({ json: { status: "needs_review", step_state: "done" } }));
+  const gap = (room, kind, message, pages) => ({ room, kind, message, pages, attempts: 2 });
+  await page.route("**/api/phase1-supervisor**", (route) => route.fulfill({ json: {
+    status: "done", step_state: "done", outcome: "partial_draft", stop_reason: "cycle_limit", stopped_at_limit: true,
+    cycle: 3, max_cycles: 3, gaps_found: 56, gaps_fixed: 9, gaps_remaining: 5, spend: { cost_usd: 0.0514 },
+    area_changes: [{ room: "Store", before_m2: 7.8, after_m2: 5.8 }],
+    exceptions: [
+      gap("Storage", "roof", "Check what is above Storage; its roof or ceiling exposure is unknown or assumed.", [9, 25]),
+      gap("Storage", "roof", "Check what is above Storage; its roof or ceiling exposure is unknown or assumed.", [1, 2]),
+      gap("Storage", "unknown_walls", "Check what is on the other side of Storage's unknown walls.", [9, 25]),
+      gap("Store", "room_use", "Check how Store is used.", [25]),
+      gap("Kitchen", "room_area", "Check Kitchen's outline and area.", [8]),
+    ],
+  } }));
+  await page.goto("/?preview=1#/job/job-1/drawings");
+  const stage = page.locator('[data-stage="supervisor"]');
+  await expect(stage).toHaveClass(/attention/);
+  await expect(stage).not.toHaveClass(/done/);
+  await expect(stage.locator(".job-stage-icon")).toHaveText("!");
+  await expect(stage).toContainText("stopped at its limit of 3 investigation cycles with 4 gaps still open");
+  await expect(stage).not.toContainText("The model checks are finished");
+  await expect(stage.locator("[data-next-step]")).toHaveAttribute("href", "#/job/job-1/fix");
+  await expect(stage.locator("[data-area-changes]")).toHaveText("Store area updated 7.8 → 5.8 m² by the model check.");
+  const details = stage.locator("[data-supervisor-exceptions]");
+  await expect(details.locator("summary")).toHaveText("4 gaps left in 3 rooms");
+  await expect(details.locator("li")).toHaveCount(3);
+  await expect(details.locator("li").first()).toHaveText("Storage: what is above; what its unknown walls face (pages 1, 2, 9, 25)");
+  await expect(details.locator("li").first()).toBeHidden();
+  await details.locator("summary").click();
+  await expect(details.locator("li").first()).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: "test-results/supervisor-cycle-limit-mobile.png", fullPage: true });
+  expect(errors).toEqual([]);
+});
+
+test("traced rooms with a question waiting to be sent need action, and a scale fallback reads plainly", async ({ page }) => {
+  await preview(page, { status: { stage: "drawings" } });
+  await finishedStages(page);
+  await page.route("**/api/drawing-tasks**", (route) => route.fulfill({ json: {
+    status: "done", step_state: "done", answered: 45, waiting_tasks: 1,
+    recovery: { action: "resume", label: "Check and resume", reason: "1 drawing question added after the last run is waiting to be sent." },
+    not_needed_tasks: [{ task: "P0_scale_read", target: "page-9", status: "not_needed", fallback: true,
+      label: "Reading the printed scale", reason: "No readable scale on page 9; the scale is found another way." }],
+  } }));
+  await page.route("**/api/skill-workflow**", (route) => route.fulfill({ json: { status: "needs_review", step_state: "done" } }));
+  await page.goto("/?preview=1#/job/job-1/drawings");
+  const stage = page.locator('[data-stage="rooms"]');
+  await expect(stage).toHaveClass(/attention/);
+  await expect(stage.locator(".job-stage-icon")).not.toHaveText("✓");
+  await expect(stage.getByRole("button", { name: "Check and resume" })).toBeEnabled();
+  await expect(stage.locator("[data-task-not-needed]")).toHaveText("Reading the printed scale: No readable scale on page 9; the scale is found another way.");
+  await expect(stage).not.toContainText("Not usable");
+  await expect(page.locator(".job-status")).toContainText("waiting to be sent");
+});
+
+test("out-of-date skill answers count as finished, with the earlier answers kept", async ({ page }) => {
+  await preview(page, { status: { stage: "drawings" } });
+  await finishedStages(page);
+  await page.route("**/api/drawing-tasks**", (route) => route.fulfill({ json: { status: "done", step_state: "done", answered: 45 } }));
+  const skill = (id) => ({ id, label: id, parent_label: "Drawing set", status: "stale", summary: {} });
+  await page.route("**/api/skill-workflow**", (route) => route.fulfill({ json: {
+    status: "stale", step_state: "waiting", recovery: { action: "resume", label: "Try again" },
+    subskills: ["sheet_identity", "revision_scope", "page_relationships", "site_clue_extraction", "address_confirmation", "room_identity_use"].map(skill),
+  } }));
+  await page.goto("/?preview=1#/job/job-1/drawings");
+  await expect(page.locator("[data-ai-activity]")).toContainText("Skill tasks: 6 of 6 finished · earlier answers kept, out of date");
+});

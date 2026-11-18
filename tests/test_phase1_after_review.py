@@ -104,36 +104,97 @@ class Phase1AfterReviewTests(unittest.TestCase):
 
 
 class TakeInDownstreamTests(unittest.TestCase):
-    """Calculating Phase 1 rewrites the review's dependency files from its own results; that must not make it stale."""
+    """Later steps rebuild the review's dependency files from its own results; that must not make it stale. Only what
+    the run's skills read counts, and only a real change to it (or to their instructions)."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.project = {"id": "p2", "review_dir": self.tmp.name}
-        (self.root / "room_use_resolution.json").write_text(json.dumps({"records": ["before"]}))
+        self.write("room_use_resolution.json", {"records": [{"room_id": "r-store", "taxonomy_id": "store"}]})
+        self.write("site_location_resolution.json", {"status": "proposed", "address": "139A Burns Road"})
+        self.write("geometry_resolution.json", {"room_geometry_proofs": [{"room_id": "r-store", "area_m2": 7.8}]})
+        proposals = self.root / "skill_workflow_runs" / "r1" / "proposals"
+        proposals.mkdir(parents=True)
+        for skill, names in {"room_identity_use": ["room_use_resolution.json"],
+                             "address_confirmation": ["site_location_resolution.json"],
+                             "sheet_identity": ["drawing_coverage.json"]}.items():
+            (proposals / f"{skill}.json").write_text(json.dumps({"evidence_artifact_names": names}))
         manifest = {"run_id": "r1", "scope": "phase1_envelope", "status": "needs_review",
-                    "dependency_fingerprints": service._derived_dependency_fingerprints(service._project_paths(self.project))}
-        (self.root / "skill_workflow_run.json").write_text(json.dumps(manifest))
+                    "subskills": {"room_identity_use": {"status": "needs_review"}, "address_confirmation": {"status": "needs_review"},
+                                  "sheet_identity": {"status": "needs_review"}, "surface_area": {"status": "not_in_scope"}}}
+        service._record_dependencies(service._project_paths(self.project), manifest)
+        self.write("skill_workflow_run.json", manifest)
+
+    def write(self, name, value):
+        (self.root / name).write_text(json.dumps(value))
 
     def stale(self):
         manifest = json.loads((self.root / "skill_workflow_run.json").read_text())
-        return manifest["dependency_fingerprints"] != service._derived_dependency_fingerprints(service._project_paths(self.project))
+        return bool(service._dependency_changes(service._project_paths(self.project), manifest)
+                    or service._instruction_changes(manifest))
 
-    def test_a_calculation_of_this_run_keeps_the_review_current_and_a_later_change_still_counts(self):
-        (self.root / "room_use_resolution.json").write_text(json.dumps({"records": ["rebuilt by the calculation"]}))
+    def test_only_the_files_the_skills_read_are_fingerprinted(self):
+        manifest = json.loads((self.root / "skill_workflow_run.json").read_text())
+        self.assertEqual(sorted(manifest["dependency_fingerprints"]), ["room_use_resolution.json", "site_location_resolution.json"])
+        self.assertEqual(manifest["dependency_basis"], service.DEPENDENCY_BASIS)
+        self.assertEqual(sorted(manifest["instruction_fingerprints"]), ["address_confirmation", "room_identity_use", "sheet_identity"])
+
+    def test_a_later_step_rewriting_geometry_or_rebuilding_room_uses_keeps_the_review_current(self):
+        # Turramurra (2026-11-18): the empty-room check rewrote geometry_resolution.json and the review went stale.
+        self.write("geometry_resolution.json", {"room_geometry_proofs": [{"room_id": "r-store", "area_m2": 5.8}]})
+        self.write("room_use_resolution.json", {"records": [{"room_id": "r-store", "taxonomy_id": "store", "status": "rebuilt"}]})
+        self.write("model_input_resolution.json", {"records": ["rebuilt by the calculation"]})
+        self.assertFalse(self.stale())
+
+    def test_a_typed_override_or_a_changed_consumed_file_still_counts(self):
+        self.write("room_use_resolution.json", {"records": [{"room_id": "r-store", "override": {"taxonomy_id": "office"}}]})
         self.assertTrue(self.stale())
         self.assertTrue(service.take_in_downstream(self.project, "r1"))
         self.assertFalse(self.stale())
-        (self.root / "room_use_resolution.json").write_text(json.dumps({"records": ["changed later"]}))
+        self.write("site_location_resolution.json", {"status": "confirmed", "address": "141 Burns Road"})
+        self.assertTrue(self.stale())
+
+    def test_a_changed_skill_instruction_makes_it_stale(self):
+        manifest = json.loads((self.root / "skill_workflow_run.json").read_text())
+        manifest["instruction_fingerprints"]["room_identity_use"] = "an older instruction"
+        self.write("skill_workflow_run.json", manifest)
+        self.assertTrue(self.stale())
+
+    def test_the_status_reports_stale_only_for_real_changes(self):
+        class Web:
+            def safe_link(self, path):
+                return str(path)
+        self.write("vision_extraction_settings.json", {"owner_opt_in": True})
+        with patch.object(service, "_orphaned", return_value=False):
+            self.write("geometry_resolution.json", {"room_geometry_proofs": []})
+            self.assertEqual(service._response(Web(), self.project)["status"], "needs_review")
+            self.write("site_location_resolution.json", {"status": "confirmed"})
+            reply = service._response(Web(), self.project)
+        self.assertEqual(reply["status"], "stale")
+        self.assertIn("site_location_resolution.json", " ".join(reply.get("stale_reasons", [])))
+
+    def test_a_run_saved_with_the_old_seventeen_file_fingerprints_ignores_files_its_skills_did_not_read(self):
+        manifest = json.loads((self.root / "skill_workflow_run.json").read_text())
+        manifest.pop("dependency_basis")
+        manifest.pop("instruction_fingerprints")
+        manifest["dependency_fingerprints"] = {name: service._fingerprint(service._read(self.root / name, {}))
+                                               for name in service._DOMAIN_ARTIFACTS}
+        self.write("skill_workflow_run.json", manifest)
+        self.write("geometry_resolution.json", {"room_geometry_proofs": []})
+        self.write("room_use_resolution.json", {"records": ["rebuilt"]})
+        self.assertFalse(self.stale())
+        self.write("site_location_resolution.json", {"status": "confirmed"})
         self.assertTrue(self.stale())
 
     def test_another_run_or_an_unfinished_one_is_left_alone(self):
-        (self.root / "room_use_resolution.json").write_text(json.dumps({"records": ["rebuilt"]}))
+        self.write("site_location_resolution.json", {"status": "changed"})
         self.assertFalse(service.take_in_downstream(self.project, "r0"))
         manifest = json.loads((self.root / "skill_workflow_run.json").read_text())
-        (self.root / "skill_workflow_run.json").write_text(json.dumps({**manifest, "status": "running"}))
+        self.write("skill_workflow_run.json", {**manifest, "status": "running"})
         self.assertFalse(service.take_in_downstream(self.project, "r1"))
+        self.write("skill_workflow_run.json", manifest)
         self.assertTrue(self.stale())
 
 

@@ -285,6 +285,20 @@ class DrawingTaskTests(unittest.TestCase):
             self.assertTrue(all(json.loads(path.read_text())["raw_reply"] == "[]" for path in archives))
             self.assertTrue(all(call.args[2]["action"] == "run_all" for call in publish.call_args_list))
 
+    def test_a_scale_fallback_is_listed_in_plain_words_even_from_an_older_record(self):
+        old = {"task": "P0_scale_read", "target": "page-9", "status": "not_needed", "applied_value": {"fallback_required": True},
+               "block_reason": "Not usable (Return a readable scale notation or scale bar, or null so the standard-object "
+                               "estimate can be used.); the next way of finding the scale is used."}
+        withdrawn = {"task": "P0_tenancy_outline", "target": "page-20", "status": "not_needed", "block_reason": "Every room has an outline."}
+        with tempfile.TemporaryDirectory() as folder:
+            with patch.object(drawing._JOB, "status", return_value={"status": "done"}), \
+                    patch.object(tasks_service, "_all_current", return_value=[old, withdrawn]):
+                rows = drawing.status(None, {"id": "j", "review_dir": folder})["not_needed_tasks"]
+        self.assertEqual(rows[0], {"task": "P0_scale_read", "target": "page-9", "status": "not_needed", "fallback": True,
+                                   "label": "Reading the printed scale",
+                                   "reason": "No readable scale on page 9; the scale is found another way."})
+        self.assertEqual((rows[1]["fallback"], rows[1]["reason"]), (False, "Every room has an outline."))
+
     def test_status_reconciles_later_repairs_without_rewriting_history(self):
         from copy import deepcopy
         with tempfile.TemporaryDirectory() as folder:
