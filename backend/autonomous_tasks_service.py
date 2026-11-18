@@ -107,7 +107,8 @@ def _status_for_accuracy(source, accuracy):
 
 def _site_packet(root):
     ai_input, spatial, building = _load_inputs(root)
-    packet, prompt = autonomous_tasks.build_site_packet(ai_input, spatial, building)
+    page_inventory = _read(root / "page_inventory.json", {})
+    packet, prompt = autonomous_tasks.build_site_packet(ai_input, spatial, building, page_inventory)
     return packet, prompt, {"ai_input": ai_input, "spatial_ocr": spatial, "building_evidence": building}
 
 

@@ -1747,7 +1747,10 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                           if facing_unknown else
                           _surface_sun(site_sun, scenario_set, tilt, bearing, wall_shade, wall_height, wall_obstruction))
             solar_peak = max((value for hours in hourly_sun.values() for value in hours), default=0.0)
-        if solar_peak:
+        # A glazing-only host contributes no opaque area to the model. Its
+        # windows receive their own solar schedules below, so do not create an
+        # orphan wall schedule for the host.
+        if solar_peak and not glazing_only:
             operating = _sun_schedule(profile_id)
             values = (operating if hourly_sun else [round(operating[hour] * solar_profile[hour] / solar_peak, 6) for hour in range(24)])
             schedules.append(_schedule_with_values(solar_schedule_id, f"Preliminary {orientation or 'averaged'} façade solar profile", values, _source(f"solar-{orientation or 'averaged'}")))

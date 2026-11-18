@@ -404,7 +404,8 @@ def _hydrate_preliminary_artifacts(web, project, paths, input_set):
         except (ValueError, TypeError, KeyError, OSError) as error:
             item.update({"status": "missing", "can_hydrate": False,
                          "remediation": f"{remediation} The draft input set is not complete for this artifact."})
-            item["message"] = "Materialized preliminary content is incomplete for this artifact."
+            item["validation_error"] = str(error)
+            item["message"] = f"Could not materialize {key.replace('_', ' ')}: {error}"
             missing.append(item)
         hydrated.append(item)
     if any(item.get("hydrated") for item in hydrated):
@@ -523,6 +524,7 @@ def _build(web, project):
         ) from error
     register["required_artifacts"] = hydrated
     register["missing_artifacts"] = [item["key"] for item in missing]
+    register["artifact_errors"] = {item["key"]: item["validation_error"] for item in missing if item.get("validation_error")}
     _write(paths["register"], register)
     return register, current
 
