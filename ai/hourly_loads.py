@@ -530,7 +530,7 @@ def validate_room(raw, index):
             raise ValueError(f"Room {room_id} heat-source ID '{heat_source['source_id']}' is duplicated.")
         source_ids.add(heat_source["source_id"])
         sources.append(heat_source)
-    assignments = validate_assignments(raw.get("schedule_assignments", {}), room_id, source_ids, cooling, raw.get("unapproved_components"))
+    assignments = validate_assignments(raw.get("schedule_assignments", {}), room_id, source_ids, cooling, raw.get("unapproved_components"), name)
     components = validate_room_components(raw.get("unapproved_components"), room_id)
     return {
         "room_id": room_id,
@@ -726,7 +726,8 @@ def validate_hourly_heat_source(raw, room_id, index):
     return result
 
 
-def validate_assignments(raw, room_id, source_ids, cooling, raw_components=None):
+def validate_assignments(raw, room_id, source_ids, cooling, raw_components=None, room_name=""):
+    room_label = room_name or room_id
     if not isinstance(raw, dict):
         raise ValueError(f"Room {room_id} schedule assignments must be an object.")
     for key in ("people", "lighting", "outside_air", "infiltration"):
@@ -740,21 +741,21 @@ def validate_assignments(raw, room_id, source_ids, cooling, raw_components=None)
         raise ValueError(f"Room {room_id} equipment, solar, moisture and airflow assignments must be objects.")
     unknown_equipment = set(equipment) - set(source_ids)
     if unknown_equipment:
-        raise ValueError(f"Room {room_id} assigns schedules to unknown heat sources: {', '.join(sorted(unknown_equipment))}.")
+        raise ValueError(f"Room {room_label} assigns schedules to unknown heat sources: {', '.join(sorted(unknown_equipment))}.")
     surface_ids = {str(item.get("surface_id", "")) for item in cooling.get("envelope_surfaces", [])}
     surface_ids.update(str(item.get("surface_id", "")) for item in cooling.get("glazing_surfaces", []))
     unknown_solar = set(solar) - surface_ids
     if unknown_solar:
-        raise ValueError(f"Room {room_id} assigns schedules to unknown surfaces: {', '.join(sorted(unknown_solar))}.")
+        raise ValueError(f"Room {room_label} assigns schedules to unknown surfaces: {', '.join(sorted(unknown_solar))}.")
     components = default_room_components() if raw_components is None else raw_components
     moisture_ids = {item.get("component_id") for item in components if isinstance(item, dict)}
     unknown_moisture = set(moisture) - moisture_ids
     if unknown_moisture:
-        raise ValueError(f"Room {room_id} assigns schedules to unknown moisture components: {', '.join(sorted(unknown_moisture))}.")
+        raise ValueError(f"Room {room_label} assigns schedules to unknown moisture components: {', '.join(sorted(unknown_moisture))}.")
     airflow_ids = {item.get("component_id") for item in components if isinstance(item, dict) and item.get("component_type") == "transfer_air"}
     unknown_airflow = set(airflow) - airflow_ids
     if unknown_airflow:
-        raise ValueError(f"Room {room_id} assigns schedules to unknown room-airflow components: {', '.join(sorted(unknown_airflow))}.")
+        raise ValueError(f"Room {room_label} assigns schedules to unknown room-airflow components: {', '.join(sorted(unknown_airflow))}.")
     return {
         "people": raw.get("people", "").strip(),
         "lighting": raw.get("lighting", "").strip(),

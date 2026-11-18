@@ -769,7 +769,7 @@ def parse_json_reply(reply):
     return value
 
 
-def build_site_packet(ai_input, spatial_ocr, building_evidence):
+def build_site_packet(ai_input, spatial_ocr, building_evidence, page_inventory=None):
     context = site_location_resolution.infer_pdf_context(ai_input, spatial_ocr, building_evidence)
     excerpts = []
     for group in ("address_candidates", "site_name_candidates", "excluded_address_candidates"):
@@ -779,6 +779,17 @@ def build_site_packet(ai_input, spatial_ocr, building_evidence):
             if excerpt:
                 excerpts.append({"page": source.get("page"), "drawing_number": source.get("drawing_number", ""),
                                  "text": excerpt, "clue_type": group})
+    inventory_pages = (page_inventory or {}).get("pages", {})
+    inventory_rows = ((int(key) + 1 if str(key).isdigit() else None, row)
+                      for key, row in inventory_pages.items()) if isinstance(inventory_pages, dict) else ((None, row) for row in inventory_pages)
+    for inventory_page, page_row in inventory_rows:
+        if not isinstance(page_row, dict):
+            continue
+        page_number = page_row.get("page", inventory_page)
+        for fact in page_row.get("information", []):
+            if fact.get("kind") == "location_orientation" and fact.get("what"):
+                excerpts.append({"page": page_number, "drawing_number": page_row.get("drawing_number", ""),
+                                 "text": str(fact["what"]), "clue_type": "site_location_fact"})
     unique = {(row["page"], row["text"]): row for row in excerpts}
     excerpts = sorted(unique.values(), key=lambda row: (row["page"] or 0, row["clue_type"], row["text"]))
     candidates = []
@@ -811,7 +822,26 @@ def validate_site_reply(packet, reply):
         if not isinstance(site, dict) or site.get("kind") not in {"street_address", "tenancy_in_centre"}:
             raise ValueError("site must be null or an object with a supported kind.")
         text, page = str(site.get("text", "")).strip(), site.get("page")
-        if not text or type(page) is not int or not any(row.get("page") == page and text in row.get("text", "") for row in excerpts):
+        submitted_text = text
+        page_excerpts = [str(row.get("text", "")) for row in excerpts if row.get("page") == page]
+        site_facts = [str(row.get("text", "")) for row in excerpts if row.get("clue_type") == "site_location_fact"
+                      and row.get("text", "").casefold().startswith("site is")]
+        parcel_pattern = r"\bLot\s+\d+\s+(?:DP|SP)\s*\d+\b"
+        parcel = next((match.group(0) for excerpt in page_excerpts
+                       for match in re.finditer(parcel_pattern, excerpt, re.I)), "")
+        if not parcel:
+            address_core = re.sub(r"\s+Lot\s*$", "", text, flags=re.I).rstrip(" ,")
+            parcel = next((match.group(0) for excerpt in site_facts if address_core.casefold() in excerpt.casefold()
+                           for match in re.finditer(parcel_pattern, excerpt, re.I)), "")
+        if parcel and not re.search(r"\bLot\s+\d+\s+(?:DP|SP)\s*\d+\b", text, re.I):
+            text = re.sub(r"\s+Lot\s*$", "", text, flags=re.I).rstrip(" ,") + " " + parcel
+        else:
+            text = re.sub(r"\s+Lot\s*$", "", text, flags=re.I).rstrip(" ,")
+        site = {**site, "text": text}
+        page_evidence = " ".join(page_excerpts)
+        cited_text = any(row.get("page") == page and submitted_text in row.get("text", "") for row in excerpts)
+        parcel_is_cited = not parcel or parcel in page_evidence or any(parcel in excerpt for excerpt in site_facts)
+        if not text or type(page) is not int or not cited_text or not parcel_is_cited:
             raise ValueError("Site text must be an exact substring of a supplied excerpt on the cited page.")
     consultants = value.get("consultant_addresses", [])
     if not isinstance(consultants, list):

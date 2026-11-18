@@ -2672,7 +2672,15 @@ def _calculate_load(web, project, scope, persist):
     }
     missing = [label for label, path in required.items() if not path.exists()]
     if missing:
-        raise ValueError("Cannot calculate the preliminary load yet. Missing required artifacts: " + ", ".join(missing) + ".")
+        details = _read(paths["root"] / "model_input_resolution.json", {}).get("artifact_errors", {})
+        artifact_keys = {"project inputs": "design_requirements", "schedule library": "schedule_library",
+                         "design-day weather": "design_day_scenarios", "hourly load model": "hourly_load_model"}
+        explained = [f"{label}: {details[artifact_keys[label]]}" for label in missing
+                     if details.get(artifact_keys[label])]
+        message = "Cannot calculate the preliminary load yet. Missing required artifacts: " + ", ".join(missing)
+        if explained:
+            message += ". Validation details: " + "; ".join(explained)
+        raise ValueError(message + ".")
     candidates = []
     if scope == "phase1_base_room":
         candidates = room_scope_confirmation.candidates(input_set, _room_use_artifact(paths))
