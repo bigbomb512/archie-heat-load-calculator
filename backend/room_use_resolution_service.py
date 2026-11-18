@@ -114,77 +114,70 @@ def _gather_use_evidence(root):
     dwelling = _dwelling_context(root)["is_dwelling"] is True
     registered_types = ({"proposed_layout"}, {"reflected_ceiling_plan", "services_plan"}) if dwelling else ({"proposed_layout"}, set())
     room_words = {}
-    doc = None
+    doc = None                     # the PDF's page sizes and words, read once per PDF and page (pdf_page_text_cache)
     pdf_path = inputs.get("source_pdf") or inputs.get("source_files", {}).get("pdf")
     if pdf_path and Path(pdf_path).is_file():
-        import pdfplumber
+        from backend import pdf_page_text_cache
         try:
-            doc = pdfplumber.open(pdf_path)
+            doc = pdf_page_text_cache.PdfText(root, pdf_path)
         except (OSError, RuntimeError):
             pass
     located = {}
     registered_pages = {}
     def page_words(number):
-        sheet = doc.pages[number - 1]
-        return [{"text": word["text"], "bbox": [word["x0"], word["top"], word["x1"], word["bottom"]]}
-                for word in sheet.extract_words()]
-    try:
-        for page in sorted({trace.get("page") for _, trace, _ in polygons if isinstance(trace.get("page"), int)}):
-            system, saved = systems.get(page, {}), spatial.get(page, {})
-            width, height = system.get("image_width"), system.get("image_height")
-            words, sx, sy = [], None, None
-            if doc is not None and 0 < page <= len(doc.pages) and width and height:
-                sheet = doc.pages[page - 1]
-                sx, sy = width / sheet.width, height / sheet.height
-                words = [{"text": word["text"], "bbox": [word["x0"], word["top"], word["x1"], word["bottom"]]}
-                         for word in sheet.extract_words()]
-            elif width and height and saved.get("width") and saved.get("height"):
-                words = saved.get("word_samples", []) + saved.get("standalone_text_items", [])
-                sx, sy = width / saved["width"], height / saved["height"]
-            if not sx or not sy:
-                continue
-            local_words = [{**word, "source_page": page} for word in words]
-            if doc is not None:
-                for number, reading in sorted(inventory.items()):
-                    number = int(number)
-                    layout = reading.get("page_type") == "floor_plan" and reading.get("floor_plan_kind") in registered_types[0]
-                    if number == page or not 0 < number <= len(doc.pages) or not (layout or reading.get("page_type") in registered_types[1]):
-                        continue
-                    sheet = doc.pages[number - 1]
-                    if abs(sheet.width - doc.pages[page - 1].width) > 1 or abs(sheet.height - doc.pages[page - 1].height) > 1:
-                        continue
-                    source_words = page_words(number)
-                    registration = room_use_resolution.plan_text_translation(source_words, words)
-                    if not registration:
-                        continue
-                    registered_pages[(page, number)] = registration
-                    dx, dy = registration["dx_pt"], registration["dy_pt"]
-                    local_words.extend({"text": word["text"], "source_page": number,
-                        "bbox": [word["bbox"][0]+dx, word["bbox"][1]+dy, word["bbox"][2]+dx, word["bbox"][3]+dy]}
-                        for word in source_words)
-            for word in local_words:
-                bounds = word.get("bbox", [])
-                if len(bounds) != 4:
-                    continue
-                point = Point((bounds[0] + bounds[2]) * sx / 2, (bounds[1] + bounds[3]) * sy / 2)
-                hits = [(key, polygon.area) for key, trace, polygon in polygons if trace.get("page") == page and polygon.contains(point)]
-                # Nested enclosing tenancy outlines must not inherit the contents of their smaller room.
-                if not hits:
-                    continue
-                key = min(hits, key=lambda row: (row[1], row[0]))[0]
-                text = str(word.get("text", ""))
-                if dwelling:
-                    room_words.setdefault(key, []).append((word["source_page"], bounds[1], bounds[0], text))
-                for item in code_items.get(text.casefold(), []):
-                    located.setdefault(item["id"], set()).add(key)
-                if re.search(r"\b(wc|toilet|urinal|basin|counter|seating|desk|workstation|prep|pizza|dishwash)\b", text, re.I):
-                    add(key, text, word["source_page"], "text_inside_outline" if word["source_page"] == page else "registered_plan_text")
-                    if word["source_page"] != page:
-                        contexts[key].setdefault("registration", []).append({"page": word["source_page"], "target_page": page,
-                            **registered_pages[(page, word["source_page"])]})
-    finally:
+        return doc.words(number)
+    for page in sorted({trace.get("page") for _, trace, _ in polygons if isinstance(trace.get("page"), int)}):
+        system, saved = systems.get(page, {}), spatial.get(page, {})
+        width, height = system.get("image_width"), system.get("image_height")
+        words, sx, sy = [], None, None
+        if doc is not None and 0 < page <= doc.page_count and width and height:
+            sheet_width, sheet_height = doc.size(page)
+            sx, sy = width / sheet_width, height / sheet_height
+            words = page_words(page)
+        elif width and height and saved.get("width") and saved.get("height"):
+            words = saved.get("word_samples", []) + saved.get("standalone_text_items", [])
+            sx, sy = width / saved["width"], height / saved["height"]
+        if not sx or not sy:
+            continue
+        local_words = [{**word, "source_page": page} for word in words]
         if doc is not None:
-            doc.close()
+            for number, reading in sorted(inventory.items()):
+                number = int(number)
+                layout = reading.get("page_type") == "floor_plan" and reading.get("floor_plan_kind") in registered_types[0]
+                if number == page or not 0 < number <= doc.page_count or not (layout or reading.get("page_type") in registered_types[1]):
+                    continue
+                (sheet_width, sheet_height), (page_width, page_height) = doc.size(number), doc.size(page)
+                if abs(sheet_width - page_width) > 1 or abs(sheet_height - page_height) > 1:
+                    continue
+                source_words = page_words(number)
+                registration = room_use_resolution.plan_text_translation(source_words, words)
+                if not registration:
+                    continue
+                registered_pages[(page, number)] = registration
+                dx, dy = registration["dx_pt"], registration["dy_pt"]
+                local_words.extend({"text": word["text"], "source_page": number,
+                    "bbox": [word["bbox"][0]+dx, word["bbox"][1]+dy, word["bbox"][2]+dx, word["bbox"][3]+dy]}
+                    for word in source_words)
+        for word in local_words:
+            bounds = word.get("bbox", [])
+            if len(bounds) != 4:
+                continue
+            point = Point((bounds[0] + bounds[2]) * sx / 2, (bounds[1] + bounds[3]) * sy / 2)
+            hits = [(key, polygon.area) for key, trace, polygon in polygons if trace.get("page") == page and polygon.contains(point)]
+            # Nested enclosing tenancy outlines must not inherit the contents of their smaller room.
+            if not hits:
+                continue
+            key = min(hits, key=lambda row: (row[1], row[0]))[0]
+            text = str(word.get("text", ""))
+            if dwelling:
+                room_words.setdefault(key, []).append((word["source_page"], bounds[1], bounds[0], text))
+            for item in code_items.get(text.casefold(), []):
+                located.setdefault(item["id"], set()).add(key)
+            if re.search(r"\b(wc|toilet|urinal|basin|counter|seating|desk|workstation|prep|pizza|dishwash)\b", text, re.I):
+                add(key, text, word["source_page"], "text_inside_outline" if word["source_page"] == page else "registered_plan_text")
+                if word["source_page"] != page:
+                    contexts[key].setdefault("registration", []).append({"page": word["source_page"], "target_page": page,
+                        **registered_pages[(page, word["source_page"])]})
     for key, words in room_words.items():
         found = _air_conditioning_text(words)
         if found and key in contexts:

@@ -382,12 +382,20 @@ def trace_is_current(row, source_pdf_fingerprint, vector_page_fingerprint):
             and sources.get("vector_page") == vector_page_fingerprint)
 
 
-def active_records(artifact, source_pdf_fingerprint, vector_pages):
-    """Return only records whose PDF and page geometry have not changed."""
-    rows = []
+def vector_page_fingerprints(vector_pages):
+    """{page number: fingerprint of that page's vector geometry}, the value active_records checks traces against."""
     by_page = {row.get("page"): row for row in vector_pages if isinstance(row, dict)}
+    return {page: fingerprint(row) for page, row in by_page.items()}
+
+
+def active_records(artifact, source_pdf_fingerprint, vector_pages, page_fingerprints=None):
+    """Return only records whose PDF and page geometry have not changed. page_fingerprints, when given, is
+    vector_page_fingerprints(vector_pages) worked out beforehand (each page is then not fingerprinted per trace)."""
+    rows = []
+    if page_fingerprints is None:
+        page_fingerprints = vector_page_fingerprints(vector_pages)
+    missing = fingerprint({})
     for row in (artifact or {}).get("records", []):
-        page = by_page.get(row.get("page"), {})
-        if trace_is_current(row, source_pdf_fingerprint, fingerprint(page)):
+        if trace_is_current(row, source_pdf_fingerprint, page_fingerprints.get(row.get("page"), missing)):
             rows.append(deepcopy(row))
     return rows

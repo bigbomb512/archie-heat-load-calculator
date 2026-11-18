@@ -3162,20 +3162,18 @@ def _plan_text_registration(paths, upper_page, lower_page, lower_mm_per_px):
     print at the same places (house_envelope.plan_text_registration), worked in sheet points so each plan's own scale
     calibration doesn't matter; else None."""
     from ai import house_envelope
-    from backend import seating_service
     source = _read(paths["root"] / "ai_input.json", {}).get("source_pdf")
     systems = {page.get("page"): page.get("coordinate_systems", {}).get("image_px", {})
                for page in _read(paths["root"] / "vector_geometry.json", {}).get("geometry_key_points", {}).get("pages", [])}
     if not source or not Path(source).exists() or upper_page == lower_page:
         return None
-    import pdfplumber
-    version = seating_service._pdf_version(source)
-    with pdfplumber.open(source) as doc:
-        if not (0 < upper_page <= len(doc.pages) and 0 < lower_page <= len(doc.pages)):
-            return None
-        top, bottom = seating_service._Page(doc, upper_page, version), seating_service._Page(doc, lower_page, version)
-        fit = house_envelope.plan_text_registration(seating_service._words(top), seating_service._words(bottom))
-        widths = (top.width, bottom.width)
+    from backend import pdf_page_text_cache
+    top = pdf_page_text_cache.page_words(paths["root"], source, upper_page)
+    bottom = pdf_page_text_cache.page_words(paths["root"], source, lower_page)
+    if top is None or bottom is None:
+        return None
+    fit = house_envelope.plan_text_registration(top[0], bottom[0])
+    widths = (top[1], bottom[1])
     if not fit:
         return None
     px_per_pt = []

@@ -6,12 +6,15 @@ graph.  Plans provide room geometry witnesses; elevations, schedules, service
 pages and 3D views provide role-limited supporting evidence.
 """
 
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from copy import deepcopy
 import hashlib
 import json
+from json.encoder import encode_basestring_ascii as _json_string
 import math
+import pickle
 import re
+import threading
 
 from ai.geometry_review import normalise_vision
 from ai.drawing_coverage import has_current_level_classification
@@ -42,16 +45,64 @@ def _canonical_json(value):
     Built bottom-up in one pass, so each item is serialised once. It produces exactly the text that
     json.dumps(sort_keys=True, separators=(",", ":"), allow_nan=False) gives for the structure the
     previous recursive canonical() built (which re-serialised every subtree at every nesting level).
+    Scalars are written the way json.dumps writes them, without its per-call encoder set-up.
     """
     if isinstance(value, dict):
         if not all(isinstance(key, str) for key in value):
             raise TypeError("non-string key")
-        return "{" + ",".join(json.dumps(key) + ":" + _canonical_json(value[key]) for key in sorted(value)) + "}"
+        return "{" + ",".join(_json_string(key) + ":" + _canonical_json(value[key]) for key in sorted(value)) + "}"
     if isinstance(value, list):
         return "[" + ",".join(sorted(_canonical_json(item) for item in value)) + "]"
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return json.dumps(value, allow_nan=False)
+    return _json_scalar(value)
+
+
+_INFINITIES = (float("inf"), float("-inf"))
+
+
+def _json_scalar(value):
+    """json.dumps(value, allow_nan=False) for a str, int, float, bool or None (TypeError for anything else)."""
+    if isinstance(value, str):
+        return _json_string(value)
+    if value is None:
+        return "null"
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if isinstance(value, int):
+        return int.__repr__(value)
+    if isinstance(value, float):
+        if value != value or value in _INFINITIES:
+            raise ValueError("Out of range float values are not JSON compliant: " + repr(value))
+        return float.__repr__(value)
     raise TypeError(f"unsupported value {type(value).__name__}")
+
+
+# Canonical JSON text of recent evidence values, keyed by a digest of their pickle (which tells lists from tuples,
+# ints from floats and True from 1, so equal keys mean equal values). One rebuild fingerprints the same 80 MB
+# vector geometry and OCR evidence several times; this works their text out once.
+_CANONICAL_MEMO = OrderedDict()
+_CANONICAL_MEMO_LOCK = threading.Lock()
+_CANONICAL_MEMO_CHARS = 400_000_000
+
+
+def _memoised_canonical_json(value):
+    try:
+        key = hashlib.sha256(pickle.dumps(value, pickle.HIGHEST_PROTOCOL)).digest()
+    except (pickle.PicklingError, TypeError, AttributeError, ValueError, RecursionError):
+        return _canonical_json(value)
+    with _CANONICAL_MEMO_LOCK:
+        text = _CANONICAL_MEMO.get(key)
+        if text is not None:
+            _CANONICAL_MEMO.move_to_end(key)
+            return text
+    text = _canonical_json(value)
+    if len(text) <= _CANONICAL_MEMO_CHARS // 4:
+        with _CANONICAL_MEMO_LOCK:
+            _CANONICAL_MEMO[key] = text
+            while sum(map(len, _CANONICAL_MEMO.values())) > _CANONICAL_MEMO_CHARS:
+                _CANONICAL_MEMO.popitem(last=False)
+    return text
 
 
 def _canonical(value):
@@ -75,7 +126,8 @@ def _evidence_fingerprint(ai_input, coverage, spatial_ocr, vector_geometry, dime
         "reviewer_room_geometry": reviewer_room_geometry or {},
     }
     try:
-        text = _canonical_json(evidence)
+        # The same text _canonical_json(evidence) gives (its keys are all strings), each part worked out once.
+        text = "{" + ",".join(_json_string(key) + ":" + _memoised_canonical_json(evidence[key]) for key in sorted(evidence)) + "}"
     except TypeError:
         return fingerprint({key: _canonical(value) for key, value in evidence.items()})
     return hashlib.sha256(text.encode()).hexdigest()

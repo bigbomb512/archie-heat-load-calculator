@@ -63,10 +63,40 @@ def _page_fp(page):
     return fingerprint(page or {})
 
 
+_PAGE_FINGERPRINTS = {}
+_PAGE_FINGERPRINTS_LOCK = threading.Lock()
+
+
+def _vector_page_fingerprints(paths):
+    """reviewer_room_geometry.vector_page_fingerprints of the job's vector geometry, worked out once per saved
+    version of the file (it is ~90 MB on a house set, and every read of the current traces checks against it)."""
+    path = Path(paths["vector"])
+    try:
+        stat = path.stat()
+        version = (stat.st_size, stat.st_mtime_ns, getattr(stat, "st_ino", 0))
+    except OSError:
+        version = None
+    key = str(path.resolve()) if version else None
+    if key:
+        with _PAGE_FINGERPRINTS_LOCK:
+            hit = _PAGE_FINGERPRINTS.get(key)
+            if hit and hit[0] == version:
+                return dict(hit[1])
+    value = reviewer_room_geometry.vector_page_fingerprints(_vector_pages(paths))
+    if key:
+        with _PAGE_FINGERPRINTS_LOCK:
+            _PAGE_FINGERPRINTS.pop(key, None)
+            _PAGE_FINGERPRINTS[key] = (version, value)
+            while len(_PAGE_FINGERPRINTS) > 16:
+                _PAGE_FINGERPRINTS.pop(next(iter(_PAGE_FINGERPRINTS)))
+    return dict(value)
+
+
 def current_records(paths, artifact=None):
     artifact = artifact if isinstance(artifact, dict) else _read(paths["artifact"], reviewer_room_geometry.empty_artifact())
     checked = reviewer_room_geometry.validate_artifact(artifact)
-    active = reviewer_room_geometry.active_records(checked, _source_pdf_fingerprint(paths), _vector_pages(paths))
+    active = reviewer_room_geometry.active_records(checked, _source_pdf_fingerprint(paths), None,
+                                                   page_fingerprints=_vector_page_fingerprints(paths))
     rooms = _rooms(paths)
     return [resolved for row in active if (resolved := _trace_with_current_room(row, paths, rooms))]
 
