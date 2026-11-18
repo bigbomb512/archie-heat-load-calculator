@@ -41,6 +41,18 @@ def _key(value):
     return " ".join(str(value or "").casefold().split())
 
 
+def room_display_name(use, records):
+    """The room's name as people see it: its label ("Ensuite (2)" when one name is printed on separate rooms), with the
+    level added when another level has a room of the same label ("Storage (Basement)", "Storage (First Floor)")."""
+    label = " ".join(str(use.get("original_label") or use.get("label") or "").split())
+    level = " ".join(str(use.get("level_name") or "").split())
+    others = [row for row in records if row is not use and row.get("room_id") != use.get("room_id")
+              and _key(row.get("original_label") or row.get("label")) == _key(label)]
+    if others and level and level.casefold() != "unassigned level":
+        return f"{label} ({level})"
+    return label
+
+
 def _positive(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value > 0
 
@@ -87,17 +99,50 @@ def load_snapshot(project, report=None):
         current_tasks.append(row)
     rooms = []
     material_rooms = ((inputs.get("material") or {}).get("hourly_load_model") or {}).get("rooms", []) if current else []
-    for use in uses.get("records", []):
+    # Rooms are matched by their identity (level + label, numbered when one name is printed on separate rooms). A
+    # label alone matches only when no other room on any level has it: Turramurra's Basement and First Floor Storage
+    # rooms are two rooms, and the first floor's must not take the basement's outline (2026-11-18).
+    records = [row for row in uses.get("records", []) if isinstance(row, dict)]
+    label_count = {}
+    for use in records:
+        key = _key(use.get("original_label") or use.get("label"))
+        label_count[key] = label_count.get(key, 0) + 1
+    page_levels = {}
+
+    def page_level(page):
+        if type(page) is not int:
+            return None
+        if page not in page_levels:
+            try:
+                page_levels[page] = _key(tasks._page_level(root, page) or "Unassigned level")
+            except (OSError, ValueError, TypeError, KeyError):
+                page_levels[page] = None
+        return page_levels[page]
+
+    for use in records:
         label = use.get("original_label") or use.get("label") or ""
-        matching = [row for row in traces if row.get("room_id") == use.get("room_id") or _key(row.get("room_label")) == _key(label)]
-        area = areas.get(use.get("room_id"), {})
-        height = next((row for row in heights.get("records", []) if row.get("room_id") == use.get("room_id")
-                       or _key(row.get("original_label")) == _key(label)), {})
-        material = next((row for row in material_rooms if _key(row.get("name")) == _key(label)), {})
-        room_tasks = [row for row in current_tasks if (row.get("packet") or {}).get("room_id") == use.get("room_id")
-                      or any(_key(label) == _key(value) for value in (row.get("packet") or {}).get("room_names", []))]
-        rooms.append({"id": use.get("room_id"), "name": label, "scope": use.get("space_scope"),
-            "level": use.get("level_name") or "",
+        room_id = use.get("room_id")
+        level = use.get("level_name") or "Unassigned level"
+        unique = label_count.get(_key(label), 0) <= 1
+
+        def named(names, page=None):
+            if not any(_key(label) == _key(value) for value in names or [] if isinstance(value, str)):
+                return False
+            return unique or (page_level(page) is not None and page_level(page) == _key(level))
+
+        matching = [row for row in traces if row.get("room_id") == room_id]
+        area = areas.get(room_id, {})
+        height = next((row for row in heights.get("records", []) if row.get("room_id") == room_id), None)
+        if height is None:
+            height = next((row for row in heights.get("records", []) if unique and _key(row.get("original_label")) == _key(label)), {})
+        material = next((row for row in material_rooms if row.get("source_room_id") == room_id), None)
+        if material is None:     # an input set from before rooms carried their identity
+            material = next((row for row in material_rooms if unique and not row.get("source_room_id")
+                             and _key(row.get("name")) == _key(label)), {})
+        room_tasks = [row for row in current_tasks if (row.get("packet") or {}).get("room_id") == room_id
+                      or named((row.get("packet") or {}).get("room_names", []), (row.get("packet") or {}).get("page"))]
+        rooms.append({"id": room_id, "name": label, "display_name": room_display_name(use, records),
+            "level": level, "label_unique": unique, "scope": use.get("space_scope"),
             "use_status": use.get("status"), "traces": matching, "area_m2": area.get("area_m2") or sum(
                 row.get("ai_measured_area_m2", 0) or 0 for row in matching),
             "area_source": area.get("area_origin") or area.get("method") or area.get("area_source") or " ".join(str(row.get("method", "")) for row in matching),
@@ -199,7 +244,7 @@ def audit(snapshot):
     all_internal = bool(tenancy_sides) and all(side in {"internal", "adjacent_tenancy"} for side in tenancy_sides)
 
     def add(rank, kind, room, task, sentence, pages=None, target=None):
-        label = _name(room.get("name"))
+        label = _name(room.get("display_name") or room.get("name"))
         plan_page = next((trace.get("page") for trace in room.get("traces", []) if trace.get("page")), None)
         pages = sorted(set(page for page in (pages or room.get("pages", [])) if type(page) is int))
         identity = f"{kind}:{room.get('id') or _key(label)}" + (f":{task}:{target or ''}" if kind == "unanswered" else "")
@@ -228,8 +273,12 @@ def audit(snapshot):
                 "P0_unnamed_space", f"Check plan page {page} for floor that no traced room covers (drawings often leave "
                 "the main dining or sales area unlabelled); that check wasn't answered.", target=record.get("target"))
 
+    def same_room(room, value):
+        """A drawing check's room name is this room's when the label is unique, or the check names it by identity."""
+        return _key(value) == _key(room.get("name")) and room.get("label_unique", True)
+
     for room in rooms:
-        label = _name(room.get("name"))
+        label = _name(room.get("display_name") or room.get("name"))
         traces = room.get("traces", [])
         area = room.get("area_m2")
         # An area-only room's source is the room-size step's wording ("AI estimate from the plan", "tenancy area
@@ -249,14 +298,14 @@ def audit(snapshot):
             packet = record.get("packet") or {}
             related = (record in room.get("tasks", []) or packet.get("room_id") == room.get("id")
                        or (packet.get("page") in related_pages and record.get("task") in {"P3_boundaries", "P3_surroundings", "P4_storefront_wall"})
-                       or any(_key(label) == _key(value) for value in packet.get("rooms", []) if isinstance(value, str)))
+                       or any(same_room(room, value) for value in packet.get("rooms", []) if isinstance(value, str)))
             if related and (not record.get("current", True) or record.get("status") in {"failed", "blocked", "waiting_for_reply"}):
                 add(2, "unanswered", room, record["task"], f"Finish the unanswered drawing check for {label}: {drawings.TASK_LABELS.get(record['task'], 'checking the room').lower()}.",
                     pages=([packet["page"]] if type(packet.get("page")) is int else None), target=record.get("target"))
         sides = _boundaries(traces)
         if storefront and any(side in {"external", "mall"} for side in sides) and not _has_glass(room):
             opening = next((row for row in records if row.get("task") == "P4_openings" and (
-                (row.get("packet") or {}).get("room_id") == room.get("id") or _key((row.get("packet") or {}).get("room_label")) == _key(label))), None)
+                (row.get("packet") or {}).get("room_id") == room.get("id") or same_room(room, (row.get("packet") or {}).get("room_label")))), None)
             add(3, "storefront_glass", room, "P4_openings" if opening else "P4_storefront_wall",
                 f"Read {label}'s shopfront glass panel by panel from the elevation; the empty-room model needs its glazed widths.",
                 pages=storefront, target=opening.get("target") if opening else None)
@@ -277,15 +326,21 @@ def audit(snapshot):
     report = snapshot.get("report") or {}
     if report:
         for room in rooms:
-            label = _name(room.get("name"))
+            label = _name(room.get("display_name") or room.get("name"))
+            name = room.get("name")       # the model's and the report's room name is the room's label
+            model_id = (room.get("model") or {}).get("room_id")
             coverage = report.get("phase1_coverage") or {}
-            omitted = any(_key(row.get("label")) == _key(label) for row in coverage.get("rooms_left_out", []))
-            if "rooms_included" in coverage and _key(label) not in {_key(name) for name in coverage["rooms_included"]}:
+            omitted = any(_key(row.get("label")) == _key(name) for row in coverage.get("rooms_left_out", []))
+            if "rooms_included" in coverage and _key(name) not in {_key(value) for value in coverage["rooms_included"]}:
                 omitted = True
-            results = [row for scenario in report.get("scenario_results", []) for row in scenario.get("rooms", []) if _key(row.get("name")) == _key(label)]
+            results = [row for scenario in report.get("scenario_results", []) for row in scenario.get("rooms", [])
+                       if ((row.get("room_id") == model_id) if model_id
+                           else (room.get("label_unique", True) and _key(row.get("name")) == _key(name)))]
             zero = bool(results) and all(isinstance((row.get("peak") or {}).get("total_kw"), (int, float))
                 and abs(row["peak"]["total_kw"]) < 1e-9 for row in results)
-            surfaces = [row for row in report.get("phase1_surface_audit", []) if _key(row.get("room_name")) == _key(label)]
+            surfaces = [row for row in report.get("phase1_surface_audit", [])
+                        if ((row.get("room_id") == model_id) if model_id and row.get("room_id")
+                            else (room.get("label_unique", True) and _key(row.get("room_name")) == _key(name)))]
             if not results and surfaces:
                 zero = all(isinstance(row.get("total_kw"), (int, float)) and abs(row["total_kw"]) < 1e-9 for row in surfaces)
             # A zero is only suspicious when the room has something that should load it: an outside wall, an exposed
@@ -388,6 +443,9 @@ def _rebuild(web, project):
     """Reassemble and locally calculate a preview; the normal calculation job publishes after checks settle."""
     from backend import ai_preliminary_service as model, skill_workflow_service as skills
     checkpoint()
+    from backend import reviewer_room_geometry_service
+    if reviewer_room_geometry_service.split_repeated_room_traces(project["review_dir"]):
+        _build_calculation_evidence(web, project)     # separate same-named rooms in an older job: new room identities
     paths = model._paths(project)
     inputs = read_json(paths["current_set"])
     if not inputs or model._stale_reasons(paths, inputs):

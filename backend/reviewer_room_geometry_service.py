@@ -133,6 +133,80 @@ def persist_ai_determined_traces(web, project, rows, ai_run_id, quality_label, r
     return prepared
 
 
+def split_repeated_room_traces(root):
+    """Migrate a saved job whose separate same-named rooms were saved as one room in parts (Turramurra's three
+    first-floor Ensuite outlines were parts 1-3 of one 16.4 m² "Ensuite", 2026-11-18).
+
+    No AI is asked: the saved AI outlines are regrouped with the rule the outline steps now use
+    (autonomous_tasks_service.number_repeated_rooms), each separate room becomes "Ensuite (1)", "Ensuite (2)", ... in
+    plan reading order, and the numbered rooms are recorded (ai_named_rooms.json) so the room list replaces the merged
+    record. Trace IDs are kept, so a wall, window or roof answer saved on an outline stays on that outline. A
+    reviewer's own trace is never regrouped. Idempotent: a job with nothing to split is not written. Returns
+    {old room ID: [new room IDs]}."""
+    from backend import house_windows_service, room_proposal
+    from backend.autonomous_tasks_service import number_repeated_rooms
+    from shapely.geometry import Polygon
+    from ai.page_inventory import level_key
+    root = Path(root)
+    paths = _paths({"review_dir": str(root)})
+    if not paths["artifact"].exists() or not house_windows_service.is_dwelling(root):
+        return {}
+    try:
+        artifact = reviewer_room_geometry.validate_artifact(_read(paths["artifact"], reviewer_room_geometry.empty_artifact()))
+    except ValueError:
+        return {}
+    groups = {}
+    for index, row in enumerate(artifact.get("records", [])):
+        if row.get("declaration_source") not in {"ai_determined", "ai_fallback"} or not row.get("room_id"):
+            continue
+        groups.setdefault((str(row["room_id"]), row.get("page"), str(row.get("ai_run_id") or "")), []).append(index)
+    rooms = None
+    split = {}
+    records = artifact["records"]
+    for (room_id, page, run_id), indexes in sorted(groups.items(), key=lambda item: (item[0][0], str(item[0][1]), item[0][2])):
+        if len(indexes) < 2 or type(page) is not int:
+            continue
+        shapes = []
+        for index in indexes:
+            try:
+                shape = Polygon(records[index]["points_image_px"])
+                shapes.append(shape if shape.is_valid and shape.area > 0 else None)
+            except (TypeError, ValueError, KeyError):
+                shapes.append(None)
+        mm = [float((records[index].get("calibration") or {}).get("mm_per_px") or 0) for index in indexes]
+        if None in shapes or not all(value > 0 for value in mm):
+            continue
+        rooms = _rooms(paths) if rooms is None else rooms
+        level = records[indexes[0]].get("level_name") or "Unassigned level"
+        label = records[indexes[0]].get("room_label") or ""
+        printed = [room.get("label", "") for room in rooms if level_key(room.get("level_name")) == level_key(level)]
+        renamed, numbered = number_repeated_rooms([(label, shape) for shape in shapes], mm[0], printed)
+        if not numbered:
+            continue
+        counts = {}
+        for position, index in enumerate(indexes):
+            new_label = renamed.get(position, label)
+            counts[new_label] = counts.get(new_label, 0) + 1
+            records[index].update({"room_id": room_identity(new_label, level), "room_label": new_label,
+                                   "part_index": counts[new_label]})
+        for index in indexes:
+            records[index]["part_count"] = counts[records[index]["room_label"]]
+        room_proposal.save_numbered_rooms(root, f"P0_numbered_repeat:saved_outlines:{room_id}", page, level, numbered,
+                                          run_id or "saved-outlines")
+        split[room_id] = sorted({room_identity(new_label, level) for new_label, _base in numbered})
+        rooms = None                    # the room list now has the numbered rooms
+    if split:
+        previous = artifact.get("fingerprint", "")
+        validated = reviewer_room_geometry.validate_artifact({"records": records,
+            "page_north": artifact.get("page_north", {}), "rooms": artifact.get("rooms", [])})
+        _atomic_json(paths["artifact"], validated)
+        from backend import productization
+        productization.record_change_if_fingerprint_changed(root, action="repeated_room_names_split",
+            target=paths["artifact"].name, previous_fingerprint=previous, new_fingerprint=validated.get("fingerprint", ""),
+            affected_ids=sorted({*split, *(room for rooms_ in split.values() for room in rooms_)}))
+    return split
+
+
 _ARTIFACT_INPUT_MEMO = {}
 _ARTIFACT_INPUT_MEMO_LOCK = threading.Lock()
 _ARTIFACT_INPUT_MEMO_LIMIT = 8
@@ -625,12 +699,12 @@ def _rooms(paths):
     building = _read(paths["building"], {})
     room_use = _read(paths["room_use"], {})
     run = _read(paths["run"], {})
-    from backend.room_proposal import room_proposal, numbered_bedroom_levels
+    from backend.room_proposal import is_replaced, replaced_repeated_labels, room_proposal
     proposal = room_proposal(run, paths["root"])
-    numbered_levels = numbered_bedroom_levels(paths["root"])
+    replaced = replaced_repeated_labels(paths["root"])
     def replaced_bedroom(row):
-        return (str(row.get("label") or row.get("name") or row.get("original_label") or "").strip().casefold()
-                in {"bedroom", "bed"} and str(row.get("level_name") or "Unassigned level").casefold() in numbered_levels)
+        # A merged record of one name printed on separate rooms, now numbered per room (Bedroom 1 / Ensuite (1)).
+        return is_replaced(row, replaced)
     geometry = _read(paths["geometry"], {})
     active_area_ids = {row.get("room_source_id") for row in geometry.get("entities", [])
                        if isinstance(row, dict) and row.get("kind") == "area"

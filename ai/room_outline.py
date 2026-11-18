@@ -1435,3 +1435,37 @@ def raster_wall_geometry(page_image, viewport, mm_per_px, dark_threshold=180, mi
         for run in runs:
             open_runs.setdefault(run, row)
     return unary_union(rectangles) if rectangles else None
+
+
+SEPARATE_ROOM_GAP_MM = 50.0      # same-named outlines further apart than this have a wall between them: separate rooms
+SEPARATE_ROOM_MIN_M2 = 1.0       # a smaller separate piece stays part of the same-named room it is nearest
+
+
+def separate_rooms(shapes, mm_per_px, min_m2=SEPARATE_ROOM_MIN_M2, gap_mm=SEPARATE_ROOM_GAP_MM):
+    """Group same-named outline pieces into rooms: pieces that touch (within gap_mm) are one room; a group smaller than
+    min_m2 joins the room it is nearest. Returns lists of indexes into shapes, one per room, in plan reading order
+    (top to bottom in 1 m bands, then left to right) so the numbering is the same on every rebuild. One room, or
+    none big enough to stand alone, gives a single group."""
+    if not shapes:
+        return []
+    groups = []
+    for index, shape in enumerate(shapes):
+        touching = [group for group in groups if any(shape.distance(shapes[other]) * mm_per_px <= gap_mm for other in group)]
+        merged = [index]
+        for group in touching:
+            merged += group
+            groups.remove(group)
+        groups.append(sorted(merged))
+    union = lambda group: unary_union([shapes[index] for index in group])
+    big = [group for group in groups if union(group).area * (mm_per_px / 1000) ** 2 >= min_m2]
+    if len(big) < 2:
+        return [list(range(len(shapes)))]
+    for group in groups:
+        if group not in big:
+            nearest = min(big, key=lambda other: union(group).distance(union(other)))
+            nearest += group
+    band_px = 1000.0 / mm_per_px if mm_per_px > 0 else 1.0
+    def reading_order(group):
+        centre = union(group).centroid
+        return (math.floor(centre.y / band_px), round(centre.x, 3), round(centre.y, 3))
+    return [sorted(group) for group in sorted(big, key=reading_order)]

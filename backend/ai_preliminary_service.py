@@ -817,6 +817,23 @@ def _proposal_with_skill_findings(paths):
         str(row.get("label", "")).strip().casefold(): row for row in proposal["rooms"]
         if isinstance(row, dict) and row.get("label")
     }
+    # A finding for a merged same-name room ("Ensuite", saved before separate rooms of one name were told apart) is
+    # each numbered room's ("Ensuite (1)", "(2)", ...): it must not bring the merged room back as an extra room.
+    occurrences = {}
+    for row in proposal["rooms"]:
+        if isinstance(row, dict) and row.get("source") == "numbered_from_repeated_label" and row.get("repeated_label"):
+            merged = room_use_resolution.room_identity(row["repeated_label"], row.get("level_name") or "Unassigned level")
+            occurrences.setdefault(merged, []).append(row)
+    expanded = []
+    for index, finding in accepted_rows:
+        merged = str(finding.get("room_id", "")) if isinstance(finding, dict) else ""
+        if merged in occurrences and merged not in rooms_by_id:
+            for row in occurrences[merged]:
+                inference_by_id.setdefault(str(row["room_id"]), inference_by_id.get(merged, []))
+                expanded.append((index, {**deepcopy(finding), "room_id": str(row["room_id"]), "original_label": row["label"]}))
+        else:
+            expanded.append((index, finding))
+    accepted_rows = expanded
     unresolved_fields = identity_proposal.get("unresolved_fields", []) if isinstance(identity_proposal, dict) else []
     candidates = list(geometry_candidates.values())
     accepted_room_ids = set()
@@ -2295,6 +2312,8 @@ def _room_peaks(report):
                 item = {"room_id": str(room["room_id"]), "name": str(room.get("name", "")),
                         "design_total_kw": peak["design_total_kw"],
                         "hour": peak.get("display_hour", peak.get("hour"))}
+                if (report.get("room_identities") or {}).get(str(room["room_id"])):
+                    item["source_room_id"] = report["room_identities"][str(room["room_id"])]
                 if room.get("area_m2") is not None:
                     item["area_m2"] = room["area_m2"]
                 if isinstance(peak.get("components"), dict):
@@ -2544,6 +2563,11 @@ def _assemble_inputs(web, project, source):
     building, vision = _read(paths["building"], {}), _read(paths["vision"], {})
     if not building:
         raise ValueError("Analyse the PDF before assembling an AI preliminary model.")
+    # A job saved before separate same-named rooms were told apart ("Ensuite" in three parts) is migrated first, and
+    # its geometry evidence rebuilt for the new room identities, so the model gets one room per separate room.
+    from backend import reviewer_room_geometry_service
+    if reviewer_room_geometry_service.split_repeated_room_traces(paths["root"]):
+        _rebuild_geometry_evidence(web, project)
     # Use the same current skill findings that feed room-use resolution.
     # Previously assembly kept the base detector's shorter room list, so
     # newly inferred enclosed spaces could be classified but never get into
@@ -2745,6 +2769,10 @@ def _calculate_load(web, project, scope, persist):
             for row in coverage["records"] if row["status"] in {"no_value", "no_room"})
     report["confirmed_rooms"] = confirmed_rooms
     report["room_scope_confirmation"] = confirmation_summary
+    # Each model room's room-list identity: report rooms are named by label, which another level can share.
+    report["room_identities"] = {str(room["room_id"]): str(room["source_room_id"])
+                                 for room in ((confirmed_set.get("material") or {}).get("hourly_load_model") or {}).get("rooms", [])
+                                 if isinstance(room, dict) and room.get("room_id") and room.get("source_room_id")}
     if scope == "phase1_base_room":
         report["phase1_input_fingerprint"] = _phase1_input_fingerprint(input_set)
         _phase1_coverage(report, candidates, confirmed_set)

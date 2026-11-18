@@ -151,8 +151,12 @@ def get(web, project):
     final_current = bool(status.get("results_ready") and not status.get("result_stale"))
 
     def peaks_by_identity(report):
-        return {room_identity(row.get("name", ""), "Unassigned level"): row
-                for row in (report.get("room_peaks") or []) if isinstance(row, dict) and row.get("name")}
+        """Peaks by the room list's identity where the report records it (a label can repeat on another level), and
+        by name for a report from before rooms carried their identity."""
+        rows = [row for row in (report.get("room_peaks") or []) if isinstance(row, dict) and row.get("name")]
+        result = {room_identity(row.get("name", ""), "Unassigned level"): row for row in rows if not row.get("source_room_id")}
+        result.update({str(row["source_room_id"]): row for row in rows if row.get("source_room_id")})
+        return result
     phase1_peaks, final_peaks = peaks_by_identity(base), peaks_by_identity(final)
 
     def area_for(room_id, candidate):
@@ -175,9 +179,11 @@ def get(web, project):
         kind = _kind(use.get("space_scope") or candidate.get("scope"))
         area, basis = area_for(room_id, candidate)
         identity = room_identity(name, "Unassigned level")
-        load = (_load_number(phase1_peaks.get(identity, {}).get("design_total_kw"))
+        phase1_peak = phase1_peaks.get(room_id) or phase1_peaks.get(identity, {})
+        final_peak = final_peaks.get(room_id) or final_peaks.get(identity, {})
+        load = (_load_number(phase1_peak.get("design_total_kw"))
                 if phase1_current and name in included_in_phase1 else None)
-        final_kw = _load_number(final_peaks.get(identity, {}).get("design_total_kw")) if final_current else None
+        final_kw = _load_number(final_peak.get("design_total_kw")) if final_current else None
         level = "" if not level or level == "Unassigned level" else level
         return {"room_id": room_id, "name": name, "level": level, "area_m2": area,
                 "occupancy": (gains_by_id.get(room_id, {}).get("fields") or {}).get("occupancy_count", {}),
@@ -228,11 +234,19 @@ def get(web, project):
     # room's identity for the area, people and glass answers and for matching the load report).
     from backend import quick_fix_service
     shown = quick_fix_service.display_names(project["review_dir"])
+    # A label on rooms of two levels (Turramurra's Basement and First Floor Storage) is shown with its level; one name
+    # printed on separate rooms of one level is already numbered in the label ("Ensuite (1)", "Ensuite (2)").
+    levels_by_name = {}
+    for room in rooms:
+        levels_by_name.setdefault(" ".join(str(room["name"]).casefold().split()), set()).add(room["room_id"])
+    def default_name(room):
+        repeated = len(levels_by_name.get(" ".join(str(room["name"]).casefold().split()), ())) > 1
+        return f"{room['name']} ({room['level']})" if repeated and room.get("level") else room["name"]
     for room in rooms:
         room["has_outline"] = room["room_id"] in outlined
-        room["display_name"] = shown.get(room["room_id"]) or room["name"]
+        room["display_name"] = shown.get(room["room_id"]) or default_name(room)
     for outline in outlines:
-        outline["display_name"] = shown.get(outline["room_id"]) or outline["name"]
+        outline["display_name"] = shown.get(outline["room_id"]) or room_by_id[outline["room_id"]]["display_name"]
 
     return {"project_id": project["id"], "status": status, "rooms": rooms,
             "room_use_options": {key: row["label"] for key, row in load_taxonomy()["categories"].items()},

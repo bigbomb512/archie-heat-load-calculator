@@ -68,6 +68,14 @@ NOTE_KINDS = {"boundary": "What is beyond a wall (set on the Walls tab)", "other
 KINDS = {**{key: row["label"] for key, row in APPLIED_KINDS.items()}, **NOTE_KINDS}
 
 
+
+def _room_answer(rooms, label):
+    """A room's answer by its label. A room numbered from a name printed on separate rooms ("Ensuite (2)") takes an
+    answer given for that name before the rooms were told apart ("Ensuite") until it has its own."""
+    from ai.room_use_resolution import base_label
+    key = str(label or "").casefold()
+    return rooms.get(key) or rooms.get(base_label(label).casefold())
+
 def options(web, project):
     """What the answer form offers: kinds, rooms (name and level), equipment items and the roof choices."""
     from backend import ai_preliminary_service, job_service, page_extraction_service
@@ -258,7 +266,7 @@ def apply_glazing(root, proposal):
     for opening in proposal.get("openings", []) if isinstance(proposal, dict) else []:
         if not isinstance(opening, dict):
             continue
-        answer = rooms.get(str(opening.get("owner_room_label", "")).casefold()) or stored.get("all")
+        answer = _room_answer(rooms, opening.get("owner_room_label")) or stored.get("all")
         if not answer:
             continue
         opening["u_value_w_m2k"], opening["shgc"] = answer["u_value_w_m2k"], answer["shgc"]
@@ -320,7 +328,7 @@ def apply_constructions(root, proposal):
             continue
         answers = stored.get(surface["physical_type"]) or {}
         rooms = {str(label).casefold(): row for label, row in (answers.get("rooms") or {}).items()}
-        answer = rooms.get(str(surface.get("owner_room_label", "")).casefold()) or answers.get("all")
+        answer = _room_answer(rooms, surface.get("owner_room_label")) or answers.get("all")
         if not answer:
             continue
         surface["u_value_w_m2k"] = answer["u_value_w_m2k"]
@@ -355,7 +363,7 @@ def unconditioned_temperature(root, room_label):
         return None, None
     stored = json.loads(path.read_text(encoding="utf-8"))
     rooms = {str(label).casefold(): row for label, row in (stored.get("rooms") or {}).items()}
-    record = rooms.get(str(room_label or "").casefold()) or stored.get("all")
+    record = _room_answer(rooms, room_label) or stored.get("all")
     return (float(record["temperature_c"]), record) if record else (None, None)
 
 
