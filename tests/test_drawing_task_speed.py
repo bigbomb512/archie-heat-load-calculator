@@ -237,10 +237,14 @@ class SettledRecordTests(unittest.TestCase):
         row = self.progress("done")
         self.assertEqual((row["waiting"], row["left_waiting"]), (0, 1))
 
-    def test_a_question_waits_until_the_supervisor_has_finished(self):
-        for state in (None, "running", "failed"):
+    def test_a_question_waits_when_no_later_step_is_sending_it(self):
+        for state in (None, "failed"):
             row = self.progress(state)
             self.assertEqual((row["waiting"], row["left_waiting"]), (1, 0), state)
+
+    def test_a_question_sent_by_the_running_supervisor_does_not_hold_drawings(self):
+        row = self.progress("running")
+        self.assertEqual((row["waiting"], row["left_waiting"]), (0, 0))
 
 
 if __name__ == "__main__":

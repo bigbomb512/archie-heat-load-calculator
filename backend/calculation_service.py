@@ -112,9 +112,34 @@ def status(web, project):
 def maybe_start_phase1(web, project):
     from backend import ai_preliminary_service
     from backend.job_runner import read_json, write_json
+    from backend.job_progress import in_flight
     if web is None:
         return None
     current = web.project_by_id(project["id"]) if hasattr(web, "project_by_id") else project
+    if not current.get("review_dir"):
+        return None
+    # A finished later step may have exposed drawing questions after the drawing job ended.
+    # The handoff owns their delivery and then runs again with the new drawing evidence.
+    from backend import ai_provider, drawing_tasks_service as drawings
+    from backend.job_progress import stage_blocker
+    root = Path(current["review_dir"])
+    supervisor_job = read_json(root / "phase1_supervisor_job.json")
+    drawing_state = drawings.status(None, current)
+    waiting = drawings._waiting(root)
+    # One automatic follow-up pass per set of waiting questions: a pass re-runs the review, the model check and the
+    # calculation, and if it in turn leaves new questions the "Check and resume" button is offered instead of looping.
+    waiting_keys = sorted(f"{row.get('task')}:{row.get('target')}" for row in waiting)
+    follow_up_path = root / "drawing_follow_up.json"
+    follow_up = read_json(follow_up_path)
+    if (waiting and waiting_keys != follow_up.get("waiting") and int(follow_up.get("passes") or 0) < 1
+            and not supervisor_job.get("provider_limited")
+            and not drawing_state.get("provider_limited") and not drawing_state.get("unresolved")
+            and not in_flight(supervisor_job)
+            and not stage_blocker(current, "supervisor") and ai_provider.configured()
+            and drawings._JOB.key(current) not in drawings._JOB.running):
+        write_json(follow_up_path, {"waiting": waiting_keys, "passes": int(follow_up.get("passes") or 0) + 1})
+        drawings.start(web, current, then_skills=True)
+        return None
     if _phase1_drawing_problems(current, include_supervisor=False):
         return None
     from backend import phase1_supervisor_service as supervisor

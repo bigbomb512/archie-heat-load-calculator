@@ -276,7 +276,8 @@ class BackgroundJob:
 
             elif outcome.get("status") == "done" and self.file_name in {
                     "new_job_job.json", "page_preparation_job.json", "page_inventory_job.json",
-                    "page_extraction_job.json", "drawing_tasks_job.json", "phase1_supervisor_job.json"} and web is not None:
+                    "page_extraction_job.json", "drawing_tasks_job.json", "phase1_supervisor_job.json",
+                    "calculation_job.json"} and web is not None:
                 try:
                     from backend.calculation_service import maybe_start_phase1
                     maybe_start_phase1(web, project)

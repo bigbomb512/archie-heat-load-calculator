@@ -153,6 +153,26 @@ class RoutingAndCacheTests(unittest.TestCase):
         self.assertIn(gap["note"], first["prompt"])
         self.assertIn("22", first["prompt"])
 
+    def test_applied_outline_is_not_replaced_by_its_own_baseline_question(self):
+        baseline = {"task": "P0_room_outlines", "page": 6, "room_names": ["Dining", "Kitchen"]}
+        targeted = {**baseline, "room_names": ["Kitchen"]}
+        gap = {"task": "P0_room_outlines", "target": "page-6", "room_names": ["Kitchen"],
+               "note": "Check Kitchen", "pages": [6]}
+        with patch.object(tasks, "_p0_outline_packets", side_effect=lambda root, requested_rooms=None, skipped=None:
+                [("P0_room_outlines", "page-6", targeted if requested_rooms else baseline, "Trace", [], "")]):
+            record = tasks.prepare_investigation(self.project, gap)[0]
+            record.update(status="below_accuracy_bar", applied_value={"rooms": ["Kitchen"]})
+            tasks._update_record(self.root, record)
+            after_own_answer = {**baseline, "room_names": ["Dining"]}
+            rebuilt = tasks._create_run(self.root, "P0_room_outlines", "page-6", after_own_answer, "Trace")
+            self.assertEqual(rebuilt["run_id"], record["run_id"])
+            self.assertEqual(tasks._current_task(self.root, "P0_room_outlines", "page-6")["status"], "below_accuracy_bar")
+            self.assertEqual(tasks._create_run(self.root, "P0_room_outlines", "page-6", after_own_answer, "Trace")["run_id"], record["run_id"])
+            changed = tasks._create_run(self.root, "P0_room_outlines", "page-6",
+                                        {**baseline, "calibration": {"mm_per_px": 2}}, "Trace")
+            self.assertNotEqual(changed["run_id"], record["run_id"])
+            self.assertEqual(changed["status"], "waiting_for_reply")
+
     def test_refresh_preserves_a_targeted_rejection_and_its_correction_reason(self):
         baseline = {"room": "Shop"}
         targeted = tasks._create_run(self.root, "P5_roof", "shop", {**baseline, "supervisor_note": "Check above"}, "Read roof\nCheck above")
@@ -346,11 +366,30 @@ class RunTests(unittest.TestCase):
         answer.assert_called_once()
         self.assertEqual(result["outcome"], "draft_ready")
 
+    def test_new_drawing_question_is_sent_before_cycle_model_rebuild(self):
+        order = []
+        values = iter([snapshot(room(area_m2=None)), snapshot()])
+        def rebuild(*args):
+            order.append("model")
+            return next(values)
+        def waiting(*args):
+            return [{"task": "P8_glazing_certificate", "target": "page-3"}] if "sent" not in order else []
+        with patch.object(supervisor, "_rebuild", side_effect=rebuild), \
+                patch.object(tasks, "prepare_investigation", side_effect=self.fake_prepare), \
+                patch.object(drawings, "request_investigation", return_value={}), \
+                patch.object(drawings, "apply_investigation", return_value={"status": "applied"}), \
+                patch.object(drawings, "_waiting", side_effect=waiting), \
+                patch.object(drawings, "answer_all", side_effect=lambda *args: order.append("sent")) as send:
+            supervisor.run(None, self.project)
+        self.assertEqual(order, ["model", "sent", "model"])
+        send.assert_called_once()
+
     def test_a_usage_limit_on_the_last_pass_keeps_the_result(self):
         with patch.object(drawings, "_waiting", return_value=[{"task": "P4_openings", "target": "20"}]), \
                 patch.object(drawings, "answer_all", side_effect=supervisor.ai_provider.UsageLimitReached("limit")):
             result, _calls = self.execute([snapshot()])
         self.assertEqual(result["outcome"], "draft_ready")
+        self.assertTrue(read_json(self.root / supervisor.JOB_FILE)["provider_limited"])
 
     def test_no_last_pass_when_ai_is_unavailable(self):
         with patch.object(supervisor, "ai_unavailable", return_value="No key"), \

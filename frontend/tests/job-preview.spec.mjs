@@ -1829,6 +1829,22 @@ test("traced rooms with a question waiting to be sent need action, and a scale f
   await expect(page.locator(".job-status")).toContainText("waiting to be sent");
 });
 
+test("a follow-up drawing question is neutral while the model check is sending it", async ({ page }) => {
+  await preview(page, { status: { stage: "phase1" } });
+  await finishedStages(page);
+  await page.route("**/api/drawing-tasks**", (route) => route.fulfill({ json: {
+    status: "done", step_state: "done", waiting_tasks: 1, follow_up_sender: "model check",
+  } }));
+  await page.route("**/api/phase1-supervisor**", (route) => route.fulfill({ json: {
+    status: "running", step_state: "active", step_label: "Checking the empty-room model",
+  } }));
+  await page.goto("/?preview=1#/job/job-1/drawings");
+  const stage = page.locator('[data-stage="rooms"]');
+  await expect(stage).not.toHaveClass(/attention/);
+  await expect(stage).toContainText("1 follow-up drawing question will be sent by the model check.");
+  await expect(stage).not.toContainText("Needs your action");
+});
+
 test("out-of-date skill answers count as finished, with the earlier answers kept", async ({ page }) => {
   await preview(page, { status: { stage: "drawings" } });
   await finishedStages(page);

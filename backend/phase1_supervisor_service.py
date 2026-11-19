@@ -753,6 +753,13 @@ def run(web, project, step=lambda *args: None):
             tasks._export_determinations(root)
             _build_calculation_evidence(web, project)
             tasks._refresh_geometry_tasks(root)
+            # The rebuild may expose new drawing questions (including glass and corner refinements).
+            # Send them in this cycle, before auditing the model built from their evidence.
+            if drawings._waiting(root) and not read_json(root / JOB_FILE).get("provider_limited"):
+                try:
+                    drawings.answer_all(web, project)
+                except ai_provider.UsageLimitReached:
+                    progress(provider_limited=True)
             from backend import ai_preliminary_service as model
             paths = model._paths(project)
             stored_inputs = read_json(paths["current_set"])
@@ -777,7 +784,7 @@ def run(web, project, step=lambda *args: None):
             break
     # Questions the fixes above unlocked have no other way to be sent: answer them once (the drawing step's own limits
     # apply), so the result uses them.
-    if not unavailable and drawings._waiting(root):
+    if not unavailable and not read_json(root / JOB_FILE).get("provider_limited") and drawings._waiting(root):
         step("rebuild")
         try:
             drawings.answer_all(web, project)
@@ -785,7 +792,7 @@ def run(web, project, step=lambda *args: None):
             _take_in_review(project)
             gaps = audit(snapshot)
         except ai_provider.UsageLimitReached:
-            pass
+            progress(provider_limited=True)
     exceptions = [{**gap, "attempts": attempts.get(gap["id"], 0),
                    "tried": [row for row in history if row.get("gap_id") == gap["id"]],
                    **({"message": gap["message"].rstrip(".") + ". " + unavailable} if unavailable else {})} for gap in gaps]

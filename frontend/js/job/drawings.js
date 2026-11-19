@@ -13,7 +13,7 @@ const stopped = (data) => stepOf(data) === "failed";
 const queuedQuestions = (data) => Number(data?.waiting_tasks) || 0;
 const stoppedAtLimit = (data) => Boolean(data?.stopped_at_limit) && stepOf(data) === "done";
 const needsAction = (data, kind) =>
-  kind === "rooms" ? stateOf(data) === "done" && queuedQuestions(data) > 0
+  kind === "rooms" ? stateOf(data) === "done" && queuedQuestions(data) > 0 && !data?.follow_up_sender
     : kind === "supervisor" ? stoppedAtLimit(data) : false;
 const plural = (count, one, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
 
@@ -99,6 +99,10 @@ function envelopeFailureLine(data) {
 
 function stageLine(data, kind, status, plan) {
   if (stepOf(data) === "stopping") return data.recovery?.reason || "Waiting for the current AI request to finish or time out, then resuming unfinished work.";
+  if (kind === "rooms" && data?.follow_up_sender && queuedQuestions(data)) {
+    const count = queuedQuestions(data);
+    return `${plural(count, "follow-up drawing question")} will be sent by the ${data.follow_up_sender}.`;
+  }
   if (kind !== "calculation" && data?.recovery?.label === "Check and resume" && data?.recovery?.reason && !working(data)) return data.recovery.reason;
   if (kind === "pages") {
     if (stopped(data)) {

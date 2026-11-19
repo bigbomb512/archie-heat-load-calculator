@@ -314,6 +314,22 @@ class DrawingTaskTests(unittest.TestCase):
                 self.assertEqual(drawing.status(None, project)["unresolved"][0]["kind"], "answer_rejected")
             self.assertEqual(original["unresolved"][0]["kind"], "service_error")
 
+    def test_waiting_follow_up_is_neutral_while_supervisor_runs(self):
+        with tempfile.TemporaryDirectory() as folder:
+            project = {"id": "j", "review_dir": folder}
+            (Path(folder) / "phase1_supervisor_job.json").write_text('{"status":"running"}')
+            with patch.object(drawing._JOB, "status", return_value={"status": "done"}), \
+                    patch.object(drawing, "_waiting", return_value=[{"task": "P8_glazing_certificate", "target": "page-3"}]):
+                state = drawing.status(None, project)
+            self.assertEqual((state["waiting_tasks"], state["follow_up_sender"]), (1, "model check"))
+            self.assertNotIn("recovery", state)
+            (Path(folder) / "phase1_supervisor_job.json").write_text('{"status":"running","provider_limited":true}')
+            with patch.object(drawing._JOB, "status", return_value={"status": "done"}):
+                limited = drawing.status(None, project)
+            self.assertTrue(limited["provider_limited"])
+            self.assertIn("retry after the limit resets", limited["warning"])
+            self.assertNotIn("follow_up_sender", limited)
+
     def test_grid_coordinates_become_image_pixels_by_the_image_or_the_chosen_crop(self):
         # Gemini read a 1,536 x 1,469 plan on a 0-1000 grid: the Kitchen's corner (480, 217) is pixel (737.3, 318.8).
         outline = {"rooms": [{"room": "Kitchen", "points_px": [[480, 217], [798, 585]], "open_sides": ""}]}

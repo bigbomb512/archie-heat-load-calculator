@@ -114,6 +114,9 @@ def status(web, project):
                            "message": "The reply did not pass the drawing checks; completed tasks are kept."}
             unresolved.append(failure)
         job["unresolved"] = unresolved
+    supervisor_limit = read_json(Path(project["review_dir"]) / "phase1_supervisor_job.json").get("provider_limited")
+    if supervisor_limit:
+        job["provider_limited"] = True
     if job.get("provider_limited"):
         job["warning"] = "The drawing provider's usage limit was reached. Unanswered tasks are saved; retry after the limit resets."
     if job.get("status") == "done" and (job.get("unresolved") or job.get("provider_limited")):
@@ -124,11 +127,19 @@ def status(web, project):
         # offer to resume rather than leave the job at the drawings stage (Butcher Buffet 2026-10-26). No AI call is
         # started from here.
         from backend.job_runner import recovery
-        count = len(_waiting(Path(project["review_dir"])))
+        root = Path(project["review_dir"])
+        count = len(_waiting(root))
         job["waiting_tasks"] = count
-        job["recovery"] = {**recovery("failed"), "action": "resume", "label": "Check and resume",
-                           "reason": f"{count} drawing question{'s' if count != 1 else ''} added after the last run "
-                                     f"{'are' if count != 1 else 'is'} waiting to be sent."}
+        from backend.job_progress import in_flight
+        supervisor = read_json(root / "phase1_supervisor_job.json")
+        calculation = read_json(root / "calculation_job.json")
+        if not supervisor.get("provider_limited") and (in_flight(supervisor) or in_flight(calculation)):
+            job["follow_up_sender"] = "model check" if in_flight(supervisor) else "calculation"
+            job.pop("recovery", None)
+        else:
+            job["recovery"] = {**recovery("failed"), "action": "resume", "label": "Check and resume",
+                               "reason": f"{count} drawing question{'s' if count != 1 else ''} added after the last run "
+                                         f"{'are' if count != 1 else 'is'} waiting to be sent."}
     # Ages worked out here, so the screen doesn't depend on the browser's clock.
     if job.get("status") in {"queued", "running"}:
         job["request_seconds"] = _seconds_since(job.get("request_started_at")) if job.get("request_started_at") else None

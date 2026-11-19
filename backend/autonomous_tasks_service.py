@@ -4144,6 +4144,18 @@ def _create_run(root, task, target, packet, prompt, image_bytes=None, blocked_re
     # The current record is kept for the same question only when both or neither are "not needed": a task now known
     # to be not needed replaces an older blocked one, and a withdrawn (not needed) question is asked again when needed.
     reusable = bool(current) and (current.get("status") == "not_needed") == not_needed
+    if (reusable and task == "P0_room_outlines" and not packet.get("supervisor_note")
+            and current.get("status") in {"applied", "below_accuracy_bar"}
+            and (current.get("packet") or {}).get("supervisor_note")):
+        # The first ordinary rebuild after the targeted answer can reflect that answer's own
+        # room evidence. Record that settled baseline once; only later changes to it re-ask.
+        settled = current.get("post_answer_base_fingerprint")
+        if not settled:
+            current["post_answer_base_fingerprint"] = input_fingerprint
+            _update_record(root, current)
+            return current
+        if settled == input_fingerprint:
+            return current
     if reusable and (current.get("input_fingerprint") == input_fingerprint or (
             not packet.get("supervisor_note") and current.get("base_input_fingerprint") == input_fingerprint)):
         return current
@@ -4260,8 +4272,11 @@ def _task_progress(root):
                                             for record in records)).encode("utf-8")).hexdigest()[:16]
     waiting = sum(1 for record in records if record.get("status") == "waiting_for_reply" and not _not_answered(record))
     finished = isinstance(supervisor, dict) and supervisor.get("status") == "done"
+    from backend.job_progress import in_flight
+    sending_later = (not supervisor.get("provider_limited") and
+                     (in_flight(supervisor) or in_flight(_read(Path(root) / "calculation_job.json", {}))))
     return {"total": len(records),
-            "waiting": 0 if finished else waiting,
+            "waiting": 0 if finished or sending_later else waiting,
             "left_waiting": waiting if finished else 0,
             "not_answered": sum(1 for record in records if _not_answered(record)),
             "blocked": sum(1 for record in records if record.get("status") == "blocked"),

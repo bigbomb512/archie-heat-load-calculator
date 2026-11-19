@@ -8,7 +8,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from backend import ai_preliminary_service, calculation_service as service, job_service
+from backend import ai_preliminary_service, calculation_service as service, drawing_tasks_service as drawings, job_service
 
 SCOPE = {"candidate_fingerprint": "fp", "candidates": [
     {"key": "kitchen", "area_m2": 104.9, "include": True, "status": "calculated"},
@@ -49,6 +49,29 @@ class CalculationJobTests(unittest.TestCase):
     def tearDown(self):
         service._RUNNING.clear()
         self.temp.cleanup()
+
+    def test_handoff_sends_new_questions_then_restarts_affected_review(self):
+        with patch.object(drawings, "_waiting", return_value=[{"task": "P8_glazing_certificate", "target": "page-3"}]), \
+                patch.object(drawings, "start") as start, \
+                patch.object(service, "_phase1_drawing_problems", return_value=[]), \
+                patch("backend.job_progress.stage_blocker", return_value=""), \
+                patch("backend.ai_provider.configured", return_value=True):
+            service.maybe_start_phase1(self.web, self.web.project)
+        start.assert_called_once_with(self.web, self.web.project, then_skills=True)
+
+    def test_handoff_runs_one_automatic_follow_up_pass_then_leaves_the_button(self):
+        waiting = [[{"task": "P8_glazing_certificate", "target": "page-3"}],
+                   [{"task": "P0_outline_corners", "target": "room-family-page-6"}]]
+        with patch.object(drawings, "_waiting", side_effect=lambda root: waiting[0]), \
+                patch.object(drawings, "start") as start, \
+                patch.object(service, "_phase1_drawing_problems", return_value=["drawings"]), \
+                patch("backend.job_progress.stage_blocker", return_value=""), \
+                patch("backend.ai_provider.configured", return_value=True):
+            service.maybe_start_phase1(self.web, self.web.project)
+            service.maybe_start_phase1(self.web, self.web.project)     # the same questions: not sent twice
+            waiting.pop(0)
+            service.maybe_start_phase1(self.web, self.web.project)     # new questions after the pass: no loop
+        self.assertEqual(start.call_count, 1)
 
     def patches(self, assemble_errors=()):
         errors = list(assemble_errors)
