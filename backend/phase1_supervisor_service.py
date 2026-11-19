@@ -507,7 +507,7 @@ def _take_in_review(project):
 
 
 def _room_use_investigation(web, project, gap):
-    """Replace only a complete, validated room-use answer; partial replies never overwrite the room list."""
+    """Apply a validated answer only to the rooms named by this investigation."""
     from backend import skill_workflow_service as skills
     root = Path(project["review_dir"])
     manifest = read_json(root / "skill_workflow_run.json")
@@ -530,16 +530,37 @@ def _room_use_investigation(web, project, gap):
             "seconds": raw.get("seconds", 0), "error": error, **(raw.get("usage") or {})})
 
     previous = read_json(directory / "room_identity_use.json")
+    target_ids = {gap_id.removeprefix("room_use:") for gap_id in gap.get("gap_ids", [])
+                  if gap_id.startswith("room_use:")}
+    target_ids.discard("project")
+    if not target_ids and gap.get("room_id") not in (None, "project"):
+        target_ids = {gap["room_id"]}
     try:
         result = skills._execute_subskill(spec, project, dependencies, manifest["source_fingerprint"],
-            {"question": gap["note"] + " Return the complete room list, preserving every already evidenced room."})
+            {"question": gap["note"] + (" Answer only for these room IDs: " + ", ".join(sorted(target_ids)) + "."
+                                           if target_ids else " Return the complete room list, preserving every already evidenced room.")})
         attempt = result.pop("_attempt_record", {})
         result = skills._validate_subskill_output(spec, result, registry,
             allowed_pages=skills._consented_page_ids(skills._project_paths(project)))
-        prior = {row.get("room_id") for row in previous.get("proposal_fields", {}).get("rooms", []) if row.get("room_id")}
-        current = {row.get("room_id") for row in result.get("proposal_fields", {}).get("rooms", []) if row.get("room_id")}
-        if not prior <= current:
-            raise ValueError("The targeted answer omitted previously evidenced rooms; the existing room list was kept.")
+        old_rows = previous.get("proposal_fields", {}).get("rooms", [])
+        new_rows = result.get("proposal_fields", {}).get("rooms", [])
+        prior = {row["room_id"]: row for row in old_rows if row.get("room_id")}
+        current = {row["room_id"]: row for row in new_rows if row.get("room_id")}
+        if len(current) != len(new_rows):
+            raise ValueError("The room-use answer has missing or duplicate room IDs.")
+        if target_ids:
+            if not target_ids <= current.keys():
+                raise ValueError("The targeted answer omitted a requested room; the existing room list was kept.")
+            # Only the asked-about rooms are taken from the answer. Anything it says about other rooms (a reply that
+            # repeats the whole list, with small differences) is ignored rather than throwing the answer away.
+            result["affected_ids"] = [room_id for room_id in result.get("affected_ids", []) if room_id in target_ids]
+            result["proposal_fields"]["rooms"] = [current[row["room_id"]] if row.get("room_id") in target_ids else row
+                                                  for row in old_rows]
+            result["proposal_fields"]["rooms"].extend(current[room_id] for room_id in sorted(target_ids - prior.keys()))
+            for key in ("affected_ids", "observations", "inferences", "citations", "alternatives", "unresolved_fields", "remediation"):
+                result[key] = list(previous.get(key, [])) + list(result.get(key, []))
+        elif not prior.keys() <= current.keys():
+            raise ValueError("The room-use answer omitted previously evidenced rooms; the existing room list was kept.")
     except Exception as error:
         attempt = getattr(error, "attempt_record", attempt)
         record_unlogged_attempt(False, str(error)[:300])

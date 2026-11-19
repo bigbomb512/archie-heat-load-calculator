@@ -221,23 +221,78 @@ class RoutingAndCacheTests(unittest.TestCase):
         archive = next((tasks._record_file(self.root, saved).parent / "reply_attempts").glob("*.json"))
         self.assertEqual(read_json(archive)["raw_reply"], "[]")
 
-    def test_a_partial_room_use_reply_cannot_replace_the_full_room_list(self):
+    def test_targeted_room_use_reply_merges_only_requested_rooms(self):
         from backend import skill_workflow_service as skills
         folder = self.root / "skill_workflow_runs" / "review" / "proposals"
         folder.mkdir(parents=True)
-        previous = {"proposal_fields": {"rooms": [{"room_id": "shop"}, {"room_id": "kitchen"}]}, "citations": [{"id": "c1", "page": 1}]}
+        previous = {"proposal_fields": {"rooms": [{"room_id": "shop", "scope": "comfort_hvac"},
+            {"room_id": "kitchen", "scope": "comfort_hvac"}]}, "citations": [{"id": "c1", "page": 1}]}
         write_json(folder / "room_identity_use.json", previous)
         write_json(self.root / "skill_workflow_run.json", {"run_id": "review", "source_fingerprint": "a" * 64,
             "subskills": {"room_identity_use": {"status": "done"}}})
-        partial = {"status": "provisional", "input_fingerprint": "b" * 64, "proposal_fields": {"rooms": [{"room_id": "shop"}]}}
+        partial = {"status": "provisional", "input_fingerprint": "b" * 64,
+            "proposal_fields": {"rooms": [{"room_id": "shop", "scope": "unresolved"}]}}
         with patch.object(skills, "_execute_subskill", return_value=partial), \
                 patch.object(skills, "_validate_subskill_output", side_effect=lambda spec, reply, *args, **kwargs: reply), \
                 patch.object(skills, "_consented_page_ids", return_value={1}), \
-                patch.object(skills, "_persist_skill_attempt") as archive:
-            with self.assertRaisesRegex(ValueError, "omitted previously evidenced rooms"):
-                supervisor._room_use_investigation(None, self.project, {"note": "Check Shop"})
+                patch.object(skills, "_persist_skill_attempt") as archive, \
+                patch.object(skills, "_auto_review_confident_findings"), \
+                patch("backend.job_progress.stage_blocker", return_value=None):
+            self.assertEqual(supervisor._room_use_investigation(None, self.project,
+                {"note": "Check Shop", "gap_ids": ["room_use:shop"]}), {"status": "applied"})
+        merged = read_json(folder / "room_identity_use.json")
+        self.assertEqual(merged["proposal_fields"]["rooms"],
+            [{"room_id": "shop", "scope": "unresolved"}, {"room_id": "kitchen", "scope": "comfort_hvac"}])
+        self.assertEqual(merged["citations"], previous["citations"])
+        self.assertEqual(archive.call_args.kwargs["outcome"], "accepted")
+
+    def test_targeted_room_use_reply_must_answer_every_requested_room(self):
+        from backend import skill_workflow_service as skills
+        folder = self.root / "skill_workflow_runs" / "review" / "proposals"
+        folder.mkdir(parents=True)
+        previous = {"proposal_fields": {"rooms": [{"room_id": "shop", "original_label": "Shop"},
+            {"room_id": "kitchen", "original_label": "Kitchen"}]}}
+        write_json(folder / "room_identity_use.json", previous)
+        write_json(self.root / "skill_workflow_run.json", {"run_id": "review", "source_fingerprint": "a" * 64,
+            "subskills": {"room_identity_use": {"status": "done"}}})
+        reply = {"status": "provisional", "input_fingerprint": "b" * 64, "proposal_fields": {"rooms": [{"room_id": "shop"}]}}
+        with patch.object(skills, "_execute_subskill", return_value=reply), \
+                patch.object(skills, "_validate_subskill_output", side_effect=lambda spec, value, *a, **k: value), \
+                patch.object(skills, "_consented_page_ids", return_value={1}), \
+                patch.object(skills, "_persist_skill_attempt"):
+            with self.assertRaisesRegex(ValueError, "omitted a requested room"):
+                supervisor._room_use_investigation(None, self.project,
+                    {"note": "Check Shop and Kitchen", "gap_ids": ["room_use:shop", "room_use:kitchen"]})
         self.assertEqual(read_json(folder / "room_identity_use.json"), previous)
-        self.assertEqual(archive.call_args.kwargs["outcome"], "rejected")
+
+    def test_targeted_room_use_reply_ignores_what_it_says_about_other_rooms(self):
+        """A reply that repeats the whole list with small differences (Job A's Store answers, 2026-11-19) keeps its
+        answer for the asked-about room; other rooms, added rooms and other affected ids are left as they were."""
+        from backend import skill_workflow_service as skills
+        folder = self.root / "skill_workflow_runs" / "review" / "proposals"
+        folder.mkdir(parents=True)
+        previous = {"proposal_fields": {"rooms": [{"room_id": "shop", "original_label": "Shop", "scope": "comfort_hvac"},
+            {"room_id": "kitchen", "original_label": "Kitchen", "scope": "comfort_hvac"}]}}
+        write_json(folder / "room_identity_use.json", previous)
+        write_json(self.root / "skill_workflow_run.json", {"run_id": "review", "source_fingerprint": "a" * 64,
+            "subskills": {"room_identity_use": {"status": "done"}}})
+        reply = {"status": "provisional", "input_fingerprint": "b" * 64, "affected_ids": ["shop", "kitchen"],
+            "proposal_fields": {"rooms": [{"room_id": "shop", "original_label": "Shop", "scope": "not_cooled"},
+                {"room_id": "kitchen", "original_label": "Cookhouse", "scope": "not_cooled"},
+                {"room_id": "other", "original_label": "Other"}]}}
+        with patch.object(skills, "_execute_subskill", return_value=reply), \
+                patch.object(skills, "_validate_subskill_output", side_effect=lambda spec, value, *a, **k: value), \
+                patch.object(skills, "_consented_page_ids", return_value={1}), \
+                patch.object(skills, "_persist_skill_attempt"), \
+                patch.object(skills, "_auto_review_confident_findings"), \
+                patch("backend.job_progress.stage_blocker", return_value=None):
+            self.assertEqual(supervisor._room_use_investigation(None, self.project,
+                {"note": "Check Shop", "gap_ids": ["room_use:shop"]}), {"status": "applied"})
+        merged = read_json(folder / "room_identity_use.json")
+        self.assertEqual(merged["proposal_fields"]["rooms"],
+            [{"room_id": "shop", "original_label": "Shop", "scope": "not_cooled"},
+             {"room_id": "kitchen", "original_label": "Kitchen", "scope": "comfort_hvac"}])
+        self.assertEqual(merged["affected_ids"], ["shop"])
 
     def test_one_packet_is_selected_per_attempt_then_an_alternative_view(self):
         packet = {"task": "P7_ceiling_heights", "rooms": ["Shop"], "labels": []}
