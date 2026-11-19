@@ -162,8 +162,10 @@ def load_snapshot(project, report=None):
             for mapping in perimeter.get("trace_edges", {}).get(trace.get("trace_id"), []):
                 if mapping.get("perimeter_run_index") is not None:
                     perimeter_sides.append(edges.get(mapping["edge_index"], "unknown"))
-    return {"rooms": rooms, "tasks": current_tasks, "traces": traces,
-        "dwelling": ((uses.get("dwelling_context") or {}).get("is_dwelling") is True),
+    dwelling = (uses.get("dwelling_context") or {}).get("is_dwelling") is True
+    return {"rooms": rooms, "tasks": current_tasks, "traces": traces, "dwelling": dwelling,
+        # No outside-walls question exists for such a house: its unclassified walls are set by rule (ai/house_envelope.py).
+        "house_walls_by_rule": dwelling and tasks._house_without_shared_walls(root),
         "storefront_pages": [row["page"] for row in tasks._storefront_elevation_pages(ai_input)],
         "height_pages": [row["page"] for row, _labels in [*ceiling, *views]], "perimeter_sides": perimeter_sides,
         "report": stored if report_current else {}, "input_current": current,
@@ -317,7 +319,10 @@ def audit(snapshot):
             add(4, "ceiling_height", room, "P7_ceiling_heights", f"Check {label}'s ceiling height on the labelled ceiling plan, elevation or section.", pages=height_pages)
         if storefront and sides and all_internal:
             add(5, "internal_perimeter", room, "P3_boundaries", f"Check {label}'s perimeter: its walls all face other rooms or tenancies although a shopfront elevation exists.", pages=storefront + room.get("pages", []))
-        if any(side == "unknown" for side in sides):
+        # A house that shares no wall with another dwelling is never asked what its walls face: an unclassified wall is
+        # outside unless a traced room is beyond it (user decision 2026-10-30), a labelled assumption of the result. Job
+        # A's five "unknown walls" checks had no question to ask and ended "unavailable" (2026-11-19).
+        if any(side == "unknown" for side in sides) and not snapshot.get("house_walls_by_rule"):
             add(6, "unknown_walls", room, "P3_boundaries", f"Check what is on the other side of {label}'s unknown walls.")
         # In a house what is over a room follows from its level (the top storey is under the roof, a lower one under the
         # storey above: ai_preliminary_service._house_level_roof), and no roof question is asked (Turramurra, 2026-11-18:
@@ -359,7 +364,9 @@ def audit(snapshot):
             if zero and not omitted and not _exposed(room):
                 continue
             if omitted or zero:
-                add(7, "omitted_room" if omitted else "zero_load", room, "P3_boundaries",
+                # A room with no outline has no walls to check yet: its outline comes first (Job A's Kitchen, 2026-11-19).
+                add(7, "omitted_room" if omitted else "zero_load", room,
+                    "P3_boundaries" if room.get("traces") else "P0_room_outlines",
                     f"Check {label}'s envelope: it was left out of the empty-room result." if omitted else f"Check {label}'s envelope: its calculated load is zero, so verify every boundary and opening.")
         peak = (report.get("included_scope_peak") or {}).get("total_kw")
         if (rooms and any(_exposed(room) for room in rooms) and isinstance(peak, (float, int)) and abs(peak) < 1e-9
@@ -643,10 +650,14 @@ def run(web, project, step=lambda *args: None):
                         continue
                     try:
                         records = tasks.prepare_investigation(project, gap)
-                    except ValueError:
+                    except ValueError as outline_error:
                         if gap["task"] != "P0_room_outlines":
                             raise
-                        records = tasks.prepare_investigation(project, {**gap, "task": "P0_room_sizes"})
+                        try:
+                            records = tasks.prepare_investigation(project, {**gap, "task": "P0_room_sizes"})
+                        except ValueError as size_error:
+                            # Both reasons: the outline's names the prerequisite that held it back (2026-11-19).
+                            raise ValueError(f"{outline_error} {size_error}") from size_error
                     for record in records:
                         if record.get("status") == "blocked":
                             raise ValueError(record.get("block_reason") or "This drawing check needs earlier evidence.")
