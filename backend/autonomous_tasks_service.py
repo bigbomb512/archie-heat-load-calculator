@@ -1334,6 +1334,16 @@ PACKET_ERRORS = (OSError, ValueError, IndexError, KeyError, TypeError, GEOSExcep
 # readings list a plan's rooms in one sentence (house set 15, 2026-11-02).
 _READ_ROOM_LIST = re.compile(r"\b(?:includes?|rooms?(?:/services)?(?: shown)?:)\s+(.+)$", re.I)
 _READ_ROOM = re.compile(r"^([A-Za-z][A-Za-z'/& -]{1,40}?(?: \d{1,2})?)(?:\s+\d{3,5}\s*[x×]\s*\d{3,5}(?:\s*mm)?)?$")
+# "Infinity pool, spa and deck at rear; living & dining, kitchen, WIR, ensuite, lounge, porch and existing garage" with
+# evidence "room labels on plan": the plan's labels as a plain list, no "includes" or "rooms:" before it (2026.08.06 set,
+# 2026-11-18: neither of its two plans gave the naming step a room name, so the garage was named "Ensuite" and the
+# first floor's Rumpus and bedroom were never asked for).
+_READ_LABELS_EVIDENCE = re.compile(r"\blabels\b", re.I)
+_READ_LABELS_LEAD = re.compile(r"^.*?\blabels\b:?\s+", re.I)       # "Basement plan with labels CELLAR, ..."
+_READ_PLACE_SUFFIX = re.compile(r"\s+(?:at|to|on)\s+(?:the\s+)?(?:rear|front|back|side|left|right|top|bottom|north|south|east|"
+                                r"west)\b.*$", re.I)
+_READ_NOT_A_NAME = re.compile(r"\b(?:dimensions?|area|total|site|mm|overall|width|grid|lines?|marks?|shown?|showing|"
+                              r"sections?|boundar\w*)\b", re.I)
 
 
 def _reading_room_names(root, page):
@@ -1347,11 +1357,21 @@ def _reading_room_names(root, page):
             continue
         what = " ".join(str(item.get("what") or "").split())
         listed = _READ_ROOM_LIST.search(what)
-        parts = re.split(r",\s*(?:and\s+)?|\s+and\s+", re.sub(r"\s*\(.*?\)|\.$", "", listed.group(1))) if listed else [what]
+        labelled = not listed and _READ_LABELS_EVIDENCE.search(str(item.get("evidence") or "")) and re.search(r"[,;]", what)
+        if listed:
+            parts = re.split(r",\s*(?:and\s+)?|\s+and\s+", re.sub(r"\s*\(.*?\)|\.$", "", listed.group(1)))
+        elif labelled:
+            # A plain list of the plan's labels, possibly in clauses ("...deck at rear; living & dining, kitchen").
+            parts = [_READ_PLACE_SUFFIX.sub("", part.strip())
+                     for clause in re.sub(r"\s*\(.*?\)|\.$", "", what).split(";")
+                     for part in re.split(r",\s*(?:and\s+)?|\s+and\s+", _READ_LABELS_LEAD.sub("", clause.strip()))]
+        else:
+            parts = [what]
         for part in parts:
             match = _READ_ROOM.match(part.strip())
             name = match.group(1).strip() if match else ""
-            if name and len(name.split()) <= 4 and not re.search(r"\b(?:dimensions?|area|total|site|mm)\b", name, re.I):
+            not_a_name = _READ_NOT_A_NAME if labelled else re.compile(r"\b(?:dimensions?|area|total|site|mm)\b", re.I)
+            if name and len(name.split()) <= 4 and not not_a_name.search(name):
                 names.add(name[0].upper() + name[1:])
     return sorted(names)
 

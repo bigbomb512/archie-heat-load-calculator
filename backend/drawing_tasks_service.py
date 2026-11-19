@@ -14,6 +14,8 @@ Coordinates: vision models answer on their own 0–1000 grid over an image whate
 plan as 0–1000, which made every room about 45 % of its area). So when the AI answers, the prompt asks for that grid
 and the reply's pixel fields (*_px) are converted to the image's pixels before the checker sees them: by the one
 image's size, or for the north arrow by the size of the crop it chose. Where neither applies, nothing is converted.
+Claude models are the exception: they answer in the image's own pixels even when asked for the grid, so they are asked
+for pixels and their replies are not converted (answers_in_pixels).
 
 Started after the equipment reading; the skills start when it finishes, so the room skills see the traced rooms.
 Every call is logged in the job's ai_usage.jsonl under "drawing:<task>" with its cost.
@@ -253,8 +255,20 @@ def _grid_size(task, reply, sizes):
 NO_GRID_TASKS = {"P0_room_sizes", "P0_outline_corners"}   # the corner question answers in corner numbers
 
 
-def uses_grid(task, sizes):
-    if task in NO_GRID_TASKS:
+def answers_in_pixels(provider):
+    """True for a model that answers in the image's own pixels whatever the prompt asks: Claude. On the 2026.08.06 set
+    (2026-11-18) Claude Haiku 5.5 was asked for the 0-1000 grid on a 1,536 x 1,106 plan and answered in pixels (its own
+    note put the house's east wall at "x≈1022", and one corner was at x 1024, off the grid); converting those as grid
+    values moved every point right by half again and down by a tenth, so the "Living" sketch landed on the east wing's
+    bedrooms (78.2 m²) and the "Bedroom" sketch on the kitchen. The Turramurra tenancy reached x 1789 on a 1,536-px
+    image the same way. Such a model is asked for pixels (the tasks' own wording) and its reply is not converted."""
+    model = str(getattr(provider, "model", "") or "").casefold()
+    name = str(getattr(provider, "name", "") or "").casefold()
+    return "claude" in model or name == "anthropic"
+
+
+def uses_grid(task, sizes, provider=None):
+    if task in NO_GRID_TASKS or (provider is not None and answers_in_pixels(provider)):
         return False
     return len(sizes) == 1 or (task == "P2_north" and len(sizes) > 1) or (task in FIRST_IMAGE_TASKS and bool(sizes))
 
@@ -269,6 +283,27 @@ def to_pixels(value, size, key=""):
             return [round(value[0] * size[0] / 1000, 1), round(value[1] * size[1] / 1000, 1)]
         return [to_pixels(item, size, key) for item in value]
     return value
+
+
+def _px_values(value, key=""):
+    if isinstance(value, dict):
+        return [number for name, item in value.items() for number in _px_values(item, name)]
+    if isinstance(value, list):
+        if key.endswith("_px"):
+            return [item for item in value if isinstance(item, (int, float)) and not isinstance(item, bool)] + \
+                [number for item in value if isinstance(item, (list, dict)) for number in _px_values(item, key)]
+        return [number for item in value for number in _px_values(item, key)]
+    return []
+
+
+def grid_to_pixels(reply, size):
+    """to_pixels for a reply asked on the 0-1000 grid. A reply with a *_px value beyond 1000 can't be on that grid (the
+    model answered in pixels anyway), so it is left as it is rather than stretched off the image."""
+    if not size:
+        return reply
+    if any(number > 1000 for number in _px_values(reply)):
+        return reply
+    return to_pixels(reply, size)
 
 
 def _prompt(record, grid=False):
@@ -346,8 +381,8 @@ def _answer_rounds(web, project, step, provider_for, retry_not_answered):
             tried[record["run_id"]] = tried.get(record["run_id"], 0) + 1
             images = _images(root, record)
             sizes = _sizes(images)
-            grid = uses_grid(record["task"], sizes)
             provider = ai_provider.recorded(provider_for(record["task"]), root, f"drawing:{record['task']}")
+            grid = uses_grid(record["task"], sizes, provider)
             prompt = _prompt(record, grid)
             key = hashlib.sha256(json.dumps([prompt, getattr(provider, "model", ""),
                 [hashlib.sha256(Path(image).read_bytes()).hexdigest() for image in images]]).encode()).hexdigest()
@@ -459,8 +494,8 @@ def _answer_rounds(web, project, step, provider_for, retry_not_answered):
                     break
                 continue
             images, sizes = result["images"], result["sizes"]
-            grid = uses_grid(record["task"], sizes)
             provider, reply = result["provider"], result["reply"]
+            grid = uses_grid(record["task"], sizes, provider)
             if result["cached"]:
                 reused_replies += 1
             else:
@@ -477,7 +512,7 @@ def _answer_rounds(web, project, step, provider_for, retry_not_answered):
             if reply is not None:
                 size = _grid_size(record["task"], reply, sizes) if grid else None
                 if size:
-                    reply = to_pixels(reply, size)
+                    reply = grid_to_pixels(reply, size)
             try:
                 autonomous_tasks_service.post(web, project, {"action": "validate_apply", "task": record["task"],
                                                                  "target": record["target"], "reply": json.dumps(reply),
@@ -582,8 +617,8 @@ def request_investigation(project, record, provider_for=None, check=None):
         root = Path(project["review_dir"])
         images = _images(root, record)
         sizes = _sizes(images)
-        grid = uses_grid(record["task"], sizes)
         provider = (provider_for or (lambda task: ai_provider.get(f"drawing:{task}")))(record["task"])
+        grid = uses_grid(record["task"], sizes, provider)
         prompt = _prompt(record, grid)
         key = hashlib.sha256(json.dumps([prompt, getattr(provider, "model", ""),
             [hashlib.sha256(Path(image).read_bytes()).hexdigest() for image in images]]).encode()).hexdigest()
@@ -598,7 +633,7 @@ def request_investigation(project, record, provider_for=None, check=None):
             _write_json(cached_path, {"reply": reply, "raw": raw})
         checkpoint()
         size = _grid_size(record["task"], reply, sizes) if grid else None
-        return {"reply": to_pixels(reply, size) if size else reply, "raw": raw,
+        return {"reply": grid_to_pixels(reply, size), "raw": raw,
                 "cache_path": str(cached_path), "reused": reused}
     finally:
         _context.check = previous_check
