@@ -684,5 +684,86 @@ class SurroundingsAuditTests(unittest.TestCase):
         street = {**mall, "traces": [{"edges": [{"index": 3, "boundary": "external"}], "roof": "not_exposed", "openings": [{"edge_index": 3}]}]}
         self.assertTrue(supervisor._exposed(street))
 
+
+class UnavailablePacketTests(unittest.TestCase):
+    """Job A (2026-11-19): 7 of 10 checks ended "unavailable" with a generic reason and nothing was fixed."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.project = {"id": "a", "review_dir": str(self.root), "reasoning_packet": "ready"}
+
+    def test_a_house_whose_walls_are_set_by_rule_has_no_unknown_wall_check(self):
+        value = room("Bedroom", traces=[{"page": 7, "roof": "exposed", "roof_source": "ai_determined",
+                                         "edges": [{"index": 0, "boundary": "unknown"}]}])
+        self.assertEqual([gap["kind"] for gap in supervisor.audit(snapshot(value))], ["unknown_walls"])
+        self.assertEqual(supervisor.audit(snapshot(value, dwelling=True, house_walls_by_rule=True)), [])
+        # A house that shares a wall is asked, as before.
+        self.assertEqual([gap["kind"] for gap in supervisor.audit(snapshot(value, dwelling=True, house_walls_by_rule=False))],
+                         ["unknown_walls"])
+
+    def test_a_left_out_room_with_no_outline_asks_for_its_outline_with_its_area_check(self):
+        kitchen = room("KITCHEN", area_m2=None, area_source="", traces=[], pages=[7, 16])
+        report = {"phase1_coverage": {"rooms_left_out": [{"label": "KITCHEN"}]}}
+        gaps = supervisor.audit(snapshot(kitchen, report=report))
+        self.assertEqual({(gap["kind"], gap["task"]) for gap in gaps},
+                         {("room_area", "P0_room_outlines"), ("omitted_room", "P0_room_outlines")})
+        grouped = supervisor.group_investigations(gaps)
+        self.assertEqual(len(grouped), 1)
+        self.assertEqual(sorted(grouped[0]["gap_ids"]), sorted(gap["id"] for gap in gaps))
+
+    def test_the_outside_walls_check_says_why_a_house_has_no_question(self):
+        gap = {"task": "P3_boundaries", "room": "Bedroom", "room_names": ["Bedroom"], "plan_page": 7, "pages": [7], "note": "n"}
+        with patch.object(tasks, "_house_without_shared_walls", return_value=True):
+            with self.assertRaises(ValueError) as caught:
+                tasks.prepare_investigation(self.project, gap)
+        self.assertIn("outside-walls question", str(caught.exception))
+        self.assertIn("set by rule", str(caught.exception))
+        self.assertNotIn("prerequisite remains unresolved", str(caught.exception))
+
+    def test_the_outline_check_names_the_missing_prerequisite_per_plan_page(self):
+        write_json(self.root / "room_use_resolution.json", {"records": [
+            {"room_id": "k", "original_label": "KITCHEN", "evidence": [{"page": 7, "excerpt": "KITCHEN"}, {"page": 16, "excerpt": ""}]}]})
+        gap = {"task": "P0_room_outlines", "room": "KITCHEN", "room_names": ["KITCHEN"], "plan_page": None,
+               "pages": [7, 16], "note": "n"}
+        with patch.object(tasks, "_p0_main_geometry_pages", return_value=[{"page": 7}, {"page": 8}]), \
+                patch.object(tasks, "_inferred_rooms_for_plan", return_value=[]), \
+                patch.object(tasks, "_p0_wall_style_records", return_value=[]), \
+                patch.object(tasks, "_p0_context", return_value={}), \
+                patch.object(tasks, "_p0_calibration_ready", return_value=(None, "The sheet scale is unreadable.")), \
+                patch("backend.house_windows_service.is_dwelling", return_value=False):
+            with self.assertRaises(ValueError) as caught:
+                tasks.prepare_investigation(self.project, gap)
+        message = str(caught.exception)
+        # The room-use step read KITCHEN on page 7, so page 7 is its plan; what holds it back is the scale.
+        self.assertIn("for KITCHEN", message)
+        self.assertIn("page 7: the plan's scale is not settled (The sheet scale is unreadable.)", message)
+        self.assertNotIn("page 8", message)
+
+    def test_a_room_the_room_use_step_read_on_a_plan_is_on_that_plan(self):
+        write_json(self.root / "room_use_resolution.json", {"records": [
+            {"original_label": "KITCHEN", "evidence": [{"page": 7, "excerpt": "KITCHEN"}, {"page": 16, "excerpt": ""}]},
+            {"original_label": "Spa", "evidence": [{"page": 4, "excerpt": "SPA"}]}]})
+        self.assertEqual(tasks._room_use_names_on_page(self.root, 7), {"kitchen"})
+        self.assertEqual(tasks._room_use_names_on_page(self.root, 16), set())
+
+    def test_when_neither_outline_nor_size_can_be_asked_both_reasons_are_kept(self):
+        write_json(self.root / supervisor.JOB_FILE, {"status": "running"})
+        kitchen = room("KITCHEN", area_m2=None, area_source="", traces=[], pages=[7])
+
+        def prepare(project, gap):
+            raise ValueError(f"No {gap['task']} because of a reason.")
+        with patch.object(supervisor.tasks, "_refresh_geometry_tasks"), \
+                patch("backend.job_progress.stage_blocker", return_value=""), \
+                patch.object(supervisor, "ai_unavailable", return_value=""), \
+                patch.object(supervisor, "_rebuild", return_value=snapshot(kitchen)), \
+                patch.object(drawings, "_waiting", return_value=[]), \
+                patch.object(tasks, "prepare_investigation", side_effect=prepare):
+            result = supervisor.run(None, self.project)
+        reason = result["exceptions"][0]["tried"][0]["reason"]
+        self.assertIn("No P0_room_outlines because", reason)
+        self.assertIn("No P0_room_sizes because", reason)
+
 if __name__ == "__main__":
     unittest.main()

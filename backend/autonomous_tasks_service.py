@@ -1635,13 +1635,32 @@ TENANCY_NOT_NEEDED = ("Every room on this plan already has an outline from the w
                       "so the tenancy outline isn't needed to trim AI-drawn rooms.")
 
 
-def _p0_outline_packets(root, requested_rooms=None):
+def _room_use_names_on_page(root, page):
+    """The room names the room-use step found printed on this page (its excerpt cites the page), casefolded. The
+    room-use step read "KITCHEN" on Job A's ground-floor plan while the text layer and the page reading gave no room
+    list for it, so the Phase 1 check's outline question for the Kitchen found no plan to ask (2026-11-19)."""
+    names = set()
+    for row in _read(Path(root) / "room_use_resolution.json", {}).get("records", []):
+        if not isinstance(row, dict):
+            continue
+        label = str(row.get("original_label") or row.get("label") or "").strip()
+        if label and any(isinstance(item, dict) and item.get("page") == page and str(item.get("excerpt") or "").strip()
+                         for item in row.get("evidence") or []):
+            names.add(label.casefold())
+    return names
+
+
+def _p0_outline_packets(root, requested_rooms=None, skipped=None):
+    """skipped: an optional list that is given (page, why no packet was built for it) for each plan page passed over,
+    so a targeted check can say which prerequisite is missing instead of a generic "unavailable"."""
     result = []
+    skipped = [] if skipped is None else skipped
     from backend import house_windows_service
     dwelling = house_windows_service.is_dwelling(root)
     for page in _p0_main_geometry_pages(root):
         number = page["page"]
         if not requested_rooms and _tenancy_waiting(root, number):
+            skipped.append((number, "the tenancy outline question is still waiting for its answer"))
             continue      # its outlines are clipped to the tenancy once that is answered
         names_record = _current_task(root, "P0_room_names", f"page-{number}")
         plan_rooms = _inferred_rooms_for_plan(root, number)
@@ -1653,14 +1672,17 @@ def _p0_outline_packets(root, requested_rooms=None):
             on_plan.update(str(name).casefold() for name in ((names_record or {}).get("packet") or {}).get("room_names", []))
             if dwelling:
                 on_plan.update(name.casefold() for name in _reading_room_names(root, number))
+            on_plan.update(_room_use_names_on_page(root, number))
             page_requested = [name for name in requested_rooms if str(name).casefold() in on_plan]
             if not page_requested:
+                skipped.append((number, f"{', '.join(map(str, requested_rooms))} not named on this plan"))
                 continue
         wall_records = _p0_wall_style_records(root, number)
         try:
             context = _p0_context(root, number)
-            calibration, _calibration_error = _p0_calibration_ready(root, number, context)
+            calibration, calibration_error = _p0_calibration_ready(root, number, context)
             if not calibration:
+                skipped.append((number, "the plan's scale is not settled" + (f" ({calibration_error})" if calibration_error else "")))
                 continue
             raster_mode = _p0_is_raster(root, number, context, calibration)
             borrowed_styles = []
@@ -1669,12 +1691,16 @@ def _p0_outline_packets(root, requested_rooms=None):
             else:
                 if (not wall_records or
                         any(row.get("status") not in {"applied", "below_accuracy_bar"} for row in wall_records)):
+                    skipped.append((number, "the wall-style question has not been asked yet" if not wall_records else
+                                    "the wall-style question is not answered yet"))
                     continue
                 wall_style_ids, borrowed_styles = _page_wall_style_ids(root, number, wall_records)
                 if wall_style_ids:
                     wall_style_ids, _added = _completed_wall_styles(root, number, context, calibration, wall_style_ids)
             names_blocked = bool(names_record) and names_record.get("status") not in {"applied", "below_accuracy_bar"}
             if names_blocked and not (names_record.get("status") == "blocked" and not wall_style_ids and not raster_mode):
+                skipped.append((number, "the room-naming question is not answered yet"
+                                + (f" ({names_record.get('block_reason')})" if names_record.get("block_reason") else "")))
                 continue    # the naming question is still open: the open-plan outlines follow its answer
             if names_blocked:
                 # No wall line at all on this plan (not even one its sibling plans use): its naming can't be asked, so
@@ -1684,6 +1710,7 @@ def _p0_outline_packets(root, requested_rooms=None):
             _room_names, missing = _p0_outline_room_names(root, names_record, len(areas), page_requested,
                 inferred_rooms=plan_rooms, dwelling=dwelling)
             if not missing:
+                skipped.append((number, "every room named on it already has an outline or a printed area"))
                 continue
             image, transform = room_outline.render_candidate_areas(context["image"], [], context["viewport"])
             references, reference_images = _p0_name_sheets(root, number, missing)
@@ -2115,8 +2142,12 @@ def _p0_size_packets(root, requested_rooms=None):
                 if (row.get("page") == number or (len(pages) == 1 and row.get("page") is None))
                 and isinstance(row.get("area_m2"), (int, float))
                 and row["area_m2"] >= room_outline.minimum_room_area(row.get("room_label"))}
-        missing = ([name for name in requested_rooms if name in names] if requested_rooms else
-                   [name for name in names if name.casefold() not in have])
+        if requested_rooms:
+            # A requested room counts as on this plan when the room-use step read its name here, as the outline step does.
+            on_plan = {name.casefold() for name in names} | _room_use_names_on_page(root, number)
+            missing = [name for name in requested_rooms if str(name).casefold() in on_plan]
+        else:
+            missing = [name for name in names if name.casefold() not in have]
         if not missing:
             continue
         try:
@@ -2581,9 +2612,16 @@ def _house_without_shared_walls(root):
     return not _SHARED_WALL.search(text)
 
 
-def _p3_packets(root, room_id=None, page_number=None, force=False):
+HOUSE_WALLS_BY_RULE = ("a house whose drawings mention no wall shared with another dwelling: its unclassified walls "
+                       "are set by rule (outside unless a traced room is beyond them), so no outside-walls question is asked")
+
+
+def _p3_packets(root, room_id=None, page_number=None, force=False, skipped=None):
+    """skipped: an optional list given (page or None, why no packet was built) for each page passed over."""
     result=[]
+    skipped = [] if skipped is None else skipped
     if _house_without_shared_walls(root):
+        skipped.append((None, HOUSE_WALLS_BY_RULE))
         return result
     try: traces=reviewer_room_geometry_service.current_records(reviewer_room_geometry_service._paths({"review_dir":str(root)}))
     except (OSError,ValueError,TypeError,KeyError): traces=[]
@@ -2594,16 +2632,26 @@ def _p3_packets(root, room_id=None, page_number=None, force=False):
                       if room_id is not None else None)
     grouped={}
     for trace in selected: grouped.setdefault(trace.get("page"),[]).append(trace)
+    if not selected:
+        skipped.append((page_number, "no room has a traced outline on a plan with a usable scale yet" if not traces
+                        else "no traced outline has a usable scale yet"))
+    elif affected_pages is not None and not affected_pages & set(grouped):
+        skipped.append((page_number, f"no traced outline with a usable scale on page {page_number}" if page_number is not None
+                        else "the room has no traced outline with a usable scale yet"))
     ai_input,spatial,_building=_load_inputs(root)
     dwelling = __import__("backend.house_windows_service", fromlist=["is_dwelling"]).is_dwelling(root)
     elevation_rows=[] if dwelling else _storefront_elevation_pages(ai_input)
     for page,traces_on_page in sorted(grouped.items()):
         if affected_pages is not None and page not in affected_pages: continue
         comfort_traces=[row for row in traces_on_page if row.get("room_id") in comfort]
-        if not comfort_traces: continue
+        if not comfort_traces:
+            skipped.append((page, "no cooled room is traced on it"))
+            continue
         target=f"page-{page}"
         current=_current_task(root,"P3_boundaries",target)
-        if not force and room_id is None and current and current.get("status") in {"applied","below_accuracy_bar"}: continue
+        if not force and room_id is None and current and current.get("status") in {"applied","below_accuracy_bar"}:
+            skipped.append((page, "its outside-walls question is already answered"))
+            continue
         perimeter=_page_perimeter_data(traces_on_page)
         if perimeter["error"]:
             result.append(("P3_boundaries",target,{"task":"P3_boundaries","page":page},"",[],perimeter["error"]))
@@ -4891,6 +4939,29 @@ def image(web, project, data):
     return {"path": str(resolved), "content_type": "image/png"}
 
 
+def unavailable_reason(task, names, skipped, pages=()):
+    """Why no packet could be built for a targeted check, naming the missing prerequisite per plan page."""
+    label = TASK_PREREQUISITE_LABELS.get(task, "this check")
+    who = f" for {', '.join(map(str, names))}" if names else ""
+    reasons = {}
+    for page, why in skipped:
+        if pages and page is not None and page not in pages and any(row[0] in pages for row in skipped):
+            continue
+        reasons.setdefault(why, []).append(page)
+    if not reasons:
+        return (f"No {label} could be built{who}: the current drawings give no plan page for it "
+                "(no main floor plan with this room).")
+    parts = []
+    for why, on in reasons.items():
+        numbered = sorted(page for page in set(on) if page is not None)
+        parts.append((f"page{'s' if len(numbered) != 1 else ''} {', '.join(map(str, numbered))}: " if numbered else "") + why)
+    return f"No {label} could be built{who}; missing prerequisite — " + "; ".join(parts) + "."
+
+
+TASK_PREREQUISITE_LABELS = {"P0_room_outlines": "room-outline question", "P0_room_sizes": "room-size question",
+                            "P3_boundaries": "outside-walls question"}
+
+
 def prepare_investigation(project, investigation):
     """Build a focused drawing-task run using its usual evidence packet and validation contract."""
     from backend.job_runner import checkpoint
@@ -4898,13 +4969,14 @@ def prepare_investigation(project, investigation):
     root = _root(project)
     task = investigation["task"]
     names = investigation.get("room_names") or ([investigation["room"]] if investigation.get("room") else None)
+    skipped = []
     builders = {
-        "P0_room_outlines": lambda: _p0_outline_packets(root, requested_rooms=names),
+        "P0_room_outlines": lambda: _p0_outline_packets(root, requested_rooms=names, skipped=skipped),
         "P0_room_sizes": lambda: _p0_size_packets(root, requested_rooms=names),
         "P0_unnamed_space": lambda: _p0_unnamed_space_packets(root, force=True),
         "P0_tenancy_outline": lambda: _p0_tenancy_packets(root, force=True),
         "P0_outline_corners": lambda: _p0_corner_packets(root, force=True),
-        "P3_boundaries": lambda: _p3_packets(root, page_number=investigation.get("plan_page"), force=True),
+        "P3_boundaries": lambda: _p3_packets(root, page_number=investigation.get("plan_page"), force=True, skipped=skipped),
         "P3_surroundings": lambda: _p3_surroundings_packets(root),
         "P4_storefront_wall": lambda: _p4_packets(root),
         "P4_openings": lambda: _p4_packets(root, only_room_id=investigation.get("room_id") or None),
@@ -4925,7 +4997,7 @@ def prepare_investigation(project, investigation):
         on_page = [row for row in candidates if row[2].get("page") in pages]
         candidates = on_page or candidates
     if not candidates:
-        raise ValueError("The current drawings cannot yet provide a packet for this check; its prerequisite remains unresolved.")
+        raise ValueError(unavailable_reason(task, names, skipped, pages))
     # One packet per targeted attempt. Prefer a new view after a valid answer
     # failed to resolve the same gap; rejected answers get their correction retry.
     tried_targets = set(investigation.get("previous_targets", []))
