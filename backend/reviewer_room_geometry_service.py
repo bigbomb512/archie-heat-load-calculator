@@ -82,7 +82,7 @@ def _vector_page_fingerprints(paths):
         if key is not None and key in _PAGE_FINGERPRINTS:
             _PAGE_FINGERPRINTS.move_to_end(key)
             return dict(_PAGE_FINGERPRINTS[key])
-    fingerprints = {row.get("page"): _page_fp(row) for row in _vector_pages(paths) if isinstance(row, dict)}
+    fingerprints = reviewer_room_geometry.vector_page_fingerprints(_vector_pages(paths))
     if key is not None:
         with _PAGE_FINGERPRINTS_LOCK:
             _PAGE_FINGERPRINTS[key] = fingerprints
