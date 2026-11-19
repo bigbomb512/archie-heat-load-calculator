@@ -172,6 +172,11 @@ def room_proposal(run, root):
     for row in _current_named_rooms(root, traces):
         if not room_inference.plausible_room_label(row.get("label")):
             continue
+        if not row.get("derived_from_repeated_label") and is_replaced(row, replaced):
+            # The outline step's plain name for rooms it then numbered (ENSUITE on a level with ENSUITE (1)-(3)): the
+            # merged record is replaced like the detected one above, or it comes back as a fourth room that a later
+            # outline of one of them is filed under (house job 1795082136, 2026-11-19: ENSUITE drawn over ENSUITE (2)).
+            continue
         identity = room_identity(row["label"], row["level_name"])
         if identity in existing:
             continue
@@ -194,7 +199,8 @@ def room_proposal(run, root):
         level = trace.get("level_name") or "Unassigned level"
         identity = room_identity(label, level)
         own_id = trace.get("room_id") or identity
-        if (not room_inference.plausible_room_label(label) or identity in existing
+        if (not room_inference.plausible_room_label(label) or is_replaced({"label": label, "level_name": level}, replaced)
+                or identity in existing
                 or own_id in listed_ids or own_id in existing):
             continue
         page = trace.get("page")
