@@ -21,27 +21,35 @@ MIN_DISTINCT = 2         # at least two different boundaries must agree, so one 
 
 
 def labels(pdf_path, pages=None):
-    """Every bearing label: page, bearing in degrees, and the sheet direction its text runs in (clockwise from up)."""
+    """Every bearing label: page, bearing in degrees, and the sheet direction its text runs in (clockwise from up).
+
+    Reading every character of a 30-sheet set is most of the drawing checks' time, so the pages are read side by
+    side in worker processes (pdf_pipeline.page_pool); the rows come back in page order, as one loop gave them."""
     import pdfplumber
-    rows = []
+    from pdf_pipeline import page_pool
     with pdfplumber.open(str(pdf_path)) as pdf:
-        for number, page in enumerate(pdf.pages, 1):
-            if pages is not None and number not in pages:
-                continue
-            chars = page.chars
-            text = "".join(char.get("text", "") for char in chars)
-            for match in BEARING.finditer(text):
-                degrees, minutes = int(match.group(1)), int(match.group(2))
-                seconds = float(match.group(3) or 0)
-                if degrees >= 360 or minutes >= 60 or seconds >= 60:
-                    continue
-                first = chars[match.start()]
-                a, b = (first.get("matrix") or (1, 0))[:2]
-                if abs(a) < 1e-9 and abs(b) < 1e-9:
-                    continue
-                rows.append({"page": number, "bearing_deg": round(degrees + minutes / 60 + seconds / 3600, 4),
-                             "text_direction_deg": round(math.degrees(math.atan2(a, b)) % 360, 3),
-                             "text": match.group(0).strip(), "x": round(first.get("x0", 0), 1), "y": round(first.get("top", 0), 1)})
+        count = len(pdf.pages)
+    numbers = [number for number in range(1, count + 1) if pages is None or number in pages]
+    per_page = page_pool.map_pdf_pages(_page_labels, str(pdf_path), [{"page": number} for number in numbers])
+    return [row for rows in per_page for row in rows]
+
+
+def _page_labels(page, item):
+    number, rows = item["page"], []
+    chars = page.chars
+    text = "".join(char.get("text", "") for char in chars)
+    for match in BEARING.finditer(text):
+        degrees, minutes = int(match.group(1)), int(match.group(2))
+        seconds = float(match.group(3) or 0)
+        if degrees >= 360 or minutes >= 60 or seconds >= 60:
+            continue
+        first = chars[match.start()]
+        a, b = (first.get("matrix") or (1, 0))[:2]
+        if abs(a) < 1e-9 and abs(b) < 1e-9:
+            continue
+        rows.append({"page": number, "bearing_deg": round(degrees + minutes / 60 + seconds / 3600, 4),
+                     "text_direction_deg": round(math.degrees(math.atan2(a, b)) % 360, 3),
+                     "text": match.group(0).strip(), "x": round(first.get("x0", 0), 1), "y": round(first.get("top", 0), 1)})
     return rows
 
 

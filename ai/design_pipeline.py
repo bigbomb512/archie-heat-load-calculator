@@ -23,7 +23,9 @@ def create_confirmed_ai_packet(packet_path, decisions_path, output_path=None):
     ai_input = build_ai_packet(packet, decisions, str(decisions_path), spatial_ocr=spatial_ocr)
     output_path.write_text(json.dumps(ai_input, indent=2), encoding="utf-8")
     # Render once so vector/candidate overlays share the same high-resolution images.
-    chatgpt_packet = create_chatgpt_packet(output_path, dpi=DEFAULT_DPI, zip_packet=False, stage="preparation")
+    chatgpt_packet = create_chatgpt_packet(output_path, dpi=DEFAULT_DPI, zip_packet=False, stage="preparation",
+                                           return_page_images=True)
+    page_images = chatgpt_packet.pop("page_images", None)
     vector_path = create_vector_geometry(
         output_path,
         output_path.with_name("vector_geometry.json"),
@@ -43,8 +45,9 @@ def create_confirmed_ai_packet(packet_path, decisions_path, output_path=None):
         output_path.with_name("candidate_overlays"),
         Path(chatgpt_packet["folder"]) / "screenshots",
     )
-    # Rebuild once to include vector and candidate evidence in the manual vision packet.
-    chatgpt_packet = create_chatgpt_packet(output_path, dpi=DEFAULT_DPI)
+    # Rebuild once to include vector and candidate evidence in the manual vision packet. The page
+    # screenshots are unchanged since the first build, so they are reused rather than rendered again.
+    chatgpt_packet = create_chatgpt_packet(output_path, dpi=DEFAULT_DPI, page_images=page_images)
 
     return {
         "ai_input": str(output_path),

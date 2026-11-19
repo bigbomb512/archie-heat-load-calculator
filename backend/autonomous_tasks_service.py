@@ -197,23 +197,11 @@ def _site_packet(root):
 def _survey_axis(root):
     """The drawing set's orientation from its boundary bearings (ai/survey_bearings.py), read once per PDF and kept in
     the job; None when the set has no agreeing bearings or the PDF can't be read."""
-    from ai import survey_bearings
+    from backend import survey_axis_service     # kept there so page preparation can read it ahead of the checks
     pdf = Path(str((_read(root / "ai_input.json", {}) or {}).get("source_pdf") or ""))
     if not pdf.is_file():
         return None
-    stat = pdf.stat()
-    key = f"{survey_bearings.METHOD_ID}:{stat.st_size}:{stat.st_mtime_ns}"
-    cached = _read(root / "survey_bearings.json", {})
-    if isinstance(cached, dict) and cached.get("key") == key:
-        return cached.get("axis")
-    try:
-        rows = survey_bearings.labels(pdf)
-    except Exception as error:      # any PDF library failure: north comes from the arrows alone
-        print(f"Couldn't read the survey bearings: {type(error).__name__}: {error}", flush=True)
-        rows = []
-    result = survey_bearings.axis(rows)
-    _write(root / "survey_bearings.json", {"key": key, "method_id": survey_bearings.METHOD_ID, "axis": result, "labels": rows[:200]})
-    return result
+    return survey_axis_service.axis_for_pdf(root, pdf)
 
 
 def _site_declination(root):

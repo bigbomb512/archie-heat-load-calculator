@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+from functools import partial
 import json
 import math
 import re
@@ -10,6 +11,7 @@ import pdfplumber
 
 from ai.ai_packet import load_json
 from pdf_pipeline.numeric_annotations import classify_numeric_annotation
+from pdf_pipeline import page_pool
 
 
 MIN_LINE_LENGTH_PX = 18
@@ -35,12 +37,7 @@ def create_vector_geometry(ai_input_path, output_path=None, screenshots_dir=None
     overlays_dir = Path(overlays_dir) if overlays_dir else ai_input_path.with_name("vector_overlays")
     page_refs = geometry_page_refs(ai_input)
 
-    with pdfplumber.open(source_pdf) as pdf:
-        pages = [
-            extract_page_vectors(pdf.pages[ref["page"] - 1], ref, screenshots_dir)
-            for ref in page_refs
-            if 1 <= ref["page"] <= len(pdf.pages)
-        ]
+    pages = extract_pages(ai_input, screenshots_dir, page_refs, source_pdf)
 
     output = {
         "source_pdf": str(source_pdf),
@@ -55,11 +52,16 @@ def create_vector_geometry(ai_input_path, output_path=None, screenshots_dir=None
     return output_path
 
 
-def extract_pages(ai_input, screenshots_dir, page_refs):
-    """Vector rows for these pages: {"page", "title", "plan_role", "evidence_bucket"}. A page past the PDF's end is skipped."""
-    with pdfplumber.open(resolve_source_pdf(ai_input)) as pdf:
-        return [extract_page_vectors(pdf.pages[ref["page"] - 1], ref, Path(screenshots_dir))
-                for ref in page_refs if 1 <= ref["page"] <= len(pdf.pages)]
+def extract_pages(ai_input, screenshots_dir, page_refs, source_pdf=None):
+    """Vector rows for these pages: {"page", "title", "plan_role", "evidence_bucket"}. A page past the PDF's end is skipped.
+
+    Pages are extracted side by side in worker processes (pdf_pipeline.page_pool), in page_refs order.
+    """
+    source_pdf = source_pdf or resolve_source_pdf(ai_input)
+    with pdfplumber.open(source_pdf) as pdf:
+        page_count = len(pdf.pages)
+    refs = [ref for ref in page_refs if 1 <= ref["page"] <= page_count]
+    return page_pool.map_pdf_pages(partial(extract_page_vectors, screenshots_dir=Path(screenshots_dir)), source_pdf, refs)
 
 
 def resolve_source_pdf(ai_input):
@@ -920,29 +922,30 @@ def create_vector_overlays(pages, screenshots_dir, overlays_dir):
     screenshots_dir = Path(screenshots_dir)
     overlays_dir = Path(overlays_dir)
     overlays_dir.mkdir(parents=True, exist_ok=True)
-    overlays = []
+    # Pages are drawn side by side in worker processes; results stay in page order.
+    return page_pool.map_items(partial(_vector_overlay_for_page, screenshots_dir=screenshots_dir, overlays_dir=overlays_dir), pages)
 
-    for page in pages:
-        image_name = Path(page.get("image", "")).name
-        image_path = screenshots_dir / image_name
-        if not image_name or not image_path.exists():
-            overlays.append({"page": page.get("page"), "status": "missing_image", "image": image_name})
-            continue
 
-        image = Image.open(image_path).convert("RGB")
-        draw = ImageDraw.Draw(image)
-        draw_bbox(draw, page.get("plan_viewport", {}).get("bbox_px"), "orange", 5)
-        for item in page.get("line_candidates", [])[:300]:
-            draw_line(draw, item.get("start_px"), item.get("end_px"), "red", 2)
-        for item in page.get("curve_candidates", [])[:180]:
-            draw_polyline(draw, item.get("points_px"), "deepskyblue", 3)
-        for item in page.get("dimension_candidates", [])[:80]:
-            draw_bbox(draw, item.get("bbox_px"), "yellow", 2)
+def _vector_overlay_for_page(page, screenshots_dir, overlays_dir):
+    from PIL import Image, ImageDraw
 
-        output = overlays_dir / f"page_{int(page.get('page', 0)):03d}_vector_overlay.png"
-        image.save(output)
-        overlays.append({"page": page.get("page"), "status": "created", "path": str(output)})
-    return overlays
+    image_name = Path(page.get("image", "")).name
+    image_path = screenshots_dir / image_name
+    if not image_name or not image_path.exists():
+        return {"page": page.get("page"), "status": "missing_image", "image": image_name}
+    image = Image.open(image_path).convert("RGB")
+    draw = ImageDraw.Draw(image)
+    draw_bbox(draw, page.get("plan_viewport", {}).get("bbox_px"), "orange", 5)
+    for item in page.get("line_candidates", [])[:300]:
+        draw_line(draw, item.get("start_px"), item.get("end_px"), "red", 2)
+    for item in page.get("curve_candidates", [])[:180]:
+        draw_polyline(draw, item.get("points_px"), "deepskyblue", 3)
+    for item in page.get("dimension_candidates", [])[:80]:
+        draw_bbox(draw, item.get("bbox_px"), "yellow", 2)
+
+    output = overlays_dir / f"page_{int(page.get('page', 0)):03d}_vector_overlay.png"
+    image.save(output)
+    return {"page": page.get("page"), "status": "created", "path": str(output)}
 
 
 def draw_line(draw, start, end, color, width):
