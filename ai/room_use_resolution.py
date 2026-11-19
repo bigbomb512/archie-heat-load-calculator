@@ -427,8 +427,18 @@ def _record(room, taxonomy, source_fingerprints, existing=None, use_evidence=Non
         scope = scope_override
         category = deepcopy(category)
         category["space_scope"] = scope
+    unsettled = origin in {"generic_fallback", "conflict"} or selected == "generic_conditioned" or (score < 0.5 and origin != "multi_factor_evidence")
+    if dwelling and not override and not ac_evidence and scope_override not in SCOPES and unsettled \
+            and scope in {"comfort_hvac", "comfort_hvac_with_process_exception"}:
+        # In a house, a room whose use the evidence can't settle is not cooled until someone says it is (user decision
+        # 2026-11-19: small jobs count it as not cooled; larger buildings keep it cooled and wait for confirmation).
+        scope = "not_cooled"
+        rationale = ("House room whose use the drawings don't settle (" + rationale.rstrip(".") + "): counted as not cooled. "
+                     "Mark it cooled on the Fix screen if it is air-conditioned.")
+        category = deepcopy(category)
+        category["space_scope"] = scope
     special = scope in EXCLUDED_SCOPES
-    status = "excluded" if special else "needs_review" if origin in {"generic_fallback", "conflict"} or selected == "generic_conditioned" or (score < 0.5 and origin != "multi_factor_evidence") else "resolved"
+    status = "excluded" if special else "needs_review" if unsettled else "resolved"
     evidence = []
     for item in [room["building"], *(room["ai"] or [])]:
         for reference in _evidence(item):
