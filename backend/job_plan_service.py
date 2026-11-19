@@ -241,7 +241,8 @@ def get(web, project):
         levels_by_name.setdefault(" ".join(str(room["name"]).casefold().split()), set()).add(room["room_id"])
     def default_name(room):
         repeated = len(levels_by_name.get(" ".join(str(room["name"]).casefold().split()), ())) > 1
-        return f"{room['name']} ({room['level']})" if repeated and room.get("level") else room["name"]
+        from ai.page_inventory import level_display_name
+        return f"{room['name']} ({level_display_name(room['level'])})" if repeated and room.get("level") else room["name"]
     for room in rooms:
         room["has_outline"] = room["room_id"] in outlined
         room["display_name"] = shown.get(room["room_id"]) or default_name(room)

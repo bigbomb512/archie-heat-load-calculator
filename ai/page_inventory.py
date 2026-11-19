@@ -124,6 +124,17 @@ def level_key(level):
     return f"level {match.group(1)}" if match else text
 
 
+_BARE_FLOOR_NAME = re.compile(r"(?:(?:lower|upper)\s+)?(?:ground|first|second|third|fourth|fifth|1st|2nd|3rd|4th|5th)", re.I)
+
+
+def level_display_name(level):
+    """A level's name as people read it: the page reading's bare "First" or "Ground" (from a plan titled FIRST FLOOR
+    PLAN) is "First Floor", so a room shown with its level reads "Ensuite (First Floor)", not "Ensuite (First)".
+    Other names ("Basement", "Level 1", "Ground Floor", "Mezzanine") are kept as written."""
+    text = " ".join(str(level or "").split())
+    return f"{text} Floor" if _BARE_FLOOR_NAME.fullmatch(text) else text
+
+
 # Drawn over a whole floor but not the floor plan: the room labels and walls on these are diagrams (house sets 15, 16, 18:
 # a GFA diagram outranked the proposed plan and an area table became rooms).
 NOT_A_MAIN_PLAN_TITLE = re.compile(r"\b(?:gfa|gross floor|area (?:calc\w*|plan|diagram|schedule)|diagrams?|shadow|landscap\w*|"

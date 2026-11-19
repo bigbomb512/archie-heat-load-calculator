@@ -475,16 +475,17 @@ def _job_report_lines(details):
              conditions_text or "Design temperatures not recorded with this result.",
              "Cooling only: no winter (heating) design temperature or heating load is calculated.",
              details["design_basis"], "", "Rooms (own peak):"]
+    from ai.page_inventory import level_display_name
     engineer_rooms = details.get("engineer_rooms") or []
     if engineer_rooms:
-        lines += [f"  {row['name']} ({row['level']}): {row['area_m2']:.1f} m2, "
+        lines += [f"  {row['name']} ({level_display_name(row['level'])}): {row['area_m2']:.1f} m2, "
                   f"{row['peak']['design_total_kw']:.2f} kW total, "
                   f"{row['peak'].get('sensible_kw', 0):.2f} sensible, "
                   f"{row['peak'].get('latent_kw', 0):.2f} latent, "
                   f"{row['month']} {row['peak']['hour']}:00"
                   for row in engineer_rooms if row.get("area_m2") is not None]
     else:
-        lines += [f"  {row['name']} ({row['level']}): {row['area_m2'] or 0:.1f} m2, {row['kw']:.1f} kW" for row in details["rooms"]]
+        lines += [f"  {row['name']} ({level_display_name(row['level'])}): {row['area_m2'] or 0:.1f} m2, {row['kw']:.1f} kW" for row in details["rooms"]]
     comparison = details.get("setpoint_comparison") or {}
     lines += ["", "Indoor setpoint comparison:"]
     if comparison.get("status") == "calculated":

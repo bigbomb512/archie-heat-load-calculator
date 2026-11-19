@@ -50,7 +50,8 @@ def room_display_name(use, records):
     others = [row for row in records if row is not use and row.get("room_id") != use.get("room_id")
               and _key(row.get("original_label") or row.get("label")) == _key(label)]
     if others and level and level.casefold() != "unassigned level":
-        return f"{label} ({level})"
+        from ai.page_inventory import level_display_name
+        return f"{label} ({level_display_name(level)})"
     return label
 
 
