@@ -6,6 +6,7 @@ import math
 import logging
 import re
 import threading
+from collections import OrderedDict
 from functools import lru_cache
 from copy import deepcopy
 from pathlib import Path
@@ -63,39 +64,37 @@ def _page_fp(page):
     return fingerprint(page or {})
 
 
-_PAGE_FINGERPRINTS = {}
+_PAGE_FINGERPRINTS = OrderedDict()
 _PAGE_FINGERPRINTS_LOCK = threading.Lock()
 
 
 def _vector_page_fingerprints(paths):
-    """reviewer_room_geometry.vector_page_fingerprints of the job's vector geometry, worked out once per saved
-    version of the file (it is ~90 MB on a house set, and every read of the current traces checks against it)."""
+    """Each vector page's fingerprint, worked out once per version of vector_geometry.json. Checking the current traces
+    used to re-read the whole file (~90 MB on a house set) and fingerprint a page per trace, about ten times a round of
+    drawing questions (Turramurra 2026-11-18)."""
     path = Path(paths["vector"])
     try:
         stat = path.stat()
-        version = (stat.st_size, stat.st_mtime_ns, getattr(stat, "st_ino", 0))
+        key = (str(path.resolve()), stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size, stat.st_ino)
     except OSError:
-        version = None
-    key = str(path.resolve()) if version else None
-    if key:
+        key = None
+    with _PAGE_FINGERPRINTS_LOCK:
+        if key is not None and key in _PAGE_FINGERPRINTS:
+            _PAGE_FINGERPRINTS.move_to_end(key)
+            return dict(_PAGE_FINGERPRINTS[key])
+    fingerprints = {row.get("page"): _page_fp(row) for row in _vector_pages(paths) if isinstance(row, dict)}
+    if key is not None:
         with _PAGE_FINGERPRINTS_LOCK:
-            hit = _PAGE_FINGERPRINTS.get(key)
-            if hit and hit[0] == version:
-                return dict(hit[1])
-    value = reviewer_room_geometry.vector_page_fingerprints(_vector_pages(paths))
-    if key:
-        with _PAGE_FINGERPRINTS_LOCK:
-            _PAGE_FINGERPRINTS.pop(key, None)
-            _PAGE_FINGERPRINTS[key] = (version, value)
-            while len(_PAGE_FINGERPRINTS) > 16:
-                _PAGE_FINGERPRINTS.pop(next(iter(_PAGE_FINGERPRINTS)))
-    return dict(value)
+            _PAGE_FINGERPRINTS[key] = fingerprints
+            while len(_PAGE_FINGERPRINTS) > 8:
+                _PAGE_FINGERPRINTS.popitem(last=False)
+    return dict(fingerprints)
 
 
 def current_records(paths, artifact=None):
     artifact = artifact if isinstance(artifact, dict) else _read(paths["artifact"], reviewer_room_geometry.empty_artifact())
     checked = reviewer_room_geometry.validate_artifact(artifact)
-    active = reviewer_room_geometry.active_records(checked, _source_pdf_fingerprint(paths), None,
+    active = reviewer_room_geometry.active_records(checked, _source_pdf_fingerprint(paths), [],
                                                    page_fingerprints=_vector_page_fingerprints(paths))
     rooms = _rooms(paths)
     return [resolved for row in active if (resolved := _trace_with_current_room(row, paths, rooms))]
@@ -109,9 +108,9 @@ def persist_ai_determined_traces(web, project, rows, ai_run_id, quality_label, r
     paths = _paths(project)
     current_artifact = reviewer_room_geometry.validate_artifact(_read(paths["artifact"], reviewer_room_geometry.empty_artifact()))
     pdf_fp = _source_pdf_fingerprint(paths)
-    vectors = {row.get("page"): row for row in _vector_pages(paths) if isinstance(row, dict)}
+    vector_fps = _vector_page_fingerprints(paths)
     room_lookup = {row.get("room_id"): row for row in _rooms(paths)}
-    current = reviewer_room_geometry.active_records(current_artifact, pdf_fp, list(vectors.values()))
+    current = reviewer_room_geometry.active_records(current_artifact, pdf_fp, [], page_fingerprints=vector_fps)
     human_room_ids = {row.get("room_id") for row in current if row.get("declaration_source", "reviewer") == "reviewer"}
     prepared = []
     for row in rows:
@@ -119,7 +118,7 @@ def persist_ai_determined_traces(web, project, rows, ai_run_id, quality_label, r
         room = room_lookup.get(room_id)
         if not room or room_id in human_room_ids:
             continue
-        if page not in vectors or not isinstance(points, list) or len(points) < 4:
+        if page not in vector_fps or not isinstance(points, list) or len(points) < 4:
             raise ValueError("AI room outline does not reference a current room and plan page.")
         calibration = deepcopy(row.get("calibration") or {})
         from ai.autonomous_tasks import usable_calibration
@@ -130,7 +129,7 @@ def persist_ai_determined_traces(web, project, rows, ai_run_id, quality_label, r
             "page": page, "points_image_px": points, "snapped_line_ids": row.get("snapped_line_ids", [None] * len(points)),
             "calibration": calibration, "reviewer": "Archie AI (P0)", "note": row.get("note", ""),
             "status": "geometry_proposed", "created_at": ai_preliminary.now(),
-            "source_fingerprints": {"source_pdf": pdf_fp, "vector_page": _page_fp(vectors[page])},
+            "source_fingerprints": {"source_pdf": pdf_fp, "vector_page": vector_fps[page]},
             "declaration_source": "ai_determined", "ai_run_id": ai_run_id,
             "ai_quality_label": quality_label, "part_index": int(row.get("part_index", 1)),
             "part_count": int(row.get("part_count", 1)), "method": row.get("method", "ai_outline_snapped"),

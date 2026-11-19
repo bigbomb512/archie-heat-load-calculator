@@ -9,8 +9,11 @@ import math
 import traceback
 import re
 import subprocess
+from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import lru_cache
 from collections import OrderedDict
+import threading
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib.parse import quote
@@ -42,6 +45,85 @@ def _write(path, value):
 
 def _root(project):
     return Path(project["review_dir"])
+
+
+def _files_signature(root, names):
+    """Modification time, change time, size and inode of each named job file (None when missing): any save changes it."""
+    signature = []
+    for name in names:
+        try:
+            stat = (Path(root) / name).stat()
+            signature.append((stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size, stat.st_ino))
+        except OSError:
+            signature.append(None)
+    return tuple(signature)
+
+
+_FILE_MEMO = OrderedDict()
+_FILE_MEMO_LOCK = threading.Lock()
+_FILE_MEMO_SIZE = 64
+
+
+def _memo_by_files(name, root, files, compute, *args):
+    """compute() worked out once while the named job files are unchanged; callers always get their own copy.
+
+    A round of drawing questions asks for the same plan choice, plan levels and printed dimensions hundreds of times,
+    each re-reading the job's large JSON files (Turramurra 2026-11-18: about 165 s of a replayed run on the plan choice)."""
+    key = (name, str(Path(root).resolve()), args, _files_signature(root, files))
+    with _FILE_MEMO_LOCK:
+        if key in _FILE_MEMO:
+            _FILE_MEMO.move_to_end(key)
+            return deepcopy(_FILE_MEMO[key])
+    value = compute()
+    with _FILE_MEMO_LOCK:
+        _FILE_MEMO[key] = value
+        _FILE_MEMO.move_to_end(key)
+        while len(_FILE_MEMO) > _FILE_MEMO_SIZE:
+            _FILE_MEMO.popitem(last=False)
+    return deepcopy(value)
+
+
+# Rebuilding the calculation evidence takes about half a minute on a house set. During a run of drawing questions it is
+# deferred (drawing_tasks_service.answer_all): an applied answer marks it stale, and it is rebuilt only when a question
+# needs its traced areas (the room-size step) and once when the run ends, not after every round.
+_DEFERRED_EVIDENCE = ContextVar("archie_deferred_drawing_evidence", default=None)
+
+
+@contextmanager
+def deferred_evidence_rebuild(build):
+    """Within the block, evidence_changed() marks the evidence stale instead of rebuilding it; build() rebuilds it."""
+    state = {"stale": False, "build": build, "builds": 0}
+    token = _DEFERRED_EVIDENCE.set(state)
+    try:
+        yield state
+    finally:
+        _DEFERRED_EVIDENCE.reset(token)
+
+
+def evidence_changed(web, project):
+    """Saved drawing results changed the calculation evidence's inputs: rebuild it now, or mark it stale while deferred."""
+    state = _DEFERRED_EVIDENCE.get()
+    if state is not None:
+        state["stale"] = True
+        return
+    if web is not None:
+        from backend.phase1_supervisor_service import _build_calculation_evidence
+        _build_calculation_evidence(web, project)
+
+
+def ensure_evidence_current():
+    """Rebuild deferred, stale evidence before something reads it."""
+    state = _DEFERRED_EVIDENCE.get()
+    if state is not None and state["stale"]:
+        state["stale"] = False
+        state["builds"] += 1
+        state["build"]()
+
+
+def _current_traced_areas(root):
+    """The traced rooms' areas, from the calculation evidence's geometry proofs (rebuilt first when stale)."""
+    ensure_evidence_current()
+    return reviewer_room_geometry_service.current_traced_areas(root)
 
 
 def _task_dir(root, task, target):
@@ -223,8 +305,17 @@ def _north_packets(root):
 NOT_PLAN_PAGE_TYPES = {"elevation", "section", "detail"}
 
 
+_PAGE_SELECTION_FILES = ("ai_input.json", "spatial_ocr.json", "building_evidence.json", "drawing_coverage.json",
+                         "vector_geometry.json", "page_inventory.json")
+
+
 def _p0_page_selection(root):
-    """Select one main geometry sheet per level and explain every omitted plan page."""
+    """Select one main geometry sheet per level and explain every omitted plan page (worked out once per version of
+    the files it reads)."""
+    return _memo_by_files("p0_page_selection", root, _PAGE_SELECTION_FILES, lambda: _compute_p0_page_selection(root))
+
+
+def _compute_p0_page_selection(root):
     ai_input, spatial, _building = _load_inputs(root)
     coverage = _read(root / "drawing_coverage.json", {})
     vector = _read(root / "vector_geometry.json", {})
@@ -1153,7 +1244,14 @@ def _p0_calibration(root, page, context=None):
 def _page_dimension_texts(root, page, context):
     """The dimension numbers printed in the page's text layer, with their boxes in image pixels (the vector reading has
     them; the spatial text reading's boxes are in PDF points)."""
-    _ai_input, spatial, _building = _load_inputs(root)
+    origin = tuple(context.get("page_origin") or (0, 0))[:2]
+    return _memo_by_files("page_dimension_texts", root, ("spatial_ocr.json", "vector_geometry.json"),
+                          lambda: _compute_page_dimension_texts(root, page, context), page,
+                          context.get("render_dpi"), origin)
+
+
+def _compute_page_dimension_texts(root, page, context):
+    spatial = _read(root / "spatial_ocr.json", {})
     vector = _read(root / "vector_geometry.json", {})
     vector_page = next((row for row in (vector.get("geometry_key_points") or {}).get("pages", []) if row.get("page") == page), {})
     rows = [row for row in vector_page.get("dimension_candidates") or [] if isinstance(row, dict) and row.get("value_mm") and row.get("bbox_px")]
@@ -2020,7 +2118,7 @@ def _p0_size_packets(root, requested_rooms=None):
            and len(record.get("reply_attempts") or []) < 2 for record in _all_current(root)):
         return []
     inferred = _inferred_room_data(root)
-    traced = reviewer_room_geometry_service.current_traced_areas(root).values()
+    traced = _current_traced_areas(root).values()
     result = []
     for plan in pages:
         number = plan["page"]
@@ -2069,7 +2167,7 @@ def _apply_p0_sizes(web, project, root, record, validated):
     tenancy = validated.get("tenancy_area_m2")
     if tenancy and len(left) == 1:
         others = {str(row.get("room_label", "")).casefold(): float(row["area_m2"])
-                  for row in reviewer_room_geometry_service.current_traced_areas(root).values()
+                  for row in _current_traced_areas(root).values()
                   if isinstance(row.get("area_m2"), (int, float)) and str(row.get("room_label", "")).casefold() != left[0].casefold()}
         others.update({row["label"].casefold(): row["area_m2"] for row in rooms})
         remainder = tenancy - sum(others.values())
@@ -3468,6 +3566,11 @@ def _number_repeated_house_bedrooms(names, areas, printed_names=()):
 
 
 def _main_plan_levels(root):
+    return _memo_by_files("main_plan_levels", root, ("page_inventory.json", "drawing_coverage.json"),
+                          lambda: _compute_main_plan_levels(root))
+
+
+def _compute_main_plan_levels(root):
     from ai import page_inventory
     readings = {int(number): row for number, row in (_read(Path(root) / "page_inventory.json", {}).get("pages") or {}).items()
                 if str(number).isdigit() and isinstance(row, dict)}
@@ -4365,7 +4468,11 @@ def _apply_p1(root, project, record, validated):
                          ("; task below accuracy bar" if not record["accuracy"].get("auto_apply") else ""))
                          if source == "ai_fallback" else record["quality_label"], "ai_run_id": record["run_id"],
                      "reply_hash": record["reply_hash"], "input_fingerprint": record["input_fingerprint"],
-                     "evidence": next(row["text"] for row in record["packet"]["excerpts"] if row["page"] == site["page"] and site["text"] in row["text"]),
+                     # The checker may add the lot/DP from another excerpt to the site text, so the cited page's
+                     # excerpt is the evidence when no one excerpt holds the whole text (it used to end the drawing
+                     # step with StopIteration).
+                     "evidence": next((row["text"] for row in record["packet"]["excerpts"] if row["page"] == site["page"] and site["text"] in row["text"]),
+                                      next((row["text"] for row in record["packet"]["excerpts"] if row["page"] == site["page"]), "")),
                      "consultant_addresses": deepcopy(validated["consultant_addresses"])}
     cross_check = autonomous_tasks.site_cross_check(record["packet"], validated)
     determination["cross_check"] = cross_check

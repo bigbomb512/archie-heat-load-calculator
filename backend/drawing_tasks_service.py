@@ -286,7 +286,36 @@ def answer_all(web, project, step=lambda *args: None, provider_for=None, retry_n
     """Answer the waiting drawing tasks in rounds. Returns {"answered", "refused", "rounds", "calls"}.
 
     provider_for(task) gives the provider for a task (tests pass a fake); by default ai_provider.get("drawing:<task>").
-    retry_not_answered: the operator's deliberate retry also asks again the questions refused twice before."""
+    retry_not_answered: the operator's deliberate retry also asks again the questions refused twice before.
+
+    The calculation evidence (about half a minute to rebuild on a house set) isn't rebuilt after every round: a round
+    that applied answers marks it stale, a question that reads the traced areas rebuilds it first, and it is rebuilt
+    once at the end (also when the run stops on an error, so completed answers reach it; not when it is cancelled)."""
+    from backend import autonomous_tasks_service
+    from backend.job_runner import JobCancelled
+
+    def build_evidence():
+        if web is not None:
+            from backend.phase1_supervisor_service import _build_calculation_evidence
+            _build_calculation_evidence(web, project)
+
+    with autonomous_tasks_service.deferred_evidence_rebuild(build_evidence) as evidence:
+        try:
+            result = _answer_rounds(web, project, step, provider_for, retry_not_answered)
+        except JobCancelled:
+            raise
+        except BaseException:
+            try:
+                autonomous_tasks_service.ensure_evidence_current()
+            except Exception as error:       # the run's own error is the one to report
+                print(f"Couldn't rebuild the calculation evidence after the drawing tasks stopped: {error}", flush=True)
+            raise
+        autonomous_tasks_service.ensure_evidence_current()
+    result["evidence_rebuilds"] = evidence["builds"]
+    return result
+
+
+def _answer_rounds(web, project, step, provider_for, retry_not_answered):
     from backend import autonomous_tasks_service
     root = Path(project["review_dir"])
     provider_for = provider_for or (lambda task: ai_provider.get(f"drawing:{task}"))
@@ -477,9 +506,8 @@ def answer_all(web, project, step=lambda *args: None, provider_for=None, retry_n
             if web is not None and any(row["task"] == "S1_printed_areas" for row in waiting):
                 from backend import room_use_resolution_service
                 room_use_resolution_service.post(web, project, {"action": "resolve"})
-            if web is not None:
-                from backend.phase1_supervisor_service import _build_calculation_evidence
-                _build_calculation_evidence(web, project)
+            # Marked stale; rebuilt when a question reads the traced areas, and once at the end (answer_all).
+            autonomous_tasks_service.evidence_changed(web, project)
             # The questions are rebuilt once, by the next round's run_all (or after the last round, below).
             from backend import productization
             productization.record_change_if_fingerprint_changed(root, action="autonomous_drawing_round_applied",

@@ -11,6 +11,8 @@ import hashlib
 import json
 import math
 import re
+import threading
+from collections import OrderedDict
 from pathlib import Path
 
 from ai import house_windows
@@ -93,23 +95,55 @@ def _schedule_pages(root):
     return sorted(pages)
 
 
+_FLOWED = OrderedDict()
+_FLOWED_LOCK = threading.Lock()
+
+
+class _OpenedWhenRead:
+    """The PDF, opened only when a page isn't in the caches yet: opening and closing a 30-sheet set took about 4 s each
+    time the windows were placed again, though every page it needed was already read (Turramurra 2026-11-18)."""
+
+    def __init__(self, source):
+        self._source, self._doc = source, None
+
+    @property
+    def pages(self):
+        if self._doc is None:
+            import pdfplumber
+            self._doc = pdfplumber.open(self._source)
+        return self._doc.pages
+
+    def close(self):
+        if self._doc is not None:
+            self._doc.close()
+            self._doc = None
+
+
 def _pdf_pages(source):
     """(close, read) where read(page) -> (width_pt, height_pt, words), parsed once per PDF version (seating's cache)."""
-    import pdfplumber
     from backend import seating_service
-    doc = pdfplumber.open(source)
+    doc = _OpenedWhenRead(source)
     version = seating_service._pdf_version(source)
     def read(number):
         page = seating_service._Page(doc, number, version)
         return page.width, page.height, page.extract_words()
-    flowed = {}
-
     def flow(number):
         """The page's words in the PDF's own text order: a tag drawn letter by letter (set 15's "WG_07") is one word
-        here, where position order splits it; set 15's ground floor had 2 tags read that way, 17 this way (2026-11-15)."""
-        if number not in flowed:
-            flowed[number] = doc.pages[number - 1].extract_words(use_text_flow=True)
-        return flowed[number]
+        here, where position order splits it; set 15's ground floor had 2 tags read that way, 17 this way (2026-11-15).
+        Read once per page of each version of the PDF (the windows are placed again every round of drawing questions;
+        a page took about 4 s on Turramurra, 2026-11-18); callers get their own copies of the words."""
+        key = (*version, number)
+        with _FLOWED_LOCK:
+            words = _FLOWED.get(key)
+            if words is not None:
+                _FLOWED.move_to_end(key)
+        if words is None:
+            words = doc.pages[number - 1].extract_words(use_text_flow=True)
+            with _FLOWED_LOCK:
+                _FLOWED[key] = words
+                while len(_FLOWED) > 16:
+                    _FLOWED.popitem(last=False)
+        return [dict(word) for word in words]
     read.flow = flow
     return doc.close, read
 
@@ -330,8 +364,9 @@ def apply(web, project, root, read_page=None):
                 "reason": "Window is listed in the schedule but is not matched to a traced room wall."})
             unplaced_marks.add(mark)
     if any_saved and web is not None:   # once, after every room's windows (a house has many rooms; each took a rebuild)
-        from backend.phase1_supervisor_service import _build_calculation_evidence
-        _build_calculation_evidence(web, project)
+        # Deferred while the drawing questions run (autonomous_tasks_service.deferred_evidence_rebuild).
+        from backend.autonomous_tasks_service import evidence_changed
+        evidence_changed(web, project)
     result["coverage_status"] = ("unresolved" if not result["windows_in_schedule"] else
                                  "needs_review" if result["unplaced"] or result["invalid_traces"] or not result["placed"] else
                                  "provisional" if result["assigned_without_wall"] else "placed")
