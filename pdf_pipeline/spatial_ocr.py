@@ -9,6 +9,7 @@ import pdfplumber
 
 from ai.ai_packet import load_json
 from pdf_pipeline.numeric_annotations import classify_numeric_annotation
+from pdf_pipeline import page_pool
 
 
 def create_spatial_ocr(packet_path, output_path=None, decisions=None):
@@ -17,8 +18,7 @@ def create_spatial_ocr(packet_path, output_path=None, decisions=None):
     pages = useful_pages(packet, decisions or {})
     source_pdf = resolve_source_path(packet.get("pdf", ""), packet_path.parent)
 
-    with pdfplumber.open(source_pdf) as pdf:
-        results = [analyse_page(pdf.pages[page["page"] - 1], page) for page in pages]
+    results = page_pool.map_pdf_pages(analyse_page, source_pdf, pages)
 
     output = {
         "source_pdf": packet.get("pdf", ""),

@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 
 import argparse
+from functools import partial
 import json
 import subprocess
 from pathlib import Path
 
 from ai.ai_packet import load_json
+from pdf_pipeline import page_pool
 
 
 MAX_LINES_PER_PAGE = 90
@@ -26,10 +28,11 @@ def create_candidate_review(vector_geometry_path, dimension_wall_matches_path=No
     overlays_dir = Path(overlays_dir or vector_geometry_path.with_name("candidate_overlays"))
     screenshots_dir = Path(screenshots_dir) if screenshots_dir else vector_geometry_path.with_name("chatgpt_packet") / "screenshots"
 
-    pages = [
-        build_page_review(page, matches_for_page(dimension_wall_matches, page.get("page")))
+    # Pages are reviewed side by side in worker processes (pdf_pipeline.page_pool), in page order.
+    pages = page_pool.map_items(_build_page_review_item, [
+        (page, matches_for_page(dimension_wall_matches, page.get("page")))
         for page in vector_geometry.get("geometry_key_points", {}).get("pages", [])
-    ]
+    ])
     overlays = create_candidate_overlays(
         pages,
         screenshots_dir,
@@ -55,6 +58,10 @@ def matches_for_page(dimension_wall_matches, page_number):
         if page.get("page") == page_number:
             return page
     return {}
+
+
+def _build_page_review_item(item):
+    return build_page_review(*item)
 
 
 def build_page_review(page, match_page):
@@ -392,21 +399,28 @@ def create_candidate_overlays(pages, screenshots_dir, overlays_dir, source_pdf=N
     screenshots_dir = Path(screenshots_dir)
     overlays_dir = Path(overlays_dir)
     overlays_dir.mkdir(parents=True, exist_ok=True)
+    # Each page's overlays and crops are drawn in a worker process; the list keeps page order.
+    per_page = page_pool.map_items(partial(_candidate_overlays_for_page, screenshots_dir=screenshots_dir,
+                                           overlays_dir=overlays_dir, source_pdf=source_pdf, crop_dpi=crop_dpi), pages)
+    return [overlay for page_overlays in per_page for overlay in page_overlays]
+
+
+def _candidate_overlays_for_page(page, screenshots_dir, overlays_dir, source_pdf, crop_dpi):
+    from PIL import Image, ImageDraw
+
+    image_name = Path(page.get("image", "")).name
+    source = screenshots_dir / image_name
+    if not image_name or not source.exists():
+        return [{"page": page.get("page"), "status": "missing_image", "image": image_name}]
     overlays = []
-    for page in pages:
-        image_name = Path(page.get("image", "")).name
-        source = screenshots_dir / image_name
-        if not image_name or not source.exists():
-            overlays.append({"page": page.get("page"), "status": "missing_image", "image": image_name})
-            continue
-        base_image = Image.open(source).convert("RGB")
-        for kind in ["walls", "dimensions", "fixtures_or_joinery", "all_candidates"]:
-            image = base_image.copy()
-            draw_candidates(ImageDraw.Draw(image), page, kind)
-            output = overlays_dir / f"page_{int(page.get('page', 0)):03d}_{kind}_overlay.png"
-            image.save(output)
-            overlays.append({"page": page.get("page"), "status": "created", "kind": kind, "path": str(output)})
-        overlays.extend(create_crop_images(base_image, page, overlays_dir, source_pdf, crop_dpi))
+    base_image = Image.open(source).convert("RGB")
+    for kind in ["walls", "dimensions", "fixtures_or_joinery", "all_candidates"]:
+        image = base_image.copy()
+        draw_candidates(ImageDraw.Draw(image), page, kind)
+        output = overlays_dir / f"page_{int(page.get('page', 0)):03d}_{kind}_overlay.png"
+        image.save(output)
+        overlays.append({"page": page.get("page"), "status": "created", "kind": kind, "path": str(output)})
+    overlays.extend(create_crop_images(base_image, page, overlays_dir, source_pdf, crop_dpi))
     return overlays
 
 

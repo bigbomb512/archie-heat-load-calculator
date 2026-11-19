@@ -6,6 +6,11 @@ steps left the job half-prepared. The server now runs all steps in one thread
 and records progress in page_preparation_job.json, which the workspace polls.
 """
 
+import json
+from pathlib import Path
+import threading
+import traceback
+
 from backend.job_runner import BackgroundJob, now
 
 JOB_FILE = "page_preparation_job.json"
@@ -47,6 +52,10 @@ def start(web, project, data):
     def work(web, project_id, step):
         from backend import autonomous_tasks_service
         project = web.project_by_id(project_id)
+        if run_checks:
+            # The checks' slowest part (the survey bearings) needs only the PDF: start it now, beside the page steps.
+            threading.Thread(target=_warm_survey_bearings, args=(project,), daemon=True,
+                             name="archie-survey-bearings").start()
         step("pages")
         web.save_page_decisions(web.project_by_id(project_id),
                                 {"source_pdf": project.get("name", ""), "reviewed_at": now(), "pages": pages})
@@ -60,3 +69,18 @@ def start(web, project, data):
         return {}
 
     return _JOB.start(web, project, fields, work, action=data.get("action", "start"), expected_run_id=data.get("expected_run_id"))
+
+
+def _warm_survey_bearings(project):
+    """Read the drawing set's boundary bearings in the background; a failure only means the checks read them later."""
+    from backend import survey_axis_service
+    from pdf_pipeline.spatial_ocr import resolve_source_path
+    try:
+        packet_path = Path(project.get("packet") or "")
+        if not packet_path.is_file():
+            return
+        packet = json.loads(packet_path.read_text(encoding="utf-8"))
+        pdf = resolve_source_path(packet.get("pdf", ""), packet_path.parent)
+        survey_axis_service.warm(project["review_dir"], pdf)
+    except Exception:
+        traceback.print_exc()
