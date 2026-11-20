@@ -176,8 +176,16 @@ def grow_plan_viewport(viewport, objects, image_size, min_length_px, max_rounds=
     return (round(left, 2), round(top, 2), round(right, 2), round(bottom, 2))
 
 
-def wall_geometry(objects, wall_style_ids, viewport=None, line_half_width_px=1.0):
-    """Union of all objects drawn in the chosen wall styles."""
+# A filled shape is a wall (solid poché) only when it is wall-thin: its area over half its perimeter.
+MAX_FILLED_WALL_MM = 400.0
+
+
+def wall_geometry(objects, wall_style_ids, viewport=None, line_half_width_px=1.0, mm_per_px=None):
+    """Union of all objects drawn in the chosen wall styles.
+
+    With mm_per_px, a filled shape thicker than MAX_FILLED_WALL_MM is left out: it is a floor fill or a solid block,
+    not a wall. On the Turramurra house (2026-11-20) the wall-style task chose the white floor fill drawn under the
+    whole ground floor, which, taken as a wall, left no room enclosed."""
     wanted = set(wall_style_ids)
     area = box(*viewport) if viewport else None
     parts = []
@@ -190,10 +198,93 @@ def wall_geometry(objects, wall_style_ids, viewport=None, line_half_width_px=1.0
         if item["filled"] and len(item["points"]) >= 3:
             polygon = Polygon(item["points"]).buffer(0)
             if not polygon.is_empty and polygon.area > 0:
+                if mm_per_px and polygon.length and 2 * polygon.area / polygon.length * mm_per_px > MAX_FILLED_WALL_MM:
+                    continue
                 parts.append(polygon)
                 continue
         parts.append(line.buffer(line_half_width_px))
     return unary_union(parts) if parts else None
+
+
+# Walls found by their shape: two parallel drawn lines a wall's thickness apart, whatever pen drew them.
+PAIRED_WALL_MIN_MM = 60.0       # a 70 mm stud partition's two faces
+PAIRED_WALL_MAX_MM = 350.0      # a 260-300 mm cavity or masonry wall, with drawing tolerance
+PAIRED_WALL_MIN_RUN_MM = 300.0  # the two faces run side by side at least this far
+PAIRED_WALL_MIN_LINE_MM = 250.0
+
+
+def _straight_segments(objects, mm_per_px, min_mm, skip_styles=()):
+    """Straight pieces of the drawn, unfilled lines at least min_mm long, as (start, end)."""
+    result = []
+    for item in objects:
+        if item["filled"] or item["style"] in skip_styles:
+            continue
+        for start, end in zip(item["points"], item["points"][1:]):
+            if math.dist(start, end) * mm_per_px >= min_mm:
+                result.append((start, end))
+    return result
+
+
+def paired_wall_geometry(objects, viewport, mm_per_px):
+    """Walls found by shape: each drawn line paired with the nearest parallel line 60-350 mm away that runs beside it
+    for at least 300 mm; the band between the two is wall.
+
+    Which pen draws walls differs between offices, and some draw walls in the same pen as dimension lines, so no style
+    choice can pick them out (the Turramurra house, 2026-11-20: its wall faces share a pen with 2,146 m of dimension
+    and grid lines). A wall's two faces drawn side by side are the same on every drawing. Hatch and tile grids are left
+    out first; door gaps are closed afterwards by enclosed_rooms as for any walls."""
+    if not objects or not mm_per_px:
+        return None
+    area = box(*viewport) if viewport else None
+    segments = _straight_segments(objects, mm_per_px, PAIRED_WALL_MIN_LINE_MM, hatch_styles(objects))
+    if area is not None:
+        segments = [segment for segment in segments if LineString(segment).intersects(area)]
+    low, high, run = (value / mm_per_px for value in (PAIRED_WALL_MIN_MM, PAIRED_WALL_MAX_MM, PAIRED_WALL_MIN_RUN_MM))
+    by_angle = defaultdict(list)      # half-degree direction buckets
+    for start, end in segments:
+        angle = math.degrees(math.atan2(end[1] - start[1], end[0] - start[0])) % 180.0
+        by_angle[int(round(angle * 2)) % 360].append((start, end))
+    bands = []
+    for bucket, group in by_angle.items():
+        theta = math.radians(bucket / 2.0)
+        along, across = (math.cos(theta), math.sin(theta)), (-math.sin(theta), math.cos(theta))
+        rows = sorted(((start[0] * across[0] + start[1] * across[1] + end[0] * across[0] + end[1] * across[1]) / 2.0,
+                       *sorted((start[0] * along[0] + start[1] * along[1], end[0] * along[0] + end[1] * along[1])))
+                      for start, end in group)
+        for index, (offset, first, last) in enumerate(rows):
+            best = None
+            for other_offset, other_first, other_last in rows[index + 1:]:
+                gap = other_offset - offset
+                if gap > high:
+                    break
+                if gap < low:
+                    continue
+                begin, finish = max(first, other_first), min(last, other_last)
+                if finish - begin >= run:
+                    best = (other_offset, begin, finish)
+                    break            # the nearest parallel face is this wall's other face
+            if best is None:
+                continue
+            other_offset, begin, finish = best
+            point = lambda t, o: (along[0] * t + across[0] * o, along[1] * t + across[1] * o)
+            bands.append(Polygon([point(begin, offset), point(finish, offset),
+                                  point(finish, other_offset), point(begin, other_offset)]).buffer(1.0, join_style=2))
+    return unary_union(bands) if bands else None
+
+
+def wall_face_segments(walls, mm_per_px, min_mm=PAIRED_WALL_MIN_RUN_MM):
+    """The straight edges of a wall shape (its faces), as LineStrings for snapping outlines onto."""
+    result = []
+    if walls is None or walls.is_empty:
+        return result
+    for polygon in getattr(walls, "geoms", [walls]):
+        if not hasattr(polygon, "exterior"):
+            continue
+        for ring in [polygon.exterior, *polygon.interiors]:
+            coords = list(ring.coords)
+            result.extend(LineString([start, end]) for start, end in zip(coords, coords[1:])
+                          if math.dist(start, end) * mm_per_px >= min_mm)
+    return result
 
 
 # How many unchosen line styles may be tried when the chosen wall styles enclose too few rooms.
@@ -659,7 +750,8 @@ def corner_outline_prompt(subject, count):
             "{\"corners\": [int, ...], \"missing_sides\": string}")
 
 
-def validate_corner_outline_reply(reply, corners, sketch_points, subject, sketch_area=None, max_area=None):
+def validate_corner_outline_reply(reply, corners, sketch_points, subject, sketch_area=None, max_area=None,
+                                  min_area=None):
     """The outline built from the picked corners (pieces, if it crosses itself), checked against the sketch's area."""
     if not isinstance(reply, dict) or not isinstance(reply.get("corners"), list):
         raise ValueError("The reply must list the corner numbers in order around the outline.")
@@ -680,6 +772,9 @@ def validate_corner_outline_reply(reply, corners, sketch_points, subject, sketch
     if sketch_area and abs(built - sketch_area) > CORNER_AREA_TOLERANCE * sketch_area:
         raise ValueError(f"The listed corners enclose {built / sketch_area:.0%} of the sketched area; list the corners "
                          f"all the way around {subject}, following its walls and glazing.")
+    if min_area and built < min_area:
+        raise ValueError(f"The listed corners enclose too little of {subject}'s sketched floor; list the corners all "
+                         f"the way around {subject}, following its walls and glazing.")
     if max_area and built > 1.1 * max_area:
         raise ValueError(f"The listed corners enclose more than the whole tenancy; list only the corners around {subject}.")
     return {"corners": picked, "parts": parts, "repaired": repaired,
@@ -881,6 +976,182 @@ def split_area(polygon, line_points, room_points):
     if len(set(map(id, named.values()))) != 2:
         raise ValueError("Both rooms of a split must be in different parts.")
     return named
+
+
+# Splitting an open-plan area among the rooms printed in it.
+OPEN_PLAN_MIN_GAP_MM = 600.0       # two room names closer than this across a cut are not split apart
+OPEN_PLAN_FEATURE_TOL_MM = 120.0   # a drawn line this close to a cut runs along it
+OPEN_PLAN_LABEL_REACH_MM = 300.0   # a room name printed this close to an area belongs to it
+
+
+def _axis_lines(segments, axis):
+    """(position, start, end) of the segments within 2 degrees of vertical (axis 0) or horizontal (axis 1)."""
+    lines = []
+    for start, end in segments:
+        dx, dy = abs(end[0] - start[0]), abs(end[1] - start[1])
+        if axis == 0 and dx <= dy * 0.035:
+            lines.append(((start[0] + end[0]) / 2.0, min(start[1], end[1]), max(start[1], end[1])))
+        elif axis == 1 and dy <= dx * 0.035:
+            lines.append(((start[1] + end[1]) / 2.0, min(start[0], end[0]), max(start[0], end[0])))
+    return sorted(lines)
+
+
+def _cut_score(polygon, axis, position, lines, tolerance):
+    """How good a straight cut is: the share of it running along drawn lines (a counter edge, a wall stub, a step),
+    plus a bonus for a short cut across a narrow neck (a wide opening between two rooms)."""
+    x0, y0, x1, y1 = polygon.bounds
+    cut = (LineString([(position, y0 - 1), (position, y1 + 1)]) if axis == 0
+           else LineString([(x0 - 1, position), (x1 + 1, position)])).intersection(polygon)
+    length = cut.length
+    if length <= 0:
+        return None
+    zone = cut.buffer(tolerance)
+    covered = 0.0
+    for line_position, start, end in lines:
+        if abs(line_position - position) <= tolerance:
+            drawn = (LineString([(position, start), (position, end)]) if axis == 0
+                     else LineString([(start, position), (end, position)]))
+            covered += drawn.intersection(zone).length
+    span = (y1 - y0) if axis == 0 else (x1 - x0)
+    return min(covered / length, 1.0) + 0.6 * (1.0 - length / span)
+
+
+def _halves(polygon, axis, position):
+    x0, y0, x1, y1 = polygon.bounds
+    margin = 10.0
+    if axis == 0:
+        return (polygon.intersection(box(x0 - margin, y0 - margin, position, y1 + margin)),
+                polygon.intersection(box(position, y0 - margin, x1 + margin, y1 + margin)))
+    return (polygon.intersection(box(x0 - margin, y0 - margin, x1 + margin, position)),
+            polygon.intersection(box(x0 - margin, position, x1 + margin, y1 + margin)))
+
+
+def _polygons(geometry):
+    return [part for part in getattr(geometry, "geoms", [geometry]) if part.geom_type == "Polygon" and part.area > 0]
+
+
+def split_open_plan(polygon, labels, segments, mm_per_px):
+    """Divide one enclosed area among the rooms printed in it, with straight cuts square to the drawing.
+
+    labels is [(room name, (x, y))]: where each room's name is printed. The area is cut in two, between two groups of
+    names, along the cut that best follows a drawn line (a counter edge, a wall stub, a step) or crosses the narrowest
+    neck; each side is cut again until every piece holds one name. Pieces holding no name join the neighbour they
+    share most edge with. The pieces cover the area exactly once: no gaps and no overlaps, so the plan reads as rooms
+    side by side (the Turramurra house's sitting, entry, dining and living, 2026-11-20, which were drawn one by one
+    as overlapping triangles). Returns [(room name, polygon)]; one name or none returns the area whole."""
+    if len(labels) <= 1:
+        return [(labels[0][0] if labels else None, polygon)]
+    lines = [_axis_lines(segments, 0), _axis_lines(segments, 1)]
+    gap, tolerance = OPEN_PLAN_MIN_GAP_MM / mm_per_px, OPEN_PLAN_FEATURE_TOL_MM / mm_per_px
+
+    def divide(shape, names):
+        if len(names) <= 1:
+            return [(names[0][0] if names else None, shape)]
+        best = None
+        for axis in (0, 1):
+            ordered = sorted(names, key=lambda item: item[1][axis])
+            for index in range(len(ordered) - 1):
+                low, high = ordered[index][1][axis], ordered[index + 1][1][axis]
+                if high - low < gap:
+                    continue
+                positions = {(low + high) / 2.0} | {line[0] for line in lines[axis] if low + gap / 2 < line[0] < high - gap / 2}
+                balance = min(index + 1, len(ordered) - index - 1) / len(ordered)
+                for position in sorted(positions):
+                    score = _cut_score(shape, axis, position, lines[axis], tolerance)
+                    if score is not None and (best is None or score + 0.05 * balance > best[0]):
+                        best = (score + 0.05 * balance, axis, position, ordered[:index + 1], ordered[index + 1:])
+        if best is None:          # names too close together to cut between: the first keeps the area
+            return [(names[0][0], shape)]
+        _score, axis, position, first, second = best
+        pieces = []
+        for half, group in zip(_halves(shape, axis, position), (first, second)):
+            for part in _polygons(half):
+                inside = [item for item in group if part.buffer(1.0).contains(Point(item[1]))]
+                pieces.extend(divide(part, inside) if inside else [(None, part)])
+        return pieces
+
+    pieces = divide(polygon, list(labels))
+    named = [[name, shape] for name, shape in pieces if name]
+    if not named:
+        return [(None, polygon)]
+    unjoined = []
+    for name, orphan in [(name, shape) for name, shape in pieces if not name]:
+        neighbour = max(named, key=lambda row: row[1].buffer(2.0).intersection(orphan).area)
+        merged = unary_union([neighbour[1], orphan.buffer(0.5, join_style=2)]).buffer(-0.5, join_style=2)
+        if merged.geom_type == "Polygon" and neighbour[1].buffer(2.0).intersects(orphan):
+            neighbour[1] = merged
+        else:                     # never lose floor: a piece that can't join a neighbour stays as its own area
+            unjoined.append((None, orphan))
+    # One room's name may be printed twice (pieces of one room on both sides of a cut): its pieces are joined.
+    joined = {}
+    for name, shape in named:
+        joined[name] = unary_union([joined[name], shape]) if name in joined else shape
+    result = []
+    for name, shape in joined.items():
+        result.extend((name, part) for part in _polygons(shape))
+    return result + unjoined
+
+
+def labels_in_area(polygon, labels, mm_per_px):
+    """The printed room names inside an area, or within OPEN_PLAN_LABEL_REACH_MM of it (a name printed over a counter
+    line), each name once."""
+    reach = OPEN_PLAN_LABEL_REACH_MM / mm_per_px
+    found, seen = [], set()
+    for name, point in labels:
+        if name.casefold() in seen:
+            continue
+        if polygon.distance(Point(point)) <= reach:
+            inside = point if polygon.contains(Point(point)) else \
+                polygon.exterior.interpolate(polygon.exterior.project(Point(point))).coords[0]
+            found.append((name, tuple(inside)))
+            seen.add(name.casefold())
+    return found
+
+
+SQUARE_MAX_DEG = 6.0          # an edge this close to the drawing's horizontal or vertical is meant to be square
+SQUARE_MAX_AREA_CHANGE = 0.15
+
+
+def square_polygon(polygon, max_deg=SQUARE_MAX_DEG):
+    """An AI-drawn outline with its nearly horizontal and nearly vertical edges made exactly so.
+
+    Each such edge is replaced by a horizontal or vertical line through its middle, and the corners are rebuilt where
+    neighbouring lines meet; real diagonal walls (more than max_deg off) keep their direction. A picked or sketched
+    outline is a few pixels off at each corner, which drew rooms with slightly slanted sides (the Turramurra house,
+    2026-11-20). The outline is returned unchanged when squaring would make it invalid or change its area by more than
+    SQUARE_MAX_AREA_CHANGE."""
+    if polygon is None or polygon.is_empty or polygon.geom_type != "Polygon":
+        return polygon
+    points = list(polygon.exterior.coords)[:-1]
+    if len(points) < 3:
+        return polygon
+    lines = []                    # (point on the line, direction)
+    for start, end in zip(points, points[1:] + points[:1]):
+        dx, dy = end[0] - start[0], end[1] - start[1]
+        middle = ((start[0] + end[0]) / 2.0, (start[1] + end[1]) / 2.0)
+        angle = math.degrees(math.atan2(dy, dx)) % 180.0
+        if min(angle, 180.0 - angle) <= max_deg:
+            lines.append((middle, (1.0, 0.0)))
+        elif abs(angle - 90.0) <= max_deg:
+            lines.append((middle, (0.0, 1.0)))
+        else:
+            length = math.hypot(dx, dy) or 1.0
+            lines.append((middle, (dx / length, dy / length)))
+    corners = []
+    for index, (point, direction) in enumerate(lines):
+        previous_point, previous_direction = lines[index - 1]
+        cross = previous_direction[0] * direction[1] - previous_direction[1] * direction[0]
+        if abs(cross) < 1e-9:     # two parallel edges in a row: keep the original corner between them
+            corners.append(points[index])
+            continue
+        t = ((point[0] - previous_point[0]) * direction[1] - (point[1] - previous_point[1]) * direction[0]) / cross
+        corners.append((previous_point[0] + t * previous_direction[0], previous_point[1] + t * previous_direction[1]))
+    squared = Polygon(corners)
+    if not squared.is_valid or squared.is_empty or polygon.area <= 0:
+        return polygon
+    if abs(squared.area - polygon.area) > SQUARE_MAX_AREA_CHANGE * polygon.area:
+        return polygon
+    return squared
 
 
 def drawn_segments(objects, style_ids, min_length_px=10):

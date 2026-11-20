@@ -57,6 +57,12 @@ class SheetScaleTests(unittest.TestCase):
         reviewer_room_geometry.validate_artifact({"records": [trace]})
         with self.assertRaisesRegex(ValueError, "two finite points"):
             reviewer_room_geometry.validate_artifact({"records": [{**trace, "declaration_source": "reviewer"}]})
+        # A sheet that prints no scale and borrows one from a matching plan sheet carries no dimension span either.
+        borrowed = {**trace, "calibration": {"source": "registered_sheet_scale", "status": "declared_scale_only",
+                                             "mm_per_px": 14.109, "scale_page": 8}}
+        reviewer_room_geometry.validate_artifact({"records": [borrowed]})
+        with self.assertRaisesRegex(ValueError, "two finite points"):
+            reviewer_room_geometry.validate_artifact({"records": [{**borrowed, "declaration_source": "reviewer"}]})
 
     def test_scale_read_bar_notation_and_standard_object_agreement(self):
         bar = autonomous_tasks.validate_scale_read_reply({}, json.dumps({"scale_bar": {"points_image_px": [[0, 0], [100, 0]], "length_mm": 10000}}))

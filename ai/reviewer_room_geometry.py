@@ -126,9 +126,11 @@ def validate_artifact(raw):
         # An AI outline on a sheet where no printed dimension could be read is scaled from the sheet's printed scale
         # alone (user decision 2026-10-16), labelled as unchecked; it has no dimension span to mark.
         # Likewise a scale read from the printed notation or scale bar, estimated from standard objects, or assumed
-        # (the scale ladder's later steps, 2026-11-03): labelled, with no dimension span.
+        # (the scale ladder's later steps, 2026-11-03): labelled, with no dimension span. So is a sheet that prints no
+        # scale but borrows it from a plan sheet printing the same dimension figures at the same places.
         sheet_scale_only = (declaration_source in {"ai_determined", "ai_fallback"}
-                            and (calibration.get("source") in {"sheet_printed_scale", "ai_read_printed_scale"}
+                            and (calibration.get("source") in {"sheet_printed_scale", "ai_read_printed_scale",
+                                                               "registered_sheet_scale"}
                                  and calibration.get("status") in {"declared_scale_only", "scale_bar"}
                                  or calibration.get("status") in {"standard_objects", "assumed_scale"}))
         if sheet_scale_only:

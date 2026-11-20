@@ -68,10 +68,10 @@ _PAGE_FINGERPRINTS = OrderedDict()
 _PAGE_FINGERPRINTS_LOCK = threading.Lock()
 
 
-def _vector_page_fingerprints(paths):
-    """Each vector page's fingerprint, worked out once per version of vector_geometry.json. Checking the current traces
-    used to re-read the whole file (~90 MB on a house set) and fingerprint a page per trace, about ten times a round of
-    drawing questions (Turramurra 2026-11-18)."""
+def _vector_page_index(paths):
+    """({page: fingerprint}, {page: the page's image size and render reference}) for vector_geometry.json, worked out
+    once per version of the file. The file is ~90 MB on a house set; the plan screen needs only each page's size and
+    fingerprint, and re-reading it took about half a second of every /api/job-plan call (2026-11-20)."""
     path = Path(paths["vector"])
     try:
         stat = path.stat()
@@ -81,14 +81,26 @@ def _vector_page_fingerprints(paths):
     with _PAGE_FINGERPRINTS_LOCK:
         if key is not None and key in _PAGE_FINGERPRINTS:
             _PAGE_FINGERPRINTS.move_to_end(key)
-            return dict(_PAGE_FINGERPRINTS[key])
-    fingerprints = reviewer_room_geometry.vector_page_fingerprints(_vector_pages(paths))
+            fingerprints, summaries = _PAGE_FINGERPRINTS[key]
+            return dict(fingerprints), deepcopy(summaries)
+    pages = _vector_pages(paths)
+    fingerprints = reviewer_room_geometry.vector_page_fingerprints(pages)
+    summaries = {row.get("page"): {"page": row.get("page"), "image": row.get("image"),
+                                   "coordinate_systems": {"image_px": deepcopy((row.get("coordinate_systems") or {}).get("image_px", {}))}}
+                 for row in pages if isinstance(row, dict)}
     if key is not None:
         with _PAGE_FINGERPRINTS_LOCK:
-            _PAGE_FINGERPRINTS[key] = fingerprints
+            _PAGE_FINGERPRINTS[key] = (fingerprints, summaries)
             while len(_PAGE_FINGERPRINTS) > 8:
                 _PAGE_FINGERPRINTS.popitem(last=False)
-    return dict(fingerprints)
+    return dict(fingerprints), deepcopy(summaries)
+
+
+def _vector_page_fingerprints(paths):
+    """Each vector page's fingerprint, worked out once per version of vector_geometry.json. Checking the current traces
+    used to re-read the whole file (~90 MB on a house set) and fingerprint a page per trace, about ten times a round of
+    drawing questions (Turramurra 2026-11-18)."""
+    return _vector_page_index(paths)[0]
 
 
 def current_records(paths, artifact=None):
@@ -605,7 +617,7 @@ def _page_context(paths, web):
     ai_input = _read(paths["ai_input"], {})
     coverage = _read(paths["coverage"], {})
     level_method_current = has_current_level_classification(coverage)
-    vector_pages = {row.get("page"): row for row in _vector_pages(paths) if isinstance(row, dict)}
+    page_fingerprints, vector_pages = _vector_page_index(paths)
     coverage_pages = {row.get("page"): row for row in coverage.get("pages", []) if isinstance(row, dict)}
     role_pages = {row.get("page"): row for row in coverage.get("page_roles", []) if isinstance(row, dict)}
     drawing_pages = {row.get("page"): row for row in ai_input.get("drawing_set", {}).get("pages", []) if isinstance(row, dict)}
@@ -661,7 +673,7 @@ def _page_context(paths, web):
                       "pdf_height_pt": height_pt,
                       "image_px_per_pt": image_width / width_pt if isinstance(image_width, (int, float)) and width_pt else None,
                       "image_width_px": image_width, "image_height_px": image_height,
-                      "vector_page_fingerprint": _page_fp(vector),
+                      "vector_page_fingerprint": page_fingerprints.get(number) or _page_fp(vector),
                       "preview_url": web.safe_link(preview_path) if preview_path else "",
                       "preview_width_px": image_width if preview_matches else None,
                       "preview_height_px": image_height if preview_matches else None,
@@ -715,6 +727,20 @@ def _fallback_trace_page_numbers(role_pages, coverage_pages, drawing_pages, vect
 
 @lru_cache(maxsize=8)
 def _cached_pdf_sizes(source_pdf, inode, size, mtime_ns, ctime_ns):
+    """{page: (width, height) in points, after the page's rotation}. Read from the page boxes with pdfium without
+    loading the pages: 4 ms against about 4 s for pdfplumber parsing every page of a 30-page set (2026-11-20). The same
+    sizes as pdfplumber on all 19 job PDFs and on rotated pages, to the 4th decimal; pdfplumber if pdfium fails."""
+    try:
+        import pypdfium2 as pdfium
+        document = pdfium.PdfDocument(source_pdf)
+        try:
+            # pdfium reads the boxes as 32-bit floats; PDFs store them to a few decimals.
+            return {index + 1: tuple(round(float(value), 4) for value in document.get_page_size(index))
+                    for index in range(len(document))}
+        finally:
+            document.close()
+    except Exception:
+        pass
     try:
         import pdfplumber
         with pdfplumber.open(source_pdf) as pdf:

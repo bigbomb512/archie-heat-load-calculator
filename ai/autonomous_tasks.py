@@ -227,12 +227,20 @@ def validate_p0_tenancy_outline(packet, reply):
     return room_outline.validate_tenancy_outline_reply(parse_json_reply(reply), packet["transform"])
 
 
+CORNER_MIN_SKETCH_SHARE = 0.6
+
+
 def validate_p0_outline_corners(packet, reply):
     # Not judged against the AI's sketch: on Casa Nova (2026-10-24) the tenancy sketch was 58 m² of a ~260 m² tenancy
     # and good corner answers were refused for differing from it. A room may not exceed the corner-built tenancy.
+    # A room's corners may enclose more than its sketch (the sketch may be a fragment of the room) but not much less:
+    # on the Turramurra house (2026-11-20) three corners made the kitchen a 4.4 m² triangle of its 13.8 m² sketch.
+    room = packet.get("room")
     return room_outline.validate_corner_outline_reply(parse_json_reply(reply), packet["corners"], None,
-                                                      packet.get("room") or "the tenancy",
-                                                      max_area=packet.get("tenancy_area_px") if packet.get("room") else None)
+                                                      room or "the tenancy",
+                                                      max_area=packet.get("tenancy_area_px") if room else None,
+                                                      min_area=(CORNER_MIN_SKETCH_SHARE * packet["sketch_area_px"]
+                                                                if room and packet.get("sketch_area_px") else None))
 
 
 def validate_p0_unnamed_space(packet, reply):

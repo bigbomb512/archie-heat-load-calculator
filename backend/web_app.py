@@ -155,6 +155,19 @@ class CalculatorInputConflict(Exception):
         self.changed_sources = list(changed_sources or [])
 
 
+# The browser closed the connection before the answer was sent.
+CLIENT_GONE_ERRORS = (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)
+
+
+class ArchieHTTPServer(ThreadingHTTPServer):
+    """The web server, quiet about browsers that leave before their answer is sent (a static file cut short)."""
+
+    def handle_error(self, request, client_address):
+        if isinstance(sys.exc_info()[1], CLIENT_GONE_ERRORS):
+            return
+        super().handle_error(request, client_address)
+
+
 class Handler(SimpleHTTPRequestHandler):
     """Explicit Archie routes only; never expose the repository as a web root."""
 
@@ -620,11 +633,8 @@ class Handler(SimpleHTTPRequestHandler):
         return str(asset) if asset else str(FRONTEND / "__not_found__")
 
     def send_file(self, path, content_type):
-        self.send_response(200)
-        self.send_header("Content-Type", content_type)
-        self.send_common_headers()
-        self.end_headers()
-        self.wfile.write(path.read_bytes())
+        body = path.read_bytes()
+        self._send_body(200, content_type, body)
 
     def send_artifact(self):
         query = parse_qs(urlparse(self.path).query)
@@ -652,20 +662,30 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_file(candidate, content_type)
 
     def send_html(self, body, status=200):
-        self.send_response(status)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_common_headers()
-        self.end_headers()
-        self.wfile.write(body.encode("utf-8"))
+        self._send_body(status, "text/html; charset=utf-8", body.encode("utf-8"))
 
     def send_json(self, data, status=200):
         if security.config().production and isinstance(data, dict) and data.get("error"):
             data = {"error": "Request could not be completed.", "code": data.get("code", "request_failed")}
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_common_headers()
-        self.end_headers()
-        self.wfile.write(json.dumps(data, indent=2).encode("utf-8"))
+        self._send_body(status, "application/json; charset=utf-8", json.dumps(data, indent=2).encode("utf-8"))
+
+    def _send_body(self, status, content_type, body):
+        """Send one response. A browser that has already gone (the page was closed, or a newer poll replaced this
+        request) is not an error: the answer is dropped quietly. Raising here made every route's error handler try to
+        send a 400 down the same closed connection, which printed two Broken pipe tracebacks per dropped request
+        (2026-11-20)."""
+        if getattr(self, "_client_gone", False):
+            return None
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_common_headers()
+            self.end_headers()
+            self.wfile.write(body)
+        except CLIENT_GONE_ERRORS:
+            self._client_gone = True
+            self.close_connection = True
+        return None
 
     def send_common_headers(self):
         # Archie is same-origin.  Deliberately do not grant cross-origin access.
@@ -3946,7 +3966,7 @@ def main():
     global SERVER_HOST
     SERVER_HOST = args.host
     _register_stack_dump()
-    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    server = ArchieHTTPServer((args.host, args.port), Handler)
     print(f"Open http://{args.host}:{args.port}")
     if os.environ.get("ARCHIE_RECOVER_HANDOFFS", "").lower() != "off" and os.environ.get("ARCHIE_ENV") != "test":
         threading.Thread(target=calculation_service.reconcile_finished_reviews, args=(sys.modules[__name__],),

@@ -714,7 +714,9 @@ def _p0_walls_areas(root, page_number, context, calibration, wall_style_ids=None
     active = page_analysis_cache._ACTIVE.get()
     generation = active.generation if active else page_analysis_cache.PageAnalysisCache(
         root, _page_analysis_code_fingerprint()).generation
-    key = (generation, int(page_number), bool(raster_mode), tuple(sorted(wall_style_ids or [])), round(float(mm_per_px), 6))
+    names, labels = _p0_plan_names(root, page_number), _p0_label_points(root, page_number, context)
+    key = (generation, int(page_number), bool(raster_mode), tuple(sorted(wall_style_ids or [])), round(float(mm_per_px), 6),
+           tuple(sorted(names)), tuple((name, round(x, 1), round(y, 1)) for name, (x, y) in labels))
     cached = _WALLS_AREAS_CACHE.get(key)
     if cached is not None:
         _WALLS_AREAS_CACHE.move_to_end(key)
@@ -722,8 +724,27 @@ def _p0_walls_areas(root, page_number, context, calibration, wall_style_ids=None
     if raster_mode:
         walls = room_outline.raster_wall_geometry(context["image"], context["viewport"], mm_per_px)
     else:
-        walls = room_outline.wall_geometry(context["objects"], wall_style_ids or [], context["viewport"])
+        # The chosen wall pens, plus walls found by their shape (two parallel faces a wall's thickness apart): a pen
+        # choice alone misses walls drawn in a shared pen (the Turramurra house, 2026-11-20).
+        walls = room_outline.wall_geometry(context["objects"], wall_style_ids or [], context["viewport"], mm_per_px=mm_per_px)
     areas = room_outline.enclosed_rooms(walls, context["viewport"], mm_per_px)
+    if not raster_mode and len(areas) < len(names):
+        # The chosen wall pens enclose fewer areas than the plan has rooms: walls found by their shape (two parallel
+        # faces a wall's thickness apart) are added. On the Turramurra house (2026-11-20) the chosen pen was the floor
+        # fill and its walls share a pen with the dimension lines, so no pen choice could enclose a room. Only then:
+        # where the pens already work (Butcher Buffet) booth backs and table edges would read as walls too.
+        paired = room_outline.paired_wall_geometry(context["objects"], context["viewport"], mm_per_px)
+        if paired is not None and not paired.is_empty:
+            from shapely.ops import unary_union
+            trial_walls = unary_union([geometry for geometry in (walls, paired) if geometry is not None])
+            trial = room_outline.enclosed_rooms(trial_walls, context["viewport"], mm_per_px)
+            if len(trial) > len(areas):
+                walls, areas = trial_walls, trial
+    from backend import house_windows_service
+    if house_windows_service.is_dwelling(root):
+        # A house's open-plan living is divided at its printed room names. Not a shop: its buffet stations and
+        # servery belong to the dining or shop area they face, whatever is printed in them.
+        areas = _split_open_plan_areas(areas, labels, context, walls, mm_per_px, raster_mode)
     if raster_mode:
         from shapely.geometry import LineString
         geometries = list(walls.geoms) if walls is not None and hasattr(walls, "geoms") else ([walls] if walls is not None else [])
@@ -739,12 +760,80 @@ def _p0_walls_areas(root, page_number, context, calibration, wall_style_ids=None
     else:
         objects = context["objects"]
         selected_styles = wall_style_ids or []
-        segments = room_outline.drawn_segments(objects, selected_styles)
+        segments = room_outline.drawn_segments(objects, selected_styles) + room_outline.wall_face_segments(walls, mm_per_px)
     result = walls, areas, segments
     _WALLS_AREAS_CACHE[key] = result
     while len(_WALLS_AREAS_CACHE) > _WALLS_AREAS_CACHE_LIMIT:
         _WALLS_AREAS_CACHE.popitem(last=False)
     return result
+
+
+def _p0_plan_names(root, page_number):
+    """The room names of one plan page: those evidenced on it and, on a house, those the page reading listed."""
+    try:
+        names = {row["label"] for row in _inferred_rooms_for_plan(root, page_number)}
+        from backend import house_windows_service
+        if house_windows_service.is_dwelling(root):
+            names |= set(_reading_room_names(root, page_number))
+    except PACKET_ERRORS:
+        return set()
+    return {str(name) for name in names if str(name).strip()}
+
+
+def _p0_label_points(root, page_number, context):
+    """[(room name, (x, y))]: where each of the plan's room names is printed on it, in page-image pixels, from the
+    drawing's text layer (letter-spaced names such as "P D R" included). Names printed in the title block are left out."""
+    from ai import room_inference
+    spatial = next((row for row in _read(Path(root) / "spatial_ocr.json", {}).get("pages", [])
+                    if row.get("page") == page_number), {})
+    items = spatial.get("standalone_text_items") or []
+    if not items:
+        return []
+    names = _p0_plan_names(root, page_number)
+    wanted = {"".join(name.casefold().split()): name for name in names}
+    in_title = room_inference.title_block_test(spatial, items)
+    scale = float(context.get("image_scale") or 1.0)   # the text layer is measured from the page box, as the shapes are
+    found = []
+    for text, bbox in room_inference._text_item_lines(items):
+        name = wanted.get("".join(str(text).casefold().split()))
+        if not name or in_title({"bbox": bbox}):
+            continue
+        found.append((name, ((bbox[0] + bbox[2]) / 2.0 * scale, (bbox[1] + bbox[3]) / 2.0 * scale)))
+    return sorted(found)
+
+
+def _split_open_plan_areas(areas, labels, context, walls, mm_per_px, raster_mode):
+    """Each enclosed area that has two or more of the plan's room names printed in it, divided among them with
+    straight cuts along the drawing's features (room_outline.split_open_plan). Areas with one name or none stay whole.
+    A name printed outside every area belongs to the nearest area within reach."""
+    if not labels or not areas:
+        return areas
+    from shapely.geometry import Point
+    reach = room_outline.OPEN_PLAN_LABEL_REACH_MM / mm_per_px
+    owned = {}
+    for name, point in labels:
+        spot = Point(point)
+        owner = next((index for index, area in enumerate(areas) if area.contains(spot)), None)
+        if owner is None:
+            distances = [(area.distance(spot), index) for index, area in enumerate(areas)]
+            nearest = min(distances)
+            if nearest[0] > reach:
+                continue
+            owner = nearest[1]
+        owned.setdefault(owner, []).append((name, point))
+    if not any(len({name for name, _ in rows}) > 1 for rows in owned.values()):
+        return areas
+    segments = [] if raster_mode else room_outline._straight_segments(
+        context["objects"], mm_per_px, room_outline.PAIRED_WALL_MIN_RUN_MM, room_outline.hatch_styles(context["objects"]))
+    segments += [tuple(line.coords) for line in room_outline.wall_face_segments(walls, mm_per_px)]
+    result = []
+    for index, area in enumerate(areas):
+        names = room_outline.labels_in_area(area, owned.get(index, []), mm_per_px)
+        if len(names) < 2:
+            result.append(area)
+            continue
+        result.extend(piece for _name, piece in room_outline.split_open_plan(area, names, segments, mm_per_px))
+    return sorted(result, key=lambda polygon: -polygon.area)
 
 
 def _roof_packets(root, room_id=None):
@@ -3432,6 +3521,9 @@ def _number_separate_repeated_rooms(root, record, polygons, mm_per_px):
     return polygons
 
 
+SQUARED_METHODS = {"ai_outline_snapped", "ai_corner_outline", "ai_split_snapped"}
+
+
 def _p0_trace_rows(root, record, polygons):
     page = int(record["packet"]["page"])
     calibration = deepcopy(record["packet"]["calibration"])
@@ -3466,6 +3558,8 @@ def _p0_trace_rows(root, record, polygons):
             continue
         indexes[row["label"]] = indexes.get(row["label"], 0) + 1
         polygon = row["polygon"]
+        if row.get("method") in SQUARED_METHODS:   # drawn by the AI: nearly square sides made square
+            polygon = room_outline.square_polygon(polygon)
         mm_per_px = float(calibration["mm_per_px"])
         simplified = _simplify_trace_polygon(polygon, 250.0 / mm_per_px)
         coords = [[round(float(x), 2), round(float(y), 2)] for x, y in simplified.exterior.coords]

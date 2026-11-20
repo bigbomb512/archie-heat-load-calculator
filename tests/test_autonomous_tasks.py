@@ -2967,7 +2967,7 @@ class AutonomousTaskTests(unittest.TestCase):
             context = {"image": Image.new("RGB", (2, 2)), "objects": [], "viewport": (0, 0, 2, 2)}
             calibration = {"mm_per_px": 1.0}
             calls = []
-            def geometry(objects, styles, viewport):
+            def geometry(objects, styles, viewport, mm_per_px=None):
                 calls.append(tuple(styles))
                 return None
             with patch("ai.room_outline.wall_geometry", side_effect=geometry), \

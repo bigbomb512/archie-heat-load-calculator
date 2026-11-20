@@ -1,6 +1,7 @@
 """Project-local orchestration for the draft-only AI preliminary cooling path."""
 
 import contextvars
+from collections import OrderedDict
 import json
 import threading
 import math
@@ -10,6 +11,7 @@ import re
 import tempfile
 from contextlib import contextmanager
 from copy import deepcopy
+from functools import lru_cache
 from pathlib import Path
 
 from ai import design_weather
@@ -301,10 +303,59 @@ def _preliminary_geometry(paths):
     return _once("preliminary_geometry", paths, lambda: _shared_preliminary_geometry(paths), state=_geometry_input_signature)
 
 
+_GEOMETRY_FINGERPRINT_MEMO = {}
+# The draft geometry's fingerprint, saved in the job folder with the inputs and code it was worked out from: after a
+# server restart the first freshness check rebuilt the whole draft geometry (about 8 s on the Turramurra house) only
+# to fingerprint it (2026-11-20).
+GEOMETRY_FINGERPRINT_CACHE = "preliminary_geometry_fingerprint.cache"
+
+
+@lru_cache(maxsize=1)
+def _source_code_fingerprint():
+    """A fingerprint of the calculator's Python source (ai/ and backend/), once per process: a value saved by another
+    version of the code is never reused."""
+    import hashlib
+    digest = hashlib.sha256()
+    source_root = Path(__file__).resolve().parents[1]
+    for folder in ("ai", "backend"):
+        for path in sorted((source_root / folder).rglob("*.py")):
+            digest.update(str(path.relative_to(source_root)).encode("utf-8") + b"\0" + path.read_bytes() + b"\0")
+    return digest.hexdigest()
+
+
 def _preliminary_geometry_fingerprint(paths):
-    """ai_preliminary.fingerprint of the draft geometry, for the source fingerprints (no copy needed)."""
-    return _once("preliminary_geometry_fingerprint", paths, lambda: ai_preliminary.fingerprint(_preliminary_geometry(paths)),
-                 state=_geometry_input_signature)
+    """ai_preliminary.fingerprint of the draft geometry, for the source fingerprints (no copy needed).
+
+    Kept between requests while every geometry input is unchanged (the same signature as the geometry memo):
+    copying and hashing the cached geometry again took over a second on each freshness check (2026-11-20)."""
+    key = str(Path(paths["root"]).resolve())
+    signature = _geometry_input_signature(paths)
+    with _GEOMETRY_MEMO_LOCK:
+        hit = _GEOMETRY_FINGERPRINT_MEMO.get(key)
+        if hit and hit[0] == signature:
+            return hit[1]
+    saved_key = ai_preliminary.fingerprint({"inputs": [list(row) for row in signature], "code": _source_code_fingerprint()})
+    saved_path = Path(paths["root"]) / GEOMETRY_FINGERPRINT_CACHE
+    try:
+        saved = json.loads(saved_path.read_text(encoding="utf-8"))
+        value = saved["fingerprint"] if saved.get("key") == saved_key else None
+    except (OSError, ValueError, TypeError, KeyError):
+        value = None
+    if value is None:
+        value = _once("preliminary_geometry_fingerprint", paths,
+                      lambda: ai_preliminary.fingerprint(_preliminary_geometry(paths)), state=lambda _paths: signature)
+        try:   # kept across server restarts; not a .json file, so job-file signatures are unchanged by it
+            staged = saved_path.with_suffix(".tmp")
+            staged.write_text(json.dumps({"key": saved_key, "fingerprint": value}), encoding="utf-8")
+            os.replace(staged, saved_path)
+        except OSError:
+            pass
+    with _GEOMETRY_MEMO_LOCK:
+        _GEOMETRY_FINGERPRINT_MEMO.pop(key, None)
+        _GEOMETRY_FINGERPRINT_MEMO[key] = (signature, value)
+        while len(_GEOMETRY_FINGERPRINT_MEMO) > _GEOMETRY_MEMO_LIMIT:
+            _GEOMETRY_FINGERPRINT_MEMO.pop(next(iter(_GEOMETRY_FINGERPRINT_MEMO)))
+    return value
 
 
 def _shared_preliminary_geometry(paths):
@@ -2336,9 +2387,18 @@ def _response(web, project, response_view="full", check_freshness=None):
         check_freshness = response_view != "workspace"
     paths = _paths(project)
     settings = _settings(paths)
-    input_set = _read(paths["current_set"], {})
-    report = _read(paths["report"], {})
-    base_report = _read(paths["base_report"], {})
+    if response_view == "workspace":
+        # The workspace view needs a few small parts of the large saved files (input set ~30 MB, reports ~46 MB on a
+        # house set): those parts are worked out once per saved version of each file (_file_derived).
+        compact = _file_derived(paths["current_set"], {}, "workspace_input", _workspace_input)
+        input_set = compact["input_set"]
+        report = _file_derived(paths["report"], {}, "workspace_report", _workspace_report_parts)
+        base_report = _file_derived(paths["base_report"], {}, "workspace_report", _workspace_report_parts)
+    else:
+        compact = None
+        input_set = _read(paths["current_set"], {})
+        report = _read(paths["report"], {})
+        base_report = _read(paths["base_report"], {})
     stale_reasons = _stale_reasons(paths, input_set) if check_freshness else []
     from backend import equipment_catalogue_service
     equipment_rooms = [r.get("label") for r in _proposal_for_resolution(paths, equipment=False).get("rooms", []) if r.get("label")]
@@ -2347,7 +2407,10 @@ def _response(web, project, response_view="full", check_freshness=None):
     phase1_stale = [reason for reason in stale_reasons if reason not in {
         "internal_gains_resolution", "airflow_resolution", "ahu_resolution", "plant_resolution"}]
     base_report_stale = bool(base_report and (phase1_stale or (
-        base_report.get("phase1_input_fingerprint") != _phase1_input_fingerprint(input_set)
+        base_report.get("phase1_input_fingerprint") != (
+            # Worked out once per saved input set (rebuilding the empty-room set to hash it took about 1 s a call).
+            _file_derived(paths["current_set"], {}, "phase1_input_fingerprint", _phase1_input_fingerprint)
+            if compact is not None else _phase1_input_fingerprint(input_set))
         if base_report.get("phase1_input_fingerprint") else
         base_report.get("preliminary_input_set_fingerprint") != input_set.get("input_fingerprint"))))
     checks = _read(paths["root"] / "phase1_supervisor_job.json", {})
@@ -2364,10 +2427,10 @@ def _response(web, project, response_view="full", check_freshness=None):
                           "manual_placeholder_entities", "codex_handoff_status") if run.get(key) is not None}
         return {
             "id": project["id"], "settings": settings, "run": workspace_run,
-            "hourly_ai_preliminary_load_report": _workspace_report(report),
-            "phase1_base_room_load_report": _workspace_report(base_report),
+            "hourly_ai_preliminary_load_report": report.get("workspace") or _workspace_report({}),
+            "phase1_base_room_load_report": base_report.get("workspace") or _workspace_report({}),
             "phase1_base_room_load_report_stale": base_report_stale,
-            "phase2_room_inputs": _phase2_room_inputs(input_set),
+            "phase2_room_inputs": compact["phase2_room_inputs"],
             "equipment_coverage": equipment_coverage,
             "hourly_ai_preliminary_load_report_stale": bool(stale_reasons or equipment_stale),
             "status": ("stale" if stale_reasons else ("current" if input_set else "not_calculated"))
@@ -2403,6 +2466,66 @@ def _response(web, project, response_view="full", check_freshness=None):
     }
 
 
+_FILE_DERIVED = OrderedDict()
+_FILE_DERIVED_LOCK = threading.Lock()
+_FILE_DERIVED_LIMIT = 24
+
+
+def _file_derived(path, default, name, derive):
+    """derive(contents of the JSON file at path), worked out once per saved version of the file (its size,
+    modification time and inode; saves are atomic replaces); callers get their own copy."""
+    path = Path(path)
+    try:
+        stat = path.stat()
+        key = (str(path.resolve()), name, stat.st_mtime_ns, stat.st_size, getattr(stat, "st_ino", 0))
+    except OSError:
+        return derive(deepcopy(default))
+    with _FILE_DERIVED_LOCK:
+        if key in _FILE_DERIVED:
+            _FILE_DERIVED.move_to_end(key)
+            return _unpacked(_FILE_DERIVED[key])
+    value = derive(_read(path, default))
+    with _FILE_DERIVED_LOCK:
+        _FILE_DERIVED[key] = _packed(value)
+        while len(_FILE_DERIVED) > _FILE_DERIVED_LIMIT:
+            _FILE_DERIVED.popitem(last=False)
+    return value
+
+
+def _workspace_report_parts(report):
+    """What the workspace view reads from a saved load report: the compact report and the fields its staleness
+    checks compare. An empty dict when there is no report, as before."""
+    if not isinstance(report, dict) or not report:
+        return {}
+    parts = {key: report.get(key) for key in ("equipment_source_hash", "phase1_input_fingerprint",
+                                              "preliminary_input_set_fingerprint", "supervisor_fingerprint")
+             if key in report}
+    parts["workspace"] = _workspace_report(report)
+    return parts
+
+
+def _workspace_input(input_set):
+    """What the workspace view reads from the saved input set: its fingerprints, the operating-load room inputs, and the parts room_scope_confirmation.candidates reads (rooms, zones, floors, area
+    and scope ledger rows, excluded spaces)."""
+    if not isinstance(input_set, dict) or not input_set:
+        return {"input_set": {}, "phase2_room_inputs": _phase2_room_inputs(input_set)}
+    material = input_set.get("material") if isinstance(input_set.get("material"), dict) else {}
+    model = material.get("hourly_load_model") if isinstance(material.get("hourly_load_model"), dict) else {}
+    room_keys = ("room_id", "name", "zone_id", "area_m2")
+    scoped = {
+        "input_fingerprint": input_set.get("input_fingerprint"),
+        "dependency_fingerprints": input_set.get("dependency_fingerprints", {}),
+        "material": {"hourly_load_model": {
+            "rooms": [{key: room.get(key) for key in room_keys if key in room}
+                      for room in model.get("rooms", []) if isinstance(room, dict)],
+            "zones": model.get("zones", []), "floors": model.get("floors", [])}},
+        "materialized_fields": [row for row in input_set.get("materialized_fields", [])
+                                if isinstance(row, dict) and row.get("field") in {"area_m2", "space_scope"}],
+        "excluded_spaces": input_set.get("excluded_spaces", []),
+    }
+    return {"input_set": scoped, "phase2_room_inputs": _phase2_room_inputs(input_set)}
+
+
 def _phase2_room_inputs(input_set):
     """Compact saved operating-load inputs for room cards; this does not resolve or calculate anything."""
     if not isinstance(input_set, dict):
@@ -2435,8 +2558,32 @@ def _phase2_room_inputs(input_set):
     return list(by_room.values())
 
 
+_REQUEST_MEMO = contextvars.ContextVar("ai_preliminary_request_memo", default=None)
+
+
+@contextmanager
+def one_request():
+    """Within this block (one web request that writes nothing), get() builds each view of the model once; later
+    calls get their own copy. /api/job-plan built the same model twice, once for the job status and once for the
+    plan, at about 2-8 s each on the Turramurra house (2026-11-20)."""
+    if _REQUEST_MEMO.get() is not None:
+        yield
+        return
+    token = _REQUEST_MEMO.set({})
+    try:
+        yield
+    finally:
+        _REQUEST_MEMO.reset(token)
+
+
 def get(web, project, response_view="full", check_freshness=None):
-    return _response(web, project, response_view, check_freshness)
+    memo = _REQUEST_MEMO.get()
+    if memo is None:
+        return _response(web, project, response_view, check_freshness)
+    key = (str(project.get("review_dir") or project.get("id")), response_view, check_freshness)
+    if key not in memo:
+        memo[key] = _packed(_response(web, project, response_view, check_freshness))
+    return _unpacked(memo[key])
 
 
 class RoomScopeNotConfirmed(ValueError):
@@ -2520,8 +2667,10 @@ def _apply_codex_response(web, project):
 
 def _phase1_input_fingerprint(input_set):
     """Envelope-only dependencies; changing equipment cannot stale an empty-room result."""
-    if not input_set.get("material", {}).get("hourly_load_model"):
-        return None
+    return _compute_phase1_input_fingerprint(input_set)
+
+
+def _compute_phase1_input_fingerprint(input_set):
     projected = ai_preliminary._base_room_load_input_set(input_set)
     material = projected["material"]
     return ai_preliminary.content_fingerprint({

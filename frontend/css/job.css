@@ -331,32 +331,60 @@ body.job-preview {
 }
 .job-plans {
   display: grid;
-  gap: 18px;
+  gap: 16px;
 }
 .job-plan-page {
   margin: 0;
   min-width: 0;
   background: var(--sheet);
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  overflow: hidden;
 }
 .job-plan-page figcaption {
-  padding: 10px 12px 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 14px;
+}
+.job-plan-level {
+  color: var(--ink);
+  font-weight: 700;
+}
+.job-plan-summary {
   color: var(--ink-2);
   font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
-.job-plan polygon {
-  fill: var(--sheet);
-  stroke: var(--ink);
-  stroke-width: 1.5;
-  vector-effect: non-scaling-stroke;
+.job-plan-page .job-plan {
+  padding: 16px;
+  box-sizing: border-box;
+  margin: 0 auto;
+  min-width: 160px;
 }
+/* Walls: one solid band under all rooms, so a wall two rooms share reads as one wall. */
 .job-plan polygon.job-plan-wall {
-  fill: #c9d3d8;
-  stroke: #c9d3d8;
-  stroke-linejoin: round;
+  fill: #5d7381;
+  stroke: #5d7381;
+  stroke-linejoin: miter;
   vector-effect: none;
   pointer-events: none;
 }
+.job-plan polygon {
+  fill: #ffffff;
+  stroke: #5d7381;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  transition: fill 120ms ease;
+}
 .job-plan polygon.assumed {
+  fill: #f7fafb;
+  stroke: var(--ink-2);
+  stroke-width: 1.5;
   stroke-dasharray: 6 4;
 }
 .job-plan polygon.estimated,
@@ -367,11 +395,20 @@ body.job-preview {
   stroke-dasharray: 1 5;
   stroke-linecap: round;
 }
+.job-plan-room:hover polygon:not(.estimated):not(.load-shaded):not(.selected) {
+  fill: #e8f1f7;
+}
 .job-plan text {
   font-family: "Alte Haas Grotesk", Helvetica, sans-serif;
   fill: var(--ink);
   font-size: 38px;
   font-weight: 700;
+  pointer-events: none;
+}
+.job-plan .job-plan-detail {
+  fill: var(--ink-2);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
 }
 .job-plan image {
   pointer-events: none;
@@ -383,6 +420,32 @@ body.job-preview {
 }
 .job-plan polygon[tabindex] {
   cursor: pointer;
+}
+.job-plan-small {
+  margin: 0;
+  padding: 10px 16px 12px;
+  border-top: 1px solid var(--line-soft);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+.job-plan-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  color: var(--ink);
+  background: #ffffff;
+}
+.job-plan-chip small {
+  color: var(--ink-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 .job-facts {
   margin: 0;
@@ -417,17 +480,22 @@ body.job-preview {
 }
 .job-key {
   display: inline-block;
-  width: 24px;
-  border-top: 1.5px solid var(--ink);
-  vertical-align: middle;
+  width: 18px;
+  height: 12px;
+  border: 1.5px solid #5d7381;
+  border-radius: 2px;
+  background: #ffffff;
+  vertical-align: -1px;
   margin-right: 6px;
+  box-sizing: border-box;
 }
 .job-key.dashed {
-  border-top-style: dashed;
+  border: 1.5px dashed var(--ink-2);
+  background: #f7fafb;
 }
 .job-key.dotted {
-  border-top-style: dotted;
-  border-color: var(--hatch);
+  border: 2px dotted var(--hatch);
+  background: transparent;
 }
 .job-button {
   display: inline-flex;

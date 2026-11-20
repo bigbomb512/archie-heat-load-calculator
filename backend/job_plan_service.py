@@ -101,7 +101,13 @@ def _label_point(points):
         polygon = Polygon(points)
         if not polygon.is_valid or polygon.area <= 0:
             return None
-        point = polygon.representative_point()
+        # The point deepest inside the room (its pole of inaccessibility), so the name sits in the middle of the
+        # floor, not against a wall as an arbitrary inside point can.
+        from shapely.ops import polylabel
+        size = max(polygon.bounds[2] - polygon.bounds[0], polygon.bounds[3] - polygon.bounds[1])
+        point = polylabel(polygon, tolerance=max(size / 200.0, 0.5))
+        if not polygon.contains(point):
+            point = polygon.representative_point()
         return [round(point.x, 2), round(point.y, 2)]
     except (TypeError, ValueError):
         return None
@@ -109,6 +115,12 @@ def _label_point(points):
 
 def get(web, project):
     """Assemble current plan polygons and room facts without changing evidence."""
+    # The job status and the plan read the same draft model: it is built once for this request.
+    with ai_preliminary_service.one_request():
+        return _get(web, project)
+
+
+def _get(web, project):
     from ai.room_use_resolution import room_identity, load_taxonomy
     from backend import autonomous_tasks_service
 
@@ -125,7 +137,7 @@ def get(web, project):
                 "phase1_current": False, "phase1_report": {}, "final_report": {}}
     root = Path(project["review_dir"])
     status = job_service.status(web, project)
-    # job_service.status has just checked freshness, so this repeat reuses the cached source fingerprints.
+    # The same view job_service.status has just built: one_request() hands back its copy.
     model = ai_preliminary_service.get(web, project, "workspace", check_freshness=True)
     scope = model.get("room_scope") if isinstance(model.get("room_scope"), dict) else {}
     candidates = [row for row in scope.get("candidates", []) if isinstance(row, dict)]
