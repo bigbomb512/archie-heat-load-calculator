@@ -1199,6 +1199,77 @@ body.job-preview {
   height: 100%;
   display: block;
 }
+.job-room-toggle {
+  all: unset;
+  cursor: pointer;
+  font-weight: 700;
+  display: inline-flex;
+  gap: 6px;
+  align-items: baseline;
+}
+.job-room-toggle span {
+  color: var(--action);
+  width: 1ch;
+}
+.job-room-toggle:focus-visible {
+  outline: 2px solid var(--action);
+  outline-offset: 2px;
+}
+.job-room-detail td {
+  background: var(--ui-wash, #e8f1f7);
+  padding: 12px 8px 16px;
+}
+.job-room-profile p {
+  margin: 0 0 8px;
+}
+.job-hour-chart {
+  width: 100%;
+  height: auto;
+  display: block;
+  max-width: 760px;
+  font-variant-numeric: tabular-nums;
+}
+.job-hour-chart .grid {
+  stroke: var(--line-soft);
+  stroke-width: 1;
+}
+.job-hour-chart .zero {
+  stroke: var(--ink);
+  stroke-width: 1;
+}
+.job-hour-chart .axis {
+  font-size: 11px;
+  fill: var(--ink-2);
+}
+.job-hour-chart .peak-line {
+  stroke: var(--ink);
+  stroke-width: 1;
+}
+.job-hour-chart .peak-label {
+  font-size: 12px;
+  font-weight: 700;
+  fill: var(--ink);
+}
+.job-more {
+  margin-top: 12px;
+}
+.job-more > summary {
+  cursor: pointer;
+  color: var(--action);
+  padding: 8px 0;
+}
+.job-more > summary:focus-visible {
+  outline: 2px solid var(--action);
+  outline-offset: 2px;
+}
+.job-total-small {
+  font-size: 48px;
+}
+.job-hour-table td,
+.job-hour-table th {
+  padding: 6px 8px;
+  font-variant-numeric: tabular-nums;
+}
 .job-component-legend {
   display: flex;
   gap: 12px;

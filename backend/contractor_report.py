@@ -640,13 +640,15 @@ def legend():
 
 # ----- the page ------------------------------------------------------------------------------------------------------
 
-def design_conditions_html(c):
+def design_conditions_html(c, heating=None):
     """The design temperatures as cards under the total; a plain warning when they weren't recorded."""
     e = _e
     summer = c.get("summer") or {}
     if summer.get("db") is None:
+        note = (f"<p class=muted>Heating is not calculated. {e(heating.get('reason') or '')}</p>"
+                if heating and heating.get("status") != "current" else "")
         return ("<h2>Design conditions</h2><p class=warn>The design temperatures weren't recorded with this result; "
-                "update the load before using this report.</p>")
+                f"update the load before using this report.</p>{note}")
     sizing, indoor, humid = c.get("sizing") or {}, c.get("indoor") or {}, c.get("humid") or {}
     where = e(c.get("location") or "the site")
     far = (f"<p class=warn>The nearest listed design location is {e(c['distance_km'])} km from the site; check it suits the site.</p>"
@@ -673,9 +675,38 @@ def design_conditions_html(c):
     body = "".join(f"<div class=card>{e(title)}<b>{e(value)}</b>{f'<span>{e(second)}</span><br>' if second else ''}"
                    f"<span class=muted>{e(note)}</span></div>" for title, value, second, note in cards)
     check = (f" Dehumidification check day: {e(_temps(humid['db'], humid.get('wb')))}." if humid.get("db") is not None else "")
+    heating_note = ("This report is for cooling only: no winter (heating) design temperature or heating load is calculated."
+                    if heating is None else "Heating is not calculated. " + str(heating.get("reason") or ""))
+    notice = "" if heating and heating.get("status") == "current" else f" {e(heating_note)}"
     return (f"<h2>Design conditions</h2>{far}<div class=cards>{body}</div>"
-            f"<p class=muted>Each month's design day runs hour by hour from these temperatures.{check} "
-            "This report is for cooling only: no winter (heating) design temperature or heating load is calculated.</p>")
+            f"<p class=muted>Each month's design day runs hour by hour from these temperatures.{check}{notice}</p>")
+
+
+def heating_html(heating):
+    if not heating or heating.get("status") != "current":
+        return ""
+    e = _e
+    total = _kw(heating.get("total_kw"))
+    conditions = []
+    for label, key in (("Outdoor winter design", "outdoor_design_c"),
+                       ("Indoor winter design", "indoor_design_c")):
+        if _number(heating.get(key)) is not None:
+            conditions.append(f"{label}: {heating[key]:g} °C")
+    temperature = f"<p>{e(' · '.join(conditions))}</p>" if conditions else ""
+    note = f"<p class=muted>{e(heating.get('temperature_note'))}</p>" if heating.get("temperature_note") else ""
+    rows = []
+    for room in heating.get("rooms") or []:
+        split = ", ".join(f"{label}: {_kw(value)} kW" for label, value in (room.get("components") or {}).items()
+                          if _number(value) is not None)
+        rows.append(f"<tr><td>{e(room.get('name', ''))}</td><td class=n>{_kw(room.get('peak_kw'))}</td>"
+                    f"<td>{e(split)}</td></tr>")
+    draft = ("<p class=warn>Draft: heating method gate not approved by an engineer.</p>"
+             if heating.get("draft") and not (heating.get("gate") or {}).get("approved") else
+             "<p class=warn>Draft: heating report is not review ready.</p>" if heating.get("draft") else "")
+    return ("<section><h2>Design heating load</h2>"
+            f"<p><b>{total} kW</b> for the house.</p>{temperature}{note}{draft}"
+            "<table><tr><th>Room</th><th class=n>Peak kW</th><th>Component split</th></tr>"
+            f"{''.join(rows) or '<tr><td colspan=3>No room peaks recorded.</td></tr>'}</table></section>")
 
 
 def _kw(value, digits=1):
@@ -909,7 +940,8 @@ def render_html(d):
     source_rows = "".join(f"<li><b>{e(row['topic'])}:</b> {e(row['text'])}</li>" for row in d.get("sources", []))
     not_cooled = ", ".join(e(name) for name in d["not_cooled"]) or "None"
     day = d.get("design_day") or {}
-    conditions = design_conditions_html(d.get("design_conditions") or {})
+    conditions = design_conditions_html(d.get("design_conditions") or {}, d.get("heating"))
+    heating_section = heating_html(d.get("heating"))
     engineer = engineer_tables_html(d)
     return f"""<!doctype html><html lang="en" data-theme="light"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>Cooling load: {e(d['name'])}</title>
@@ -951,6 +983,7 @@ svg,tr,.card{{break-inside:avoid}}
 <div class=card>Sensible heat ratio<b>{'' if shr is None else f'{shr:.2f}'}</b><span class=muted>check the unit's sensible capacity</span></div>
 </div>
 {conditions}
+{heating_section}
 
 <h2>Units to consider</h2>
 <h3>One ducted system for the whole building</h3>

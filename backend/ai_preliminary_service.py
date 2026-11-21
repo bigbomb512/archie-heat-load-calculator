@@ -2314,6 +2314,7 @@ def _workspace_report(report):
                                 for item in (report.get("phase1_assumptions", []) or [])[:200] if isinstance(item, dict)],
         "design_conditions_basis": report.get("design_conditions_basis", {}),
         "seasonal": report.get("seasonal") if isinstance(report.get("seasonal"), dict) else {},
+        "design_day_profile": _design_day_profile(report),
         "refrigeration_process_exclusions": [{key: item.get(key) for key in ("room_name", "reason") if item.get(key) is not None}
                                               for item in report.get("refrigeration_process_exclusions", [])
                                               if isinstance(item, dict)],
@@ -2373,9 +2374,82 @@ def _room_peaks(report):
                     item["area_m2"] = room["area_m2"]
                 if isinstance(peak.get("components"), dict):
                     item["components"] = peak["components"]
+                profile = _hour_profile(room.get("hours"))
+                if profile:
+                    item["hourly"] = profile
+                own = _own_peak(scenarios, str(room["room_id"]))
+                if own:
+                    item["own_peak"] = own
                 peaks.append(item)
         break  # only the design day's rooms
     return peaks
+
+
+def _hour_profile(hours):
+    """A room's or the house's 24 hours on the design day, as saved: each hour's design total and its load groups
+    (the contractor report's groups). Empty unless all 24 hours carry a numeric design total."""
+    from backend.contractor_report import GROUP_OF, GROUPS
+    if not isinstance(hours, list) or len(hours) != 24:
+        return {}
+    totals, groups = [], []
+    for row in hours:
+        total = row.get("design_total_kw") if isinstance(row, dict) else None
+        if not isinstance(total, (int, float)) or isinstance(total, bool) or not math.isfinite(total):
+            return {}
+        totals.append(round(float(total), 4))
+        grouped = {key: 0.0 for key, *_rest in GROUPS}
+        for name, part in (row.get("components") or {}).items():
+            value = part.get("total_kw") if isinstance(part, dict) else part
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+                grouped[GROUP_OF.get(name, "equipment")] += float(value)
+        groups.append({key: round(value, 4) for key, value in grouped.items() if abs(value) > 1e-9})
+    return {"total_kw": totals, "groups": groups}
+
+
+def _own_peak(scenarios, room_id):
+    """The room's own largest design total over every calculated design day (it can fall on another month or hour
+    than the house's)."""
+    best = None
+    for scenario in scenarios:
+        for room in scenario.get("rooms", []) if isinstance(scenario, dict) and isinstance(scenario.get("rooms"), list) else []:
+            peak = room.get("peak") if isinstance(room, dict) and str(room.get("room_id")) == room_id else None
+            value = peak.get("design_total_kw") if isinstance(peak, dict) else None
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and (best is None or value > best["kw"]):
+                best = {"kw": value, "hour": peak.get("display_hour", peak.get("hour")),
+                        "month": scenario.get("representative_month") or scenario.get("title") or "",
+                        "scenario_id": scenario.get("scenario_id", "")}
+    # Without the design day's month or identity the "when" isn't known: nothing to show beyond the room's peak.
+    return best if best and (best["month"] or best["scenario_id"]) else None
+
+
+def _design_day_profile(report):
+    """The whole house's design day (the governing scenario), hour by hour, by load group, from the saved report."""
+    peak = report.get("included_scope_peak") or {}
+    scenarios = report.get("scenario_results", []) if isinstance(report.get("scenario_results"), list) else []
+    scenario = next((row for row in scenarios if isinstance(row, dict) and row.get("scenario_id") == peak.get("scenario_id")), None)
+    if not scenario:
+        return {}
+    profile = _hour_profile(scenario.get("included_scope_hours"))
+    if not profile:
+        return {}
+    # The month's saved hourly totals include the fan heat added after the room sum (as the contractor report's
+    # design day does): the difference is shown as fan heat, so the columns reach the reported totals.
+    seasonal = next((row for row in ((report.get("seasonal") or {}).get("months") or [])
+                     if isinstance(row, dict) and row.get("scenario_id") == scenario.get("scenario_id")), {})
+    totals = seasonal.get("hourly_kw") if isinstance(seasonal.get("hourly_kw"), list) else []
+    if len(totals) == 24 and all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in totals):
+        for index, total in enumerate(totals):
+            residual = float(total) - sum(profile["groups"][index].values())
+            if abs(residual) > 1e-9:
+                groups = profile["groups"][index]
+                groups["fan"] = round(groups.get("fan", 0.0) + residual, 4)
+            profile["total_kw"][index] = round(float(total), 4)
+    from backend.contractor_report import GROUPS
+    return {**profile, "scenario_id": scenario.get("scenario_id", ""),
+            "month": scenario.get("representative_month") or scenario.get("title") or "",
+            "peak_hour": peak.get("display_hour", peak.get("hour")),
+            "peak_kw": peak.get("final_design_total_kw", peak.get("design_total_kw")),
+            "group_labels": [{"key": key, "label": label, "color": color} for key, label, _names, color in GROUPS]}
 
 
 def _response(web, project, response_view="full", check_freshness=None):

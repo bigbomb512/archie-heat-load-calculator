@@ -86,7 +86,7 @@ function bar(components, roomLoadValue, maxLoad, historical = false) {
 
 function roomRows(rooms, roomPeaks, maxLoad, stale) {
   return rooms
-    .map((room) => {
+    .map((room, index) => {
       const peak = roomPeakFor(room, roomPeaks);
       const total = isNumber(room.final_kw) ? room.final_kw : null;
       const historical = total == null && stale;
@@ -98,14 +98,242 @@ function roomRows(rooms, roomPeaks, maxLoad, stale) {
           )
         : total;
       const area = room.area_m2 == null ? "Not available" : fmt(room.area_m2);
-      return `<tr>
-        <th scope="row">${escapeHtml(room.display_name || room.name)}</th>
+      const name = escapeHtml(room.display_name || room.name);
+      const detailId = `job-room-hours-${index}`;
+      return `<tr class="job-room-row">
+        <th scope="row"><button type="button" class="job-room-toggle" aria-expanded="false" aria-controls="${detailId}" data-room-toggle><span aria-hidden="true">+</span> ${name}</button></th>
         <td>${area}</td>
         <td>${bar(peak?.components, breakdownTotal, maxLoad, historical)}</td>
         <td><b>${total == null ? "Not calculated yet" : `${fmt(total)} kW`}</b></td>
-      </tr>`;
+      </tr>
+      <tr class="job-room-detail" id="${detailId}" hidden><td colspan="4">${roomProfile(room, peak, historical)}</td></tr>`;
     })
     .join("");
+}
+
+const hourLabel = (hour) => `${String(hour).padStart(2, "0")}:00`;
+
+// Chart colours: the design system's blues, dark to light, the two lightest outlined (DESIGN.md: one primary blue).
+const DAY_GROUP_STYLE = {
+  air: { color: "#163B50" },
+  people: { color: "#246B91" },
+  sun: { color: "#4F8DB3" },
+  lights: { color: "#7FAECB" },
+  equipment: { color: "#B9D3E2" },
+  conduction: { color: "#FFFFFF", outline: true },
+  fan: { color: "#DCE8EF", outline: true },
+};
+
+function niceTop(value) {
+  for (const step of [0.1, 0.2, 0.25, 0.5, 1, 2, 2.5, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000]) {
+    const ticks = Math.max(1, Math.ceil(value / step - 1e-9));
+    if (ticks <= 6) return [ticks * step, step];
+  }
+  return [value, value / 5];
+}
+
+// Stacked hourly columns from zero: positive groups stack up, negative ones (heat leaving at night) down.
+function hourlyChartSvg({ hours, labels, peakHour, peakKw, title, compact = false }) {
+  const width = compact ? 560 : 720;
+  const height = compact ? 190 : 300;
+  const [left, right, top, bottom] = [44, 10, compact ? 24 : 30, 34];
+  const plotW = width - left - right;
+  const plotH = height - top - bottom;
+  const ups = hours.map((row) => Object.values(row.groups || {}).filter((v) => v > 0).reduce((a, b) => a + b, 0));
+  const downs = hours.map((row) => Object.values(row.groups || {}).filter((v) => v < 0).reduce((a, b) => a + b, 0));
+  const [yTop, step] = niceTop(Math.max(0.01, ...ups, ...hours.map((row) => row.total)) * 1.08);
+  const lowest = Math.min(0, ...downs, ...hours.map((row) => row.total));
+  // Below zero in whole steps of the same grid, so the gridlines fall on round numbers through zero.
+  const yBottomAbs = lowest < 0 ? Math.ceil(-lowest / step - 1e-9) * step : 0;
+  const span = yTop + yBottomAbs;
+  const y = (kw) => top + ((yTop - kw) / span) * plotH;
+  const barW = plotW / 24;
+  const parts = [`<svg class="job-hour-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(title)}">`];
+  for (let tick = -yBottomAbs; tick <= yTop + 1e-9; tick += step) {
+    const value = Math.round(tick * 1000) / 1000;
+    parts.push(`<line x1="${left}" x2="${width - right}" y1="${y(value).toFixed(1)}" y2="${y(value).toFixed(1)}" class="${value === 0 ? "zero" : "grid"}"/><text x="${left - 6}" y="${(y(value) + 4).toFixed(1)}" class="axis" text-anchor="end">${fmt(value)}</text>`);
+  }
+  parts.push(`<text x="12" y="${top + plotH / 2}" class="axis" text-anchor="middle" transform="rotate(-90 12 ${top + plotH / 2})">kW</text>`);
+  hours.forEach((row, hour) => {
+    const x = left + hour * barW + 1.5;
+    let up = 0;
+    let down = 0;
+    for (const { key, label } of labels) {
+      const value = Number(row.groups?.[key] || 0);
+      if (!value) continue;
+      const style = DAY_GROUP_STYLE[key] || { color: "#86B3CE" };
+      const from = value > 0 ? up : down;
+      const to = from + value;
+      if (value > 0) up = to;
+      else down = to;
+      const yA = y(Math.max(from, to));
+      const h = Math.max(Math.abs(y(from) - y(to)) - 0.5, 0.5);
+      parts.push(`<rect x="${x.toFixed(1)}" y="${yA.toFixed(1)}" width="${(barW - 3).toFixed(1)}" height="${h.toFixed(1)}" fill="${style.color}"${style.outline ? ' stroke="#163B50" stroke-width="0.75"' : ""}><title>${hourLabel(hour)} ${escapeHtml(label)}: ${fmt(value)} kW</title></rect>`);
+    }
+    if (!labels.length || !Object.keys(row.groups || {}).length) {
+      const yA = y(Math.max(0, row.total));
+      parts.push(`<rect x="${x.toFixed(1)}" y="${yA.toFixed(1)}" width="${(barW - 3).toFixed(1)}" height="${Math.max(Math.abs(y(0) - y(row.total)), 0.5).toFixed(1)}" fill="${hour === peakHour ? "#163B50" : "#86B3CE"}"><title>${hourLabel(hour)}: ${fmt(row.total)} kW</title></rect>`);
+    }
+    if (hour % 3 === 0) {
+      parts.push(`<text x="${(x + (barW - 3) / 2).toFixed(1)}" y="${height - bottom + 15}" class="axis" text-anchor="middle">${String(hour).padStart(2, "0")}</text>`);
+    }
+  });
+  if (Number.isInteger(peakHour) && peakHour >= 0 && peakHour < 24 && isNumber(peakKw)) {
+    const x = left + peakHour * barW + barW / 2;
+    const labelY = top - 10;
+    const anchor = peakHour > 18 ? "end" : peakHour < 5 ? "start" : "middle";
+    parts.push(`<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${labelY + 3}" y2="${(y(Math.max(0, hours[peakHour].total)) - 2).toFixed(1)}" class="peak-line"/><text x="${x.toFixed(1)}" y="${labelY}" class="peak-label" text-anchor="${anchor}" data-peak-label>Peak ${fmt(peakKw)} kW at ${hourLabel(peakHour)}</text>`);
+  }
+  parts.push(`<text x="${left + plotW / 2}" y="${height - 4}" class="axis" text-anchor="middle">Hour of the day (local clock time)</text></svg>`);
+  return parts.join("");
+}
+
+function profileHours(profile) {
+  const totals = profile?.total_kw;
+  if (!Array.isArray(totals) || totals.length !== 24 || !totals.every(isNumber)) return null;
+  return totals.map((total, hour) => ({ total, groups: (profile.groups || [])[hour] || {} }));
+}
+
+function roomProfile(room, peak, historical) {
+  const name = room.display_name || room.name;
+  const hours = profileHours(peak?.hourly);
+  if (!peak || !hours) {
+    return `<p class="job-muted">Hour-by-hour profile not calculated: ${peak ? "the saved result has no 24-hour record for this room" : "this room has no load in the saved result"}.</p>`;
+  }
+  const peakHour = Number.isInteger(peak.hour) ? peak.hour : hours.reduce((best, row, hour) => (row.total > hours[best].total ? hour : best), 0);
+  const peakKw = hours[peakHour].total;
+  const own = peak.own_peak;
+  const ownLine =
+    own && isNumber(own.kw) && (own.scenario_id || own.month)
+      ? `<p class="job-caption">This room's own peak over every design day: ${fmt(own.kw)} kW in ${escapeHtml(own.month || "not recorded")} at ${Number.isInteger(own.hour) ? hourLabel(own.hour) : "an unrecorded hour"}.</p>`
+      : "";
+  return `<div class="job-room-profile" data-room-profile>
+      <p><b>${escapeHtml(name)}</b> on the design day: peak ${fmt(peakKw)} kW at ${hourLabel(peakHour)}${historical ? " (out of date)" : ""}.</p>
+      ${hourlyChartSvg({ hours, labels: [], peakHour, peakKw, title: `${name}: cooling load by hour on the design day`, compact: true })}
+      ${ownLine}
+    </div>`;
+}
+
+function designDaySection(day, stale) {
+  const hours = profileHours(day);
+  if (!day || !hours) {
+    return `<section class="job-panel ${stale ? "stale" : ""}" aria-labelledby="design-day-title"><h2 id="design-day-title">The design day, hour by hour</h2><p>Not calculated: the saved result has no 24-hour record for the design day.</p></section>`;
+  }
+  const labels = (day.group_labels || []).filter((group) => hours.some((row) => Number(row.groups?.[group.key] || 0) !== 0));
+  const peakHour = Number.isInteger(day.peak_hour) ? day.peak_hour : null;
+  const peakKw = isNumber(day.peak_kw) ? day.peak_kw : peakHour == null ? null : hours[peakHour].total;
+  const tableRows = hours
+    .map((row, hour) => `<tr><th scope="row">${hourLabel(hour)}</th>${labels.map((group) => `<td>${fmt(Number(row.groups?.[group.key] || 0))}</td>`).join("")}<td>${fmt(row.total)}</td></tr>`)
+    .join("");
+  return `<section class="job-panel ${stale ? "stale" : ""}" aria-labelledby="design-day-title" data-design-day>
+      <h2 id="design-day-title">The design day, hour by hour</h2>
+      <p>The whole house's cooling load on the ${escapeHtml(day.month || "design")} design day, stacked by where it comes from.${peakHour == null ? "" : ` Peak ${fmt(peakKw)} kW at ${hourLabel(peakHour)}.`}</p>
+      ${hourlyChartSvg({ hours, labels, peakHour, peakKw, title: `Cooling load by hour on the ${day.month || "design"} design day, stacked by load component` })}
+      <ul class="job-component-legend">${labels
+        .map((group) => {
+          const style = DAY_GROUP_STYLE[group.key] || { color: "#86B3CE" };
+          return `<li><i class="${style.outline ? "outline" : ""}" style="--part-color:${style.color}"></i>${escapeHtml(group.label)}</li>`;
+        })
+        .join("")}</ul>
+      <p class="job-caption">Below zero is heat leaving the rooms (cool hours through walls, roof and windows). Fan heat is the difference between the saved hour total and its parts.</p>
+      <details class="job-more"><summary>Show the hours as a table</summary>
+        <div class="job-table-wrap"><table class="job-results-table job-hour-table">
+          <thead><tr><th scope="col">Hour</th>${labels.map((group) => `<th scope="col">${escapeHtml(group.label)}</th>`).join("")}<th scope="col">Total kW</th></tr></thead>
+          <tbody>${tableRows}</tbody>
+        </table></div>
+      </details>
+    </section>`;
+}
+
+const kwOrNot = (value) => (isNumber(value) ? `${fmt(value)} kW` : "Not calculated");
+const setpointLabel = (value) => `${fmt(value)} °C`;
+
+function comparisonContent(comparison, planRooms) {
+  if (!comparison || comparison.status !== "calculated") {
+    return `<p data-setpoint-state="not_calculated"><b>Not calculated.</b> ${escapeHtml(comparison?.reason || "No comparison is recorded for this result.")}</p>`;
+  }
+  const variants = comparison.variants || [];
+  const rows = variants
+    .map((row) => {
+      const label = `${setpointLabel(row.setpoint_c)}${row.baseline ? " (as designed)" : ""}`;
+      if (row.status === "not_calculated") {
+        return `<tr><th scope="row">${label}</th><td colspan="6">Not calculated: ${escapeHtml(row.reason || "no peak recorded")}</td></tr>`;
+      }
+      const change = row.baseline
+        ? "<td>—</td><td>—</td>"
+        : `<td>${isNumber(row.delta_kw) ? `${row.delta_kw > 0 ? "+" : ""}${fmt(row.delta_kw)} kW` : "Not calculated"}</td><td>${isNumber(row.delta_pct) ? `${row.delta_pct > 0 ? "+" : ""}${fmt(row.delta_pct)}%` : "Not calculated"}</td>`;
+      const when = `${escapeHtml(row.month || "Month not recorded")} ${Number.isInteger(row.hour) ? hourLabel(row.hour) : ""}`.trim();
+      return `<tr data-setpoint="${escapeHtml(row.setpoint_c)}"><th scope="row">${label}</th><td><b>${kwOrNot(row.total_kw)}</b></td><td>${kwOrNot(row.sensible_kw)}</td><td>${kwOrNot(row.latent_kw)}</td><td>${when}</td>${change}</tr>`;
+    })
+    .join("");
+  const shown = (row) => {
+    const match =
+      planRooms.find((room) => row.source_room_id && room.room_id === row.source_room_id) ||
+      planRooms.filter((room) => String(room.name || "").trim().toLowerCase() === String(row.name || "").trim().toLowerCase()).at(0);
+    return match?.display_name || match?.name || row.name;
+  };
+  const roomRowsHtml = (comparison.rooms || [])
+    .map(
+      (room) =>
+        `<tr><th scope="row">${escapeHtml(shown(room))}</th>${variants
+          .map((variant) => {
+            const peak = room.peaks?.[String(variant.setpoint_c)];
+            return isNumber(peak?.kw)
+              ? `<td>${fmt(peak.kw)} kW<span class="job-caption"> ${escapeHtml(peak.month || "")} ${Number.isInteger(peak.hour) ? hourLabel(peak.hour) : ""}</span></td>`
+              : "<td>Not calculated</td>";
+          })
+          .join("")}</tr>`,
+    )
+    .join("");
+  const rh = isNumber(comparison.relative_humidity) ? ` at ${fmt(comparison.relative_humidity * 100)}% relative humidity` : "";
+  return `<p>Only the indoor temperature changes${rh}, kept the same at every setpoint. Walls, floors and ceilings to other cooled rooms move with the room's temperature; everything else is as designed. Peaks can fall in a different month or hour.</p>
+    <div class="job-table-wrap"><table class="job-results-table" data-setpoint-table>
+      <thead><tr><th scope="col">Indoor setpoint</th><th scope="col">Total</th><th scope="col">Sensible</th><th scope="col">Latent</th><th scope="col">Peak</th><th scope="col">Change</th><th scope="col">Change %</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    ${roomRowsHtml ? `<details class="job-more" data-setpoint-rooms><summary>Each room's peak at each setpoint</summary>
+      <div class="job-table-wrap"><table class="job-results-table">
+        <thead><tr><th scope="col">Room</th>${variants.map((variant) => `<th scope="col">${setpointLabel(variant.setpoint_c)}</th>`).join("")}</tr></thead>
+        <tbody>${roomRowsHtml}</tbody>
+      </table></div>
+      <p class="job-caption">Each room's own largest load over the design days, and when it happens.</p>
+    </details>` : ""}`;
+}
+
+
+function heatingContent(heating) {
+  const gate = heating?.gate || {};
+  if (!heating || heating.status !== "current" || !isNumber(heating.total_kw)) {
+    const reasons = (heating?.stale_reasons || []).length
+      ? `<ul>${heating.stale_reasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul>`
+      : "";
+    return `<div data-heating-state="${escapeHtml(heating?.status || "not_calculated")}">
+      <p><b>Not calculated.</b> ${escapeHtml(heating?.reason || "No heating report is recorded for this job.")}</p>${reasons}
+      <p><b>Next step:</b> ${escapeHtml(heating?.next_step || "Calculate the heating report for this job.")}</p>
+      ${gate.message ? `<p class="job-caption">Heating method: ${escapeHtml(gate.message)}</p>` : ""}
+    </div>`;
+  }
+  const rooms = heating.rooms || [];
+  const keys = [...new Set(rooms.flatMap((room) => Object.keys(room.components || {})))];
+  const draft = heating.draft
+    ? `<p class="job-stale-note" role="status" data-heating-draft><span>Draft.</span> ${escapeHtml(gate.approved ? `The heating report itself is ${heating.report_status || "draft"}.` : gate.message || "The heating method hasn't been approved by an engineer.")} ${escapeHtml(heating.next_step || "")}</p>`
+    : "";
+  const temperature = (value) => (isNumber(value) ? `${fmt(value)} °C` : "Not recorded");
+  return `<div data-heating-state="current">
+    ${draft}
+    <strong class="job-total job-total-small" data-heating-total>${fmt(heating.total_kw)} <span>kW</span></strong>
+    <p>Design heating load for the house${heating.peak?.hour == null ? "" : ` at ${hourLabel(heating.peak.hour)}`}${heating.peak?.title ? ` on the ${escapeHtml(heating.peak.title)} day` : ""}.</p>
+    <p>Winter design outdoor temperature: <b>${temperature(heating.outdoor_design_c)}</b>. Indoor: <b>${temperature(heating.indoor_design_c)}</b>.${heating.temperature_note ? ` ${escapeHtml(heating.temperature_note)}` : ""}</p>
+    <div class="job-table-wrap"><table class="job-results-table" data-heating-rooms>
+      <thead><tr><th scope="col">Room</th>${keys.map((key) => `<th scope="col">${escapeHtml(key)}</th>`).join("")}<th scope="col">Peak kW</th></tr></thead>
+      <tbody>${rooms
+        .map((room) => `<tr><th scope="row">${escapeHtml(room.name)}</th>${keys.map((key) => `<td>${isNumber(room.components?.[key]) ? fmt(room.components[key]) : "Not recorded"}</td>`).join("")}<td><b>${kwOrNot(room.peak_kw)}</b></td></tr>`)
+        .join("")}
+        <tr class="job-grand-total"><th colspan="${keys.length + 1}">Design heating load</th><td>${fmt(heating.total_kw)} kW</td></tr>
+      </tbody>
+    </table></div>
+    ${(heating.blocked_rooms || []).length ? `<p class="job-caption">Not calculated for: ${heating.blocked_rooms.map((row) => escapeHtml(typeof row === "string" ? row : `${row.name || row.room_id}${row.reason ? ` (${row.reason})` : ""}`)).join("; ")}.</p>` : ""}
+  </div>`;
 }
 
 function legend() {
@@ -172,7 +400,6 @@ function yearSection(seasonal, stale) {
   );
   if (!months.length) return "";
   const top = Math.max(0.001, ...months.flatMap((row) => row.hourly_kw));
-  const hourLabel = (hour) => `${String(hour).padStart(2, "0")}:00`;
   const lead = seasonal.monthly
     ? `Each month's 21st is calculated hour by hour with that day's sun angle and design temperature. The largest, ${fmt(seasonal.design_kw)} kW in ${escapeHtml(seasonal.design_month)} at ${hourLabel(seasonal.design_hour)}, sizes the system.`
     : `Only the summer design day is calculated: no monthly temperatures are available for this location, so the other months aren't shown.`;
@@ -262,9 +489,11 @@ function resultsContent({ plan, report, gaps, projectId, stale, canUpdate }) {
           ? `<p class="job-muted">Update the final load before creating the report.</p>`
           : `<div class="job-report" data-report>
               <button class="job-button" type="button" data-create-report>Create the report</button>
+              <button class="job-button secondary" type="button" data-create-heating-report disabled aria-describedby="job-heating-report-note">Create the heating report</button>
               <a class="job-button secondary" href="#/job/${encodeURIComponent(projectId)}/fix">Fix a room or window</a>
               ${reportUrl ? `<a class="job-link-button" href="${escapeHtml(reportUrl)}" download>Download the last report</a>` : ""}
               <p class="job-note" role="status" data-report-status></p>
+              <p class="job-caption" id="job-heating-report-note" data-heating-report-note>Checking the heating report…</p>
             </div>`}
       </div>
     </section>
@@ -287,8 +516,67 @@ function resultsContent({ plan, report, gaps, projectId, stale, canUpdate }) {
         </table></div>
       </section>
     </div>
+    <section class="job-panel ${stale ? "stale" : ""}" aria-labelledby="setpoint-title" data-setpoint-panel>
+      <h2 id="setpoint-title">Indoor setpoint comparison</h2>
+      <div data-setpoint-body><p class="job-muted" role="status">Loading the comparison… The first view after a new result calculates it, which can take a few seconds.</p></div>
+    </section>
+    ${designDaySection(report.design_day_profile, stale)}
     ${yearSection(report.seasonal, stale)}
+    <section class="job-panel" aria-labelledby="heating-title" data-heating-panel>
+      <h2 id="heating-title">Design heating load</h2>
+      <div data-heating-body><p class="job-muted" role="status">Loading the heating result…</p></div>
+    </section>
     <section class="job-panel ${stale ? "stale" : ""}"><h2>Still assumed</h2>${assumptionsList(assumptions, projectId)}</section>`;
+}
+
+// The heating report package uses the same report-package call; it is offered only for a current heating report.
+function bindHeatingReport(projectId) {
+  const button = document.querySelector("[data-create-heating-report]");
+  const status = document.querySelector("[data-report-status]");
+  button?.addEventListener("click", async () => {
+    button.disabled = true;
+    status.textContent = "Creating the heating report…";
+    try {
+      const report = await sendJson("/api/report-package", { project_id: projectId, report_type: "heating" });
+      status.innerHTML = `Heating report ready: <a href="${escapeHtml(report.pdf_url)}" download>Download the PDF</a> or <a href="${escapeHtml(report.html_url)}" target="_blank" rel="noopener">open it in a new tab</a>.`;
+    } catch (error) {
+      status.textContent = `The heating report couldn’t be created: ${error.message}`;
+    } finally {
+      button.disabled = false;
+    }
+  });
+}
+
+// The comparison and the heating result are read after the page shows: the comparison's first read after a new
+// result is calculated on the server, and the rest of the results shouldn't wait for it.
+async function loadExtraPanels(projectId, planRooms) {
+  const setpointBody = document.querySelector("[data-setpoint-body]");
+  const heatingBody = document.querySelector("[data-heating-body]");
+  const heatingButton = document.querySelector("[data-create-heating-report]");
+  const heatingNote = document.querySelector("[data-heating-report-note]");
+  const [comparison, heating] = await Promise.all([
+    getJson(`/api/setpoint-comparison${query(projectId)}`).catch((error) => ({ status: "not_calculated", reason: `The comparison couldn't be read: ${error.message}` })),
+    getJson(`/api/heating-summary${query(projectId)}`).catch((error) => ({ status: "not_calculated", reason: `The heating result couldn't be read: ${error.message}`, next_step: "Reload the page; if it persists, check the server log." })),
+  ]);
+  if (setpointBody) setpointBody.innerHTML = comparisonContent(comparison, planRooms);
+  if (heatingBody) heatingBody.innerHTML = heatingContent(heating);
+  if (heatingButton) {
+    const ready = heating?.status === "current";
+    heatingButton.disabled = !ready;
+    if (heatingNote) heatingNote.textContent = ready ? (heating.draft ? "The heating report will be marked draft." : "") : `Heating report not available: ${heating?.reason || "not calculated"}`;
+  }
+}
+
+function bindRoomToggles() {
+  document.querySelectorAll("[data-room-toggle]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const detail = document.getElementById(button.getAttribute("aria-controls"));
+      const open = button.getAttribute("aria-expanded") !== "true";
+      button.setAttribute("aria-expanded", String(open));
+      button.querySelector("span").textContent = open ? "−" : "+";
+      if (detail) detail.hidden = !open;
+    });
+  });
 }
 
 // The cooling report (HTML and PDF) is built on the server from the current final load, then offered to open or save.
@@ -347,6 +635,9 @@ export async function renderResults(projectId) {
     content,
     bind: () => {
       bindReport(projectId);
+      bindHeatingReport(projectId);
+      bindRoomToggles();
+      loadExtraPanels(projectId, plan.rooms || []);
       document
         .querySelector("#job-update-final")
         ?.addEventListener("click", async (event) => {

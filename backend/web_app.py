@@ -432,6 +432,14 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._send_security_error(error, 403)
             except Exception as error:
                 return self.send_json(product_error(error), 400)
+        if urlparse(self.path).path in {"/api/setpoint-comparison", "/api/heating-summary"}:
+            try:
+                handler = api_setpoint_comparison if urlparse(self.path).path == "/api/setpoint-comparison" else api_heating_summary
+                return self.send_json(handler(self))
+            except security.SecurityError as error:
+                return self._send_security_error(error, 403)
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
         if self.path.startswith("/api/audit-log"):
             try:
                 return self.send_json(api_audit_log(self))
@@ -1261,6 +1269,8 @@ def _job_report_details(project, stale_reasons):
     household = peak.get("household_counted_once") or {}
     from backend import contractor_report
     contractor = _contractor_details(project, plan, peak)
+    from backend import heating_summary_service
+    heating = heating_summary_service.get(web, project)
     design_basis = (f"Summer design days for {basis.get('location', 'the site')}"
                     f"{', ' + basis['state'] if basis.get('state') else ''}, from {basis.get('source', 'the listed design data')}; "
                     "the 21st of each month calculated hour by hour with the site's sun.")
@@ -1280,6 +1290,7 @@ def _job_report_details(project, stale_reasons):
         "exclusions": list(dict.fromkeys(f"{row.get('component')}: {row.get('reason')}"
                                          for row in report.get("known_exclusions") or [] if isinstance(row, dict))),
         "stale_reasons": stale_reasons,
+        "heating": heating,
         **contractor,
         # The temperatures first: a contractor checks the design conditions before anything else (2026-11-15).
         "design_basis": " ".join(part for part in (contractor_report.design_conditions_text(contractor.get("design_conditions")),
@@ -1290,7 +1301,7 @@ def _job_report_details(project, stale_reasons):
 def _contractor_details(project, plan, peak):
     """Unit sizes, the design day by the hour, the load by group and the values used, from the job's full hourly
     report and input set (the plan carries only a summary of them)."""
-    from backend import ai_preliminary_service, ahu_resolution_service, contractor_report, setpoint_comparison
+    from backend import ai_preliminary_service, ahu_resolution_service, contractor_report, setpoint_comparison_service
     paths = ai_preliminary_service._paths(project)
     full = load_json(paths["report"]) if paths["report"].exists() else {}
     input_set = load_json(paths["current_set"]) if paths["current_set"].exists() else {}
@@ -1305,7 +1316,8 @@ def _contractor_details(project, plan, peak):
         "ducted": contractor_report.ducted(peak.get("final_design_total_kw", peak.get("design_total_kw")) or 0.0, dwelling),
         "design_day": contractor_report.design_day(full),
         "engineer_rooms": contractor_report.engineer_room_details(full, input_set, plan_rooms),
-        "setpoint_comparison": setpoint_comparison.compare(input_set, full),
+        # From the inputs this result was calculated from (not a newer input set), as the Results page shows it.
+        "setpoint_comparison": setpoint_comparison_service.get(project, full=True),
         "ahu": contractor_report.ahu_results(ahu_report, full, input_set, plan_rooms, ahu_resolution, dwelling),
         "breakdown": contractor_report.breakdown(full["included_scope_peak"] if (full.get("included_scope_peak") or {}).get("components")
                                                  else peak),
@@ -2724,6 +2736,24 @@ def api_job_plan(request):
     security.require_project_role(project, request._identity(), "viewer")
     from backend import job_plan_service
     return job_plan_service.get(sys.modules[__name__], project)
+
+
+def api_setpoint_comparison(request):
+    """Read-only: the indoor setpoint comparison for the job's saved cooling result (worked out once per result)."""
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    security.require_project_role(project, request._identity(), "viewer")
+    from backend import setpoint_comparison_service
+    return {"project_id": project["id"], **setpoint_comparison_service.get(project)}
+
+
+def api_heating_summary(request):
+    """Read-only: the job's design heating load from its saved heating report, or why there is none."""
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    security.require_project_role(project, request._identity(), "viewer")
+    from backend import heating_summary_service
+    return {"project_id": project["id"], **heating_summary_service.get(sys.modules[__name__], project)}
 
 
 def api_save_job(request):
