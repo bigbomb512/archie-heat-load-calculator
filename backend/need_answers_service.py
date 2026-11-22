@@ -199,7 +199,7 @@ def apply(web, project, data):
                                                    "ceiling_height_mm": round(metres * 1000), "edited_by": reviewer})
         return {"applied": True, "summary": f"{where} ceiling height set to {metres:g} m."}
     if kind == "occupancy":
-        people = _number(data.get("value"), "number of people")
+        people = _in_range_nonnegative(data.get("value"), "number of people")
         _internal_gains_override(web, project, room, "occupancy_count", people, reviewer, note)
         return {"applied": True, "summary": f"{where}: {people:g} people."}
     if kind == "lighting_load":
@@ -223,6 +223,17 @@ def apply(web, project, data):
                                                   "value": value, "reviewer": reviewer})
     name = f"{value.get('code') + ' ' if value.get('code') else ''}{value.get('name', '')}"
     return {"applied": True, "summary": f"{name} in {where}: {watts:g} W each × {value.get('quantity') or 1} × {value['heat_to_space_factor']:g} to the room."}
+
+
+def _in_range_nonnegative(value, label):
+    import math
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"Enter the {label} as a number.") from None
+    if isinstance(value, bool) or not math.isfinite(number) or number < 0:
+        raise ValueError(f"The {label} must be above 0, or exactly 0 to clear it.")
+    return number
 
 
 def _in_range(value, low, high, label):

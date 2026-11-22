@@ -262,6 +262,7 @@ body.job-preview {
   color: var(--ink-3);
 }
 /* Finished with work left for the person (unsent questions, gaps left at a limit): never the done tick. */
+.job-stage.unfinished .job-stage-icon,
 .job-stage.attention .job-stage-icon {
   background: var(--needs);
   border-color: var(--needs-ink);
@@ -441,6 +442,28 @@ body.job-preview {
   border-radius: 999px;
   color: var(--ink);
   background: #ffffff;
+}
+.job-plan-key-num {
+  display: inline-grid;
+  place-items: center;
+  min-width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--ink);
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 700;
+  align-self: center;
+}
+.job-plan-marker circle {
+  fill: var(--ink);
+  stroke: #ffffff;
+  stroke-width: 0.5px;
+}
+.job-plan-marker text {
+  fill: #ffffff;
+  font-weight: 700;
+  font-family: "Alte Haas Grotesk", Helvetica, sans-serif;
 }
 .job-plan-chip small {
   color: var(--ink-2);
@@ -1616,3 +1639,350 @@ body.job-preview {
 .job-fix-actions { position: sticky; bottom: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 16px; background: var(--sheet); border-top: 1px solid var(--line); z-index: 2; }
 .job-fix-actions .job-note { flex: 1 1 100%; margin: 0; }
 .job-fix-name { min-width: 10em; }
+
+/* The answer card and the job's one to-do list (js/job/summary.js), at the top of every job step. */
+.job-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.job-answer {
+  display: grid;
+  grid-template-columns: minmax(220px, auto) 1fr auto;
+  gap: 16px 24px;
+  align-items: center;
+  background: var(--sheet);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--action);
+  border-radius: 4px;
+  padding: 16px 20px;
+}
+.job-answer[data-answer-state="stale"],
+.job-answer[data-answer-state="building_only"] {
+  border-left-color: var(--ui-warning, #805a17);
+}
+.job-answer[data-answer-state="none"] {
+  border-left-color: var(--hatch);
+}
+.job-answer-figure {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.job-answer-label {
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.job-answer-total {
+  font-size: 32px;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+.job-answer-total.none {
+  font-size: 20px;
+  color: var(--ink-2);
+}
+.job-answer[data-answer-state="stale"] .job-answer-total {
+  color: var(--ink-2);
+}
+.job-answer-facts {
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.job-answer-status p {
+  margin: 0 0 4px;
+}
+.job-answer-note {
+  font-size: 14px;
+  color: var(--ink-2);
+  max-width: 62ch;
+}
+.job-answer-badge {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--select);
+  color: var(--ink);
+}
+.job-answer-badge.ok {
+  background: #e2efe8;
+  color: var(--ui-success, #27654d);
+}
+.job-answer-badge.warn {
+  background: var(--needs);
+  color: var(--needs-ink);
+}
+.job-answer-badge.muted {
+  background: var(--line-soft);
+  color: var(--ink-2);
+}
+.job-answer-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.job-answer-done {
+  font-size: 14px;
+  color: var(--ui-success, #27654d);
+}
+.job-todos {
+  background: var(--sheet);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 16px 20px 20px;
+}
+.job-todos h2 {
+  font-size: 18px;
+  margin: 0 0 8px;
+}
+.job-todos ol {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+}
+.job-todo {
+  display: grid;
+  grid-template-columns: 132px 1fr;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--line-soft);
+}
+.job-todo[hidden] {
+  display: none;
+}
+.job-summary-flash {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 4px;
+  background: #e2efe8;
+  color: var(--ui-success, #27654d);
+  font-size: 14px;
+}
+.job-todo-severity {
+  font-size: 12px;
+  font-weight: 700;
+  padding-top: 3px;
+  color: var(--ink-2);
+}
+.job-todo.blocks .job-todo-severity {
+  color: var(--ui-danger, #a33432);
+}
+.job-todo.changes_number .job-todo-severity {
+  color: var(--needs-ink);
+}
+.job-todo-body p {
+  margin: 0;
+}
+.job-todo-title {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  align-items: baseline;
+}
+.job-todo-impact {
+  font-size: 13px;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+.job-todo-detail {
+  font-size: 14px;
+  color: var(--ink-2);
+  margin-top: 2px !important;
+  max-width: 72ch;
+}
+.job-todo-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  margin-top: 8px;
+}
+.job-todo-actions:empty {
+  display: none;
+}
+.job-todo-actions .job-button {
+  min-height: 36px;
+  padding: 6px 12px;
+  font-size: 14px;
+}
+.job-todo-field {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+.job-todo-field input,
+.job-todo-field select {
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font: inherit;
+  color: var(--ink);
+  background: var(--sheet);
+}
+.job-todo-field input[type="number"] {
+  width: 7ch;
+}
+.job-todo-more summary {
+  cursor: pointer;
+  color: var(--action);
+  font-size: 14px;
+}
+.job-todo-more[open] summary {
+  margin-bottom: 6px;
+}
+.job-todo-link {
+  font-size: 14px;
+}
+.job-todo-message:empty {
+  display: none;
+}
+.job-todo-message {
+  font-size: 13px;
+  margin-top: 6px !important;
+}
+.job-step-todo {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  margin-left: 4px;
+  border-radius: 999px;
+  background: var(--needs);
+  color: var(--needs-ink);
+  font-size: 11px;
+  font-weight: 700;
+  vertical-align: 2px;
+}
+@media (max-width: 760px) {
+  .job-answer {
+    grid-template-columns: 1fr;
+  }
+  .job-answer-actions {
+    justify-content: flex-start;
+  }
+  .job-todo {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+}
+
+.job-jobs-table .job-load-value {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.job-row-actions {
+  white-space: nowrap;
+}
+.job-row-actions .job-link-button + .job-link-button {
+  margin-left: 12px;
+}
+.job-earlier-row > td {
+  padding: 4px 12px 12px;
+}
+.job-earlier-row summary,
+.job-archived > summary {
+  cursor: pointer;
+  color: var(--action);
+  font-size: 14px;
+}
+.job-earlier-table {
+  margin-top: 8px;
+  background: var(--sheet);
+}
+.job-archived {
+  margin-top: 24px;
+}
+.job-archived > summary {
+  margin-bottom: 12px;
+}
+
+/* "Check the house" tabs (js/job/frame.js) */
+.job-subtabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  border-bottom: 1px solid var(--line);
+}
+.job-subtab {
+  padding: 10px 16px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink-2);
+  text-decoration: none;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -1px;
+}
+.job-preview a.job-subtab {
+  color: var(--ink-2);
+}
+.job-preview a.job-subtab[aria-current="page"] {
+  color: var(--ink);
+  border-bottom-color: var(--action);
+}
+.job-subtab.locked {
+  color: var(--ink-3);
+  font-weight: 400;
+}
+
+/* "Design the system" (js/job/system.js) */
+.job-system-summary h1 {
+  margin-bottom: 8px;
+}
+.job-system-totals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 48px;
+  margin: 16px 0;
+}
+.job-system-totals > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.job-system-suggestion {
+  font-size: 24px;
+  line-height: 1.2;
+}
+.job-system-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 32px;
+  margin: 0 0 8px;
+}
+.job-system-facts dt {
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.job-system-facts dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+[data-system-rooms] th small,
+[data-system-rooms] td small {
+  display: block;
+  font-size: 12px;
+  color: var(--ink-2);
+  font-weight: 400;
+}
+
+/* Rooms read in pieces (js/job/joins.js) */
+.job-join-list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+}
+.job-join-list li {
+  padding: 12px 0;
+  border-top: 1px solid var(--line-soft);
+}
+.job-join-list p {
+  margin: 0 0 8px;
+}
+.job-joins .job-todo-field input {
+  width: 18ch;
+}

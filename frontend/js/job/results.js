@@ -453,9 +453,20 @@ function resultsContent({ plan, report, gaps, projectId, stale, canUpdate }) {
   const householdLine = household
     ? `<p>Household counted once: the rooms hold ${escapeHtml(household.people_in_rooms)} people at ${escapeHtml(peak.display_hour ?? peak.hour)}:00, the house has ${escapeHtml(household.people_counted)} — ${fmt(Number(household.removed_sensible_kw || 0) + Number(household.removed_latent_kw || 0))} kW of people heat not counted twice.</p>`
     : "";
-  const rooms = (plan.rooms || []).filter(
-    (room) => room.kind === "comfort" && room.included,
-  );
+  // A joined room (pieces the drawing reader split) is one row: its load is the peak of the pieces' summed hours.
+  const joinedRows = (plan.joined_rooms || [])
+    .filter((group) => group.cooled !== false)
+    .map((group) => ({ room_id: group.id, name: group.name, display_name: group.name, area_m2: group.area_m2,
+                       final_kw: group.final_kw, kind: "comfort", included: true, member_ids: group.member_ids || [] }));
+  // In the room list's order, each joined room where its first piece was.
+  const placed = new Set();
+  const rooms = (plan.rooms || []).flatMap((room) => {
+    if (!room.join_id) return room.kind === "comfort" && room.included ? [room] : [];
+    const group = joinedRows.find((row) => row.room_id === room.join_id);
+    if (!group || placed.has(group.room_id)) return [];
+    placed.add(group.room_id);
+    return [group];
+  });
   const peaks = report.room_peaks || [];
   const historicalLoads = rooms.map((room) => {
     const roomPeak = roomPeakFor(room, peaks);
@@ -479,9 +490,9 @@ function resultsContent({ plan, report, gaps, projectId, stale, canUpdate }) {
     ? `The previous result covered ${peaks.length} rooms${peak.display_hour == null ? "" : ` at hour ${escapeHtml(peak.display_hour)}`}. Room-by-room loads are out of date.${allowanceText}`
     : `${rooms.length} rooms counted${peak.display_hour == null ? "" : ` at the peak hour ${escapeHtml(peak.display_hour)}`}.${allowanceText} Refrigeration is sized separately.`;
   return `${outOfDate}
-    ${report.equipment_coverage && !report.equipment_coverage.coverage_complete ? `<section class="job-panel" role="status"><h2>Some equipment isn't counted</h2><p>${fmt(Number(report.equipment_coverage.summary?.no_value || 0) + Number(report.equipment_coverage.summary?.no_room || 0))} item(s) have no value yet or no room. Those rooms use their typical equipment allowance instead.</p><a href="#/job/${encodeURIComponent(projectId)}/operating">See the equipment</a></section>` : ""}
+    ${report.equipment_coverage && !report.equipment_coverage.coverage_complete ? `<section class="job-panel" role="status"><h2>Some equipment isn't counted</h2><p>${(() => { const count = Number(report.equipment_coverage.summary?.no_value || 0) + Number(report.equipment_coverage.summary?.no_room || 0); return count === 1 ? "1 item has" : `${count} items have`; })()} no value yet or no room. Those rooms use their typical equipment allowance instead.</p><a href="#/job/${encodeURIComponent(projectId)}/operating">See the equipment</a></section>` : ""}
     <section class="job-panel job-result-summary ${stale ? "stale" : ""}">
-      <div><h1>Design cooling load for the tenancy</h1>
+      <div><h1>Design cooling load for the ${plan.status?.dwelling ? "house" : "tenancy"}</h1>
         <strong class="job-total">${fmt(total)} <span>kW</span></strong>
         <p>${statusSentence}</p>
         ${householdLine}

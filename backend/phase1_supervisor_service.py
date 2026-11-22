@@ -17,7 +17,7 @@ from backend.job_runner import BackgroundJob, JobCancelled, checkpoint, current_
 
 JOB_FILE = "phase1_supervisor_job.json"
 MAX_CYCLES = 3
-MAX_ATTEMPTS = 2
+MAX_ATTEMPTS = 3
 _JOB = BackgroundJob(JOB_FILE, [("audit", "Checking the empty-room model"),
     ("investigate", "Checking the drawings"), ("rebuild", "Updating the empty-room model")],
     "archie-phase1-supervisor", "Checking the empty-room model was interrupted. Resume to keep the saved drawing answers.")
@@ -444,6 +444,32 @@ def group_investigations(gaps):
     return list(grouped.values())
 
 
+def third_attempt_note(gap, history, snapshot, root):
+    """Give the final drawing question its prior result and nearby model evidence."""
+    prior = [row for row in history if row.get("gap_id") in gap["gap_ids"]]
+    outcomes = []
+    for row in prior[-4:]:
+        result = row.get("status") or row.get("outcome") or "unresolved"
+        reason = str(row.get("reason") or "")[:180]
+        outcomes.append(f"{result}: {reason}" if reason else f"{result}: the gap remained open")
+    context = " Earlier checks: " + "; ".join(outcomes) + "." if outcomes else ""
+    for row in reversed(prior):
+        if not row.get("task") or not row.get("target"):
+            continue
+        record = tasks._current_task(root, row["task"], row["target"])
+        answer = (record or {}).get("applied_value") if (record or {}).get("run_id") == row.get("run_id") else None
+        if answer:
+            context += " Earlier drawing answer: " + json.dumps(answer, ensure_ascii=False, default=str)[:450] + "."
+            break
+    pages = set(gap.get("pages") or [])
+    neighbours = [room for room in snapshot.get("rooms", []) if room.get("id") != gap.get("room_id")
+                  and pages.intersection(room.get("pages") or []) and _positive(room.get("area_m2"))]
+    if neighbours:
+        context += " Other rooms on these pages: " + ", ".join(
+            f"{_name(room.get('name'))} {room['area_m2']:g} m²" for room in neighbours[:6]) + "."
+    return context
+
+
 def _usage(root):
     rows = []
     path = Path(root) / ai_provider.USAGE_FILE
@@ -629,7 +655,7 @@ def run(web, project, step=lambda *args: None):
     def progress(**extra):
         checkpoint()
         state = read_json(root / JOB_FILE)
-        state.update(attempts=attempts, history=history, cycle=cycle, max_cycles=MAX_CYCLES,
+        state.update(attempts=attempts, history=history, cycle=cycle, max_cycles=MAX_CYCLES, max_attempts=MAX_ATTEMPTS,
                      gaps_found=len(initial_ids | set(attempts) | {gap["id"] for gap in gaps}), gaps_fixed=len(resolved),
                      resolved_gap_ids=sorted(resolved), gaps=deepcopy(gaps), spend=_usage(root),
                      area_baseline=baseline, area_changes=area_changes(baseline, room_areas(snapshot)),
@@ -645,7 +671,8 @@ def run(web, project, step=lambda *args: None):
         checkpoint()
         selected = select_investigations(gaps, attempts)
         current_fp = model_fingerprint(snapshot)
-        selected = [gap for gap in selected if failed_inputs.get(gap["id"]) != current_fp]
+        selected = [gap for gap in selected if failed_inputs.get(gap["id"]) != current_fp
+                    or attempts.get(gap["id"], 0) == MAX_ATTEMPTS - 1]
         if not selected:
             break
         cycle += 1
@@ -666,6 +693,8 @@ def run(web, project, step=lambda *args: None):
                 checkpoint()
                 gap["previous_targets"] = [row["target"] for row in history if row.get("target")
                     and row.get("gap_id") in gap["gap_ids"] and row.get("status") in SUCCESS]
+                if any(attempts.get(gap_id) == MAX_ATTEMPTS for gap_id in gap["gap_ids"]):
+                    gap["note"] += third_attempt_note(gap, history, snapshot, root)
                 try:
                     if gap["task"] == "room_identity_use":
                         skills_to_run.append(gap)
@@ -779,7 +808,8 @@ def run(web, project, step=lambda *args: None):
         after = model_fingerprint(snapshot), {row["id"] for row in gaps}
         resolved = (resolved | (before[1] - after[1])) - after[1]
         progress(active_investigations=[])
-        if before == after or not changed:
+        final_checks_available = any(attempts.get(gap["id"], 0) == MAX_ATTEMPTS - 1 for gap in gaps)
+        if (before == after or not changed) and not final_checks_available:
             progress(stop_reason="no_progress")
             break
     # Questions the fixes above unlocked have no other way to be sent: answer them once (the drawing step's own limits
@@ -809,7 +839,8 @@ def run(web, project, step=lambda *args: None):
     progress(exceptions=exceptions, active_investigations=[], model_fingerprint=model_fingerprint(snapshot), result_fingerprint=result_fp,
              outcome=outcome, stop_reason=("no_progress" if read_json(root / JOB_FILE).get("stop_reason") == "no_progress"
                  else "ai_unavailable" if unavailable and gaps
-                 else "cycle_limit" if cycle >= MAX_CYCLES and gaps else "attempt_limit" if gaps else "ready"))
+                 else "cycle_limit" if cycle >= MAX_CYCLES and any(
+                     attempts.get(gap["id"], 0) < MAX_ATTEMPTS for gap in gaps) else "attempt_limit" if gaps else "ready"))
     return {"exceptions": exceptions, "outcome": outcome, "spend": _usage(root), "result_fingerprint": result_fp}
 
 

@@ -162,11 +162,11 @@ function stageLine(data, kind, status, plan) {
   }
   if (kind === "supervisor") {
     if (stoppedAtLimit(data)) return supervisorLimitLine(data);
-    const copy = working(data) ? data.step_label || "Checking the empty-room model."
+    const copy = working(data) ? data.step_label || "Checking the building model."
       : stepOf(data) === "done" ? data.outcome === "needs_information"
         ? "The model checks finished, but no cooled room has enough supported inputs yet. See the remaining exceptions."
         : "The model checks are finished; remaining uncertainties are listed with the result."
-      : stopped(data) ? "Checking the empty-room model stopped. Resume to keep the saved answers."
+      : stopped(data) ? "Checking the building model stopped. Resume to keep the saved answers."
       : data?.recovery?.reason || "Starts after the room and site review.";
     const cycle = Number(data?.cycle) || 0;
     const gaps = `${Number(data?.gaps_found) || 0} gaps found · ${Number(data?.gaps_fixed) || 0} fixed`;
@@ -176,7 +176,7 @@ function stageLine(data, kind, status, plan) {
   }
   if (kind === "calculation") {
     const partial = plan.phase1_report?.phase1_coverage?.partial_label;
-    if (status.phase1_complete) return partial ? `Saved empty-room loads are available. ${partial}.` : "Saved empty-room loads are available.";
+    if (status.phase1_complete) return partial ? `Saved building loads are available. ${partial}.` : "Saved building loads are available.";
     const reportReason = plan.phase1_report?.blocked_reasons?.[0];
     const leftOut = plan.phase1_report?.phase1_coverage?.rooms_left_out || [];
     if (reportReason) return String(reportReason);
@@ -184,28 +184,29 @@ function stageLine(data, kind, status, plan) {
       return `Calculated with ${leftOut.map((room) => room.label || room.name).join(", ")} left out.`;
     }
     if (working(data)) {
-      return data?.step_label || "Calculating each room’s empty-room load.";
+      return data?.step_label || "Calculating each room’s building load.";
     }
     if (data?.offerStart) {
-      return "The empty-room load hasn't started. Calculate now runs it from the saved drawing evidence.";
+      return "The building load hasn't started. Calculate now runs it from the saved drawing evidence.";
     }
-    if (data?.readiness?.ready && stepOf(data) !== "done" && !stopped(data)) return "Starting the empty-room load calculation.";
+    if (data?.readiness?.ready && stepOf(data) !== "done" && !stopped(data)) return "Starting the building load calculation.";
     if (data?.readiness?.reasons?.length) return data.readiness.reasons.join(" ");
     if (stopped(data)) {
-      return data?.error || data?.problem || "The empty-room load calculation stopped. Try again to continue.";
+      return data?.error || data?.problem || "The building load calculation stopped. Try again to continue.";
     }
     if (stepOf(data) === "done") {
-      return "The drawings changed since the last calculation. The empty-room load is recalculated when the drawing review finishes.";
+      return "The drawings changed since the last calculation. The building load is recalculated when the drawing review finishes.";
     }
     return "Starts on its own when the drawing review finishes.";
   }
-  if (status.phase1_complete) return "Saved empty-room loads are available.";
-  return "The empty-room load calculation has not started yet.";
+  if (status.phase1_complete) return "Saved building loads are available.";
+  return "The building load calculation has not started yet.";
 }
 
 const LIMIT_WHY = {
   cycle_limit: (data) => `It stopped at its limit of ${plural(Number(data.max_cycles) || 3, "investigation cycle")}`,
-  attempt_limit: () => "It stopped after asking about each gap twice",
+  // Runs saved before max_attempts was recorded asked twice.
+  attempt_limit: (data) => `It stopped after asking about each gap ${({ 1: "once", 2: "twice", 3: "three times" })[Number(data.max_attempts) || 2] || `${Number(data.max_attempts)} times`}`,
   no_progress: () => "It stopped because its last cycle changed nothing",
 };
 
@@ -216,7 +217,7 @@ function supervisorLimitLine(data) {
   const why = (LIMIT_WHY[data.stop_reason] || LIMIT_WHY.attempt_limit)(data);
   const counts = `${Number(data.gaps_found) || 0} gaps found · ${Number(data.gaps_fixed) || 0} fixed`;
   const price = data.spend ? ` · US$${Number(data.spend.cost_usd || 0).toFixed(4)} spent` : "";
-  return `${why} with ${plural(left, "gap")} still open (${counts}${price}). The empty-room load uses labelled estimates for these until you fix them.`;
+  return `${why} with ${plural(left, "gap")} still open (${counts}${price}). The building load uses labelled estimates for these until you fix them.`;
 }
 
 // What each kind of gap asks the person to check, worded as something to look at (never as a finding).
@@ -296,7 +297,7 @@ function stage(title, data, kind, status, plan, retryEndpoint = "") {
       : needsAction(data, kind)
         ? "attention"
         : stateOf(data) === "done" && data?.recovery?.label === "Try again"
-        ? "waiting"
+        ? "unfinished"
         : stateOf(data);
   const copy = stageLine(data, kind, status, plan);
   const startNow = kind === "calculation" && data?.offerStart
@@ -319,8 +320,10 @@ function stage(title, data, kind, status, plan, retryEndpoint = "") {
     : `<p class="job-caption" data-task-not-needed><strong>${escapeHtml(row.label)}: Not needed.</strong> ${escapeHtml(row.reason || "")}</p>`).join("")
     + (data?.not_answered_tasks || []).map((row) =>
       `<p class="job-caption" data-task-not-answered><strong>${escapeHtml(row.label)}: Not answered.</strong> The checker refused the AI's reply twice${row.reason ? ` (${escapeHtml(row.reason)})` : ""}; the room keeps the area its other steps found.</p>`).join("") : "";
-  const icon = state === "done" ? "✓" : state === "attention" ? "!" : "";
-  const flag = state === "attention" ? `<span class="job-stage-flag">Needs your action</span>` : "";
+  // Finished with parts it couldn't do: marked like a step that needs you, so it doesn't read as not started.
+  const icon = state === "done" ? "✓" : state === "attention" || state === "unfinished" ? "!" : "";
+  const flag = state === "attention" ? `<span class="job-stage-flag">Needs your action</span>`
+    : state === "unfinished" ? `<span class="job-stage-flag">Finished with gaps</span>` : "";
   return `<li class="job-stage ${state}" data-stage="${kind}"><span class="job-stage-icon" aria-hidden="true">${icon}</span><span><strong>${title}</strong>${flag}<p>${escapeHtml(copy)}</p>${areaNote}${problem}${notNeeded}${exceptions}${retry}${nextStep}${startNow}</span></li>`;
 }
 
@@ -380,7 +383,7 @@ function facts(status, plan) {
 
 function statusSentence(data, status, plan) {
   if (status.phase1_complete)
-    return "The empty-room loads are ready. Continue when you are.";
+    return "The building loads are ready. Continue to Rooms when you are.";
   const order = [
     ["pages", data.reading],
     ["equipment", data.equipment],
@@ -408,7 +411,7 @@ function statusSentence(data, status, plan) {
     if (kind === "pages") return pageReadingProblem(value);
     return kind === "envelope"
       ? `${(value.failed_steps || []).map((row) => row.label).join(" and ") || "Working out the walls, roof and floor"} stopped. Try again to continue; finished steps are kept.`
-      : kind === "calculation" ? "The empty-room load calculation stopped. Try again under Calculate each room’s empty-room load."
+      : kind === "calculation" ? "The building load calculation stopped. Try again under Calculate each room’s building load."
       : "A drawing step stopped. Try again to continue.";
   }
   const copy = stageLine(value, kind, status, plan);
@@ -471,8 +474,8 @@ function stagesMarkup(data, status, plan) {
         ${stage("Find equipment", data.equipment, "equipment", status, plan, "/api/page-extraction")}
         ${stage("Trace the rooms and walls", data.rooms, "rooms", status, plan, "/api/drawing-tasks")}
         ${stage("Review room names and site", data.envelope, "envelope", status, plan, "/api/skill-workflow")}
-        ${stage("Check the empty-room model", data.supervisor, "supervisor", status, plan, "/api/phase1-supervisor")}
-        ${stage("Calculate each room’s empty-room load", data.calculation, "calculation", status, plan, "/api/job-calculation")}`;
+        ${stage("Check the building model", data.supervisor, "supervisor", status, plan, "/api/phase1-supervisor")}
+        ${stage("Calculate each room’s building load", data.calculation, "calculation", status, plan, "/api/job-calculation")}`;
 }
 
 function sentenceFor(data, status, plan) {

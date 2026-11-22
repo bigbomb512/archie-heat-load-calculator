@@ -73,8 +73,11 @@ def room_sizing(report, plan_rooms):
     levels = {row["name"]: row.get("level") or "" for row in plan_rooms}
     areas = {row["name"]: row.get("area_m2") for row in plan_rooms}
     worst = {}
+    joined = {row["join_id"]: row for row in plan_rooms if row.get("join_id")}
     for scenario in report.get("scenario_results") or []:
         for room in scenario.get("rooms") or []:
+            if room.get("name") in {row.get("name") for row in plan_rooms if row.get("join_id")}:
+                continue
             peak = room.get("peak") or {}
             total, sensible = _number(peak.get("design_total_kw")), _number(peak.get("sensible_kw"))
             name = room.get("name", "")
@@ -87,6 +90,20 @@ def room_sizing(report, plan_rooms):
                                "hour": peak.get("display_hour", peak.get("hour")),
                                "load_kw": round(load, 2), "sensible_kw": round((sensible or 0.0) * (1 + fan_percent / 100), 2),
                                "room_kw": round(total, 2)}
+    for peak in report.get("room_peaks") or []:
+        group = joined.get(peak.get("source_room_id"))
+        if not group or group.get("final_kw") is None:
+            continue
+        load = _number(peak.get("design_total_kw"))
+        if load is None:
+            continue
+        name = group.get("join_name") or peak.get("name")
+        sensible = _number(peak.get("sensible_kw")) or 0.0
+        worst[name] = {"name": name, "level": group.get("level") or "",
+                       "area_m2": sum(_number(row.get("area_m2")) or 0 for row in plan_rooms if row.get("join_id") == peak.get("source_room_id")),
+                       "month": (peak.get("own_peak") or {}).get("month", ""), "hour": peak.get("display_hour", peak.get("hour")),
+                       "load_kw": round(load + sensible * fan_percent / 100, 2),
+                       "sensible_kw": round(sensible * (1 + fan_percent / 100), 2), "room_kw": round(load, 2)}
     rows = []
     for row in sorted(worst.values(), key=lambda item: (-item["load_kw"], item["name"])):
         units, size = pick(row["load_kw"], config["wall_split_kw"])
@@ -206,7 +223,53 @@ def engineer_room_details(report, input_set, plan_rooms):
                              "roof_exposed": roof, "peak": peak, "month": scenario.get("representative_month") or "not recorded",
                              "fan_heat_sizing_kw": (_number(peak.get("sensible_kw")) or 0.0) * fan_percent / 100,
                              "fan_heat_percent": fan_percent, "hours": hours}
-    return sorted(best.values(), key=lambda row: (row["level"], row["name"]))
+    joined = {row["join_id"]: row for row in plan_rooms if row.get("join_id")}
+    joined_member_ids = {row.get("room_id") for row in plan_rooms if row.get("join_id")}
+    identities = report.get("room_identities") or {}
+    rows = [row for row in best.values() if identities.get(str(row.get("room_id"))) not in joined_member_ids]
+    for peak in report.get("room_peaks") or []:
+        group = joined.get(peak.get("source_room_id"))
+        if not group or group.get("final_kw") is None:
+            continue
+        member_ids = set(peak.get("member_ids") or [])
+        members = [row for row in best.values() if identities.get(str(row.get("room_id"))) in member_ids]
+        scenario_id = (peak.get("own_peak") or {}).get("scenario_id")
+        scenario = next((row for row in report.get("scenario_results") or [] if row.get("scenario_id") == scenario_id), {})
+        scenario_rooms = [row for row in scenario.get("rooms") or [] if identities.get(str(row.get("room_id"))) in member_ids]
+        hours = []
+        if scenario_rooms and all(len(row.get("hours") or []) == 24 for row in scenario_rooms):
+            for index in range(24):
+                parts = [row["hours"][index] for row in scenario_rooms]
+                components = {}
+                for part in parts:
+                    for key, component in (part.get("components") or {}).items():
+                        target = components.setdefault(key, {"sensible_kw": 0, "latent_kw": 0, "total_kw": 0})
+                        for field in target:
+                            target[field] += _number((component or {}).get(field)) or 0
+                hours.append({"hour": parts[0].get("hour", index),
+                              "total_kw": sum(_number(part.get("design_total_kw")) or 0 for part in parts),
+                              "sensible_kw": sum(_number(part.get("subtotal_sensible_kw")) or 0 for part in parts),
+                              "latent_kw": sum(_number(part.get("subtotal_latent_kw")) or 0 for part in parts),
+                              "components": components})
+        glass = {}
+        for member in members:
+            for facing, area in member.get("glass_by_facing_m2", {}).items():
+                glass[facing] = glass.get(facing, 0) + area
+        area = sum(_number(member.get("area_m2")) or 0 for member in members)
+        rows.append({"room_id": peak["source_room_id"], "name": group.get("join_name") or peak["name"],
+                     "level": group.get("level") or "", "area_m2": area,
+                     "height_mm": members[0].get("height_mm") if members and all(member.get("height_mm") == members[0].get("height_mm") for member in members) else None,
+                     "volume_m3": sum(_number(member.get("volume_m3")) or 0 for member in members),
+                     "people": sum(_number(member.get("people")) or 0 for member in members),
+                     "lighting_w_m2": (sum((_number(member.get("lighting_w_m2")) or 0) * (_number(member.get("area_m2")) or 0) for member in members) / area) if area else None,
+                     "equipment_w": sum(_number(member.get("equipment_w")) or 0 for member in members),
+                     "external_wall_m2": sum(_number(member.get("external_wall_m2")) or 0 for member in members),
+                     "roof_exposed": any(member.get("roof_exposed") for member in members),
+                     "glass_by_facing_m2": glass, "peak": peak,
+                     "fan_heat_sizing_kw": (_number(peak.get("sensible_kw")) or 0) * fan_percent / 100,
+                     "fan_heat_percent": fan_percent,
+                     "month": (peak.get("own_peak") or {}).get("month", ""), "hours": hours})
+    return sorted(rows, key=lambda row: (row["level"], row["name"]))
 
 
 def _value(row):
@@ -401,6 +464,29 @@ def room_values(input_set, plan_rooms):
             item = str(source.get("name", ""))
             equipment.append({"room": name, "name": ITEM_NAMES.get(item, item), "quantity": quantity, "watts": watts,
                               "counted_w": round(counted), "source": _source_head(source.get("source"))})
+    joined = {row["join_id"]: row for row in plan_rooms if row.get("join_id")}
+    member_names = {row.get("name"): row.get("join_id") for row in plan_rooms if row.get("join_id")}
+    merged = {}
+    for row in rows:
+        group_id = member_names.get(next((source for source, shown_name in names.items() if shown_name == row["name"]), row["name"]))
+        if not group_id:
+            continue
+        group = merged.setdefault(group_id, {**row, "name": joined[group_id].get("join_name") or row["name"],
+                                             "area_m2": 0, "people": 0, "outside_air_lps": 0,
+                                             "lighting_w_m2": 0})
+        area = _number(row.get("area_m2")) or 0
+        group["area_m2"] += area
+        group["people"] += _number(row.get("people")) or 0
+        group["outside_air_lps"] += _number(row.get("outside_air_lps")) or 0
+        group["lighting_w_m2"] += (_number(row.get("lighting_w_m2")) or 0) * area
+    for row in merged.values():
+        row["lighting_w_m2"] = round(row["lighting_w_m2"] / row["area_m2"], 2) if row["area_m2"] else None
+    rows = [row for row in rows if row["name"] not in {names.get(name, name) for name in member_names}] + list(merged.values())
+    for row in equipment:
+        for name, group_id in member_names.items():
+            if row["room"] == names.get(name, name):
+                row["room"] = joined[group_id].get("join_name") or row["room"]
+                break
     return rows, equipment
 
 

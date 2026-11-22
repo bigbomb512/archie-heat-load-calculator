@@ -311,9 +311,9 @@ test("preview renders the Drawings frame and current room outline", async ({
   await expect(
     page.getByRole("heading", { name: "Found so far" }),
   ).toBeVisible();
-  await expect(page.getByRole("link", { name: /Rooms/ })).toHaveAttribute(
+  await expect(page.getByRole("link", { name: /Check the house/ })).toHaveAttribute(
     "href",
-    /#\/job\/job-1\/rooms/,
+    /#\/job\/job-1\/house/,
   );
   await expect(
     page.locator(".job-plan polygon[data-room-id=shop]"),
@@ -679,7 +679,7 @@ test("after the review finishes the page waits for the server's Phase 1 start an
   ]);
   const calculation = page.locator('[data-stage="calculation"]');
   await expect(calculation).toHaveClass(/active/);
-  await expect(calculation).toContainText("Starting the empty-room load calculation.");
+  await expect(calculation).toContainText("Starting the building load calculation.");
   await page.clock.runFor(5000);
   await expect(calculation).toContainText("Calculating the room load");
   expect(seen.posts).toEqual([]);
@@ -776,7 +776,7 @@ test("an out-of-date Phase 1 result says it is redone after the review, not that
 }) => {
   await reviewFinished(page, [{ status: "done", step_state: "done", phase: "phase1_base_room" }]);
   const calculation = page.locator('[data-stage="calculation"]');
-  await expect(calculation).toContainText("The empty-room load is recalculated when the drawing review finishes.");
+  await expect(calculation).toContainText("The building load is recalculated when the drawing review finishes.");
   await expect(page.getByText("on Results")).toHaveCount(0);
 });
 
@@ -886,13 +886,13 @@ test("ceiling height uses the existing override and wall edits use envelope clas
     .first()
     .click();
   await page.getByLabel("Ceiling height in metres").fill("3.2");
-  await page.getByRole("button", { name: "Save and update Phase 1" }).click();
+  await page.getByRole("button", { name: "Save and update the load" }).click();
   await expect.poll(() => height?.ceiling_height_mm).toBe(3200);
   await expect.poll(() => calculationCount).toBe(1);
   await page.goto("/?preview=1#/job/job-1/rooms/shop");
   await page.getByRole("button", { name: "Change a wall or the roof" }).click();
   await page.locator("select[name='edge-0']").selectOption("mall");
-  await page.getByRole("button", { name: "Save and update Phase 1" }).click();
+  await page.getByRole("button", { name: "Save and update the load" }).click();
   await expect.poll(() => classification?.edges?.[0]?.boundary).toBe("mall");
   await expect.poll(() => calculationCount).toBe(2);
 });
@@ -1228,10 +1228,13 @@ test("locked Results are not keyboard links and the preview fits 375 pixels", as
   await page.setViewportSize({ width: 375, height: 812 });
   await page.goto("/?preview=1#/job/job-1/drawings");
   await expect(
-    page.locator(".job-step.locked").filter({ hasText: "Results" }),
+    page.locator(".job-step.locked").filter({ hasText: "Load and report" }),
   ).toHaveCount(1);
   await expect(
-    page.locator(".job-step.locked").filter({ hasText: "Results" }),
+    page.locator(".job-step.locked").filter({ hasText: "Load and report" }),
+  ).not.toHaveAttribute("href", /.*/);
+  await expect(
+    page.locator(".job-step.locked").filter({ hasText: "Design the system" }),
   ).not.toHaveAttribute("href", /.*/);
   await expect
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
@@ -1471,7 +1474,7 @@ test("Phase 1 completion controls the Drawings calculation check and failure cop
   await page.goto(`/?preview=1#/job/${fixture.status.id}/drawings`);
   const calc = page
     .locator(".job-stage")
-    .filter({ hasText: "Calculate each room’s empty-room load" });
+    .filter({ hasText: "Calculate each room’s building load" });
   await expect(calc).not.toHaveClass(/done/);
   await page.route("**/api/skill-workflow**", (route) =>
     route.fulfill({

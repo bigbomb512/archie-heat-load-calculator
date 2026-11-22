@@ -7,6 +7,8 @@ import { renderResults } from "./results.js";
 import { renderJobs, renderNewJob } from "./jobs.js";
 import { renderJobDetails } from "./editors.js";
 import { renderFix } from "./fix.js";
+import { renderSystem } from "./system.js";
+import { loadJobSummary } from "./summary.js";
 
 const root = document.querySelector("#jobApp");
 let generation = 0;
@@ -48,11 +50,17 @@ async function render() {
       root.innerHTML = `<main class="job-main"><h1>Jobs</h1><p>Choose a job to continue.</p>${projects.map((project) => `<p><a href="#/job/${encodeURIComponent(project.id)}/drawings">${escapeHtml(project.name)}</a></p>`).join("")}</main>`;
       return;
     }
-    const project = projects.find((item) => String(item.id) === projectId) || {
+    const project = projects.flatMap((item) => [item, ...(item.earlier_runs || [])]).find((item) => String(item.id) === projectId) || {
       id: projectId,
       name: "Job",
     };
     let step = routeState.step || "drawings";
+    // "Check the house" opens on its Rooms tab.
+    if (step === "house") step = "rooms";
+    if (step === "system" && !project.results_ready) {
+      navigate(projectId, project.phase2_complete ? "results" : "rooms");
+      return;
+    }
     if (step === "operating" && !project.phase1_complete) {
       navigate(projectId, "rooms");
       return;
@@ -72,7 +80,9 @@ async function render() {
               ? await renderJobDetails(projectId)
               : step === "fix"
                 ? await renderFix(projectId)
-              : await renderDrawings(project, projectId);
+                : step === "system"
+                  ? await renderSystem(projectId)
+                  : await renderDrawings(project, projectId);
     if (step === "details") step = "drawings";
     if (current !== generation) return;
     root.innerHTML = renderFrame({
@@ -84,6 +94,7 @@ async function render() {
       statusLine: screen.statusLine,
     });
     screen.bind?.();
+    loadJobSummary(projectId, () => current === generation);
   } catch (error) {
     if (current !== generation) return;
     root.innerHTML = `<main class="job-main"><section class="job-error" role="alert"><h1>Could not load this job</h1><p>${escapeHtml(error.message)}</p><a href="#/jobs">Jobs</a></section></main>`;

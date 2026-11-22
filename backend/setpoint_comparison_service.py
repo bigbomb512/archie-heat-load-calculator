@@ -127,6 +127,19 @@ def _inputs(paths, key):
     return report, input_set, ""
 
 
+def cached(project):
+    """The saved comparison for the job's current cooling result, or None when it hasn't been worked out yet (it is
+    never calculated here: that takes several seconds)."""
+    if not project.get("review_dir"):
+        return None
+    paths = ai_preliminary_service._paths(project)
+    key = ai_preliminary_service._file_derived(paths["report"], {}, "setpoint_comparison_key", _report_key)
+    saved = _read(Path(paths["root"]) / CACHE_NAME)
+    if key and saved.get("version") == VERSION and saved.get("key") == key["fingerprint"]:
+        return saved.get("result") or None
+    return None
+
+
 def get(project, *, full=False):
     """The comparison for the job's saved cooling result. full=True returns the uncompacted comparison (with each
     variant's scenario results) for the contractor's report; it is not cached, only the compact view is."""

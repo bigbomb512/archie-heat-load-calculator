@@ -432,9 +432,11 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._send_security_error(error, 403)
             except Exception as error:
                 return self.send_json(product_error(error), 400)
-        if urlparse(self.path).path in {"/api/setpoint-comparison", "/api/heating-summary"}:
+        if urlparse(self.path).path in {"/api/setpoint-comparison", "/api/heating-summary", "/api/job-summary",
+                                        "/api/ac-design-input"}:
             try:
-                handler = api_setpoint_comparison if urlparse(self.path).path == "/api/setpoint-comparison" else api_heating_summary
+                handler = {"/api/setpoint-comparison": api_setpoint_comparison, "/api/heating-summary": api_heating_summary,
+                           "/api/job-summary": api_job_summary, "/api/ac-design-input": api_ac_design_input}[urlparse(self.path).path]
                 return self.send_json(handler(self))
             except security.SecurityError as error:
                 return self._send_security_error(error, 403)
@@ -533,6 +535,20 @@ class Handler(SimpleHTTPRequestHandler):
         if urlparse(self.path).path in {"/api/job-setup", "/api/room-area-override", "/api/room-height-override"}:
             try:
                 return self.send_json(api_save_job(self))
+            except security.SecurityError as error:
+                return self._send_security_error(error, 403)
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if urlparse(self.path).path == "/api/room-join":
+            try:
+                return self.send_json(api_room_join(self))
+            except security.SecurityError as error:
+                return self._send_security_error(error, 403)
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if urlparse(self.path).path == "/api/project-archive":
+            try:
+                return self.send_json(api_project_archive(self))
             except security.SecurityError as error:
                 return self._send_security_error(error, 403)
             except Exception as error:
@@ -2756,6 +2772,17 @@ def api_heating_summary(request):
     return {"project_id": project["id"], **heating_summary_service.get(sys.modules[__name__], project)}
 
 
+def api_job_summary(request):
+    """Read-only: the job's answer so far (the saved load, how complete it is) and its one to-do list, ordered by how
+    much each item could change the load, for the card at the top of every job step."""
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    security.require_project_role(project, request._identity(), "viewer")
+    ensure_review_dir(project)
+    from backend import job_summary_service
+    return {"project_id": project["id"], **job_summary_service.get(sys.modules[__name__], project)}
+
+
 def api_save_job(request):
     """Job setup (name, address, building type, what's above), typed room areas and ceiling heights."""
     data = read_json_body(request)
@@ -3671,6 +3698,92 @@ def upload_response(project):
     }
 
 
+def api_ac_design_input(request):
+    """Read-only: the saved cooling load as the AC system design starts from it (docs/ac-design-input.md)."""
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    security.require_project_role(project, request._identity(), "viewer")
+    ensure_review_dir(project)
+    from backend import ac_design_input_service
+    return ac_design_input_service.api(sys.modules[__name__], project)
+
+
+def api_room_join(request):
+    """Join rooms the drawing reader split into pieces into one room, or split a joined room again."""
+    from backend import room_join_service
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or "")
+    ensure_review_dir(project)
+    security.require_project_role(project, request._identity(), "editor")
+    reviewer = " ".join(str(data.get("reviewer") or "").split())[:80] or "Check the house"
+    return room_join_service.api(sys.modules[__name__], project, data, reviewer)
+
+
+def normalise_site_address(address):
+    address = str(address or "").casefold().strip()
+    address = re.sub(r"\b(?:lot(?:\s+\w+)?|dp\s*\d+)\b.*$", "", address).strip()
+    address = re.sub(r"\b(?:nsw|vic|qld|sa|wa|tas|act|nt)\s*\d{4}\b\W*$", "", address).strip()
+    return " ".join(re.findall(r"\w+", address))
+
+
+def _saved_cooling_load(project):
+    if not project.get("review_dir"):
+        return None, "none"
+    from backend import ai_preliminary_service
+    paths = ai_preliminary_service._paths(project)
+
+    def total(report, *, final):
+        peak = (report.get("included_scope_peak") or {}) if isinstance(report, dict) else {}
+        value = peak.get("final_design_total_kw") if final else peak.get("design_total_kw")
+        if value is None:
+            value = peak.get("design_total_kw") if final else peak.get("final_design_total_kw")
+        return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+    def stamp(path):
+        try:
+            stat = Path(path).stat()
+            return [stat.st_mtime_ns, stat.st_size, getattr(stat, "st_ino", 0)]
+        except OSError:
+            return None
+
+    # The saved reports are several MB each: a fresh server would parse every job's report to draw the Jobs list.
+    # The two totals are kept beside them, keyed to each report's saved version, so that happens once per save.
+    cache_path = Path(paths["root"]) / "job_list_load.json"
+    stamps = {"final": stamp(paths["report"]), "base": stamp(paths["base_report"])}
+    try:
+        cached = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        cached = {}
+    if cached.get("version") == 1 and cached.get("stamps") == stamps:
+        final_kw, base_kw = cached.get("final_kw"), cached.get("base_kw")
+    else:
+        final_kw = ai_preliminary_service._file_derived(paths["report"], {}, "jobs_final_kw", lambda report: total(report, final=True))
+        base_kw = None if final_kw is not None else ai_preliminary_service._file_derived(
+            paths["base_report"], {}, "jobs_base_kw", lambda report: total(report, final=False))
+        try:
+            ai_preliminary_service._write(cache_path, {"version": 1, "stamps": stamps, "final_kw": final_kw, "base_kw": base_kw})
+        except OSError:
+            pass
+    if final_kw is not None:
+        return final_kw, "final"
+    return (base_kw, "building_only") if base_kw is not None else (None, "none")
+
+
+def group_site_jobs(items):
+    groups = []
+    by_address = {}
+    for item in items:
+        address = normalise_site_address(item.get("address") or item.get("found_site"))
+        key = (bool(item.get("archived")), address)
+        if address and key in by_address:
+            groups[by_address[key]]["earlier_runs"].append(item)
+        else:
+            groups.append({**item, "earlier_runs": []})
+            if address:
+                by_address[key] = len(groups) - 1
+    return groups
+
+
 def project_list(identity=None):
     projects = list(load_projects().values())
     # Isolated local walkthroughs can leave metadata in the project registry;
@@ -3696,6 +3809,8 @@ def project_list(identity=None):
             "created_at": project.get("created_at", ""),
             "updated_at": project.get("updated_at", ""),
             "revision": project.get("analysis_version", "") or project.get("revision", ""),
+            "archived": project.get("archived") is True,
+            "can_edit": identity is None or identity.development or security.role_for_project(project, identity) in {"owner", "editor"},
         }
         # Keep the jobs page responsive when the registry contains many large
         # drawing sets. Full freshness checks run after a job is opened.
@@ -3711,8 +3826,19 @@ def project_list(identity=None):
                          "drawings_confirmed": False, "phase1_complete": False, "phase2_complete": False, "results_ready": False,
                          "address": "", "found_site": "", "result_stale": False,
                          "display_name": str(project["name"]).removesuffix(".pdf")})
+        item["cooling_load_kw"], item["cooling_load_kind"] = _saved_cooling_load(project)
         result.append(item)
-    return result
+    return group_site_jobs(result)
+
+
+def api_project_archive(request):
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id", ""))
+    security.require_project_role(project, request._identity(), "editor")
+    if type(data.get("archived")) is not bool:
+        raise ValueError("Archived must be true or false.")
+    update_project({"id": project["id"], "archived": data["archived"]})
+    return {"project_id": project["id"], "archived": data["archived"]}
 
 
 def api_project_members(request):

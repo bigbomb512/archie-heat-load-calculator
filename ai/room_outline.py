@@ -751,7 +751,7 @@ def corner_outline_prompt(subject, count):
 
 
 def validate_corner_outline_reply(reply, corners, sketch_points, subject, sketch_area=None, max_area=None,
-                                  min_area=None):
+                                  min_area=None, check_area_tolerance=True):
     """The outline built from the picked corners (pieces, if it crosses itself), checked against the sketch's area."""
     if not isinstance(reply, dict) or not isinstance(reply.get("corners"), list):
         raise ValueError("The reply must list the corner numbers in order around the outline.")
@@ -769,14 +769,33 @@ def validate_corner_outline_reply(reply, corners, sketch_points, subject, sketch
     built = sum(Polygon(part).area for part in parts)
     if sketch_area is None and sketch_points and len(sketch_points) >= 3:
         sketch_area = Polygon(sketch_points).buffer(0).area
-    if sketch_area and abs(built - sketch_area) > CORNER_AREA_TOLERANCE * sketch_area:
-        raise ValueError(f"The listed corners enclose {built / sketch_area:.0%} of the sketched area; list the corners "
-                         f"all the way around {subject}, following its walls and glazing.")
+    def area_feedback():
+        reference = sketch_area or min_area or max_area
+        label = "sketched area" if sketch_area else "minimum area" if min_area else "tenancy area"
+        amount = f"{built / reference:.0%} of the {label}"
+        if sketch_points and len(sketch_points) >= 3:
+            from shapely.ops import unary_union
+            sketch = Polygon(sketch_points).buffer(0)
+            if not sketch.is_empty:
+                missing = sketch.difference(unary_union([Polygon(part) for part in parts]))
+                pieces = [piece for piece in getattr(missing, "geoms", [missing]) if piece.geom_type == "Polygon" and not piece.is_empty]
+                if pieces:
+                    largest = max(pieces, key=lambda piece: piece.area)
+                    dx = largest.centroid.x - sketch.centroid.x
+                    dy = largest.centroid.y - sketch.centroid.y
+                    side = ("right" if dx > 0 else "left") if abs(dx) >= abs(dy) else ("bottom" if dy > 0 else "top")
+                    near = sorted(range(len(corners)), key=lambda index: largest.distance(Point(corners[index])))[:2]
+                    amount += f"; the {side} of the sketch near corners {', '.join(str(index + 1) for index in near)} is uncovered"
+        return amount
+    if check_area_tolerance and sketch_area and abs(built - sketch_area) > CORNER_AREA_TOLERANCE * sketch_area:
+        raise ValueError(f"The listed corners enclose {area_feedback()}; list the corners all the way around {subject}, "
+                         "following its walls and glazing.")
     if min_area and built < min_area:
-        raise ValueError(f"The listed corners enclose too little of {subject}'s sketched floor; list the corners all "
-                         f"the way around {subject}, following its walls and glazing.")
+        raise ValueError(f"The listed corners enclose too little of {subject}'s sketched floor ({area_feedback()}); "
+                         f"list the corners all the way around {subject}, following its walls and glazing.")
     if max_area and built > 1.1 * max_area:
-        raise ValueError(f"The listed corners enclose more than the whole tenancy; list only the corners around {subject}.")
+        raise ValueError(f"The listed corners enclose {area_feedback()}, more than the whole tenancy; list only the "
+                         f"corners around {subject}.")
     return {"corners": picked, "parts": parts, "repaired": repaired,
             "missing_sides": str(reply.get("missing_sides", ""))[:300]}
 

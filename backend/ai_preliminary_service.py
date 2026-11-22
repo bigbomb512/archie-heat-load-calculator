@@ -255,6 +255,10 @@ def _sources(paths):
         "quick_fixes": _file_fingerprint(paths["root"] / "quick_fixes.json", {}),
         # A house's window glass read from its energy certificate (P8) changes the draft's glazing.
         "glazing_certificates": ai_preliminary.fingerprint(_certificate_answers(paths)),
+        # Rooms joined from pieces (backend/room_join_service.py). Only a job with joins carries the key, so the
+        # results of every job without one stay current.
+        **({"room_joins": _file_fingerprint(paths["root"] / "room_joins.json", {})}
+           if (_read(paths["root"] / "room_joins.json", {}) or {}).get("joins") else {}),
     }
 
 
@@ -2382,7 +2386,59 @@ def _room_peaks(report):
                     item["own_peak"] = own
                 peaks.append(item)
         break  # only the design day's rooms
+    joins = report.get("room_joins") or []
+    by_source = {row.get("source_room_id"): row for row in peaks}
+    for join in joins:
+        for member_id in join.get("member_ids", []):
+            if member_id in by_source:
+                by_source[member_id]["join_id"] = join["id"]
+        joined = _joined_peak(scenarios, report.get("room_identities") or {}, join)
+        if joined:
+            peaks.append(joined)
     return peaks
+
+
+def _joined_peak(scenarios, identities, join):
+    """Peak of simultaneous member hours across all design days, with their component totals."""
+    members = set(join.get("member_ids") or [])
+    best = None
+    for scenario in scenarios:
+        rooms = [room for room in scenario.get("rooms", []) if identities.get(str(room.get("room_id"))) in members]
+        if not rooms or any(len(room.get("hours") or []) != 24 for room in rooms):
+            continue
+        hours = []
+        for index in range(24):
+            parts = [room["hours"][index] for room in rooms]
+            if any(not isinstance(part.get("design_total_kw"), (int, float)) for part in parts):
+                hours = []
+                break
+            components = {}
+            for part in parts:
+                for name, component in (part.get("components") or {}).items():
+                    if not isinstance(component, dict):
+                        continue
+                    total = components.setdefault(name, {"sensible_kw": 0.0, "latent_kw": 0.0, "total_kw": 0.0})
+                    for key in total:
+                        total[key] += float(component.get(key) or 0)
+            hours.append({"hour": parts[0].get("hour", index),
+                          "design_total_kw": sum(part["design_total_kw"] for part in parts),
+                          "sensible_kw": sum(float(part.get("subtotal_sensible_kw") or 0) for part in parts),
+                          "latent_kw": sum(float(part.get("subtotal_latent_kw") or 0) for part in parts),
+                          "components": components})
+        if not hours:
+            continue
+        index = max(range(24), key=lambda hour: hours[hour]["design_total_kw"])
+        peak = hours[index]
+        if best is None or peak["design_total_kw"] > best["design_total_kw"]:
+            month = scenario.get("representative_month") or scenario.get("title") or ""
+            best = {"source_room_id": join["id"], "name": join["name"], "member_ids": list(join["member_ids"]),
+                    "calculated_member_ids": [identities.get(str(room.get("room_id"))) for room in rooms],
+                    "design_total_kw": peak["design_total_kw"], "hour": peak["hour"], "display_hour": peak["hour"],
+                    "month": month, "sensible_kw": peak["sensible_kw"], "latent_kw": peak["latent_kw"],
+                    "components": peak["components"], "hourly": _hour_profile(hours),
+                    "own_peak": {"kw": peak["design_total_kw"], "hour": peak["hour"], "month": month,
+                                 "scenario_id": scenario.get("scenario_id", "")}}
+    return best
 
 
 def _hour_profile(hours):
@@ -3000,6 +3056,9 @@ def _calculate_load(web, project, scope, persist):
     report["room_identities"] = {str(room["room_id"]): str(room["source_room_id"])
                                  for room in ((confirmed_set.get("material") or {}).get("hourly_load_model") or {}).get("rooms", [])
                                  if isinstance(room, dict) and room.get("room_id") and room.get("source_room_id")}
+    from backend import room_join_service
+    report["room_joins"] = [{key: row[key] for key in ("id", "name", "level", "member_ids", "primary_id")}
+                            for row in room_join_service.read(paths["root"])]
     if scope == "phase1_base_room":
         report["phase1_input_fingerprint"] = _phase1_input_fingerprint(input_set)
         _phase1_coverage(report, candidates, confirmed_set)
@@ -3031,6 +3090,7 @@ def _calculate_load(web, project, scope, persist):
         from backend.thermal_audit_service import build_elements
         _write(paths["thermal_audit_elements"], build_elements(report))
     _slim_report(report)
+    report["room_peaks"] = _room_peaks(report)
     if persist:
         _write(paths["base_report"] if scope == "phase1_base_room" else paths["report"], report)
     return report

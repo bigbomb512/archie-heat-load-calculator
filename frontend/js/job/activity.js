@@ -58,12 +58,12 @@ export function activityMarkup(data, projectId = "") {
   if (running(data.envelope) && !activeSkills.length) active.push(taskRow("Skill workflow", "Review room names and site", "Working",
     "Preparing evidence or checking returned answers.", true));
   if (running(data.supervisor)) {
-    active.push(taskRow("Supervisor", "Check the empty-room model", "Working",
+    active.push(taskRow("Supervisor", "Check the building model", "Working",
       data.supervisor.step_label || "Reviewing the model for missing evidence and contradictions.", true));
     active.push(...investigations.map((row) => taskRow("Specialist investigation", row.label || "Drawing check", "Assigned; awaiting answer",
       row.message || (row.pages?.length ? `Pages ${row.pages.join(", ")}` : "Checking drawing evidence."), true)));
   }
-  if (running(data.calculation)) active.push(taskRow("Calculation engine", "Calculate empty-room loads", "Working",
+  if (running(data.calculation)) active.push(taskRow("Calculation engine", "Calculate the building loads", "Working",
     "Calculating from the saved, checked room inputs.", true));
   const completed = skills.filter((row) => answered(row.status)).length;
   const outOfDate = skills.filter((row) => row.status === "stale").length;

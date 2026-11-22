@@ -10,6 +10,27 @@ import unittest
 from unittest.mock import patch
 
 from backend import ai_provider, autonomous_tasks_service as tasks_service, drawing_tasks_service as drawing
+from ai import autonomous_tasks as validators
+
+
+class CornerRetryFeedbackTests(unittest.TestCase):
+    def test_small_corner_outline_reports_coverage_and_missing_side_to_retry(self):
+        packet = {"room": "Corridor", "corners": [[0, 0], [40, 0], [40, 20], [0, 20], [100, 0], [100, 20]],
+                  "sketch": [[0, 0], [100, 0], [100, 20], [0, 20]], "sketch_area_px": 2000}
+        with self.assertRaises(ValueError) as refused:
+            validators.validate_p0_outline_corners(packet, json.dumps({"corners": [1, 2, 3, 4]}))
+        reason = str(refused.exception)
+        self.assertIn("40% of the sketched area", reason)
+        self.assertIn("right of the sketch", reason)
+        self.assertIn("near corners 2, 3", reason)
+        record = {"prompt": "Pick corners", "reply_attempts": [{"outcome": "rejected", "reason": reason}]}
+        self.assertIn(reason, drawing._prompt(record))
+
+    def test_minimum_area_without_sketch_reports_percentage(self):
+        from ai import room_outline
+        with self.assertRaisesRegex(ValueError, "40% of the minimum area"):
+            room_outline.validate_corner_outline_reply({"corners": [1, 2, 3, 4]},
+                [[0, 0], [20, 0], [20, 20], [0, 20]], None, "Dining", min_area=1000)
 
 
 class FakeTasks:

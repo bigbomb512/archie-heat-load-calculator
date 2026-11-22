@@ -231,7 +231,7 @@ export async function renderFix(projectId) {
           line.textContent = `Saved: ${saved.applied.join(" ")} Updating the load…`;
           const status = data.status || {};
           if (status.phase1_complete || status.result_exists)
-            await runCalculation(projectId, "phase1_base_room", line, "Updating the empty-room load…");
+            await runCalculation(projectId, "phase1_base_room", line, "Updating the building load…");
           if (status.phase2_complete || status.results_ready || status.result_exists) {
             await runCalculation(projectId, "full", line, "Updating the final load…");
             navigate(projectId, "results");

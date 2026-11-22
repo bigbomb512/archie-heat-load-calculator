@@ -131,11 +131,16 @@ def _get(web, project):
         status = {"id": project["id"], "name": name, "area_overrides": [], **job_progress.milestones(
             drawings_confirmed=False, checks={}, phase1_complete=False, result_exists=False, result_stale=False,
             rooms=[], areas_still_being_found=False, open_needs=0)}
-        return {"project_id": project["id"], "status": status, "rooms": [], "outlines": [], "pages": [],
+        return {"project_id": project["id"], "status": status, "rooms": [], "joined_rooms": [], "outlines": [], "pages": [],
                 "rooms_without_outline": [], "area_basis_labels": {key: {"label": label, "line_style": style}
                                                                    for key, (label, style) in AREA_BASIS.items()},
                 "phase1_current": False, "phase1_report": {}, "final_report": {}}
     root = Path(project["review_dir"])
+    from backend import room_join_service
+    joins = room_join_service.read(root)
+    join_by_member = {member_id: join for join in joins for member_id in join.get("member_ids", [])}
+    from backend import quick_fix_service
+    cooled_choices = quick_fix_service.cooled_choices(root)
     status = job_service.status(web, project)
     # The same view job_service.status has just built: one_request() hands back its copy.
     model = ai_preliminary_service.get(web, project, "workspace", check_freshness=True)
@@ -187,7 +192,8 @@ def _get(web, project):
         return None, ""
 
     def room_row(room_id, name, level, candidate, source_pages):
-        use = use_by_id.get(room_id, {})
+        join = join_by_member.get(room_id, {})
+        use = use_by_id.get(room_id) or use_by_id.get(join.get("primary_id"), {})
         kind = _kind(use.get("space_scope") or candidate.get("scope"))
         area, basis = area_for(room_id, candidate)
         identity = room_identity(name, "Unassigned level")
@@ -198,6 +204,7 @@ def _get(web, project):
         final_kw = _load_number(final_peak.get("design_total_kw")) if final_current else None
         level = "" if not level or level == "Unassigned level" else level
         return {"room_id": room_id, "name": name, "level": level, "area_m2": area,
+                "join_id": join.get("id"), "join_name": join.get("name"),
                 "occupancy": (gains_by_id.get(room_id, {}).get("fields") or {}).get("occupancy_count", {}),
                 "seating": gains_by_id.get(room_id, {}).get("seating", {}),
                 "use": {key: use.get(key) for key in ("taxonomy_id", "taxonomy_label", "rationale", "confidence_band", "classification_origin", "use_assessment")},
@@ -205,7 +212,7 @@ def _get(web, project):
                 "phase1_kw": load, "final_kw": final_kw,
                 "w_m2": round(load * 1000 / area, 1) if load is not None and area else None,
                 "final_w_m2": round(final_kw * 1000 / area, 1) if final_kw is not None and area else None,
-                "kind": kind, "included": kind == "comfort" and candidate.get("include") is not False,
+                "kind": kind, "included": cooled_choices.get(room_id, kind == "comfort" and candidate.get("include") is not False),
                 "state": _room_state(candidate, kind, area, load, areas_still_being_found, phase1_current),
                 "source_pages": source_pages}
 
@@ -237,6 +244,7 @@ def _get(web, project):
         basis = _area_basis("printed_on_drawing" if trace.get("printed_area_m2") else "",
                             calibration.get("status", ""), source)
         outlines.append({"room_id": room_id, "name": room["name"], "level": room["level"],
+                         "join_id": room.get("join_id"), "join_name": room.get("join_name"),
                          "page": page_number, "points": points, "label_point": _label_point(points),
                          "line_style": AREA_BASIS[basis][1], "area_basis": basis,
                          "kind": room["kind"], "state": room["state"], "source": source})
@@ -261,7 +269,23 @@ def _get(web, project):
     for outline in outlines:
         outline["display_name"] = shown.get(outline["room_id"]) or room_by_id[outline["room_id"]]["display_name"]
 
+    joined_rooms = []
+    for join in joins:
+        members = [room_by_id[room_id] for room_id in join["member_ids"] if room_id in room_by_id]
+        primary = room_by_id.get(join["primary_id"], {})
+        area = sum(room["area_m2"] for room in members if room.get("area_m2") is not None)
+        final_peak = final_peaks.get(join["id"], {}) if final_current else {}
+        phase1_peak = phase1_peaks.get(join["id"], {}) if phase1_current else {}
+        final_kw = _load_number(final_peak.get("design_total_kw"))
+        joined_rooms.append({"id": join["id"], "name": join["name"], "level": join["level"],
+                             "member_ids": join["member_ids"], "area_m2": area,
+                             "use": primary.get("use", {}), "cooled": bool(primary.get("included")),
+                             "people": (primary.get("occupancy") or {}).get("value"),
+                             "final_kw": final_kw, "phase1_kw": _load_number(phase1_peak.get("design_total_kw")),
+                             "final_w_m2": round(final_kw * 1000 / area, 1) if final_kw is not None and area else None})
+
     return {"project_id": project["id"], "status": status, "rooms": rooms,
+            "joined_rooms": joined_rooms,
             "room_use_options": {key: row["label"] for key, row in load_taxonomy()["categories"].items()},
             "outlines": outlines, "pages": pages,
             "rooms_without_outline": [row for row in rooms if row["room_id"] not in outlined],

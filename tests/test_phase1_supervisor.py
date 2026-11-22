@@ -141,6 +141,17 @@ class RoutingAndCacheTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.project = {"id": "test", "review_dir": str(self.root), "reasoning_packet": "ready"}
 
+    def test_third_attempt_includes_prior_answer_and_failure_reason(self):
+        gap = {"gap_ids": ["room_area:shop"], "room_id": "shop", "pages": [20]}
+        history = [{"gap_id": "room_area:shop", "task": "P0_room_outlines", "target": "page-20",
+                    "run_id": "first", "status": "applied"}, {"gap_id": "room_area:shop", "outcome": "unavailable",
+                    "reason": "No plan page matched the room."}]
+        with patch.object(tasks, "_current_task", return_value={"run_id": "first", "applied_value": {"rooms": [{"room": "Shop"}]}}):
+            note = supervisor.third_attempt_note(gap, history, snapshot(room(), room("Kitchen", area_m2=25)), self.root)
+        self.assertIn('"room": "Shop"', note)
+        self.assertIn("No plan page matched the room", note)
+        self.assertIn("Kitchen 25 m²", note)
+
     def test_targeted_note_changes_fingerprint_but_same_note_reuses_the_run(self):
         packet = {"task": "P7_ceiling_heights", "page": 22, "rooms": ["Shop"], "labels": []}
         base = tasks._create_run(self.root, "P7_ceiling_heights", "page-22", deepcopy(packet), "Read labels")
@@ -448,11 +459,23 @@ class RunTests(unittest.TestCase):
         self.assertEqual(result["exceptions"][0]["attempts"], 1)
         self.assertEqual(read_json(self.root / supervisor.JOB_FILE)["stop_reason"], "no_progress")
 
-    def test_each_gap_gets_at_most_two_attempts_even_if_other_inputs_improve(self):
-        values = [snapshot(room(area_m2=None), model_inputs=[number]) for number in range(3)]
-        result, calls = self.execute(values)
-        self.assertEqual(calls, 2)
-        self.assertEqual(result["exceptions"][0]["attempts"], 2)
+    def test_each_gap_gets_a_third_attempt_with_prior_results_and_neighbour_evidence(self):
+        values = [snapshot(room(area_m2=None), room("Kitchen", area_m2=25), model_inputs=[number])
+                  for number in range(4)]
+        notes = []
+        def prepare(project, gap):
+            notes.append(gap["note"])
+            return self.fake_prepare(project, gap)
+        with patch.object(tasks, "prepare_investigation", side_effect=prepare), \
+                patch.object(supervisor, "_rebuild", side_effect=values), \
+                patch.object(drawings, "request_investigation", return_value={"reply": {}}) as ask, \
+                patch.object(drawings, "apply_investigation", return_value={"status": "applied"}):
+            result = supervisor.run(None, self.project)
+        self.assertEqual(ask.call_count, 3)
+        self.assertEqual(result["exceptions"][0]["attempts"], 3)
+        self.assertNotIn("Earlier checks:", notes[0])
+        self.assertIn("Earlier checks: applied: the gap remained open", notes[2])
+        self.assertIn("Kitchen 25 m²", notes[2])
         self.assertEqual(read_json(self.root / supervisor.JOB_FILE)["stop_reason"], "attempt_limit")
 
     def test_replacement_run_restores_attempts_from_durable_state(self):
@@ -460,9 +483,9 @@ class RunTests(unittest.TestCase):
         self.execute([value, value])
         # BackgroundJob creates a replacement file with the original start fields.
         write_json(self.root / supervisor.JOB_FILE, {"status": "running"})
-        result, calls = self.execute([value, value])
-        self.assertEqual(calls, 1)
-        self.assertEqual(result["exceptions"][0]["attempts"], 2)
+        result, calls = self.execute([value, value, value])
+        self.assertEqual(calls, 2)
+        self.assertEqual(result["exceptions"][0]["attempts"], 3)
 
     def test_three_cycles_backstop_when_new_material_gaps_keep_appearing(self):
         values = [snapshot(room(str(number), area_m2=None)) for number in range(4)]

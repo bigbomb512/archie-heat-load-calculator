@@ -16,36 +16,67 @@ const updatedDate = (value) => {
 };
 const listHeader = () =>
   `<header class="job-header"><div class="job-head-inner"><a href="#/jobs" aria-label="Jobs"><img class="job-wordmark" src="/frontend/assets/images/toki-wordmark-exact.png" alt="Toki"></a><a href="#/jobs">Jobs</a></div></header>`;
+const jobStage = (project) => project.results_ready || project.phase2_complete
+  ? "results" : project.phase1_complete ? "operating" : project.drawings_confirmed ? "rooms" : "drawings";
+const stageLabel = (stage) => ({ results: "Results ready", operating: "People and equipment", rooms: "Rooms", drawings: "Drawings" })[stage];
+const loadLabel = (project) => {
+  const value = Number(project.cooling_load_kw);
+  if (project.cooling_load_kw == null || !Number.isFinite(value)) return "—";
+  // A saved total of zero means no room was counted, not a room that needs no cooling.
+  if (value <= 0) return "No rooms counted yet";
+  const load = `${value.toFixed(1)} kW`;
+  return project.cooling_load_kind === "building_only" ? `Building only · ${load}`
+    : `${load}${project.result_stale ? " · out of date" : ""}`;
+};
+const jobRow = (project) => {
+  const stage = jobStage(project);
+  const address = project.address || project.found_site;
+  // A name someone gave the job wins; then the site; then the drawing file it was made from.
+  const fileName = String(project.name || "").replace(/\.pdf$/i, "");
+  const named = project.display_name && project.display_name.replace(/\.pdf$/i, "") !== fileName ? project.display_name : "";
+  const title = named || address || project.name;
+  const second = named ? address : address ? project.name : "";
+  const subtitle = second ? `<small>${escapeHtml(second)}</small>` : "";
+  const archive = project.can_edit === false ? "" : `<button class="job-link-button" type="button" data-archive-job="${escapeHtml(project.id)}" data-archived="${project.archived ? "true" : "false"}">${project.archived ? "Unarchive" : "Archive"}</button>`;
+  return `<tr data-job-id="${escapeHtml(project.id)}"><th><a href="#/job/${encodeURIComponent(project.id)}/${stage}">${escapeHtml(title)}</a>${subtitle}</th><td>${stageLabel(stage)}</td><td class="job-load-value">${escapeHtml(loadLabel(project))}</td><td>${needCount(project) || ""}</td><td>${escapeHtml(updatedDate(project.created_at || project.updated_at))}</td><td class="job-row-actions"><button class="job-link-button" type="button" data-export-job="${escapeHtml(project.id)}">Export</button>${archive}</td></tr>`;
+};
+const groupedRows = (projects) => projects.map((project) => {
+  const earlier = project.earlier_runs || [];
+  return jobRow(project) + (earlier.length ? `<tr class="job-earlier-row"><td colspan="6"><details><summary>${earlier.length} earlier ${earlier.length === 1 ? "run" : "runs"}</summary><table class="job-jobs-table job-earlier-table"><thead><tr><th>Job</th><th>Where it is</th><th>Cooling load</th><th>Needs you</th><th>Uploaded</th><th>Actions</th></tr></thead><tbody>${earlier.map(jobRow).join("")}</tbody></table></details></td></tr>` : "");
+}).join("");
+const allJobs = (groups) => groups.flatMap((group) => [group, ...(group.earlier_runs || [])]);
+const jobsMarkup = (projects) => {
+  const active = projects.filter((project) => !project.archived);
+  const archived = projects.filter((project) => project.archived);
+  const count = allJobs(archived).length;
+  const table = (groups) => `<div class="job-panel job-table-wrap"><table class="job-jobs-table"><thead><tr><th>Job</th><th>Where it is</th><th>Cooling load</th><th>Needs you</th><th>Uploaded</th><th>Actions</th></tr></thead><tbody>${groupedRows(groups)}</tbody></table></div>`;
+  return `${active.length ? table(active) : `<section class="job-panel"><h2>No active jobs</h2><p>Upload the architect’s PDF to start.</p><a class="job-button" href="#/new-job">New job</a></section>`}${count ? `<details class="job-archived"><summary>Show archived (${count})</summary>${table(archived)}</details>` : ""}`;
+};
 export async function renderJobs() {
   const projects = await getJson("/api/projects");
-  const body = `${listHeader()}<main class="job-main job-list-inner"><div class="job-status-row"><h1>Jobs</h1><div class="job-actions"><label class="job-button secondary" for="job-import">Import a job</label><input id="job-import" type="file" accept=".zip,application/zip" hidden><a class="job-button" href="#/new-job">New job</a></div></div><p class="job-note" role="status" data-jobs-status></p>${
-    projects.length
-      ? `<div class="job-panel job-table-wrap"><table class="job-jobs-table"><thead><tr><th>Job</th><th>Where it is</th><th>Needs you</th><th>Uploaded</th><th><span class="job-sr-only">Job file</span></th></tr></thead><tbody>${projects
-          .map((project) => {
-            const stage = project.results_ready
-              ? "results"
-              : project.phase2_complete
-                ? "results"
-                : project.phase1_complete
-                  ? "operating"
-                  : project.drawings_confirmed
-                    ? "rooms"
-                    : "drawings";
-            const site =
-              project.address || project.found_site || "Site not added yet";
-            return `<tr><th><a href="#/job/${encodeURIComponent(project.id)}/${stage}">${escapeHtml(project.display_name || project.name)}</a><small>${escapeHtml(site)}</small></th><td>${escapeHtml(stage === "results" ? "Results ready" : project.phase2_complete ? "Results" : project.phase1_complete ? "Operating loads" : project.drawings_confirmed ? "Rooms" : "Drawings")}</td><td>${needCount(project) || ""}</td><td>${escapeHtml(updatedDate(project.created_at || project.updated_at))}</td><td><button class="job-link-button" type="button" data-export-job="${escapeHtml(project.id)}">Export</button></td></tr>`;
-          })
-          .join("")}</tbody></table></div>`
-      : `<section class="job-panel"><h2>No jobs yet</h2><p>Upload the architect’s PDF to start.</p><a class="job-button" href="#/new-job">New job</a></section>`
-  }</main>`;
+  const body = `${listHeader()}<main class="job-main job-list-inner"><div class="job-status-row"><h1>Jobs</h1><div class="job-actions"><label class="job-button secondary" for="job-import">Import a job</label><input id="job-import" type="file" accept=".zip,application/zip" hidden><a class="job-button" href="#/new-job">New job</a></div></div><p class="job-note" role="status" data-jobs-status></p><div data-jobs-list>${jobsMarkup(projects)}</div></main>`;
   return { content: body, bind: bindJobFiles };
 }
 
 // A job saved to one file (drawings, readings, results) to move it to another computer, and loaded back from one.
 function bindJobFiles() {
   const status = document.querySelector("[data-jobs-status]");
-  document.querySelectorAll("[data-export-job]").forEach((button) => {
-    button.addEventListener("click", async () => {
+  document.querySelector("[data-jobs-list]")?.addEventListener("click", async (event) => {
+    const archiveButton = event.target.closest("[data-archive-job]");
+    if (archiveButton) {
+      archiveButton.disabled = true;
+      try {
+        await sendJson("/api/project-archive", { project_id: archiveButton.dataset.archiveJob, archived: archiveButton.dataset.archived !== "true" });
+        document.querySelector("[data-jobs-list]").innerHTML = jobsMarkup(await getJson("/api/projects"));
+        status.textContent = "Job list updated.";
+      } catch (error) {
+        status.textContent = `The job couldn’t be updated: ${error.message}`;
+        archiveButton.disabled = false;
+      }
+      return;
+    }
+    const button = event.target.closest("[data-export-job]");
+    if (button) {
       button.disabled = true;
       status.textContent = "Saving the job to a file…";
       try {
@@ -56,7 +87,7 @@ function bindJobFiles() {
       } finally {
         button.disabled = false;
       }
-    });
+    }
   });
   document.querySelector("#job-import")?.addEventListener("change", async (event) => {
     const file = event.currentTarget.files?.[0];
