@@ -251,7 +251,8 @@ class SeatingPageCacheTests(unittest.TestCase):
 class OccupancyIntegrationTests(unittest.TestCase):
     def fixture(self):
         building={"spaces":[{"name":"Dining","level_name":"Ground","area_m2":100},{"name":"Kitchen","level_name":"Ground","area_m2":20}]}
-        uses=room_use_resolution.resolve(building)
+        uses=room_use_resolution.resolve(building, proposal={"rooms": [{"kind": "room", "label": "Kitchen",
+            "level_name": "Ground", "calculation_scope_override": "comfort_hvac_with_process_exception"}]})
         rid=uses['records'][0]['room_id']
         seats={"rooms":{rid:{"seat_count":140,"origin":"direct_project_evidence","rationale":"140 seats on page 19.","evidence":[{"page":19,"excerpt":"SEATS 140"}],"basis":seating.BASIS}}}
         return building,uses,rid,seats

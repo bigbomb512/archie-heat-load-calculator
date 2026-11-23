@@ -416,6 +416,12 @@ class LadderTests(unittest.TestCase):
         }
         for name, value in artifacts.items():
             (self.root / name).write_text(json.dumps(value))
+        building = artifacts["building_evidence.json"]
+        kitchen_use = room_use_resolution.resolve(building)
+        kitchen_use = room_use_resolution.apply_override(
+            kitchen_use, kitchen_use["records"][0]["room_id"], "kitchen", "Test reviewer",
+            "The kitchen is air-conditioned for this equipment calculation.")
+        (self.root / "room_use_resolution.json").write_text(json.dumps(kitchen_use))
         web = SimpleNamespace(safe_link=lambda path: str(path), update_project=lambda project: None)
         with patch.object(service.catalogue, "load", return_value=self.book), \
                 patch.object(service.catalogue, "load_typical", return_value=self.typical):

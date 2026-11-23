@@ -3,6 +3,7 @@
 import math
 import re
 
+from ai.room_use_resolution import is_kitchen_only
 from backend import (calculation_service, contractor_report, drawing_tasks_service,
                      job_plan_service, phase1_supervisor_service, result_status_service)
 
@@ -202,7 +203,15 @@ def _room_items(rooms, field):
                                ({"type": "rename", "label": "Rename"}, {"type": "use", "label": "Change use"},
                                 {"type": "cooled", "value": not cooled, "label": "Not cooled" if cooled else "Cool it"})))
         excluded = OUTDOOR + WET + ("store", "storage", "plant", "robe", "wir", "walk-in")
-        if kind == "not_cooled" and area is not None and area >= 12 and not (
+        if kind == "not_cooled" and is_kitchen_only(room.get("name")):
+            # Kitchens aren't cooled (user decision 2026-11-22); one open to a cooled room is cooled by that room's
+            # system anyway, so the exception is named rather than left to be found.
+            items.append(_item(f"kitchen-not-cooled:{rid}", "kitchen_not_cooled", "check", f"{name} isn't cooled",
+                               "Kitchens aren't air-conditioned: the exhaust hood draws the cooled air straight out. "
+                               "If this kitchen is open to a cooled living or dining area with no wall between, cool it: "
+                               "that area's system cools it anyway.", "rooms", room,
+                               actions=({"type": "cooled", "value": True, "label": "Cool it (open plan)"},)))
+        elif kind == "not_cooled" and area is not None and area >= 12 and not (
                 _words(room.get("name"), excluded) or _words(use_id.replace("_", " "), excluded)):
             items.append(_item(f"large-not-cooled:{rid}", "large_not_cooled", "check",
                                f"{name} ({_area_text(area)} m²) isn't cooled", "Check it shouldn't be air-conditioned.",

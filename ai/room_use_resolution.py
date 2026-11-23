@@ -361,6 +361,14 @@ def _house_label_matches(label):
     return [category for category in priority if re.search(patterns[category], text)][:1]
 
 
+KITCHEN_LABEL = re.compile(r"^\s*(?:commercial\s+|main\s+|house\s+)?(?:kitchen|kitch|kit)\b(?:\s*\(\d+\))?\s*$", re.I)
+
+
+def is_kitchen_only(label):
+    """A room labelled only as a kitchen ("Kitchen", "KITCH", "Kitchen (2)"), not one shared with another use."""
+    return bool(KITCHEN_LABEL.match(str(label or "")))
+
+
 def _record(room, taxonomy, source_fingerprints, existing=None, use_evidence=None, dwelling=False):
     label, level = room["label"], room["level_name"]
     room_id = room_identity(label, level)
@@ -437,6 +445,18 @@ def _record(room, taxonomy, source_fingerprints, existing=None, use_evidence=Non
                      "Mark it cooled on the Fix screen if it is air-conditioned.")
         category = deepcopy(category)
         category["space_scope"] = scope
+    if is_kitchen_only(label) and not override and not ac_evidence and scope_override not in SCOPES \
+            and scope in {"comfort_hvac", "comfort_hvac_with_process_exception"}:
+        # A kitchen isn't air-conditioned: its exhaust hood draws the cooled air straight out, so cooling it wastes
+        # money (user decision 2026-11-22). A kitchen the drawings show air-conditioned, a reviewer's choice and a
+        # confirmed answer still win; a combined label ("Kitchen/Dining", "Living & Kitchen") is the room it opens
+        # into and stays cooled.
+        scope = "not_cooled"
+        rationale = ("Kitchen: not air-conditioned, as its exhaust hood draws the cooled air straight out. "
+                     "Mark it cooled on the Fix screen if this one is air-conditioned.")
+        category = deepcopy(category)
+        category["space_scope"] = scope
+        unsettled = False
     special = scope in EXCLUDED_SCOPES
     status = "excluded" if special else "needs_review" if unsettled else "resolved"
     evidence = []

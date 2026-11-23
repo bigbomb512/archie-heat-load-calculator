@@ -11,6 +11,7 @@ import unittest
 
 from ai import (ai_preliminary, airflow_resolution, ceiling_volume_resolution, house_household, internal_gains_resolution,
                 room_use_resolution, sun)
+from tests.kitchen_fixture import cooled_kitchen
 
 ROOT = Path(__file__).resolve().parents[1]
 SUITE = json.loads((ROOT / "tests" / "fixtures" / "draft_reference_rooms_v1.json").read_text(encoding="utf-8"))
@@ -37,11 +38,12 @@ def proposal(case):
     rooms, surfaces, openings = [], [], []
     for room in case["rooms"]:
         name = room["name"]
-        rooms.append({"kind": "room", "label": name, "level_name": "Ground", "area_m2": room["area_m2"],
+        proposed = {"kind": "room", "label": name, "level_name": "Ground", "area_m2": room["area_m2"],
                       "preliminary_profile_id": "residential" if case.get("dwelling") else room["profile"], "confidence": 0.8,
                       "page": 1, "excerpt": name, "rationale": "Reference room.", "evidence": [{"page": 1, "excerpt": name}],
                       **({"ceiling_height_mm": round(room["height_m"] * 1000)} if room.get("height_m") else {}),
-                      **({"occupancy_count": room["seats"]} if room.get("seats") else {})})
+                      **({"occupancy_count": room["seats"]} if room.get("seats") else {})}
+        rooms.append(cooled_kitchen(proposed, "comfort_hvac" if case.get("dwelling") else "comfort_hvac_with_process_exception"))
         host_key = None
         for index, surface in enumerate(room.get("surfaces", [])):
             key = f"{name}-surface-{index}"
@@ -97,6 +99,8 @@ def run(case, scope="full"):
                for room in case["rooms"] if room.get("exhaust_lps")}
     traced = proposal(case)
     building, resolved = house_inputs(case, traced) if case.get("dwelling") else ({"spaces": []}, {})
+    if not case.get("dwelling"):
+        resolved["room_use_resolution"] = room_use_resolution.resolve(building, proposal=traced)
     model = ai_preliminary.assemble(building, preliminary_proposal=traced, site_location=SITE,
                                     design_weather_table=DESIGN_TABLE, monthly_climate_table=MONTHLY_TABLE,
                                     process_exhaust=exhaust or None, **resolved)

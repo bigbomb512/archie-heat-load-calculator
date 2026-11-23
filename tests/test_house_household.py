@@ -7,6 +7,7 @@ import unittest
 from ai import (ai_preliminary, airflow_resolution, ceiling_volume_resolution, hourly_loads, house_household,
                 internal_gains_resolution, room_use_resolution)
 from backend.ai_preliminary_service import _household_plan, _workspace_report
+from tests.kitchen_fixture import cooled_kitchen
 
 
 def room(room_id, label, category, area=12, scope="comfort_hvac", level="Ground Floor"):
@@ -117,9 +118,11 @@ class HouseThroughTheModelTests(unittest.TestCase):
         spaces = [("MASTER BEDROOM", 16), ("BED 2", 11), ("LIVING", 30), ("KITCHEN", 15)]
         building = {"spaces": [{"name": name, "level_name": "Ground", "area_m2": area, "ceiling_height_mm": 2700,
                                 "evidence": [{"page": 1, "excerpt": name}]} for name, area in spaces]}
-        proposal = {"rooms": [{"kind": "room", "label": name, "level_name": "Ground", "area_m2": area,
-                               "preliminary_profile_id": "residential", "confidence": .8, "page": 1,
-                               "evidence": [{"page": 1, "excerpt": name}], "ceiling_height_mm": 2700} for name, area in spaces]}
+        proposal = {"rooms": [cooled_kitchen({"kind": "room", "label": name, "level_name": "Ground", "area_m2": area,
+                                              "preliminary_profile_id": "residential", "confidence": .8, "page": 1,
+                                              "evidence": [{"page": 1, "excerpt": name}], "ceiling_height_mm": 2700},
+                                             "comfort_hvac")
+                              for name, area in spaces]}
         uses = room_use_resolution.resolve(building, proposal=proposal,
                                            dwelling_context={"is_dwelling": True, "evidence": [{"page": 1, "excerpt": "BASIX"}]})
         rooms = [{"room_id": row["room_id"], "label": row["original_label"], "level": row["level_name"], "category": row["taxonomy_id"],

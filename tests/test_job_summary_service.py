@@ -120,6 +120,14 @@ class SummaryTests(unittest.TestCase):
         self.assertIn("usually 9 m²", rows[0]["detail"])
         self.assertEqual([action["type"] for action in rows[0]["actions"]], ["link", "rename", "use", "cooled"])
 
+    def test_a_kitchen_left_uncooled_names_the_open_plan_exception(self):
+        summary = self.summary([room("k", "Kitchen", 29.2, "not_cooled", "not_cooled", None, use_id="house_living")])
+        row = next(row for row in summary["todos"] if row["id"] == "kitchen-not-cooled:k")
+        self.assertIn("exhaust hood", row["detail"])
+        self.assertIn("open to a cooled living or dining area", row["detail"])
+        self.assertEqual(row["actions"], [{"type": "cooled", "value": True, "label": "Cool it (open plan)"}])
+        self.assertFalse(any(row["kind"] == "large_not_cooled" for row in summary["todos"]))
+
     def test_split_grouping_and_severity_order(self):
         rooms = [room("a", "Ensuite", 2, "not_cooled", "not_cooled", None),
                  room("b", "Ensuite (1)", 4, "not_cooled", "not_cooled", None),

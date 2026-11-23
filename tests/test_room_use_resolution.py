@@ -37,7 +37,7 @@ def main():
     artifact = room_use_resolution.resolve(building(), source_fingerprints=source)
     dining, kitchen = record(artifact, "Dining area"), record(artifact, "Kitchen")
     check("explicit dining label selects controlled hospitality profile", dining["taxonomy_id"] == "dining" and dining["preliminary_profile_id"] == "hospitality")
-    check("kitchens retain HVAC profile and process exception scope", kitchen["preliminary_profile_id"] == "hospitality" and kitchen["space_scope"] == "comfort_hvac_with_process_exception")
+    check("kitchens retain the hospitality profile but are not cooled", kitchen["preliminary_profile_id"] == "hospitality" and kitchen["space_scope"] == "not_cooled")
     check("cool rooms are classified as excluded refrigeration scope", record(artifact, "Cool Room")["status"] == "excluded" and record(artifact, "Cool Room")["space_scope"] == "refrigeration_process")
     check("plant rooms remain excluded from comfort-HVAC scope", record(artifact, "Plant Room")["space_scope"] == "unresolved_scope")
     service_counter = record(artifact, "Service Counter")
@@ -76,7 +76,7 @@ def main():
 
     assembled = ai_preliminary.assemble(building(), room_use_resolution=artifact, source_fingerprints={"room_use_resolution": artifact["fingerprint"]})
     names = {room["name"] for room in assembled["material"]["hourly_load_model"]["rooms"]}
-    check("preliminary assembly includes comfort rooms but excludes refrigeration and plant scope", {"Dining area", "Kitchen", "Room 14"} <= names and "Cool Room" not in names and "Plant Room" not in names)
+    check("preliminary assembly includes comfort rooms but excludes kitchen, refrigeration and plant scope", {"Dining area", "Room 14"} <= names and not {"Kitchen", "Cool Room", "Plant Room"} & names)
     check("snapshot fingerprints the separate room-use resolution", assembled["dependency_fingerprints"]["room_use_resolution"] == artifact["fingerprint"])
 
 

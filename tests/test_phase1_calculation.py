@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from ai.ai_preliminary import assemble
+from ai import room_use_resolution
 from backend import ai_preliminary_service
 
 
@@ -20,15 +21,19 @@ class PhaseOneCalculationTests(unittest.TestCase):
         self.assertEqual(compact["phase1_surface_audit"][0]["surface_id"], "wall-a")
 
     def test_missing_area_and_geometry_diagnostics_merge_by_room(self):
+        building = {"spaces": [{"name": "Kitchen", "level_name": "Level 1", "area": "",
+                               "evidence": [{"page": 33, "excerpt": "Kitchen"}]}]}
+        room_use = room_use_resolution.resolve(building, proposal={"rooms": [{"kind": "room", "label": "Kitchen",
+            "level_name": "Level 1", "calculation_scope_override": "comfort_hvac_with_process_exception"}]})
         input_set = assemble(
-            {"spaces": [{"name": "Kitchen", "level_name": "Level 1", "area": "",
-                         "evidence": [{"page": 33, "excerpt": "Kitchen"}]}]},
+            building,
             preliminary_proposal={"rooms": [], "issues": [{
                 "component": "room area", "label": "Kitchen", "level": "Level 1",
                 "scope": "comfort_hvac_with_process_exception",
                 "reason": "No validated area or structured boundary is available.",
                 "evidence": [{"page": 33, "excerpt": "Kitchen partition evidence"}],
             }]},
+            room_use_resolution=room_use,
             allow_area_fallbacks=False,
         )
 

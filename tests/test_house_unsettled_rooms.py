@@ -30,7 +30,7 @@ class UnsettledHouseRoomTests(unittest.TestCase):
         self.assertEqual(resolve("Store", OTHER)["space_scope"], "comfort_hvac")
 
     def test_settled_house_rooms_are_unchanged(self):
-        for label in ("Bedroom", "Living", "Kitchen"):
+        for label in ("Bedroom", "Living"):
             with self.subTest(label=label):
                 self.assertEqual(resolve(label, HOUSE)["space_scope"]
                                  in {"comfort_hvac", "comfort_hvac_with_process_exception"}, True)
