@@ -445,9 +445,43 @@ def _room_use_sources(paths):
     }
 
 
+QUICK_FIX_COOLING_REVIEWER = "Quick fixes (cooled)"
+
+
+def _with_quick_fix_cooling(paths, artifact):
+    """A room switched to "Cool it" on the quick-fix screen whose use left it uncooled (a restaurant kitchen, a room the
+    drawings didn't settle) is cooled: its use is kept as a reviewer's choice, which those rules give way to. Without
+    this the switch did nothing, as the room was left out before the room selection read it (Casa Nova, 2026-11-23).
+    Switching it back removes that choice. A room another reviewer has chosen a use for is left as they set it."""
+    from backend import quick_fix_service
+    choices = quick_fix_service.cooled_choices(paths["root"])
+    comfort = {"comfort_hvac", "comfort_hvac_with_process_exception"}
+    for row in list(artifact.get("records") or []):
+        room_id = row.get("room_id")
+        if choices.get(room_id) is True and row.get("space_scope") not in comfort and not row.get("override"):
+            artifact = room_use_resolution.apply_override(artifact, room_id, row["taxonomy_id"], QUICK_FIX_COOLING_REVIEWER,
+                                                          "Marked cooled on the quick-fix screen.")
+    return artifact
+
+
+def _without_stale_quick_fix_cooling(paths, existing):
+    """The saved room uses less any quick-fix "Cool it" choice since switched back, so resolving them applies the use's
+    own rules again (clearing the choice afterwards would keep the cooled scope it gave)."""
+    from backend import quick_fix_service
+    choices = quick_fix_service.cooled_choices(paths["root"])
+    existing = deepcopy(existing) if isinstance(existing, dict) else existing
+    for row in (existing or {}).get("records") or []:
+        if ((row.get("override") or {}).get("reviewer") == QUICK_FIX_COOLING_REVIEWER
+                and choices.get(row.get("room_id")) is not True):
+            row["override"] = None
+    return existing
+
+
 def _resolve_room_uses(paths, persist=False):
     from backend.room_use_resolution_service import _dwelling_context, gather_use_evidence
     existing = _read(paths["room_use"], room_use_resolution.empty_room_use_resolution())
+    saved = existing
+    existing = _without_stale_quick_fix_cooling(paths, existing)
     proposal = _proposal_for_resolution(paths, equipment=False)
     artifact = room_use_resolution.resolve(
         _read(paths["building"], {}), _read(paths["vision"], {}),
@@ -455,11 +489,12 @@ def _resolve_room_uses(paths, persist=False):
         _room_use_sources(paths), existing, use_evidence=gather_use_evidence(paths["root"]),
         dwelling_context=_dwelling_context(paths["root"]),
     )
+    artifact = _with_quick_fix_cooling(paths, artifact)
     if persist:
         _write(paths["room_use"], artifact)
         productization.record_change_if_fingerprint_changed(
             paths["root"], action="room_use_resolution_automatically_resolved", target=paths["room_use"].name,
-            previous_fingerprint=room_use_resolution.fingerprint(existing), new_fingerprint=artifact["fingerprint"],
+            previous_fingerprint=room_use_resolution.fingerprint(saved), new_fingerprint=artifact["fingerprint"],
             affected_ids=[row["room_id"] for row in artifact.get("records", [])],
         )
     return artifact
