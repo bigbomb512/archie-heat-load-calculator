@@ -846,10 +846,7 @@ def _roof_packets(root, room_id=None):
         traces = reviewer_room_geometry_service.current_records(reviewer_room_geometry_service._paths({"review_dir": str(root)}))
     except (OSError, ValueError, TypeError, KeyError):
         traces = []
-    room_use = _read(root / "room_use_resolution.json", {})
-    comfort_scopes = {"comfort_hvac", "comfort_hvac_with_process_exception"}
-    comfort_ids = {str(row.get("room_id")) for row in room_use.get("records", [])
-                   if isinstance(row, dict) and row.get("room_id") and row.get("space_scope") in comfort_scopes}
+    comfort_ids = _comfort_room_ids(root)
     selected = {}
     for trace in traces:
         if (trace.get("room_id") in comfort_ids and (room_id is None or trace.get("room_id") == room_id)
@@ -886,10 +883,7 @@ def _p6_kitchen_packets(root, room_id=None):
         return []
     import pdfplumber
     ai_input, spatial, _building = _load_inputs(root)
-    room_use = _read(root / "room_use_resolution.json", {})
-    comfort_ids = {str(row.get("room_id")) for row in room_use.get("records", [])
-                   if isinstance(row, dict) and row.get("room_id")
-                   and row.get("space_scope") in {"comfort_hvac", "comfort_hvac_with_process_exception"}}
+    comfort_ids = _comfort_room_ids(root)
     try:
         traces = reviewer_room_geometry_service.current_records(
             reviewer_room_geometry_service._paths({"review_dir": str(root)}))
@@ -2444,8 +2438,11 @@ def _p4_elevation_image(root, page_number):
 
 def _comfort_room_ids(root):
     uses = _read(root / "room_use_resolution.json", {})
-    return {str(row.get("room_id")) for row in uses.get("records", []) if isinstance(row, dict)
-            and row.get("space_scope") in {"comfort_hvac", "comfort_hvac_with_process_exception"}}
+    ids = {str(row.get("room_id")) for row in uses.get("records", []) if isinstance(row, dict)
+           and row.get("space_scope") in {"comfort_hvac", "comfort_hvac_with_process_exception"}}
+    for key, cooled in quick_fix_service.cooled_choices(root).items():
+        (ids.add if cooled else ids.discard)(str(key))
+    return ids
 
 
 def _geometrically_shared_edge_indices(trace, other_traces, max_wall_mm=400.0, angle_tolerance_deg=5.0,
@@ -2494,6 +2491,10 @@ def _trace_wall_runs(trace):
     points = trace.get("points_image_px", [])
     mm_per_px = float(trace.get("calibration", {}).get("mm_per_px") or 0)
     runs = room_outline.wall_runs(points, mm_per_px)
+    """The rooms the drawing work is done for: those whose use is cooled, as changed on the quick-fix screen ("Not
+    cooled" / "Cool it"). A room that isn't air-conditioned needs no wall, window or roof work: the calculation leaves
+    it out (user request 2026-11-23; Turramurra's Driveway and Fence were still asked about after being switched off)."""
+    from backend import quick_fix_service
     edge_lengths = {index: math.dist(start, end) * mm_per_px / 1000.0
                     for index, (start, end) in enumerate(zip(points, points[1:]))}
     return [{**row, "edge_lengths_m": {str(index): edge_lengths[index] for index in row["edge_indices"]}}
