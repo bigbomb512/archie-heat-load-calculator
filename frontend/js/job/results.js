@@ -495,6 +495,7 @@ function resultsContent({ plan, report, gaps, projectId, stale, canUpdate }) {
       <div><h1>Design cooling load for the ${plan.status?.dwelling ? "house" : "tenancy"}</h1>
         <strong class="job-total">${fmt(total)} <span>kW</span></strong>
         <p>${statusSentence}</p>
+        ${stale ? "" : `<p class="job-range-line" role="status" data-range-line>Working out how far this could move with what the drawings don’t show…</p>`}
         ${householdLine}
         ${stale
           ? `<p class="job-muted">Update the final load before creating the report.</p>`
@@ -527,6 +528,14 @@ function resultsContent({ plan, report, gaps, projectId, stale, canUpdate }) {
         </table></div>
       </section>
     </div>
+    ${stale ? "" : `<section class="job-panel" aria-labelledby="range-title" data-range-panel>
+      <h2 id="range-title">What could change the number</h2>
+      <div data-range-body><p class="job-muted" role="status">Loading…</p></div>
+    </section>
+    <section class="job-panel" aria-labelledby="architect-title" data-architect-panel>
+      <h2 id="architect-title">Ask the architect</h2>
+      <div data-architect-body><p class="job-muted" role="status">Loading…</p></div>
+    </section>`}
     <section class="job-panel ${stale ? "stale" : ""}" aria-labelledby="setpoint-title" data-setpoint-panel>
       <h2 id="setpoint-title">Indoor setpoint comparison</h2>
       <div data-setpoint-body><p class="job-muted" role="status">Loading the comparison… The first view after a new result calculates it, which can take a few seconds.</p></div>
@@ -538,6 +547,157 @@ function resultsContent({ plan, report, gaps, projectId, stale, canUpdate }) {
       <div data-heating-body><p class="job-muted" role="status">Loading the heating result…</p></div>
     </section>
     <section class="job-panel ${stale ? "stale" : ""}"><h2>Still assumed</h2>${assumptionsList(assumptions, projectId)}</section>`;
+}
+
+// How far the saved load could move with the facts the drawings don't settle: every kW is a full calculation with one
+// input changed (backend/assumption_range_service.py). Nothing is shown that the server didn't calculate.
+function rangeLine(range) {
+  if (range?.status === "calculated" && range.low_kw != null) {
+    const top = range.unknowns.filter((row) => row.swing_kw > 0).slice(0, 2).map((row) => row.label.toLowerCase());
+    const unitNote = range.unknowns.some((row) => row.changes_unit) ? " Some answers would change the unit." : "";
+    return `Could be <strong data-range-low>${fmt(range.low_kw)}</strong>–<strong data-range-high>${fmt(range.high_kw)}</strong> kW${top.length ? ` depending on the ${escapeHtml(top.join(" and "))}` : ""}.${unitNote}`;
+  }
+  if (range?.status === "running") return `Working out how far this could move with what the drawings don’t show (${escapeHtml(range.done ?? 0)} of ${escapeHtml(range.total ?? "?")} calculations)…`;
+  if (range?.status === "nothing_open") return "The windows, walls, roof and north are answered or read from the drawings.";
+  return `Range not calculated: ${escapeHtml(range?.reason || "unknown reason")}`;
+}
+
+function rangeContent(range) {
+  if (range?.status === "running") {
+    return `<p class="job-muted" role="status" data-range-state="running">Each unknown is tried through the full calculation on a copy of the job: ${escapeHtml(range.done ?? 0)} of ${escapeHtml(range.total ?? "?")} done. This takes a few minutes the first time.</p>`;
+  }
+  if (range?.status !== "calculated") {
+    return `<p data-range-state="${escapeHtml(range?.status || "not_calculated")}">${range?.status === "nothing_open" ? "" : "Not calculated. "}${escapeHtml(range?.reason || "")}</p>`;
+  }
+  const rows = range.unknowns.flatMap((unknown) => {
+    const cases = unknown.cases.length ? unknown.cases : [{ status: "not_calculated", label: "", reason: "No case ran." }];
+    return cases.map((item, index) => `<tr data-range-case="${escapeHtml(item.case_id || "")}">
+      ${index === 0 ? `<th scope="rowgroup" rowspan="${cases.length}">${escapeHtml(unknown.label)}${unknown.answered ? ` <span class="job-answer-badge ok">Answered since</span>` : ""}<span class="job-caption">${escapeHtml(unknown.assumed || "")}</span></th>` : ""}
+      <td>${escapeHtml(item.label)}</td>
+      ${item.status === "calculated"
+        ? `<td>${fmt(item.kw)} kW</td><td>${item.delta_kw > 0 ? "+" : ""}${fmt(item.delta_kw)} kW (${item.delta_pct > 0 ? "+" : ""}${fmt(item.delta_pct)}%)</td><td>${escapeHtml(item.unit)}${item.changes_unit ? ` <span class="job-answer-badge warn" data-changes-unit>Changes the unit</span>` : ""}</td>`
+        : `<td colspan="3">Not calculated: ${escapeHtml(item.reason)}</td>`}
+    </tr>`);
+  }).join("");
+  return `<p data-range-state="calculated">As calculated: <strong>${fmt(range.saved_kw)} kW</strong>, ${escapeHtml(range.unit)}. ${escapeHtml(range.basis)}</p>
+    <div class="job-table-wrap"><table class="job-results-table job-range-table">
+      <thead><tr><th scope="col">Not shown on the drawings</th><th scope="col">If it is</th><th scope="col">Load</th><th scope="col">Change</th><th scope="col">Unit</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>`;
+}
+
+const STATUS_LABEL = { open: "Not asked yet", asked: "Asked – waiting", answered: "Answered" };
+
+function answerForm(item, constructions) {
+  const id = escapeHtml(item.id);
+  if (item.answer_kind === "glazing") {
+    return `<label class="job-field"><span>Glass U-value (W/m²K)</span><input name="u_value_w_m2k" type="number" step="0.1" min="0.5" max="7" required></label>
+      <label class="job-field"><span>SHGC</span><input name="shgc" type="number" step="0.01" min="0.05" max="0.95" required></label>
+      <label class="job-field"><span>Window type (as the architect described it)</span><input name="value" type="text" maxlength="160"></label>`;
+  }
+  if (item.answer_kind === "construction") {
+    const options = (constructions?.[item.id] || []).map((row) => `<option value="${escapeHtml(row.id)}">${escapeHtml(row.name)} (U ${escapeHtml(row.u_value_w_m2k)})</option>`).join("");
+    return `<label class="job-field"><span>Construction (AIRAH handbook table)</span><select name="construction_id"><option value="">Another construction (type its U-value)</option>${options}</select></label>
+      <label class="job-field"><span>Or its U-value (W/m²K)</span><input name="u_value_w_m2k" type="number" step="0.01" min="0.1" max="7"></label>
+      <label class="job-field"><span>Description</span><input name="value" type="text" maxlength="160"></label>`;
+  }
+  if (item.answer_kind === "north") {
+    return `<fieldset class="job-architect-north"><legend>True north on the plans</legend>
+      <label><input type="radio" name="choice" value="as_read" required> As the drawings were read</label>
+      <label><input type="radio" name="choice" value="reversed"> The other way round</label>
+      <label><input type="radio" name="choice" value="bearing"> The top of the plan faces this bearing:</label>
+      <input name="plan_up_azimuth_deg" type="number" step="0.1" min="0" max="359.9" aria-label="Plan-up bearing in degrees for ${id}">
+    </fieldset>`;
+  }
+  return "";
+}
+
+function architectContent(list) {
+  const items = list?.items || [];
+  if (!items.length) {
+    return `<p data-architect-state="empty">${list?.range?.status === "running" ? "The list fills in once the range is worked out." : "Nothing to ask: the windows, walls, roof and north are answered or read from the drawings."}</p>`;
+  }
+  const open = items.filter((item) => item.status !== "answered");
+  const mail = list.email || {};
+  const mailto = `mailto:?subject=${encodeURIComponent(mail.subject || "")}&body=${encodeURIComponent(mail.body || "")}`;
+  return `<p>${open.length ? `${open.length} question${open.length === 1 ? "" : "s"} still open${list.unit_changing_open ? `, ${list.unit_changing_open} of which could change the unit` : ""}. Ranked by how much the answer could move the load.` : "Every question is answered. Update the load to use the answers."}</p>
+    ${open.length ? `<div class="job-actions job-architect-actions">
+      <a class="job-button" href="${escapeHtml(mailto)}" data-architect-mailto>Email the questions</a>
+      <button class="job-button secondary" type="button" data-architect-copy>Copy the email</button>
+      <button class="job-button secondary" type="button" data-architect-mark-all>Mark all asked</button>
+    </div>` : ""}
+    <ol class="job-architect-list">${items.map((item) => `<li class="job-architect-item" data-architect-item="${escapeHtml(item.id)}" data-status="${escapeHtml(item.status)}">
+      <div class="job-architect-head"><strong>${escapeHtml(item.label)}</strong>
+        <span class="job-answer-badge ${item.status === "answered" ? "ok" : ""}" data-architect-status>${escapeHtml(STATUS_LABEL[item.status] || item.status)}</span>
+        ${item.changes_unit ? `<span class="job-answer-badge warn">Could change the unit</span>` : ""}
+        ${item.swing_kw != null ? `<span class="job-caption">up to ${fmt(item.swing_kw)} kW</span>` : ""}</div>
+      <p>${escapeHtml(item.question)}</p>
+      ${item.why ? `<p class="job-caption">${escapeHtml(item.why)}</p>` : ""}
+      ${item.status === "answered" ? "" : `<div class="job-row-actions">
+        <button class="job-button secondary" type="button" data-architect-toggle="${escapeHtml(item.id)}" data-asked="${item.status === "asked"}">${item.status === "asked" ? "Not asked yet" : "Mark asked"}</button>
+        <details class="job-architect-answer"><summary>Type the answer</summary>
+          <form data-architect-form="${escapeHtml(item.id)}">${answerForm(item, list.constructions)}
+            <button class="job-button" type="submit">Save the answer</button></form>
+        </details></div>`}
+    </li>`).join("")}</ol>
+    <p class="job-note" role="status" data-architect-status-line></p>`;
+}
+
+async function loadRangeAndArchitect(projectId) {
+  const line = document.querySelector("[data-range-line]");
+  const rangeBody = document.querySelector("[data-range-body]");
+  const architectBody = document.querySelector("[data-architect-body]");
+  if (!rangeBody && !architectBody) return;
+  let range;
+  for (let attempt = 0; attempt < 240; attempt += 1) {
+    range = await getJson(`/api/assumption-range${query(projectId)}`).catch((error) => ({ status: "not_calculated", reason: `The range couldn't be read: ${error.message}` }));
+    if (line) line.innerHTML = rangeLine(range);
+    if (rangeBody) rangeBody.innerHTML = rangeContent(range);
+    if (range.status !== "running" || !document.body.contains(rangeBody)) break;
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+  }
+  await renderArchitect(projectId);
+}
+
+// The list after a save is the one the save returned: it already holds the change.
+async function renderArchitect(projectId, message = "", saved = null) {
+  const body = document.querySelector("[data-architect-body]");
+  if (!body) return;
+  const list = saved || await getJson(`/api/architect-questions${query(projectId)}`).catch((error) => ({ items: [], error: error.message }));
+  body.innerHTML = list.error ? `<p>The list couldn't be read: ${escapeHtml(list.error)}</p>` : architectContent(list);
+  const status = body.querySelector("[data-architect-status-line]");
+  if (status && message) status.innerHTML = message;
+  const save = async (data, done) => {
+    try {
+      const result = await sendJson("/api/architect-questions", { project_id: projectId, reviewer: "Job workspace", ...data });
+      await renderArchitect(projectId, done(result), result);
+    } catch (error) {
+      if (status) status.textContent = error.message;
+    }
+  };
+  body.querySelector("[data-architect-copy]")?.addEventListener("click", async () => {
+    const text = `${list.email.subject}\n\n${list.email.body}`;
+    try {
+      await navigator.clipboard.writeText(text);
+      if (status) status.textContent = "Email copied.";
+    } catch {
+      if (status) status.textContent = "Couldn't copy: select the questions above and copy them.";
+    }
+  });
+  body.querySelector("[data-architect-mark-all]")?.addEventListener("click", () =>
+    save({ action: "mark_asked", ids: list.items.filter((item) => item.status === "open").map((item) => item.id) }, (result) => escapeHtml(result.summary)));
+  body.querySelectorAll("[data-architect-toggle]").forEach((button) => button.addEventListener("click", () =>
+    save({ action: button.dataset.asked === "true" ? "unmark" : "mark_asked", ids: [button.dataset.architectToggle] }, (result) => escapeHtml(result.summary))));
+  body.querySelectorAll("[data-architect-form]").forEach((form) => form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(form).entries());
+    for (const key of ["u_value_w_m2k", "shgc", "plan_up_azimuth_deg"]) {
+      if (data[key] === "" || data[key] == null) delete data[key];
+      else data[key] = Number(data[key]);
+    }
+    save({ action: "answer", id: form.dataset.architectForm, source: "architect", ...data },
+      (result) => `Saved: ${escapeHtml(result.summary)} <a href="#/job/${encodeURIComponent(projectId)}/results" onclick="location.reload()">Reload to update the load with it</a>.`);
+  }));
 }
 
 // The heating report package uses the same report-package call; it is offered only for a current heating report.
@@ -649,6 +809,7 @@ export async function renderResults(projectId) {
       bindHeatingReport(projectId);
       bindRoomToggles();
       loadExtraPanels(projectId, plan.rooms || []);
+      loadRangeAndArchitect(projectId);
       document
         .querySelector("#job-update-final")
         ?.addEventListener("click", async (event) => {

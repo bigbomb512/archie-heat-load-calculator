@@ -433,10 +433,12 @@ class Handler(SimpleHTTPRequestHandler):
             except Exception as error:
                 return self.send_json(product_error(error), 400)
         if urlparse(self.path).path in {"/api/setpoint-comparison", "/api/heating-summary", "/api/job-summary",
-                                        "/api/ac-design-input"}:
+                                        "/api/ac-design-input", "/api/assumption-range", "/api/architect-questions"}:
             try:
                 handler = {"/api/setpoint-comparison": api_setpoint_comparison, "/api/heating-summary": api_heating_summary,
-                           "/api/job-summary": api_job_summary, "/api/ac-design-input": api_ac_design_input}[urlparse(self.path).path]
+                           "/api/job-summary": api_job_summary, "/api/ac-design-input": api_ac_design_input,
+                           "/api/assumption-range": api_assumption_range,
+                           "/api/architect-questions": api_architect_questions}[urlparse(self.path).path]
                 return self.send_json(handler(self))
             except security.SecurityError as error:
                 return self._send_security_error(error, 403)
@@ -521,6 +523,13 @@ class Handler(SimpleHTTPRequestHandler):
         if urlparse(self.path).path == "/api/new-job":
             try:
                 return self.send_json(api_start_new_job(self))
+            except security.SecurityError as error:
+                return self._send_security_error(error, 403)
+            except Exception as error:
+                return self.send_json(product_error(error), 400)
+        if urlparse(self.path).path == "/api/architect-questions":
+            try:
+                return self.send_json(api_save_architect_questions(self))
             except security.SecurityError as error:
                 return self._send_security_error(error, 403)
             except Exception as error:
@@ -2770,6 +2779,39 @@ def api_heating_summary(request):
     security.require_project_role(project, request._identity(), "viewer")
     from backend import heating_summary_service
     return {"project_id": project["id"], **heating_summary_service.get(sys.modules[__name__], project)}
+
+
+def api_assumption_range(request):
+    """Read-only: how far the saved cooling load could move with the facts the drawings don't settle, one unknown at a
+    time (worked out once per saved result, in the background, on a copy of the job)."""
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    security.require_project_role(project, request._identity(), "viewer")
+    ensure_review_dir(project)
+    from backend import assumption_range_service
+    return {"project_id": project["id"], **assumption_range_service.get(project)}
+
+
+def api_architect_questions(request):
+    """Read-only: the "Ask the architect" list, ranked by how much each answer could move the load."""
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    security.require_project_role(project, request._identity(), "viewer")
+    ensure_review_dir(project)
+    from backend import architect_questions_service
+    return {"project_id": project["id"], **architect_questions_service.get(project)}
+
+
+def api_save_architect_questions(request):
+    """Mark questions asked (or not), or put an architect's answer in (window glass, a construction, north)."""
+    from backend import architect_questions_service, calculation_service
+    data = read_json_body(request)
+    project = project_by_id(data.get("project_id") or "")
+    ensure_review_dir(project)
+    security.require_project_role(project, request._identity(), "editor")
+    if data.get("action") == "answer" and calculation_service._JOB.status(project).get("status") in {"queued", "running", "stopping"}:
+        raise ValueError("A calculation is running. Wait for it to finish, then save the answer.")
+    return {"project_id": project["id"], **architect_questions_service.post(sys.modules[__name__], project, data)}
 
 
 def api_job_summary(request):

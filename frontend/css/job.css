@@ -1986,3 +1986,54 @@ body.job-preview {
 .job-joins .job-todo-field input {
   width: 18ch;
 }
+
+/* What could change the number, and the Ask the architect list (results.js). */
+.job-range-line {
+  color: var(--ink-2);
+}
+.job-range-table th[scope="rowgroup"] {
+  vertical-align: top;
+  text-align: left;
+}
+.job-range-table th .job-caption {
+  display: block;
+  font-weight: 400;
+  margin-top: 4px;
+}
+.job-answer-badge.warn {
+  background: #f6e7cf;
+  color: #7a4b0c;
+}
+.job-architect-list {
+  padding-left: 20px;
+  display: grid;
+  gap: 16px;
+}
+.job-architect-item p {
+  margin: 6px 0;
+}
+.job-architect-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.job-architect-item[data-status="answered"] {
+  color: var(--ink-2);
+}
+.job-architect-answer summary {
+  cursor: pointer;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+}
+.job-architect-north {
+  border: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.job-architect-north input[type="number"] {
+  max-width: 160px;
+  min-height: 44px;
+}
