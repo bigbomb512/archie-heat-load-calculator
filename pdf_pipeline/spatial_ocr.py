@@ -148,8 +148,14 @@ def scale_candidates(words, title_blocks):
     candidates = []
     for source, text, source_bbox in searchable_text(words, title_blocks):
         for match in re.finditer(r"(?i)scale\s*[:@]?\s*(?:at\s+)?(?:a\d\s+)?(\d+\s*:\s*\d+)", text):
-            candidates.append(candidate(source, match.group(1).replace(" ", ""), source_bbox))
+            # Printed next to the word "Scale": the sheet says this is a drawing scale (page_scale_denominator
+            # prefers these).
+            candidates.append({**candidate(source, match.group(1).replace(" ", ""), source_bbox), "labelled": True})
         for match in re.finditer(r"\b(1\s*:\s*(?:5|10|20|25|50|75|100|125|150|200|250|500))\b", text):
+            # A slope is not a scale: "duct shall be graded (1:200)", "fall 1:100" (Casa Nova M110, 2026-11-23).
+            if re.search(r"(?i)\b(?:grad(?:e|ed|ient)|falls?|slope[sd]?|pitch(?:ed)?|incline[d]?)\W{0,3}(?:\w+\W{1,3}){0,2}$",
+                         text[:match.start()]):
+                continue
             candidates.append(candidate(source, re.sub(r"\s*:\s*", ":", match.group(1)), source_bbox))
         for match in re.finditer(r"\b(\d+/\d+\"\s*=\s*\d+'-?\d*\")", text):
             candidates.append(candidate(source, match.group(1), source_bbox))

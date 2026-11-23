@@ -25,7 +25,11 @@ def page_scale_denominator(scale_candidates):
     """
     from ai.scan_reading import parse_scale
     best = 0
-    for item in scale_candidates or []:
+    # A scale printed next to the word "Scale" ("Scale @ A3 1:80") is the sheet's own; a bare ratio elsewhere may be
+    # a note's (a 1:200 duct grade made Casa Nova's M110 2.5 times too big, 2026-11-23). Use the labelled ones when
+    # there are any.
+    labelled = [item for item in scale_candidates or [] if isinstance(item, dict) and item.get("labelled")]
+    for item in labelled or scale_candidates or []:
         text = str((item.get("text", "") if isinstance(item, dict) else item) or "")
         # Imperial scales ('1/8" = 1'-0"' is 1:96) must not be read as '1/8' = 1:8.
         value = parse_scale(text)
