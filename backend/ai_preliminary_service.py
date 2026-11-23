@@ -194,6 +194,13 @@ def _file_fingerprint(path, default, use_saved=False):
     return value
 
 
+# Bump when a rule in the code changes what the model is assembled from saved inputs that are themselves unchanged
+# (a room's default scope, how an answered construction reaches a surface). Every saved result then shows as out of
+# date, and updating it assembles the model again. 2: kitchens not cooled by default; an answered wall or roof's sun
+# and thermal mass follow the answer; a house's NatHERS/BASIX certificate walls, ceiling and roof are read (2026-11-23).
+MODEL_RULES_VERSION = 2
+
+
 def _sources(paths):
     run = _read(paths["run"], {})
     proposal = _proposal_for_resolution(paths, equipment=False)
@@ -255,6 +262,9 @@ def _sources(paths):
         "quick_fixes": _file_fingerprint(paths["root"] / "quick_fixes.json", {}),
         # A house's window glass read from its energy certificate (P8) changes the draft's glazing.
         "glazing_certificates": ai_preliminary.fingerprint(_certificate_answers(paths)),
+        # The assembly rules in the code (MODEL_RULES_VERSION): a saved result from older rules is out of date, so
+        # "Update the final load" assembles the model again instead of recalculating the old one.
+        "model_rules": MODEL_RULES_VERSION,
         # Rooms joined from pieces (backend/room_join_service.py). Only a job with joins carries the key, so the
         # results of every job without one stay current.
         **({"room_joins": _file_fingerprint(paths["root"] / "room_joins.json", {})}
@@ -263,9 +273,11 @@ def _sources(paths):
 
 
 def _certificate_answers(paths):
+    from ai import certificate_constructions
     from backend import autonomous_tasks_service
     try:
-        return autonomous_tasks_service.drawing_glazing_certificates(paths["root"])
+        return {"glazing": autonomous_tasks_service.drawing_glazing_certificates(paths["root"]),
+                "constructions": certificate_constructions.read_job(paths["root"])}
     except (OSError, ValueError, KeyError, TypeError):
         return []
 
@@ -1574,6 +1586,24 @@ def _prepare_preliminary_proposal(paths, raw_proposal, room_use, geometry):
             # default. Validate strictly here so that corruption is visible to
             # the reviewer instead of looking like simply absent evidence.
             trace_registry = json.loads(trace_registry_path.read_text(encoding="utf-8"))
+        # A numeric plan-up bearing explicitly printed with a certificate is a
+        # declaration for this calculation. A reviewer declaration still wins.
+        from ai import certificate_constructions
+        for certificate in certificate_constructions.read_job(paths["root"]):
+            if "north" not in certificate:
+                continue
+            page_north = trace_registry.setdefault("page_north", {})
+            plan_pages = {str(row.get("page")) for row in trace_registry.get("records", [])
+                          if isinstance(row, dict) and isinstance(row.get("page"), int)}
+            for page in plan_pages:
+                page_north.setdefault(page, {"page": int(page), "declaration_source": "certificate"})
+            for page, declaration in page_north.items():
+                if isinstance(declaration, dict) and declaration.get("declaration_source", "reviewer") == "reviewer":
+                    continue
+                if isinstance(declaration, dict):
+                    declaration.update(plan_up_azimuth_deg=certificate["north"]["plan_up_azimuth_deg"],
+                                       source=f"{certificate['certificate']} certificate p{certificate['page']}: {certificate['north']['excerpt']}",
+                                       declaration_source="certificate")
         traced_areas = reviewer_room_geometry_service.current_traced_areas(paths["root"])
     except (OSError, ValueError, TypeError, KeyError):
         traced_areas = {}
@@ -2841,6 +2871,48 @@ def _with_certificate_glazing(paths, proposal, room_use):
     return proposal
 
 
+def _with_certificate_constructions(paths, proposal, room_use):
+    """Use labelled certificate insulation where an operator has not answered."""
+    if (room_use or {}).get("dwelling_context", {}).get("is_dwelling") is not True:
+        return proposal
+    from ai import certificate_constructions
+    certificates = certificate_constructions.read_job(paths["root"])
+    for surface in proposal.get("surfaces", []):
+        if not isinstance(surface, dict) or surface.get("physical_type") not in {"wall", "roof"}:
+            continue
+        if str(surface.get("construction_source") or "").startswith("Answered by the operators"):
+            continue
+        for certificate in certificates:
+            kind = surface["physical_type"]
+            entry = certificate.get(kind if kind == "wall" else "ceiling")
+            if not entry:
+                entry = certificate.get("roof") if kind == "roof" else None
+            if not entry:
+                continue
+            description = entry["construction"]
+            ceiling_r = 0
+            if kind == "roof" and "ceiling" in certificate and entry is certificate["ceiling"]:
+                description = certificate.get("roof_material") or description
+                ceiling_r = entry["insulation_r"]
+                roof_r = (certificate.get("roof") or {}).get("insulation_r", 0)
+                insulation_r = roof_r
+            else:
+                insulation_r = entry["insulation_r"]
+            source = (f"{certificate['certificate']} certificate p{certificate['page']}: {entry['excerpt']}; "
+                      f"{'Roof material ' if kind == 'roof' else ''}{description}")
+            if kind == "roof" and ceiling_r and certificate.get("roof"):
+                source += f"; {certificate['roof']['excerpt']}"
+            try:
+                u_value = certificate_constructions.u_value(kind, description, insulation_r, ceiling_r)
+            except ValueError:
+                continue
+            surface.update(u_value_w_m2k=u_value,
+                           construction_id=f"certificate-{kind}", construction_source=source,
+                           construction_description=description)
+            break
+    return proposal
+
+
 def _assemble_inputs(web, project, source):
     paths = _paths(project)
     building, vision = _read(paths["building"], {}), _read(paths["vision"], {})
@@ -2885,6 +2957,7 @@ def _assemble_inputs(web, project, source):
     geometry = _preliminary_geometry(paths)
     proposal = _prepare_preliminary_proposal(paths, proposal, room_use, geometry)
     proposal = _with_certificate_glazing(paths, proposal, room_use)
+    proposal = _with_certificate_constructions(paths, proposal, room_use)
     from backend import need_answers_service
     input_set = ai_preliminary.assemble(
         building, vision, source_fingerprints=_sources(paths), preliminary_proposal=proposal,

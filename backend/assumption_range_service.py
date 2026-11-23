@@ -88,6 +88,21 @@ def open_unknowns(root, report):
     Windows: no glass answered and not every window from a certificate. Walls, roof: no construction answered and the
     result has such surfaces. North: the north on a plan page is the AI's reading, not measured or confirmed."""
     root = Path(root)
+    from ai import certificate_constructions
+    certificate_rows = certificate_constructions.read_job(root)
+    def usable(row, kind):
+        entry = row.get(kind if kind == "wall" else "ceiling") or (row.get("roof") if kind == "roof" else None)
+        if not entry:
+            return False
+        description = entry["construction"] if kind == "wall" else row.get("roof_material", entry["construction"])
+        try:
+            certificate_constructions.u_value(kind, description, entry["insulation_r"])
+        except ValueError:
+            return False
+        return True
+    certificate_wall = any(usable(row, "wall") for row in certificate_rows)
+    certificate_roof = any(usable(row, "roof") for row in certificate_rows)
+    certificate_north = any(row.get("north") for row in certificate_rows)
     glazing = _read(root / "glazing_answers.json")
     constructions = _read(root / "construction_answers.json")
     surfaces = [surface for room in ((_read(root / "ai_preliminary_input_set.json").get("material") or {})
@@ -108,12 +123,12 @@ def open_unknowns(root, report):
             answered = bool(glazing.get("all") or glazing.get("rooms"))
         elif key in {"wall", "roof"}:
             answer = constructions.get(key) or {}
-            answered = bool(answer.get("all") or answer.get("rooms"))
+            answered = bool(answer.get("all") or answer.get("rooms")) or (certificate_wall if key == "wall" else certificate_roof)
             is_open = has[key] and not answered
         elif key == "north":
             origin = north_origin(root)
-            answered = origin in {"measured_from_drawing", "edited_by_user"}
-            is_open = origin == "ai_estimate"
+            answered = origin in {"measured_from_drawing", "edited_by_user"} or certificate_north
+            is_open = origin == "ai_estimate" and not certificate_north
         else:
             continue
         found.append({**unknown, "open": is_open, "answered": answered})
