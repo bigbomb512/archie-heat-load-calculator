@@ -275,6 +275,23 @@ class DesignConditionsTests(unittest.TestCase):
 
 
 class PageTests(unittest.TestCase):
+    def test_preliminary_label_is_on_cover_and_summary(self):
+        details = self.details()
+        details["result_label"] = {"status": "preliminary", "text": "Preliminary (2 answers that could change the unit still open)",
+                                   "reason": "The range is not settled."}
+        page = cr.render_html(details)
+        self.assertIn("<title>Preliminary (2 answers that could change the unit still open) cooling load", page)
+        self.assertIn("data-result-label", page)
+        self.assertIn("The range is not settled.", page)
+        self.assertIn("Preliminary (2 answers that could change the unit still open) cooling load for the whole building", page)
+
+    def test_design_label_is_on_cover_and_summary(self):
+        details = self.details()
+        details["result_label"] = {"status": "design", "text": "Design", "reason": "No unit-changing inputs remain open."}
+        page = cr.render_html(details)
+        self.assertIn("<h1>Design cooling load", page)
+        self.assertIn("Design cooling load for the whole building", page)
+
     def details(self):
         return {"name": "Test job", "address": "1 Street", "status": "draft", "generated_at": "now", "total_kw": 9.0,
                 "sensible_kw": 7.5, "latent_kw": 1.5, "peak_month": "January", "peak_hour": 15, "rooms_counted": 3,

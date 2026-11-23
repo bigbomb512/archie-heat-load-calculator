@@ -434,7 +434,7 @@ function yearSection(seasonal, stale) {
     </section>`;
 }
 
-function resultsContent({ plan, report, gaps, projectId, stale, canUpdate }) {
+function resultsContent({ plan, report, gaps, resultLabel, projectId, stale, canUpdate }) {
   const peak = report.included_scope_peak || {};
   const total = peak.final_design_total_kw ?? peak.design_total_kw;
   const safetyFactor = Number(peak.safety_factor || 1);
@@ -492,8 +492,9 @@ function resultsContent({ plan, report, gaps, projectId, stale, canUpdate }) {
   return `${outOfDate}
     ${report.equipment_coverage && !report.equipment_coverage.coverage_complete ? `<section class="job-panel" role="status"><h2>Some equipment isn't counted</h2><p>${(() => { const count = Number(report.equipment_coverage.summary?.no_value || 0) + Number(report.equipment_coverage.summary?.no_room || 0); return count === 1 ? "1 item has" : `${count} items have`; })()} no value yet or no room. Those rooms use their typical equipment allowance instead.</p><a href="#/job/${encodeURIComponent(projectId)}/operating">See the equipment</a></section>` : ""}
     <section class="job-panel job-result-summary ${stale ? "stale" : ""}">
-      <div><h1>Design cooling load for the ${plan.status?.dwelling ? "house" : "tenancy"}</h1>
-        <strong class="job-total">${fmt(total)} <span>kW</span></strong>
+      <div><h1>${resultLabel.status === "design" ? "Design" : "Preliminary"} cooling load for the ${plan.status?.dwelling ? "house" : "tenancy"}</h1>
+        <div class="job-result-total-line"><strong class="job-total">${fmt(total)} <span>kW</span></strong>
+          <span class="job-answer-badge ${resultLabel.status === "design" ? "ok" : "warn"}" data-result-label title="${escapeHtml(resultLabel.reason || "")}">${escapeHtml(resultLabel.text || "Preliminary")}</span></div>
         <p>${statusSentence}</p>
         ${stale ? "" : `<p class="job-range-line" role="status" data-range-line>Working out how far this could move with what the drawings don’t show…</p>`}
         ${householdLine}
@@ -523,7 +524,7 @@ function resultsContent({ plan, report, gaps, projectId, stale, canUpdate }) {
           <thead><tr><th scope="col">Room</th><th scope="col">m²</th><th scope="col">Where the load comes from</th><th scope="col">kW</th></tr></thead>
           <tbody>${roomRows(rooms, peaks, maxLoad, stale)}
             ${allowanceRow}
-            <tr class="job-grand-total"><th colspan="3">Design cooling load</th><td>${fmt(total)} kW</td></tr>
+            <tr class="job-grand-total"><th colspan="3">${resultLabel.status === "design" ? "Design" : "Preliminary"} cooling load</th><td>${fmt(total)} kW</td></tr>
           </tbody>
         </table></div>
       </section>
@@ -769,9 +770,10 @@ function bindReport(projectId) {
 }
 
 export async function renderResults(projectId) {
-  const [plan, gaps] = await Promise.all([
+  const [plan, gaps, resultLabel] = await Promise.all([
     getJson(`/api/job-plan${query(projectId)}`),
     getJson(`/api/result-status${query(projectId)}`).catch(() => ({})),
+    getJson(`/api/result-label${query(projectId)}`).catch(() => ({ status: "preliminary", text: "Preliminary", reason: "The result label couldn't be read." })),
   ]);
   const status = plan.status || {};
   const report = plan.final_report || {};
@@ -791,6 +793,7 @@ export async function renderResults(projectId) {
     plan,
     report,
     gaps,
+    resultLabel,
     projectId,
     stale: Boolean(status.result_stale),
     canUpdate:

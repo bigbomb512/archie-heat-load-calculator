@@ -1189,6 +1189,15 @@ body.job-preview {
 .job-total span {
   font-size: 24px;
 }
+.job-result-total-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+.job-result-total-line [data-result-label] {
+  max-width: 28ch;
+}
 .job-results-columns > * {
   flex: 1 1 560px !important;
 }

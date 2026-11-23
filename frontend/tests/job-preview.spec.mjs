@@ -1019,7 +1019,7 @@ test("current Results show the total, room bars and assumptions", async ({
   );
   await page.goto("/?preview=1#/job/job-1/results");
   await expect(
-    page.getByRole("heading", { name: "Design cooling load for the tenancy" }),
+    page.getByRole("heading", { name: "Preliminary cooling load for the tenancy" }),
   ).toBeVisible();
   await expect(page.locator(".job-total")).toContainText("4.2");
   await expect(page.locator(".job-stacked-bar")).toHaveAttribute(

@@ -988,6 +988,9 @@ def comparison_html(comparison, rooms=()):
 
 def render_html(d):
     e = _e
+    result_label = d.get("result_label") or {"status": "preliminary", "text": "Preliminary", "reason": "The cooling result has not been confirmed for design."}
+    label_text = result_label.get("text") or "Preliminary"
+    label_note = result_label.get("reason") or ""
     config = sizes()
     stale = "".join(f"<p class=warn>{e(reason)}</p>" for reason in d.get("stale_reasons", []))
     shr = (d["sensible_kw"] / d["total_kw"]) if d.get("total_kw") else None
@@ -1030,7 +1033,7 @@ def render_html(d):
     heating_section = heating_html(d.get("heating"))
     engineer = engineer_tables_html(d)
     return f"""<!doctype html><html lang="en" data-theme="light"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><title>Cooling load: {e(d['name'])}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>{e(label_text)} cooling load: {e(d['name'])}</title>
 <style>
 :root{{color-scheme:light;--ink:#17242b;--muted:#5b6b73;--line:#d6dde0;--wash:#f5f7f8;--blue:#2a78d6}}
 body{{font:13px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;max-width:900px;margin:24px auto 64px;padding:0 16px;color:var(--ink);background:#fff}}
@@ -1058,11 +1061,12 @@ svg,tr,.card{{break-inside:avoid}}
 @media (max-width:600px){{.total{{font-size:32px}}.ahu-metrics{{grid-template-columns:1fr}}td,th{{padding:4px}}}}
 </style></head><body>
 <div class=footer>{e(LABEL)} · {e(d['name'])} · generated {e(d['generated_at'])}</div>
-<h1>Cooling load: {e(d['name'])}</h1><div class=muted>{e(d['address'])}</div>
+<h1>{e(label_text)} cooling load: {e(d['name'])}</h1><div class=muted>{e(d['address'])}</div>
+<div class="banner" data-result-label><strong>{e(label_text)}</strong>. {e(label_note)}</div>
 <div class=banner>{e(LABEL)}. Use it to plan and quote; have the design checked before equipment is ordered for a job that needs an engineer's sign-off.</div>
 {stale}
 <div class=total>{_kw(d['total_kw'])} kW</div>
-<div>Design cooling load for the whole building at {e(d['peak_hour'])}:00 on the {e(d['peak_month'])} design day. {e(d['rooms_counted'])} rooms counted. {e(d['household_note'])}</div>
+<div>{e(label_text)} cooling load for the whole building at {e(d['peak_hour'])}:00 on the {e(d['peak_month'])} design day. {e(d['rooms_counted'])} rooms counted. {e(d['household_note'])}</div>
 <div class=cards>
 <div class=card>Sensible<b>{_kw(d['sensible_kw'])} kW</b><span class=muted>raises the air temperature</span></div>
 <div class=card>Latent<b>{_kw(d['latent_kw'])} kW</b><span class=muted>moisture from people and outside air</span></div>

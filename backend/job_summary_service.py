@@ -320,6 +320,8 @@ def get(web, project):
     else:
         result = drawing = supervisor = calculation = {}
     answer = _answer(plan, calculation, failed)
+    from backend import result_label_service
+    result_label = gather("result_label_service", lambda: result_label_service.label(project, status=plan.get("status") or {})) if project.get("review_dir") else {}
     rooms = _display_rooms(plan)
     field = "final_kw" if _number(_peak(plan.get("final_report")).get("final_design_total_kw",
                      _peak(plan.get("final_report")).get("design_total_kw"))) is not None else "phase1_kw"
@@ -353,5 +355,6 @@ def get(web, project):
     if any(row.get("kind") == "typical" for row in result.get("items") or []):
         text += " Uses typical values for people, lights and equipment."
     return {"project_id": str(project.get("id") or ""), "answer": answer,
+            "result_label": result_label,
             "completeness": {"level": level, "text": text}, "todos": todos, "counts": counts,
             "uses": plan.get("room_use_options") or {}, "sources_failed": failed}

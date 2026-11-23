@@ -34,12 +34,15 @@ class ACDesignInputTests(unittest.TestCase):
                  {"kind": "to_find", "text": "Missing drawing."}]}), \
              patch.object(service.job_summary_service, "get", return_value={"todos": [
                  {"severity": "blocks", "title": "Update load"},
-                 {"severity": "check", "title": "Check address"}]}):
+                 {"severity": "check", "title": "Check address"}]}), \
+             patch.object(service.result_label_service, "label", return_value={"status": "preliminary", "count": 1, "open": [],
+                                                                         "text": "Preliminary", "reason": "Open input."}):
             return service.api(None, self.project)
 
     def test_current_hourly_order_and_missing_values(self):
         result = self.call()
         self.assertEqual(result["status"], {"state": "current", "reason": "The saved cooling load is current.", "ready": True})
+        self.assertEqual(result["result_label"]["status"], "preliminary")
         self.assertEqual([r["id"] for r in result["rooms"]], ["a", "b"])
         self.assertEqual(result["rooms"][0]["peak"]["kw"], 3)
         self.assertEqual(result["rooms"][0]["peak"]["month"], "February")

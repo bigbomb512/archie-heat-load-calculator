@@ -3,7 +3,7 @@
 import math
 from datetime import datetime, timezone
 
-from backend import contractor_report, job_plan_service, job_summary_service, result_status_service
+from backend import contractor_report, job_plan_service, job_summary_service, result_label_service, result_status_service
 
 
 def _number(value):
@@ -188,6 +188,7 @@ def get(web, project):
             "project": {"id": str(project.get("id") or ""), "name": status.get("name") or str(project.get("name") or "").removesuffix(".pdf"),
                         "address": address, "dwelling": bool(status.get("dwelling"))},
             "status": {"state": state, "reason": reasons[state], "ready": state == "current"},
+            "result_label": result_label_service.label(project, status=status),
             "design_conditions": conditions,
             "totals": {"peak_kw": total_kw, "sensible_kw": _number(peak.get("sensible_kw")),
                        "latent_kw": _number(peak.get("latent_kw")), "month": month,

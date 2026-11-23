@@ -432,11 +432,11 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._send_security_error(error, 403)
             except Exception as error:
                 return self.send_json(product_error(error), 400)
-        if urlparse(self.path).path in {"/api/setpoint-comparison", "/api/heating-summary", "/api/job-summary",
+        if urlparse(self.path).path in {"/api/setpoint-comparison", "/api/heating-summary", "/api/job-summary", "/api/result-label",
                                         "/api/ac-design-input", "/api/assumption-range", "/api/architect-questions"}:
             try:
                 handler = {"/api/setpoint-comparison": api_setpoint_comparison, "/api/heating-summary": api_heating_summary,
-                           "/api/job-summary": api_job_summary, "/api/ac-design-input": api_ac_design_input,
+                           "/api/job-summary": api_job_summary, "/api/result-label": api_result_label, "/api/ac-design-input": api_ac_design_input,
                            "/api/assumption-range": api_assumption_range,
                            "/api/architect-questions": api_architect_questions}[urlparse(self.path).path]
                 return self.send_json(handler(self))
@@ -1267,10 +1267,11 @@ def _job_report_details(project, stale_reasons):
     """What the Results page shows, for the contractor's report: the final load, design basis, components, rooms,
     months and what is still assumed."""
     from collections import Counter
-    from backend import job_plan_service, result_status_service
+    from backend import job_plan_service, result_label_service, result_status_service
     web = sys.modules[__name__]
     plan = job_plan_service.get(web, project)
     report = plan.get("final_report") or {}
+    result_label = result_label_service.label(project, status=plan.get("status") or {})
     peak = report.get("included_scope_peak") or {}
     setup = job_service.job_setup(project)
     basis = (report.get("design_conditions_basis") or {}).get("design_day") or {}
@@ -1300,6 +1301,7 @@ def _job_report_details(project, stale_reasons):
                     f"{', ' + basis['state'] if basis.get('state') else ''}, from {basis.get('source', 'the listed design data')}; "
                     "the 21st of each month calculated hour by hour with the site's sun.")
     return {
+        "result_label": result_label,
         "name": setup.get("name") or str(project.get("name") or project["id"]).removesuffix(".pdf"),
         "address": setup.get("address") or plan.get("status", {}).get("found_site") or "",
         "status": report.get("status", "draft"), "generated_at": productization._now(),
@@ -2823,6 +2825,16 @@ def api_job_summary(request):
     ensure_review_dir(project)
     from backend import job_summary_service
     return {"project_id": project["id"], **job_summary_service.get(sys.modules[__name__], project)}
+
+
+def api_result_label(request):
+    query = parse_qs(urlparse(request.path).query)
+    project = project_by_id(query.get("project_id", [""])[0])
+    security.require_project_role(project, request._identity(), "viewer")
+    ensure_review_dir(project)
+    from backend import job_service, result_label_service
+    return {"project_id": project["id"], **result_label_service.label(
+        project, status=job_service.status(sys.modules[__name__], project))}
 
 
 def api_save_job(request):
