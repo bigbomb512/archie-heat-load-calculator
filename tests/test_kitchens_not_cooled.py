@@ -22,12 +22,18 @@ def resolve(label, dwelling=False, ac_evidence=None, reviewer=False):
 
 
 class KitchenScopeTests(unittest.TestCase):
-    def test_house_and_commercial_kitchens_are_excluded_for_exhaust(self):
-        for dwelling in (True, False):
-            with self.subTest(dwelling=dwelling):
-                row = resolve("Kitchen", dwelling)
-                self.assertEqual((row["space_scope"], row["status"]), ("not_cooled", "excluded"))
-                self.assertIn("exhaust hood draws the cooled air straight out", row["rationale"])
+    def test_a_commercial_kitchen_is_excluded_for_its_exhaust(self):
+        row = resolve("Kitchen", False)
+        self.assertEqual((row["space_scope"], row["status"]), ("not_cooled", "excluded"))
+        self.assertIn("exhaust hood draws the cooled air straight out", row["rationale"])
+
+    def test_a_house_kitchen_stays_cooled(self):
+        # A house's range hood is small and runs only while cooking (user decision 2026-11-23).
+        for label in ("Kitchen", "KITCH", "Kitchen (2)"):
+            with self.subTest(label=label):
+                row = resolve(label, True)
+                self.assertNotEqual(row["space_scope"], "not_cooled")
+                self.assertNotIn("exhaust hood", row.get("rationale", ""))
 
     def test_kitchen_only_label_variants_are_excluded(self):
         for label in ("KITCH", "Kitchen (2)", "Commercial Kitchen"):

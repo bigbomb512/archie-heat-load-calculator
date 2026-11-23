@@ -445,12 +445,12 @@ def _record(room, taxonomy, source_fingerprints, existing=None, use_evidence=Non
                      "Mark it cooled on the Fix screen if it is air-conditioned.")
         category = deepcopy(category)
         category["space_scope"] = scope
-    if is_kitchen_only(label) and not override and not ac_evidence and scope_override not in SCOPES \
+    if not dwelling and is_kitchen_only(label) and not override and not ac_evidence and scope_override not in SCOPES \
             and scope in {"comfort_hvac", "comfort_hvac_with_process_exception"}:
-        # A kitchen isn't air-conditioned: its exhaust hood draws the cooled air straight out, so cooling it wastes
-        # money (user decision 2026-11-22). A kitchen the drawings show air-conditioned, a reviewer's choice and a
-        # confirmed answer still win; a combined label ("Kitchen/Dining", "Living & Kitchen") is the room it opens
-        # into and stays cooled.
+        # A restaurant's or shop's kitchen isn't air-conditioned: its large exhaust hood draws the cooled air straight
+        # out, so cooling it wastes money (user decisions 2026-11-22 and 2026-11-23). A house's kitchen is cooled as
+        # before: its range hood is small and runs only while cooking. A kitchen the drawings show air-conditioned, a
+        # reviewer's choice and a confirmed answer still win; a combined label ("Kitchen/Dining") stays cooled.
         scope = "not_cooled"
         rationale = ("Kitchen: not air-conditioned, as its exhaust hood draws the cooled air straight out. "
                      "Mark it cooled on the Fix screen if this one is air-conditioned.")

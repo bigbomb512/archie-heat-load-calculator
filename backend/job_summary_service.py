@@ -204,8 +204,8 @@ def _room_items(rooms, field):
                                 {"type": "cooled", "value": not cooled, "label": "Not cooled" if cooled else "Cool it"})))
         excluded = OUTDOOR + WET + ("store", "storage", "plant", "robe", "wir", "walk-in")
         if kind == "not_cooled" and is_kitchen_only(room.get("name")):
-            # Kitchens aren't cooled (user decision 2026-11-22); one open to a cooled room is cooled by that room's
-            # system anyway, so the exception is named rather than left to be found.
+            # A commercial kitchen isn't cooled (user decision 2026-11-22; a house's kitchen is, 2026-11-23); one open
+            # to a cooled room is cooled by that room's system anyway, so the exception is named rather than left.
             items.append(_item(f"kitchen-not-cooled:{rid}", "kitchen_not_cooled", "check", f"{name} isn't cooled",
                                "Kitchens aren't air-conditioned: the exhaust hood draws the cooled air straight out. "
                                "If this kitchen is open to a cooled living or dining area with no wall between, cool it: "
