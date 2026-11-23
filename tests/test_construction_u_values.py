@@ -142,6 +142,17 @@ class CalculationTests(unittest.TestCase):
             self.assertIn("Concrete, dense", after["opaque_wall"]["source"])
             self.assertIn("Answered by the operators", after["roof"]["source"])
             self.assertGreater(after_kw, before_kw)                      # heavier, less insulated constructions
+            # The sun through a surface follows its own U-value (U × absorptance / outside film), not the pack's.
+            ratio = ai_preliminary.load_pack()["preliminary_envelope"]["opaque_solar_absorptance_over_ho_m2k_w"]
+            for kind, u_value in (("opaque_wall", 3.9), ("roof", 1.73)):
+                if before[kind]["solar_gain_factor"]:
+                    self.assertAlmostEqual(after[kind]["solar_gain_factor"], round(u_value * ratio, 6))
+            # A typed answer's description reaches the stored-heat model, which picks the construction's thermal
+            # mass from it: "Concrete roof" is a concrete roof, not the default metal one.
+            self.assertIn("Concrete roof", after["roof"]["construction_source"])
+            from ai import stored_heat_rooms
+            self.assertEqual(stored_heat_rooms._choose(stored_heat_rooms.config(), after["roof"], False)[0], "roof_concrete")
+            self.assertEqual(stored_heat_rooms._choose(stored_heat_rooms.config(), before["roof"], False)[0], "roof_metal")
 
     def test_results_list_walls_and_roof_still_on_the_preliminary_u_values(self):
         with tempfile.TemporaryDirectory() as folder:

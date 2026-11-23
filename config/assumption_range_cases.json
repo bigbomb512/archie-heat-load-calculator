@@ -1,5 +1,5 @@
 {
-  "description": "The alternatives the assumption range runs for each fact the drawings don't settle (backend/assumption_range_service.py). Each case is one full calculation with that one input changed. Wall and roof cases take the U-value of a row of the imported AIRAH handbook table (ai/construction_u_values.py), typed in as a U-value only: choosing the handbook construction itself also changes how the calculation treats the wall (found 2026-11-23: Vaucluse, same U 1.9, 24.1 kW typed vs 20.1 kW as the handbook's Brick Veneer), so the range changes the U-value alone until that is reviewed. Edit this file to change what is tried.",
+  "description": "The alternatives the assumption range runs for each fact the drawings don't settle (backend/assumption_range_service.py). Each case is one full calculation with that one input changed. Wall and roof cases are rows of the imported AIRAH handbook table (ai/construction_u_values.py): the row's U-value with its name as the description, as a typed answer is saved. The name also picks the construction's thermal mass in the hourly model (config/stored_heat.json construction_words), so a brick veneer case is modelled as brick, not as the default lightweight wall. Edit this file to change what is tried.",
   "unknowns": [
     {
       "key": "windows",

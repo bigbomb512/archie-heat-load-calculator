@@ -1796,10 +1796,18 @@ def assemble(building, vision=None, contractor_overrides=None, source_fingerprin
                            "provenance_status": "provisional"})
         if candidate.get("resolved_u_value_w_m2k") is not None:
             opaque["u_value_w_m2k"] = candidate["resolved_u_value_w_m2k"]
+            # The sun on the surface reaches the room as U × (absorptance / outside film) of it: with the surface's own
+            # U-value, not the pack's it was first given (an answered U 1.9 wall was taking the sun of a U 0.6 one;
+            # Vaucluse, 2026-11-23).
+            if opaque["solar_gain_factor"]:
+                opaque["solar_gain_factor"] = round(opaque["u_value_w_m2k"] * envelope["opaque_solar_absorptance_over_ho_m2k_w"], 6)
         if candidate.get("resolved_construction_id"):
             opaque["construction_id"] = candidate["resolved_construction_id"]
         if candidate.get("construction_source"):          # the operators' answered construction, not the pack's U-value
             opaque["source"] = candidate["construction_source"]
+            # Kept under its own name too: the stored-heat model reads it to pick the construction's thermal mass, so a
+            # typed "double brick, U 1.6" is modelled as brick, not as the default lightweight wall (2026-11-23).
+            opaque["construction_source"] = candidate["construction_source"]
         for note in candidate.get("phase1_assumptions") or []:      # several notes on one surface (e.g. area, roof)
             if isinstance(note, dict) and note.get("reason"):
                 phase1_assumptions.append({"room_id": room["room_id"], "component": note.get("component") or physical,
