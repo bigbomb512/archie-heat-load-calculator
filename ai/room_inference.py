@@ -27,7 +27,7 @@ NON_ROOM_LABEL = re.compile(
 # annotation (Butcher Buffet's page 21 "ENTRY" became a sixth room, 2026-11-14), so these count only on a dwelling.
 HOUSE_ONLY_TERMS = frozenset({
     "balcony", "cellar", "master bedroom", "bed", "br", "ensuite", "ens", "laundry", "wir", "walk in robe", "garage",
-    "family", "entry", "study", "media", "sitting", "scullery", "linen", "hall", "alfresco", "bath", "powder room",
+    "family", "entry", "study", "study nook", "media", "sitting", "scullery", "linen", "hall", "alfresco", "bath", "powder room",
     "wardrobe",
 })
 
@@ -131,10 +131,25 @@ def parse_room_label_item(value):
     area = float(area_match.group(1)) if area_match else None
     text = text[:area_match.start()] if area_match else text
     text = re.sub(r"\s+(?:area)\s*$", "", text, flags=re.I)
-    numbered_bedroom = re.fullmatch(r"(?i)(?:bedroom|bed|br)\s*([1-9]\d?)", text.strip())
+    compact_before_suffix = re.sub(r"\s+", "", text).casefold()
+    numbered_bedroom = (re.fullmatch(r"(?i)(?:bedroom|bed|br)\s*([1-9]\d?)", text.strip())
+                        or re.fullmatch(r"bedroom([1-9]\d?)", compact_before_suffix))
     if not numbered_bedroom:
         text = re.sub(r"\s+\d{1,3}(?:\.\d{1,3})?\s*$", "", text)
     text = re.sub(r"\s+", " ", text).strip(" .,:;-/")
+    # PDF text layers sometimes split a single printed label into glyph runs
+    # ("BE D R OOM 2", "W IR"). Rejoin only a complete known room phrase;
+    # a line containing a note or two room names still fails the exact test.
+    compact = re.sub(r"\s+", "", text).casefold()
+    fragmented = {
+        "bedroom": "Bedroom", "bathroom": "Bathroom", "ensuite": "Ensuite",
+        "wir": "WIR", "walkinrobe": "Walk in robe", "studynook": "Study nook",
+        "sitting": "Sitting", "study": "Study", "linen": "Linen",
+    }
+    bedroom_run = re.fullmatch(r"bedroom([1-9]\d?)", compact)
+    if len(text.split()) > 1 and (compact in fragmented or bedroom_run):
+        text = f"Bedroom {bedroom_run.group(1)}" if bedroom_run else fragmented[compact]
+        numbered_bedroom = bedroom_run
     if not text or len(text.split()) > 5 or (re.search(r"\d", text) and not numbered_bedroom):
         return None, None, None
     known_terms = (
@@ -144,7 +159,7 @@ def parse_room_label_item(value):
         "showroom", "retail", "shop", "bedroom", "living", "lounge", "balcony", "cellar", "service counter", "front of house",
         "counter", "kiosk", "plant room", "staff room", "staff", "storage",
         "master bedroom", "bed", "br", "ensuite", "ens", "laundry", "wir", "walk in robe",
-        "garage", "family", "entry", "study", "media", "sitting", "scullery", "linen",
+        "garage", "family", "entry", "study", "study nook", "media", "sitting", "scullery", "linen",
         "hall", "alfresco", "bath", "powder room", "wardrobe",
     )
     matches = [term for term in known_terms if re.search(r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])", text, re.I)]
@@ -345,19 +360,20 @@ def _text_item_lines(items):
         items_on_line = sorted(line["items"])
         segments, current = [], []
         previous_right = None
-        for x0, x1, word, _ in items_on_line:
+        for x0, x1, word, bbox in items_on_line:
             gap = None if previous_right is None else x0 - previous_right
             if gap is not None and gap > 24:
                 if current:
                     segments.append(current)
                 current = []
-            current.append((word, x0, x1))
+            current.append((word, x0, x1, bbox))
             previous_right = x1
         if current:
             segments.append(current)
         for segment in segments:
-            text = " ".join(word for word, _, _ in segment)
-            output.append((text, [segment[0][1], min(i[3][1] for i in line["items"]), segment[-1][2], max(i[3][3] for i in line["items"])]))
+            text = " ".join(item[0] for item in segment)
+            output.append((text, [segment[0][1], min(item[3][1] for item in segment),
+                                  segment[-1][2], max(item[3][3] for item in segment)]))
     return output
 
 

@@ -780,6 +780,13 @@ def _p0_plan_names(root, page_number):
         from backend import house_windows_service
         if house_windows_service.is_dwelling(root):
             names |= set(_reading_room_names(root, page_number))
+            # The saved inference can predate a better text-layer reading. In
+            # particular, letter-spaced labels on house plans (BEDROOM 2,
+            # ENSUITE, WIR) were omitted while their walls were already found.
+            from ai import room_inference
+            spatial = next((row for row in _read(Path(root) / "spatial_ocr.json", {}).get("pages", [])
+                            if row.get("page") == page_number), {})
+            names.update(label for label, _area in room_inference._spatial_label_items(spatial))
     except PACKET_ERRORS:
         return set()
     return {str(name) for name in names if str(name).strip()}
@@ -1611,6 +1618,8 @@ def _p0_followup_packets(root):
             read_names = _reading_room_names(root, number) if dwelling else []
             if read_names:
                 room_names = sorted({*room_names, *read_names})
+            if dwelling:
+                room_names = sorted(set(room_names) | _p0_plan_names(root, number))
             notes = _note_only_rooms(root, room_names)
             naming_packet = {"task":"P0_room_names", "page":number, **({"dwelling":True} if dwelling else {}),
                              "on_page_text": _p0_page_room_text(root, number),
@@ -1700,6 +1709,12 @@ def _p0_outline_room_names(root, names_record, area_count, requested_rooms=None,
     else:
         placed = set()
         room_names = sorted({row["label"] for row in inferred_rooms})
+    if dwelling:
+        page = ((names_record or {}).get("packet") or {}).get("page")
+        if page is None:
+            page = next((row.get("page") for row in inferred_rooms if row.get("page") is not None), None)
+        if page is not None:
+            room_names = sorted(set(room_names) | _p0_plan_names(root, page))
     printed = {row["label"] for row in inferred_rooms if row.get("area_m2")}
     if requested_rooms:
         return room_names, sorted(set(requested_rooms))
