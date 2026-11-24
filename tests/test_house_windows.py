@@ -140,6 +140,28 @@ class PlacementTests(unittest.TestCase):
     def tag(self, mark, x, y, level="Ground Floor"):
         return {"mark": mark, "x": x, "y": y, "page": 5, "level": level}
 
+    def test_zero_padded_and_hyphenated_marks_match_the_same_schedule_row(self):
+        result = hw.place_windows([self.tag("W-01", 100, 20)], self.schedule, [self.room], 10)
+        self.assertEqual([row["mark"] for row in result["openings"]], ["W-01"])
+        self.assertEqual(result["openings"][0]["distance_mm"], 200)
+        self.assertEqual(result["openings"][0]["tag_position"], {"page": 5, "x": 100, "y": 20})
+
+    def test_levels_compare_loosely_and_an_unmatched_level_falls_back_to_the_mark(self):
+        # "Ground Floor" on the plan and "Ground" in the schedule are the same level; a level that matches nothing
+        # (schedules name levels loosely) falls back to the mark alone rather than losing the window.
+        self.assertEqual(hw.normalized_level("Ground Floor"), hw.normalized_level("ground"))
+        result = hw.place_windows([self.tag("W1", 100, 20, "First Floor")], self.schedule, [self.room], 10)
+        self.assertEqual([row["mark"] for row in result["openings"]], ["W1"])
+
+    def test_offset_keeps_full_precision_at_end_of_wall(self):
+        room = {**self.room, "points": [[0, 0], [421.007, 0], [421.007, 400], [0, 400], [0, 0]],
+                "outside_edges": [0]}
+        result = hw.place_windows([self.tag("W1", 421.007, 0)], self.schedule, [room], 10)
+        self.assertEqual(len(result["openings"]), 1)
+        opening = result["openings"][0]
+        self.assertAlmostEqual(opening["offset_m"], 2.41007)
+        self.assertLessEqual(opening["offset_m"] + opening["width_m"], 4.21007)
+
     def test_a_tag_far_from_the_traced_wall_is_placed_and_labelled(self):
         # An AI outline can stop short of the wall: a tag 1.5 m outside it still goes on that room's outside wall,
         # with the distance stated; one beside the wall carries no such note.

@@ -28,6 +28,17 @@ def _text(word):
     return str(word.get("text", "")).strip()
 
 
+def normalized_mark(mark):
+    """Compare printed marks despite zero padding and the optional hyphen/underscore."""
+    match = re.fullmatch(r"(HLW|W[A-Z]?|D[A-Z]?)[_-]?(\d{1,3})([A-Z]?)", str(mark).strip(), re.I)
+    return (f"{match[1].upper()}{int(match[2])}{match[3].upper()}" if match
+            else str(mark).strip().upper())
+
+
+def normalized_level(value):
+    return re.sub(r"\s+floor$", "", " ".join(str(value or "").casefold().split()))
+
+
 def _x(word):
     return (float(word["x0"]) + float(word["x1"])) / 2
 
@@ -289,7 +300,8 @@ def find_window_tags(words, page, level=None, same_within=3.0):
                             or (re.search(r"\b\d+\s*mm\b", context) and re.search(r"\bwall\b", context)))
         if window_sample or wall_type_sample:
             continue
-        if any(tag["mark"].upper() == text.upper() and math.dist((tag["x"], tag["y"]), (x, y)) <= same_within for tag in tags):
+        if any(normalized_mark(tag["mark"]) == normalized_mark(text)
+               and math.dist((tag["x"], tag["y"]), (x, y)) <= same_within for tag in tags):
             continue
         tags.append({"mark": text, "x": x, "y": y, "page": page, "level": level})
     return tags
@@ -349,13 +361,14 @@ def place_windows(tags, windows, rooms, mm_per_point, reach_mm=3000):
     """
     by_mark = defaultdict(list)
     for window in windows:
-        by_mark[window["mark"].upper()].append(window)
+        by_mark[normalized_mark(window["mark"])].append(window)
     candidates, unplaced = [], []
     claimed = set()
     for tag in tags:
-        rows = by_mark.get(tag["mark"].upper(), [])
+        rows = by_mark.get(normalized_mark(tag["mark"]), [])
         if tag.get("level") and any(row.get("level") for row in rows):
-            rows = [row for row in rows if (row.get("level") or "").casefold() == str(tag["level"]).casefold()] or rows
+            # Schedules name levels loosely ("GF", "Ground"): a level that doesn't match falls back to the mark alone.
+            rows = [row for row in rows if normalized_level(row.get("level")) == normalized_level(tag["level"])] or rows
         sizes = {(row["width_mm"], row["height_mm"], row.get("sill_mm"), row.get("head_mm")) for row in rows}
         if not rows:
             unplaced.append({"mark": tag["mark"], "page": tag["page"], "reason": "no window schedule row with this mark"})
@@ -432,13 +445,18 @@ def place_windows(tags, windows, rooms, mm_per_point, reach_mm=3000):
                                          (tag["y"] - segment_start[1]) * dy) / (dx * dx + dy * dy)))
         offset_m = max(0.0, min(edge_m - width_m, fraction * edge_m - width_m / 2))
         openings.append({"trace_id": room["trace_id"], "edge_index": edge, "mark": tag["mark"], "width_m": width_m,
-                         "offset_m": round(offset_m, 4), "position_basis": "plan_tag_projection",
+                         "offset_m": offset_m, "position_basis": "plan_tag_projection",
+                         "tag_position": {"page": tag["page"], "x": tag["x"], "y": tag["y"]},
+                         "distance_mm": round(distance, 1), "placement_reason": "nearest eligible outside wall of the owning room",
                          "schedule_page": row["page"],
                          "sill_height_m": sill / 1000, "head_height_m": head / 1000,
                          "assumptions": ([assumption] if assumption else []) + width_assumption + width_assumption_far,
                          **({"internal_shade": blind} if blind else {}),
                          **({"frame_group": group} if group else {}),
-                         "evidence": f"Schedule p{row['page']}: {row['evidence']}; tag on plan p{tag['page']}"})
+                         "evidence": (f"Schedule p{row['page']}: {row['evidence']}; plan p{tag['page']} tag "
+                                      f"at image px ({tag['x']:.1f}, {tag['y']:.1f}); "
+                                      f"{distance:.1f} mm to eligible outside edge {edge} "
+                                      f"of trace {room['trace_id']}")})
     return {"openings": openings, "unplaced": unplaced}
 
 

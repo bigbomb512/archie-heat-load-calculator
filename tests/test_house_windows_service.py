@@ -25,7 +25,8 @@ SCHEDULE = [word("Window", 217, 45), word("Schedule", 247, 45),
 PLAN = [word("BED", 300, 200), word("W4", 150, 18), word("W6", 300, 392), word("W99", 590, 200)]
 TRACE = {"trace_id": "bed-1", "room_id": "room-use:ground:bed", "room_label": "Bed 1", "level_name": "Ground Floor",
          "page": 9, "points_image_px": [[0, 0], [1200, 0], [1200, 800], [0, 800], [0, 0]],
-         "calibration": {"status": "agreed", "mm_per_px": 5}, "edges": [{"index": 3, "boundary": "internal"}],
+         "calibration": {"status": "agreed", "mm_per_px": 5}, "edges": [{"index": 0, "boundary": "external"},
+             {"index": 2, "boundary": "external"}, {"index": 3, "boundary": "internal"}],
          "roof": "unknown", "openings": [{"opening_id": "kept", "edge_index": 0, "declaration_source": "reviewer"}]}
 
 
@@ -47,6 +48,14 @@ def read_page(number):
 
 
 class HouseWindowsServiceTests(unittest.TestCase):
+    def test_unknown_internal_and_mall_wall_eligibility(self):
+        trace = {**TRACE, "edges": [{"index": 0, "boundary": "unknown"},
+                                     {"index": 1, "boundary": "internal"},
+                                     {"index": 2, "boundary": "mall"}]}
+        # A house's walls aren't classified by the AI: an unknown edge not along another traced room is outside by rule;
+        # an internal edge never takes a window; a mall boundary can.
+        self.assertEqual(house_windows_service._outside_edges(trace, [trace], 5), [0, 2, 3])  # edge 3 unlisted: unknown
+
     def test_untraced_label_candidates_exclude_outdoor_and_retain_bedroom(self):
         spatial = {"standalone_text_items": [
             {"text": "BEDROOM", "bbox": [10, 10, 60, 20]},
@@ -72,6 +81,22 @@ class HouseWindowsServiceTests(unittest.TestCase):
             self.assertEqual([(row["mark"], row["room"]) for row in result["assigned_without_wall"]],
                              [("W4", "Bedroom 3")])
             self.assertFalse(any(row.get("mark") == "W4" for row in result["unplaced"]))
+
+    def test_wrong_level_schedule_row_is_not_assigned_to_untraced_label(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = job(folder)
+            (root / "spatial_ocr.json").write_text(json.dumps({"pages": [{"page": 9,
+                "standalone_text_items": [{"text": "BEDROOM", "bbox": [700, 180, 760, 190]},
+                                          {"text": "3", "bbox": [762, 180, 770, 190]}]}]}))
+            def pages(number):
+                return (1000, 700, SCHEDULE if number == 20 else [word("W4", 750, 200)])
+            with patch.object(reviewer_room_geometry_service, "current_records", return_value=[TRACE]), \
+                 patch.object(autonomous_tasks_service, "_p0_main_geometry_pages",
+                              return_value=[{"page": 9, "level_name": "First Floor"}]), \
+                 patch.object(autonomous_tasks_service, "room_ceiling_height", return_value=2700):
+                result = house_windows_service.apply(None, {"review_dir": str(root)}, root, read_page=pages)
+            # A schedule row for another level is never given to a room by its printed name alone.
+            self.assertEqual(result["assigned_without_wall"], [])
 
     def test_a_plan_with_no_traced_room_still_assigns_its_windows_by_label(self):
         # Page 9 has no trace at all; its scale comes from the sheet's printed scale (5 mm per image px).
@@ -160,11 +185,11 @@ class HouseWindowsServiceTests(unittest.TestCase):
             w4 = next(row for row in new if row["mark"] == "W4")
             self.assertEqual((w4["width_m"], w4["sill_height_m"], w4["head_height_m"], w4["elevation_page"]), (1.6, 1.0, 1.6, 20))
             self.assertEqual(w4["glazing_choice"], "residential")
-            # The reviewer's own opening is kept; the walls holding the windows are now outside, the inside wall untouched.
+            # The reviewer's own opening is kept; only previously classed outside walls host windows.
             self.assertIn("kept", [row["opening_id"] for row in body["openings"]])
             edges = {row["index"]: row["boundary"] for row in body["edges"]}
             self.assertEqual((edges[0], edges[2], edges[3]), ("external", "external", "internal"))
-            self.assertEqual(body["edge_sources"], {"0": "drawing_text", "2": "drawing_text"})
+            self.assertEqual(body["edge_sources"], {})
             # W99 has no schedule row: listed, not guessed. The result is saved for the job.
             self.assertIn({"mark": "W99", "page": 9, "reason": "no window schedule row with this mark"}, result["unplaced"])
             self.assertEqual(json.loads((root / "house_windows.json").read_text())["windows_in_schedule"], 2)
@@ -208,7 +233,8 @@ class HouseWindowsServiceTests(unittest.TestCase):
             vector = json.loads((root / "vector_geometry.json").read_text())
             vector["geometry_key_points"]["pages"][0]["coordinate_systems"]["image_px"]["image_height"] = 1050
             (root / "vector_geometry.json").write_text(json.dumps(vector))
-            with patch.object(reviewer_room_geometry_service, "current_records", return_value=[TRACE]), \
+            trace = {**TRACE, "edges": [*TRACE["edges"], {"index": 1, "boundary": "external"}]}
+            with patch.object(reviewer_room_geometry_service, "current_records", return_value=[trace]), \
                  patch.object(reviewer_room_geometry_service, "post") as post, \
                  patch.object(autonomous_tasks_service, "room_ceiling_height", return_value=2700):
                 result = house_windows_service.apply(None, {"review_dir": str(root)}, root, read_page=pages)
@@ -262,6 +288,29 @@ class HouseWindowsServiceTests(unittest.TestCase):
             self.run_apply(root)
             _result, writes = self.run_apply(root)
             self.assertEqual(writes, [])
+
+    def test_old_window_scan_version_is_replayed_even_with_matching_fingerprint(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = job(folder)
+            self.run_apply(root)
+            saved = json.loads((root / "house_windows.json").read_text())
+            saved["version"] = "house-windows-text-v1"
+            (root / "house_windows.json").write_text(json.dumps(saved))
+            result, writes = self.run_apply(root)
+            self.assertEqual(result["version"], house_windows_service.VERSION)
+            self.assertEqual(len(writes), 1)
+
+    def test_new_outside_wall_classification_invalidates_window_scan(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = job(folder)
+            unknown = {**TRACE, "edges": [{"index": 0, "boundary": "unknown"},
+                                          {"index": 2, "boundary": "unknown"}]}
+            with patch.object(reviewer_room_geometry_service, "current_records", return_value=[unknown]), \
+                 patch.object(reviewer_room_geometry_service, "post"):
+                first = house_windows_service.apply(None, {"id": "house"}, root, read_page=read_page)
+            second, writes = self.run_apply(root)
+            self.assertNotEqual(first["fingerprint"], second["fingerprint"])
+            self.assertEqual(len(writes), 1)
 
     def test_a_shop_is_left_alone(self):
         with tempfile.TemporaryDirectory() as folder:
