@@ -498,6 +498,10 @@ _RESULT_FACTS = {}
 _RESULT_FACTS_LOCK = threading.Lock()
 RESULT_FILES = ("ai_preliminary_input_set.json", "phase1_base_room_load_report.json",
                 "hourly_ai_preliminary_load_report.json", "ai_preliminary_model.json")
+# The facts are also saved beside the job, so the first jobs list after a server restart doesn't re-read every job's
+# large result files (~5 s on 26 jobs). Bump the version whenever the facts below change shape or meaning.
+RESULT_FACTS_FILE = "job_list_facts.cache"
+RESULT_FACTS_VERSION = 1
 
 
 def _saved_result_facts(root):
@@ -518,6 +522,13 @@ def _saved_result_facts(root):
         hit = _RESULT_FACTS.get(key)
         if hit and hit[0] == version:
             return hit[1]
+    saved = _read(root / RESULT_FACTS_FILE, {})
+    disk_version = json.loads(json.dumps(version))         # tuples as the saved JSON lists them
+    if (isinstance(saved, dict) and saved.get("schema") == RESULT_FACTS_VERSION
+            and saved.get("version") == disk_version and isinstance(saved.get("facts"), dict)):
+        with _RESULT_FACTS_LOCK:
+            _RESULT_FACTS[key] = (version, saved["facts"])
+        return saved["facts"]
     input_set, base_report, full_report, model = (_read(root / name, {}) for name in RESULT_FILES)
     input_set, base_report, full_report, model = (value if isinstance(value, dict) else {}
                                                   for value in (input_set, base_report, full_report, model))
@@ -540,6 +551,10 @@ def _saved_result_facts(root):
     }
     with _RESULT_FACTS_LOCK:
         _RESULT_FACTS[key] = (version, facts)
+    try:
+        _write(root / RESULT_FACTS_FILE, {"schema": RESULT_FACTS_VERSION, "version": version, "facts": facts})
+    except OSError:
+        pass                                                # the in-memory copy still serves this server run
     return facts
 
 

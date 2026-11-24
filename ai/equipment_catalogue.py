@@ -242,11 +242,38 @@ def load_typical(path=None):
     return result
 
 
+_CURRENT_HASH = {}
+
+
+def _workbook_stamp():
+    stamp = []
+    for path in (Path(DEFAULT_PATH), Path(TYPICAL_PATH)):
+        try:
+            stat = path.stat()
+            stamp.append((str(path), stat.st_mtime_ns, stat.st_size, getattr(stat, "st_ino", 0)))
+        except OSError:
+            stamp.append((str(path), None))
+    return tuple(stamp)
+
+
 def current_hash(book=None, typical=None):
     """One hash for both workbooks: a change to either makes a saved Phase 2 result out of date."""
+    if book is None and typical is None:
+        # The jobs list asks once per job; the workbooks are re-read only when either file changes.
+        stamp = _workbook_stamp()
+        with _LOCK:
+            if stamp in _CURRENT_HASH:
+                return _CURRENT_HASH[stamp]
+    else:
+        stamp = None
     book = book or load()
     typical = typical or load_typical()
-    return hashlib.sha256(f"{book['hash']}:{typical['hash']}".encode()).hexdigest()
+    digest = hashlib.sha256(f"{book['hash']}:{typical['hash']}".encode()).hexdigest()
+    if stamp is not None:
+        with _LOCK:
+            _CURRENT_HASH.clear()
+            _CURRENT_HASH[stamp] = digest
+    return digest
 
 
 def typical_candidates(typical, item):
