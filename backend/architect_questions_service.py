@@ -50,7 +50,7 @@ def _why(row):
 def get(project, *, start=True):
     root = Path(project["review_dir"])
     asked = (_read(root / FILE).get("asked") or {})
-    report = _read(assumption_range_service.ai_preliminary_service._paths(project)["report"])
+    report = assumption_range_service._read_big(assumption_range_service.ai_preliminary_service._paths(project)["report"])
     unknowns = {row["key"]: row for row in assumption_range_service.open_unknowns(root, report)}
     rng = assumption_range_service.get(project, start=start)
     ranged = {row["key"]: row for row in rng.get("unknowns") or []} if rng.get("status") == "calculated" else {}

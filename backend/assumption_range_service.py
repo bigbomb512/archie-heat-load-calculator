@@ -41,6 +41,28 @@ def _read(path, default=None):
         return {} if default is None else default
 
 
+_BIG_MEMO = {}
+
+
+def _read_big(path):
+    """A large saved file (the input set, the cooling report: 100 MB and more) parsed once until it changes. Callers
+    only read it."""
+    path = Path(path)
+    try:
+        stat = path.stat()
+    except OSError:
+        return {}
+    key = (stat.st_mtime_ns, stat.st_size)
+    hit = _BIG_MEMO.get(str(path))
+    if hit and hit[0] == key:
+        return hit[1]
+    value = _read(path)
+    _BIG_MEMO[str(path)] = (key, value)
+    while len(_BIG_MEMO) > 8:
+        _BIG_MEMO.pop(next(iter(_BIG_MEMO)))
+    return value
+
+
 def _write(path, value):
     path = Path(path)
     staging = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
@@ -105,12 +127,12 @@ def open_unknowns(root, report):
     certificate_north = any(row.get("north") for row in certificate_rows)
     glazing = _read(root / "glazing_answers.json")
     constructions = _read(root / "construction_answers.json")
-    surfaces = [surface for room in ((_read(root / "ai_preliminary_input_set.json").get("material") or {})
-                                     .get("hourly_load_model") or {}).get("rooms", []) if isinstance(room, dict)
-                for surface in (room.get("cooling_load") or {}).get("envelope_surfaces", []) if isinstance(surface, dict)]
-    windows = [surface for room in ((_read(root / "ai_preliminary_input_set.json").get("material") or {})
-                                    .get("hourly_load_model") or {}).get("rooms", []) if isinstance(room, dict)
-               for surface in (room.get("cooling_load") or {}).get("glazing_surfaces", []) if isinstance(surface, dict)]
+    rooms = ((_read_big(root / "ai_preliminary_input_set.json").get("material") or {}).get("hourly_load_model") or {}).get("rooms", [])
+    rooms = [room for room in rooms if isinstance(room, dict)]
+    surfaces = [surface for room in rooms for surface in (room.get("cooling_load") or {}).get("envelope_surfaces", [])
+                if isinstance(surface, dict)]
+    windows = [surface for room in rooms for surface in (room.get("cooling_load") or {}).get("glazing_surfaces", [])
+               if isinstance(surface, dict)]
     certified = bool(windows) and all("certificate" in str(row.get("glazing_source") or row.get("source") or "").casefold()
                                       for row in windows)
     has = {"wall": any(row.get("kind") == "opaque_wall" and row.get("boundary_method") == "external" for row in surfaces),
@@ -327,7 +349,7 @@ def get(project, *, start=True):
     """The range for the job's saved cooling result: worked out in the background the first time it's asked for."""
     paths = ai_preliminary_service._paths(project)
     root = Path(paths["root"])
-    report = _read(paths["report"])
+    report = _read_big(paths["report"])
     if _total(report) is None:
         return {"status": "not_calculated", "reason": "No final cooling load has been calculated yet."}
     from backend import house_windows_service

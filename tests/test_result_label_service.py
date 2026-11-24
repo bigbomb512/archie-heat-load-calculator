@@ -19,7 +19,7 @@ class ResultLabelTests(unittest.TestCase):
     def call(self, *, report=None, unknowns=None, rng=None, stale=False):
         with patch.object(service.assumption_range_service.ai_preliminary_service, "_paths",
                           return_value={"report": Path("/unused/report.json"), "root": Path("/unused")}), \
-             patch.object(service.assumption_range_service, "_read", return_value=self.report if report is None else report), \
+             patch.object(service.assumption_range_service, "_read_big", return_value=self.report if report is None else report), \
              patch.object(service.assumption_range_service, "open_unknowns", return_value=self.open if unknowns is None else unknowns), \
              patch.object(service.assumption_range_service, "get", return_value=self.range if rng is None else rng) as get:
             result = service.label(self.project, status={"results_ready": True, "result_stale": stale})

@@ -5,7 +5,7 @@ from backend import assumption_range_service
 
 def label(project, *, status=None):
     paths = assumption_range_service.ai_preliminary_service._paths(project)
-    report = assumption_range_service._read(paths["report"])
+    report = assumption_range_service._read_big(paths["report"])
     if assumption_range_service._total(report) is None:
         return {"status": "not_calculated", "count": 0, "open": [], "text": "Not calculated",
                 "reason": "No final cooling load has been calculated yet."}

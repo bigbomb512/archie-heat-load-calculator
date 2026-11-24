@@ -50,7 +50,38 @@ def parse_page(text, page, certificate="BASIX"):
     return result
 
 
+_READ_JOB_MEMO = {}
+
+
+def _stamp(path):
+    try:
+        stat = Path(path).stat()
+        return (stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        return None
+
+
 def read_job(root):
+    """read_job_uncached, remembered until the PDF, the page inventory or the OCR file changes: it runs pdftotext over
+    the whole PDF (about 1.3 s on a 22-page set), and the job summary, result label and range all ask for it."""
+    import json
+    root = Path(root)
+    try:
+        pdf = json.loads((root / "spatial_ocr.json").read_text()).get("source_pdf") or ""
+    except (OSError, ValueError):
+        pdf = ""
+    key = (_stamp(root / "page_inventory.json"), _stamp(root / "spatial_ocr.json"), _stamp(pdf) if pdf else None)
+    hit = _READ_JOB_MEMO.get(str(root))
+    if hit and hit[0] == key:
+        return [dict(row) for row in hit[1]]
+    found = read_job_uncached(root)
+    _READ_JOB_MEMO[str(root)] = (key, found)
+    if len(_READ_JOB_MEMO) > 64:
+        _READ_JOB_MEMO.pop(next(iter(_READ_JOB_MEMO)))
+    return [dict(row) for row in found]
+
+
+def read_job_uncached(root):
     """Read certificate-titled pages from the original PDF without altering saved jobs."""
     import json
     root = Path(root)
