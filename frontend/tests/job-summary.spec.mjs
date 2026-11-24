@@ -20,7 +20,7 @@ const summary = (overrides = {}) => ({
   project_id: projectId,
   answer: { state: "current", headline: "Cooling load", total_kw: 21.6568, sensible_kw: 18.2, latent_kw: 3.4, month: "January", hour: 17,
             suggested_system: "1 × 22 kW ducted", rooms_counted: 16, rooms_found: 21, note: "" },
-  completeness: { level: "partial", text: "Partial: 3 rooms aren't counted and 6 things need checking." },
+  completeness: { level: "partial", text: "Partial: 5 cooled rooms aren't counted yet (2 need an area, 3 have walls still being worked out)." },
   todos: [
     todo("area:bed", "room_area", "blocks", "Type the area of Bedroom 1", {
       room: { room_id: "room-use:unassigned-level:bedroom-1", name: "Bedroom 1", level: "", area_m2: null, use_id: "house_bedroom", cooled: true },
@@ -74,7 +74,7 @@ test("the answer card shows the saved total, where it peaks, the suggestion and 
   await expect(card).toContainText("16 of 21 cooled rooms counted");
   await expect(card.locator("[data-answer-badge]")).toHaveText("Current");
   await expect(card.locator("[data-completeness]")).toHaveText("Partial");
-  await expect(card).toContainText("3 rooms aren't counted");
+  await expect(card).toContainText("5 cooled rooms aren't counted yet (2 need an area, 3 have walls still being worked out)");
   // The step bar shows how many items each step holds.
   // "Check the house" holds the rooms and people-and-equipment items; each tab shows its own.
   await expect(page.locator('[data-step-todo="house"]')).toHaveText("4");

@@ -590,10 +590,17 @@ test("a result missing a room is labelled partial, and assumptions are listed se
       partial_reasons: ["Storage is not counted: no area yet."] },
     supervisor_assumptions: [{ message: "Check what is above Shop; its roof exposure is assumed." }],
   } });
+  // The uncounted rooms come from the job summary, the one count every screen shows.
+  await page.route("**/api/job-summary**", (route) => route.fulfill({ json: {
+    answer: { state: "building_only", headline: "Building-only load", total_kw: 4.2, rooms_counted: 1, rooms_found: 2,
+              rooms_not_counted: [{ room_id: "storage", name: "Storage", why: "needs_area", reason: "needs an area typed in" }],
+              not_counted_text: "1 needs an area" },
+    completeness: { level: "partial", text: "Partial: 1 cooled room isn't counted yet (1 needs an area)." }, todos: [], counts: { total: 0, by_step: {} },
+  } }));
   await page.goto("/?preview=1#/job/job-1/rooms/shop");
   const partial = page.locator("[data-phase1-partial]");
-  await expect(partial.getByRole("heading", { name: "Partial: 1 room not counted" })).toBeVisible();
-  await expect(partial).toContainText("Storage is not counted: no area yet.");
+  await expect(partial.getByRole("heading", { name: "1 of 2 cooled rooms aren't counted yet" })).toBeVisible();
+  await expect(partial).toContainText("Storage: needs an area typed in");
   await expect(page.locator("[data-result-assumptions]")).toContainText("its roof exposure is assumed");
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(partial).toBeVisible();
@@ -609,7 +616,7 @@ test("assumed values alone don't label a result partial", async ({ page }) => {
   } });
   await page.goto("/?preview=1#/job/job-1/rooms/shop");
   await expect(page.locator("[data-result-assumptions]")).toContainText("ceiling height is assumed");
-  await expect(page.locator("[data-phase1-partial]")).toHaveCount(0);
+  await expect(page.locator("[data-phase1-partial]")).toBeHidden();
 });
 
 test("a failed envelope step is named with its reason, and Try again resumes it", async ({ page }) => {
@@ -1459,7 +1466,7 @@ test("every documented room state is distinct and Needs you contains only action
     ).toContainText(state);
   }
   const needs = page.locator(".job-needs li");
-  await expect(page.locator(".job-needs h2")).toHaveText("2 things need you");
+  await expect(page.locator(".job-needs h2")).toHaveText("2 rooms need you");
   await expect(needs).toHaveCount(2);
   await expect(page.locator(".job-needs")).not.toContainText("Area room");
   await expect(page.locator(".job-needs")).not.toContainText("Surface room");

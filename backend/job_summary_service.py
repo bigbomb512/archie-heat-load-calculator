@@ -101,6 +101,43 @@ def _display_rooms(plan):
     return shown
 
 
+# Why a cooled room isn't in the load yet, in the operator's words, by its state on the job plan (job_plan_service
+# _room_state). One list, shown the same on every screen: the summary card, Rooms and Results (2026-11-24: they had
+# said "5 rooms", "3 rooms" and "16 rooms" for the same job).
+NOT_COUNTED_REASONS = {
+    "needs_area": ("needs_area", "needs an area typed in"),
+    "finding_area": ("finding_area", "area still being read from the drawings"),
+    "needs_use": ("needs_use", "needs its use chosen"),
+    "finding_surfaces": ("finding_surfaces", "walls and windows still being worked out"),
+    "left_out": ("left_out", "left out of the room selection"),
+}
+NOT_COUNTED_GROUPS = (("needs_area", "need an area", "needs an area"),
+                      ("needs_use", "need their use chosen", "needs its use chosen"),
+                      ("finding_area", "have their area still being read", "has its area still being read"),
+                      ("finding_surfaces", "have walls still being worked out", "has walls still being worked out"),
+                      ("left_out", "were left out of the room selection", "was left out of the room selection"),
+                      ("not_in_result", "aren't in the latest calculation", "isn't in the latest calculation"))
+
+
+def _not_counted(rooms, field):
+    """The cooled rooms not in the load, each with why: [{room_id, name, why, reason}] and a one-line breakdown."""
+    rows = []
+    for room in rooms:
+        if not (room.get("kind") == "comfort" or room.get("included")):
+            continue
+        if room.get("included") and _number(room.get(field)) is not None:
+            continue
+        why, reason = NOT_COUNTED_REASONS.get(room.get("state"), ("not_in_result", "not in the latest calculation; update the load"))
+        rows.append({"room_id": str(room.get("room_id") or ""), "name": str(room.get("display_name") or room.get("name") or "A room"),
+                     "why": why, "reason": reason})
+    parts = []
+    for key, many, one in NOT_COUNTED_GROUPS:
+        count = sum(row["why"] == key for row in rows)
+        if count:
+            parts.append(f"{count} {one if count == 1 else many}")
+    return rows, ", ".join(parts)
+
+
 def _answer(plan, calculation, failed):
     status = plan.get("status") or {}
     final, base = _peak(plan.get("final_report")), _peak(plan.get("phase1_report"))
@@ -120,6 +157,7 @@ def _answer(plan, calculation, failed):
     rooms = _display_rooms(plan)
     field = "final_kw" if final_kw is not None else "phase1_kw"
     counted = sum(bool(row.get("included")) and _number(row.get(field)) is not None for row in rooms)
+    not_counted, not_counted_text = _not_counted(rooms, field) if state != "none" else ([], "")
     notes = {"none": "Not calculated yet.", "working": "The load is being calculated.",
              "building_only": "People, lights and appliances are not included yet.",
              "current": "The saved calculation is current.",
@@ -137,6 +175,7 @@ def _answer(plan, calculation, failed):
             "hour": peak.get("display_hour", peak.get("hour")) if type(peak.get("display_hour", peak.get("hour"))) is int else None,
             "suggested_system": suggestion, "rooms_counted": counted,
             "rooms_found": sum(bool(row.get("included") or row.get("kind") == "comfort") for row in rooms),
+            "rooms_not_counted": not_counted, "not_counted_text": not_counted_text,
             "note": notes[state]}
 
 
@@ -345,13 +384,14 @@ def get(web, project):
     if answer["total_kw"] is None:
         level, text = "none", "No load has been calculated yet."
     elif counts["blocks"] or counts["changes_number"] or uncounted:
+        # The to-do button carries the count of things to check; this line says what the number covers.
         level = "partial"
-        text = (f"Partial: {_plural(uncounted, 'room isn\'t', 'rooms aren\'t')} counted"
-                f" and {_plural(unchecked, 'item needs', 'items need')} checking.")
+        text = (f"Partial: {_plural(uncounted, 'cooled room isn\'t', 'cooled rooms aren\'t')} counted yet"
+                + (f" ({answer['not_counted_text']})." if uncounted and answer.get("not_counted_text") else ".")
+                if uncounted else "Partial: some inputs could still change the number.")
     else:
         level = "complete"
-        text = (f"Complete: {_plural(answer['rooms_counted'], 'room', 'rooms')} counted;"
-                f" {_plural(unchecked, 'item', 'items')} to check.")
+        text = f"Complete: all {_plural(answer['rooms_counted'], 'cooled room', 'cooled rooms')} counted."
     if any(row.get("kind") == "typical" for row in result.get("items") or []):
         text += " Uses typical values for people, lights and equipment."
     return {"project_id": str(project.get("id") or ""), "answer": answer,

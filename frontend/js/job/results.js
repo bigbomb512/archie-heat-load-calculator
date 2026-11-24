@@ -488,7 +488,7 @@ function resultsContent({ plan, report, gaps, resultLabel, projectId, stale, can
   const assumptions = gaps.assumptions || gaps.items || gaps.open_items || [];
   const statusSentence = stale
     ? `The previous result covered ${peaks.length} rooms${peak.display_hour == null ? "" : ` at hour ${escapeHtml(peak.display_hour)}`}. Room-by-room loads are out of date.${allowanceText}`
-    : `${rooms.length} rooms counted${peak.display_hour == null ? "" : ` at the peak hour ${escapeHtml(peak.display_hour)}`}.${allowanceText} Refrigeration is sized separately.`;
+    : `<span data-rooms-counted>${rooms.length} rooms counted</span>${peak.display_hour == null ? "" : `, peak at ${escapeHtml(String(peak.display_hour).padStart(2, "0"))}:00`}.${allowanceText} Refrigeration is sized separately.`;
   return `${outOfDate}
     <section class="job-panel job-result-summary ${stale ? "stale" : ""}">
       <div><h1>${resultLabel.status === "design" ? "Design" : "Preliminary"} cooling load for the ${plan.status?.dwelling ? "house" : "tenancy"}</h1>

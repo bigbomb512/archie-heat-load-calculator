@@ -265,6 +265,30 @@ function bind(host, summary, projectId) {
 }
 
 // Fills the page's [data-job-summary] slot. isCurrent() is false once another screen has been drawn.
+// The room count every screen shows comes from here, so the summary card, Rooms and Results always agree
+// (2026-11-24: one job read "16 of 21", "5 rooms" and "3 rooms" on three screens).
+function fillCounts(summary, projectId) {
+  const answer = summary.answer || {};
+  const found = Number(answer.rooms_found);
+  const counted = Number(answer.rooms_counted);
+  const missing = answer.rooms_not_counted || [];
+  document.querySelectorAll("[data-rooms-counted]").forEach((node) => {
+    if (Number.isFinite(found) && found > 0)
+      node.textContent = counted === found ? `All ${found} cooled rooms counted` : `${counted} of ${found} cooled rooms counted`;
+  });
+  document.querySelectorAll("[data-uncounted]").forEach((panel) => {
+    if (!missing.length) {
+      panel.hidden = true;
+      panel.innerHTML = "";
+      return;
+    }
+    panel.innerHTML = `<h2>${missing.length} of ${found} cooled ${found === 1 ? "room isn't" : "rooms aren't"} counted yet</h2>
+      <p>${escapeHtml(answer.not_counted_text || "")}. The load leaves ${missing.length === 1 ? "it" : "them"} out until then.</p>
+      <ul>${missing.map((room) => `<li><a href="#/job/${encodeURIComponent(projectId)}/rooms/${encodeURIComponent(room.room_id)}">${escapeHtml(room.name)}</a>: ${escapeHtml(room.reason)}</li>`).join("")}</ul>`;
+    panel.hidden = false;
+  });
+}
+
 export async function loadJobSummary(projectId, isCurrent = () => true) {
   const host = document.querySelector("[data-job-summary]");
   if (!host) return;
@@ -284,6 +308,7 @@ export async function loadJobSummary(projectId, isCurrent = () => true) {
     lastShown = { projectId, html };
     bind(host, summary, projectId);
     stepBadges(summary);
+    fillCounts(summary, projectId);
   } catch (error) {
     if (!isCurrent() || !host.isConnected) return;
     host.innerHTML = `<p class="job-answer-note">The summary couldn't load: ${escapeHtml(error.message)}</p>`;

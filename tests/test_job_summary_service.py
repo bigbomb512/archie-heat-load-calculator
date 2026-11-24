@@ -109,7 +109,11 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(balcony["impact"], {"kw": 0.27, "text": "Adds 0.3 kW to the total now"})
         equipment = next(row for row in summary["todos"] if row["kind"] == "equipment")
         self.assertTrue(equipment["detail"].startswith("1 item. "))
-        self.assertIn("1 room isn't counted", summary["completeness"]["text"])
+        self.assertIn("1 cooled room isn't counted yet (1 has walls still being worked out)", summary["completeness"]["text"])
+        # One list behind every screen's count: the room, why, and a plain reason.
+        self.assertEqual([(row["name"], row["why"]) for row in summary["answer"]["rooms_not_counted"]],
+                         [("Study", "finding_surfaces")])
+        self.assertEqual(summary["answer"]["not_counted_text"], "1 has walls still being worked out")
         self.assertEqual(service._plain_count("76 finding(s) to review"), "76 findings to review")
 
     def test_a_room_left_out_and_too_small_is_one_row(self):

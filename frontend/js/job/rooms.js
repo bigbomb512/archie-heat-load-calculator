@@ -335,7 +335,9 @@ function needsYou(plan, projectId) {
     })
     .join("");
   return `<section class="job-needs" aria-labelledby="needs-title">
-    <h2 id="needs-title">${rows.length} ${rows.length === 1 ? "thing needs" : "things need"} you</h2>
+    <h2 id="needs-title">${rows.every((room) => room.state === "needs_area")
+      ? `${rows.length} ${rows.length === 1 ? "room needs" : "rooms need"} an area`
+      : `${rows.length} ${rows.length === 1 ? "room needs" : "rooms need"} you`}</h2>
     <ul>${items}</ul>
   </section>`;
 }
@@ -371,9 +373,9 @@ function renderLayout(plan, status, roomId, uses, projectId, editor = {}) {
   const remaining = plan.phase1_report?.supervisor_exceptions || [];
   const exceptionPanel = remaining.length
     ? `<section class="job-panel" data-model-exceptions><h2>Unresolved drawing checks</h2><p>The building load covers the supported inputs. These checks remain unresolved.</p><ul>${remaining.map((row) => `<li>${escapeHtml(row.message)}</li>`).join("")}</ul></section>` : "";
-  const coverage = plan.phase1_report?.phase1_coverage || {};
-  const partialPanel = coverage.partial
-    ? `<section class="job-panel" data-phase1-partial><h2>${escapeHtml(coverage.partial_label || "Partial result")}</h2><p>The building load total below leaves this out.</p><ul>${(coverage.partial_reasons || []).map((text) => `<li>${escapeHtml(text)}</li>`).join("")}</ul></section>` : "";
+  // Which cooled rooms aren't in the load, and why: filled from the job summary (summary.js fillCounts), the one count
+  // every screen shows. The saved building-load report's own list could lag the live rooms.
+  const partialPanel = `<section class="job-panel" data-uncounted data-phase1-partial aria-live="polite" hidden></section>`;
   const assumed = (plan.phase1_report?.supervisor_assumptions || []).map((row) => row.message);
   const assumptionPanel = assumed.length
     ? `<section class="job-panel" data-result-assumptions><h2>Assumptions in this result</h2><p>These parts use a labelled assumption or a check the drawings didn't answer.</p><ul>${assumed.map((text) => `<li>${escapeHtml(plainNote(text))}</li>`).join("")}</ul></section>` : "";
