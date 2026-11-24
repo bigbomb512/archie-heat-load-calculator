@@ -615,6 +615,26 @@ body.job-preview {
 .job-floor-rooms + .job-floor-rooms {
   margin-top: 28px;
 }
+.job-floor-rooms[hidden] {
+  display: none;
+}
+.job-floor-switch {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 20px;
+  font-weight: 700;
+}
+.job-floor-switch select {
+  min-width: 180px;
+  max-width: 100%;
+  padding: 10px 12px;
+  font: inherit;
+  color: var(--ink);
+  background: var(--sheet);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
 .job-not-cooled {
   margin-top: 12px;
 }

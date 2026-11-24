@@ -137,6 +137,8 @@ async function preview(page, overrides = {}) {
   if (overrides.final_report) currentPlan.final_report = overrides.final_report;
   if (overrides.phase1_report) currentPlan.phase1_report = overrides.phase1_report;
   if (overrides.rooms) currentPlan.rooms = overrides.rooms;
+  if (overrides.pages) currentPlan.pages = overrides.pages;
+  if (overrides.outlines) currentPlan.outlines = overrides.outlines;
   if (overrides.room_use_options) currentPlan.room_use_options = overrides.room_use_options;
   const currentProject = {
     ...project,
@@ -434,12 +436,17 @@ test("a timed-out drawing call is explained, and finishing redraws the screen on
     { status: "done", step_state: "done", step: "skills", answered: 41, refused: 8, rounds: 5, last_problem: problem },
   ]);
   await expect(page.locator("[data-stage-problem]")).toHaveText(problem);
+  const originalList = await page.locator(".job-stage-list").elementHandle();
   await page.clock.runFor(5000);
   await expect(page.locator('[data-stage="rooms"]')).toHaveClass(/done/);
   await expect.poll(() => counts.plan).toBe(2);
-  await page.clock.runFor(20000);
-  // First load, one refresh, then the redraw's own read; nothing is working any more, so polling stopped.
-  expect(counts.tasks).toBe(3);
+  await expect.poll(() => originalList.evaluate((element) => element.isConnected)).toBe(false);
+  // The redraw also reads the tasks. Wait for that asynchronous read before advancing the clock:
+  // waiting stages intentionally keep polling until Phase 1 completes.
+  await expect.poll(() => counts.tasks).toBe(3);
+  await page.clock.runFor(5000);
+  await expect.poll(() => counts.tasks).toBe(4);
+  expect(counts.plan).toBe(2);
 });
 
 test("polling stops when the person leaves the Drawings screen", async ({ page }) => {
@@ -672,7 +679,7 @@ test("each floor keeps cooled rooms visible and collapses clickable non-cooled r
   await expect(floors).toHaveCount(2);
   await expect(floors.nth(0).getByRole("heading", { name: "Rooms on this floor" })).toBeVisible();
   await expect(floors.nth(0).getByRole("button", { name: "Bedroom" })).toBeVisible();
-  await expect(floors.nth(1).getByRole("button", { name: "Office" })).toBeVisible();
+  await expect(floors.nth(1).getByRole("button", { name: "Office" })).toBeHidden();
   const groundClosed = floors.nth(0).locator(".job-not-cooled");
   await expect(groundClosed.locator("summary")).toHaveText("2 rooms not cooled on this floor");
   await expect(groundClosed).not.toHaveAttribute("open");
@@ -682,9 +689,36 @@ test("each floor keeps cooled rooms visible and collapses clickable non-cooled r
   await expect(groundClosed.getByRole("button", { name: "Wardrobe" })).toBeVisible();
   await groundClosed.getByRole("button", { name: "Wardrobe" }).click();
   await expect(page.locator(".job-room-detail h2")).toHaveText("Wardrobe");
-  const firstClosed = page.locator(".job-floor-rooms").nth(1).locator(".job-not-cooled");
+  await page.getByLabel("Floor", { exact: true }).selectOption("First");
+  await expect(page).toHaveURL(/#\/job\/job-1\/rooms\/office$/);
+  await expect(page.locator(".job-floor-rooms:not([hidden])").getByRole("button", { name: "Office" })).toBeVisible();
+  const firstClosed = page.locator(".job-floor-rooms:not([hidden]) .job-not-cooled");
   await expect(firstClosed.locator("summary")).toHaveText("1 room not cooled on this floor");
   await expect(firstClosed).not.toHaveAttribute("open");
+});
+
+test("Rooms shows one floor's plan and table at a time and opens the routed room's floor", async ({ page }) => {
+  const levels = ["Ground", "First", "Second"];
+  const rooms = levels.map((level, index) => ({ ...plan.rooms[0], room_id: `room-${index}`,
+    name: `${level} room`, level, source_pages: [index + 1] }));
+  const pages = levels.map((level, index) => ({ ...plan.pages[0], page: index + 1, level_name: level,
+    title: `${level} plan` }));
+  const outlines = levels.map((level, index) => ({ ...plan.outlines[0], room_id: `room-${index}`,
+    name: `${level} room`, level, page: index + 1 }));
+  await preview(page, { rooms, pages, outlines });
+  await page.goto("/?preview=1#/job/job-1/rooms/room-2");
+  const floor = page.getByLabel("Floor", { exact: true });
+  await expect(floor).toHaveValue("Second");
+  await expect(page.locator(".job-floor-rooms:not([hidden]) .job-plan-page")).toHaveCount(1);
+  await expect(page.locator(".job-floor-rooms:not([hidden]) .job-plan-page")).toContainText("Second");
+  await expect(page.locator(".job-floor-rooms:not([hidden]) .job-room-select")).toHaveText("Second room");
+  await expect(page.locator(".job-floor-rooms[hidden]")).toHaveCount(2);
+  // A native <select>: its keyboard behaviour is the platform's (arrow keys open the list on macOS), so choose directly.
+  await floor.selectOption("Ground");
+  await expect(page).toHaveURL(/#\/job\/job-1\/rooms\/room-0$/);
+  await expect(page.getByLabel("Floor", { exact: true })).toHaveValue("Ground");
+  await expect(page.locator(".job-floor-rooms:not([hidden]) .job-plan-page")).toContainText("Ground");
+  await expect(page.locator(".job-floor-rooms:not([hidden]) .job-room-select")).toHaveText("Ground room");
 });
 
 test("a failed envelope step is named with its reason, and Try again resumes it", async ({ page }) => {
