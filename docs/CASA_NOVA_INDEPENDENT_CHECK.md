@@ -91,3 +91,23 @@ Combinations of moderate changes could also bridge the gap. The highest-leverage
 ## Review limits and next evidence
 
 This check is **implemented** as a reproducible independent hand calculation and comparison. Engineering validation remains **open**: the SCL table is a hemisphere/latitude analogue; the glazing optical conversion is approximate; the weather numbers come from the saved job; the humid weather/clear sun combination is only a screen; no measured leakage, fan or makeup-air data exist; and the equipment list is provisional. The next concrete step is to obtain the as-built façade and glass schedule, current ventilation/exhaust design, bar equipment and condenser schedule, fan selection, door-use basis, and a local coincident weather/solar basis, then have a qualified HVAC designer reconcile both methods on the **same hour and scope**. No sizing recommendation follows from this note alone.
+
+## Update, 24 November 2026: Toki after the moisture rule
+
+Toki now counts outside air drier than the room as adding no moisture load (it had subtracted it). Recalculated with
+the same inputs, Toki's Casa Nova result is **33.95 kW** (March 16:00): people 6.08, glass sun 15.18, outside air
+3.58 (was 0.60), glass conduction 2.84, equipment 3.03, lights 2.19, fan heat 0.86, walls/roof 0.21; latent
++2.75 kW (was −0.24). The gap to this hand check's 37.31 kW hot-day figure is now 3.36 kW, against 6.34 kW before,
+and is within what the different methods (peak-hour CLTD/CLF here, hourly radiant time series in Toki) and the
+different month (January here, March in Toki) would explain.
+
+Two inputs still decide most of what's left, and neither is on the drawings:
+- **Fresh-air rate.** Toki uses 7.5 L/s per person plus 0.3 L/s per m² (506 L/s for 60 people). At 10 L/s per person
+  plus the same area rate, 656 L/s, the outside-air load rises roughly in proportion: about +1.1 kW at Toki's peak hour.
+- **Bar and dining equipment.** Toki uses generic values (3.0 kW). Espresso machines, under-bench fridges, display
+  lighting and a pizza oven in the cooled space would each add to this; the owner has said the pizza oven was not
+  counted in the earlier figure.
+
+The earlier 70–85 kW figure stays unexplained by these inputs: reaching it needs roughly 140–210 more people,
+90–130 m² more west glass, or 33–48 kW more equipment heat in the dining room (see above). Its source and scope are
+needed to compare it.

@@ -109,3 +109,34 @@ class ACDesignInputTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HandoffContractTests(ACDesignInputTests):
+    """The documented handoff (docs/ac-design-input.md) is what a consumer builds against: every field it lists must be
+    in the payload, under the documented schema and version. Removing or renaming one needs a new version
+    (the document says so); this test is what notices."""
+
+    def documented_fields(self):
+        import re
+        from pathlib import Path
+        text = (Path(__file__).resolve().parent.parent / "docs" / "ac-design-input.md").read_text(encoding="utf-8")
+        return re.findall(r"^\| `([a-z_\[\]\.]+)` \|", text, re.M)
+
+    def test_every_documented_field_is_in_the_payload(self):
+        result = self.call()
+        self.assertEqual((result["schema"], result["version"]), ("toki.ac-design-input", 1))
+        fields = self.documented_fields()
+        self.assertIn("result_label", fields)
+        for field in fields:
+            with self.subTest(field=field):
+                top = field.split("[]")[0].split(".")[0]
+                self.assertIn(top, result)
+                if "." in field:                          # rooms[].peak etc.: on every listed room
+                    child = field.split(".", 1)[1]
+                    self.assertTrue(result[top], f"{top} is empty in the fixture; can't check {field}")
+                    for row in result[top]:
+                        self.assertIn(child, row)
+
+    def test_result_label_keeps_its_documented_shape(self):
+        label = self.call()["result_label"]
+        self.assertLessEqual({"status", "count", "open", "text", "reason"}, set(label))
