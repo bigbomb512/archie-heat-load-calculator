@@ -601,7 +601,13 @@ test("a result missing a room is labelled partial, and assumptions are listed se
   const partial = page.locator("[data-phase1-partial]");
   await expect(partial.getByRole("heading", { name: "1 of 2 cooled rooms aren't counted yet" })).toBeVisible();
   await expect(partial).toContainText("Storage: needs an area typed in");
-  await expect(page.locator("[data-result-assumptions]")).toContainText("its roof exposure is assumed");
+  const assumptions = page.locator("[data-result-assumptions] details");
+  await expect(assumptions).not.toHaveAttribute("open");
+  await expect(assumptions.locator("summary")).toHaveText("1 assumption in this result");
+  await expect(assumptions.getByText("its roof exposure is assumed", { exact: false })).toBeHidden();
+  await assumptions.locator("summary").focus();
+  await page.keyboard.press("Enter");
+  await expect(assumptions.getByText("its roof exposure is assumed", { exact: false })).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(partial).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
@@ -615,8 +621,70 @@ test("assumed values alone don't label a result partial", async ({ page }) => {
     supervisor_assumptions: [{ message: "Its ceiling height is assumed." }],
   } });
   await page.goto("/?preview=1#/job/job-1/rooms/shop");
-  await expect(page.locator("[data-result-assumptions]")).toContainText("ceiling height is assumed");
+  await expect(page.locator("[data-result-assumptions] summary")).toHaveText("1 assumption in this result");
   await expect(page.locator("[data-phase1-partial]")).toBeHidden();
+});
+
+test("assumptions summary counts multiple items while the panel starts closed", async ({ page }) => {
+  await preview(page, { phase1_report: {
+    supervisor_assumptions: Array.from({ length: 8 }, (_, index) => ({ message: `Assumption ${index + 1}` })),
+  } });
+  await page.goto("/?preview=1#/job/job-1/rooms/shop");
+  const assumptions = page.locator("[data-result-assumptions] details");
+  await expect(assumptions.locator("summary")).toHaveText("8 assumptions in this result");
+  await expect(assumptions).not.toHaveAttribute("open");
+  await assumptions.locator("summary").click();
+  await expect(assumptions.locator("li")).toHaveCount(8);
+});
+
+test("room detail stays in view beside a long list on wide screens only", async ({ page }) => {
+  const rooms = Array.from({ length: 24 }, (_, index) => ({
+    ...plan.rooms[0],
+    room_id: `room-${index}`,
+    name: `Room ${index + 1}`,
+  }));
+  await preview(page, { rooms });
+  await page.setViewportSize({ width: 1280, height: 700 });
+  await page.goto("/?preview=1#/job/job-1/rooms/room-0");
+  const detail = page.locator(".job-room-detail");
+  await expect(detail).toBeVisible();
+  await expect.poll(() => detail.evaluate((element) => getComputedStyle(element).position)).toBe("sticky");
+  const wide = await detail.evaluate((element) => ({ height: element.getBoundingClientRect().height, overflow: getComputedStyle(element).overflowY }));
+  expect(wide.height).toBeLessThanOrEqual(652);
+  expect(wide.overflow).toBe("auto");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(() => detail.evaluate((element) => getComputedStyle(element).position)).toBe("static");
+});
+
+test("each floor keeps cooled rooms visible and collapses clickable non-cooled rooms", async ({ page }) => {
+  const room = (id, name, level, state) => ({
+    ...plan.rooms[0], room_id: id, name, level, state,
+  });
+  await preview(page, { rooms: [
+    room("bed", "Bedroom", "Ground", "done"),
+    room("wardrobe", "Wardrobe", "Ground", "not_cooled"),
+    room("plant", "Plant", "Ground", "left_out"),
+    room("office", "Office", "First", "done"),
+    room("coolroom", "Coolroom", "First", "sized_separately"),
+  ] });
+  await page.goto("/?preview=1#/job/job-1/rooms/bed");
+  const floors = page.locator(".job-floor-rooms");
+  await expect(floors).toHaveCount(2);
+  await expect(floors.nth(0).getByRole("heading", { name: "Rooms on this floor" })).toBeVisible();
+  await expect(floors.nth(0).getByRole("button", { name: "Bedroom" })).toBeVisible();
+  await expect(floors.nth(1).getByRole("button", { name: "Office" })).toBeVisible();
+  const groundClosed = floors.nth(0).locator(".job-not-cooled");
+  await expect(groundClosed.locator("summary")).toHaveText("2 rooms not cooled on this floor");
+  await expect(groundClosed).not.toHaveAttribute("open");
+  await expect(groundClosed.getByRole("button", { name: "Wardrobe" })).toBeHidden();
+  await groundClosed.locator("summary").focus();
+  await page.keyboard.press("Enter");
+  await expect(groundClosed.getByRole("button", { name: "Wardrobe" })).toBeVisible();
+  await groundClosed.getByRole("button", { name: "Wardrobe" }).click();
+  await expect(page.locator(".job-room-detail h2")).toHaveText("Wardrobe");
+  const firstClosed = page.locator(".job-floor-rooms").nth(1).locator(".job-not-cooled");
+  await expect(firstClosed.locator("summary")).toHaveText("1 room not cooled on this floor");
+  await expect(firstClosed).not.toHaveAttribute("open");
 });
 
 test("a failed envelope step is named with its reason, and Try again resumes it", async ({ page }) => {

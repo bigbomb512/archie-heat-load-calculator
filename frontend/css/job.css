@@ -593,6 +593,42 @@ body.job-preview {
 .job-room-detail {
   flex: 1 1 440px !important;
 }
+@media (min-width: 1024px) {
+  .job-rooms-layout > .job-room-detail {
+    position: sticky;
+    top: 24px;
+    max-height: calc(100vh - 48px);
+    overflow-y: auto;
+  }
+}
+.job-collapsible-panel summary {
+  cursor: pointer;
+}
+.job-collapsible-panel summary h2 {
+  display: inline;
+  margin: 0;
+}
+.job-collapsible-panel summary:focus-visible {
+  outline: 2px solid var(--action);
+  outline-offset: 2px;
+}
+.job-floor-rooms + .job-floor-rooms {
+  margin-top: 28px;
+}
+.job-not-cooled {
+  margin-top: 12px;
+}
+.job-not-cooled > summary {
+  cursor: pointer;
+  min-height: 44px;
+  padding: 12px 0;
+  color: var(--action);
+  font-weight: 700;
+}
+.job-not-cooled > summary:focus-visible {
+  outline: 2px solid var(--action);
+  outline-offset: 2px;
+}
 .job-section-title {
   display: flex;
   justify-content: space-between;
