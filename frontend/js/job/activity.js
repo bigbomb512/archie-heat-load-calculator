@@ -67,7 +67,7 @@ export function activityMarkup(data, projectId = "") {
     "Calculating from the saved, checked room inputs.", true));
   const completed = skills.filter((row) => answered(row.status)).length;
   const outOfDate = skills.filter((row) => row.status === "stale").length;
-  const skillsSummary = `Skill tasks: ${completed} of ${skills.length} finished`
+  const skillsSummary = `AI checks: ${completed} of ${skills.length} finished`
     + (outOfDate ? ` · ${outOfDate === completed ? "earlier answers" : `${outOfDate} earlier ${outOfDate === 1 ? "answer" : "answers"}`} kept, out of date` : "");
   const recent = data.supervisor?.recent_activity || [];
   return `<h3>AI activity</h3>
@@ -76,7 +76,7 @@ export function activityMarkup(data, projectId = "") {
     <ul class="job-activity-list" aria-label="Current AI activity">${active.join("") || '<li class="job-caption">No active tasks reported. See the progress steps for completion or blockers.</li>'}</ul>
     ${skills.length ? `<details data-activity-details="skills" ${open.has("skills") ? "open" : ""}><summary>${escapeHtml(skillsSummary)}</summary>
       <ul class="job-activity-list">${skills.map((row) => skillRow(row, running(data.envelope), skills)).join("")}</ul></details>` : ""}
-    ${recent.length ? `<details data-activity-details="recent" ${open.has("recent") ? "open" : ""}><summary>Recent specialist answers</summary>
+    ${recent.length ? `<details data-activity-details="recent" ${open.has("recent") ? "open" : ""}><summary>Latest AI answers</summary>
       <ul class="job-activity-list">${recent.map((row) => taskRow("Specialist", row.label, textState(row.status), row.cycle ? `Investigation cycle ${row.cycle}.` : "")).join("")}</ul></details>` : ""}`;
 }
 

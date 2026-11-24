@@ -219,7 +219,7 @@ function renderPage(plan, page, options) {
         }
         marker = outlineMarker(outline.label_point || centreOf(outline.points), row.number, scaleWidth);
       }
-      return `<g class="job-plan-room"><polygon class="${classes}" points="${points}"${fill ? ` fill="${fill}" style="fill:${fill}"` : ""} data-room-id="${escapeHtml(outline.room_id)}" aria-label="${escapeHtml(name)}${level}"/><title>${escapeHtml(name)}${level}${detail ? ` · ${escapeHtml(detail)}` : ""}</title>${size ? outlineLabel(outline.label_point, name, detail, size) : marker}</g>`;
+      return `<g class="job-plan-room"><polygon class="${classes}" points="${points}"${fill ? ` fill="${fill}" style="fill:${fill}"` : ""} data-room-id="${escapeHtml(outline.room_id)}" role="img" aria-label="${escapeHtml(name)}${level}"/><title>${escapeHtml(name)}${level}${detail ? ` · ${escapeHtml(detail)}` : ""}</title>${size ? outlineLabel(outline.label_point, name, detail, size) : marker}</g>`;
     })
     .join("");
   const count = seen.size;

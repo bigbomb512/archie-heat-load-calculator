@@ -1,4 +1,4 @@
-import { getJson, sendJson, escapeHtml, fmt } from "./api.js";
+import { getJson, sendJson, escapeHtml, fmt, labelBadge, plainNote } from "./api.js";
 import { planSvg } from "./plan.js";
 
 const query = (projectId) => `?project_id=${encodeURIComponent(projectId)}`;
@@ -370,7 +370,7 @@ function assumptionsList(items, projectId) {
         text =
           "Some drawing details still need review; they are not included in this number.";
       }
-      text = text
+      text = plainNote(text)
         .replace(/\bfindings?\b/gi, "items")
         .replace(/\bskills?\b/gi, "review steps")
         .replace(/needs a supported area source/gi, "needs its area entered");
@@ -406,7 +406,7 @@ function yearSection(seasonal, stale) {
   const head = Array.from(
     { length: 24 },
     (_value, hour) =>
-      `<th scope="col" class="job-year-hour">${hour % 3 === 0 ? String(hour).padStart(2, "0") : ""}</th>`,
+      `<th scope="col" class="job-year-hour">${hour % 3 === 0 ? String(hour).padStart(2, "0") : `<span class="job-sr-only">${String(hour).padStart(2, "0")}:00</span>`}</th>`,
   ).join("");
   const rows = months
     .map((row) => {
@@ -490,11 +490,11 @@ function resultsContent({ plan, report, gaps, resultLabel, projectId, stale, can
     ? `The previous result covered ${peaks.length} rooms${peak.display_hour == null ? "" : ` at hour ${escapeHtml(peak.display_hour)}`}. Room-by-room loads are out of date.${allowanceText}`
     : `${rooms.length} rooms counted${peak.display_hour == null ? "" : ` at the peak hour ${escapeHtml(peak.display_hour)}`}.${allowanceText} Refrigeration is sized separately.`;
   return `${outOfDate}
-    ${report.equipment_coverage && !report.equipment_coverage.coverage_complete ? `<section class="job-panel" role="status"><h2>Some equipment isn't counted</h2><p>${(() => { const count = Number(report.equipment_coverage.summary?.no_value || 0) + Number(report.equipment_coverage.summary?.no_room || 0); return count === 1 ? "1 item has" : `${count} items have`; })()} no value yet or no room. Those rooms use their typical equipment allowance instead.</p><a href="#/job/${encodeURIComponent(projectId)}/operating">See the equipment</a></section>` : ""}
     <section class="job-panel job-result-summary ${stale ? "stale" : ""}">
       <div><h1>${resultLabel.status === "design" ? "Design" : "Preliminary"} cooling load for the ${plan.status?.dwelling ? "house" : "tenancy"}</h1>
         <div class="job-result-total-line"><strong class="job-total">${fmt(total)} <span>kW</span></strong>
-          <span class="job-answer-badge ${resultLabel.status === "design" ? "ok" : "warn"}" data-result-label title="${escapeHtml(resultLabel.reason || "")}">${escapeHtml(resultLabel.text || "Preliminary")}</span></div>
+          ${labelBadge(resultLabel.text ? resultLabel : { status: "preliminary", text: "Preliminary" })}</div>
+        ${resultLabel.status === "preliminary" && resultLabel.text ? `<p class="job-label-why" data-label-why>${escapeHtml(resultLabel.text)}. Answer the open questions below to make it a design figure.</p>` : ""}
         <p>${statusSentence}</p>
         ${stale ? "" : `<p class="job-range-line" role="status" data-range-line>Working out how far this could move with what the drawings don’t show…</p>`}
         ${householdLine}
@@ -502,14 +502,15 @@ function resultsContent({ plan, report, gaps, resultLabel, projectId, stale, can
           ? `<p class="job-muted">Update the final load before creating the report.</p>`
           : `<div class="job-report" data-report>
               <button class="job-button" type="button" data-create-report>Create the report</button>
-              <button class="job-button secondary" type="button" data-create-heating-report disabled aria-describedby="job-heating-report-note">Create the heating report</button>
+              <button class="job-button secondary" type="button" data-create-heating-report disabled hidden aria-describedby="job-heating-report-note">Create the heating report</button>
               <a class="job-button secondary" href="#/job/${encodeURIComponent(projectId)}/fix">Fix a room or window</a>
               ${reportUrl ? `<a class="job-link-button" href="${escapeHtml(reportUrl)}" download>Download the last report</a>` : ""}
               <p class="job-note" role="status" data-report-status></p>
-              <p class="job-caption" id="job-heating-report-note" data-heating-report-note>Checking the heating report…</p>
+              <p class="job-caption" id="job-heating-report-note" data-heating-report-note hidden></p>
             </div>`}
       </div>
     </section>
+    ${report.equipment_coverage && !report.equipment_coverage.coverage_complete ? `<section class="job-panel" role="status"><h2>Some equipment isn't counted</h2><p>${(() => { const count = Number(report.equipment_coverage.summary?.no_value || 0) + Number(report.equipment_coverage.summary?.no_room || 0); return count === 1 ? "1 item has" : `${count} items have`; })()} no value yet or no room. Those rooms use their typical equipment allowance instead.</p><a href="#/job/${encodeURIComponent(projectId)}/operating">See the equipment</a></section>` : ""}
     <div class="job-columns job-results-columns">
       <section class="job-panel ${stale ? "stale" : ""}" aria-label="Load by room on the plan">
         <h2>Load per square metre</h2>
@@ -734,8 +735,13 @@ async function loadExtraPanels(projectId, planRooms) {
   if (heatingBody) heatingBody.innerHTML = heatingContent(heating);
   if (heatingButton) {
     const ready = heating?.status === "current";
+    // Offered only once a heating report exists; the heating panel below says why there isn't one.
     heatingButton.disabled = !ready;
-    if (heatingNote) heatingNote.textContent = ready ? (heating.draft ? "The heating report will be marked draft." : "") : `Heating report not available: ${heating?.reason || "not calculated"}`;
+    heatingButton.hidden = !ready;
+    if (heatingNote) {
+      heatingNote.textContent = ready && heating.draft ? "The heating report will be marked draft." : "";
+      heatingNote.hidden = !heatingNote.textContent;
+    }
   }
 }
 

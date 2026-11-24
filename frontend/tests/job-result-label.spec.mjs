@@ -24,17 +24,21 @@ async function open(page, label) {
   await page.goto(`/?preview=1#/job/${projectId}/results`);
 }
 
-for (const label of [
-  { status: "preliminary", text: "Preliminary (2 answers that could change the unit still open)", reason: "The range isn't worked out yet." },
-  { status: "design", text: "Design", reason: "One input is still assumed." },
-  { status: "preliminary", text: "Preliminary (out of date)", reason: "Update the load." },
+// The badge is short ("Design", "Preliminary · 2 open"); the full sentence is its tooltip and, for a preliminary
+// result, the line under the Results headline.
+for (const [label, badge] of [
+  [{ status: "preliminary", count: 2, text: "Preliminary (2 answers that could change the unit still open)", reason: "The range isn't worked out yet." }, "Preliminary · 2 open"],
+  [{ status: "design", count: 0, text: "Design", reason: "One input is still assumed." }, "Design"],
+  [{ status: "preliminary", count: 0, text: "Preliminary (out of date)", reason: "Update the load." }, "Preliminary"],
 ]) {
   test(`shows ${label.text} beside the result and in the summary card`, async ({ page }) => {
     await open(page, label);
-    await expect(page.locator(".job-result-summary [data-result-label]")).toHaveText(label.text);
-    await expect(page.locator("[data-job-summary] [data-result-label]")).toHaveText(label.text);
-    await expect(page.locator(".job-result-summary [data-result-label]")).toHaveAttribute("title", label.reason);
+    await expect(page.locator(".job-result-summary [data-result-label]")).toHaveText(badge);
+    await expect(page.locator("[data-job-summary] [data-result-label]")).toHaveText(badge);
+    await expect(page.locator(".job-result-summary [data-result-label]")).toHaveAttribute("title", `${label.text} — ${label.reason}`);
     await expect(page.locator(".job-result-summary h1")).toContainText(label.status === "design" ? "Design cooling load" : "Preliminary cooling load");
+    if (label.status === "preliminary") await expect(page.locator("[data-label-why]")).toContainText(label.text);
+    else await expect(page.locator("[data-label-why]")).toHaveCount(0);
   });
 }
 

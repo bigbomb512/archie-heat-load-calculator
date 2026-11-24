@@ -375,7 +375,7 @@ function facts(status, plan) {
       : "Not identified yet";
   return `<dl class="job-facts">
     <div><dt>Site</dt><dd>${escapeHtml(site)}</dd></div>
-    <div><dt>Weather</dt><dd>${escapeHtml(weather || "Not identified yet")}</dd><small class="job-caption">${escapeHtml(weatherWhy)}</small></div>
+    <div><dt>Weather</dt><dd>${escapeHtml(weather || "Not identified yet")}<small class="job-caption">${escapeHtml(weatherWhy)}</small></dd></div>
     <div><dt>Rooms named on the drawings</dt><dd>${escapeHtml(named.length ? named.join(", ") : "Still reading the drawing set")}</dd></div>
     <div><dt>${escapeHtml(aboveTerm)}</dt><dd>${escapeHtml(above)}</dd></div>
   </dl>`;

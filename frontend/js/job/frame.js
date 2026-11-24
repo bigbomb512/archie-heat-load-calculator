@@ -11,7 +11,7 @@ const STEPS = [
 const HOUSE_TABS = [
   ["rooms", "Rooms"],
   ["operating", "People and equipment"],
-  ["fix", "Windows and names"],
+  ["fix", "Fix rooms and windows"],
 ];
 const HOUSE_VIEWS = new Set(["house", "rooms", "operating", "fix", "phase1", "phase2"]);
 export function renderFrame({
@@ -37,7 +37,7 @@ export function renderFrame({
     params.has("engineer") || params.has("operator")
       ? `<details class="job-tools-menu"><summary aria-label="More tools">⋯</summary><div><a href="/?engineer=1#/job/${encodeURIComponent(projectId)}/drawings">Detailed tools</a><a href="/?operator=1#/job/${encodeURIComponent(projectId)}/drawings">Manual AI task review</a></div></details>`
       : "";
-  const header = `<header class="job-header"><div class="job-head-inner">
+  const header = `<a class="job-skip" href="#main">Skip to the step</a><header class="job-header"><div class="job-head-inner">
     <a href="#/jobs" aria-label="Jobs"><img class="job-wordmark" src="/frontend/assets/images/toki-wordmark-exact.png" alt="Toki"></a>
     <a href="#/jobs">Jobs</a>
     <div class="job-name"><strong>${escapeHtml(status?.name || project?.display_name || project?.name || "Job")}</strong><span>${escapeHtml(project?.site || project?.address || status?.address || status?.found_site || "Site not added yet")}</span></div>
@@ -70,7 +70,11 @@ export function renderFrame({
           : `<a class="job-subtab" href="#/job/${encodeURIComponent(projectId)}/${key}"${key === view ? ' aria-current="page"' : ""}>${label}</a>`;
       }).join("")}</nav>`
     : "";
-  return `${header}<main class="job-main">${summarySlot}${tabs}${statusBlock}${content}</main>`;
+  // Every step has a page heading for screen readers and the browser's outline; a screen with its own <h1> keeps it.
+  const stepTitle = active === "house" ? `Check the house: ${(HOUSE_TABS.find(([key]) => key === view) || [null, "Rooms"])[1]}`
+    : (STEPS.find(([key]) => key === active) || [null, "Job"])[1];
+  const heading = /<h1[\s>]/.test(content) ? "" : `<h1 class="job-sr-only">${escapeHtml(stepTitle)}</h1>`;
+  return `${header}<main class="job-main" id="main" tabindex="-1" data-step="${escapeHtml(active)}">${heading}${summarySlot}${tabs}${statusBlock}${content}</main>`;
 }
 export function bindFrameAction(projectId, step, handler) {
   const button = document.querySelector("#jobPrimaryAction");

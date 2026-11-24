@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-// The four steps: Read the drawings → Check the house (Rooms / People and equipment / Windows and names tabs)
+// The four steps: Read the drawings → Check the house (Rooms / People and equipment / Fix rooms and windows tabs)
 // → Load and report → Design the system (js/job/frame.js, js/job/system.js).
 const projectId = "steps-job";
 const status = { id: projectId, name: "Steps job", stage: "results", drawings_confirmed: true, phase1_complete: true,
@@ -55,11 +55,11 @@ test("Check the house holds the rooms, people-and-equipment and windows tabs; ol
   await mock(page);
   await page.goto(`/?preview=1#/job/${projectId}/house`);
   const tabs = page.locator(".job-subtabs .job-subtab");
-  await expect(tabs).toHaveText(["Rooms", "People and equipment", "Windows and names"]);
+  await expect(tabs).toHaveText(["Rooms", "People and equipment", "Fix rooms and windows"]);
   await expect(page.locator('.job-subtab[aria-current="page"]')).toHaveText("Rooms");
   await expect(tabs.nth(1)).toHaveAttribute("href", `#/job/${projectId}/operating`);
   await page.goto(`/?preview=1#/job/${projectId}/fix`);
-  await expect(page.locator('.job-subtab[aria-current="page"]')).toHaveText("Windows and names");
+  await expect(page.locator('.job-subtab[aria-current="page"]')).toHaveText("Fix rooms and windows");
   await expect(page.locator('.job-step[aria-current="step"]')).toContainText("Check the house");
 });
 

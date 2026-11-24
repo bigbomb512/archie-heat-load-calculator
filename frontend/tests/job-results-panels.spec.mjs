@@ -107,8 +107,9 @@ test("unavailable heating shows the gate and keeps report creation disabled", as
   await expect(panel).toContainText(unavailableHeating.next_step);
   await expect(panel).toContainText(unavailableHeating.gate.message);
   await expect(panel).not.toContainText(/\b0(?:\.0)? kW\b/);
-  await expect(page.locator("[data-create-heating-report]")).toBeDisabled();
-  await expect(page.locator("[data-heating-report-note]")).toContainText(unavailableHeating.reason);
+  // Offered only once a heating report exists; the panel above says why there isn't one.
+  await expect(page.locator("[data-create-heating-report]")).toBeHidden();
+  await expect(page.locator("[data-heating-report-note]")).toBeHidden();
 });
 
 test("stale heating lists its reasons", async ({ page }) => {
@@ -118,7 +119,7 @@ test("stale heating lists its reasons", async ({ page }) => {
   await expect(panel.locator("li")).toHaveCount(2);
   await expect(panel).toContainText("A room setpoint changed.");
   await expect(panel).toContainText("The outdoor temperature changed.");
-  await expect(page.locator("[data-create-heating-report]")).toBeDisabled();
+  await expect(page.locator("[data-create-heating-report]")).toBeHidden();
 });
 
 test("current draft heating renders components and creates a heating report", async ({ page }) => {

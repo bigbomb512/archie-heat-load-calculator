@@ -1692,7 +1692,7 @@ test("live activity shows parallel specialists, skill results and retains disclo
   await expect(activity.getByText("Check Shop glass on page 26")).toBeVisible();
   await expect(activity.getByText("Check Kitchen roof on page 22")).toBeVisible();
   await expect(activity).not.toContainText("People loads");
-  await activity.getByText("Skill tasks: 1 of 3 finished").click();
+  await activity.getByText("AI checks: 1 of 3 finished").click();
   await expect(activity).toContainText("38 records returned; 38 citations");
   await expect(activity).toContainText("Waiting for Room use");
   await page.clock.runFor(5000);
@@ -1706,7 +1706,7 @@ test("live activity shows parallel specialists, skill results and retains disclo
   await page.clock.runFor(5000);
   await expect(activity.getByText("Check Shop glass on page 26")).toHaveCount(0);
   await expect(activity.locator('[data-activity-details="skills"]')).toHaveAttribute("open", "");
-  await activity.getByText("Recent specialist answers").click();
+  await activity.getByText("Latest AI answers").click();
   await expect(activity).toContainText("Answer applied");
   await page.screenshot({ path: "test-results/live-ai-activity.png", fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
@@ -1858,5 +1858,5 @@ test("out-of-date skill answers count as finished, with the earlier answers kept
     subskills: ["sheet_identity", "revision_scope", "page_relationships", "site_clue_extraction", "address_confirmation", "room_identity_use"].map(skill),
   } }));
   await page.goto("/?preview=1#/job/job-1/drawings");
-  await expect(page.locator("[data-ai-activity]")).toContainText("Skill tasks: 6 of 6 finished · earlier answers kept, out of date");
+  await expect(page.locator("[data-ai-activity]")).toContainText("AI checks: 6 of 6 finished · earlier answers kept, out of date");
 });

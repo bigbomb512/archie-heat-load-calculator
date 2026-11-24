@@ -67,3 +67,23 @@ export function navigate(projectId, step = "drawings", roomId = "") {
     window.dispatchEvent(new HashChangeEvent("hashchange"));
   else location.hash = path;
 }
+
+// The result label as a short badge ("Design", "Preliminary · 4 open"); the full sentence is its tooltip and is shown
+// in full where there is room (the Results headline).
+export function labelBadge(label) {
+  if (!label?.text || label.status === "not_calculated") return "";
+  const design = label.status === "design";
+  const short = design ? "Design" : `Preliminary${Number(label.count) > 0 ? ` · ${Number(label.count)} open` : ""}`;
+  return `<span class="job-answer-badge ${design ? "ok" : "warn"}" data-result-label title="${escapeHtml(label.text)}${label.reason ? ` — ${escapeHtml(label.reason)}` : ""}">${escapeHtml(short)}</span>`;
+}
+
+// Assumption text from the server carries dated references for the audit trail ("(user decision 2026-10-30)",
+// "(Phase 1 rule, 2026-10-06)", "; review 2026-11-17"). On screen they are noise: drop them, keep the sentence.
+export function plainNote(text) {
+  return String(text ?? "")
+    .replace(/\s*\((?:[^()]*?\b(?:user decision|decision|review|rule|reviewed)\b[^()]*?)?\d{4}-\d{2}-\d{2}[^()]*\)/gi, "")
+    .replace(/[;,]?\s*\b(?:user decision|review)\s+\d{4}-\d{2}-\d{2}\b/gi, "")
+    .replace(/\s+([:;,.])/g, "$1")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}

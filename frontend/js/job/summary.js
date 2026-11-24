@@ -1,7 +1,7 @@
 // The answer card and the job's one to-do list, shown at the top of every job step.
 // Reads /api/job-summary (backend/job_summary_service.py). Numbers come only from the saved result: a load that
 // hasn't been calculated stays "Not calculated" with the reason.
-import { getJson, sendJson, escapeHtml, fmt } from "./api.js";
+import { labelBadge, getJson, sendJson, escapeHtml, fmt } from "./api.js";
 
 const query = (projectId) => `?project_id=${encodeURIComponent(projectId)}`;
 const SHOWN = 4;
@@ -64,7 +64,7 @@ function answerCard(summary, projectId) {
     <div class="job-answer-figure">
       <span class="job-answer-label">${escapeHtml(answer.headline || "Cooling load")}</span>
       ${figure}
-      ${hasTotal && summary.result_label?.text && summary.result_label.status !== "not_calculated" ? `<span class="job-answer-badge ${summary.result_label.status === "design" ? "ok" : "warn"}" data-result-label title="${escapeHtml(summary.result_label.reason || "")}">${escapeHtml(summary.result_label.text)}</span>` : ""}
+      ${hasTotal ? labelBadge(summary.result_label) : ""}
       ${facts.length ? `<span class="job-answer-facts">${facts.join(" · ")}</span>` : ""}
     </div>
     <div class="job-answer-status">

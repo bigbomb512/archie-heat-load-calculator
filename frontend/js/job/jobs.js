@@ -42,24 +42,46 @@ const jobRow = (project) => {
 };
 const groupedRows = (projects) => projects.map((project) => {
   const earlier = project.earlier_runs || [];
-  return jobRow(project) + (earlier.length ? `<tr class="job-earlier-row"><td colspan="6"><details><summary>${earlier.length} earlier ${earlier.length === 1 ? "run" : "runs"}</summary><table class="job-jobs-table job-earlier-table"><thead><tr><th>Job</th><th>Where it is</th><th>Cooling load</th><th>Needs you</th><th>Uploaded</th><th>Actions</th></tr></thead><tbody>${earlier.map(jobRow).join("")}</tbody></table></details></td></tr>` : "");
+  return jobRow(project) + (earlier.length ? `<tr class="job-earlier-row"><td colspan="6"><details><summary>${earlier.length} earlier ${earlier.length === 1 ? "run" : "runs"}</summary><table class="job-jobs-table job-earlier-table"><thead><tr><th>Job</th><th>Where it is</th><th>Cooling load</th><th><abbr title="Things only you can answer before the load can be finished">Needs you</abbr></th><th>Uploaded</th><th>Actions</th></tr></thead><tbody>${earlier.map(jobRow).join("")}</tbody></table></details></td></tr>` : "");
 }).join("");
 const allJobs = (groups) => groups.flatMap((group) => [group, ...(group.earlier_runs || [])]);
 const jobsMarkup = (projects) => {
   const active = projects.filter((project) => !project.archived);
   const archived = projects.filter((project) => project.archived);
   const count = allJobs(archived).length;
-  const table = (groups) => `<div class="job-panel job-table-wrap"><table class="job-jobs-table"><thead><tr><th>Job</th><th>Where it is</th><th>Cooling load</th><th>Needs you</th><th>Uploaded</th><th>Actions</th></tr></thead><tbody>${groupedRows(groups)}</tbody></table></div>`;
+  const table = (groups) => `<div class="job-panel job-table-wrap"><table class="job-jobs-table"><thead><tr><th>Job</th><th>Where it is</th><th>Cooling load</th><th><abbr title="Things only you can answer before the load can be finished">Needs you</abbr></th><th>Uploaded</th><th>Actions</th></tr></thead><tbody>${groupedRows(groups)}</tbody></table></div>`;
   return `${active.length ? table(active) : `<section class="job-panel"><h2>No active jobs</h2><p>Upload the architect’s PDF to start.</p><a class="job-button" href="#/new-job">New job</a></section>`}${count ? `<details class="job-archived"><summary>Show archived (${count})</summary>${table(archived)}</details>` : ""}`;
 };
 export async function renderJobs() {
   const projects = await getJson("/api/projects");
-  const body = `${listHeader()}<main class="job-main job-list-inner"><div class="job-status-row"><h1>Jobs</h1><div class="job-actions"><label class="job-button secondary" for="job-import">Import a job</label><input id="job-import" type="file" accept=".zip,application/zip" hidden><a class="job-button" href="#/new-job">New job</a></div></div><p class="job-note" role="status" data-jobs-status></p><div data-jobs-list>${jobsMarkup(projects)}</div></main>`;
+  const body = `${listHeader()}<main class="job-main job-list-inner"><div class="job-status-row"><h1>Jobs</h1><div class="job-actions"><label class="job-button secondary" for="job-import">Import a job</label><input id="job-import" type="file" accept=".zip,application/zip" hidden><a class="job-button" href="#/new-job">New job</a></div></div><p class="job-note" role="status" data-jobs-status></p><div class="job-filter"><label for="job-filter-input">Find a job</label><input id="job-filter-input" type="search" data-job-filter placeholder="Address, name or drawing file…" autocomplete="off" spellcheck="false"><span class="job-caption" role="status" data-job-filter-count></span></div><div data-jobs-list>${jobsMarkup(projects)}</div></main>`;
   return { content: body, bind: bindJobFiles };
 }
 
 // A job saved to one file (drawings, readings, results) to move it to another computer, and loaded back from one.
+// Narrows the list as you type: a job (with its earlier runs) stays when its name, address or file name matches.
+function bindJobFilter() {
+  const input = document.querySelector("[data-job-filter]");
+  const count = document.querySelector("[data-job-filter-count]");
+  const apply = () => {
+    const words = input.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    let shown = 0;
+    document.querySelectorAll(".job-jobs-table:not(.job-earlier-table) > tbody > tr[data-job-id]").forEach((row) => {
+      const earlier = row.nextElementSibling?.classList.contains("job-earlier-row") ? row.nextElementSibling : null;
+      const text = `${row.textContent} ${earlier?.textContent || ""}`.toLowerCase();
+      const match = words.every((word) => text.includes(word));
+      row.hidden = !match;
+      if (earlier) earlier.hidden = !match;
+      shown += match ? 1 : 0;
+    });
+    count.textContent = words.length ? (shown ? `${shown} job${shown === 1 ? "" : "s"} shown` : "No job matches. Try part of the address or the file name.") : "";
+  };
+  input?.addEventListener("input", apply);
+  return apply;
+}
+
 function bindJobFiles() {
+  const refilter = bindJobFilter();
   const status = document.querySelector("[data-jobs-status]");
   document.querySelector("[data-jobs-list]")?.addEventListener("click", async (event) => {
     const archiveButton = event.target.closest("[data-archive-job]");
@@ -68,6 +90,7 @@ function bindJobFiles() {
       try {
         await sendJson("/api/project-archive", { project_id: archiveButton.dataset.archiveJob, archived: archiveButton.dataset.archived !== "true" });
         document.querySelector("[data-jobs-list]").innerHTML = jobsMarkup(await getJson("/api/projects"));
+        refilter?.();
         status.textContent = "Job list updated.";
       } catch (error) {
         status.textContent = `The job couldn’t be updated: ${error.message}`;

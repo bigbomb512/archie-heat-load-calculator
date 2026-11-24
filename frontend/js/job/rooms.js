@@ -1,4 +1,4 @@
-import { getJson, sendJson, escapeHtml, fmt, navigate } from "./api.js";
+import { getJson, sendJson, escapeHtml, fmt, navigate, plainNote } from "./api.js";
 import { joinPanel, bindJoins } from "./joins.js";
 import { planSvg, lineLegend } from "./plan.js";
 
@@ -286,7 +286,7 @@ function roomDetails(plan, room, status, uses, editor = {}) {
     ? `<ul class="job-assumptions">${assumptions
         .map(
           (item) =>
-            `<li>${escapeHtml(item.reason || item.component || "Assumption recorded")} <button class="job-link-button" data-edit-envelope>Change</button></li>`,
+            `<li>${escapeHtml(plainNote(item.reason || item.component || "Assumption recorded"))} <button class="job-link-button" data-edit-envelope>Change</button></li>`,
         )
         .join("")}</ul>`
     : `<p class="job-muted">No assumptions are recorded for this room’s building load.</p>`;
@@ -296,7 +296,7 @@ function roomDetails(plan, room, status, uses, editor = {}) {
   const useFactors = factors.length ? `<details><summary>Why this use was selected</summary><ul class="job-assumptions">${factors.map((factor) => `<li>${escapeHtml(factor.reason)} (${Number(factor.weight) || 0} points)</li>`).join("")}</ul></details>` : "";
   return `<section class="job-panel job-room-detail" aria-labelledby="room-detail-title">
     <h2 class="job-room-title" id="room-detail-title">${escapeHtml(room.display_name || room.name)}</h2>
-    <p class="job-room-use">${escapeHtml(room.use?.taxonomy_label || (room.kind === "refrigeration" ? "Refrigeration" : "Comfort-HVAC room"))}</p>
+    <p class="job-room-use">${escapeHtml(room.use?.taxonomy_label || (room.kind === "refrigeration" ? "Refrigeration" : "Cooled room"))}</p>
     ${useReason}${useFactors}${useEditor}
     ${room.occupancy?.value != null ? `<p class="job-caption" data-room-occupancy><strong>Design occupants (operating loads): ${fmt(room.occupancy.value, 0)}</strong><br>${escapeHtml(room.occupancy.rationale || "Saved occupancy; source not recorded.")}</p>` : ""}
     <dl class="job-key-facts">
@@ -376,7 +376,7 @@ function renderLayout(plan, status, roomId, uses, projectId, editor = {}) {
     ? `<section class="job-panel" data-phase1-partial><h2>${escapeHtml(coverage.partial_label || "Partial result")}</h2><p>The building load total below leaves this out.</p><ul>${(coverage.partial_reasons || []).map((text) => `<li>${escapeHtml(text)}</li>`).join("")}</ul></section>` : "";
   const assumed = (plan.phase1_report?.supervisor_assumptions || []).map((row) => row.message);
   const assumptionPanel = assumed.length
-    ? `<section class="job-panel" data-result-assumptions><h2>Assumptions in this result</h2><p>These parts use a labelled assumption or a check the drawings didn't answer.</p><ul>${assumed.map((text) => `<li>${escapeHtml(text)}</li>`).join("")}</ul></section>` : "";
+    ? `<section class="job-panel" data-result-assumptions><h2>Assumptions in this result</h2><p>These parts use a labelled assumption or a check the drawings didn't answer.</p><ul>${assumed.map((text) => `<li>${escapeHtml(plainNote(text))}</li>`).join("")}</ul></section>` : "";
   const notOnPlan = plan.rooms_not_on_plan || [];
   const notOnPlanPanel = notOnPlan.length
     ? `<section class="job-panel" data-rooms-not-on-plan><h2>Not counted as rooms</h2><ul>${notOnPlan.map((row) => `<li>${escapeHtml(row.reason)}</li>`).join("")}</ul></section>` : "";

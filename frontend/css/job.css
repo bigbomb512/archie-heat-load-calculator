@@ -19,7 +19,7 @@ body.job-preview {
   --sheet: #ffffff;
   --ink: #163b50;
   --ink-2: #4b616d;
-  --ink-3: #6b7f89;
+  --ink-3: #5f727c; /* 5.0:1 on white, 4.6:1 on the page (was #6b7f89, 4.2:1) */
   --line: #d3dce1;
   --line-soft: #e3e9ec;
   --action: #246b91;
@@ -1367,7 +1367,9 @@ body.job-preview {
 .job-operating-room > summary {
   list-style: none;
   display: grid;
-  grid-template-columns: 1.2fr 0.8fr 1fr 1fr;
+  /* the +/− marker, then name, area, building load, people and equipment */
+  grid-template-columns: 1.2em 1.2fr 0.8fr 1fr 1fr;
+  align-items: baseline;
   gap: 8px;
   padding: 14px 6px;
   cursor: pointer;
@@ -1458,10 +1460,13 @@ body.job-preview {
     min-width: 0;
   }
   .job-operating-room > summary {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1.2em 1fr 1fr;
   }
-  .job-operating-room > summary:before {
-    grid-column: 1;
+  .job-operating-room > summary b {
+    grid-column: 2 / -1;
+  }
+  .job-operating-room > summary span:first-of-type {
+    grid-column: 2;
   }
   .job-load-scale {
     gap: 5px;
@@ -2045,4 +2050,252 @@ body.job-preview {
 .job-architect-north input[type="number"] {
   max-width: 160px;
   min-height: 44px;
+}
+
+/* --- 2026-11-24 usability pass (ux-heuristics + web interface guidelines) --- */
+.job-skip {
+  position: absolute;
+  left: 12px;
+  top: -48px;
+  z-index: 20;
+  padding: 10px 14px;
+  border-radius: 4px;
+  background: var(--action);
+  color: #fff;
+  text-decoration: none;
+}
+.job-skip:focus-visible {
+  top: 12px;
+}
+.job-main:focus {
+  outline: none; /* reached by the skip link; the content, not the box, is what's focused */
+}
+.job-main[data-loading="screen"] > :not(.job-loading):not(.job-summary):not(.job-subtabs) {
+  opacity: 0.55;
+  transition: opacity 120ms ease;
+}
+.job-loading p {
+  margin: 0 0 14px;
+  color: var(--ink-2);
+}
+.job-skeleton {
+  display: grid;
+  gap: 10px;
+}
+.job-skeleton i {
+  display: block;
+  height: 14px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--line-soft) 0%, var(--sheet) 50%, var(--line-soft) 100%);
+  background-size: 200% 100%;
+  animation: job-shimmer 1.4s ease-in-out infinite;
+}
+.job-skeleton i:nth-child(1) { width: 60%; }
+.job-skeleton i:nth-child(2) { width: 85%; }
+.job-skeleton i:nth-child(3) { width: 40%; }
+@keyframes job-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .job-skeleton i { animation: none; }
+  .job-main[data-loading="screen"] > * { transition: none; }
+}
+/* The Fix screen's save bar sticks to the bottom: a field reached by Tab scrolls clear of it. */
+.job-fix-table :is(input, select, button) {
+  scroll-margin-bottom: 96px;
+}
+.job-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 0 0 16px;
+}
+.job-filter label {
+  font-weight: 600;
+}
+.job-filter input {
+  flex: 1 1 280px;
+  max-width: 480px;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--sheet);
+  color: var(--ink);
+  font: inherit;
+}
+.job-jobs-table abbr {
+  text-decoration: none;
+  border-bottom: 1px dotted currentColor;
+  cursor: help;
+}
+.job-label-why {
+  margin: 6px 0 0;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+/* On Results the headline shows the load: the summary card above keeps its status and to-do list only. */
+.job-main[data-step="results"] .job-answer-figure {
+  display: none;
+}
+.job-preview :is(h1, h2, h3) {
+  text-wrap: balance;
+}
+
+/* --- 2026-11-24 visual system (frontend-design): a drawing sheet's vocabulary ---------------------------------
+   One bold element: the Results answer is set as a title block (the ruled box on every drawing sheet), with the load
+   large and the facts in a ruled column. Everything else is quieter than before: detail sections are plain sheets
+   without outlines, separated by space, with smaller headings. Type: Alte Haas Grotesk only; scale 13/15/18/24/64. */
+body.job-preview {
+  --rule: #163b50;      /* the title block's line: the ink colour, as drawn */
+  --space-section: 28px;
+}
+.job-main {
+  gap: var(--space-section);
+}
+.job-panel {
+  border: 0;
+  border-radius: 2px;
+  padding: 24px 28px;
+}
+.job-panel h1,
+.job-panel h2 {
+  font-size: 18px;
+  line-height: 1.25;
+  margin: 0 0 14px;
+  letter-spacing: -0.005em;
+}
+.job-panel h3 {
+  font-size: 15px;
+  margin: 18px 0 8px;
+}
+.job-panel p,
+.job-panel li {
+  max-width: 78ch;
+}
+.job-status {
+  font-size: 16px;
+  color: var(--ink-2);
+}
+
+/* The answer: a title block. */
+.job-result-summary {
+  display: block;
+  text-align: left;
+  padding: 0;
+  border: 2px solid var(--rule);
+  border-radius: 0;
+}
+.job-result-summary > div {
+  max-width: none;
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(280px, 1.4fr);
+  grid-template-areas:
+    "title  facts"
+    "total  facts"
+    "why    facts"
+    "report report";
+  column-gap: 0;
+}
+.job-result-summary h1 {
+  grid-area: title;
+  font-size: 15px;
+  font-weight: 400;
+  color: var(--ink-2);
+  padding: 18px 24px 0;
+}
+.job-result-summary .job-result-total-line {
+  grid-area: total;
+  justify-content: flex-start;
+  padding: 4px 24px 0;
+  gap: 12px;
+}
+.job-result-summary .job-total {
+  font-size: 64px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin: 0;
+}
+.job-result-summary .job-total span {
+  font-size: 22px;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+.job-result-summary .job-label-why {
+  grid-area: why;
+  padding: 6px 24px 18px;
+  margin: 0;
+  max-width: 46ch;
+}
+.job-result-summary > div > p:not(.job-label-why):not(.job-range-line),
+.job-result-summary .job-range-line {
+  grid-column: facts;
+  margin: 0;
+  padding: 12px 24px;
+  border-left: 1px solid var(--rule);
+  border-bottom: 1px solid var(--line);
+  font-size: 14px;
+}
+.job-result-summary > div > p:not(.job-label-why):first-of-type {
+  grid-row: 1;
+}
+.job-result-summary .job-report {
+  grid-area: report;
+  border-top: 2px solid var(--rule);
+  padding: 14px 24px;
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+}
+.job-result-summary .job-report .job-note,
+.job-result-summary .job-report .job-caption {
+  flex-basis: 100%;
+  margin: 0;
+}
+.job-result-summary.stale {
+  border-color: var(--hatch);
+}
+@media (max-width: 760px) {
+  .job-result-summary > div {
+    grid-template-columns: 1fr;
+    grid-template-areas: "title" "total" "why" "report";
+  }
+  .job-result-summary > div > p:not(.job-label-why):not(.job-range-line),
+  .job-result-summary .job-range-line {
+    grid-column: 1;
+    grid-row: auto;
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+  .job-result-summary .job-total {
+    font-size: 48px;
+  }
+}
+.job-preview [hidden] {
+  display: none !important;
+}
+.job-result-summary .job-report {
+  flex-direction: row;
+  justify-content: flex-start;
+  text-align: left;
+}
+.job-result-summary > div > p {
+  max-width: none;
+}
+@media (max-width: 760px) {
+  .job-result-summary .job-report {
+    grid-area: auto;
+    order: 99;
+  }
+}
+.job-facts dd .job-caption {
+  display: block;
+}
+/* Hidden hour labels stay inside the year table's scroll box (they widened the phone page). */
+.job-year-hour {
+  position: relative;
 }

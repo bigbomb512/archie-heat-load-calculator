@@ -131,7 +131,7 @@ function roomCard(room, plan, model) {
 }
 
 function roomUse(room) {
-  return room.kind === "refrigeration" ? "Refrigeration" : "Comfort-HVAC room";
+  return room.kind === "refrigeration" ? "Refrigeration" : "Cooled room";
 }
 
 function scheduleEditor(schedule) {
