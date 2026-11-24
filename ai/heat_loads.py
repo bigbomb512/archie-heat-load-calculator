@@ -260,11 +260,16 @@ def outside_air_load(flow_lps, indoor_db_c, indoor_wb_c, outdoor_db_c, outdoor_w
         moist_air_enthalpy_kj_kg(outdoor_db_c, outdoor_ratio)
         - moist_air_enthalpy_kj_kg(indoor_db_c, indoor_ratio)
     )
+    # Outside air drier than the room takes moisture out: counted as no moisture load, not a negative one that lowers
+    # the cooling total (user decision 2026-11-24; Casa Nova's March peak was cut by its dry outdoor air). The signed
+    # value stays in the inputs for audit, as infiltration does. Sensible keeps its sign.
+    raw_latent_kw = total_kw - sensible_kw
     return contribution(
         "outside_air",
         sensible_kw,
-        total_kw - sensible_kw,
+        max(raw_latent_kw, 0.0),
         {
+            "raw_signed_latent_kw": round(raw_latent_kw, 4),
             "flow_lps": flow_lps,
             "flow_reference_basis": airflow_reference_basis,
             "flow_reference_status": "calculation_assumption_unverified" if airflow_reference_basis == "legacy_unverified" else "declared_basis_unverified",
@@ -283,7 +288,7 @@ def outside_air_load(flow_lps, indoor_db_c, indoor_wb_c, outdoor_db_c, outdoor_w
             "mass_flow_kg_s": round(mass_flow_kg_s, 6),
             **({"sensible_specific_heat": "moist air (1.006 + 1.86 W)"} if moist_air_sensible else {}),
         },
-        "outside-air mass flow × moist-air enthalpy difference; latent = total − sensible",
+        "outside-air mass flow × moist-air enthalpy difference; latent = total − sensible, not below zero (drier outside air adds no moisture load)",
     )
 
 
@@ -352,7 +357,7 @@ def infiltration_load(value, unit, indoor_db_c, indoor_wb_c, outdoor_db_c, outdo
                            indoor_wet_bulb_basis=indoor_wet_bulb_basis, outdoor_wet_bulb_basis=outdoor_wet_bulb_basis,
                            airflow_reference_basis="outdoor_design_condition")
     raw_sensible = raw["sensible_kw"]
-    raw_latent = raw["latent_kw"]
+    raw_latent = raw["inputs"].get("raw_signed_latent_kw", raw["latent_kw"])   # outside_air_load clamps its own
     return contribution(
         "infiltration",
         max(raw_sensible, 0.0),

@@ -170,12 +170,15 @@ class Arithmetic(unittest.TestCase):
                 if latent_sign < 0:
                     self.assertEqual(result['latent_kw'], 0)
 
-    def test_outside_air_has_different_existing_sign_policy(self):
+    def test_outside_air_keeps_signed_sensible_but_no_negative_moisture(self):
+        # Cool outside air still offsets sensible load; drier outside air adds no moisture load rather than a negative
+        # one (user decision 2026-11-24). The signed latent is kept for audit.
         x = inputs('cool_dry')
         result = outside_air_load(x['value'], x['indoor_db_c'], x['indoor_wb_c'],
                                   x['outdoor_db_c'], x['outdoor_wb_c'], x['pressure_kpa'])
         self.assertLess(result['sensible_kw'], 0)
-        self.assertLess(result['latent_kw'], 0)
+        self.assertEqual(result['latent_kw'], 0)
+        self.assertLess(result['inputs']['raw_signed_latent_kw'], 0)
 
     def test_invalid_units_values_and_ach_volume_raise(self):
         for value, unit, volume in ((0, 'ACH', 60), (-1, 'L/s', None),

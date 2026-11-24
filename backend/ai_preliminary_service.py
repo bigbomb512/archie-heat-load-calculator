@@ -199,7 +199,8 @@ def _file_fingerprint(path, default, use_saved=False):
 # date, and updating it assembles the model again. 2: kitchens not cooled by default; an answered wall or roof's sun
 # and thermal mass follow the answer; a house's NatHERS/BASIX certificate walls, ceiling and roof are read (2026-11-23).
 # 3: only a commercial kitchen (restaurant, shop) is left uncooled; a house's kitchen is cooled again (2026-11-23).
-MODEL_RULES_VERSION = 3
+# 4: outside air drier than the room adds no moisture load instead of a negative one (2026-11-24).
+MODEL_RULES_VERSION = 4
 
 
 def _sources(paths):

@@ -131,9 +131,12 @@ class DraftReferenceRoomTests(unittest.TestCase):
                     actual = room_hour(report, check["month"], check["hour"], name)
                     for key, (component, part) in COMPONENTS.items():
                         relative = SUITE["tolerances"]["latent_relative" if key.endswith("_l") else "component_relative"]
+                        # The reference values are the signed psychrometric result; outside air drier than the room
+                        # adds no moisture load (user decision 2026-11-24), as infiltration already did.
+                        want = max(expected[key], 0.0) if key == "outside_air_l" else expected[key]
                         with self.subTest(case=case["case_id"], month=check["month"], hour=check["hour"], room=name, component=key):
                             self.assert_close(f"{case['case_id']} {name} month {check['month']} {check['hour']:02d}:00 {key}",
-                                              expected[key], (actual.get(component) or {}).get(part, 0.0), relative)
+                                              want, (actual.get(component) or {}).get(part, 0.0), relative)
 
     def test_the_sizing_month_hour_and_total(self):
         for case in SUITE["cases"]:
