@@ -153,7 +153,8 @@ function roomTable(rooms, selected) {
   </table></div>`;
 }
 
-function floorRoomLists(rooms, selected) {
+function floorRoomLists(plan, selected, projectId) {
+  const rooms = plan.rooms || [];
   const selectedLevel = selected.level || "Floor plan";
   const byLevel = new Map();
   for (const room of rooms) {
@@ -162,16 +163,33 @@ function floorRoomLists(rooms, selected) {
     byLevel.get(level).push(room);
   }
   const levels = [selectedLevel, ...[...byLevel.keys()].filter((level) => level !== selectedLevel)];
-  return levels.map((level) => {
+  const switcher = levels.length > 1 ? `<div class="job-floor-switch"><label for="job-floor-select">Floor</label><select id="job-floor-select" data-floor-switch aria-controls="job-floor-panels">${levels.map((level) => `<option value="${escapeHtml(level)}"${level === selectedLevel ? " selected" : ""}>${escapeHtml(level)}</option>`).join("")}</select></div>` : "";
+  const panels = levels.map((level) => {
     const floorRooms = byLevel.get(level) || [];
     const cooled = floorRooms.filter((room) => !NOT_COOLED_STATES.has(room.state));
     const notCooled = floorRooms.filter((room) => NOT_COOLED_STATES.has(room.state));
-    return `<div class="job-floor-rooms">
+    const pages = (plan.pages || []).filter((page) => {
+      const outlines = (plan.outlines || []).filter((outline) => outline.page === page.page && outline.points?.length >= 3);
+      if (!outlines.length) return false;
+      const pageLevels = new Set([page.level_name].filter(Boolean));
+      outlines.forEach((outline) => {
+        if (outline.level) pageLevels.add(outline.level);
+        const match = rooms.find((room) => room.room_id === outline.room_id);
+        if (match) pageLevels.add(match.level || "Floor plan");
+      });
+      rooms.filter((room) => room.source_pages?.includes(page.page)).forEach((room) => pageLevels.add(room.level || "Floor plan"));
+      // A plan without a matching room floor remains reachable on every floor.
+      return pageLevels.has(level) || !levels.some((knownLevel) => pageLevels.has(knownLevel));
+    });
+    return `<div class="job-floor-rooms" data-floor-panel="${escapeHtml(level)}"${level === selectedLevel ? "" : " hidden"}>
+      ${planSvg({ ...plan, pages }, { selectedRoom: selected.room_id, onSelect: (id) => navigate(projectId, "rooms", id) })}
+      ${lineLegend()}
       <h3>${level === selectedLevel ? "Rooms on this floor" : `Rooms on ${escapeHtml(level)}`}</h3>
       ${cooled.length ? roomTable(cooled, selected) : ""}
       ${notCooled.length ? `<details class="job-not-cooled"><summary>${notCooled.length} ${notCooled.length === 1 ? "room" : "rooms"} not cooled on this floor</summary>${roomTable(notCooled, selected)}</details>` : ""}
     </div>`;
   }).join("");
+  return `${switcher}<div id="job-floor-panels">${panels}</div>`;
 }
 
 function areaClass(room) {
@@ -391,9 +409,7 @@ function renderLayout(plan, status, roomId, uses, projectId, editor = {}) {
     : "";
   const left = `<section class="job-panel job-room-plan" aria-labelledby="floor-title">
     <div class="job-section-title"><h2 id="floor-title">${escapeHtml(level)}</h2>${pages ? `<span>${escapeHtml(pages)}</span>` : ""}</div>
-    ${planSvg(plan, { selectedRoom: room.room_id, onSelect: (id) => navigate(projectId, "rooms", id) })}
-    ${lineLegend()}
-    ${floorRoomLists(rooms, room)}
+    ${floorRoomLists(plan, room, projectId)}
   </section>`;
   const remaining = plan.phase1_report?.supervisor_exceptions || [];
   const exceptionPanel = remaining.length
@@ -480,6 +496,10 @@ export async function renderRooms(project, projectId, roomId = "") {
 }
 
 function bindRoomActions(projectId, room, plan, status, uses) {
+  document.querySelector("[data-floor-switch]")?.addEventListener("change", (event) => {
+    const first = (plan.rooms || []).find((item) => (item.level || "Floor plan") === event.currentTarget.value);
+    if (first) navigate(projectId, "rooms", first.room_id);
+  });
   document.querySelectorAll("[data-room]").forEach((button) => {
     if (button.dataset.bound) return;
     button.dataset.bound = "1";
