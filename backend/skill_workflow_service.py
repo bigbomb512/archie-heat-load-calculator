@@ -851,12 +851,21 @@ def _subskill_records(subskill_id, project):
     ceilings = artifacts["ceiling"].get("records", [])
     gains = artifacts["internal_gains"].get("records", [])
     schedules = artifacts["internal_gains"].get("schedules", [])
-    rows, artifact_names = [], []
+    rows, artifact_names, shared = [], [], {}
     if subskill_id == "room_identity_use":
+        # The evidence that the job is a house is copied into every room's record. Sent once for the job instead of
+        # once per room: on a 48-room house the copies alone pushed this task over the prompt budget.
+        dwelling = artifacts["room_use"].get("dwelling_context") or {}
+        house_rows = [item for item in dwelling.get("evidence", []) if isinstance(item, dict)] if dwelling.get("is_dwelling") is True else []
+        house_keys = {json.dumps(item, sort_keys=True, ensure_ascii=False) for item in house_rows}
         rows = [{"room_id": row.get("room_id"), "original_label": row.get("original_label", ""), "level": row.get("level_name"),
                  "taxonomy_id": row.get("taxonomy_id"), "scope": row.get("space_scope", "unresolved"),
-                 "evidence_page_ids": _source_pages(row), "status": row.get("status"), "evidence": row.get("evidence", [])}
+                 "evidence_page_ids": _source_pages(row), "status": row.get("status"),
+                 "evidence": [item for item in row.get("evidence", [])
+                              if json.dumps(item, sort_keys=True, ensure_ascii=False) not in house_keys]}
                 for row in room_use]
+        if house_rows:
+            shared = {"house_evidence_for_every_room": house_rows}
         artifact_names = ["room_use_resolution.json"]
         key = "rooms"
     elif subskill_id == "room_boundaries_areas":
@@ -1012,7 +1021,7 @@ def _subskill_records(subskill_id, project):
         subskill = next((row for row in load_subskill_registry()["subskills"] if row["id"] == subskill_id), {})
         key = next(iter(subskill.get("proposal_fields", {})), "records")
         artifact_names = list(parent_by_subskill.get(subskill_id, ()))
-    return {key: rows if isinstance(rows, list) else []}, artifact_names
+    return {key: rows if isinstance(rows, list) else [], **shared}, artifact_names
 
 
 # Findings operators don't review: the page register built in code from the page reading (shown under "What's on each
@@ -1225,6 +1234,8 @@ def _failure_reason(row):
     remediation = row.get("remediation")
     text = " ".join(remediation) if isinstance(remediation, list) else str(remediation or "")
     detail = str(row.get("validation_detail") or "")
+    if code == "prompt_over_budget":
+        return "too_large", "the information for this step was too large to send to the AI, so it wasn't sent"
     if code == "skill_provider_usage_limit":
         return "usage_limit", "the AI account's usage limit was reached"
     if code == "skill_workflow_interrupted":
@@ -1249,7 +1260,8 @@ def _failed_steps(subskills):
     in_scope = {row["id"]: row for row in subskills if row.get("status") not in {"not_in_scope", "not_applicable"}}
     steps = []
     for row in in_scope.values():
-        if row.get("status") != "failed":
+        # A step blocked because its request was too large to send stopped as surely as a failed one.
+        if row.get("status") != "failed" and not (row.get("status") == "blocked" and row.get("error_code") == "prompt_over_budget"):
             continue
         dependents, frontier = [], [row["id"]]
         while frontier:

@@ -81,6 +81,45 @@ class FailedStepTests(unittest.TestCase):
         connection = service._failed_steps(self.subskills(cases["connection"]))[0]["reason"]
         self.assertIn("nothing was learned from the drawings", connection)
 
+    def test_a_step_blocked_because_its_request_was_too_large_is_named(self):
+        rows = self.subskills({"error_code": "prompt_over_budget"})
+        rows[1]["status"] = "blocked"
+        step = service._failed_steps(rows)[0]
+        self.assertEqual((step["id"], step["kind"]), ("ceiling_height_volume", "too_large"))
+        self.assertIn("too large to send", step["reason"])
+        # A step blocked for any other reason (waiting on an earlier step) is not reported as stopped.
+        rows = self.subskills({"error_code": ""})
+        rows[1]["status"] = "blocked"
+        self.assertEqual(service._failed_steps(rows), [])
+
+
+class RoomEvidenceSizeTests(unittest.TestCase):
+    def test_house_evidence_is_sent_once_not_with_every_room(self):
+        import json, tempfile
+        from pathlib import Path
+        house = [{"page": 2, "excerpt": "BASIX commitments " + "x" * 280, "basis": "dwelling/residential drawing term"}]
+        own = {"page": 7, "kind": "reviewed_pdf_text", "excerpt": "Cellar"}
+        records = [{"room_id": f"room-use:basement:room-{n}", "original_label": f"Room {n}", "level_name": "Basement",
+                    "status": "inferred", "evidence": [own, *house]} for n in range(40)]
+        with tempfile.TemporaryDirectory() as root:
+            Path(root, "room_use_resolution.json").write_text(json.dumps(
+                {"records": records, "dwelling_context": {"is_dwelling": True, "evidence": house}}))
+            packet, _ = service._subskill_records("room_identity_use", {"id": "p", "review_dir": root})
+        self.assertEqual(packet["house_evidence_for_every_room"], house)
+        self.assertEqual({json.dumps(row["evidence"]) for row in packet["rooms"]}, {json.dumps([own])})
+        self.assertEqual(len(packet["rooms"]), 40)
+
+    def test_a_non_house_keeps_each_rooms_evidence_and_adds_no_house_section(self):
+        import json, tempfile
+        from pathlib import Path
+        row = {"page": 3, "excerpt": "Food prep", "basis": "dwelling/residential drawing term"}
+        with tempfile.TemporaryDirectory() as root:
+            Path(root, "room_use_resolution.json").write_text(json.dumps(
+                {"records": [{"room_id": "r", "evidence": [row]}], "dwelling_context": {"is_dwelling": False, "evidence": []}}))
+            packet, _ = service._subskill_records("room_identity_use", {"id": "p", "review_dir": root})
+        self.assertNotIn("house_evidence_for_every_room", packet)
+        self.assertEqual(packet["rooms"][0]["evidence"], [row])
+
 
 if __name__ == "__main__":
     unittest.main()
