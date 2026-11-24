@@ -351,6 +351,40 @@ class ReadinessTests(unittest.TestCase):
             recover.assert_not_called()
 
 
+    def test_startup_skips_a_job_it_checked_when_no_trigger_changed_since(self):
+        import os, time
+        class Web:
+            def load_projects(_self):
+                return {"r": self.project}
+        # The first startup checks the job in full and notes when that check began.
+        with patch.object(calculation_service, "maybe_start_phase1") as recover:
+            calculation_service.reconcile_finished_reviews(Web())
+            recover.assert_called_once()
+        self.assertTrue((self.root / calculation_service.HANDOFF_CHECKED_FILE).is_file())
+        past = time.time_ns() - 60 * 10**9
+        for name in calculation_service.HANDOFF_TRIGGER_FILES:
+            if (self.root / name).exists():
+                os.utime(self.root / name, ns=(past, past))
+        with patch.object(calculation_service, "maybe_start_phase1") as recover:
+            calculation_service.reconcile_finished_reviews(Web())
+            recover.assert_not_called()
+        # A job finished after that check (then the server stopped before its hand-off): checked again.
+        _write_json(self.root / "drawing_tasks_job.json", {"status": "done"})
+        with patch.object(calculation_service, "maybe_start_phase1") as recover:
+            calculation_service.reconcile_finished_reviews(Web())
+            recover.assert_called_once()
+
+    def test_a_startup_check_that_raises_leaves_no_note_and_a_handoff_writes_none(self):
+        class Web:
+            def load_projects(_self):
+                return {"r": self.project}
+        with patch.object(calculation_service, "maybe_start_phase1", side_effect=RuntimeError("boom")):
+            calculation_service.reconcile_finished_reviews(Web())
+        self.assertFalse((self.root / calculation_service.HANDOFF_CHECKED_FILE).exists())
+        # A hand-off run by a finishing job (on a job thread) writes no note: a late write raced folder clean-up.
+        with patch.object(calculation_service, "start", side_effect=RuntimeError("Could not launch worker")):
+            calculation_service.maybe_start_phase1(object(), self.project)
+        self.assertFalse((self.root / calculation_service.HANDOFF_CHECKED_FILE).exists())
 
 if __name__ == "__main__":
     unittest.main()

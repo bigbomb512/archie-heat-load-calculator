@@ -109,6 +109,32 @@ def status(web, project):
     return {**job, "readiness": readiness, "offer_start": bool(offer), "automatic_start_problem": auto.get("error", "") if offer else ""}
 
 
+# The files whose "finished" write is followed by the Phase 1 hand-off (job_runner and the envelope review). A hand-off
+# can only have been missed if one of them was written after the server's last startup check of that job began.
+HANDOFF_CHECKED_FILE = "phase1_handoff_checked.json"
+HANDOFF_TRIGGER_FILES = ("new_job_job.json", "page_preparation_job.json", "page_inventory_job.json",
+                         "page_extraction_job.json", "drawing_tasks_job.json", "phase1_supervisor_job.json",
+                         "calculation_job.json", "skill_workflow_run.json")
+
+
+def _handoff_maybe_missed(root):
+    """False only when no trigger file changed since the last startup check of this job began: nothing to recover.
+    Only the startup check notes the time (in its own thread at boot); a hand-off run by a finishing job doesn't, as
+    those run on job threads and a late write raced folder clean-up (2026-11-21). A job worked on since the last
+    restart is therefore checked in full once; the others are skipped."""
+    from backend.job_runner import read_json
+    checked = read_json(Path(root) / HANDOFF_CHECKED_FILE).get("started_ns")
+    if not isinstance(checked, int):
+        return True
+    for name in HANDOFF_TRIGGER_FILES:
+        try:
+            if (Path(root) / name).stat().st_mtime_ns > checked:
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def maybe_start_phase1(web, project):
     from backend import ai_preliminary_service
     from backend.job_runner import read_json, write_json
@@ -183,7 +209,7 @@ def maybe_start_phase1(web, project):
 
 def reconcile_finished_reviews(web):
     """Recover a missed handoff after server restart, without restarting stopped AI jobs."""
-    from backend.job_runner import read_json
+    from backend.job_runner import read_json, write_json
     seen = set()
     for project in web.load_projects().values():
         if not isinstance(project, dict) or not project.get("id") or not project.get("reasoning_packet"):
@@ -198,10 +224,18 @@ def reconcile_finished_reviews(web):
         manifest = read_json(Path(root) / "skill_workflow_run.json")
         if manifest.get("scope") != "phase1_envelope" or manifest.get("status") not in {"completed", "needs_review", "provisional", "failed", "blocked"}:
             continue
+        if not _handoff_maybe_missed(root):
+            continue
+        started_ns = time.time_ns()
         try:
             maybe_start_phase1(web, project)
         except Exception:
             logging.getLogger(__name__).exception("Could not recover the completed drawing review handoff", extra={"project_id": project.get("id")})
+            continue
+        try:
+            write_json(Path(root) / HANDOFF_CHECKED_FILE, {"started_ns": started_ns})
+        except OSError:
+            pass
 
 
 def _include_map(data):

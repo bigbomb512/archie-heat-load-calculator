@@ -4179,8 +4179,10 @@ def main():
     server = ArchieHTTPServer((args.host, args.port), Handler)
     print(f"Open http://{args.host}:{args.port}")
     if os.environ.get("ARCHIE_RECOVER_HANDOFFS", "").lower() != "off" and os.environ.get("ARCHIE_ENV") != "test":
-        threading.Thread(target=calculation_service.reconcile_finished_reviews, args=(sys.modules[__name__],),
-                         daemon=True, name="archie-recover-handoffs").start()
+        # A few seconds' grace so the first page load after a restart isn't competing with the recovery check.
+        recover = threading.Timer(5.0, calculation_service.reconcile_finished_reviews, args=(sys.modules[__name__],))
+        recover.daemon, recover.name = True, "archie-recover-handoffs"
+        recover.start()
     server.serve_forever()
 
 
