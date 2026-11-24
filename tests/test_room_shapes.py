@@ -4,7 +4,7 @@ AI outlines squared, and corner answers that collapse a room refused (the Turram
 import json
 import unittest
 
-from shapely.geometry import Polygon, box
+from shapely.geometry import Point, Polygon, box
 
 from ai import autonomous_tasks
 from ai import room_outline as ro
@@ -106,3 +106,55 @@ class SquaringAndCornerGuardTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UnenclosedNamedFloorTests(unittest.TestCase):
+    """A printed room name in floor no enclosed area holds: a kitchen open to the alfresco through bifold doors
+    (Turramurra ground floor, 2026-11-21)."""
+
+    def house(self, opening_px):
+        # Two rooms side by side, 600 x 500 px each (6 x 5 m). The right room's outer wall has an opening.
+        walls = [box(100, 100, 1300, 111), box(100, 589, 1300, 600), box(100, 100, 111, 600), box(694, 100, 705, 600)]
+        top, bottom = 100 + (500 - opening_px) / 2.0, 100 + (500 + opening_px) / 2.0
+        walls += [box(1289, 100, 1300, top), box(1289, bottom, 1300, 600)]
+        from shapely.ops import unary_union
+        return unary_union(walls)
+
+    def test_a_named_room_open_to_the_outside_through_a_wide_opening_gets_its_floor(self):
+        walls = self.house(opening_px=300)                # a 3 m bifold opening
+        areas = ro.enclosed_rooms(walls, VIEWPORT, MM_PER_PX)
+        self.assertEqual(len(areas), 1)                    # the left room; the right one leaks outside
+        labels = [("Living", (400, 350)), ("Kitchen", (1000, 350))]
+        found = ro.unenclosed_named_floor(walls, areas, labels, VIEWPORT, MM_PER_PX)
+        self.assertEqual(len(found), 1)
+        self.assertAlmostEqual(ro.area_m2(found[0], MM_PER_PX), 5.84 * 4.78, delta=1.0)
+        self.assertTrue(found[0].contains(Point(1000, 350)))
+
+    def test_floor_outside_the_building_or_open_along_many_metres_is_not_taken(self):
+        walls = self.house(opening_px=300)
+        areas = ro.enclosed_rooms(walls, VIEWPORT, MM_PER_PX)
+        # A name printed in the yard, outside the footprint.
+        self.assertEqual(ro.unenclosed_named_floor(walls, areas, [("Garden", (1350, 800))], VIEWPORT, MM_PER_PX), [])
+        # A name within 600 mm of an area is the naming step's to place.
+        self.assertEqual(ro.unenclosed_named_floor(walls, areas, [("Kitchen", (740, 350))], VIEWPORT, MM_PER_PX), [])
+        # A room missing its whole outer wall (5 m of edge with no wall, and more) leaks: not taken.
+        from shapely.ops import unary_union
+        open_walls = unary_union([box(100, 100, 1300, 111), box(100, 589, 1300, 600), box(100, 100, 111, 600),
+                                  box(694, 100, 705, 600)])
+        open_areas = ro.enclosed_rooms(open_walls, VIEWPORT, MM_PER_PX)
+        self.assertEqual(ro.unenclosed_named_floor(open_walls, open_areas, [("Kitchen", (1000, 350))], VIEWPORT, MM_PER_PX), [])
+
+    def test_floor_holding_two_names_is_left_alone(self):
+        walls = self.house(opening_px=300)
+        areas = ro.enclosed_rooms(walls, VIEWPORT, MM_PER_PX)
+        labels = [("Kitchen", (900, 350)), ("Dining", (1150, 350))]
+        self.assertEqual(ro.unenclosed_named_floor(walls, areas, labels, VIEWPORT, MM_PER_PX), [])
+
+
+class SameNamedPiecesTests(unittest.TestCase):
+    def test_a_kitchen_island_55_mm_from_the_kitchen_floor_is_part_of_the_one_kitchen(self):
+        # Turramurra (2026-11-21): the island's double edge line left 55 mm; at a 50 mm limit it became "Kitchen (2)".
+        aisle, island = box(0, 0, 400, 100), box(0, 105.5, 300, 175)          # 10 mm/px: 55 mm apart
+        self.assertEqual(ro.separate_rooms([aisle, island], MM_PER_PX), [[0, 1]])
+        ensuite = box(0, 109, 300, 175)                                         # a 90 mm wall between: separate
+        self.assertEqual(len(ro.separate_rooms([aisle, ensuite], MM_PER_PX)), 2)

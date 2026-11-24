@@ -742,6 +742,11 @@ def _p0_walls_areas(root, page_number, context, calibration, wall_style_ids=None
                 walls, areas = trial_walls, trial
     from backend import house_windows_service
     if house_windows_service.is_dwelling(root):
+        # A printed room name in floor no area holds (a kitchen open to the alfresco through bifold doors, its aisle
+        # closed as if it were a doorway) gets that floor within the building's footprint, instead of falling to the
+        # AI's corner sketch (Turramurra ground floor, 2026-11-21). Not a shop: its open floor is the shop itself.
+        areas = sorted([*areas, *room_outline.unenclosed_named_floor(walls, areas, labels, context["viewport"], mm_per_px)],
+                       key=lambda polygon: -polygon.area)
         # A house's open-plan living is divided at its printed room names. Not a shop: its buffet stations and
         # servery belong to the dining or shop area they face, whatever is printed in them.
         areas = _split_open_plan_areas(areas, labels, context, walls, mm_per_px, raster_mode)
@@ -1696,8 +1701,21 @@ def _p0_outline_room_names(root, names_record, area_count, requested_rooms=None,
         placed = set()
         room_names = sorted({row["label"] for row in inferred_rooms})
     printed = {row["label"] for row in inferred_rooms if row.get("area_m2")}
-    missing = sorted(set(requested_rooms)) if requested_rooms else sorted(set(room_names) - placed - printed)
+    if requested_rooms:
+        return room_names, sorted(set(requested_rooms))
+    # The page reading's "Ensuites" is the naming step's "Ensuite" or "Ensuite (2)": asked to sketch it again, the AI
+    # drew one of them and was refused (Turramurra first floor, 2026-11-21).
+    covered = {_room_name_key(name) for name in placed | printed}
+    missing = sorted(name for name in set(room_names) - placed - printed if _room_name_key(name) not in covered)
     return room_names, missing
+
+
+def _room_name_key(name):
+    """A room name compared without case, an occurrence number ("(2)") or a plural "s": Ensuites = Ensuite (2)."""
+    text = re.sub(r"\s*\(\d+\)\s*$", "", str(name or "")).casefold()
+    words = re.findall(r"[a-z0-9]+", text)
+    return " ".join(word[:-1] if len(word) > 3 and word.endswith("s") and not word.endswith("ss") else word
+                    for word in words)
 
 
 def _tenancy_rooms_needing_outline(root, page):
@@ -1910,6 +1928,34 @@ def _settled(record):
             or len(record.get("reply_attempts") or []) >= 2)
 
 
+def _dropped_spaces(record):
+    """Casefolded names of the spaces a step's own checks dropped (kept in its reply, listed in applied_value)."""
+    applied = (record or {}).get("applied_value") if isinstance((record or {}).get("applied_value"), dict) else {}
+    return {str(row.get("room", "")).casefold() for row in applied.get("dropped") or [] if isinstance(row, dict)}
+
+
+def _retire_dropped_corner_outlines(project, root, page, subjects):
+    """Remove the AI outline of a space its step dropped, built from a corner answer given before the drop was honoured
+    (the Turramurra basement "Corridor", 2026-11-21), unless another step still sketches that room on the page."""
+    dropped = set()
+    for task in ("P0_room_outlines", "P0_unnamed_space"):
+        dropped |= _dropped_spaces(_current_task(root, task, f"page-{page}"))
+    dropped -= {str(room).casefold() for _target, room, _source, _sketches in subjects if room}
+    if not dropped:
+        return
+    try:
+        traces = reviewer_room_geometry_service.current_records(reviewer_room_geometry_service._paths({"review_dir": str(root)}))
+    except (OSError, ValueError, TypeError, KeyError):
+        return
+    stale = sorted({row.get("room_label") for row in traces
+                    if row.get("page") == page and row.get("method") == "ai_corner_outline"
+                    and row.get("declaration_source") in {"ai_determined", "ai_fallback"}
+                    and str(row.get("room_label", "")).casefold() in dropped})
+    if stale:
+        reviewer_room_geometry_service.persist_ai_determined_traces(None, project, [], "dropped-space-cleanup",
+            "AI-determined (below accuracy bar)", replace_pages=[page], replace_room_labels=stale)
+
+
 def _corner_subjects(root, page):
     """What the AI sketched on a plan page that has no corner-built outline yet: [(target, room or None, source task,
     [sketch pieces as point lists])]. The tenancy comes first; rooms only once its corners are settled."""
@@ -1928,9 +1974,13 @@ def _corner_subjects(root, page):
         value = record.get("validation")
         value = value.get("result", value) if isinstance(value, dict) else value     # the reply handler wraps it
         value = value.get("spaces", []) if isinstance(value, dict) else value
+        # A space the step itself dropped (mostly inside rooms already traced: the Turramurra basement "Corridor",
+        # 2026-11-21) is not asked about again; its sketch stays in the reply, so the reply alone isn't the answer.
+        dropped = _dropped_spaces(record)
         pieces = {}
         for row in value if isinstance(value, list) else []:
-            if isinstance(row, dict) and row.get("room") and len(row.get("points") or []) >= 3:
+            if (isinstance(row, dict) and row.get("room") and len(row.get("points") or []) >= 3
+                    and str(row["room"]).casefold() not in dropped):
                 pieces.setdefault(row["room"], []).append(row["points"])
         removed = rooms_not_on_plan(root)
         for room, sketches in sorted(pieces.items()):
@@ -1991,6 +2041,7 @@ def _p0_corner_packets(root, force=False):
     for page in _p0_main_geometry_pages(root):
         number = page["page"]
         subjects = _corner_subjects(root, number)
+        _retire_dropped_corner_outlines({"id": Path(root).name, "review_dir": str(root)}, root, number, subjects)
         if not subjects:
             continue
         try:
@@ -2437,6 +2488,10 @@ def _p4_elevation_image(root, page_number):
 
 
 def _comfort_room_ids(root):
+    """The rooms the drawing work is done for: those whose use is cooled, as changed on the quick-fix screen ("Not
+    cooled" / "Cool it"). A room that isn't air-conditioned needs no wall, window or roof work: the calculation leaves
+    it out (user request 2026-11-23; Turramurra's Driveway and Fence were still asked about after being switched off)."""
+    from backend import quick_fix_service
     uses = _read(root / "room_use_resolution.json", {})
     ids = {str(row.get("room_id")) for row in uses.get("records", []) if isinstance(row, dict)
            and row.get("space_scope") in {"comfort_hvac", "comfort_hvac_with_process_exception"}}
@@ -2491,10 +2546,6 @@ def _trace_wall_runs(trace):
     points = trace.get("points_image_px", [])
     mm_per_px = float(trace.get("calibration", {}).get("mm_per_px") or 0)
     runs = room_outline.wall_runs(points, mm_per_px)
-    """The rooms the drawing work is done for: those whose use is cooled, as changed on the quick-fix screen ("Not
-    cooled" / "Cool it"). A room that isn't air-conditioned needs no wall, window or roof work: the calculation leaves
-    it out (user request 2026-11-23; Turramurra's Driveway and Fence were still asked about after being switched off)."""
-    from backend import quick_fix_service
     edge_lengths = {index: math.dist(start, end) * mm_per_px / 1000.0
                     for index, (start, end) in enumerate(zip(points, points[1:]))}
     return [{**row, "edge_lengths_m": {str(index): edge_lengths[index] for index in row["edge_indices"]}}

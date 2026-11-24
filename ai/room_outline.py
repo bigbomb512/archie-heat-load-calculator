@@ -384,6 +384,85 @@ def enclosed_rooms(walls, viewport, mm_per_px, door_gap_mm=DEFAULT_DOOR_GAP_MM, 
     return sorted(rooms, key=lambda polygon: -polygon.area)
 
 
+OPEN_FLOOR_OPENING_MM = 4000.0    # openings up to this wide (bifold and stacking doors) are closed for the footprint
+OPEN_FLOOR_MAX_OPEN_MM = 5000.0    # at most this much of a recovered floor's edge has no wall (one wide opening)
+OPEN_FLOOR_MAX_M2 = 80.0
+OPEN_FLOOR_NAME_CLEAR_MM = 600.0  # a name this close to an area is the naming step's to place, not an unenclosed floor
+
+
+def _parts(geometry):
+    return [part for part in getattr(geometry, "geoms", [geometry]) if part.geom_type == "Polygon" and not part.is_empty]
+
+
+def unenclosed_named_floor(walls, areas, labels, viewport, mm_per_px, door_gap_mm=DEFAULT_DOOR_GAP_MM,
+                           opening_mm=OPEN_FLOOR_OPENING_MM, min_room_m2=MIN_ROOM_M2, max_room_m2=OPEN_FLOOR_MAX_M2):
+    """Floor under a printed room name that no area holds: it opens to the outside through an opening wider than a
+    door, or a narrow aisle in it was closed as if it were a doorway. The Turramurra kitchen (2026-11-21) is both: a
+    0.97 m aisle between the bench and the island, open to the alfresco through bifold doors. enclosed_rooms dropped
+    it, so its name fell to the AI's corner sketch and was drawn as a thin strip.
+
+    The floor around the name is taken from the walls as drawn (no gap closing), within the building's footprint (the
+    walls and rooms with openings up to opening_mm closed), less the areas already found; slivers thinner than a wall
+    (a doorway into a neighbouring room) are shaved off. It is kept only when it is room-sized, no more than
+    one wide opening's worth of its edge (OPEN_FLOOR_MAX_OPEN_MM) has no wall, and it holds no other room's name:
+    floor that leaks out through gaps runs along many metres of open edge (an ensuite reaching out to the AC units,
+    a shop's storeroom taking the shop floor, 6-24 m on the 2026-11 house sets; the Turramurra kitchen has 4.7 m).
+    Returns new polygons."""
+    if walls is None or walls.is_empty or not labels:
+        return []
+    radius = (door_gap_mm / mm_per_px) / 2.0
+    closed = walls.buffer(radius, join_style=2).buffer(-radius, join_style=2)
+    if not closed.is_valid:
+        closed = make_valid(closed).buffer(0)
+    taken = unary_union(areas) if areas else Polygon()
+    reach = OPEN_PLAN_LABEL_REACH_MM / mm_per_px      # a name printed this close to an area belongs to it
+    shell = (opening_mm / mm_per_px) / 2.0
+    sliver = (PAIRED_WALL_MAX_MM / mm_per_px) / 2.0 + 1.0
+    clear = OPEN_FLOOR_NAME_CLEAR_MM / mm_per_px
+    try:
+        footprint = unary_union([closed, taken]).buffer(shell, join_style=2).buffer(-shell, join_style=2)
+        footprint = unary_union([Polygon(part.exterior) for part in _parts(footprint)])
+        inside = box(*viewport).intersection(footprint).difference(taken.buffer(1.0))
+        # The floor with door gaps closed, as enclosed_rooms sees it; the walls as drawn only where that closing
+        # filled the floor under the name (a narrow aisle), as drawn walls let the floor run on through doorways.
+        floors = (inside.difference(closed), inside.difference(walls))
+    except GEOSException:
+        return []
+    wall_zone = walls.buffer(3.0)
+    found = []
+    for _name, point in labels:
+        spot = Point(point)
+        if any(area.distance(spot) <= clear for area in [*areas, *found]):
+            continue
+        taken_now = unary_union(found) if found else None
+        part = None
+        for floor in floors:
+            pieces = _parts(floor.difference(taken_now) if taken_now is not None else floor)
+            part = next((piece for piece in pieces if piece.buffer(0.5).contains(spot)), None)
+            if part is not None:
+                break
+        if part is None:
+            continue
+        opened = _parts(part.buffer(-sliver, join_style=2).buffer(sliver, join_style=2).intersection(part))
+        if not opened:
+            continue
+        part = min(opened, key=lambda piece: piece.distance(spot))
+        if part.distance(spot) > reach:
+            continue
+        outline = _fill_notches(Polygon(part.exterior), DEFAULT_NOTCH_MM / mm_per_px / 2.0)
+        size = outline.area * mm_per_px ** 2 / 1e6
+        if not min_room_m2 <= size <= max_room_m2:
+            continue
+        open_edge = outline.exterior.length - outline.exterior.intersection(wall_zone).length
+        if open_edge * mm_per_px > OPEN_FLOOR_MAX_OPEN_MM:
+            continue
+        if len({other.casefold() for other, other_point in labels
+                if outline.buffer(reach).contains(Point(other_point))}) > 1:
+            continue
+        found.append(outline)
+    return found
+
+
 def area_m2(polygon, mm_per_px):
     return polygon.area * mm_per_px ** 2 / 1e6
 
@@ -843,7 +922,9 @@ def room_naming_prompt(room_names, area_count, notes=None, dwelling=False):
             "what is drawn in it (equipment, furniture, doors, signage, text). A room can sit inside another one (a bar "
             "walled off in the middle of a dining area): name it as that room. Buffet, servery and self-serve stations "
             "that customers walk up to belong to the dining or shop area they face, even when walls enclose them on "
-            "three sides; a kitchen is the back-of-house area where food is prepared and cooked. If an area is not a room (a void, "
+            "three sides; a kitchen is the back-of-house area where food is prepared and cooked. Furniture or joinery drawn "
+            "as a closed outline inside a room (a kitchen island, a bench) is part of the room it stands in: give it "
+            "that room's name. If an area is not a room (a void, "
             "planter, duct, shaft or outside space) say \"not_a_room\". If one numbered area contains **two** of the "
             "rooms with no wall between them, give a split: a line in image pixels drawn along the drawn feature that "
             "separates them (counter edge, floor-finish change, bulkhead), and one point inside each room. "
@@ -1727,7 +1808,10 @@ def raster_wall_geometry(page_image, viewport, mm_per_px, dark_threshold=180, mi
     return unary_union(rectangles) if rectangles else None
 
 
-SEPARATE_ROOM_GAP_MM = 50.0      # same-named outlines further apart than this have a wall between them: separate rooms
+# Same-named outlines further apart than this have a wall between them: separate rooms. The thinnest wall the wall
+# finder accepts (PAIRED_WALL_MIN_MM); a kitchen island's double edge line left 55 mm between it and the kitchen floor
+# around it, and 50 mm made them two kitchens (Turramurra, 2026-11-21).
+SEPARATE_ROOM_GAP_MM = 60.0
 SEPARATE_ROOM_MIN_M2 = 1.0       # a smaller separate piece stays part of the same-named room it is nearest
 
 

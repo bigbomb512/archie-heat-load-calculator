@@ -825,6 +825,46 @@ class AutonomousTaskTests(unittest.TestCase):
             subjects = autonomous_tasks_service._corner_subjects(Path("/x"), 25)
         self.assertEqual([(row[0], row[2], row[3]) for row in subjects], [("room-store-page-25", "P0_room_outlines", [traced, elsewhere])])
 
+    def test_a_corner_outline_of_a_dropped_space_is_removed_unless_another_step_sketches_it(self):
+        dropped = {"applied_value": {"dropped": [{"room": "Corridor", "reason": "inside"}]}}
+        traces = [{"page": 7, "room_label": "Corridor", "method": "ai_corner_outline", "declaration_source": "ai_determined"},
+                  {"page": 9, "room_label": "Corridor", "method": "ai_corner_outline", "declaration_source": "ai_determined"}]
+        with patch.object(autonomous_tasks_service, "_current_task",
+                          side_effect=lambda root, task, target: dropped if task == "P0_unnamed_space" else None), \
+                patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "current_records", return_value=traces), \
+                patch.object(autonomous_tasks_service.reviewer_room_geometry_service, "persist_ai_determined_traces") as persist:
+            autonomous_tasks_service._retire_dropped_corner_outlines({"review_dir": "/x"}, Path("/x"), 7, [])
+            persist.assert_called_once()
+            self.assertEqual((persist.call_args.args[2], persist.call_args.kwargs["replace_pages"],
+                              persist.call_args.kwargs["replace_room_labels"]), ([], [7], ["Corridor"]))
+            persist.reset_mock()
+            # The outline step still sketches a Corridor on the page: its corner outline stays.
+            autonomous_tasks_service._retire_dropped_corner_outlines(
+                {"review_dir": "/x"}, Path("/x"), 7, [("room-corridor-page-7", "Corridor", "P0_room_outlines", [])])
+            persist.assert_not_called()
+
+    def test_a_plural_or_numbered_name_already_placed_is_not_asked_again(self):
+        # Turramurra first floor (2026-11-21): the reading listed "Ensuites", the naming placed "Ensuite"; the AI was
+        # asked to sketch "Ensuites" again and its sketch was refused twice.
+        record = {"reply": "{}", "packet": {"room_names": ["Ensuite", "Ensuites", "Bedrooms 2", "Void"], "transform": {}}}
+        with patch.object(autonomous_tasks_service.room_outline, "validate_naming_reply",
+                          return_value=({0: "Ensuite (1)", 1: "Ensuite", 2: "Bedroom 2"}, [])):
+            _names, missing = autonomous_tasks_service._p0_outline_room_names(Path("/x"), record, 3, inferred_rooms=[])
+        self.assertEqual(missing, ["Void"])
+
+    def test_a_space_the_unnamed_space_step_dropped_gets_no_corner_question(self):
+        # Turramurra basement (2026-11-21): the step dropped "Corridor" (mostly inside rooms already traced), but its
+        # sketch stayed in the reply, so a corner question was asked and a first-floor corridor drawn on the basement.
+        sketch = [[0, 0], [100, 0], [100, 50], [0, 50]]
+        records = {"P0_unnamed_space": {"status": "below_accuracy_bar",
+                                        "validation": {"spaces": [{"room": "Corridor", "points": sketch},
+                                                                  {"room": "Store", "points": [[300, 0], [400, 0], [400, 50]]}]},
+                                        "applied_value": {"rooms": [], "dropped": [{"room": "Corridor", "reason": "inside"}]}}}
+        with patch.object(autonomous_tasks_service, "_current_task", side_effect=lambda root, task, target: records.get(task)), \
+                patch.object(autonomous_tasks_service, "rooms_not_on_plan", return_value=set()):
+            subjects = autonomous_tasks_service._corner_subjects(Path("/x"), 7)
+        self.assertEqual([row[0] for row in subjects], ["room-store-page-7"])
+
     def test_a_room_built_from_corners_replaces_its_sketch_inside_the_tenancy_less_rooms_inside_it(self):
         from shapely.geometry import box as shape_box
         with TemporaryDirectory() as temporary:
