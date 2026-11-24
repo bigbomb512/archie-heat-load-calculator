@@ -5,6 +5,7 @@ import { planSvg, lineLegend } from "./plan.js";
 const query = (projectId) => `?project_id=${encodeURIComponent(projectId)}`;
 const ESTIMATED_AREAS = new Set(["ai_outline", "remainder", "estimate"]);
 const ASSUMED_AREAS = new Set(["sheet_scale", "printed_dimensions"]);
+const NOT_COOLED_STATES = new Set(["not_cooled", "sized_separately", "left_out"]);
 
 function norm(value) {
   return String(value || "")
@@ -123,8 +124,8 @@ function roomState(room) {
   );
 }
 
-function roomRows(plan, selected) {
-  return (plan.rooms || [])
+function roomRows(rooms, selected) {
+  return rooms
     .map((room) => {
       const selectedClass = room.room_id === selected.room_id ? "selected" : "";
       const area = room.area_m2 == null ? "—" : `${fmt(room.area_m2)} m²`;
@@ -143,6 +144,34 @@ function roomRows(plan, selected) {
       </tr>`;
     })
     .join("");
+}
+
+function roomTable(rooms, selected) {
+  return `<div class="job-table-wrap"><table class="job-room-table">
+    <thead><tr><th scope="col">Room</th><th scope="col">Area</th><th scope="col">Building load</th><th scope="col">Status</th></tr></thead>
+    <tbody>${roomRows(rooms, selected)}</tbody>
+  </table></div>`;
+}
+
+function floorRoomLists(rooms, selected) {
+  const selectedLevel = selected.level || "Floor plan";
+  const byLevel = new Map();
+  for (const room of rooms) {
+    const level = room.level || "Floor plan";
+    if (!byLevel.has(level)) byLevel.set(level, []);
+    byLevel.get(level).push(room);
+  }
+  const levels = [selectedLevel, ...[...byLevel.keys()].filter((level) => level !== selectedLevel)];
+  return levels.map((level) => {
+    const floorRooms = byLevel.get(level) || [];
+    const cooled = floorRooms.filter((room) => !NOT_COOLED_STATES.has(room.state));
+    const notCooled = floorRooms.filter((room) => NOT_COOLED_STATES.has(room.state));
+    return `<div class="job-floor-rooms">
+      <h3>${level === selectedLevel ? "Rooms on this floor" : `Rooms on ${escapeHtml(level)}`}</h3>
+      ${cooled.length ? roomTable(cooled, selected) : ""}
+      ${notCooled.length ? `<details class="job-not-cooled"><summary>${notCooled.length} ${notCooled.length === 1 ? "room" : "rooms"} not cooled on this floor</summary>${roomTable(notCooled, selected)}</details>` : ""}
+    </div>`;
+  }).join("");
 }
 
 function areaClass(room) {
@@ -364,11 +393,7 @@ function renderLayout(plan, status, roomId, uses, projectId, editor = {}) {
     <div class="job-section-title"><h2 id="floor-title">${escapeHtml(level)}</h2>${pages ? `<span>${escapeHtml(pages)}</span>` : ""}</div>
     ${planSvg(plan, { selectedRoom: room.room_id, onSelect: (id) => navigate(projectId, "rooms", id) })}
     ${lineLegend()}
-    <h3>Rooms on this floor</h3>
-    <div class="job-table-wrap"><table class="job-room-table">
-      <thead><tr><th scope="col">Room</th><th scope="col">Area</th><th scope="col">Building load</th><th scope="col">Status</th></tr></thead>
-      <tbody>${roomRows(plan, room)}</tbody>
-    </table></div>
+    ${floorRoomLists(rooms, room)}
   </section>`;
   const remaining = plan.phase1_report?.supervisor_exceptions || [];
   const exceptionPanel = remaining.length
@@ -378,7 +403,7 @@ function renderLayout(plan, status, roomId, uses, projectId, editor = {}) {
   const partialPanel = `<section class="job-panel" data-uncounted data-phase1-partial aria-live="polite" hidden></section>`;
   const assumed = (plan.phase1_report?.supervisor_assumptions || []).map((row) => row.message);
   const assumptionPanel = assumed.length
-    ? `<section class="job-panel" data-result-assumptions><h2>Assumptions in this result</h2><p>These parts use a labelled assumption or a check the drawings didn't answer.</p><ul>${assumed.map((text) => `<li>${escapeHtml(plainNote(text))}</li>`).join("")}</ul></section>` : "";
+    ? `<section class="job-panel job-collapsible-panel" data-result-assumptions><details><summary><h2>${assumed.length} ${assumed.length === 1 ? "assumption" : "assumptions"} in this result</h2></summary><p>These parts use a labelled assumption or a check the drawings didn't answer.</p><ul>${assumed.map((text) => `<li>${escapeHtml(plainNote(text))}</li>`).join("")}</ul></details></section>` : "";
   const notOnPlan = plan.rooms_not_on_plan || [];
   const notOnPlanPanel = notOnPlan.length
     ? `<section class="job-panel" data-rooms-not-on-plan><h2>Not counted as rooms</h2><ul>${notOnPlan.map((row) => `<li>${escapeHtml(row.reason)}</li>`).join("")}</ul></section>` : "";
