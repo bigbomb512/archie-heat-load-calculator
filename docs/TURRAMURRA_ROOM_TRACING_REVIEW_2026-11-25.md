@@ -22,6 +22,17 @@ joinery, floor tiling and annotations, so a candidate polygon cannot be treated
 as a room solely because it contains a name. The raster-wall fallback at its
 default settings found no enclosed areas on this plan in a read-only check.
 
+On an APFS clone of the job, the current P0 packet builder produced 15
+numbered candidates on page 8 and 18 on page 9, with no provider call. Visual
+inspection of those packets shows why the counts cannot be used as room counts:
+ground-floor candidates include the pool, paved area and tennis court, while
+separately printed interior rooms such as Bedroom 5 and Media have no numbered
+candidate over their floor. The first-floor packet also includes the exterior
+roof and a void among its numbered candidates. Each candidate needs a
+`not_a_room`, one-room or split decision against the source plan before it
+could be used as a trace. The copy's packets are under
+`/private/tmp/codex-turramurra-room-review-20261125/ai_tasks/P0_room_names`.
+
 The evaluator was run read-only over all 12 saved house jobs on 25 November:
 310 saved trace parts, 156 located printed labels outside traces, 6 traces
 containing different printed room names, 38 trace/name mismatches and 30 trace
