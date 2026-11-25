@@ -486,7 +486,7 @@ function sentenceFor(data, status, plan) {
       : stopped(newJob)
       ? "Preparing the drawing set stopped. Try again to continue."
       : stepOf(newJob) === "active"
-        ? "Toki is reading the PDF. You can close this page; it keeps going."
+        ? "Archie is reading the PDF. You can close this page; it keeps going."
         : "Read the PDF to start this job.";
   }
   return statusSentence(data, status, plan);

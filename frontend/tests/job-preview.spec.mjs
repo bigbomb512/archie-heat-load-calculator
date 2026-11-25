@@ -1401,7 +1401,7 @@ test("New job is one large drop tile; a chosen PDF uploads, starts the server jo
   const preparation = page.locator("[data-preparation-stage]");
   await expect(preparation).toContainText("Prepare the drawing set");
   await expect(preparation).toContainText("Reading the PDF: page titles");
-  await expect(page.locator(".job-status")).toContainText("Toki is reading the PDF");
+  await expect(page.locator(".job-status")).toContainText("Archie is reading the PDF");
 });
 
 test("New job refuses a file that isn't a PDF and says why", async ({ page }) => {

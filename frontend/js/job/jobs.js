@@ -15,7 +15,7 @@ const updatedDate = (value) => {
       });
 };
 const listHeader = () =>
-  `<header class="job-header"><div class="job-head-inner"><a href="#/jobs" aria-label="Jobs"><img class="job-wordmark" src="/frontend/assets/images/toki-wordmark-exact.png" alt="Toki"></a><a href="#/jobs">Jobs</a></div></header>`;
+  `<header class="job-header"><div class="job-head-inner"><a href="#/jobs" aria-label="Jobs"><img class="job-wordmark" src="/frontend/assets/images/archie-wordmark.svg" alt="Archie"></a><a href="#/jobs">Jobs</a></div></header>`;
 const jobStage = (project) => project.results_ready || project.phase2_complete
   ? "results" : project.phase1_complete ? "operating" : project.drawings_confirmed ? "rooms" : "drawings";
 const stageLabel = (stage) => ({ results: "Results ready", operating: "People and equipment", rooms: "Rooms", drawings: "Drawings" })[stage];
@@ -140,7 +140,7 @@ function uploadMarkup() {
   return `${listHeader()}<main class="job-main job-list-inner job-new">
     <a class="job-link-button" href="#/jobs">Back to Jobs</a>
     <h1>New job</h1>
-    <p class="job-new-lede">Give Toki the architect’s drawing set as one PDF. The AI reads every page.</p>
+    <p class="job-new-lede">Give Archie the architect’s drawing set as one PDF. The AI reads every page.</p>
     <button type="button" class="job-drop" id="job-drop" aria-describedby="job-drop-help">
       ${SHEET_ICON}
       <span class="job-drop-title" data-drop-title>Drop the PDF here</span>
@@ -227,7 +227,7 @@ export function renderNewJob() {
         };
         xhr.onerror = () => {
           reset();
-          error.textContent = "The upload didn’t reach Toki. Check the connection and try again.";
+          error.textContent = "The upload didn’t reach Archie. Check the connection and try again.";
         };
         xhr.onload = async () => {
           let result = {};

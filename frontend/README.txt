@@ -4,7 +4,7 @@ Archie — website bundle
   index.html                    loads the job workspace
   css/job.css                   all styles of the job workspace
   js/job/                       the job workspace (one module per screen)
-  assets/images/toki-wordmark-exact.png  current logo artwork
+  assets/images/archie-wordmark.svg  current logo artwork
   package.json                  local scripts and browser test dependency
 
 There is no src/ or public/ folder — this frontend has no build step, so there is
